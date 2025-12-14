@@ -10,7 +10,7 @@ export interface ManagementUser {
   role: 'Admin' | 'RouteManager'; 
 }
 
-// --- NEW INTERFACE: Bonus ---
+// --- BONUS STRUCTURE ---
 export interface Bonus {
     id: number;
     type: string;   // e.g., "Performance", "Rookie of Day"
@@ -25,43 +25,32 @@ export interface Worker {
   email?: string;
   status: 'Rookie' | 'Return' | 'Alumni';
 
-  // --- NEW FIELDS FOR PAYOUT REFACTOR ---
-  isAlumni?: boolean;       // Triggers Alumni Increment (e.g. +$1.00)
-  isSilver?: boolean;       // Triggers Silver Increment (e.g. +$1.00)
+  // --- RATES & METADATA ---
+  alumniRate?: number;      // e.g., 0.50
+  silverRate?: number;      // e.g., 0.50
+  customBaseRate?: number;  // Optional override
   
-  // NEW: Flexible Rate Imports from Excel
-  alumniRate?: number;      // e.g., 0.50 or 1.00
-  silverRate?: number;      // e.g., 0.50 or 1.00
-
-  customBaseRate?: number;  // Optional override for base rate
-  
-  // New Session Linkage
   assignedManagerId?: string; // Links to ManagementUser.userId
-  
-  // Transient Session Data (Calculated at runtime)
-  stats?: any; // Will be defined in payout service
 }
 
-// --- CORE DATA FEED (THE NEW SESSION STORE) ---
+// --- DATA FEED STRUCTURE ---
 
 export interface RouteData {
   routeCode: string;
-  managerId: string; // The "Manager Assignment" from CSV
-  assignedWorkerId: string | null; // Assigned via RM Tool
-  streets?: string[]; // Added to ensure feedParser compatibility
+  managerId: string; 
+  assignedWorkerId: string | null; 
+  streets?: string[];
 }
 
 export interface DailySessionData {
   date: string; // YYYY-MM-DD
-  managers: ManagementUser[]; // Derived from Routes CSV
-  workers: Worker[]; // Derived from Workers CSV
-  routes: RouteData[]; // Derived from Routes CSV
-  
-  // The "Pending Queue" (Aeration Jobs)
-  pendingBookings: MasterBooking[]; // Derived from Bookings CSV
+  managers: ManagementUser[]; 
+  workers: Worker[]; 
+  routes: RouteData[]; 
+  pendingBookings: MasterBooking[]; 
 }
 
-// --- NEW INTERFACE: SessionValidation ---
+// --- PAYOUT VALIDATION ---
 export interface SessionValidation {
     isValidated: boolean;
     
@@ -70,16 +59,16 @@ export interface SessionValidation {
     verifiedCheque: number;
     
     // Diffs
-    cashDiff: number;       // Difference (Actual - Expected)
-    chequeDiff: number;     // Difference (Actual - Expected)
+    cashDiff: number;       
+    chequeDiff: number;     
     
-    // Resolved "Actual" Stats (Written by PayoutContractor)
+    // Resolved "Actual" Stats
     actualProdCash: number;
     actualProdCheque: number;
     actualTotalEQ: number;
 
     machineRental: boolean; // True = Deduct $10
-    finalCommission: number;// The frozen final payout amount
+    finalCommission: number;
     managerName?: string;
     timestamp?: string;
 }
@@ -89,26 +78,19 @@ export interface SessionValidation {
 export interface LogsheetSession {
   id: string;
   workerId: string;
-  
-  // NEW: Snapshot of the manager at creation time
   managerName?: string; 
-  
   date: string;
-  status: 'OPEN' | 'COMPLETE' | 'CLOSED'; // Updated to include 'COMPLETE'
+  status: 'OPEN' | 'COMPLETE' | 'CLOSED'; 
   
-  // Operational List (Jobs on the device)
+  // Note: These arrays are populated by the service after fetching
   dailyRouteStore: MasterBooking[];   
-  
-  // Financial Store (Completed jobs)
   financialStore: SessionTransaction[]; 
   
-  // Stats
   stats: SessionStats;
 
-  // *** NEW FIELDS FOR PAYOUT REFACTOR ***
+  // Payout Data
   validation?: SessionValidation;
   bonuses?: Bonus[]; 
-  payoutStatus?: 'PENDING' | 'VALIDATED' | 'PAID';
 }
 
 export interface SessionStats {
@@ -151,12 +133,10 @@ export interface MasterBooking {
   'Cell Phone'?: string;
   'Email Address'?: string;
   'Route Number'?: string;
-  'Master Map'?: string;
   
   // Status
   'Completed'?: string; 
   'Status'?: string;    
-  'Date Completed'?: string;
   
   // Display Info
   'Price'?: string;
@@ -167,18 +147,9 @@ export interface MasterBooking {
   isContract?: boolean;
   isPrebooked?: boolean;
   
-  // Upsell linkage
   upsellMenuId?: string; 
   
-  // Legacy Flags
-  'Call First'?: string;
-  'Gate'?: string;
-  'Must be home'?: string;
-  'Sprinkler'?: string;
-  'Second Run'?: string;
   'FO/BO/FP'?: 'FO' | 'BO' | 'FP' | 'SS' | 'SSP' | 'Ramp';
-  
-  // New: Assignment
   'Contractor Number'?: string;
 }
 
@@ -198,7 +169,6 @@ export interface SessionTransaction {
   
   workerId: string;
   workerName: string;
-  routeManagerName: string;
   
   routeCode: string;
 
@@ -216,17 +186,14 @@ export interface SessionTransaction {
   ccFullNumber?: string;
   ccExpiry?: string;
   ccCVC?: string;
+  etransferEmail?: string;
+  chequeNumber?: string;
   
   // Logic
   isWestSplit?: boolean;   
   refId?: string;
   itemDescription?: string;
+  paymentBreakdown?: Record<string, number>;
 }
 
-// --- RM SESSION ---
-
-export interface RMSession {
-  id: string;
-  managerId: string;
-  date: string;
-}
+export type SortOption = 'alpha' | 'steps' | 'gross' | 'equiv' | 'upsell' | 'commission';
