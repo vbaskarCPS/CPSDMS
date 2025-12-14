@@ -32,7 +32,7 @@ class SessionService {
       .from('daily_sessions')
       .select('date')
       .eq('is_active', true)
-      .single();
+      .maybeSingle(); // FIX: Use .maybeSingle() to prevent 406 errors if DB is empty
     return data ? data.date : null;
   }
 
@@ -154,7 +154,8 @@ class SessionService {
       booking_id: b['Booking ID'],
       route_number: b['Route Number'],
       status: 'pending',
-      price: parseFloat((b.Price || '0').replace(/[^0-9.]/g, '')) || 0,
+      // FIX: Force String() before replace to handle Excel Numbers safely
+      price: parseFloat(String(b.Price || '0').replace(/[^0-9.]/g, '')) || 0,
       customer_details: {
         'First Name': b['First Name'],
         'Last Name': b['Last Name'],
