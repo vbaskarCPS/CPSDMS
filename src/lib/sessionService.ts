@@ -32,7 +32,7 @@ class SessionService {
       .from('daily_sessions')
       .select('date')
       .eq('is_active', true)
-      .maybeSingle(); // FIX: Use .maybeSingle() to prevent 406 errors if DB is empty
+      .maybeSingle();
     return data ? data.date : null;
   }
 
@@ -154,7 +154,7 @@ class SessionService {
       booking_id: b['Booking ID'],
       route_number: b['Route Number'],
       status: 'pending',
-      // FIX: Force String() before replace to handle Excel Numbers safely
+      // Fix: Force to String() before replacing to handle Excel "Number" cells
       price: parseFloat(String(b.Price || '0').replace(/[^0-9.]/g, '')) || 0,
       customer_details: {
         'First Name': b['First Name'],
@@ -257,7 +257,33 @@ class SessionService {
     };
   }
 
-  // --- 3. DATA FETCHING (Cloud) ---
+  // --- 3. ACTIONS (Assignments) ---
+
+  public async assignRouteToWorker(
+    routeCode: string,
+    workerId: string | null
+  ): Promise<void> {
+    const date = await this.getDailySessionDate();
+    if (!date) return;
+
+    await supabase
+      .from('routes')
+      .update({ assigned_worker_id: workerId })
+      .eq('route_code', routeCode)
+      .eq('session_date', date);
+  }
+
+  public async assignBookingToWorker(
+    bookingId: string,
+    workerId: string | null
+  ): Promise<void> {
+    await supabase
+      .from('bookings')
+      .update({ contractor_id: workerId })
+      .eq('booking_id', bookingId);
+  }
+
+  // --- 4. DATA FETCHING (Cloud) ---
 
   // Get Assignments: Merges Bookings + Transactions
   public async getWorkerAssignments(
@@ -342,7 +368,7 @@ class SessionService {
       .then((res) => res.data?.streets || []);
   }
 
-  // --- 4. LOGSHEET SESSIONS (State) ---
+  // --- 5. LOGSHEET SESSIONS (State) ---
 
   public async getLogsheetSessions(): Promise<LogsheetSession[]> {
     const date = await this.getDailySessionDate();
@@ -461,7 +487,7 @@ class SessionService {
       .eq('id', sessionId);
   }
 
-  // --- 5. TRANSACTIONS (Completing Jobs) ---
+  // --- 6. TRANSACTIONS (Completing Jobs) ---
 
   // New method to handle "Save & Complete" safely
   public async completeJob(
@@ -504,7 +530,7 @@ class SessionService {
     }
   }
 
-  // --- 6. UTILS ---
+  // --- 7. UTILS ---
 
   public getEmptyStats(): SessionStats {
     return {
