@@ -1,0 +1,200 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  @apply antialiased text-gray-100 bg-black;
+}
+
+.card {
+  @apply bg-gray-800 rounded-lg shadow-md overflow-hidden transition-all duration-200 hover:shadow-lg;
+}
+
+.btn {
+  @apply px-4 py-2 rounded-md font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2;
+}
+
+.btn-primary {
+  @apply bg-cps-red text-white hover:bg-[#600018] focus:ring-red-900;
+}
+
+.btn-secondary {
+  @apply bg-cps-blue text-white hover:bg-blue-700 focus:ring-blue-900;
+}
+
+.btn-success {
+  @apply bg-cps-green text-white hover:bg-green-700 focus:ring-green-900;
+}
+
+.input {
+  @apply block w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-cps-red focus:border-transparent text-gray-100;
+}
+
+.input-currency {
+  @apply pl-8 bg-gray-800 border border-gray-700 text-gray-100;
+}
+
+.input-currency-symbol {
+  @apply absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 select-none pointer-events-none;
+}
+
+.label {
+  @apply block text-sm font-medium text-gray-300 mb-1;
+}
+
+.status-pending {
+  @apply bg-yellow-900/50 text-yellow-200 border-l-4 border-cps-yellow;
+}
+
+.status-completed {
+  @apply bg-green-900/50 text-green-200 border-l-4 border-cps-green;
+}
+
+.status-canceled {
+  @apply bg-red-900/50 text-red-200 border-l-4 border-cps-red;
+}
+
+/* Dark theme overrides */
+.bg-white {
+  @apply bg-gray-800;
+}
+
+.text-gray-600 {
+  @apply text-gray-400;
+}
+
+.text-gray-700 {
+  @apply text-gray-300;
+}
+
+.bg-gray-50 {
+  @apply bg-gray-900;
+}
+
+.bg-gray-100 {
+  @apply bg-gray-900;
+}
+
+.bg-gray-200 {
+  @apply bg-gray-700;
+}
+
+.hover\:bg-gray-100:hover {
+  @apply hover:bg-gray-700;
+}
+
+.hover\:bg-gray-200:hover {
+  @apply hover:bg-gray-600;
+}
+
+.hover\:bg-gray-300:hover {
+  @apply hover:bg-gray-500;
+}
+
+/* Text colors for better contrast */
+.text-gray-500 {
+  @apply text-gray-400;
+}
+
+.text-gray-800 {
+  @apply text-gray-200;
+}
+
+.text-gray-900 {
+  @apply text-gray-100;
+}
+
+/* Input placeholders */
+.input::placeholder {
+  @apply text-gray-500;
+}
+
+/* Currency input specific styles */
+.currency-input {
+  @apply relative;
+}
+
+.currency-input input {
+  @apply pl-8 w-full bg-gray-800 border border-gray-700 text-gray-100 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-cps-red focus:border-transparent;
+}
+
+.currency-input span {
+  @apply absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 select-none pointer-events-none;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(1rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-1rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.slide-up {
+  animation: slideUp 0.3s ease-out;
+}
+
+.slide-down {
+  animation: slideDown 0.3s ease-out;
+}
+
+/* Custom scrollbar */
+.scrollbar-thin {
+  scrollbar-width: thin;
+}
+
+.scrollbar-thumb-gray-700::-webkit-scrollbar-thumb {
+  background-color: #374151;
+  border-radius: 9999px;
+}
+
+.scrollbar-track-transparent::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #374151;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #4b5563;
+}
