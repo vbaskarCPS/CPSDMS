@@ -87,7 +87,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
               'Route Number': tx.routeCode,
               'Price': tx.displayPrice || tx.price.toString(),
               'Home Phone': (tx as any).customerPhone || '',
-              'Email Address': (tx as any).customerEmail || ''
+              'Email Address': (tx as any).customerEmail || '',
+              'Prepaid': (tx as any).isPrepaid ? 'x' : undefined // Ensure prepaid flag is carried over
           } as MasterBooking));
           setAvailableClients(clients);
       }
@@ -149,16 +150,43 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       const isUpgrade = selectedRecipe.type === 'Upgrade';
       const isIOS = paymentInfo.method === 'IOS';
       const collectionAmount = parseFloat(paymentInfo.amount);
-      const finalTotal = collectionAmount; 
+
+      // --- LOGIC FIX: CALCULATE TRUE TOTAL & BREAKDOWN ---
+      let creditAmount = 0;
+      if (isUpgrade && selectedBooking && selectedBooking.Price) {
+          // Parse the original value (e.g., convert "100.00" or "SP100.00" to 100.00)
+          creditAmount = parseFloat(String(selectedBooking.Price).replace(/[^0-9.]/g, '')) || 0;
+      }
+
+      const finalTotal = creditAmount + collectionAmount;
+
+      // Construct Payment Breakdown for Backend Bucketing
+      const paymentBreakdown: Record<string, number> = {};
+      
+      // 1. Add Credit (Original Value)
+      if (creditAmount > 0) {
+          // If original was marked prepaid, bucket it as 'Prepaid'. 
+          // Otherwise, bucket as 'Previous' (or specific method if known, but 'Prepaid' ensures split logic works)
+          const creditKey = selectedBooking?.Prepaid === 'x' ? 'Prepaid' : 'Previous Payment';
+          paymentBreakdown[creditKey] = creditAmount;
+      }
+
+      // 2. Add New Collection
+      const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
+      paymentBreakdown[currentMethodKey] = (paymentBreakdown[currentMethodKey] || 0) + collectionAmount;
+
+      // --- END LOGIC FIX ---
 
       let finalNotes = formData.notes;
       if (answers['timing']) finalNotes += ` [${answers['timing']}]`; 
       if (formData.hasLockedGate) finalNotes += ' [LG]';
 
-      // --- RESTORED PRICE FORMATTING LOGIC ---
+      // --- PRICE FORMATTING LOGIC ---
       let displayPricePrefix = '';
       if (selectedRecipe.name.includes('Star')) displayPricePrefix = 'SP';
       if (selectedRecipe.name.includes('Rejuv')) displayPricePrefix = 'RJ';
+      
+      // Use finalTotal for display string so it shows the full contract value (e.g. SP150.00)
       const formattedDisplayPrice = `${displayPricePrefix}${finalTotal.toFixed(2)}`;
 
       const finalAddress = selectedBooking ? selectedBooking['Full Address'] : `${houseNumber} ${streetName}`.trim();
@@ -179,12 +207,14 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           routeCode: formData.routeNumber,
           
           type: selectedRecipe.type as any,
-          price: finalTotal,
-          displayPrice: formattedDisplayPrice, // Use formatted price (e.g. RJ200.00)
+          price: finalTotal, // Store full value
+          displayPrice: formattedDisplayPrice, 
           serviceName: selectedRecipe.name, 
           
           paymentMethod: isIOS ? 'IOS' : paymentInfo.method,
+          paymentBreakdown: paymentBreakdown, // Pass breakdown to backend
           isPaid: !isIOS && paymentInfo.method !== 'Billed',
+          
           ccFullNumber: ccData?.number,
           ccExpiry: ccData?.expiry,
           ccCVC: ccData?.cvc,
