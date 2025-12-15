@@ -81,7 +81,7 @@ class SessionService {
       ...b.customer_details,
       'Booking ID': b.booking_id,
       'Route Number': b.route_number,
-      Price: b.price?.toString(), // Ensure string
+      Price: b.price?.toString(), 
       'Log Sheet Notes': b.log_notes,
       Status: b.status,
       Prepaid: b.is_prepaid ? 'x' : undefined,
@@ -145,11 +145,7 @@ class SessionService {
       booking_id: b['Booking ID'],
       route_number: b['Route Number'],
       status: 'pending',
-      
-      // FIX: Store Price strictly as text to support "SP", "RJ", etc.
-      // Previously, parseFloat() was stripping these non-numeric values to 0.
       price: String(b.Price || ''), 
-      
       customer_details: {
         'First Name': b['First Name'],
         'Last Name': b['Last Name'],
@@ -183,29 +179,13 @@ class SessionService {
     if (lsError) throw lsError;
   }
 
-  // UPDATED: Completely wipes session data, transactions, and session users
   public async adminResetDailySession(date: string): Promise<void> {
-    
-    // 1. DELETE TRANSACTIONS (Child of Bookings/Users)
     await supabase.from('transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000'); 
-    
-    // 2. DELETE LOGSHEET SESSIONS (Child of Users)
     await supabase.from('logsheet_sessions').delete().eq('date', date);
-    
-    // 3. DELETE ROUTES (Child of Users)
     await supabase.from('routes').delete().eq('session_date', date);
-    
-    // 4. DELETE BOOKINGS (Child of Session)
     await supabase.from('bookings').delete().eq('session_date', date);
-    
-    // 5. DELETE DAILY SESSION (Parent of Bookings/Routes)
     await supabase.from('daily_sessions').delete().eq('date', date);
-
-    // 6. DELETE USERS (Parent of everything)
-    // Only delete Workers and RouteManagers to avoid deleting the Admin account
     await supabase.from('users').delete().in('role', ['Worker', 'RouteManager']);
-
-    // 7. CLEAR LOCAL STORAGE & RELOAD
     localStorage.clear();
     window.location.reload();
   }
@@ -279,26 +259,19 @@ class SessionService {
       'Price': tx.display_price,
       'Route Number': tx.customer_snapshot?.routeCode || '',
       'Log Sheet Notes': tx.item_description,
-      
-      // Mapped fields for Card Display
       'Home Phone': tx.customer_phone,
       'Email Address': tx.customer_email,
-
       'Payment Method': tx.payment_method,
       'paymentBreakdown': tx.payment_breakdown,
       'FO/BO/FP': tx.customer_snapshot?.serviceType || 'FP',
-      
       'Contract Title': (tx.items && tx.items.length > 0) ? tx.items[0].name : (tx.customer_snapshot?.serviceName || tx.display_price),
-
       'invoiceNumber': tx.invoice_number,
       'chequeNumber': tx.cheque_number,
       'etransferEmail': tx.etransfer_email,
-      
       isContract: ['Upgrade', 'Add-On'].includes(tx.type),
       isUpgrade: tx.type === 'Upgrade',
       isAddOn: tx.type === 'Add-On',
       isNewSale: tx.type === 'Sale',
-      
       Prepaid: (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? 'x' : undefined,
     }));
 
@@ -370,7 +343,9 @@ class SessionService {
         serviceName: tx.customer_snapshot?.serviceName,
         customerPhone: tx.customer_phone, 
         customerEmail: tx.customer_email,
-        isWestSplit: tx.is_west_split 
+        isWestSplit: tx.is_west_split,
+        // FIX: Explicitly send isPrepaid so the Modal knows to give credit
+        isPrepaid: tx.payment_method === 'Prepaid' || (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? true : false
       })) as any,
     };
   }
@@ -417,22 +392,15 @@ class SessionService {
       price: transaction.price,
       payment_method: transaction.paymentMethod,
       payment_breakdown: transaction.paymentBreakdown,
-      
-      // IMPORTANT: Save West Split flag to DB
-      is_west_split: transaction.isWestSplit, 
-      
+      is_west_split: transaction.isWestSplit,
       display_price: transaction.displayPrice,
       item_description: transaction.itemDescription,
       invoice_number: transaction.invoiceNumber,
       cheque_number: transaction.chequeNumber,
       etransfer_email: transaction.etransferEmail,
-      
-      // IMPORTANT: Save Contact Info to DB columns
       customer_phone: transaction.customerPhone,
       customer_email: transaction.customerEmail,
-      
       items: transaction.items, 
-
       customer_snapshot: {
         firstName: transaction.customerName.split(' ')[0],
         lastName: transaction.customerName.split(' ').slice(1).join(' '),
@@ -479,8 +447,6 @@ class SessionService {
         const val = Number(amount) || 0;
         const addToBucket = (val: number, isProd: boolean) => {
           if (isProd) {
-            // FIX: Only treat as Flats if it is STRICTLY a Production job.
-            // This prevents Upgrades (like "RJ500") from being counted as flats.
             if ((tx.type === 'Production') && (tx.displayPrice?.startsWith('RJ') || tx.displayPrice?.startsWith('SP'))) {
               stats.prodFlats += val;
             } else if (method.includes('Prepaid')) stats.prodPrepaid += val;
@@ -504,8 +470,6 @@ class SessionService {
         } else if (tx.type === 'Add-On') {
           addToBucket(val, false);
         } else if (tx.type === 'Upgrade') {
-          // WEST SPLIT LOGIC
-          // This safely splits the amount and puts it into the standard buckets (not flats)
           if (tx.isWestSplit || tx.is_west_split) {
             addToBucket(val * 0.2, true);
             addToBucket(val * 0.8, false);
