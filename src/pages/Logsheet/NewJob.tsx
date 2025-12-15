@@ -7,6 +7,17 @@ import { Worker, SessionTransaction } from '../../types';
 import { sessionService } from '../../lib/sessionService';
 import CreditCardModal from '../../components/CreditCardModal';
 
+// Helper to generate a valid UUID to fix 400 Errors on ID columns
+function generateUUID() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
 const NewJob: React.FC = () => {
   const navigate = useNavigate();
 
@@ -42,17 +53,24 @@ const NewJob: React.FC = () => {
       const currentWorker = getStorageItem<Worker | null>('current_user', null);
       if (currentWorker) {
         setWorker(currentWorker);
-        const dailySession = await sessionService.getDailySession();
-        let myRoutes: string[] = [];
+        try {
+          const dailySession = await sessionService.getDailySession();
+          let myRoutes: string[] = [];
 
-        if (dailySession && dailySession.routes) {
-          myRoutes = dailySession.routes
-            .filter((r) => r.assignedWorkerId === currentWorker.contractorId)
-            .map((r) => r.routeCode);
+          if (dailySession && dailySession.routes) {
+            myRoutes = dailySession.routes
+              .filter((r) => r.assignedWorkerId === currentWorker.contractorId)
+              .map((r) => r.routeCode);
+          }
+          setAssignedRoutes(myRoutes);
+          if (myRoutes.length > 0) setRouteCode(myRoutes[0]);
+          else setRouteCode('SALES');
+        } catch (err) {
+          console.error("Error loading session:", err);
+          // Fallback if session load fails (406 error)
+          setAssignedRoutes([]);
+          setRouteCode('SALES');
         }
-        setAssignedRoutes(myRoutes);
-        if (myRoutes.length > 0) setRouteCode(myRoutes[0]);
-        else setRouteCode('SALES');
       }
     };
     init();
@@ -92,12 +110,16 @@ const NewJob: React.FC = () => {
     if (!worker) { setError('No worker session.'); return; }
 
     const transactionPrice = parseFloat(amount) || 0;
+    
+    // Generate valid UUIDs to prevent 400 Bad Request errors
+    const newJobId = generateUUID();
+    const newTransactionId = generateUUID();
 
     const transaction: SessionTransaction = {
-      id: `sale_${Date.now()}`,
-      jobId: `NEW-${Date.now()}`,
+      id: newTransactionId,
+      jobId: newJobId,
       timestamp: new Date().toISOString(),
-      customerId: 'NEW_CLIENT',
+      customerId: 'NEW_CLIENT', // Ensure this ID string is allowed by your DB constraints
       customerName: `${firstName} ${lastName}`,
       address: `${houseNumber} ${streetName}`.trim(),
       customerPhone: phone,
@@ -129,14 +151,19 @@ const NewJob: React.FC = () => {
 
     try {
       await sessionService.completeJob(transaction, transaction.jobId, worker.contractorId);
+      
+      // Update local session stats
       const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
       if (session) {
         const newStats = sessionService.recalculateStats(session.financialStore, 5);
         await sessionService.updateLogsheetSession(session.id, { stats: newStats });
       }
       navigate('/logsheet');
-    } catch (err) {
-      setError('Failed to save sale: ' + err);
+    } catch (err: any) {
+      console.error("Failed to save sale:", err);
+      // Display detailed error from server if available
+      const message = err.message || err.error_description || JSON.stringify(err);
+      setError('Failed to save sale: ' + message);
     }
   };
 
