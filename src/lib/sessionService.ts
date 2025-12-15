@@ -1,3 +1,4 @@
+// src/lib/sessionService.ts
 import { supabase } from './supabase';
 import { format } from 'date-fns';
 import {
@@ -81,7 +82,8 @@ class SessionService {
       ...b.customer_details,
       'Booking ID': b.booking_id,
       'Route Number': b.route_number,
-      Price: b.price?.toString(),
+      // Ensure Price is treated as a string for the frontend
+      Price: b.price?.toString(), 
       'Log Sheet Notes': b.log_notes,
       Status: b.status,
       Prepaid: b.is_prepaid ? 'x' : undefined,
@@ -145,7 +147,11 @@ class SessionService {
       booking_id: b['Booking ID'],
       route_number: b['Route Number'],
       status: 'pending',
-      price: parseFloat(String(b.Price || '0').replace(/[^0-9.]/g, '')) || 0,
+      
+      // FIX: Store Price directly as text (allowing 'SP', 'RJ', etc.)
+      // We do NOT use parseFloat() here anymore.
+      price: String(b.Price || ''), 
+      
       customer_details: {
         'First Name': b['First Name'],
         'Last Name': b['Last Name'],
@@ -244,6 +250,7 @@ class SessionService {
       'Route Number': b.route_number,
       'Contractor Number': b.contractor_id,
       Status: b.status,
+      // Price is now a string from DB, so we just ensure it's a string
       Price: b.price?.toString(),
       'Log Sheet Notes': b.log_notes,
       Prepaid: b.is_prepaid ? 'x' : undefined,
@@ -366,7 +373,7 @@ class SessionService {
     await supabase.from('logsheet_sessions').update(safeUpdates).eq('id', sessionId);
   }
 
-  // --- 5. ASSIGNMENTS & UPDATES (NEW) ---
+  // --- 5. ASSIGNMENTS & UPDATES ---
 
   public async assignBookingToWorker(bookingId: string, workerId: string | null): Promise<void> {
     const { error } = await supabase
@@ -380,7 +387,6 @@ class SessionService {
     const date = await this.getDailySessionDate();
     if (!date) return;
     
-    // We update the route table for the specific session
     const { error } = await supabase
       .from('routes')
       .update({ assigned_worker_id: workerId })
