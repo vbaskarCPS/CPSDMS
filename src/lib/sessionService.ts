@@ -146,7 +146,8 @@ class SessionService {
       booking_id: b['Booking ID'],
       route_number: b['Route Number'],
       status: 'pending',
-      price: String(b.Price || ''),
+      // FIX: Cast to String() before replace to handle raw numbers from Excel
+      price: parseFloat(String(b.Price || '0').replace(/[^0-9.]/g, '')) || 0,
       customer_details: {
         'First Name': b['First Name'],
         'Last Name': b['Last Name'],
@@ -218,7 +219,7 @@ class SessionService {
     };
   }
 
-  // --- 3. DATA FETCHING (CRITICAL FIXES HERE) ---
+  // --- 3. DATA FETCHING (CRITICAL MAPPING FIXES) ---
 
   public async getWorkerAssignments(workerId: string): Promise<MasterBooking[]> {
     const date = await this.getDailySessionDate();
@@ -236,7 +237,6 @@ class SessionService {
       return (isMyRoute && !isAssignedToOther) || isAssignedToMe;
     });
 
-    // FETCH TRANSACTIONS WITH CONTACT INFO
     const { data: myTransactions } = await supabase
       .from('transactions')
       .select('*')
@@ -265,7 +265,7 @@ class SessionService {
       'Route Number': tx.customer_snapshot?.routeCode || '',
       'Log Sheet Notes': tx.item_description,
       
-      // FIX 1: Map Phone & Email so the card shows them
+      // FIX 1: Restore Contact Info for LogsheetJobCard
       'Home Phone': tx.customer_phone,
       'Email Address': tx.customer_email,
 
@@ -279,13 +279,13 @@ class SessionService {
       'chequeNumber': tx.cheque_number,
       'etransferEmail': tx.etransfer_email,
       
-      // FIX 2: Explicitly set boolean flags for coloring
+      // FIX 2: Restore Flags for Orange/Blue Cards
       isContract: ['Upgrade', 'Add-On'].includes(tx.type),
       isUpgrade: tx.type === 'Upgrade',
       isAddOn: tx.type === 'Add-On',
       isNewSale: tx.type === 'Sale',
       
-      // FIX 3: Restore PP Badge Logic
+      // FIX 3: Restore PP Badge based on Payment Breakdown
       Prepaid: (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? 'x' : undefined,
     }));
 
@@ -355,11 +355,8 @@ class SessionService {
         etransferEmail: tx.etransfer_email,
         serviceType: tx.customer_snapshot?.serviceType,
         serviceName: tx.customer_snapshot?.serviceName,
-        customerPhone: tx.customer_phone, // Map for modals
-        customerEmail: tx.customer_email,  // Map for modals
-        
-        // CRITICAL FIX: Ensure West Split boolean survives the DB round trip
-        // Database column is snake_case (is_west_split), JS is camelCase (isWestSplit)
+        customerPhone: tx.customer_phone, 
+        customerEmail: tx.customer_email,
         isWestSplit: tx.is_west_split 
       })) as any,
     };
@@ -477,6 +474,7 @@ class SessionService {
     };
   }
 
+  // --- STATS ENGINE (WITH WEST SPLIT SAFETY) ---
   public recalculateStats(financials: any[], taxRate: number = 5): SessionStats {
     const stats = this.getEmptyStats();
     const taxDivisor = 1 + taxRate / 100;
@@ -492,7 +490,9 @@ class SessionService {
         const val = Number(amount) || 0;
         const addToBucket = (val: number, isProd: boolean) => {
           if (isProd) {
-            if (tx.type === 'Production' && (tx.displayPrice?.startsWith('RJ') || tx.displayPrice?.startsWith('SP'))) {
+            // FIX: Only treat as Flats if it is STRICTLY a Production job.
+            // This prevents Upgrades (like "RJ500") from being counted as flats.
+            if ((tx.type === 'Production') && (tx.displayPrice?.startsWith('RJ') || tx.displayPrice?.startsWith('SP'))) {
               stats.prodFlats += val;
             } else if (method.includes('Prepaid')) stats.prodPrepaid += val;
             else if (method.includes('Billed') || method === 'IOS') stats.prodBilled += val;
@@ -515,7 +515,8 @@ class SessionService {
         } else if (tx.type === 'Add-On') {
           addToBucket(val, false);
         } else if (tx.type === 'Upgrade') {
-          // CHECKING BOTH CASE TYPES FOR SAFETY
+          // WEST SPLIT LOGIC
+          // This safely splits the amount and puts it into the standard buckets (not flats)
           if (tx.isWestSplit || tx.is_west_split) {
             addToBucket(val * 0.2, true);
             addToBucket(val * 0.8, false);
