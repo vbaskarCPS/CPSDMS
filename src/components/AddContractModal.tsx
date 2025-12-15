@@ -55,7 +55,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
 
-  // Territory Helpers (simplified for LIVE)
+  // Territory Helpers
   const [assignedRoutes, setAssignedRoutes] = useState<string[]>([]);
   const [streetName, setStreetName] = useState('');
   const [houseNumber, setHouseNumber] = useState('');
@@ -68,7 +68,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
 
       const activeSession = await sessionService.getActiveLogsheetSession(w.contractorId);
       if (activeSession) {
-          // Filter financials for upgrades
           const clients = activeSession.financialStore.map(tx => ({
               'Booking ID': tx.jobId,
               'First Name': tx.customerName.split(' ')[0],
@@ -165,6 +164,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           type: selectedRecipe.type as any,
           price: finalTotal,
           displayPrice: selectedRecipe.name,
+          serviceName: selectedRecipe.name, // Ensure this exists
           
           paymentMethod: isIOS ? 'IOS' : paymentInfo.method,
           isPaid: !isIOS && paymentInfo.method !== 'Billed',
@@ -180,6 +180,11 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           
           region: 'West', seasonId: 'west-aeration'
       } as any;
+
+      // FIX: IF UPGRADE, DELETE OLD TRANSACTION FIRST TO AVOID DUPLICATE
+      if (isUpgrade && selectedBooking) {
+          await sessionService.deleteTransactionByJobId(selectedBooking['Booking ID']);
+      }
 
       await sessionService.completeJob(tx, tx.jobId, worker.contractorId);
 
@@ -200,8 +205,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
       <div className="bg-gray-900 border border-gray-700 rounded-lg w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
-        
-        {/* Header */}
         <div className="p-4 border-b border-gray-700 flex justify-between items-center">
           <div className="flex items-center gap-2">
             {step !== 'SELECT_CONTRACT' && (
@@ -255,7 +258,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
 
           {step === 'ENTER_DETAILS' && (
             <div className="space-y-6">
-              {/* Client Info Block */}
               <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
                 <h4 className="text-sm font-medium text-gray-400 mb-2">Client Details</h4>
                 {selectedBooking ? (

@@ -20,7 +20,7 @@ class SessionService {
     return SessionService.instance;
   }
 
-  // --- 1. SESSION MANAGEMENT (Cloud) ---
+  // --- 1. SESSION MANAGEMENT ---
 
   private getTodayStr(): string {
     return format(new Date(), 'yyyy-MM-dd');
@@ -180,65 +180,33 @@ class SessionService {
     if (lsError) throw lsError;
   }
 
-  // REPLACES clearSession -> Explicitly deletes all related tables
   public async adminResetDailySession(date: string): Promise<void> {
-    // 1. Delete Transactions (Filtered by timestamp range for the date)
     const startOfDay = `${date}T00:00:00.000Z`;
     const endOfDay = `${date}T23:59:59.999Z`;
 
-    await supabase.from('transactions')
-      .delete()
-      .gte('timestamp', startOfDay)
-      .lte('timestamp', endOfDay);
-
-    // 2. Delete Logsheet Sessions
+    await supabase.from('transactions').delete().gte('timestamp', startOfDay).lte('timestamp', endOfDay);
     await supabase.from('logsheet_sessions').delete().eq('date', date);
-
-    // 3. Delete Bookings
     await supabase.from('bookings').delete().eq('session_date', date);
-
-    // 4. Delete Routes
     await supabase.from('routes').delete().eq('session_date', date);
-
-    // 5. Delete Daily Session (Parent)
-    const { error } = await supabase.from('daily_sessions').delete().eq('date', date);
-    
-    if (error) {
-      console.error("Failed to delete session root:", error);
-      throw error;
-    }
+    await supabase.from('daily_sessions').delete().eq('date', date);
 
     localStorage.clear();
     window.location.reload();
   }
 
-  // --- 2. AUTHENTICATION (Cloud) ---
+  // --- 2. AUTHENTICATION ---
 
   public async authenticateRM(username: string, password: string): Promise<ManagementUser | null> {
     if (username === 'admin' && password === 'admin') {
       return { userId: 'admin', name: 'Administrator', username: 'admin', role: 'Admin' };
     }
-    const { data } = await supabase
-      .from('users')
-      .select('*')
-      .ilike('username', username)
-      .eq('password', password)
-      .eq('role', 'RouteManager')
-      .single();
-
+    const { data } = await supabase.from('users').select('*').ilike('username', username).eq('password', password).eq('role', 'RouteManager').single();
     if (!data) return null;
     return { userId: data.user_id, name: data.name, username: data.username, role: 'RouteManager' };
   }
 
   public async authenticateWorker(contractorId: string, password: string): Promise<Worker | null> {
-    const { data } = await supabase
-      .from('users')
-      .select('*')
-      .eq('user_id', contractorId)
-      .eq('password', password)
-      .eq('role', 'Worker')
-      .single();
-
+    const { data } = await supabase.from('users').select('*').eq('user_id', contractorId).eq('password', password).eq('role', 'Worker').single();
     if (!data) return null;
     const names = data.name.split(' ');
     return {
@@ -253,24 +221,16 @@ class SessionService {
     };
   }
 
-  // --- 3. DATA FETCHING (Cloud) ---
+  // --- 3. DATA FETCHING ---
 
   public async getWorkerAssignments(workerId: string): Promise<MasterBooking[]> {
     const date = await this.getDailySessionDate();
     if (!date) return [];
 
-    const { data: myRoutes } = await supabase
-      .from('routes')
-      .select('route_code')
-      .eq('assigned_worker_id', workerId)
-      .eq('session_date', date);
+    const { data: myRoutes } = await supabase.from('routes').select('route_code').eq('assigned_worker_id', workerId).eq('session_date', date);
     const routeCodes = myRoutes?.map((r) => r.route_code) || [];
 
-    const { data: allBookings } = await supabase
-      .from('bookings')
-      .select('*')
-      .eq('session_date', date)
-      .neq('status', 'completed');
+    const { data: allBookings } = await supabase.from('bookings').select('*').eq('session_date', date).neq('status', 'completed');
 
     const myPending = (allBookings || []).filter((b) => {
       const isMyRoute = routeCodes.includes(b.route_number);
@@ -279,10 +239,7 @@ class SessionService {
       return (isMyRoute && !isAssignedToOther) || isAssignedToMe;
     });
 
-    const { data: myTransactions } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('worker_id', workerId);
+    const { data: myTransactions } = await supabase.from('transactions').select('*').eq('worker_id', workerId);
 
     const pendingMapped = myPending.map((b) => ({
       ...b.data,
@@ -310,6 +267,9 @@ class SessionService {
       'paymentBreakdown': tx.payment_breakdown,
       'FO/BO/FP': tx.customer_snapshot?.serviceType || 'FP',
       
+      // FIX: CORRECTLY MAP CONTRACT TITLE
+      'Contract Title': (tx.items && tx.items.length > 0) ? tx.items[0].name : (tx.customer_snapshot?.serviceName || tx.display_price),
+
       'invoiceNumber': tx.invoice_number,
       'chequeNumber': tx.cheque_number,
       'etransferEmail': tx.etransfer_email,
@@ -322,23 +282,15 @@ class SessionService {
   }
 
   public getStreetsForRoute(routeCode: string): Promise<string[]> {
-    return supabase
-      .from('routes')
-      .select('streets')
-      .eq('route_code', routeCode)
-      .single()
-      .then((res) => res.data?.streets || []);
+    return supabase.from('routes').select('streets').eq('route_code', routeCode).single().then((res) => res.data?.streets || []);
   }
 
-  // --- 4. LOGSHEET SESSIONS (State) ---
+  // --- 4. LOGSHEET SESSIONS ---
 
   public async getLogsheetSessions(): Promise<LogsheetSession[]> {
     const date = await this.getDailySessionDate();
     if (!date) return [];
-    const { data } = await supabase
-      .from('logsheet_sessions')
-      .select('*')
-      .eq('date', date);
+    const { data } = await supabase.from('logsheet_sessions').select('*').eq('date', date);
     return (data || []).map((d) => ({
       id: d.id,
       workerId: d.worker_id,
@@ -356,19 +308,10 @@ class SessionService {
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
-    const { data } = await supabase
-      .from('logsheet_sessions')
-      .select('*')
-      .eq('worker_id', workerId)
-      .eq('date', date)
-      .single();
-
+    const { data } = await supabase.from('logsheet_sessions').select('*').eq('worker_id', workerId).eq('date', date).single();
     if (!data) return null;
 
-    const { data: financials } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('worker_id', workerId);
+    const { data: financials } = await supabase.from('transactions').select('*').eq('worker_id', workerId);
 
     return {
       id: data.id,
@@ -392,14 +335,15 @@ class SessionService {
         customerName: `${tx.customer_snapshot?.firstName} ${tx.customer_snapshot?.lastName}`,
         address: tx.customer_snapshot?.address,
         routeCode: tx.customer_snapshot?.routeCode,
-        items: [],
+        items: tx.items || [], // Ensure items are retrieved
         paymentBreakdown: tx.payment_breakdown,
         displayPrice: tx.display_price,
         itemDescription: tx.item_description,
         invoiceNumber: tx.invoice_number,
         chequeNumber: tx.cheque_number,
         etransferEmail: tx.etransfer_email,
-        serviceType: tx.customer_snapshot?.serviceType
+        serviceType: tx.customer_snapshot?.serviceType,
+        serviceName: tx.customer_snapshot?.serviceName // Map serviceName
       })) as any,
     };
   }
@@ -407,10 +351,8 @@ class SessionService {
   public async startLogsheetSession(workerId: string): Promise<LogsheetSession> {
     const date = await this.getDailySessionDate();
     if (!date) throw new Error('No active session day found');
-
     const existing = await this.getActiveLogsheetSession(workerId);
     if (existing) return existing;
-
     const newSession = {
       id: `sess_${workerId}_${Date.now()}`,
       worker_id: workerId,
@@ -418,10 +360,8 @@ class SessionService {
       status: 'OPEN',
       stats: this.getEmptyStats(),
     };
-
     const { error } = await supabase.from('logsheet_sessions').insert(newSession);
     if (error) throw error;
-
     return this.getActiveLogsheetSession(workerId) as Promise<LogsheetSession>;
   }
 
@@ -431,11 +371,15 @@ class SessionService {
     if (updates.validation) safeUpdates.validation = updates.validation;
     if (updates.bonuses) safeUpdates.bonuses = updates.bonuses;
     if (updates.status) safeUpdates.status = updates.status;
-
     await supabase.from('logsheet_sessions').update(safeUpdates).eq('id', sessionId);
   }
 
-  // --- 5. TRANSACTIONS (Completing Jobs) ---
+  // --- 5. TRANSACTIONS ---
+
+  // NEW: Delete transaction to allow upgrades to replace old jobs
+  public async deleteTransactionByJobId(jobId: string): Promise<void> {
+      await supabase.from('transactions').delete().eq('job_id', jobId);
+  }
 
   public async completeJob(transaction: SessionTransaction, bookingId: string, workerId: string): Promise<void> {
     const { error: txError } = await supabase.from('transactions').insert({
@@ -453,6 +397,9 @@ class SessionService {
       invoice_number: transaction.invoiceNumber,
       cheque_number: transaction.chequeNumber,
       etransfer_email: transaction.etransferEmail,
+      
+      // FIX: Save ITEMS and SERVICE NAME
+      items: transaction.items, // Saves [{name: 'Star Plan Pro', ...}] to JSONB
 
       customer_snapshot: {
         firstName: transaction.customerName.split(' ')[0],
@@ -460,18 +407,16 @@ class SessionService {
         address: transaction.address,
         routeCode: transaction.routeCode,
         serviceType: transaction.serviceType,
+        serviceName: transaction.serviceName // Explicitly save service Name
       },
     });
     if (txError) throw txError;
 
     if (!bookingId.startsWith('NEW-')) {
-      await supabase
-        .from('bookings')
-        .update({
+      await supabase.from('bookings').update({
           status: 'completed',
           contractor_id: workerId,
-        })
-        .eq('booking_id', bookingId);
+        }).eq('booking_id', bookingId);
     }
   }
 
