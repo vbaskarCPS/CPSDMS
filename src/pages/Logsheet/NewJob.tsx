@@ -7,7 +7,7 @@ import { Worker, SessionTransaction } from '../../types';
 import { sessionService } from '../../lib/sessionService';
 import CreditCardModal from '../../components/CreditCardModal';
 
-// Helper to generate a valid UUID to fix 400 Errors on ID columns
+// --- HELPER: Generate Valid UUIDs ---
 function generateUUID() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -48,6 +48,7 @@ const NewJob: React.FC = () => {
   const [suggestedStreets, setSuggestedStreets] = useState<string[]>([]);
   const [isCustomStreetMode, setIsCustomStreetMode] = useState(false);
 
+  // --- 1. Initialize Worker & Session ---
   useEffect(() => {
     const init = async () => {
       const currentWorker = getStorageItem<Worker | null>('current_user', null);
@@ -66,8 +67,7 @@ const NewJob: React.FC = () => {
           if (myRoutes.length > 0) setRouteCode(myRoutes[0]);
           else setRouteCode('SALES');
         } catch (err) {
-          console.error("Error loading session:", err);
-          // Fallback if session load fails (406 error)
+          console.warn("Could not load daily session (might be offline or no session):", err);
           setAssignedRoutes([]);
           setRouteCode('SALES');
         }
@@ -76,6 +76,7 @@ const NewJob: React.FC = () => {
     init();
   }, []);
 
+  // --- 2. Load Streets for Route ---
   useEffect(() => {
     if (routeCode && routeCode !== 'SALES') {
       sessionService.getStreetsForRoute(routeCode).then((streets) => {
@@ -94,6 +95,7 @@ const NewJob: React.FC = () => {
     }
   }, [routeCode]);
 
+  // --- Handlers ---
   const handleTaxClick = () => {
     const current = parseFloat(amount) || 0;
     const tax = current * 0.05;
@@ -105,63 +107,64 @@ const NewJob: React.FC = () => {
     if (method === 'Credit Card') setShowCreditModal(true);
   };
 
+  // --- MAIN SUBMIT FUNCTION ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!worker) { setError('No worker session.'); return; }
 
     const transactionPrice = parseFloat(amount) || 0;
-    
-    // Generate valid UUIDs to prevent 400 Bad Request errors
-    const newJobId = generateUUID();
     const newTransactionId = generateUUID();
 
-    const transaction: SessionTransaction = {
+    // Construct Payload using SNAKE_CASE keys to match Supabase columns
+    // We treat this as 'any' to bypass strict TS checks for the old interface if needed
+    const dbPayload: any = {
       id: newTransactionId,
-      jobId: newJobId,
-      timestamp: new Date().toISOString(),
-      customerId: 'NEW_CLIENT', // Ensure this ID string is allowed by your DB constraints
-      customerName: `${firstName} ${lastName}`,
+      created_at: new Date().toISOString(),
+      
+      // LINKING
+      job_id: null, // NULL because this is a walk-up sale, not a pre-scheduled job
+      
+      // CUSTOMER DETAILS (New Columns)
+      customer_name: `${firstName} ${lastName}`,
       address: `${houseNumber} ${streetName}`.trim(),
-      customerPhone: phone,
-      customerEmail: email,
-      workerId: worker.contractorId,
-      workerName: worker.firstName,
-      routeManagerName: 'RM',
-      routeCode: routeCode,
+      customer_phone: phone,
+      customer_email: email,
+      
+      // WORKER DETAILS
+      worker_id: worker.contractorId,
+      worker_name: worker.firstName,
+      route_code: routeCode,
+      
+      // TRANSACTION DETAILS
       price: transactionPrice,
-      displayPrice: amount,
-      type: 'Sale',
-      items: [{ name: 'Aeration', price: transactionPrice }],
-      paymentMethod: paymentMethod,
-      isPaid: paymentMethod !== 'Billed',
+      payment_method: paymentMethod,
+      items: [{ name: 'Aeration', price: transactionPrice }], // JSONB Column
+      service_type: propertyType,
+      region: 'West', // Adjust if you have dynamic regions
       
-      // Restored Fields
-      invoiceNumber: paymentMethod === 'Billed' ? invoiceNumber : undefined,
-      etransferEmail: paymentMethod === 'E-Transfer' ? etransferEmail : undefined,
-      chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : undefined,
+      // OPTIONAL PAYMENT DETAILS
+      invoice_number: paymentMethod === 'Billed' ? invoiceNumber : null,
+      cheque_number: paymentMethod === 'Cheque' ? chequeNumber : null,
       
-      ccFullNumber: ccData?.number,
-      ccExpiry: ccData?.expiry,
-      ccCVC: ccData?.cvc,
-      itemDescription: '',
-      serviceType: propertyType as any,
-      region: 'West',
-      seasonId: 'west-aeration',
+      // CREDIT CARD DATA (If you store this securely, otherwise omit)
+      // cc_last4: ccData?.number?.slice(-4) || null,
     };
 
     try {
-      await sessionService.completeJob(transaction, transaction.jobId, worker.contractorId);
-      
-      // Update local session stats
+      // Send to Supabase
+      // 2nd arg is null because we are not updating a job status
+      await sessionService.completeJob(dbPayload, null, worker.contractorId);
+
+      // Update Local Logsheet Stats for immediate UI feedback
       const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
       if (session) {
         const newStats = sessionService.recalculateStats(session.financialStore, 5);
         await sessionService.updateLogsheetSession(session.id, { stats: newStats });
       }
+
       navigate('/logsheet');
     } catch (err: any) {
       console.error("Failed to save sale:", err);
-      // Display detailed error from server if available
       const message = err.message || err.error_description || JSON.stringify(err);
       setError('Failed to save sale: ' + message);
     }
