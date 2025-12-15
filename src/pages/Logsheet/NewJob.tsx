@@ -1,10 +1,10 @@
 // src/pages/Logsheet/NewJob.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, Save, AlertCircle, RefreshCw, CheckCircle } from 'lucide-react';
-import { getStorageItem } from '../../lib/localStorage';
+import { X, Save, AlertCircle, RefreshCw, CheckCircle, CreditCard, Mail, DollarSign } from 'lucide-react';
+import { getStorageItem, STORAGE_KEYS } from '../../lib/localStorage';
 import { Worker, SessionTransaction } from '../../types';
-import { sessionService } from '../../lib/sessionService';
+import { sessionService } from '../../lib/sessionService'; 
 import CreditCardModal from '../../components/CreditCardModal';
 
 // --- HELPER: Generate Valid UUIDs ---
@@ -30,15 +30,16 @@ const NewJob: React.FC = () => {
   const [streetName, setStreetName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
-  const [amount, setAmount] = useState('');
-  const [propertyType, setPropertyType] = useState('FP');
-
+  const [amount, setAmount] = useState(''); 
+  const [propertyType, setPropertyType] = useState('FP'); 
+  
   // Payment State
   const [paymentMethod, setPaymentMethod] = useState('Cash');
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [etransferEmail, setEtransferEmail] = useState('');
   const [chequeNumber, setChequeNumber] = useState('');
-
+  
+  // Credit Card Data
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
   const [ccData, setCcData] = useState<any>(null);
@@ -49,142 +50,139 @@ const NewJob: React.FC = () => {
   const [suggestedStreets, setSuggestedStreets] = useState<string[]>([]);
   const [isCustomStreetMode, setIsCustomStreetMode] = useState(false);
 
-  // --- 1. Initialize Worker & Session ---
   useEffect(() => {
     const init = async () => {
+      // 1. Get Current Worker
       const currentWorker = getStorageItem<Worker | null>('current_user', null);
+      
       if (currentWorker) {
-        setWorker(currentWorker);
-        try {
-          // Attempt to get route list from cloud session
-          const dailySession = await sessionService.getDailySession();
-          let myRoutes: string[] = [];
+          setWorker(currentWorker);
+          
+          // 2. FETCH ROUTES FROM DAILY SESSION
+          try {
+              const dailySession = await sessionService.getDailySession();
+              let myRoutes: string[] = [];
 
-          if (dailySession && dailySession.routes) {
-            myRoutes = dailySession.routes
-              .filter((r) => r.assignedWorkerId === currentWorker.contractorId)
-              .map((r) => r.routeCode);
+              if (dailySession && dailySession.routes) {
+                  myRoutes = dailySession.routes
+                      .filter(r => r.assignedWorkerId === currentWorker.contractorId)
+                      .map(r => r.routeCode);
+              }
+
+              setAssignedRoutes(myRoutes);
+              
+              if (myRoutes.length > 0) {
+                  setRouteCode(myRoutes[0]);
+              } else {
+                  setRouteCode('SALES');
+              }
+          } catch(err) {
+              console.warn("Offline/No session found", err);
+              setAssignedRoutes([]);
+              setRouteCode('SALES');
           }
-          
-          setAssignedRoutes(myRoutes);
-          
-          // Default selection logic
-          if (myRoutes.length > 0) {
-            setRouteCode(myRoutes[0]);
-          } else {
-            setRouteCode('SALES');
-          }
-        } catch (err) {
-          console.warn("Could not load daily session (might be offline or no session):", err);
-          setAssignedRoutes([]);
-          setRouteCode('SALES');
-        }
       }
     };
     init();
   }, []);
 
-  // --- 2. Load Streets for Route ---
+  // Street Suggestions
   useEffect(() => {
     if (routeCode && routeCode !== 'SALES') {
-      sessionService.getStreetsForRoute(routeCode).then((streets) => {
-        if (streets && streets.length > 0) {
-          setSuggestedStreets(streets);
-          setIsCustomStreetMode(false);
-          setStreetName('');
-        } else {
-          setSuggestedStreets([]);
-          setIsCustomStreetMode(true);
-        }
-      });
+        sessionService.getStreetsForRoute(routeCode).then(streets => {
+            if (streets && streets.length > 0) {
+                setSuggestedStreets(streets);
+                setIsCustomStreetMode(false);
+                setStreetName(''); 
+            } else {
+                setSuggestedStreets([]);
+                setIsCustomStreetMode(true);
+            }
+        });
     } else {
-      setSuggestedStreets([]);
-      setIsCustomStreetMode(true);
+        setSuggestedStreets([]);
+        setIsCustomStreetMode(true);
     }
   }, [routeCode]);
 
-  // --- Handlers ---
-  const handleTaxClick = () => {
-    const current = parseFloat(amount) || 0;
-    const tax = current * 0.05;
-    setAmount((Math.round((current + tax) * 100) / 100).toFixed(2));
+  const handleTaxClick = () => { 
+      const current = parseFloat(amount) || 0; 
+      const tax = current * 0.05; 
+      setAmount((Math.round((current + tax) * 100) / 100).toFixed(2)); 
+  };
+  
+  const handlePaymentMethodChange = (method: string) => { 
+      setPaymentMethod(method); 
+      if (method === 'Credit Card') setShowCreditModal(true); 
   };
 
-  const handlePaymentMethodChange = (method: string) => {
-    setPaymentMethod(method);
-    if (method === 'Credit Card') setShowCreditModal(true);
-  };
-
-  // --- MAIN SUBMIT FUNCTION ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!worker) { setError('No worker session.'); return; }
+    setError(null);
 
-    const transactionPrice = parseFloat(amount) || 0;
+    if (!worker) { setError("No worker session."); return; }
     
-    // 1. Generate IDs valid for Supabase
-    const newTransactionId = generateUUID(); 
-    const placeholderJobId = `NEW-${Date.now()}`; // Custom ID for walk-ups is fine for Job ID, but not Transaction ID
+    // Ensure session exists
+    let activeSession = await sessionService.getActiveLogsheetSession(worker.contractorId);
+    if (!activeSession) { 
+        activeSession = await sessionService.startLogsheetSession(worker.contractorId);
+    }
 
-    // 2. Construct Transaction Object matching DB Schema
+    const rawPrice = parseFloat(amount) || 0;
+    const transactionPrice = Math.round(rawPrice * 100) / 100;
+    
+    const newTransactionId = generateUUID();
+    const placeholderJobId = `NEW-${Date.now()}`;
+
+    // Create Transaction Record
     const transactionData: SessionTransaction = {
-      id: newTransactionId,
-      jobId: placeholderJobId,
-      timestamp: new Date().toISOString(),
-      
-      customerId: 'WALKUP', 
-      customerName: `${firstName} ${lastName}`,
-      address: `${houseNumber} ${streetName}`.trim(),
-      customerPhone: phone,
-      customerEmail: email,
-      
-      workerId: worker.contractorId,
-      workerName: worker.firstName,
-      routeCode: routeCode,
-      
-      type: 'Sale', // New Sale
-      price: transactionPrice,
-      displayPrice: transactionPrice.toFixed(2),
-      
-      isPaid: paymentMethod !== 'Billed',
-      paymentMethod: paymentMethod,
-      
-      items: [{ name: 'Aeration', price: transactionPrice }],
-      serviceType: propertyType as any,
-      
-      invoiceNumber: paymentMethod === 'Billed' ? invoiceNumber : undefined,
-      chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : undefined,
-      etransferEmail: paymentMethod === 'E-Transfer' ? etransferEmail : undefined,
-      
-      ccFullNumber: ccData?.number,
-      ccExpiry: ccData?.expiry,
-      ccCVC: ccData?.cvc,
-      
-      // Defaults
-      itemDescription: 'New Sale',
-      region: 'West',
-      routeManagerName: 'RM',
-      isWestSplit: false
-    } as any; // Cast to any if strict typing complains about optional DB fields
+        id: newTransactionId,
+        jobId: placeholderJobId, 
+        timestamp: new Date().toISOString(),
+        customerId: "WALKUP",
+        customerName: `${firstName} ${lastName}`,
+        address: `${houseNumber} ${streetName}`.trim(),
+        customerPhone: phone,
+        customerEmail: email,
+        workerId: worker.contractorId,
+        workerName: worker.firstName,
+        
+        routeManagerName: 'RM', 
+        routeCode: routeCode,
+        
+        price: transactionPrice,
+        displayPrice: amount, 
+        type: 'Sale',
+        items: [{ name: 'Aeration', price: transactionPrice }],
+        paymentMethod: paymentMethod,
+        isPaid: paymentMethod !== 'Billed',
+        invoiceNumber: paymentMethod === 'Billed' ? invoiceNumber : undefined,
+        etransferEmail: paymentMethod === 'E-Transfer' ? etransferEmail : undefined,
+        chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : undefined,
+        ccFullNumber: ccData?.number,
+        ccExpiry: ccData?.expiry,
+        ccCVC: ccData?.cvc,
+        itemDescription: 'New Sale',
+        serviceType: propertyType as any, 
+        region: 'West', 
+        seasonId: 'west-aeration',
+        isWestSplit: false
+    } as any;
 
     try {
-      // 3. Commit to Database
-      await sessionService.completeJob(transactionData, placeholderJobId, worker.contractorId);
+        await sessionService.completeJob(transactionData, placeholderJobId, worker.contractorId);
 
-      // 4. Optimistic Update: Refresh Local Stats
-      // We fetch the session again to ensure we have the latest state including the new transaction
-      const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
-      if (session) {
-        // Recalculate stats with the new financial store from DB
-        const newStats = sessionService.recalculateStats(session.financialStore, 5);
-        await sessionService.updateLogsheetSession(session.id, { stats: newStats });
-      }
+        // Optimistic Update
+        const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
+        if (session) {
+            const newStats = sessionService.recalculateStats(session.financialStore, 5);
+            await sessionService.updateLogsheetSession(session.id, { stats: newStats });
+        }
 
-      navigate('/logsheet');
+        navigate('/logsheet');
     } catch (err: any) {
-      console.error("Failed to save sale:", err);
-      const message = err.message || err.error_description || JSON.stringify(err);
-      setError('Failed to save sale: ' + message);
+        console.error(err);
+        setError("Failed to save sale: " + err.message);
     }
   };
 
@@ -199,7 +197,7 @@ const NewJob: React.FC = () => {
         {error && <div className="m-4 p-3 bg-red-900/30 text-red-300 border border-red-700 rounded-md text-sm flex items-center gap-2"><AlertCircle size={16} /> {error}</div>}
         
         <form onSubmit={handleSubmit} className="overflow-y-auto p-4 space-y-6 flex-grow custom-scrollbar">
-          {/* CLIENT DETAILS */}
+          
           <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-700/50">
             <h3 className="text-sm font-bold text-gray-300 uppercase mb-3">Client Details</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -239,10 +237,12 @@ const NewJob: React.FC = () => {
             </div>
           </div>
 
-          {/* PRICING & SERVICES */}
+          {/* PRICING & SERVICES - FIXED UI OVERLAP */}
           <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-700/50">
               <h3 className="text-sm font-bold text-gray-300 uppercase mb-3">Services & Pricing</h3>
-              <div className="grid grid-cols-2 gap-4">
+              
+              {/* CHANGED: grid-cols-1 md:grid-cols-2 */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Total Amount ($)</label>
                       <div className="flex gap-2">
