@@ -145,6 +145,7 @@ class SessionService {
       booking_id: b['Booking ID'],
       route_number: b['Route Number'],
       status: 'pending',
+      // FIX: Cast to String() before replace to handle raw numbers from Excel (SP/RJ support)
       price: String(b.Price || ''), 
       customer_details: {
         'First Name': b['First Name'],
@@ -235,7 +236,10 @@ class SessionService {
       return (isMyRoute && !isAssignedToOther) || isAssignedToMe;
     });
 
-    const { data: myTransactions } = await supabase.from('transactions').select('*').eq('worker_id', workerId);
+    const { data: myTransactions } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('worker_id', workerId);
 
     const pendingMapped = myPending.map((b) => ({
       ...b.data,
@@ -259,19 +263,27 @@ class SessionService {
       'Price': tx.display_price,
       'Route Number': tx.customer_snapshot?.routeCode || '',
       'Log Sheet Notes': tx.item_description,
+      
+      // Mapped fields for LogsheetJobCard Display
       'Home Phone': tx.customer_phone,
       'Email Address': tx.customer_email,
+
       'Payment Method': tx.payment_method,
       'paymentBreakdown': tx.payment_breakdown,
       'FO/BO/FP': tx.customer_snapshot?.serviceType || 'FP',
+      
       'Contract Title': (tx.items && tx.items.length > 0) ? tx.items[0].name : (tx.customer_snapshot?.serviceName || tx.display_price),
+
       'invoiceNumber': tx.invoice_number,
       'chequeNumber': tx.cheque_number,
       'etransferEmail': tx.etransfer_email,
+      
+      // Flags for coloring logic
       isContract: ['Upgrade', 'Add-On'].includes(tx.type),
       isUpgrade: tx.type === 'Upgrade',
       isAddOn: tx.type === 'Add-On',
       isNewSale: tx.type === 'Sale',
+      
       Prepaid: (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? 'x' : undefined,
     }));
 
@@ -344,7 +356,7 @@ class SessionService {
         customerPhone: tx.customer_phone, 
         customerEmail: tx.customer_email,
         isWestSplit: tx.is_west_split,
-        // FIX: Explicitly send isPrepaid so the Modal knows to give credit
+        // FIX: Explicitly send isPrepaid so AddContractModal knows to give credit
         isPrepaid: tx.payment_method === 'Prepaid' || (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? true : false
       })) as any,
     };
@@ -376,7 +388,31 @@ class SessionService {
     await supabase.from('logsheet_sessions').update(safeUpdates).eq('id', sessionId);
   }
 
-  // --- 5. TRANSACTIONS ---
+  // --- 5. ASSIGNMENTS & UPDATES (RESTORED) ---
+
+  public async assignBookingToWorker(bookingId: string, workerId: string | null): Promise<void> {
+    const { error } = await supabase
+      .from('bookings')
+      .update({ contractor_id: workerId })
+      .eq('booking_id', bookingId);
+    if (error) console.error("Error assigning booking:", error);
+  }
+
+  public async assignRouteToWorker(routeCode: string, workerId: string | null): Promise<void> {
+    const date = await this.getDailySessionDate();
+    if (!date) return;
+    
+    // We update the route table for the specific session
+    const { error } = await supabase
+      .from('routes')
+      .update({ assigned_worker_id: workerId })
+      .eq('route_code', routeCode)
+      .eq('session_date', date);
+      
+    if (error) console.error("Error assigning route:", error);
+  }
+
+  // --- 6. TRANSACTIONS ---
 
   public async deleteTransactionByJobId(jobId: string): Promise<void> {
       await supabase.from('transactions').delete().eq('job_id', jobId);
@@ -392,15 +428,22 @@ class SessionService {
       price: transaction.price,
       payment_method: transaction.paymentMethod,
       payment_breakdown: transaction.paymentBreakdown,
-      is_west_split: transaction.isWestSplit,
+      
+      // IMPORTANT: Save West Split flag to DB
+      is_west_split: transaction.isWestSplit, 
+      
       display_price: transaction.displayPrice,
       item_description: transaction.itemDescription,
       invoice_number: transaction.invoiceNumber,
       cheque_number: transaction.chequeNumber,
       etransfer_email: transaction.etransferEmail,
+      
+      // IMPORTANT: Save Contact Info to DB columns
       customer_phone: transaction.customerPhone,
       customer_email: transaction.customerEmail,
+      
       items: transaction.items, 
+
       customer_snapshot: {
         firstName: transaction.customerName.split(' ')[0],
         lastName: transaction.customerName.split(' ').slice(1).join(' '),
@@ -420,7 +463,7 @@ class SessionService {
     }
   }
 
-  // --- 6. UTILS ---
+  // --- 7. UTILS ---
 
   public getEmptyStats(): SessionStats {
     return {
@@ -447,6 +490,7 @@ class SessionService {
         const val = Number(amount) || 0;
         const addToBucket = (val: number, isProd: boolean) => {
           if (isProd) {
+            // FIX: Only treat as Flats if it is STRICTLY a Production job.
             if ((tx.type === 'Production') && (tx.displayPrice?.startsWith('RJ') || tx.displayPrice?.startsWith('SP'))) {
               stats.prodFlats += val;
             } else if (method.includes('Prepaid')) stats.prodPrepaid += val;
@@ -470,6 +514,7 @@ class SessionService {
         } else if (tx.type === 'Add-On') {
           addToBucket(val, false);
         } else if (tx.type === 'Upgrade') {
+          // WEST SPLIT LOGIC
           if (tx.isWestSplit || tx.is_west_split) {
             addToBucket(val * 0.2, true);
             addToBucket(val * 0.8, false);
