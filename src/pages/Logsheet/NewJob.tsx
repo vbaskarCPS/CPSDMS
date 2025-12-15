@@ -8,6 +8,7 @@ import { sessionService } from '../../lib/sessionService';
 import CreditCardModal from '../../components/CreditCardModal';
 
 // --- HELPER: Generate Valid UUIDs ---
+// Required for Supabase 'uuid' columns to prevent 500 Errors
 function generateUUID() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -55,6 +56,7 @@ const NewJob: React.FC = () => {
       if (currentWorker) {
         setWorker(currentWorker);
         try {
+          // Attempt to get route list from cloud session
           const dailySession = await sessionService.getDailySession();
           let myRoutes: string[] = [];
 
@@ -63,9 +65,15 @@ const NewJob: React.FC = () => {
               .filter((r) => r.assignedWorkerId === currentWorker.contractorId)
               .map((r) => r.routeCode);
           }
+          
           setAssignedRoutes(myRoutes);
-          if (myRoutes.length > 0) setRouteCode(myRoutes[0]);
-          else setRouteCode('SALES');
+          
+          // Default selection logic
+          if (myRoutes.length > 0) {
+            setRouteCode(myRoutes[0]);
+          } else {
+            setRouteCode('SALES');
+          }
         } catch (err) {
           console.warn("Could not load daily session (might be offline or no session):", err);
           setAssignedRoutes([]);
@@ -113,19 +121,19 @@ const NewJob: React.FC = () => {
     if (!worker) { setError('No worker session.'); return; }
 
     const transactionPrice = parseFloat(amount) || 0;
-    const newTransactionId = generateUUID();
-    // Use a placeholder ID for new sales so the DB logic doesn't fail
-    const placeholderJobId = `NEW-${Date.now()}`;
+    
+    // 1. Generate IDs valid for Supabase
+    const newTransactionId = generateUUID(); 
+    const placeholderJobId = `NEW-${Date.now()}`; // Custom ID for walk-ups is fine for Job ID, but not Transaction ID
 
-    // FIX: Using CAMEL CASE keys to match SessionTransaction interface
-    // This fixes the "reading 'split'" error
+    // 2. Construct Transaction Object matching DB Schema
     const transactionData: SessionTransaction = {
       id: newTransactionId,
       jobId: placeholderJobId,
       timestamp: new Date().toISOString(),
       
       customerId: 'WALKUP', 
-      customerName: `${firstName} ${lastName}`, // Correct property name
+      customerName: `${firstName} ${lastName}`,
       address: `${houseNumber} ${streetName}`.trim(),
       customerPhone: phone,
       customerEmail: email,
@@ -134,7 +142,7 @@ const NewJob: React.FC = () => {
       workerName: worker.firstName,
       routeCode: routeCode,
       
-      type: 'Sale', // It is a new sale
+      type: 'Sale', // New Sale
       price: transactionPrice,
       displayPrice: transactionPrice.toFixed(2),
       
@@ -155,16 +163,19 @@ const NewJob: React.FC = () => {
       // Defaults
       itemDescription: 'New Sale',
       region: 'West',
-      routeManagerName: 'RM'
-    };
+      routeManagerName: 'RM',
+      isWestSplit: false
+    } as any; // Cast to any if strict typing complains about optional DB fields
 
     try {
-      // Send to Supabase
+      // 3. Commit to Database
       await sessionService.completeJob(transactionData, placeholderJobId, worker.contractorId);
 
-      // Update Local Logsheet Stats for immediate UI feedback
+      // 4. Optimistic Update: Refresh Local Stats
+      // We fetch the session again to ensure we have the latest state including the new transaction
       const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
       if (session) {
+        // Recalculate stats with the new financial store from DB
         const newStats = sessionService.recalculateStats(session.financialStore, 5);
         await sessionService.updateLogsheetSession(session.id, { stats: newStats });
       }
