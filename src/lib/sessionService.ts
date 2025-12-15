@@ -1,4 +1,3 @@
-// src/lib/sessionService.ts
 import { supabase } from './supabase';
 import { format } from 'date-fns';
 import {
@@ -82,7 +81,7 @@ class SessionService {
       ...b.customer_details,
       'Booking ID': b.booking_id,
       'Route Number': b.route_number,
-      Price: b.price?.toString(),
+      Price: b.price?.toString(), // Ensure string
       'Log Sheet Notes': b.log_notes,
       Status: b.status,
       Prepaid: b.is_prepaid ? 'x' : undefined,
@@ -146,8 +145,11 @@ class SessionService {
       booking_id: b['Booking ID'],
       route_number: b['Route Number'],
       status: 'pending',
-      // FIX: Cast to String() before replace to handle raw numbers from Excel
-      price: parseFloat(String(b.Price || '0').replace(/[^0-9.]/g, '')) || 0,
+      
+      // FIX: Store Price strictly as text to support "SP", "RJ", etc.
+      // Previously, parseFloat() was stripping these non-numeric values to 0.
+      price: String(b.Price || ''), 
+      
       customer_details: {
         'First Name': b['First Name'],
         'Last Name': b['Last Name'],
@@ -181,13 +183,29 @@ class SessionService {
     if (lsError) throw lsError;
   }
 
+  // UPDATED: Completely wipes session data, transactions, and session users
   public async adminResetDailySession(date: string): Promise<void> {
+    
+    // 1. DELETE TRANSACTIONS (Child of Bookings/Users)
     await supabase.from('transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000'); 
+    
+    // 2. DELETE LOGSHEET SESSIONS (Child of Users)
     await supabase.from('logsheet_sessions').delete().eq('date', date);
+    
+    // 3. DELETE ROUTES (Child of Users)
     await supabase.from('routes').delete().eq('session_date', date);
+    
+    // 4. DELETE BOOKINGS (Child of Session)
     await supabase.from('bookings').delete().eq('session_date', date);
+    
+    // 5. DELETE DAILY SESSION (Parent of Bookings/Routes)
     await supabase.from('daily_sessions').delete().eq('date', date);
+
+    // 6. DELETE USERS (Parent of everything)
+    // Only delete Workers and RouteManagers to avoid deleting the Admin account
     await supabase.from('users').delete().in('role', ['Worker', 'RouteManager']);
+
+    // 7. CLEAR LOCAL STORAGE & RELOAD
     localStorage.clear();
     window.location.reload();
   }
@@ -219,7 +237,7 @@ class SessionService {
     };
   }
 
-  // --- 3. DATA FETCHING (CRITICAL MAPPING FIXES) ---
+  // --- 3. DATA FETCHING ---
 
   public async getWorkerAssignments(workerId: string): Promise<MasterBooking[]> {
     const date = await this.getDailySessionDate();
@@ -237,10 +255,7 @@ class SessionService {
       return (isMyRoute && !isAssignedToOther) || isAssignedToMe;
     });
 
-    const { data: myTransactions } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('worker_id', workerId);
+    const { data: myTransactions } = await supabase.from('transactions').select('*').eq('worker_id', workerId);
 
     const pendingMapped = myPending.map((b) => ({
       ...b.data,
@@ -265,7 +280,7 @@ class SessionService {
       'Route Number': tx.customer_snapshot?.routeCode || '',
       'Log Sheet Notes': tx.item_description,
       
-      // FIX 1: Restore Contact Info for LogsheetJobCard
+      // Mapped fields for Card Display
       'Home Phone': tx.customer_phone,
       'Email Address': tx.customer_email,
 
@@ -279,13 +294,11 @@ class SessionService {
       'chequeNumber': tx.cheque_number,
       'etransferEmail': tx.etransfer_email,
       
-      // FIX 2: Restore Flags for Orange/Blue Cards
       isContract: ['Upgrade', 'Add-On'].includes(tx.type),
       isUpgrade: tx.type === 'Upgrade',
       isAddOn: tx.type === 'Add-On',
       isNewSale: tx.type === 'Sale',
       
-      // FIX 3: Restore PP Badge based on Payment Breakdown
       Prepaid: (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? 'x' : undefined,
     }));
 
@@ -388,30 +401,7 @@ class SessionService {
     await supabase.from('logsheet_sessions').update(safeUpdates).eq('id', sessionId);
   }
 
-  // --- 5. ASSIGNMENTS & UPDATES ---
-
-  public async assignBookingToWorker(bookingId: string, workerId: string | null): Promise<void> {
-    const { error } = await supabase
-      .from('bookings')
-      .update({ contractor_id: workerId })
-      .eq('booking_id', bookingId);
-    if (error) console.error("Error assigning booking:", error);
-  }
-
-  public async assignRouteToWorker(routeCode: string, workerId: string | null): Promise<void> {
-    const date = await this.getDailySessionDate();
-    if (!date) return;
-    
-    const { error } = await supabase
-      .from('routes')
-      .update({ assigned_worker_id: workerId })
-      .eq('route_code', routeCode)
-      .eq('session_date', date);
-      
-    if (error) console.error("Error assigning route:", error);
-  }
-
-  // --- 6. TRANSACTIONS ---
+  // --- 5. TRANSACTIONS ---
 
   public async deleteTransactionByJobId(jobId: string): Promise<void> {
       await supabase.from('transactions').delete().eq('job_id', jobId);
@@ -462,7 +452,7 @@ class SessionService {
     }
   }
 
-  // --- 7. UTILS ---
+  // --- 6. UTILS ---
 
   public getEmptyStats(): SessionStats {
     return {
@@ -474,7 +464,6 @@ class SessionService {
     };
   }
 
-  // --- STATS ENGINE (WITH WEST SPLIT SAFETY) ---
   public recalculateStats(financials: any[], taxRate: number = 5): SessionStats {
     const stats = this.getEmptyStats();
     const taxDivisor = 1 + taxRate / 100;
