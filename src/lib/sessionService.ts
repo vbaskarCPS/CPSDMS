@@ -82,8 +82,7 @@ class SessionService {
       ...b.customer_details,
       'Booking ID': b.booking_id,
       'Route Number': b.route_number,
-      // Ensure Price is treated as a string for the frontend
-      Price: b.price?.toString(), 
+      Price: b.price?.toString(),
       'Log Sheet Notes': b.log_notes,
       Status: b.status,
       Prepaid: b.is_prepaid ? 'x' : undefined,
@@ -147,11 +146,7 @@ class SessionService {
       booking_id: b['Booking ID'],
       route_number: b['Route Number'],
       status: 'pending',
-      
-      // FIX: Store Price directly as text (allowing 'SP', 'RJ', etc.)
-      // We do NOT use parseFloat() here anymore.
-      price: String(b.Price || ''), 
-      
+      price: String(b.Price || ''),
       customer_details: {
         'First Name': b['First Name'],
         'Last Name': b['Last Name'],
@@ -223,7 +218,7 @@ class SessionService {
     };
   }
 
-  // --- 3. DATA FETCHING ---
+  // --- 3. DATA FETCHING (CRITICAL FIXES HERE) ---
 
   public async getWorkerAssignments(workerId: string): Promise<MasterBooking[]> {
     const date = await this.getDailySessionDate();
@@ -241,7 +236,11 @@ class SessionService {
       return (isMyRoute && !isAssignedToOther) || isAssignedToMe;
     });
 
-    const { data: myTransactions } = await supabase.from('transactions').select('*').eq('worker_id', workerId);
+    // FETCH TRANSACTIONS WITH CONTACT INFO
+    const { data: myTransactions } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('worker_id', workerId);
 
     const pendingMapped = myPending.map((b) => ({
       ...b.data,
@@ -250,7 +249,6 @@ class SessionService {
       'Route Number': b.route_number,
       'Contractor Number': b.contractor_id,
       Status: b.status,
-      // Price is now a string from DB, so we just ensure it's a string
       Price: b.price?.toString(),
       'Log Sheet Notes': b.log_notes,
       Prepaid: b.is_prepaid ? 'x' : undefined,
@@ -266,15 +264,29 @@ class SessionService {
       'Price': tx.display_price,
       'Route Number': tx.customer_snapshot?.routeCode || '',
       'Log Sheet Notes': tx.item_description,
+      
+      // FIX 1: Map Phone & Email so the card shows them
+      'Home Phone': tx.customer_phone,
+      'Email Address': tx.customer_email,
+
       'Payment Method': tx.payment_method,
       'paymentBreakdown': tx.payment_breakdown,
       'FO/BO/FP': tx.customer_snapshot?.serviceType || 'FP',
+      
       'Contract Title': (tx.items && tx.items.length > 0) ? tx.items[0].name : (tx.customer_snapshot?.serviceName || tx.display_price),
+
       'invoiceNumber': tx.invoice_number,
       'chequeNumber': tx.cheque_number,
       'etransferEmail': tx.etransfer_email,
+      
+      // FIX 2: Explicitly set boolean flags for coloring
       isContract: ['Upgrade', 'Add-On'].includes(tx.type),
+      isUpgrade: tx.type === 'Upgrade',
+      isAddOn: tx.type === 'Add-On',
       isNewSale: tx.type === 'Sale',
+      
+      // FIX 3: Restore PP Badge Logic
+      Prepaid: (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? 'x' : undefined,
     }));
 
     return [...pendingMapped, ...completedMapped];
@@ -342,7 +354,13 @@ class SessionService {
         chequeNumber: tx.cheque_number,
         etransferEmail: tx.etransfer_email,
         serviceType: tx.customer_snapshot?.serviceType,
-        serviceName: tx.customer_snapshot?.serviceName 
+        serviceName: tx.customer_snapshot?.serviceName,
+        customerPhone: tx.customer_phone, // Map for modals
+        customerEmail: tx.customer_email,  // Map for modals
+        
+        // CRITICAL FIX: Ensure West Split boolean survives the DB round trip
+        // Database column is snake_case (is_west_split), JS is camelCase (isWestSplit)
+        isWestSplit: tx.is_west_split 
       })) as any,
     };
   }
@@ -412,13 +430,22 @@ class SessionService {
       price: transaction.price,
       payment_method: transaction.paymentMethod,
       payment_breakdown: transaction.paymentBreakdown,
-      is_west_split: transaction.isWestSplit,
+      
+      // IMPORTANT: Save West Split flag to DB
+      is_west_split: transaction.isWestSplit, 
+      
       display_price: transaction.displayPrice,
       item_description: transaction.itemDescription,
       invoice_number: transaction.invoiceNumber,
       cheque_number: transaction.chequeNumber,
       etransfer_email: transaction.etransferEmail,
+      
+      // IMPORTANT: Save Contact Info to DB columns
+      customer_phone: transaction.customerPhone,
+      customer_email: transaction.customerEmail,
+      
       items: transaction.items, 
+
       customer_snapshot: {
         firstName: transaction.customerName.split(' ')[0],
         lastName: transaction.customerName.split(' ').slice(1).join(' '),
@@ -488,7 +515,8 @@ class SessionService {
         } else if (tx.type === 'Add-On') {
           addToBucket(val, false);
         } else if (tx.type === 'Upgrade') {
-          if (tx.isWestSplit) {
+          // CHECKING BOTH CASE TYPES FOR SAFETY
+          if (tx.isWestSplit || tx.is_west_split) {
             addToBucket(val * 0.2, true);
             addToBucket(val * 0.8, false);
             if (method.includes('Prepaid')) stats.prodPrepaidSplit += val * 0.2;

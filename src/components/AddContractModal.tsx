@@ -6,6 +6,17 @@ import { MasterBooking, Worker, SessionTransaction } from '../types';
 import { sessionService } from '../lib/sessionService';
 import CreditCardModal from './CreditCardModal';
 
+// Helper to generate a valid UUID for transactions
+function generateUUID() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
 const CONTRACT_RECIPES = [
   { id: 'star_plan_pro', name: 'Star Plan Pro', type: 'Upgrade', basePrice: 150 },
   { id: 'lawn_rejuv', name: 'Lawn Rejuvenation', type: 'Upgrade', basePrice: 200 },
@@ -144,10 +155,16 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       if (answers['timing']) finalNotes += ` [${answers['timing']}]`; 
       if (formData.hasLockedGate) finalNotes += ' [LG]';
 
+      // --- RESTORED PRICE FORMATTING LOGIC ---
+      let displayPricePrefix = '';
+      if (selectedRecipe.name.includes('Star')) displayPricePrefix = 'SP';
+      if (selectedRecipe.name.includes('Rejuv')) displayPricePrefix = 'RJ';
+      const formattedDisplayPrice = `${displayPricePrefix}${finalTotal.toFixed(2)}`;
+
       const finalAddress = selectedBooking ? selectedBooking['Full Address'] : `${houseNumber} ${streetName}`.trim();
 
       const tx: SessionTransaction = {
-          id: `tx_${Date.now()}`,
+          id: generateUUID(),
           jobId: selectedBooking ? selectedBooking['Booking ID'] : `NEW-${Date.now()}`,
           timestamp: new Date().toISOString(),
           customerId: "CLIENT",
@@ -163,8 +180,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           
           type: selectedRecipe.type as any,
           price: finalTotal,
-          displayPrice: selectedRecipe.name,
-          serviceName: selectedRecipe.name, // Ensure this exists
+          displayPrice: formattedDisplayPrice, // Use formatted price (e.g. RJ200.00)
+          serviceName: selectedRecipe.name, 
           
           paymentMethod: isIOS ? 'IOS' : paymentInfo.method,
           isPaid: !isIOS && paymentInfo.method !== 'Billed',
@@ -181,7 +198,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           region: 'West', seasonId: 'west-aeration'
       } as any;
 
-      // FIX: IF UPGRADE, DELETE OLD TRANSACTION FIRST TO AVOID DUPLICATE
       if (isUpgrade && selectedBooking) {
           await sessionService.deleteTransactionByJobId(selectedBooking['Booking ID']);
       }
