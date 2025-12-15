@@ -15,16 +15,14 @@ export const generateSessionExport = async () => {
   const [logsheetsReq, transactionsReq, bookingsReq, usersReq] =
     await Promise.all([
       supabase.from('logsheet_sessions').select('*').eq('date', date),
-      // For transactions, we really want all for this DATE, but simplified schema links them to bookings.
-      // In a real query we'd join. For now fetching all might be heavy, so filtering by date is best if column exists.
-      // Assuming we fetch all and filter in memory for this prototype.
-      supabase.from('transactions').select('*'),
+      // Fetching all fields (*) ensures we get cc_full_number, cc_expiry, etc.
+      supabase.from('transactions').select('*'), 
       supabase.from('bookings').select('*').eq('session_date', date),
       supabase.from('users').select('*'),
     ]);
 
   const logsheets = logsheetsReq.data || [];
-  const transactions = transactionsReq.data || []; // Optimization needed here later
+  const transactions = transactionsReq.data || []; 
   const bookings = bookingsReq.data || [];
   const users = usersReq.data || [];
 
@@ -111,8 +109,48 @@ export const generateSessionExport = async () => {
       Price: tx.price,
       Payment: tx.payment_method,
       Worker: worker?.name,
+      // Added detail summary
+      'Payment Details': tx.payment_method === 'Billed' ? `INV: ${tx.invoice_number}` :
+                         tx.payment_method === 'Cheque' ? `CHK: ${tx.cheque_number}` : ''
     };
   });
+
+  // --- TAB 4: ACCOUNTS (Sensitive Info - RESTORED) ---
+  const accountsRows = transactions
+    .filter(tx => ['Credit Card', 'Cheque', 'Billed', 'E-Transfer'].includes(tx.payment_method))
+    .map(tx => {
+        const worker = users.find(u => u.user_id === tx.worker_id);
+        const addrParts = (tx.customer_snapshot?.address || '').split(' ');
+        const streetNum = /^\d+$/.test(addrParts[0]) ? addrParts[0] : '';
+        const streetName = /^\d+$/.test(addrParts[0]) ? addrParts.slice(1).join(' ') : (tx.customer_snapshot?.address || '');
+
+        let details = '';
+        // Map backend columns to display strings
+        if (tx.payment_method === 'Credit Card') details = `CCD: ${tx.cc_full_number || '***'}`;
+        if (tx.payment_method === 'Billed') details = `INV: ${tx.invoice_number || ''}`;
+        if (tx.payment_method === 'E-Transfer') details = `Email: ${tx.etransfer_email || ''}`;
+        if (tx.payment_method === 'Cheque') details = `Chk: ${tx.cheque_number || ''}`;
+
+        return {
+           "Route #": tx.customer_snapshot?.routeCode,
+           "First Name": tx.customer_snapshot?.firstName,
+           "Last Name": tx.customer_snapshot?.lastName,
+           "Street #": streetNum,
+           "Street Name": streetName,
+           "Phone Number": tx.customer_snapshot?.phone || '', 
+           "Email Address": tx.customer_snapshot?.email || '',
+           "Client Type": tx.type,
+           "Property Type": tx.customer_snapshot?.serviceType || '',
+           "Notes": tx.item_description,
+           "Price": tx.price,
+           "Payment Type": tx.payment_method,
+           "Contractor Name": worker?.name,
+           "Payment Type Details": details,
+           // Sensitive Columns
+           "Expiry": tx.cc_expiry || '',
+           "CVC": tx.cc_cvc || ''
+        };
+    });
 
   // --- BUILD WORKBOOK ---
   const wb = XLSX.utils.book_new();
@@ -123,7 +161,11 @@ export const generateSessionExport = async () => {
   XLSX.utils.book_append_sheet(wb, wsBookings, 'Bookings');
 
   const wsLogsheets = XLSX.utils.json_to_sheet(logsheetRows);
-  XLSX.utils.book_append_sheet(wb, wsLogsheets, 'Transactions');
+  XLSX.utils.book_append_sheet(wb, wsLogsheets, 'Logsheets');
+
+  // Add the restored Accounts tab
+  const wsAccounts = XLSX.utils.json_to_sheet(accountsRows);
+  XLSX.utils.book_append_sheet(wb, wsAccounts, 'Accounts');
 
   // WRITE FILE
   XLSX.writeFile(wb, `Data Out - ${date}.xlsx`);
