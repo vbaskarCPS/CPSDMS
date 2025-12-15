@@ -114,46 +114,53 @@ const NewJob: React.FC = () => {
 
     const transactionPrice = parseFloat(amount) || 0;
     const newTransactionId = generateUUID();
+    // Use a placeholder ID for new sales so the DB logic doesn't fail
+    const placeholderJobId = `NEW-${Date.now()}`;
 
-    // Construct Payload using SNAKE_CASE keys to match Supabase columns
-    // We treat this as 'any' to bypass strict TS checks for the old interface if needed
-    const dbPayload: any = {
+    // FIX: Using CAMEL CASE keys to match SessionTransaction interface
+    // This fixes the "reading 'split'" error
+    const transactionData: SessionTransaction = {
       id: newTransactionId,
-      created_at: new Date().toISOString(),
+      jobId: placeholderJobId,
+      timestamp: new Date().toISOString(),
       
-      // LINKING
-      job_id: null, // NULL because this is a walk-up sale, not a pre-scheduled job
-      
-      // CUSTOMER DETAILS (New Columns)
-      customer_name: `${firstName} ${lastName}`,
+      customerId: 'WALKUP', 
+      customerName: `${firstName} ${lastName}`, // Correct property name
       address: `${houseNumber} ${streetName}`.trim(),
-      customer_phone: phone,
-      customer_email: email,
+      customerPhone: phone,
+      customerEmail: email,
       
-      // WORKER DETAILS
-      worker_id: worker.contractorId,
-      worker_name: worker.firstName,
-      route_code: routeCode,
+      workerId: worker.contractorId,
+      workerName: worker.firstName,
+      routeCode: routeCode,
       
-      // TRANSACTION DETAILS
+      type: 'Sale', // It is a new sale
       price: transactionPrice,
-      payment_method: paymentMethod,
-      items: [{ name: 'Aeration', price: transactionPrice }], // JSONB Column
-      service_type: propertyType,
-      region: 'West', // Adjust if you have dynamic regions
+      displayPrice: transactionPrice.toFixed(2),
       
-      // OPTIONAL PAYMENT DETAILS
-      invoice_number: paymentMethod === 'Billed' ? invoiceNumber : null,
-      cheque_number: paymentMethod === 'Cheque' ? chequeNumber : null,
+      isPaid: paymentMethod !== 'Billed',
+      paymentMethod: paymentMethod,
       
-      // CREDIT CARD DATA (If you store this securely, otherwise omit)
-      // cc_last4: ccData?.number?.slice(-4) || null,
+      items: [{ name: 'Aeration', price: transactionPrice }],
+      serviceType: propertyType as any,
+      
+      invoiceNumber: paymentMethod === 'Billed' ? invoiceNumber : undefined,
+      chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : undefined,
+      etransferEmail: paymentMethod === 'E-Transfer' ? etransferEmail : undefined,
+      
+      ccFullNumber: ccData?.number,
+      ccExpiry: ccData?.expiry,
+      ccCVC: ccData?.cvc,
+      
+      // Defaults
+      itemDescription: 'New Sale',
+      region: 'West',
+      routeManagerName: 'RM'
     };
 
     try {
       // Send to Supabase
-      // 2nd arg is null because we are not updating a job status
-      await sessionService.completeJob(dbPayload, null, worker.contractorId);
+      await sessionService.completeJob(transactionData, placeholderJobId, worker.contractorId);
 
       // Update Local Logsheet Stats for immediate UI feedback
       const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
