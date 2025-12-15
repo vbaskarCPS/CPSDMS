@@ -1,4 +1,3 @@
-// src/lib/sessionService.ts
 import { supabase } from './supabase';
 import { format } from 'date-fns';
 import {
@@ -146,7 +145,8 @@ class SessionService {
       booking_id: b['Booking ID'],
       route_number: b['Route Number'],
       status: 'pending',
-      price: parseFloat((b.Price || '0').replace(/[^0-9.]/g, '')) || 0,
+      // FIX: Cast to String() before replace to handle raw numbers from Excel
+      price: parseFloat(String(b.Price || '0').replace(/[^0-9.]/g, '')) || 0,
       customer_details: {
         'First Name': b['First Name'],
         'Last Name': b['Last Name'],
@@ -180,16 +180,31 @@ class SessionService {
     if (lsError) throw lsError;
   }
 
+  // UPDATED: Completely wipes session data, transactions, and session users
   public async adminResetDailySession(date: string): Promise<void> {
-    const startOfDay = `${date}T00:00:00.000Z`;
-    const endOfDay = `${date}T23:59:59.999Z`;
-
-    await supabase.from('transactions').delete().gte('timestamp', startOfDay).lte('timestamp', endOfDay);
+    
+    // 1. DELETE TRANSACTIONS (Child of Bookings/Users)
+    // We delete ALL transactions for simplicity in a reset, or you can filter by date if needed.
+    // Ideally, for a full reset, we wipe the table.
+    await supabase.from('transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000'); 
+    
+    // 2. DELETE LOGSHEET SESSIONS (Child of Users)
     await supabase.from('logsheet_sessions').delete().eq('date', date);
-    await supabase.from('bookings').delete().eq('session_date', date);
+    
+    // 3. DELETE ROUTES (Child of Users)
     await supabase.from('routes').delete().eq('session_date', date);
+    
+    // 4. DELETE BOOKINGS (Child of Session)
+    await supabase.from('bookings').delete().eq('session_date', date);
+    
+    // 5. DELETE DAILY SESSION (Parent of Bookings/Routes)
     await supabase.from('daily_sessions').delete().eq('date', date);
 
+    // 6. DELETE USERS (Parent of everything)
+    // Only delete Workers and RouteManagers to avoid deleting the Admin account
+    await supabase.from('users').delete().in('role', ['Worker', 'RouteManager']);
+
+    // 7. CLEAR LOCAL STORAGE & RELOAD
     localStorage.clear();
     window.location.reload();
   }
@@ -267,7 +282,6 @@ class SessionService {
       'paymentBreakdown': tx.payment_breakdown,
       'FO/BO/FP': tx.customer_snapshot?.serviceType || 'FP',
       
-      // FIX: CORRECTLY MAP CONTRACT TITLE
       'Contract Title': (tx.items && tx.items.length > 0) ? tx.items[0].name : (tx.customer_snapshot?.serviceName || tx.display_price),
 
       'invoiceNumber': tx.invoice_number,
@@ -335,7 +349,7 @@ class SessionService {
         customerName: `${tx.customer_snapshot?.firstName} ${tx.customer_snapshot?.lastName}`,
         address: tx.customer_snapshot?.address,
         routeCode: tx.customer_snapshot?.routeCode,
-        items: tx.items || [], // Ensure items are retrieved
+        items: tx.items || [], 
         paymentBreakdown: tx.payment_breakdown,
         displayPrice: tx.display_price,
         itemDescription: tx.item_description,
@@ -343,7 +357,7 @@ class SessionService {
         chequeNumber: tx.cheque_number,
         etransferEmail: tx.etransfer_email,
         serviceType: tx.customer_snapshot?.serviceType,
-        serviceName: tx.customer_snapshot?.serviceName // Map serviceName
+        serviceName: tx.customer_snapshot?.serviceName 
       })) as any,
     };
   }
@@ -376,7 +390,6 @@ class SessionService {
 
   // --- 5. TRANSACTIONS ---
 
-  // NEW: Delete transaction to allow upgrades to replace old jobs
   public async deleteTransactionByJobId(jobId: string): Promise<void> {
       await supabase.from('transactions').delete().eq('job_id', jobId);
   }
@@ -398,8 +411,7 @@ class SessionService {
       cheque_number: transaction.chequeNumber,
       etransfer_email: transaction.etransferEmail,
       
-      // FIX: Save ITEMS and SERVICE NAME
-      items: transaction.items, // Saves [{name: 'Star Plan Pro', ...}] to JSONB
+      items: transaction.items, 
 
       customer_snapshot: {
         firstName: transaction.customerName.split(' ')[0],
@@ -407,7 +419,7 @@ class SessionService {
         address: transaction.address,
         routeCode: transaction.routeCode,
         serviceType: transaction.serviceType,
-        serviceName: transaction.serviceName // Explicitly save service Name
+        serviceName: transaction.serviceName 
       },
     });
     if (txError) throw txError;
