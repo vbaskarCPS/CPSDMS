@@ -145,7 +145,6 @@ class SessionService {
       booking_id: b['Booking ID'],
       route_number: b['Route Number'],
       status: 'pending',
-      // FIX: Cast to String() before replace to handle raw numbers from Excel
       price: parseFloat(String(b.Price || '0').replace(/[^0-9.]/g, '')) || 0,
       customer_details: {
         'First Name': b['First Name'],
@@ -180,31 +179,13 @@ class SessionService {
     if (lsError) throw lsError;
   }
 
-  // UPDATED: Completely wipes session data, transactions, and session users
   public async adminResetDailySession(date: string): Promise<void> {
-    
-    // 1. DELETE TRANSACTIONS (Child of Bookings/Users)
-    // We delete ALL transactions for simplicity in a reset, or you can filter by date if needed.
-    // Ideally, for a full reset, we wipe the table.
     await supabase.from('transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000'); 
-    
-    // 2. DELETE LOGSHEET SESSIONS (Child of Users)
     await supabase.from('logsheet_sessions').delete().eq('date', date);
-    
-    // 3. DELETE ROUTES (Child of Users)
     await supabase.from('routes').delete().eq('session_date', date);
-    
-    // 4. DELETE BOOKINGS (Child of Session)
     await supabase.from('bookings').delete().eq('session_date', date);
-    
-    // 5. DELETE DAILY SESSION (Parent of Bookings/Routes)
     await supabase.from('daily_sessions').delete().eq('date', date);
-
-    // 6. DELETE USERS (Parent of everything)
-    // Only delete Workers and RouteManagers to avoid deleting the Admin account
     await supabase.from('users').delete().in('role', ['Worker', 'RouteManager']);
-
-    // 7. CLEAR LOCAL STORAGE & RELOAD
     localStorage.clear();
     window.location.reload();
   }
@@ -281,13 +262,10 @@ class SessionService {
       'Payment Method': tx.payment_method,
       'paymentBreakdown': tx.payment_breakdown,
       'FO/BO/FP': tx.customer_snapshot?.serviceType || 'FP',
-      
       'Contract Title': (tx.items && tx.items.length > 0) ? tx.items[0].name : (tx.customer_snapshot?.serviceName || tx.display_price),
-
       'invoiceNumber': tx.invoice_number,
       'chequeNumber': tx.cheque_number,
       'etransferEmail': tx.etransfer_email,
-      
       isContract: ['Upgrade', 'Add-On'].includes(tx.type),
       isNewSale: tx.type === 'Sale',
     }));
@@ -388,7 +366,31 @@ class SessionService {
     await supabase.from('logsheet_sessions').update(safeUpdates).eq('id', sessionId);
   }
 
-  // --- 5. TRANSACTIONS ---
+  // --- 5. ASSIGNMENTS & UPDATES (NEW) ---
+
+  public async assignBookingToWorker(bookingId: string, workerId: string | null): Promise<void> {
+    const { error } = await supabase
+      .from('bookings')
+      .update({ contractor_id: workerId })
+      .eq('booking_id', bookingId);
+    if (error) console.error("Error assigning booking:", error);
+  }
+
+  public async assignRouteToWorker(routeCode: string, workerId: string | null): Promise<void> {
+    const date = await this.getDailySessionDate();
+    if (!date) return;
+    
+    // We update the route table for the specific session
+    const { error } = await supabase
+      .from('routes')
+      .update({ assigned_worker_id: workerId })
+      .eq('route_code', routeCode)
+      .eq('session_date', date);
+      
+    if (error) console.error("Error assigning route:", error);
+  }
+
+  // --- 6. TRANSACTIONS ---
 
   public async deleteTransactionByJobId(jobId: string): Promise<void> {
       await supabase.from('transactions').delete().eq('job_id', jobId);
@@ -410,9 +412,7 @@ class SessionService {
       invoice_number: transaction.invoiceNumber,
       cheque_number: transaction.chequeNumber,
       etransfer_email: transaction.etransferEmail,
-      
       items: transaction.items, 
-
       customer_snapshot: {
         firstName: transaction.customerName.split(' ')[0],
         lastName: transaction.customerName.split(' ').slice(1).join(' '),
@@ -432,7 +432,7 @@ class SessionService {
     }
   }
 
-  // --- 6. UTILS ---
+  // --- 7. UTILS ---
 
   public getEmptyStats(): SessionStats {
     return {
