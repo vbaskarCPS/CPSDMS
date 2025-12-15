@@ -228,9 +228,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           region: 'West', seasonId: 'west-aeration'
       } as any;
 
-      if (isUpgrade && selectedBooking) {
-          await sessionService.deleteTransactionByJobId(selectedBooking['Booking ID']);
-      }
+      // DELETED: await sessionService.deleteTransactionByJobId(...)
+      // logic is now handled in completeJob via upsert.
 
       await sessionService.completeJob(tx, tx.jobId, worker.contractorId);
 
