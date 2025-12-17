@@ -90,9 +90,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
               'Prepaid': (tx as any).isPrepaid ? 'x' : undefined,
               'Status': 'completed',
               'FO/BO/FP': (tx as any).serviceType,
-              // Check if they already have a contract
               isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ'))),
-              // Pre-fill Gate info from description
               'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined
           } as MasterBooking));
           setAvailableClients(clients);
@@ -105,10 +103,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   const filteredClients = useMemo(() => {
       if (!selectedRecipe) return [];
       if (selectedRecipe.type === 'Upgrade') {
-          // UPGRADES: Only existing customers who do NOT have a contract yet
           return availableClients.filter(c => !c.isContract);
       } else {
-          // ADD-ONS: Any existing customer (Contract or not)
           return availableClients;
       }
   }, [availableClients, selectedRecipe]);
@@ -168,14 +164,12 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       const isIOS = paymentInfo.method === 'IOS';
       const inputAmount = parseFloat(paymentInfo.amount);
 
-      // --- LOGIC FIX: CALCULATE TRUE TOTAL & BREAKDOWN ---
       let finalTotal = inputAmount;
       let creditAmount = 0;
       let isPrepaidSplit = false; 
 
       const paymentBreakdown: Record<string, number> = {};
 
-      // SCENARIO 1: PREPAID UPGRADE (The "Credit" Logic)
       if (isUpgrade && selectedBooking && selectedBooking.Prepaid === 'x') {
           creditAmount = parseFloat(String(selectedBooking.Price).replace(/[^0-9.]/g, '')) || 0;
           finalTotal = creditAmount + inputAmount;
@@ -184,17 +178,15 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
           paymentBreakdown[currentMethodKey] = inputAmount;
           
-          isPrepaidSplit = true; // This triggers the 20/80 split in sessionService
+          isPrepaidSplit = true; 
       } 
-      // SCENARIO 2: NON-PREPAID UPGRADE (The "Replace" Logic)
       else if (isUpgrade && selectedBooking) {
           finalTotal = inputAmount;
           const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
           paymentBreakdown[currentMethodKey] = inputAmount;
           
-          isPrepaidSplit = false; // Triggers 100% Production in sessionService
+          isPrepaidSplit = true; // CHANGED: All upgrades now follow West Split rules
       }
-      // SCENARIO 3: ADD-ON or NEW CLIENT
       else {
           finalTotal = inputAmount;
           const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
@@ -244,7 +236,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           ccCVC: ccData?.cvc,
           etransferEmail: paymentInfo.method === 'E-Transfer' ? extraPaymentInfo : undefined,
           
-          // CRITICAL FIX: Only set isWestSplit if it's actually the Prepaid scenario
           isWestSplit: isPrepaidSplit, 
           
           refId: selectedRecipe.id,
@@ -259,8 +250,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
 
       const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
       if (session) {
-          // Because getActiveLogsheetSession now calculates LIVE stats, 
-          // we simply save the live stats back to the DB for persistence.
           await sessionService.updateLogsheetSession(session.id, { stats: session.stats });
       }
 
