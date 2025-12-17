@@ -314,12 +314,15 @@ class SessionService {
 
     const { data: financials } = await supabase.from('transactions').select('*').eq('worker_id', workerId);
 
+    // DYNAMIC STATS RECALCULATION
+    const liveStats = this.recalculateStats(financials || [], 5);
+
     return {
       id: data.id,
       workerId: data.worker_id,
       date: data.date,
       status: data.status,
-      stats: data.stats,
+      stats: liveStats, // Always return fresh stats
       validation: data.validation,
       bonuses: data.bonuses,
       dailyRouteStore: [],

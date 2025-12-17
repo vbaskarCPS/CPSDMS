@@ -6,7 +6,7 @@ import { MasterBooking, Worker, SessionTransaction } from '../types';
 import { sessionService } from '../lib/sessionService';
 import CreditCardModal from './CreditCardModal';
 
-// Helper to generate a valid UUID for transactions
+// Helper to generate a valid UUID for NEW transactions only
 function generateUUID() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -59,7 +59,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   const [extraPaymentInfo, setExtraPaymentInfo] = useState(''); 
   const [answers, setAnswers] = useState<Record<string, string>>({}); 
   const [worker, setWorker] = useState<Worker | null>(null);
-  const [availableClients, setAvailableClients] = useState<MasterBooking[]>([]);
+  
+  // We will load the raw transactions and filter them dynamically
+  const [allCompletedTransactions, setAllCompletedTransactions] = useState<MasterBooking[]>([]);
 
   // CC Data
   const [ccData, setCcData] = useState<{ number: string, expiry: string, cvc: string } | null>(null);
@@ -67,7 +69,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   const [isCreditPaid, setIsCreditPaid] = useState(false);
 
   // Territory Helpers
-  const [assignedRoutes, setAssignedRoutes] = useState<string[]>([]);
   const [streetName, setStreetName] = useState('');
   const [houseNumber, setHouseNumber] = useState('');
 
@@ -79,8 +80,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
 
       const activeSession = await sessionService.getActiveLogsheetSession(w.contractorId);
       if (activeSession) {
+          // Flatten transactions into MasterBooking format for easy display/selection
           const clients = activeSession.financialStore.map(tx => ({
-              'Booking ID': tx.jobId,
+              'Booking ID': tx.jobId, // CRITICAL: This is the ID we must preserve to avoid ghosts
               'First Name': tx.customerName.split(' ')[0],
               'Last Name': tx.customerName.split(' ').slice(1).join(' '),
               'Full Address': tx.address,
@@ -88,13 +90,31 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
               'Price': tx.displayPrice || tx.price.toString(),
               'Home Phone': (tx as any).customerPhone || '',
               'Email Address': (tx as any).customerEmail || '',
-              'Prepaid': (tx as any).isPrepaid ? 'x' : undefined // Ensure prepaid flag is carried over
+              'Prepaid': (tx as any).isPrepaid ? 'x' : undefined,
+              'Status': 'completed',
+              'FO/BO/FP': (tx as any).serviceType,
+              // Check if they already have a contract
+              isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ')))
           } as MasterBooking));
-          setAvailableClients(clients);
+          
+          setAllCompletedTransactions(clients);
       }
     };
     init();
   }, []);
+
+  // Filter Logic: Dynamically filter based on Recipe Type
+  const availableClients = useMemo(() => {
+      if (!selectedRecipe) return [];
+
+      if (selectedRecipe.type === 'Upgrade') {
+          // UPGRADES: Only existing customers who do NOT have a contract yet
+          return allCompletedTransactions.filter(c => !c.isContract);
+      } else {
+          // ADD-ONS: Any existing customer (Contract or not)
+          return allCompletedTransactions;
+      }
+  }, [allCompletedTransactions, selectedRecipe]);
 
   const handleRecipeSelect = (recipe: typeof CONTRACT_RECIPES[0]) => {
     setSelectedRecipe(recipe);
@@ -133,7 +153,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   };
 
   const handleNewClient = () => {
-    if (selectedRecipe?.type === 'Upgrade') return;
+    if (selectedRecipe?.type === 'Upgrade') return; // Should not happen due to UI hiding
     setSelectedBooking(null);
     setFormData({ firstName: '', lastName: '', address: '', phone: '', email: '', routeNumber: '', notes: '', propertyType: 'FP', hasLockedGate: false, hasSprinkler: false });
     setPaymentInfo(prev => ({ ...prev, amount: '0.00' }));
@@ -149,51 +169,64 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
     try {
       const isUpgrade = selectedRecipe.type === 'Upgrade';
       const isIOS = paymentInfo.method === 'IOS';
-      const collectionAmount = parseFloat(paymentInfo.amount);
+      const inputAmount = parseFloat(paymentInfo.amount);
 
-      // --- LOGIC FIX: CALCULATE TRUE TOTAL & BREAKDOWN ---
+      // --- PRICE & BREAKDOWN LOGIC ---
+      let finalTotal = inputAmount;
       let creditAmount = 0;
-      if (isUpgrade && selectedBooking && selectedBooking.Price) {
-          // Parse the original value (e.g., convert "100.00" or "SP100.00" to 100.00)
-          creditAmount = parseFloat(String(selectedBooking.Price).replace(/[^0-9.]/g, '')) || 0;
-      }
-
-      const finalTotal = creditAmount + collectionAmount;
-
-      // Construct Payment Breakdown for Backend Bucketing
       const paymentBreakdown: Record<string, number> = {};
-      
-      // 1. Add Credit (Original Value)
-      if (creditAmount > 0) {
-          // If original was marked prepaid, bucket it as 'Prepaid'. 
-          // Otherwise, bucket as 'Previous' (or specific method if known, but 'Prepaid' ensures split logic works)
-          const creditKey = selectedBooking?.Prepaid === 'x' ? 'Prepaid' : 'Previous Payment';
-          paymentBreakdown[creditKey] = creditAmount;
+
+      // SCENARIO 1: PREPAID UPGRADE (The "Credit" Logic)
+      if (isUpgrade && selectedBooking && selectedBooking.Prepaid === 'x') {
+          // Parse original value (e.g., from "100.00" or similar)
+          creditAmount = parseFloat(String(selectedBooking.Price).replace(/[^0-9.]/g, '')) || 0;
+          finalTotal = creditAmount + inputAmount;
+          
+          paymentBreakdown['Prepaid'] = creditAmount;
+          // The rest goes to the new method
+          const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
+          paymentBreakdown[currentMethodKey] = inputAmount;
+      } 
+      // SCENARIO 2: NON-PREPAID UPGRADE (The "Replace" Logic)
+      else if (isUpgrade && selectedBooking) {
+          // We overwrite the old transaction entirely. 
+          // We do NOT add the old amount to the total; the input amount IS the total upgrade price.
+          // (User confirmed: "just pay for the upgrade")
+          finalTotal = inputAmount;
+          
+          const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
+          paymentBreakdown[currentMethodKey] = inputAmount;
+      }
+      // SCENARIO 3: ADD-ON or NEW CLIENT
+      else {
+          finalTotal = inputAmount;
+          const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
+          paymentBreakdown[currentMethodKey] = inputAmount;
       }
 
-      // 2. Add New Collection
-      const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
-      paymentBreakdown[currentMethodKey] = (paymentBreakdown[currentMethodKey] || 0) + collectionAmount;
-
-      // --- END LOGIC FIX ---
-
+      // --- NOTES & DISPLAY ---
       let finalNotes = formData.notes;
       if (answers['timing']) finalNotes += ` [${answers['timing']}]`; 
       if (formData.hasLockedGate) finalNotes += ' [LG]';
 
-      // --- PRICE FORMATTING LOGIC ---
       let displayPricePrefix = '';
       if (selectedRecipe.name.includes('Star')) displayPricePrefix = 'SP';
       if (selectedRecipe.name.includes('Rejuv')) displayPricePrefix = 'RJ';
       
-      // Use finalTotal for display string so it shows the full contract value (e.g. SP150.00)
       const formattedDisplayPrice = `${displayPricePrefix}${finalTotal.toFixed(2)}`;
-
       const finalAddress = selectedBooking ? selectedBooking['Full Address'] : `${houseNumber} ${streetName}`.trim();
 
+      // --- ID HANDLING TO PREVENT GHOSTS ---
+      // If we selected a booking, we MUST use its ID. If we generate a new ID, we create a ghost.
+      const transactionId = selectedBooking ? selectedBooking['Booking ID'] : `NEW-${generateUUID()}`;
+
       const tx: SessionTransaction = {
-          id: generateUUID(),
-          jobId: selectedBooking ? selectedBooking['Booking ID'] : `NEW-${Date.now()}`,
+          id: transactionId.startsWith('NEW-') ? generateUUID() : undefined, // Let DB handle ID if updating, or generate if new
+          // Actually, sessionService.completeJob expects `id` field for inserts.
+          // Ideally, we pass the existing transaction ID if we can find it, but `completeJob` upserts by `job_id`.
+          // So passing `jobId` correctly is the most important part.
+          
+          jobId: transactionId, 
           timestamp: new Date().toISOString(),
           customerId: "CLIENT",
           customerName: `${formData.firstName} ${formData.lastName}`,
@@ -207,12 +240,12 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           routeCode: formData.routeNumber,
           
           type: selectedRecipe.type as any,
-          price: finalTotal, // Store full value
+          price: finalTotal,
           displayPrice: formattedDisplayPrice, 
           serviceName: selectedRecipe.name, 
           
           paymentMethod: isIOS ? 'IOS' : paymentInfo.method,
-          paymentBreakdown: paymentBreakdown, // Pass breakdown to backend
+          paymentBreakdown: paymentBreakdown,
           isPaid: !isIOS && paymentInfo.method !== 'Billed',
           
           ccFullNumber: ccData?.number,
@@ -228,15 +261,18 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           region: 'West', seasonId: 'west-aeration'
       } as any;
 
-      // DELETED: await sessionService.deleteTransactionByJobId(...)
-      // logic is now handled in completeJob via upsert.
-
+      // This UPSERT will now correctly overwrite the row if jobId matches
       await sessionService.completeJob(tx, tx.jobId, worker.contractorId);
 
+      // Refresh Stats
       const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
       if (session) {
-          const newStats = sessionService.recalculateStats(session.financialStore, 5);
-          await sessionService.updateLogsheetSession(session.id, { stats: newStats });
+         // Re-fetch to ensure we catch the DB update
+         const freshSession = await sessionService.getActiveLogsheetSession(worker.contractorId);
+         if (freshSession) {
+             const newStats = sessionService.recalculateStats(freshSession.financialStore, 5);
+             await sessionService.updateLogsheetSession(session.id, { stats: newStats });
+         }
       }
 
       onClose();
@@ -250,6 +286,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
       <div className="bg-gray-900 border border-gray-700 rounded-lg w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
+        
+        {/* HEADER */}
         <div className="p-4 border-b border-gray-700 flex justify-between items-center">
           <div className="flex items-center gap-2">
             {step !== 'SELECT_CONTRACT' && (
@@ -265,6 +303,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
         {error && <div className="bg-red-900/30 border-l-4 border-red-500 p-3 mx-4 mt-4 text-red-200 text-sm flex items-center gap-2"><AlertCircle size={16}/>{error}</div>}
 
         <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
+          
+          {/* STEP 1: RECIPE SELECTION */}
           {step === 'SELECT_CONTRACT' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {availableRecipes.map(recipe => (
@@ -276,23 +316,37 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
             </div>
           )}
 
+          {/* STEP 2: CLIENT SELECTION (Strict Filtering) */}
           {step === 'SELECT_CLIENT' && (
             <div className="space-y-4">
-              <h3 className="text-sm text-gray-400 font-medium">Select Client (Completed Jobs)</h3>
+              <h3 className="text-sm text-gray-400 font-medium">
+                 {selectedRecipe?.type === 'Upgrade' ? 'Select Client to Upgrade' : 'Select Client for Add-On'}
+              </h3>
+              
               <div className="max-h-[60vh] overflow-y-auto space-y-1 border border-gray-700/50 rounded-lg p-1 custom-scrollbar mt-2">
                 {availableClients.length > 0 ? (
                     availableClients.map(b => (
                         <button key={b['Booking ID']} onClick={() => handleClientSelect(b)} className="w-full text-left p-3 rounded flex justify-between items-center group transition-colors border border-transparent hover:bg-gray-800 hover:border-gray-700">
                             <div className="flex items-center gap-3 min-w-0">
                                 <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 group-hover:bg-gray-600 group-hover:text-white"><User size={16} /></div>
-                                <div className="min-w-0"><div className="font-bold text-gray-200 group-hover:text-white truncate">{b['Full Address']}</div><div className="text-xs text-gray-500 flex items-center gap-1 truncate">{b['First Name']} {b['Last Name']}</div></div>
+                                <div className="min-w-0">
+                                    <div className="font-bold text-gray-200 group-hover:text-white truncate">{b['Full Address']}</div>
+                                    <div className="text-xs text-gray-500 flex items-center gap-1 truncate">{b['First Name']} {b['Last Name']}</div>
+                                </div>
                             </div>
+                            {/* Visual indicator if they have a contract already (should only appear for Add-ons) */}
+                            {b.isContract && <span className="text-[9px] bg-purple-900 text-purple-200 px-1 rounded border border-purple-700">Package</span>}
                         </button>
                     ))
                 ) : (
-                    <div className="text-gray-500 text-center py-4 italic">No eligible clients found.</div>
+                    <div className="text-gray-500 text-center py-4 italic">
+                        {selectedRecipe?.type === 'Upgrade' 
+                            ? "No eligible customers found. (Must be Completed & No Existing Package)" 
+                            : "No completed customers found."}
+                    </div>
                 )}
               </div>
+
               {selectedRecipe?.type === 'Add-On' && (
                   <button onClick={handleNewClient} className="w-full py-3 bg-gray-800 border border-dashed border-gray-600 text-gray-300 rounded-lg mt-4 flex items-center justify-center gap-2 hover:bg-gray-750 transition-colors">
                       <Plus size={16}/> Create New Client Record
@@ -301,8 +355,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
             </div>
           )}
 
+          {/* STEP 3: DETAILS & PAYMENT */}
           {step === 'ENTER_DETAILS' && (
             <div className="space-y-6">
+              {/* Client Info Read-Only Block */}
               <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
                 <h4 className="text-sm font-medium text-gray-400 mb-2">Client Details</h4>
                 {selectedBooking ? (
@@ -320,27 +376,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
                       <input type="text" placeholder="Email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="input" />
                    </div>
                 )}
-                
-                <div className="mt-4 pt-4 border-t border-gray-700 grid grid-cols-2 gap-4">
-                    <div>
-                        <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Property Type</label>
-                        <div className="flex gap-1">
-                            {['FP', 'FO', 'BO'].map(t => (
-                                <button key={t} onClick={() => setFormData({...formData, propertyType: t})} className={`flex-1 py-1.5 text-xs rounded border transition-colors ${formData.propertyType === t ? 'bg-cps-blue border-cps-blue text-white' : 'bg-gray-700 border-gray-600 text-gray-400'}`}>{t}</button>
-                            ))}
-                        </div>
-                    </div>
-                    <div className="flex flex-col gap-2 justify-center">
-                        <button onClick={() => setFormData({...formData, hasLockedGate: !formData.hasLockedGate})} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded border transition-colors ${formData.hasLockedGate ? 'bg-orange-900/30 border-orange-600 text-orange-200' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
-                            <Lock size={12}/> Locked Gate {formData.hasLockedGate && <Check size={10}/>}
-                        </button>
-                        <button onClick={() => setFormData({...formData, hasSprinkler: !formData.hasSprinkler})} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded border transition-colors ${formData.hasSprinkler ? 'bg-blue-900/30 border-blue-600 text-blue-200' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
-                            <Droplets size={12}/> Sprinklers {formData.hasSprinkler && <Check size={10}/>}
-                        </button>
-                    </div>
-                </div>
               </div>
 
+              {/* Questions (Timing, etc) */}
               {selectedRecipe?.questions?.map(q => (
                 <div key={q.id}>
                   <label className="block text-sm font-medium text-gray-300 mb-1">{q.label}</label>
@@ -352,8 +390,15 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
                 </div>
               ))}
 
+              {/* Payment Section */}
               <div className="space-y-3">
-                 <label className="block text-sm font-medium text-gray-300">Total Price</label>
+                 <label className="block text-sm font-medium text-gray-300">
+                    {/* Dynamic Label for Clarity */}
+                    {selectedBooking?.Prepaid === 'x' && selectedRecipe?.type === 'Upgrade' 
+                        ? "Collection Amount (Difference)" 
+                        : "Total Price (New Total)"}
+                 </label>
+                 
                  <div className="flex gap-3">
                     {paymentInfo.method !== 'IOS' && (
                         <div className="relative flex-1">
@@ -402,6 +447,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           )}
         </div>
 
+        {/* FOOTER */}
         {step === 'ENTER_DETAILS' && (
            <div className="p-4 border-t border-gray-700 flex justify-end">
               <button onClick={handleSubmit} className="bg-cps-green hover:bg-green-600 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition-all flex items-center gap-2">
