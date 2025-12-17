@@ -419,8 +419,9 @@ class SessionService {
   // FIX: Upsert Logic to prevent Double Entries
   public async completeJob(transaction: SessionTransaction, bookingId: string, workerId: string): Promise<void> {
     
+    // 1. Prepare Data Payload
     const payload = {
-      job_id: bookingId, 
+      job_id: bookingId, // Use bookingId as the stable reference
       worker_id: workerId,
       timestamp: transaction.timestamp,
       type: transaction.type,
@@ -451,6 +452,8 @@ class SessionService {
       },
     };
 
+    // 2. Check if Transaction Exists
+    // If we have a stable booking ID (not 'NEW-'), we check for existence to UPDATE instead of INSERT.
     let existingId: string | null = null;
     
     if (bookingId && !bookingId.startsWith('NEW-')) {
@@ -458,14 +461,19 @@ class SessionService {
        if (data) existingId = data.id;
     }
 
+    // 3. Perform Upsert (Update or Insert)
     if (existingId) {
+        // UPDATE existing record
         const { error } = await supabase.from('transactions').update(payload).eq('id', existingId);
         if (error) throw error;
     } else {
+        // INSERT new record
+        // We include the ID from the transaction object only on insert
         const { error } = await supabase.from('transactions').insert({ ...payload, id: transaction.id });
         if (error) throw error;
     }
 
+    // 4. Update Booking Status
     if (bookingId && !bookingId.startsWith('NEW-')) {
       await supabase.from('bookings').update({
           status: 'completed',
@@ -524,12 +532,22 @@ class SessionService {
         } else if (tx.type === 'Add-On') {
           addToBucket(val, false);
         } else if (tx.type === 'Upgrade') {
-          // --- FIX: Logic to differentiate Cash Replace vs Prepaid Split ---
           if (tx.isWestSplit) {
-            // Prepaid Credit: 20% Prod (EQ), 80% Upsell (Comm)
-            addToBucket(val * 0.2, true);
+            // West Split (Prepaid Credit Scenario)
+            
+            // 80% goes to Upsell (Commission)
             addToBucket(val * 0.8, false);
-            if (method.includes('Prepaid')) stats.prodPrepaidSplit += val * 0.2;
+
+            // 20% goes to Prod (EQ)
+            // CRITICAL FIX: Prevent double-counting in prodPrepaid
+            if (method.includes('Prepaid')) {
+                // If it's Prepaid, it ONLY goes to prodPrepaidSplit (100% weight)
+                // We do NOT call addToBucket because that would add it to prodPrepaid (50% weight)
+                stats.prodPrepaidSplit += (val * 0.2);
+            } else {
+                // If it's Cash/Cheque/etc, it goes to standard production buckets via helper
+                addToBucket(val * 0.2, true);
+            }
           } else {
             // Cash Replace: 100% Prod (EQ)
             addToBucket(val, true);
