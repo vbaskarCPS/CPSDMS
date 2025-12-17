@@ -314,19 +314,10 @@ class SessionService {
 
     const { data: financials } = await supabase.from('transactions').select('*').eq('worker_id', workerId);
 
-    // DYNAMIC STATS RECALCULATION
-    const liveStats = this.recalculateStats(financials || [], 5);
-
-    return {
-      id: data.id,
-      workerId: data.worker_id,
-      date: data.date,
-      status: data.status,
-      stats: liveStats, // Always return fresh stats
-      validation: data.validation,
-      bonuses: data.bonuses,
-      dailyRouteStore: [],
-      financialStore: (financials || []).map((tx) => ({
+    // --- CRITICAL FIX START ---
+    // 1. Convert DB 'snake_case' to App 'camelCase' FIRST.
+    // 2. Then pass the CLEAN object to recalculateStats.
+    const cleanFinancials = (financials || []).map((tx) => ({
         id: tx.id,
         jobId: tx.job_id,
         workerId: tx.worker_id,
@@ -352,7 +343,21 @@ class SessionService {
         customerEmail: tx.customer_email,
         isWestSplit: tx.is_west_split,
         isPrepaid: tx.payment_method === 'Prepaid' || (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? true : false
-      })) as any,
+    })) as SessionTransaction[];
+
+    const liveStats = this.recalculateStats(cleanFinancials, 5);
+    // --- CRITICAL FIX END ---
+
+    return {
+      id: data.id,
+      workerId: data.worker_id,
+      date: data.date,
+      status: data.status,
+      stats: liveStats,
+      validation: data.validation,
+      bonuses: data.bonuses,
+      dailyRouteStore: [],
+      financialStore: cleanFinancials,
     };
   }
 
@@ -411,12 +416,9 @@ class SessionService {
       await supabase.from('transactions').delete().eq('job_id', jobId);
   }
 
-  // FIX: Upsert Logic to prevent Double Entries
   public async completeJob(transaction: SessionTransaction, bookingId: string, workerId: string): Promise<void> {
-    
-    // 1. Prepare Data Payload
     const payload = {
-      job_id: bookingId, // Use bookingId as the stable reference
+      job_id: bookingId,
       worker_id: workerId,
       timestamp: transaction.timestamp,
       type: transaction.type,
@@ -447,8 +449,6 @@ class SessionService {
       },
     };
 
-    // 2. Check if Transaction Exists
-    // If we have a stable booking ID (not 'NEW-'), we check for existence to UPDATE instead of INSERT.
     let existingId: string | null = null;
     
     if (bookingId && !bookingId.startsWith('NEW-')) {
@@ -456,19 +456,14 @@ class SessionService {
        if (data) existingId = data.id;
     }
 
-    // 3. Perform Upsert (Update or Insert)
     if (existingId) {
-        // UPDATE existing record
         const { error } = await supabase.from('transactions').update(payload).eq('id', existingId);
         if (error) throw error;
     } else {
-        // INSERT new record
-        // We include the ID from the transaction object only on insert
         const { error } = await supabase.from('transactions').insert({ ...payload, id: transaction.id });
         if (error) throw error;
     }
 
-    // 4. Update Booking Status
     if (bookingId && !bookingId.startsWith('NEW-')) {
       await supabase.from('bookings').update({
           status: 'completed',
@@ -489,19 +484,21 @@ class SessionService {
     };
   }
 
-  public recalculateStats(financials: any[], taxRate: number = 5): SessionStats {
+  public recalculateStats(financials: SessionTransaction[], taxRate: number = 5): SessionStats {
     const stats = this.getEmptyStats();
     const taxDivisor = 1 + taxRate / 100;
 
     financials.forEach((tx) => {
+      // Step Count
       if (['Production', 'Sale', 'Upgrade'].includes(tx.type)) stats.stepCount++;
       if (['Upgrade', 'Add-On'].includes(tx.type)) stats.upsellCount++;
       if (tx.paymentMethod === 'IOS') stats.iosCount++;
 
-      const paymentMap: Record<string, number> = (tx as any).paymentBreakdown || { [tx.paymentMethod]: tx.price };
+      const paymentMap: Record<string, number> = tx.paymentBreakdown || { [tx.paymentMethod]: tx.price };
 
       Object.entries(paymentMap).forEach(([method, amount]) => {
         const val = Number(amount) || 0;
+        
         const addToBucket = (val: number, isProd: boolean) => {
           if (isProd) {
             if ((tx.type === 'Production') && (tx.displayPrice?.startsWith('RJ') || tx.displayPrice?.startsWith('SP'))) {
@@ -527,12 +524,16 @@ class SessionService {
         } else if (tx.type === 'Add-On') {
           addToBucket(val, false);
         } else if (tx.type === 'Upgrade') {
-          if (tx.isWestSplit || tx.is_west_split) {
+          // --- FIX FOR CASH UPGRADES (REPLACEMENT) ---
+          if (tx.isWestSplit) {
+            // Prepaid Credit Scenario: 20% Prod (EQ), 80% Upsell (Comm)
             addToBucket(val * 0.2, true);
             addToBucket(val * 0.8, false);
             if (method.includes('Prepaid')) stats.prodPrepaidSplit += val * 0.2;
           } else {
-            addToBucket(val, false);
+            // Cash Replacement Scenario: 
+            // Treat as 100% Production so worker gets full EQ/Comm on the new package price
+            addToBucket(val, true); 
           }
         }
       });
