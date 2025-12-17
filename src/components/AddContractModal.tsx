@@ -192,7 +192,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
           paymentBreakdown[currentMethodKey] = inputAmount;
           
-          isPrepaidSplit = true; // CHANGED: All upgrades now follow West Split rules
+          isPrepaidSplit = true; // All upgrades now follow West Split rules
       }
       // SCENARIO 3: ADD-ON or NEW CLIENT
       else {
@@ -213,7 +213,20 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       const formattedDisplayPrice = `${displayPricePrefix}${finalTotal.toFixed(2)}`;
       const finalAddress = selectedBooking ? selectedBooking['Full Address'] : `${houseNumber} ${streetName}`.trim();
 
-      const transactionId = selectedBooking ? selectedBooking['Booking ID'] : `NEW-${generateUUID()}`;
+      // --- CRITICAL FIX START: ID GENERATION ---
+      // 1. If it's an UPGRADE, we MUST reuse the existing Booking ID to overwrite/upgrade the job.
+      // 2. If it's an ADD-ON (even for an existing client), we MUST generate a NEW ID to create a separate transaction.
+      
+      let transactionId: string;
+
+      if (isUpgrade && selectedBooking) {
+          // Reuse existing ID to upgrade the row
+          transactionId = selectedBooking['Booking ID'];
+      } else {
+          // New ID for Add-Ons or New Clients
+          transactionId = `NEW-${generateUUID()}`;
+      }
+      // --- CRITICAL FIX END ---
 
       const tx: SessionTransaction = {
           id: transactionId.startsWith('NEW-') ? generateUUID() : undefined,
