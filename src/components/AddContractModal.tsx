@@ -90,7 +90,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
               'Prepaid': (tx as any).isPrepaid ? 'x' : undefined,
               'Status': 'completed',
               'FO/BO/FP': (tx as any).serviceType,
+              // Check if they already have a contract
               isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ'))),
+              // Pre-fill Gate info from description
               'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined
           } as MasterBooking));
           setAvailableClients(clients);
@@ -103,8 +105,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   const filteredClients = useMemo(() => {
       if (!selectedRecipe) return [];
       if (selectedRecipe.type === 'Upgrade') {
+          // UPGRADES: Only existing customers who do NOT have a contract yet
           return availableClients.filter(c => !c.isContract);
       } else {
+          // ADD-ONS: Any existing customer (Contract or not)
           return availableClients;
       }
   }, [availableClients, selectedRecipe]);
@@ -164,12 +168,14 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       const isIOS = paymentInfo.method === 'IOS';
       const inputAmount = parseFloat(paymentInfo.amount);
 
+      // --- LOGIC FIX: CALCULATE TRUE TOTAL & BREAKDOWN ---
       let finalTotal = inputAmount;
       let creditAmount = 0;
       let isPrepaidSplit = false; 
 
       const paymentBreakdown: Record<string, number> = {};
 
+      // SCENARIO 1: PREPAID UPGRADE (The "Credit" Logic)
       if (isUpgrade && selectedBooking && selectedBooking.Prepaid === 'x') {
           creditAmount = parseFloat(String(selectedBooking.Price).replace(/[^0-9.]/g, '')) || 0;
           finalTotal = creditAmount + inputAmount;
@@ -180,6 +186,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           
           isPrepaidSplit = true; 
       } 
+      // SCENARIO 2: NON-PREPAID UPGRADE (The "Replace" Logic)
       else if (isUpgrade && selectedBooking) {
           finalTotal = inputAmount;
           const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
@@ -187,6 +194,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           
           isPrepaidSplit = true; // CHANGED: All upgrades now follow West Split rules
       }
+      // SCENARIO 3: ADD-ON or NEW CLIENT
       else {
           finalTotal = inputAmount;
           const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
@@ -371,22 +379,22 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
               <div className="space-y-3">
                  <label className="block text-sm font-medium text-gray-300">Total Price</label>
                  <div className="flex gap-3">
-                    {paymentInfo.method !== 'IOS' && (
-                        <div className="relative flex-1">
-                           <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
-                           <input 
-                                type="number" 
-                                placeholder="0.00" 
-                                value={paymentInfo.amount} 
-                                onChange={e => setPaymentInfo({...paymentInfo, amount: e.target.value})}
-                                onBlur={e => {
-                                    const val = parseFloat(e.target.value);
-                                    if(!isNaN(val)) setPaymentInfo(prev => ({...prev, amount: (Math.round(val * 100) / 100).toFixed(2) }));
-                                }} 
-                                className="w-full bg-gray-800 border border-gray-700 rounded-lg py-2 pl-9 pr-4 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none" 
-                           />
-                        </div>
-                    )}
+                    {/* --- FIX: Always show price input, even if IOS --- */}
+                    <div className="relative flex-1">
+                        <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
+                        <input 
+                            type="number" 
+                            placeholder="0.00" 
+                            value={paymentInfo.amount} 
+                            onChange={e => setPaymentInfo({...paymentInfo, amount: e.target.value})}
+                            onBlur={e => {
+                                const val = parseFloat(e.target.value);
+                                if(!isNaN(val)) setPaymentInfo(prev => ({...prev, amount: (Math.round(val * 100) / 100).toFixed(2) }));
+                            }} 
+                            className="w-full bg-gray-800 border border-gray-700 rounded-lg py-2 pl-9 pr-4 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none" 
+                        />
+                    </div>
+                    
                     <select value={paymentInfo.method} onChange={e => { setPaymentInfo({...paymentInfo, method: e.target.value}); if(e.target.value === 'Credit Card') setShowCreditModal(true); }} className="bg-gray-800 border border-gray-700 rounded-lg px-3 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none">
                        <option value="Cash">Cash</option>
                        <option value="Cheque">Cheque</option>
