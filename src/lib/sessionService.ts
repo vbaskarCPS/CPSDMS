@@ -353,7 +353,7 @@ class SessionService {
       workerId: data.worker_id,
       date: data.date,
       status: data.status,
-      stats: liveStats,
+      stats: liveStats, // Always return fresh stats
       validation: data.validation,
       bonuses: data.bonuses,
       dailyRouteStore: [],
@@ -416,9 +416,11 @@ class SessionService {
       await supabase.from('transactions').delete().eq('job_id', jobId);
   }
 
+  // FIX: Upsert Logic to prevent Double Entries
   public async completeJob(transaction: SessionTransaction, bookingId: string, workerId: string): Promise<void> {
+    
     const payload = {
-      job_id: bookingId,
+      job_id: bookingId, 
       worker_id: workerId,
       timestamp: transaction.timestamp,
       type: transaction.type,
@@ -489,7 +491,6 @@ class SessionService {
     const taxDivisor = 1 + taxRate / 100;
 
     financials.forEach((tx) => {
-      // Step Count
       if (['Production', 'Sale', 'Upgrade'].includes(tx.type)) stats.stepCount++;
       if (['Upgrade', 'Add-On'].includes(tx.type)) stats.upsellCount++;
       if (tx.paymentMethod === 'IOS') stats.iosCount++;
@@ -498,7 +499,6 @@ class SessionService {
 
       Object.entries(paymentMap).forEach(([method, amount]) => {
         const val = Number(amount) || 0;
-        
         const addToBucket = (val: number, isProd: boolean) => {
           if (isProd) {
             if ((tx.type === 'Production') && (tx.displayPrice?.startsWith('RJ') || tx.displayPrice?.startsWith('SP'))) {
@@ -524,23 +524,33 @@ class SessionService {
         } else if (tx.type === 'Add-On') {
           addToBucket(val, false);
         } else if (tx.type === 'Upgrade') {
-          // --- FIX FOR CASH UPGRADES (REPLACEMENT) ---
+          // --- FIX: Logic to differentiate Cash Replace vs Prepaid Split ---
           if (tx.isWestSplit) {
-            // Prepaid Credit Scenario: 20% Prod (EQ), 80% Upsell (Comm)
+            // Prepaid Credit: 20% Prod (EQ), 80% Upsell (Comm)
             addToBucket(val * 0.2, true);
             addToBucket(val * 0.8, false);
             if (method.includes('Prepaid')) stats.prodPrepaidSplit += val * 0.2;
           } else {
-            // Cash Replacement Scenario: 
-            // Treat as 100% Production so worker gets full EQ/Comm on the new package price
-            addToBucket(val, true); 
+            // Cash Replace: 100% Prod (EQ)
+            addToBucket(val, true);
           }
         }
       });
     });
 
-    stats.prodGross = stats.prodPrepaid + stats.prodBilled + stats.prodCash + stats.prodCheque + stats.prodETransfer + stats.prodCreditCard + stats.prodFlats;
-    const weightedProd = stats.prodPrepaid * 0.5 + stats.prodBilled * 0.5 + stats.prodCash + stats.prodCheque + stats.prodETransfer + stats.prodCreditCard + stats.prodFlats;
+    stats.prodGross = stats.prodPrepaid + stats.prodBilled + stats.prodCash + stats.prodCheque + stats.prodETransfer + stats.prodCreditCard + stats.prodFlats + stats.prodPrepaidSplit;
+    
+    // Weighted Production for EQ
+    // Prepaid, Billed are 50%. Flats, PrepaidSplit are 100%.
+    const weightedProd = 
+        (stats.prodPrepaid * 0.5) + 
+        (stats.prodBilled * 0.5) + 
+        stats.prodCash + 
+        stats.prodCheque + 
+        stats.prodETransfer + 
+        stats.prodCreditCard + 
+        stats.prodFlats + 
+        stats.prodPrepaidSplit;
 
     stats.prodPayable = weightedProd / taxDivisor;
     stats.totalEQ = stats.prodPayable / 25;

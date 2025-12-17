@@ -6,6 +6,7 @@ import { MasterBooking, Worker, SessionTransaction } from '../types';
 import { sessionService } from '../lib/sessionService';
 import CreditCardModal from './CreditCardModal';
 
+// Helper to generate a valid UUID for transactions
 function generateUUID() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -40,6 +41,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   const [selectedBooking, setSelectedBooking] = useState<MasterBooking | null>(null);
   const [error, setError] = useState<string | null>(null);
   
+  // Data
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -57,13 +59,14 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   const [extraPaymentInfo, setExtraPaymentInfo] = useState(''); 
   const [answers, setAnswers] = useState<Record<string, string>>({}); 
   const [worker, setWorker] = useState<Worker | null>(null);
-  
-  const [allCompletedTransactions, setAllCompletedTransactions] = useState<MasterBooking[]>([]);
+  const [availableClients, setAvailableClients] = useState<MasterBooking[]>([]);
 
+  // CC Data
   const [ccData, setCcData] = useState<{ number: string, expiry: string, cvc: string } | null>(null);
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
 
+  // Territory Helpers
   const [streetName, setStreetName] = useState('');
   const [houseNumber, setHouseNumber] = useState('');
 
@@ -87,24 +90,28 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
               'Prepaid': (tx as any).isPrepaid ? 'x' : undefined,
               'Status': 'completed',
               'FO/BO/FP': (tx as any).serviceType,
-              'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined,
-              isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ')))
+              // Check if they already have a contract
+              isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ'))),
+              // Pre-fill Gate info from description
+              'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined
           } as MasterBooking));
-          
-          setAllCompletedTransactions(clients);
+          setAvailableClients(clients);
       }
     };
     init();
   }, []);
 
-  const availableClients = useMemo(() => {
+  // Filter Logic: Dynamically filter based on Recipe Type
+  const filteredClients = useMemo(() => {
       if (!selectedRecipe) return [];
       if (selectedRecipe.type === 'Upgrade') {
-          return allCompletedTransactions.filter(c => !c.isContract);
+          // UPGRADES: Only existing customers who do NOT have a contract yet
+          return availableClients.filter(c => !c.isContract);
       } else {
-          return allCompletedTransactions;
+          // ADD-ONS: Any existing customer (Contract or not)
+          return availableClients;
       }
-  }, [allCompletedTransactions, selectedRecipe]);
+  }, [availableClients, selectedRecipe]);
 
   const handleRecipeSelect = (recipe: typeof CONTRACT_RECIPES[0]) => {
     setSelectedRecipe(recipe);
@@ -136,14 +143,14 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       notes: '',
       propertyType: booking['FO/BO/FP'] || 'FP',
       hasLockedGate: booking['Gate'] === 'x',
-      hasSprinkler: false 
+      hasSprinkler: false
     });
     setPaymentInfo(prev => ({ ...prev, amount: '0.00' }));
     setStep('ENTER_DETAILS');
   };
 
   const handleNewClient = () => {
-    if (selectedRecipe?.type === 'Upgrade') return; 
+    if (selectedRecipe?.type === 'Upgrade') return;
     setSelectedBooking(null);
     setFormData({ firstName: '', lastName: '', address: '', phone: '', email: '', routeNumber: '', notes: '', propertyType: 'FP', hasLockedGate: false, hasSprinkler: false });
     setPaymentInfo(prev => ({ ...prev, amount: '0.00' }));
@@ -161,12 +168,14 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       const isIOS = paymentInfo.method === 'IOS';
       const inputAmount = parseFloat(paymentInfo.amount);
 
+      // --- LOGIC FIX: CALCULATE TRUE TOTAL & BREAKDOWN ---
       let finalTotal = inputAmount;
       let creditAmount = 0;
       let isPrepaidSplit = false; 
 
       const paymentBreakdown: Record<string, number> = {};
 
+      // SCENARIO 1: PREPAID UPGRADE (The "Credit" Logic)
       if (isUpgrade && selectedBooking && selectedBooking.Prepaid === 'x') {
           creditAmount = parseFloat(String(selectedBooking.Price).replace(/[^0-9.]/g, '')) || 0;
           finalTotal = creditAmount + inputAmount;
@@ -175,15 +184,17 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
           paymentBreakdown[currentMethodKey] = inputAmount;
           
-          isPrepaidSplit = true; 
+          isPrepaidSplit = true; // This triggers the 20/80 split in sessionService
       } 
+      // SCENARIO 2: NON-PREPAID UPGRADE (The "Replace" Logic)
       else if (isUpgrade && selectedBooking) {
           finalTotal = inputAmount;
           const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
           paymentBreakdown[currentMethodKey] = inputAmount;
           
-          isPrepaidSplit = false; 
+          isPrepaidSplit = false; // Triggers 100% Production in sessionService
       }
+      // SCENARIO 3: ADD-ON or NEW CLIENT
       else {
           finalTotal = inputAmount;
           const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
@@ -205,8 +216,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       const transactionId = selectedBooking ? selectedBooking['Booking ID'] : `NEW-${generateUUID()}`;
 
       const tx: SessionTransaction = {
-          id: transactionId.startsWith('NEW-') ? generateUUID() : undefined, 
-          jobId: transactionId, 
+          id: transactionId.startsWith('NEW-') ? generateUUID() : undefined,
+          jobId: transactionId,
           timestamp: new Date().toISOString(),
           customerId: "CLIENT",
           customerName: `${formData.firstName} ${formData.lastName}`,
@@ -220,12 +231,12 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           routeCode: formData.routeNumber,
           
           type: selectedRecipe.type as any,
-          price: finalTotal,
+          price: finalTotal, 
           displayPrice: formattedDisplayPrice, 
           serviceName: selectedRecipe.name, 
           
           paymentMethod: isIOS ? 'IOS' : paymentInfo.method,
-          paymentBreakdown: paymentBreakdown,
+          paymentBreakdown: paymentBreakdown, 
           isPaid: !isIOS && paymentInfo.method !== 'Billed',
           
           ccFullNumber: ccData?.number,
@@ -233,12 +244,13 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           ccCVC: ccData?.cvc,
           etransferEmail: paymentInfo.method === 'E-Transfer' ? extraPaymentInfo : undefined,
           
+          // CRITICAL FIX: Only set isWestSplit if it's actually the Prepaid scenario
           isWestSplit: isPrepaidSplit, 
           
           refId: selectedRecipe.id,
           items: [{ name: selectedRecipe.name, price: finalTotal }],
           itemDescription: finalNotes.trim(),
-          serviceType: formData.propertyType as any, 
+          serviceType: formData.propertyType as any,
           
           region: 'West', seasonId: 'west-aeration'
       } as any;
@@ -247,11 +259,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
 
       const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
       if (session) {
-         const freshSession = await sessionService.getActiveLogsheetSession(worker.contractorId);
-         if (freshSession) {
-             const newStats = sessionService.recalculateStats(freshSession.financialStore, 5);
-             await sessionService.updateLogsheetSession(session.id, { stats: newStats });
-         }
+          // Because getActiveLogsheetSession now calculates LIVE stats, 
+          // we simply save the live stats back to the DB for persistence.
+          await sessionService.updateLogsheetSession(session.id, { stats: session.stats });
       }
 
       onClose();
@@ -265,7 +275,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
       <div className="bg-gray-900 border border-gray-700 rounded-lg w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
-        
         <div className="p-4 border-b border-gray-700 flex justify-between items-center">
           <div className="flex items-center gap-2">
             {step !== 'SELECT_CONTRACT' && (
@@ -281,7 +290,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
         {error && <div className="bg-red-900/30 border-l-4 border-red-500 p-3 mx-4 mt-4 text-red-200 text-sm flex items-center gap-2"><AlertCircle size={16}/>{error}</div>}
 
         <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
-          
           {step === 'SELECT_CONTRACT' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {availableRecipes.map(recipe => (
@@ -295,33 +303,22 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
 
           {step === 'SELECT_CLIENT' && (
             <div className="space-y-4">
-              <h3 className="text-sm text-gray-400 font-medium">
-                 {selectedRecipe?.type === 'Upgrade' ? 'Select Client to Upgrade' : 'Select Client for Add-On'}
-              </h3>
-              
+              <h3 className="text-sm text-gray-400 font-medium">Select Client</h3>
               <div className="max-h-[60vh] overflow-y-auto space-y-1 border border-gray-700/50 rounded-lg p-1 custom-scrollbar mt-2">
-                {availableClients.length > 0 ? (
-                    availableClients.map(b => (
+                {filteredClients.length > 0 ? (
+                    filteredClients.map(b => (
                         <button key={b['Booking ID']} onClick={() => handleClientSelect(b)} className="w-full text-left p-3 rounded flex justify-between items-center group transition-colors border border-transparent hover:bg-gray-800 hover:border-gray-700">
                             <div className="flex items-center gap-3 min-w-0">
                                 <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 group-hover:bg-gray-600 group-hover:text-white"><User size={16} /></div>
-                                <div className="min-w-0">
-                                    <div className="font-bold text-gray-200 group-hover:text-white truncate">{b['Full Address']}</div>
-                                    <div className="text-xs text-gray-500 flex items-center gap-1 truncate">{b['First Name']} {b['Last Name']}</div>
-                                </div>
+                                <div className="min-w-0"><div className="font-bold text-gray-200 group-hover:text-white truncate">{b['Full Address']}</div><div className="text-xs text-gray-500 flex items-center gap-1 truncate">{b['First Name']} {b['Last Name']}</div></div>
                             </div>
                             {b.isContract && <span className="text-[9px] bg-purple-900 text-purple-200 px-1 rounded border border-purple-700">Package</span>}
                         </button>
                     ))
                 ) : (
-                    <div className="text-gray-500 text-center py-4 italic">
-                        {selectedRecipe?.type === 'Upgrade' 
-                            ? "No eligible customers found. (Must be Completed & No Existing Package)" 
-                            : "No completed customers found."}
-                    </div>
+                    <div className="text-gray-500 text-center py-4 italic">No eligible clients found.</div>
                 )}
               </div>
-
               {selectedRecipe?.type === 'Add-On' && (
                   <button onClick={handleNewClient} className="w-full py-3 bg-gray-800 border border-dashed border-gray-600 text-gray-300 rounded-lg mt-4 flex items-center justify-center gap-2 hover:bg-gray-750 transition-colors">
                       <Plus size={16}/> Create New Client Record
@@ -350,7 +347,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
                    </div>
                 )}
                 
-                {/* --- RESTORED INPUTS FOR EVERYONE --- */}
+                {/* --- RESTORED: Inputs now outside 'else' block --- */}
                 <div className="mt-4 pt-4 border-t border-gray-700 grid grid-cols-2 gap-4">
                     <div>
                         <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Property Type</label>
@@ -383,12 +380,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
               ))}
 
               <div className="space-y-3">
-                 <label className="block text-sm font-medium text-gray-300">
-                    {selectedBooking?.Prepaid === 'x' && selectedRecipe?.type === 'Upgrade' 
-                        ? "Collection Amount (Difference)" 
-                        : "Total Price (New Total)"}
-                 </label>
-                 
+                 <label className="block text-sm font-medium text-gray-300">Total Price</label>
                  <div className="flex gap-3">
                     {paymentInfo.method !== 'IOS' && (
                         <div className="relative flex-1">
