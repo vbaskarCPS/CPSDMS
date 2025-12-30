@@ -1,5 +1,5 @@
 // src/pages/Management/components/ContractorJobs.tsx
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Phone, Mail, Undo } from 'lucide-react';
 import { MasterBooking, SessionTransaction } from '../../../types';
 
@@ -24,9 +24,44 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
       return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
   
+  // --- Merge Bookings & Transactions ---
+  const allJobs = useMemo(() => {
+      const combined = [...bookings];
+      const existingIds = new Set(combined.map(b => b['Booking ID']));
+
+      // Merge in transactions from financialStore that aren't already in bookings
+      financialStore.forEach(tx => {
+          if (!existingIds.has(tx.jobId)) {
+               const nameParts = (tx.customerName || '').split(' ');
+               const convertedJob: MasterBooking = {
+                   'Booking ID': tx.jobId,
+                   'First Name': nameParts[0] || '',
+                   'Last Name': nameParts.slice(1).join(' ') || '',
+                   'Full Address': tx.address || '',
+                   'Route Number': tx.routeCode || '',
+                   'Price': tx.displayPrice || String(tx.price),
+                   'Status': 'completed',
+                   'Completed': 'x',
+                   'Payment Method': tx.paymentMethod,
+                   'Email Address': tx.customerEmail,
+                   'Cell Phone': tx.customerPhone,
+                   // Attach extra metadata for badging
+                   ...({
+                       isUpgrade: tx.type === 'Upgrade',
+                       isAddOn: tx.type === 'Add-On',
+                       isNewSale: tx.type === 'Sale',
+                       paymentBreakdown: tx.paymentBreakdown
+                   } as any)
+               };
+               combined.push(convertedJob);
+          }
+      });
+      return combined;
+  }, [bookings, financialStore]);
+
   // --- Sort & Filter ---
   // Sort Logic: Pending -> Not Done -> Completed
-  const sortedBookings = [...bookings].sort((a, b) => {
+  const sortedBookings = [...allJobs].sort((a, b) => {
       const getScore = (job: MasterBooking) => {
           if (job.Completed === 'x') return 3;
           if (job.Status && job.Status !== 'pending') return 2; // Not Done / Cancelled
@@ -91,11 +126,12 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
           paymentDisplay = simpleMethod;
       }
 
-      // Safe Price Display
+      // Safe Price Display with 2 Decimal Places
       const priceStr = String(job.Price || '');
-      const displayPrice = /^[A-Z]/.test(priceStr) 
+      // If price is just text (like "RJ"), keep it. If it has numbers, format to $0.00
+      const displayPrice = /^[A-Z]+$/.test(priceStr) 
           ? priceStr 
-          : `$${parseFloat(priceStr.replace(/[^0-9.]/g, '') || '0').toFixed(0)}`;
+          : `$${parseFloat(priceStr.replace(/[^0-9.]/g, '') || '0').toFixed(2)}`;
 
       const handleBadgeClick = (e: React.MouseEvent) => {
           if (isPaid && onRevert) {
@@ -150,7 +186,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                               {job['FO/BO/FP']}
                           </span>
                       )}
-                      <span className="font-mono font-bold text-gray-300 w-14 text-right">
+                      <span className="font-mono font-bold text-gray-300 w-16 text-right">
                           {displayPrice}
                       </span>
                       
