@@ -109,18 +109,26 @@ const RMLogbook: React.FC = () => {
   }, [dailyData?.date]);
 
 
-  // --- CALCULATE FALLBACK STATS (For Routes Tab / Initial Load) ---
-  // If we are on the 'team' tab, we SKIP this and trust the Team Tab component 
-  // to tell us the correct stats (handling transfers, etc).
-  // If we are on 'routes' tab, we calculate defaults from the DB data.
+  // --- PRIMARY STATS CALCULATION ---
+  // We perform this here to ensure the header always reflects the strictly filtered
+  // "My Team" data, regardless of which tab is open or what the child component thinks.
   useEffect(() => {
-    if (!dailyData || !allSessions) return;
+    if (!dailyData || !allSessions || !currentUser) return;
     
-    // STOP: If on Team tab, let the child component drive the stats to support transfers/filtering.
-    if (activeTab === 'team') return;
+    // 1. FILTER WORKERS: Strictly only those assigned to this Route Manager
+    const myWorkers = dailyData.workers.filter((w: any) => 
+        (w.managerId === currentUser.userId) || (w.manager_id === currentUser.userId)
+    );
+    const myWorkerIds = myWorkers.map(w => w.userId);
 
-    const activeWorkerIds = dailyData.workers.map(w => w.userId);
-    const activeSessions = allSessions.filter(s => activeWorkerIds.includes(s.user_id));
+    // 2. FILTER SESSIONS: Only sessions belonging to MY workers
+    const mySessions = allSessions.filter(s => myWorkerIds.includes(s.user_id));
+
+    // 3. FILTER BOOKINGS: Only unassigned bookings for this Route Manager
+    // (Checks both camelCase and snake_case properties to be safe)
+    const myPendingBookings = (dailyData.pendingBookings || []).filter((b: any) => 
+        (b.managerId === currentUser.userId) || (b.manager_id === currentUser.userId)
+    );
 
     let totalSteps = 0;
     let totalPending = 0; 
@@ -128,11 +136,10 @@ const RMLogbook: React.FC = () => {
     let totalGross = 0;
     let totalUpsellCount = 0;
     
-    // Sum of all individual EQs to calculate average later
     let sumOfIndividualEQs = 0;
     let workersWithActivity = 0;
 
-    activeSessions.forEach((session: any) => {
+    mySessions.forEach((session: any) => {
         const steps = Number(session.steps) || 0;
         const pending = Number(session.pending_count || session.pending || 0);
         const completed = Number(session.completed_count || session.completed || 0);
@@ -146,6 +153,7 @@ const RMLogbook: React.FC = () => {
         totalUpsellCount += upsells;
 
         // Calculate Individual EQ for aggregation
+        // We only average EQ for workers who have actually started (steps > 0)
         if (steps > 0) {
             const results = pending + completed;
             const workerEq = results / steps;
@@ -154,16 +162,17 @@ const RMLogbook: React.FC = () => {
         }
     });
 
-    // Calculate Average EQ: (Sum of all EQs) / (Number of Workers)
-    // If we are falling back to DB data, we use workersWithActivity or total workers
-    // Here we use workersWithActivity to be safe, or dailyData.workers.length if you prefer strict DB count
-    const countForAvg = workersWithActivity > 0 ? workersWithActivity : 1;
-    const avgEQ = sumOfIndividualEQs / countForAvg;
-    const currentUnassignedCount = dailyData.pendingBookings?.length || 0;
+    // Calculate Average EQ
+    // If 1 worker active with 2.0 EQ, sum=2.0, count=1 -> Avg=2.00
+    const countForAvg = workersWithActivity > 0 ? workersWithActivity : 0;
+    const avgEQ = countForAvg > 0 ? sumOfIndividualEQs / countForAvg : 0.00;
+
+    // Derived unassigned count (filtered)
+    const currentUnassignedCount = myPendingBookings.length;
 
     setStats(prev => ({
         ...prev,
-        workerCount: dailyData.workers.length, // Fallback to DB count if not on team tab
+        workerCount: myWorkers.length,
         totalSteps,
         pendingPrebooks: totalPending,
         completedPrebooks: totalCompleted,
@@ -173,7 +182,7 @@ const RMLogbook: React.FC = () => {
         unassignedBookings: currentUnassignedCount
     }));
 
-  }, [dailyData, allSessions, activeTab]);
+  }, [dailyData, allSessions, currentUser]); // Runs whenever data or user changes
 
 
   if (loading || !currentUser || !dailyData)
@@ -183,8 +192,17 @@ const RMLogbook: React.FC = () => {
       </div>
     );
 
-  // Derived calculation for unassigned count
-  const currentUnassignedCount = dailyData?.pendingBookings?.length || 0;
+  // --- PREPARE PROPS FOR CHILDREN ---
+  
+  // 1. Filter Workers
+  const myWorkers = dailyData.workers.filter((w: any) => 
+      (w.managerId === currentUser.userId) || (w.manager_id === currentUser.userId)
+  );
+
+  // 2. Filter Bookings (for Routes Tab)
+  const myPendingBookings = (dailyData.pendingBookings || []).filter((b: any) => 
+      (b.managerId === currentUser.userId) || (b.manager_id === currentUser.userId)
+  );
 
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
@@ -230,7 +248,7 @@ const RMLogbook: React.FC = () => {
               }`}
             >
               <Map size={14} /> Routes{' '}
-              {(stats.unassignedRoutes || 0) + (currentUnassignedCount) > 0 && (
+              {(stats.unassignedRoutes || 0) + (stats.unassignedBookings || 0) > 0 && (
                 <span className="flex items-center justify-center w-4 h-4 text-[9px] bg-red-500 text-white rounded-full animate-pulse">
                   !
                 </span>
@@ -243,7 +261,6 @@ const RMLogbook: React.FC = () => {
         <div className="grid grid-cols-3 md:grid-cols-6 gap-px bg-gray-700 border-t border-gray-700">
             
             {/* 1. Workers */}
-            {/* Value driven by child component via onStatsUpdate when active */}
             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Workers</span>
                 <div className="flex items-center gap-1 text-blue-300 font-bold text-lg">
@@ -264,7 +281,7 @@ const RMLogbook: React.FC = () => {
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Pending</span>
                 <div className="flex items-center gap-1 text-yellow-400 font-bold text-lg">
                     <Clock size={14} className="opacity-70" /> 
-                    {stats.pendingPrebooks + currentUnassignedCount}
+                    {stats.pendingPrebooks + stats.unassignedBookings}
                 </div>
             </div>
 
@@ -274,7 +291,6 @@ const RMLogbook: React.FC = () => {
                 <div className={`font-bold text-lg ${
                     (stats.avgEQ || 0) >= 3 ? 'text-green-400' : (stats.avgEQ || 0) >= 2 ? 'text-yellow-400' : 'text-red-400'
                 }`}>
-                    {/* Always display 2 decimals */}
                     {(stats.avgEQ || 0).toFixed(2)}
                 </div>
             </div>
@@ -305,19 +321,22 @@ const RMLogbook: React.FC = () => {
           {activeTab === 'team' && (
             <RMTeamTab
               managerId={currentUser.userId}
-              workers={dailyData.workers}
-              allSessions={allSessions}
+              workers={myWorkers} 
+              allSessions={allSessions} // Child filters this itself, but we could pass filtered if needed
               allManagers={dailyData.managers}
-              // We rely on this callback to update stats when transfers/filters happen in the UI
-              onStatsUpdate={(s: any) => setStats((prev) => ({ ...prev, ...s }))}
+              // We disconnect the child's ability to overwrite key metrics to ensure 
+              // the parent's filtered logic remains the source of truth for the header.
+              // We only accept specific updates if necessary, or empty function to block it.
+              onStatsUpdate={() => {}} 
             />
           )}
           {activeTab === 'routes' && (
             <RMRoutesTab
               managerId={currentUser.userId}
               routes={dailyData.routes}
-              bookings={dailyData.pendingBookings}
-              workers={dailyData.workers}
+              bookings={myPendingBookings}
+              workers={myWorkers} 
+              // Allow routes to update unassigned counts since that logic lives there
               onStatsUpdate={(s) => setStats((prev) => ({ 
                   ...prev, 
                   unassignedRoutes: s.unassignedRoutes, 
