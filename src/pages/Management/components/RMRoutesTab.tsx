@@ -1,5 +1,5 @@
 // src/pages/Management/components/RMRoutesTab.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Map, AlertCircle, X, Check, ChevronDown, ChevronUp, 
   MapPin, Phone, User, Users 
@@ -113,7 +113,41 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     });
   }, [managerId, routes, bookings, workers]);
 
-  // --- 2. ACTIONS ---
+  // --- 2. CALCULATE ASSIGNMENTS & SORTING ---
+  
+  // Create a map of workerId -> Array of Route Codes they own
+  const workerRouteMap = useMemo(() => {
+    const map = new Map<string, string[]>();
+    routes.forEach(r => {
+      if (r.assignedWorkerId) {
+        const existing = map.get(r.assignedWorkerId) || [];
+        existing.push(r.routeCode);
+        map.set(r.assignedWorkerId, existing);
+      }
+    });
+    return map;
+  }, [routes]);
+
+  // Sort Contractors: Available (No Route) First, then Alphabetical
+  const sortedContractors = useMemo(() => {
+    return [...contractors].sort((a, b) => {
+      const aRoutes = workerRouteMap.get(a.contractorId);
+      const bRoutes = workerRouteMap.get(b.contractorId);
+      
+      const aHasRoute = aRoutes && aRoutes.length > 0;
+      const bHasRoute = bRoutes && bRoutes.length > 0;
+
+      // If one has route and other doesn't, put the one WITHOUT route first
+      if (aHasRoute !== bHasRoute) {
+        return aHasRoute ? 1 : -1;
+      }
+
+      // Otherwise sort alphabetically
+      return a.firstName.localeCompare(b.firstName);
+    });
+  }, [contractors, workerRouteMap]);
+
+  // --- 3. ACTIONS ---
 
   const handleCopy = (text: string, uniqueId: string) => {
     navigator.clipboard.writeText(text);
@@ -149,10 +183,10 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     }
 
     setAssignModalData(null);
-    onRefresh(); // <--- TRIGGER PARENT REFRESH
+    onRefresh(); // Trigger parent refresh
   };
 
-  // --- 3. HELPERS ---
+  // --- 4. HELPERS ---
   const getWorkerInfo = (id: string | null) => {
     if (!id) return null;
     return contractors.find((x) => x.contractorId === id);
@@ -336,6 +370,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
             </div>
             
             <div className="space-y-1 max-h-64 overflow-y-auto custom-scrollbar pr-1">
+              {/* UNASSIGN OPTION */}
               <button
                 onClick={() => handleAssignConfirm(null)}
                 className="w-full text-left px-3 py-3 text-red-400 hover:bg-red-900/10 rounded flex items-center gap-2 mb-2 text-sm border border-transparent hover:border-red-900/30 transition-all"
@@ -343,24 +378,44 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                 <AlertCircle size={16} /> Unassign {assignModalData.type === 'ROUTE' ? 'Route' : 'Job'}
               </button>
 
-              {contractors.map((w) => {
+              {/* CONTRACTOR LIST - SORTED */}
+              {sortedContractors.map((w) => {
                   const isSelected = w.contractorId === assignModalData.currentWorkerId;
+                  const assignedRoutes = workerRouteMap.get(w.contractorId);
+                  const hasRoute = assignedRoutes && assignedRoutes.length > 0;
+
                   return (
                     <button
                       key={w.contractorId}
                       onClick={() => handleAssignConfirm(w.contractorId)}
-                      className={`w-full text-left px-3 py-2.5 rounded text-sm flex items-center gap-3 transition-colors ${
+                      className={`w-full text-left px-3 py-2.5 rounded text-sm flex items-center justify-between gap-3 transition-colors ${
                           isSelected 
                           ? 'bg-cps-blue/20 border border-cps-blue/50 text-white' 
                           : 'text-gray-300 hover:bg-gray-800 border border-transparent'
                       }`}
                     >
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${
-                          isSelected ? 'bg-cps-blue' : 'bg-gray-700'
-                      }`}>
-                        {w.firstName[0]}
+                      <div className="flex items-center gap-3">
+                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${
+                              isSelected ? 'bg-cps-blue' : 'bg-gray-700'
+                          }`}>
+                            {w.firstName[0]}
+                          </div>
+                          <div className="flex flex-col">
+                              <span>{w.firstName} {w.lastName}</span>
+                              {hasRoute && (
+                                  <span className="text-[10px] text-gray-500">
+                                      Assignments: {assignedRoutes.join(', ')}
+                                  </span>
+                              )}
+                          </div>
                       </div>
-                      {w.firstName} {w.lastName}
+                      
+                      {/* Visual Badge for existing assignments */}
+                      {hasRoute && (
+                          <span className="text-[9px] bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded border border-gray-600 font-mono">
+                              {assignedRoutes[0]}
+                          </span>
+                      )}
                     </button>
                   );
               })}
