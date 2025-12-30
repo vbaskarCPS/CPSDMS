@@ -63,7 +63,7 @@ class SessionService {
         .from('transactions')
         .select('*')
         .eq('job_id', jobId)
-        .maybeSingle(); // Use maybeSingle to avoid errors if not found
+        .maybeSingle(); 
     
     if (!data) return null;
     return this.mapDbTransaction(data);
@@ -242,24 +242,60 @@ class SessionService {
    * This prevents Foreign Key constraint errors.
    */
   public async deleteWorker(workerId: string): Promise<void> {
-    // 1. Unassign Routes (set to null so route exists but is unassigned)
+    // 1. Unassign Routes 
     await supabase.from('routes').update({ assigned_worker_id: null }).eq('assigned_worker_id', workerId);
 
-    // 2. Unassign Bookings (set to null so booking exists but is unassigned)
+    // 2. Unassign Bookings
     await supabase.from('bookings').update({ contractor_id: null }).eq('contractor_id', workerId);
 
-    // 3. Delete Logsheet Session (remove their daily tracking record)
+    // 3. Delete Logsheet Session
     await supabase.from('logsheet_sessions').delete().eq('worker_id', workerId);
 
-    // 4. Delete Transactions (remove any financials they generated today to prevent orphaned records)
+    // 4. Delete Transactions
     await supabase.from('transactions').delete().eq('worker_id', workerId);
 
-    // 5. Finally, delete the User
+    // 5. Delete User (Using snake_case 'user_id' to avoid 404s)
     const { error } = await supabase.from('users').delete().eq('user_id', workerId);
     
     if (error) {
         console.error("Failed to delete user:", error);
         throw error;
+    }
+  }
+
+  /**
+   * Transfers a worker to a new manager by updating metadata and active routes.
+   */
+  public async transferWorker(workerId: string, newManagerId: string): Promise<void> {
+    const date = await this.getDailySessionDate();
+
+    // 1. Fetch current user metadata
+    const { data: user, error: fetchError } = await supabase
+        .from('users')
+        .select('metadata')
+        .eq('user_id', workerId)
+        .single();
+    
+    if (fetchError || !user) throw new Error("Worker not found");
+
+    // 2. Update Metadata with new Manager ID
+    const newMetadata = { ...user.metadata, assignedManagerId: newManagerId };
+    
+    const { error: updateError } = await supabase
+        .from('users')
+        .update({ metadata: newMetadata })
+        .eq('user_id', workerId);
+
+    if (updateError) throw updateError;
+
+    // 3. Update any active routes assigned to this worker to belong to the new manager
+    // This ensures the new manager can see the routes immediately.
+    if (date) {
+        await supabase
+            .from('routes')
+            .update({ manager_id: newManagerId })
+            .eq('assigned_worker_id', workerId)
+            .eq('session_date', date);
     }
   }
 
@@ -512,8 +548,6 @@ class SessionService {
 
     let existingId: string | null = null;
     
-    // --- FIX: Removed !startsWith('NEW-') condition ---
-    // Now it searches for ANY existing job_id to prevent duplicates
     if (bookingId) {
        const { data } = await supabase.from('transactions').select('id').eq('job_id', bookingId).maybeSingle();
        if (data) existingId = data.id;

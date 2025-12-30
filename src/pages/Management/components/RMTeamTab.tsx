@@ -22,6 +22,7 @@ interface RMTeamTabProps {
   allSessions: LogsheetSession[];
   allManagers?: ManagementUser[];
   onStatsUpdate: (stats: TabStats) => void;
+  // These props are deprecated in favor of direct service calls to avoid 404s
   onTransferContractor?: (contractorId: string, newManagerId: string) => Promise<void>;
   onRemoveContractor?: (contractorId: string) => Promise<void>;
 }
@@ -47,6 +48,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   allSessions,
   allManagers = [],
   onStatsUpdate,
+  // We accept these but won't use them to prevent the 404 error from the parent
   onTransferContractor,
   onRemoveContractor
 }) => {
@@ -146,27 +148,31 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
   const handleTransfer = async (contractorId: string) => {
     if (!selectedTransferManager) return;
-    if (onTransferContractor) {
-      await onTransferContractor(contractorId, selectedTransferManager);
+    
+    try {
+        // Use service directly to avoid camelCase/snake_case mismatch errors
+        await sessionService.transferWorker(contractorId, selectedTransferManager);
+
+        // Success: Remove them from the local list immediately
+        setTeamMembers((prev) => prev.filter((m) => m.contractorId !== contractorId));
+        setTransferModeId(null);
+        setMenuOpenId(null);
+        setSelectedTransferManager("");
+    } catch (error) {
+        console.error("Transfer failed:", error);
+        alert("Failed to transfer contractor. Please try again.");
     }
-    setTransferModeId(null);
-    setMenuOpenId(null);
   };
 
   const handleRemove = async (contractorId: string) => {
     if (window.confirm("Are you sure you want to remove this contractor? This will unassign any active routes/bookings.")) {
       try {
-        // --- FIX: Call the safe delete function directly ---
+        // Use service directly to ensure clean cascade delete
         await sessionService.deleteWorker(contractorId);
 
-        // Update local state immediately to remove the card from UI
+        // Success: Remove from local UI immediately
         setTeamMembers((prev) => prev.filter((m) => m.contractorId !== contractorId));
         setMenuOpenId(null);
-
-        // Notify parent if needed (optional)
-        if (onRemoveContractor) {
-          onRemoveContractor(contractorId).catch(() => {});
-        }
       } catch (error) {
         console.error("Error removing contractor:", error);
         alert("Failed to remove contractor. Please refresh and try again.");
@@ -180,8 +186,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     // However, usually we still want to block deleting if they have generated revenue (financialStore).
     const hasHistory = member.financialStore.length > 0;
     
-    // Allow deleting if no financial history, or allow everything if you prefer.
-    // For safety, let's keep it restricted to those without financial history for now.
+    // Allow deleting if no financial history
     return !hasHistory;
   };
 
