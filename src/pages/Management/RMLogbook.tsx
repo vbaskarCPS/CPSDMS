@@ -1,14 +1,13 @@
 // src/pages/Management/RMLogbook.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Map, FileText, Loader, Calendar, BookOpen } from 'lucide-react';
+import { Users, Map, Loader, Calendar, BookOpen } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { ManagementUser, DailySessionData, LogsheetSession } from '../../types';
 import { sessionService } from '../../lib/sessionService';
 
 import RMTeamTab from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
-import RMBookingsTab from './components/RMBookingsTab';
 
 export interface TabStats {
   totalPending?: number;
@@ -21,9 +20,7 @@ export interface TabStats {
 const RMLogbook: React.FC = () => {
   const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<ManagementUser | null>(null);
-  const [activeTab, setActiveTab] = useState<'team' | 'routes' | 'bookings'>(
-    'team'
-  );
+  const [activeTab, setActiveTab] = useState<'team' | 'routes'>('team');
   const [stats, setStats] = useState<TabStats>({});
 
   // Data State
@@ -105,28 +102,11 @@ const RMLogbook: React.FC = () => {
               }`}
             >
               <Map size={16} /> Routes{' '}
-              <span className="text-xs bg-gray-800 px-1.5 rounded-full text-gray-300">
-                {stats.unassignedRoutes !== undefined &&
-                stats.unassignedRoutes > 0
-                  ? stats.unassignedRoutes
-                  : ''}
-              </span>
-            </button>
-            <button
-              onClick={() => setActiveTab('bookings')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                activeTab === 'bookings'
-                  ? 'bg-gray-700 text-white shadow-sm'
-                  : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              <FileText size={16} /> Bookings{' '}
-              <span className="text-xs bg-gray-800 px-1.5 rounded-full text-gray-300">
-                {stats.unassignedBookings !== undefined &&
-                stats.unassignedBookings > 0
-                  ? stats.unassignedBookings
-                  : ''}
-              </span>
+              {(stats.unassignedRoutes || 0) + (stats.unassignedBookings || 0) > 0 && (
+                <span className="text-xs bg-red-900/50 text-red-300 px-1.5 rounded-full border border-red-900">
+                  !
+                </span>
+              )}
             </button>
           </div>
         </div>
@@ -149,15 +129,6 @@ const RMLogbook: React.FC = () => {
               routes={dailyData.routes}
               bookings={dailyData.pendingBookings}
               workers={dailyData.workers} // Pass workers for assignment dropdown
-              onStatsUpdate={(s) => setStats((prev) => ({ ...prev, ...s }))}
-            />
-          )}
-          {activeTab === 'bookings' && (
-            <RMBookingsTab
-              managerId={currentUser.userId}
-              bookings={dailyData.pendingBookings}
-              routes={dailyData.routes}
-              workers={dailyData.workers}
               onStatsUpdate={(s) => setStats((prev) => ({ ...prev, ...s }))}
             />
           )}
