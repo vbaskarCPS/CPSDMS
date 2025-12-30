@@ -1,3 +1,4 @@
+// src/pages/Management/components/RMTeamTab.tsx
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   ChevronDown, 
@@ -5,7 +6,7 @@ import {
   Phone, 
   Check, 
   MoreVertical, 
-  ArrowRight, // Replaced UserRight with ArrowRight
+  ArrowRight, 
   Trash2, 
   X,
   MapPin,
@@ -20,10 +21,8 @@ interface RMTeamTabProps {
   managerId: string;
   workers: Worker[];
   allSessions: LogsheetSession[];
-  // New prop to populate the transfer dropdown
   allManagers?: ManagementUser[];
   onStatsUpdate: (stats: TabStats) => void;
-  // Action Handlers
   onTransferContractor?: (contractorId: string, newManagerId: string) => Promise<void>;
   onRemoveContractor?: (contractorId: string) => Promise<void>;
 }
@@ -31,8 +30,8 @@ interface RMTeamTabProps {
 interface TeamMemberDisplay extends Worker {
   displayBookings: MasterBooking[];
   financialStore: any[];
-  assignedRoutes: string[]; // New: Derived unique routes
-  lastActiveAddress: string | null; // New: Derived last address
+  assignedRoutes: string[];
+  lastActiveAddress: string | null;
   stats: {
     steps: number;
     gross: number;
@@ -47,7 +46,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   managerId,
   workers,
   allSessions,
-  allManagers = [], // Default to empty if not passed yet
+  allManagers = [],
   onStatsUpdate,
   onTransferContractor,
   onRemoveContractor
@@ -63,7 +62,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Close menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
@@ -82,41 +80,30 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         totalPending = 0,
         totalEQ = 0;
 
-      // We need to resolve each worker's data asynchronously
       const enriched = await Promise.all(
         myTeam.map(async (w) => {
-          // 1. Get Jobs (Cloud Fetch)
-          const allBookings = await sessionService.getWorkerAssignments(
-            w.contractorId
-          );
-
+          const allBookings = await sessionService.getWorkerAssignments(w.contractorId);
           const pending = allBookings.filter((b) => b.Completed !== 'x');
-
-          // 2. Find their session stats
-          const session = allSessions.find(
-            (s) => s.workerId === w.contractorId
-          );
+          const session = allSessions.find((s) => s.workerId === w.contractorId);
           const stats = session?.stats || sessionService.getEmptyStats();
           const financialStore = session?.financialStore || [];
 
-          // 3. Derive Routes (Unique Route Numbers)
+          // Unique Routes
           const uniqueRoutes = Array.from(new Set(
             allBookings
               .map(b => b['Route Number'])
               .filter(r => r && r !== 'x' && r.trim() !== '')
           )) as string[];
 
-          // 4. Derive Last Address (Most recent transaction)
+          // Last Address
           let lastAddr = null;
           if (financialStore.length > 0) {
-            // Sort by timestamp desc to get latest
             const sortedTx = [...financialStore].sort((a, b) => 
               new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
             );
             lastAddr = sortedTx[0].address;
           }
 
-          // Aggregate
           totalSteps += stats.stepCount;
           totalPending += pending.length;
           totalEQ += stats.totalEQ;
@@ -146,11 +133,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     loadData();
   }, [managerId, workers, allSessions]);
 
-  // --- Handlers ---
-
   const toggleItem = (id: string) => {
     setExpandedItem(expandedItem === id ? null : id);
-    // Close menus when toggling accordion
     setMenuOpenId(null);
     setTransferModeId(null);
   };
@@ -165,25 +149,20 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     if (!selectedTransferManager) return;
     if (onTransferContractor) {
       await onTransferContractor(contractorId, selectedTransferManager);
-    } else {
-      console.log(`Transferring ${contractorId} to ${selectedTransferManager} (No handler provided)`);
     }
     setTransferModeId(null);
     setMenuOpenId(null);
   };
 
   const handleRemove = async (contractorId: string) => {
-    if (window.confirm("Are you sure you want to remove this contractor? This cannot be undone.")) {
+    if (window.confirm("Are you sure you want to remove this contractor?")) {
       if (onRemoveContractor) {
         await onRemoveContractor(contractorId);
-      } else {
-        console.log(`Removing ${contractorId} (No handler provided)`);
       }
       setMenuOpenId(null);
     }
   };
 
-  // Logic to determine if menu is accessible
   const isModifiable = (member: TeamMemberDisplay) => {
     const hasBookings = member.displayBookings.length > 0;
     const hasHistory = member.financialStore.length > 0;
@@ -203,110 +182,109 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           key={member.contractorId}
           className="relative bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 transition-all shadow-sm"
         >
-          {/* Header Card Area */}
-          <div className="p-2 pr-10"> {/* pr-10 reserves space for the menu button */}
+          {/* Main Card Content */}
+          <div className="p-2 pr-9"> {/* Right padding reserves space for the absolute menu */}
             
-            {/* Top Row: Name & Status */}
+            {/* TOP ROW: Name (Left) + Routes (Right) */}
             <div 
-              className="flex items-center gap-3 mb-2 cursor-pointer"
+              className="flex items-center justify-between mb-1 cursor-pointer"
               onClick={() => toggleItem(member.contractorId)}
             >
-              <div
-                className={`w-2.5 h-2.5 rounded-full shadow-sm ${
-                  member.stats.pending > 0 ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'
-                }`}
-              />
-              <div>
-                <h3 className="font-bold text-white text-sm leading-tight">
+              {/* Left: Status + Name */}
+              <div className="flex items-center gap-2">
+                <div
+                  className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                    member.stats.pending > 0 ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'
+                  }`}
+                />
+                <h3 className="font-bold text-white text-sm whitespace-nowrap">
                   {member.firstName} {member.lastName}
                 </h3>
-                <div className="flex items-center gap-2 text-[10px] text-gray-500 font-mono">
-                  <span>#{member.contractorId}</span>
-                  {member.cellPhone && (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        copyPhone(member.cellPhone!, member.contractorId);
-                      }}
-                      className="flex items-center gap-1 text-blue-400 cursor-pointer hover:underline"
-                    >
-                      <Phone size={10} /> {member.cellPhone}
-                      {copiedId === member.contractorId && (
-                        <Check size={10} className="text-green-400" />
-                      )}
-                    </span>
-                  )}
-                </div>
               </div>
-            </div>
 
-            {/* Middle Row: Routes & Location (Clicking this also toggles accordion) */}
-            <div 
-              className="mb-2 space-y-1 cursor-pointer"
-              onClick={() => toggleItem(member.contractorId)}
-            >
-              {/* Assigned Routes Pills */}
-              <div className="flex flex-wrap gap-1">
+              {/* Right: Route Pills (Inline) */}
+              <div className="flex flex-wrap justify-end gap-1 ml-2">
                 {member.assignedRoutes.length > 0 ? (
                   member.assignedRoutes.map((route, idx) => (
-                    <span key={idx} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-indigo-900/50 text-indigo-200 border border-indigo-500/30">
-                      <RouteIcon size={8} />
+                    <span key={idx} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] bg-indigo-900/60 text-indigo-200 border border-indigo-500/30 font-mono">
                       {route}
                     </span>
                   ))
-                ) : (
-                   member.displayBookings.length > 0 ? (
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-gray-700 text-gray-300">
-                         {member.displayBookings.length} Bookings (No Route)
-                      </span>
-                   ) : (
-                    <span className="text-[10px] text-gray-600 italic">No active assignments</span>
-                   )
-                )}
+                ) : member.displayBookings.length > 0 ? (
+                   <span className="text-[9px] text-gray-500 italic">No Rte</span>
+                ) : null}
               </div>
+            </div>
 
-              {/* Last Address */}
-              <div className="flex items-center gap-1.5 text-[11px] text-gray-400 truncate">
-                <MapPin size={10} className={member.lastActiveAddress ? "text-emerald-500" : "text-gray-600"} />
+            {/* SECOND ROW: Location + Phone + ID */}
+            <div 
+              className="flex items-center gap-3 pl-4 mb-2 cursor-pointer"
+              onClick={() => toggleItem(member.contractorId)}
+            >
+              {/* Location */}
+              <div className="flex items-center gap-1 text-[10px] text-gray-400 truncate max-w-[50%]">
+                <MapPin size={9} className={member.lastActiveAddress ? "text-emerald-500" : "text-gray-600"} />
                 {member.lastActiveAddress ? (
                   <span className="truncate">{member.lastActiveAddress}</span>
                 ) : (
-                  <span className="opacity-50 italic">No transaction history</span>
+                  <span className="opacity-50 italic">No history</span>
+                )}
+              </div>
+
+              {/* Separator */}
+              <span className="text-gray-700 text-[10px]">|</span>
+
+              {/* ID & Phone */}
+              <div className="flex items-center gap-2 text-[10px] text-gray-500 font-mono">
+                <span>#{member.contractorId}</span>
+                {member.cellPhone && (
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      copyPhone(member.cellPhone!, member.contractorId);
+                    }}
+                    className="flex items-center gap-1 text-blue-400 cursor-pointer hover:underline"
+                  >
+                    <Phone size={9} /> {member.cellPhone}
+                    {copiedId === member.contractorId && (
+                      <Check size={9} className="text-green-400" />
+                    )}
+                  </span>
                 )}
               </div>
             </div>
 
-            {/* Bottom Row: Stats Grid (Compact) */}
+            {/* THIRD ROW: Compact Stats Grid */}
             <div 
-              className="grid grid-cols-5 gap-1 text-center bg-gray-900/50 p-1.5 rounded text-xs border border-gray-700/50 cursor-pointer"
+              className="grid grid-cols-5 gap-1 text-center bg-gray-900/40 p-1 rounded text-[10px] border border-gray-700/30 cursor-pointer"
               onClick={() => toggleItem(member.contractorId)}
             >
               <div>
-                <div className="text-gray-500 text-[9px] uppercase">Steps</div>
+                <div className="text-gray-500 text-[8px] uppercase">Steps</div>
                 <div className="text-white font-bold">{member.stats.steps}</div>
               </div>
               <div>
-                <div className="text-gray-500 text-[9px] uppercase">Pend</div>
+                <div className="text-gray-500 text-[8px] uppercase">Pend</div>
                 <div className="text-yellow-400 font-bold">{member.stats.pending}</div>
               </div>
               <div>
-                <div className="text-gray-500 text-[9px] uppercase">Gross</div>
+                <div className="text-gray-500 text-[8px] uppercase">Gross</div>
                 <div className="text-green-400 font-bold">${member.stats.gross.toFixed(0)}</div>
               </div>
               <div>
-                <div className="text-gray-500 text-[9px] uppercase">Upsell</div>
+                <div className="text-gray-500 text-[8px] uppercase">Upsell</div>
                 <div className="text-purple-400 font-bold">{member.stats.upsellCount}</div>
               </div>
               <div>
-                <div className="text-gray-500 text-[9px] uppercase">EQ</div>
+                <div className="text-gray-500 text-[8px] uppercase">EQ</div>
                 <div className="text-blue-300 font-bold">{member.stats.eq.toFixed(1)}</div>
               </div>
             </div>
 
           </div>
 
-          {/* 3-Dot Menu Button (Absolute Top Right) */}
-          <div className="absolute top-2 right-2">
+          {/* ABSOLUTE MENU: Top Right */}
+          <div className="absolute top-2 right-1.5">
              {isModifiable(member) ? (
                <div className="relative">
                  <button 
@@ -315,17 +293,15 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                       setMenuOpenId(menuOpenId === member.contractorId ? null : member.contractorId);
                       setTransferModeId(null);
                     }}
-                    className={`p-1 rounded-full hover:bg-gray-700 transition-colors ${menuOpenId === member.contractorId ? 'bg-gray-700 text-white' : 'text-gray-500'}`}
+                    className={`p-1 rounded hover:bg-gray-700 transition-colors ${menuOpenId === member.contractorId ? 'bg-gray-700 text-white' : 'text-gray-500'}`}
                  >
-                   <MoreVertical size={16} />
+                   <MoreVertical size={14} />
                  </button>
                  
                  {/* Dropdown Menu */}
                  {menuOpenId === member.contractorId && (
                    <div ref={menuRef} className="absolute right-0 top-6 w-48 bg-gray-800 border border-gray-600 rounded shadow-xl z-20 overflow-hidden">
-                     
                      {!transferModeId ? (
-                       // Standard Menu
                        <div className="flex flex-col">
                          <button 
                            onClick={() => setTransferModeId(member.contractorId)}
@@ -341,20 +317,19 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                          </button>
                        </div>
                      ) : (
-                       // Transfer Mode Sub-menu
                        <div className="p-2 space-y-2">
                          <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
                            <span>Select Manager</span>
                            <button onClick={() => setTransferModeId(null)}><X size={12}/></button>
                          </div>
                          <select 
-                            className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded p-1 focus:ring-1 focus:ring-blue-500 outline-none"
+                            className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded p-1 outline-none"
                             value={selectedTransferManager}
                             onChange={(e) => setSelectedTransferManager(e.target.value)}
                          >
                            <option value="">Select...</option>
                            {allManagers
-                            .filter(m => m.userId !== managerId) // Exclude self
+                            .filter(m => m.userId !== managerId)
                             .map(m => (
                              <option key={m.userId} value={m.userId}>{m.name}</option>
                            ))}
@@ -362,9 +337,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                          <button 
                            disabled={!selectedTransferManager}
                            onClick={() => handleTransfer(member.contractorId)}
-                           className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs py-1 rounded transition-colors"
+                           className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs py-1 rounded"
                          >
-                           Confirm Transfer
+                           Confirm
                          </button>
                        </div>
                      )}
@@ -372,12 +347,14 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                  )}
                </div>
              ) : (
-               // Disabled/Hidden Menu State
-               <div title="Cannot manage active contractor (Must have 0 assignments and 0 history)">
+               <div 
+                 className="p-1 cursor-pointer"
+                 onClick={() => toggleItem(member.contractorId)}
+               >
                  {expandedItem === member.contractorId ? (
-                    <ChevronUp size={16} className="text-gray-600" onClick={() => toggleItem(member.contractorId)}/>
+                    <ChevronUp size={14} className="text-gray-600" />
                  ) : (
-                    <ChevronDown size={16} className="text-gray-600" onClick={() => toggleItem(member.contractorId)}/>
+                    <ChevronDown size={14} className="text-gray-600" />
                  )}
                </div>
              )}
@@ -385,7 +362,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
           {/* Accordion Content */}
           {expandedItem === member.contractorId && (
-            <div className="mt-2 pt-2 border-t border-gray-700 px-2 pb-2">
+            <div className="mt-1 pt-1 border-t border-gray-700 px-2 pb-2">
               <ContractorJobs
                 bookings={member.displayBookings}
                 financialStore={member.financialStore}
