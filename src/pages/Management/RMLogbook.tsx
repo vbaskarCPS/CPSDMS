@@ -28,6 +28,21 @@ const RMLogbook: React.FC = () => {
   const [dailyData, setDailyData] = useState<DailySessionData | null>(null);
   const [allSessions, setAllSessions] = useState<LogsheetSession[]>([]);
 
+  // Shared Data Fetcher
+  const refreshData = async () => {
+    try {
+      // Parallel fetch for speed
+      const [session, sessions] = await Promise.all([
+        sessionService.getDailySession(),
+        sessionService.getLogsheetSessions()
+      ]);
+      setDailyData(session);
+      setAllSessions(sessions);
+    } catch (err) {
+      console.error('Failed to refresh RM Logbook data', err);
+    }
+  };
+
   useEffect(() => {
     const init = async () => {
       const user = getStorageItem<ManagementUser | null>('current_user', null);
@@ -37,19 +52,9 @@ const RMLogbook: React.FC = () => {
       }
       setCurrentUser(user);
 
-      try {
-        // 1. Fetch Static Data (Routes, Workers, Bookings)
-        const session = await sessionService.getDailySession();
-        setDailyData(session);
-
-        // 2. Fetch Dynamic Data (Live Stats from Workers)
-        const sessions = await sessionService.getLogsheetSessions();
-        setAllSessions(sessions);
-      } catch (err) {
-        console.error('Failed to load RM Logbook', err);
-      } finally {
-        setLoading(false);
-      }
+      // Initial Load
+      await refreshData();
+      setLoading(false);
     };
     init();
   }, [navigate]);
@@ -128,8 +133,9 @@ const RMLogbook: React.FC = () => {
               managerId={currentUser.userId}
               routes={dailyData.routes}
               bookings={dailyData.pendingBookings}
-              workers={dailyData.workers} // Pass workers for assignment dropdown
+              workers={dailyData.workers}
               onStatsUpdate={(s) => setStats((prev) => ({ ...prev, ...s }))}
+              onRefresh={refreshData} // <--- PASSED HERE
             />
           )}
         </div>

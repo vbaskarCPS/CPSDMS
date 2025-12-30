@@ -1,5 +1,5 @@
 // src/pages/Management/components/RMRoutesTab.tsx
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Map, AlertCircle, X, Check, ChevronDown, ChevronUp, 
   MapPin, Phone, User, Users 
@@ -14,6 +14,7 @@ interface RMRoutesTabProps {
   bookings: MasterBooking[];
   workers: Worker[];
   onStatsUpdate: (stats: TabStats) => void;
+  onRefresh: () => void; // <--- NEW PROP
 }
 
 interface RouteDisplay {
@@ -31,6 +32,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   bookings,
   workers,
   onStatsUpdate,
+  onRefresh, // <--- Destructure here
 }) => {
   // State
   const [displayRoutes, setDisplayRoutes] = useState<RouteDisplay[]>([]);
@@ -129,13 +131,12 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   const handleAssignConfirm = async (workerId: string | null) => {
     if (!assignModalData) return;
 
+    // Perform Assignment in DB
     if (assignModalData.type === 'ROUTE') {
       const routeCode = assignModalData.targetId;
-      
-      // 1. Update Route Record
       await sessionService.assignRouteToWorker(routeCode, workerId);
 
-      // 2. Update All Pending Jobs in Route
+      // Also assign all pending jobs in that route
       const routeItems = displayRoutes.find(r => r.routeCode === routeCode)?.items || [];
       const pendingItems = routeItems.filter(b => b.Status !== 'completed');
       
@@ -144,12 +145,11 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       ));
 
     } else {
-      // Single Job Assignment
       await sessionService.assignBookingToWorker(assignModalData.targetId, workerId);
     }
 
     setAssignModalData(null);
-    // Ideally trigger a refresh here via callback, currently relying on parent polling or socket
+    onRefresh(); // <--- TRIGGER PARENT REFRESH
   };
 
   // --- 3. HELPERS ---
