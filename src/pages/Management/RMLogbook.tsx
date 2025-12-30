@@ -38,7 +38,6 @@ const RMLogbook: React.FC = () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
     // Wait 500ms before actually fetching. 
-    // If another event comes in within 500ms, this timer resets.
     timeoutRef.current = setTimeout(async () => {
         try {
           console.log('🔄 RM Logbook: Refreshing Data...');
@@ -75,7 +74,7 @@ const RMLogbook: React.FC = () => {
     };
   }, [navigate]);
 
-  // --- Realtime Listeners & Backup Poller ---
+  // --- Realtime Listeners ---
   useEffect(() => {
     if (!dailyData?.date) return;
 
@@ -115,19 +114,22 @@ const RMLogbook: React.FC = () => {
           refreshData();
         }
       )
+      // Listen for changes to the workers table to reflect transfers/removals immediately
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'workers' },
+        (payload) => {
+          console.log('🔔 Realtime: Worker update', payload.eventType);
+          refreshData();
+        }
+      )
       .subscribe((status) => {
           if (status === 'SUBSCRIBED') {
               console.log('✅ Realtime Connected!');
-          } else if (status === 'CHANNEL_ERROR') {
-              console.error('❌ Realtime Connection Error. Check console/network.');
           }
       });
 
-    // --- Backup Poller (Every 60 Seconds) ---
-    // This ensures that if the listener fails or disconnects, 
-    // the dashboard still updates eventually.
     const intervalId = setInterval(() => {
-        console.log('⏰ Backup Poller: Triggering auto-refresh');
         refreshData();
     }, 60000); 
 
@@ -136,6 +138,43 @@ const RMLogbook: React.FC = () => {
       clearInterval(intervalId);
     };
   }, [dailyData?.date]);
+
+  // --- Management Actions ---
+
+  const handleTransferContractor = async (contractorId: string, newManagerId: string) => {
+    try {
+      // Assuming your table is named 'workers' and has an 'assignedManagerId' column
+      const { error } = await supabase
+        .from('workers')
+        .update({ assignedManagerId: newManagerId })
+        .eq('contractorId', contractorId);
+
+      if (error) throw error;
+      console.log(`✅ Transferred ${contractorId} to ${newManagerId}`);
+      await refreshData(); // Force refresh to update UI immediately
+    } catch (err) {
+      console.error('Failed to transfer contractor:', err);
+      alert('Failed to transfer contractor. Please try again.');
+    }
+  };
+
+  const handleRemoveContractor = async (contractorId: string) => {
+    try {
+      // Removing usually means setting assignedManagerId to null (unassigning)
+      const { error } = await supabase
+        .from('workers')
+        .update({ assignedManagerId: null })
+        .eq('contractorId', contractorId);
+
+      if (error) throw error;
+      console.log(`✅ Removed ${contractorId} from team`);
+      await refreshData(); // Force refresh
+    } catch (err) {
+      console.error('Failed to remove contractor:', err);
+      alert('Failed to remove contractor. Please try again.');
+    }
+  };
+
 
   if (loading || !currentUser || !dailyData)
     return (
@@ -203,6 +242,11 @@ const RMLogbook: React.FC = () => {
               managerId={currentUser.userId}
               workers={dailyData.workers}
               allSessions={allSessions}
+              // NEW: Pass the list of managers for the transfer dropdown
+              allManagers={dailyData.managers}
+              // NEW: Pass the action handlers
+              onTransferContractor={handleTransferContractor}
+              onRemoveContractor={handleRemoveContractor}
               onStatsUpdate={(s) => setStats((prev) => ({ ...prev, ...s }))}
             />
           )}
@@ -214,7 +258,6 @@ const RMLogbook: React.FC = () => {
               workers={dailyData.workers}
               onStatsUpdate={(s) => setStats((prev) => ({ ...prev, ...s }))}
               onRefresh={() => {
-                  // Immediate manual refresh (bypassing debounce for user actions)
                   refreshData();
               }} 
             />
