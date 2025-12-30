@@ -82,7 +82,7 @@ class SessionService {
       ...b.customer_details,
       'Booking ID': b.booking_id,
       'Route Number': b.route_number,
-      'Contractor Number': b.contractor_id, // <--- FIX: Map the live DB column
+      'Contractor Number': b.contractor_id,
       Price: b.price?.toString(), 
       'Log Sheet Notes': b.log_notes,
       Status: b.status,
@@ -409,6 +409,51 @@ class SessionService {
 
   public async deleteTransactionByJobId(jobId: string): Promise<void> {
       await supabase.from('transactions').delete().eq('job_id', jobId);
+  }
+
+  public async revertTransaction(transactionId: string, bookingId?: string): Promise<void> {
+    // 1. Delete from transactions
+    const { error: txError } = await supabase.from('transactions').delete().eq('id', transactionId);
+    if (txError) throw txError;
+
+    // 2. If it's a pre-booked job (not a new sale/addon), reset status to pending
+    if (bookingId && !bookingId.startsWith('NEW-')) {
+        const { error: bkError } = await supabase.from('bookings').update({
+            status: 'pending',
+            // optional: contractor_id: null // Uncomment if you want to unassign worker too
+        }).eq('booking_id', bookingId);
+        if (bkError) throw bkError;
+    }
+  }
+
+  public async updateTransaction(transactionId: string, updates: Partial<SessionTransaction>): Promise<void> {
+      // Map frontend model back to DB columns
+      const dbPayload: any = {};
+      
+      if (updates.price !== undefined) dbPayload.price = updates.price;
+      if (updates.displayPrice !== undefined) dbPayload.display_price = updates.displayPrice;
+      if (updates.paymentMethod !== undefined) dbPayload.payment_method = updates.paymentMethod;
+      if (updates.paymentBreakdown !== undefined) dbPayload.payment_breakdown = updates.paymentBreakdown;
+      if (updates.type !== undefined) dbPayload.type = updates.type;
+      
+      // Update Customer Snapshot fields if changed
+      if (updates.customerName || updates.address || updates.routeCode) {
+          // We need to fetch existing first to merge, or just update the specific json keys
+          // For simplicity in supabase, we often replace the whole json. 
+          // But here we'll assume we pass the FULL snapshot or handle partial updates via careful mapping.
+          // Since this is a "modal edit", we likely have the full object.
+          dbPayload.customer_snapshot = {
+              firstName: updates.customerName?.split(' ')[0] || '',
+              lastName: updates.customerName?.split(' ').slice(1).join(' ') || '',
+              address: updates.address || '',
+              routeCode: updates.routeCode || '',
+              serviceType: updates.serviceType || 'FP', // default
+              serviceName: updates.serviceName || ''
+          };
+      }
+
+      const { error } = await supabase.from('transactions').update(dbPayload).eq('id', transactionId);
+      if (error) throw error;
   }
 
   public async completeJob(transaction: SessionTransaction, bookingId: string, workerId: string): Promise<void> {
