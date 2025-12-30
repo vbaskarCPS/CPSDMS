@@ -112,9 +112,21 @@ const RMLogbook: React.FC = () => {
     };
   }, [dailyData?.date]);
 
-  // Derived calculations for immediate UI updates
+  // --- Sync Worker Count on Data Update ---
+  // This ensures that if the DB updates (external transfer/remove), or on initial load, 
+  // the stat matches the DB. However, RMTeamTab can still override this with optimistic updates 
+  // via setStats if the user clicks a button in the UI.
+  useEffect(() => {
+    if (dailyData?.workers) {
+        setStats(prev => ({
+            ...prev,
+            workerCount: dailyData.workers.length
+        }));
+    }
+  }, [dailyData?.workers]);
+
+  // Derived calculation for unassigned count (used for alerts and pending sum)
   const currentUnassignedCount = dailyData?.pendingBookings?.length || 0;
-  const currentWorkerCount = dailyData?.workers?.length || 0;
 
   if (loading || !currentUser || !dailyData)
     return (
@@ -180,10 +192,11 @@ const RMLogbook: React.FC = () => {
         <div className="grid grid-cols-4 md:grid-cols-8 gap-px bg-gray-700 border-t border-gray-700">
             
             {/* 1. Workers */}
+            {/* Uses stats.workerCount to allow optimistic UI updates from RMTeamTab (removals/transfers) */}
             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Workers</span>
                 <div className="flex items-center gap-1 text-blue-300 font-bold text-lg">
-                    <Users size={14} className="opacity-70" /> {currentWorkerCount}
+                    <Users size={14} className="opacity-70" /> {stats.workerCount}
                 </div>
             </div>
 
