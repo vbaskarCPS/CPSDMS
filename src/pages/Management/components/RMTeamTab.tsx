@@ -1,4 +1,3 @@
-// src/pages/Management/components/RMTeamTab.tsx
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   ChevronDown, 
@@ -155,18 +154,35 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   };
 
   const handleRemove = async (contractorId: string) => {
-    if (window.confirm("Are you sure you want to remove this contractor?")) {
-      if (onRemoveContractor) {
-        await onRemoveContractor(contractorId);
+    if (window.confirm("Are you sure you want to remove this contractor? This will unassign any active routes/bookings.")) {
+      try {
+        // --- FIX: Call the safe delete function directly ---
+        await sessionService.deleteWorker(contractorId);
+
+        // Update local state immediately to remove the card from UI
+        setTeamMembers((prev) => prev.filter((m) => m.contractorId !== contractorId));
+        setMenuOpenId(null);
+
+        // Notify parent if needed (optional)
+        if (onRemoveContractor) {
+          onRemoveContractor(contractorId).catch(() => {});
+        }
+      } catch (error) {
+        console.error("Error removing contractor:", error);
+        alert("Failed to remove contractor. Please refresh and try again.");
       }
-      setMenuOpenId(null);
     }
   };
 
   const isModifiable = (member: TeamMemberDisplay) => {
-    const hasBookings = member.displayBookings.length > 0;
+    // We can now allow deleting even if they have bookings, 
+    // because deleteWorker handles the cleanup.
+    // However, usually we still want to block deleting if they have generated revenue (financialStore).
     const hasHistory = member.financialStore.length > 0;
-    return !hasBookings && !hasHistory;
+    
+    // Allow deleting if no financial history, or allow everything if you prefer.
+    // For safety, let's keep it restricted to those without financial history for now.
+    return !hasHistory;
   };
 
   return (

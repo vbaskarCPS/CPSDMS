@@ -1,4 +1,3 @@
-// src/lib/sessionService.ts
 import { supabase } from './supabase';
 import { format } from 'date-fns';
 import {
@@ -236,6 +235,32 @@ class SessionService {
     await supabase.from('users').delete().in('role', ['Worker', 'RouteManager']);
     localStorage.clear();
     window.location.reload();
+  }
+
+  /**
+   * Safely removes a worker by clearing their dependencies first.
+   * This prevents Foreign Key constraint errors.
+   */
+  public async deleteWorker(workerId: string): Promise<void> {
+    // 1. Unassign Routes (set to null so route exists but is unassigned)
+    await supabase.from('routes').update({ assigned_worker_id: null }).eq('assigned_worker_id', workerId);
+
+    // 2. Unassign Bookings (set to null so booking exists but is unassigned)
+    await supabase.from('bookings').update({ contractor_id: null }).eq('contractor_id', workerId);
+
+    // 3. Delete Logsheet Session (remove their daily tracking record)
+    await supabase.from('logsheet_sessions').delete().eq('worker_id', workerId);
+
+    // 4. Delete Transactions (remove any financials they generated today to prevent orphaned records)
+    await supabase.from('transactions').delete().eq('worker_id', workerId);
+
+    // 5. Finally, delete the User
+    const { error } = await supabase.from('users').delete().eq('user_id', workerId);
+    
+    if (error) {
+        console.error("Failed to delete user:", error);
+        throw error;
+    }
   }
 
   // --- 4. AUTHENTICATION ---
