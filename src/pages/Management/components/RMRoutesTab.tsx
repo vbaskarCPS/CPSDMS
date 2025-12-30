@@ -1,7 +1,8 @@
 // src/pages/Management/components/RMRoutesTab.tsx
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  Map, AlertCircle, X, Check, ChevronDown, ChevronUp, 
+  Map as MapIcon, // <--- RENAMED TO AVOID CONFLICT
+  AlertCircle, X, Check, ChevronDown, ChevronUp, 
   MapPin, Phone, User, Users 
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
@@ -117,7 +118,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   
   // Create a map of workerId -> Array of Route Codes they own
   const workerRouteMap = useMemo(() => {
-    const map = new Map<string, string[]>();
+    const map = new Map<string, string[]>(); // <--- This was crashing before because 'Map' was an Icon!
     routes.forEach(r => {
       if (r.assignedWorkerId) {
         const existing = map.get(r.assignedWorkerId) || [];
@@ -361,7 +362,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
           <div className="bg-gray-900 rounded-lg w-full max-w-sm border border-gray-700 shadow-2xl p-4">
             <div className="flex justify-between items-center mb-4 pb-2 border-b border-gray-800">
               <h3 className="font-bold text-white flex items-center gap-2">
-                 <Map size={18} className="text-cps-blue" /> 
+                 <MapIcon size={18} className="text-cps-blue" /> 
                  {assignModalData.title}
               </h3>
               <button onClick={() => setAssignModalData(null)}>
