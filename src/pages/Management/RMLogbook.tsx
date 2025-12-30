@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Map, Loader, Calendar, BookOpen, Activity, DollarSign, CheckCircle, Clock } from 'lucide-react';
+import { Users, Map, Loader, Calendar, BookOpen, Activity, DollarSign, Clock } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { ManagementUser, DailySessionData, LogsheetSession } from '../../types';
 import { sessionService } from '../../lib/sessionService';
@@ -9,7 +9,7 @@ import { supabase } from '../../lib/supabase';
 import RMTeamTab, { ExtendedTabStats } from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
 
-// We now use the extended interface from RMTeamTab to support all 8 metrics
+// We now use the extended interface from RMTeamTab to support all metrics
 export type { ExtendedTabStats } from './components/RMTeamTab';
 
 const RMLogbook: React.FC = () => {
@@ -17,7 +17,7 @@ const RMLogbook: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<ManagementUser | null>(null);
   const [activeTab, setActiveTab] = useState<'team' | 'routes'>('team');
   
-  // Initialize with zeroes for all 8 stats
+  // Initialize with zeroes
   const [stats, setStats] = useState<ExtendedTabStats>({
     totalSteps: 0,
     totalPending: 0,
@@ -28,7 +28,7 @@ const RMLogbook: React.FC = () => {
     totalUpsellCount: 0,
     pendingPrebooks: 0,
     completedPrebooks: 0,
-    // Route stats (handled separately by RMRoutesTab usually, but kept here for safety)
+    // Route stats
     unassignedRoutes: 0,
     unassignedBookings: 0
   });
@@ -43,10 +43,8 @@ const RMLogbook: React.FC = () => {
 
   // --- Shared Data Fetcher ---
   const refreshData = async () => {
-    // Clear any pending refresh to "debounce" multiple rapid events
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
-    // Wait 500ms before actually fetching. 
     timeoutRef.current = setTimeout(async () => {
         try {
           console.log('🔄 RM Logbook: Refreshing Data...');
@@ -77,7 +75,6 @@ const RMLogbook: React.FC = () => {
     };
     init();
 
-    // Cleanup timeout on unmount
     return () => {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
@@ -95,7 +92,7 @@ const RMLogbook: React.FC = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, () => refreshData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'routes' }, () => refreshData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => refreshData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => refreshData()) // Listen for User/Worker changes
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => refreshData())
       .subscribe((status) => {
           if (status === 'SUBSCRIBED') {
               console.log('✅ Realtime Connected!');
@@ -112,10 +109,7 @@ const RMLogbook: React.FC = () => {
     };
   }, [dailyData?.date]);
 
-  // --- Sync Worker Count on Data Update ---
-  // This ensures that if the DB updates (external transfer/remove), or on initial load, 
-  // the stat matches the DB. However, RMTeamTab can still override this with optimistic updates 
-  // via setStats if the user clicks a button in the UI.
+  // --- Sync Worker Count ---
   useEffect(() => {
     if (dailyData?.workers) {
         setStats(prev => ({
@@ -125,7 +119,7 @@ const RMLogbook: React.FC = () => {
     }
   }, [dailyData?.workers]);
 
-  // Derived calculation for unassigned count (used for alerts and pending sum)
+  // Derived calculation for unassigned count
   const currentUnassignedCount = dailyData?.pendingBookings?.length || 0;
 
   if (loading || !currentUser || !dailyData)
@@ -188,11 +182,10 @@ const RMLogbook: React.FC = () => {
           </div>
         </div>
 
-        {/* Bottom Row: 8-Metric Stats Grid */}
-        <div className="grid grid-cols-4 md:grid-cols-8 gap-px bg-gray-700 border-t border-gray-700">
+        {/* Bottom Row: 6-Metric Stats Grid (Removed Gross & Done) */}
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-px bg-gray-700 border-t border-gray-700">
             
             {/* 1. Workers */}
-            {/* Uses stats.workerCount to allow optimistic UI updates from RMTeamTab (removals/transfers) */}
             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Workers</span>
                 <div className="flex items-center gap-1 text-blue-300 font-bold text-lg">
@@ -208,43 +201,26 @@ const RMLogbook: React.FC = () => {
                 </div>
             </div>
 
-            {/* 3. Pending Prebooks + Unassigned */}
+            {/* 3. Pending (Prebooks + Unassigned) */}
             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Pending</span>
                 <div className="flex items-center gap-1 text-yellow-400 font-bold text-lg">
                     <Clock size={14} className="opacity-70" /> 
-                    {/* Sum of Assigned Pending (Prebooks) + Unassigned Bookings */}
                     {stats.pendingPrebooks + currentUnassignedCount}
                 </div>
             </div>
 
-            {/* 4. Completed Prebooks */}
-            <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
-                <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Done</span>
-                <div className="flex items-center gap-1 text-emerald-400 font-bold text-lg">
-                    <CheckCircle size={14} className="opacity-70" /> {stats.completedPrebooks}
-                </div>
-            </div>
-
-            {/* 5. Total Gross */}
-            <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
-                <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Gross</span>
-                <div className="text-white font-bold text-lg">
-                    ${stats.totalGross?.toFixed(2)}
-                </div>
-            </div>
-
-            {/* 6. Avg EQ */}
+            {/* 4. Avg EQ (2 Decimals) */}
             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Avg EQ</span>
                 <div className={`font-bold text-lg ${
                     (stats.avgEQ || 0) >= 3 ? 'text-green-400' : (stats.avgEQ || 0) >= 2 ? 'text-yellow-400' : 'text-red-400'
                 }`}>
-                    {(stats.avgEQ || 0).toFixed(1)}
+                    {(stats.avgEQ || 0).toFixed(2)}
                 </div>
             </div>
 
-             {/* 7. Upsells Count */}
+             {/* 5. Upsells Count */}
              <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Upsells</span>
                 <div className="text-purple-300 font-bold text-lg">
@@ -252,12 +228,12 @@ const RMLogbook: React.FC = () => {
                 </div>
             </div>
 
-             {/* 8. Upsell Value (Estimated) */}
+             {/* 6. Up $ (Renamed from Gross, uses totalGross data) */}
              <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Up $</span>
                 <div className="flex items-center gap-1 text-purple-400 font-bold text-lg">
                     <DollarSign size={14} className="opacity-70" /> 
-                    -
+                    {stats.totalGross?.toFixed(2)}
                 </div>
             </div>
 
@@ -273,7 +249,6 @@ const RMLogbook: React.FC = () => {
               workers={dailyData.workers}
               allSessions={allSessions}
               allManagers={dailyData.managers}
-              // Cast to any because we extended the type in the child component but TS might complain about the mismatch until reload
               onStatsUpdate={(s: any) => setStats((prev) => ({ ...prev, ...s }))}
             />
           )}
@@ -283,7 +258,6 @@ const RMLogbook: React.FC = () => {
               routes={dailyData.routes}
               bookings={dailyData.pendingBookings}
               workers={dailyData.workers}
-              // Only update specific route stats to avoid overwriting team stats
               onStatsUpdate={(s) => setStats((prev) => ({ 
                   ...prev, 
                   unassignedRoutes: s.unassignedRoutes, 
