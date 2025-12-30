@@ -82,6 +82,7 @@ class SessionService {
       ...b.customer_details,
       'Booking ID': b.booking_id,
       'Route Number': b.route_number,
+      'Contractor Number': b.contractor_id, // <--- FIX: Map the live DB column
       Price: b.price?.toString(), 
       'Log Sheet Notes': b.log_notes,
       Status: b.status,
@@ -314,9 +315,6 @@ class SessionService {
 
     const { data: financials } = await supabase.from('transactions').select('*').eq('worker_id', workerId);
 
-    // --- CRITICAL FIX START ---
-    // 1. Convert DB 'snake_case' to App 'camelCase' FIRST.
-    // 2. Then pass the CLEAN object to recalculateStats.
     const cleanFinancials = (financials || []).map((tx) => ({
         id: tx.id,
         jobId: tx.job_id,
@@ -346,7 +344,6 @@ class SessionService {
     })) as SessionTransaction[];
 
     const liveStats = this.recalculateStats(cleanFinancials, 5);
-    // --- CRITICAL FIX END ---
 
     return {
       id: data.id,

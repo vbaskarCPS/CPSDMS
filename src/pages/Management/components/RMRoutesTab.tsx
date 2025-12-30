@@ -14,7 +14,7 @@ interface RMRoutesTabProps {
   bookings: MasterBooking[];
   workers: Worker[];
   onStatsUpdate: (stats: TabStats) => void;
-  onRefresh: () => void; // <--- NEW PROP
+  onRefresh: () => void;
 }
 
 interface RouteDisplay {
@@ -32,7 +32,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   bookings,
   workers,
   onStatsUpdate,
-  onRefresh, // <--- Destructure here
+  onRefresh,
 }) => {
   // State
   const [displayRoutes, setDisplayRoutes] = useState<RouteDisplay[]>([]);
