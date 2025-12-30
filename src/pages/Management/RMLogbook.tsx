@@ -5,6 +5,7 @@ import { Users, Map, Loader, Calendar, BookOpen } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { ManagementUser, DailySessionData, LogsheetSession } from '../../types';
 import { sessionService } from '../../lib/sessionService';
+import { supabase } from '../../lib/supabase'; // <--- Added Supabase Import
 
 import RMTeamTab from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
@@ -28,7 +29,7 @@ const RMLogbook: React.FC = () => {
   const [dailyData, setDailyData] = useState<DailySessionData | null>(null);
   const [allSessions, setAllSessions] = useState<LogsheetSession[]>([]);
 
-  // Shared Data Fetcher
+  // --- Shared Data Fetcher ---
   const refreshData = async () => {
     try {
       // Parallel fetch for speed
@@ -43,6 +44,7 @@ const RMLogbook: React.FC = () => {
     }
   };
 
+  // --- Initial Load ---
   useEffect(() => {
     const init = async () => {
       const user = getStorageItem<ManagementUser | null>('current_user', null);
@@ -52,12 +54,58 @@ const RMLogbook: React.FC = () => {
       }
       setCurrentUser(user);
 
-      // Initial Load
       await refreshData();
       setLoading(false);
     };
     init();
   }, [navigate]);
+
+  // --- Realtime Listeners ---
+  useEffect(() => {
+    if (!dailyData?.date) return;
+
+    // Create a subscription to watch for changes
+    const channel = supabase
+      .channel('rm-dashboard-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'logsheet_sessions' },
+        () => {
+          console.log('Realtime: Logsheet update detected');
+          refreshData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'bookings' },
+        () => {
+          console.log('Realtime: Booking update detected');
+          refreshData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'routes' },
+        () => {
+          console.log('Realtime: Route update detected');
+          refreshData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'transactions' },
+        () => {
+          console.log('Realtime: Transaction update detected');
+          refreshData();
+        }
+      )
+      .subscribe();
+
+    // Cleanup subscription on unmount
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [dailyData?.date]);
 
   if (loading || !currentUser || !dailyData)
     return (
@@ -135,7 +183,7 @@ const RMLogbook: React.FC = () => {
               bookings={dailyData.pendingBookings}
               workers={dailyData.workers}
               onStatsUpdate={(s) => setStats((prev) => ({ ...prev, ...s }))}
-              onRefresh={refreshData} // <--- PASSED HERE
+              onRefresh={refreshData} 
             />
           )}
         </div>
