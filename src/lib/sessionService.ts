@@ -486,7 +486,10 @@ class SessionService {
     };
 
     let existingId: string | null = null;
-    if (bookingId && !bookingId.startsWith('NEW-')) {
+    
+    // --- FIX: Removed !startsWith('NEW-') condition ---
+    // Now it searches for ANY existing job_id to prevent duplicates
+    if (bookingId) {
        const { data } = await supabase.from('transactions').select('id').eq('job_id', bookingId).maybeSingle();
        if (data) existingId = data.id;
     }
