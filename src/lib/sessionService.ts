@@ -20,10 +20,54 @@ class SessionService {
     return SessionService.instance;
   }
 
-  // --- 1. SESSION MANAGEMENT ---
+  // --- 1. HELPERS ---
 
   private getTodayStr(): string {
     return format(new Date(), 'yyyy-MM-dd');
+  }
+
+  // Unified mapper to ensure consistency everywhere
+  private mapDbTransaction(tx: any): SessionTransaction {
+    return {
+        id: tx.id,
+        jobId: tx.job_id,
+        workerId: tx.worker_id,
+        timestamp: tx.timestamp,
+        type: tx.type,
+        price: tx.price,
+        paymentMethod: tx.payment_method,
+        isPaid: true,
+        customerId: tx.job_id,
+        customerName: `${tx.customer_snapshot?.firstName || ''} ${tx.customer_snapshot?.lastName || ''}`.trim(),
+        address: tx.customer_snapshot?.address,
+        routeCode: tx.customer_snapshot?.routeCode,
+        items: tx.items || [], 
+        paymentBreakdown: tx.payment_breakdown,
+        displayPrice: tx.display_price,
+        itemDescription: tx.item_description,
+        invoiceNumber: tx.invoice_number,
+        chequeNumber: tx.cheque_number,
+        etransferEmail: tx.etransfer_email,
+        serviceType: tx.customer_snapshot?.serviceType,
+        serviceName: tx.customer_snapshot?.serviceName,
+        customerPhone: tx.customer_phone, 
+        customerEmail: tx.customer_email,
+        isWestSplit: tx.is_west_split,
+        isPrepaid: tx.payment_method === 'Prepaid' || (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? true : false
+    };
+  }
+
+  // --- 2. FETCHING ---
+
+  public async getTransactionByJobId(jobId: string): Promise<SessionTransaction | null> {
+    const { data } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('job_id', jobId)
+        .maybeSingle(); // Use maybeSingle to avoid errors if not found
+    
+    if (!data) return null;
+    return this.mapDbTransaction(data);
   }
 
   public async getDailySessionDate(): Promise<string | null> {
@@ -98,6 +142,8 @@ class SessionService {
       pendingBookings,
     };
   }
+
+  // --- 3. SESSION MANAGEMENT ---
 
   public async uploadDailySession(data: DailySessionData): Promise<void> {
     const { error: sessError } = await supabase
@@ -192,7 +238,7 @@ class SessionService {
     window.location.reload();
   }
 
-  // --- 2. AUTHENTICATION ---
+  // --- 4. AUTHENTICATION ---
 
   public async authenticateRM(username: string, password: string): Promise<ManagementUser | null> {
     if (username === 'admin' && password === 'admin') {
@@ -219,7 +265,7 @@ class SessionService {
     };
   }
 
-  // --- 3. DATA FETCHING ---
+  // --- 5. LOGSHEETS & TRANSACTIONS ---
 
   public async getWorkerAssignments(workerId: string): Promise<MasterBooking[]> {
     const date = await this.getDailySessionDate();
@@ -254,31 +300,35 @@ class SessionService {
       Prepaid: b.is_prepaid ? 'x' : undefined,
     }));
 
-    const completedMapped = (myTransactions || []).map((tx) => ({
-      'Booking ID': tx.job_id,
-      'First Name': tx.customer_snapshot?.firstName || 'Unknown',
-      'Last Name': tx.customer_snapshot?.lastName || '',
-      'Full Address': tx.customer_snapshot?.address || '',
-      'Completed': 'x',
-      'Status': 'completed',
-      'Price': tx.display_price,
-      'Route Number': tx.customer_snapshot?.routeCode || '',
-      'Log Sheet Notes': tx.item_description,
-      'Home Phone': tx.customer_phone,
-      'Email Address': tx.customer_email,
-      'Payment Method': tx.payment_method,
-      'paymentBreakdown': tx.payment_breakdown,
-      'FO/BO/FP': tx.customer_snapshot?.serviceType || 'FP',
-      'Contract Title': (tx.items && tx.items.length > 0) ? tx.items[0].name : (tx.customer_snapshot?.serviceName || tx.display_price),
-      'invoiceNumber': tx.invoice_number,
-      'chequeNumber': tx.cheque_number,
-      'etransferEmail': tx.etransfer_email,
-      isContract: ['Upgrade', 'Add-On'].includes(tx.type),
-      isUpgrade: tx.type === 'Upgrade',
-      isAddOn: tx.type === 'Add-On',
-      isNewSale: tx.type === 'Sale',
-      Prepaid: (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? 'x' : undefined,
-    }));
+    // Use shared mapper for consistency
+    const completedMapped = (myTransactions || []).map(tx => {
+        const mapped = this.mapDbTransaction(tx);
+        return {
+            'Booking ID': mapped.jobId,
+            'First Name': mapped.customerName.split(' ')[0],
+            'Last Name': mapped.customerName.split(' ').slice(1).join(' '),
+            'Full Address': mapped.address,
+            'Completed': 'x',
+            'Status': 'completed',
+            'Price': mapped.displayPrice,
+            'Route Number': mapped.routeCode,
+            'Log Sheet Notes': mapped.itemDescription,
+            'Home Phone': mapped.customerPhone,
+            'Email Address': mapped.customerEmail,
+            'Payment Method': mapped.paymentMethod,
+            'paymentBreakdown': mapped.paymentBreakdown,
+            'FO/BO/FP': mapped.serviceType,
+            'Contract Title': (mapped.items && mapped.items.length > 0) ? mapped.items[0].name : (mapped.serviceName || mapped.displayPrice),
+            'invoiceNumber': mapped.invoiceNumber,
+            'chequeNumber': mapped.chequeNumber,
+            'etransferEmail': mapped.etransferEmail,
+            isContract: ['Upgrade', 'Add-On'].includes(mapped.type),
+            isUpgrade: mapped.type === 'Upgrade',
+            isAddOn: mapped.type === 'Add-On',
+            isNewSale: mapped.type === 'Sale',
+            Prepaid: mapped.isPrepaid ? 'x' : undefined,
+        };
+    });
 
     return [...pendingMapped, ...completedMapped];
   }
@@ -286,8 +336,6 @@ class SessionService {
   public getStreetsForRoute(routeCode: string): Promise<string[]> {
     return supabase.from('routes').select('streets').eq('route_code', routeCode).single().then((res) => res.data?.streets || []);
   }
-
-  // --- 4. LOGSHEET SESSIONS ---
 
   public async getLogsheetSessions(): Promise<LogsheetSession[]> {
     const date = await this.getDailySessionDate();
@@ -314,35 +362,7 @@ class SessionService {
     if (!data) return null;
 
     const { data: financials } = await supabase.from('transactions').select('*').eq('worker_id', workerId);
-
-    const cleanFinancials = (financials || []).map((tx) => ({
-        id: tx.id,
-        jobId: tx.job_id,
-        workerId: tx.worker_id,
-        timestamp: tx.timestamp,
-        type: tx.type,
-        price: tx.price,
-        paymentMethod: tx.payment_method,
-        isPaid: true,
-        customerId: tx.job_id,
-        customerName: `${tx.customer_snapshot?.firstName} ${tx.customer_snapshot?.lastName}`,
-        address: tx.customer_snapshot?.address,
-        routeCode: tx.customer_snapshot?.routeCode,
-        items: tx.items || [], 
-        paymentBreakdown: tx.payment_breakdown,
-        displayPrice: tx.display_price,
-        itemDescription: tx.item_description,
-        invoiceNumber: tx.invoice_number,
-        chequeNumber: tx.cheque_number,
-        etransferEmail: tx.etransfer_email,
-        serviceType: tx.customer_snapshot?.serviceType,
-        serviceName: tx.customer_snapshot?.serviceName,
-        customerPhone: tx.customer_phone, 
-        customerEmail: tx.customer_email,
-        isWestSplit: tx.is_west_split,
-        isPrepaid: tx.payment_method === 'Prepaid' || (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? true : false
-    })) as SessionTransaction[];
-
+    const cleanFinancials = (financials || []).map(tx => this.mapDbTransaction(tx));
     const liveStats = this.recalculateStats(cleanFinancials, 5);
 
     return {
@@ -384,8 +404,6 @@ class SessionService {
     await supabase.from('logsheet_sessions').update(safeUpdates).eq('id', sessionId);
   }
 
-  // --- 5. ASSIGNMENTS & UPDATES ---
-
   public async assignBookingToWorker(bookingId: string, workerId: string | null): Promise<void> {
     const { error } = await supabase
       .from('bookings')
@@ -397,13 +415,11 @@ class SessionService {
   public async assignRouteToWorker(routeCode: string, workerId: string | null): Promise<void> {
     const date = await this.getDailySessionDate();
     if (!date) return;
-    
     const { error } = await supabase
       .from('routes')
       .update({ assigned_worker_id: workerId })
       .eq('route_code', routeCode)
       .eq('session_date', date);
-      
     if (error) console.error("Error assigning route:", error);
   }
 
@@ -412,46 +428,31 @@ class SessionService {
   }
 
   public async revertTransaction(transactionId: string, bookingId?: string): Promise<void> {
-    // 1. Delete from transactions
     const { error: txError } = await supabase.from('transactions').delete().eq('id', transactionId);
     if (txError) throw txError;
-
-    // 2. If it's a pre-booked job (not a new sale/addon), reset status to pending
     if (bookingId && !bookingId.startsWith('NEW-')) {
-        const { error: bkError } = await supabase.from('bookings').update({
-            status: 'pending',
-            // optional: contractor_id: null // Uncomment if you want to unassign worker too
-        }).eq('booking_id', bookingId);
+        const { error: bkError } = await supabase.from('bookings').update({ status: 'pending' }).eq('booking_id', bookingId);
         if (bkError) throw bkError;
     }
   }
 
   public async updateTransaction(transactionId: string, updates: Partial<SessionTransaction>): Promise<void> {
-      // Map frontend model back to DB columns
       const dbPayload: any = {};
-      
       if (updates.price !== undefined) dbPayload.price = updates.price;
       if (updates.displayPrice !== undefined) dbPayload.display_price = updates.displayPrice;
       if (updates.paymentMethod !== undefined) dbPayload.payment_method = updates.paymentMethod;
       if (updates.paymentBreakdown !== undefined) dbPayload.payment_breakdown = updates.paymentBreakdown;
       if (updates.type !== undefined) dbPayload.type = updates.type;
-      
-      // Update Customer Snapshot fields if changed
       if (updates.customerName || updates.address || updates.routeCode) {
-          // We need to fetch existing first to merge, or just update the specific json keys
-          // For simplicity in supabase, we often replace the whole json. 
-          // But here we'll assume we pass the FULL snapshot or handle partial updates via careful mapping.
-          // Since this is a "modal edit", we likely have the full object.
           dbPayload.customer_snapshot = {
               firstName: updates.customerName?.split(' ')[0] || '',
               lastName: updates.customerName?.split(' ').slice(1).join(' ') || '',
               address: updates.address || '',
               routeCode: updates.routeCode || '',
-              serviceType: updates.serviceType || 'FP', // default
+              serviceType: updates.serviceType || 'FP',
               serviceName: updates.serviceName || ''
           };
       }
-
       const { error } = await supabase.from('transactions').update(dbPayload).eq('id', transactionId);
       if (error) throw error;
   }
@@ -465,20 +466,15 @@ class SessionService {
       price: transaction.price,
       payment_method: transaction.paymentMethod,
       payment_breakdown: transaction.paymentBreakdown,
-      
       is_west_split: transaction.isWestSplit, 
-      
       display_price: transaction.displayPrice,
       item_description: transaction.itemDescription,
       invoice_number: transaction.invoiceNumber,
       cheque_number: transaction.chequeNumber,
       etransfer_email: transaction.etransferEmail,
-      
       customer_phone: transaction.customerPhone,
       customer_email: transaction.customerEmail,
-      
       items: transaction.items, 
-
       customer_snapshot: {
         firstName: transaction.customerName ? transaction.customerName.split(' ')[0] : 'Unknown',
         lastName: transaction.customerName ? transaction.customerName.split(' ').slice(1).join(' ') : '',
@@ -490,7 +486,6 @@ class SessionService {
     };
 
     let existingId: string | null = null;
-    
     if (bookingId && !bookingId.startsWith('NEW-')) {
        const { data } = await supabase.from('transactions').select('id').eq('job_id', bookingId).maybeSingle();
        if (data) existingId = data.id;

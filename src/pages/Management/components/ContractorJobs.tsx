@@ -1,17 +1,19 @@
 // src/pages/Management/components/ContractorJobs.tsx
 import React, { useState, useMemo } from 'react';
-import { Phone, Mail } from 'lucide-react';
+import { Phone, Mail, Loader } from 'lucide-react';
 import { MasterBooking, SessionTransaction } from '../../../types';
 import EditTransactionModal from '../../../components/EditTransactionModal';
+import { sessionService } from '../../../lib/sessionService';
 
 interface ContractorJobsProps {
   bookings: MasterBooking[];
   financialStore: SessionTransaction[];
-  onRevert?: (job: MasterBooking) => void; // Kept for legacy compatibility if needed, but we use the modal now
+  onRevert?: (job: MasterBooking) => void;
 }
 
 const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStore, onRevert }) => {
   const [editingTransaction, setEditingTransaction] = useState<SessionTransaction | null>(null);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
 
   // --- Merge Bookings & Transactions ---
   const allJobs = useMemo(() => {
@@ -65,18 +67,34 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
   const completedJobs = sortedBookings.filter(b => b.Completed === 'x' || b.Status === 'completed');
 
   // --- Handlers ---
-  const handleJobClick = (job: MasterBooking) => {
-      // Find actual transaction object if it exists (for editing)
-      const tx = financialStore.find(t => t.jobId === job['Booking ID']);
-      if (tx) {
-          setEditingTransaction(tx);
-      } else if (job.Completed === 'x') {
-          alert("Transaction record not found in local store. Try refreshing.");
+  const handleJobClick = async (job: MasterBooking) => {
+      // Only clickable if it's a completed job
+      const isPaid = job.Completed === 'x' || job.Status === 'completed';
+      if (!isPaid) return;
+
+      const jobId = job['Booking ID'];
+      setLoadingId(jobId);
+
+      try {
+          // 1. Fetch strictly from DB (bypass local store)
+          const tx = await sessionService.getTransactionByJobId(jobId);
+          
+          if (tx) {
+              setEditingTransaction(tx);
+          } else {
+              alert("Transaction record not found in database (it might have been deleted or not synced).");
+          }
+      } catch (err) {
+          console.error("Error fetching transaction:", err);
+          alert("Failed to load transaction details.");
+      } finally {
+          setLoadingId(null);
       }
   };
 
   const renderJobRow = (job: MasterBooking) => {
       const isPaid = job.Completed === 'x' || job.Status === 'completed';
+      const isLoading = loadingId === job['Booking ID'];
 
       // --- Badges ---
       let badge = { text: 'PENDING', color: 'bg-gray-700 text-gray-400 border-gray-600' };
@@ -112,7 +130,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
       return (
           <div 
             key={job['Booking ID']} 
-            onClick={() => isPaid && handleJobClick(job)}
+            onClick={() => handleJobClick(job)}
             className={`bg-gray-800 border border-gray-700 rounded px-2 py-1.5 flex flex-col gap-1 relative mb-1 transition-colors ${isPaid ? 'hover:border-cps-blue cursor-pointer group' : ''}`}
           >
               <div className="flex items-center justify-between gap-2 text-xs">
@@ -152,9 +170,10 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                       <span className="font-mono font-bold text-gray-300 w-16 text-right">
                           {displayPrice}
                       </span>
-                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border min-w-[55px] text-center ${badge.color}`}>
-                          {badge.text}
-                      </span>
+                      
+                      <button className={`text-[9px] font-bold px-1.5 py-0.5 rounded border min-w-[55px] text-center flex items-center justify-center gap-1 ${badge.color}`}>
+                          {isLoading ? <Loader size={8} className="animate-spin" /> : badge.text}
+                      </button>
                   </div>
               </div>
           </div>
@@ -192,7 +211,6 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                 transaction={editingTransaction}
                 onClose={() => setEditingTransaction(null)}
                 onUpdate={() => {
-                    // Triggers implicit refresh via Realtime listener in parent
                     setEditingTransaction(null);
                 }}
             />
