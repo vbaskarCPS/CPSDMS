@@ -109,25 +109,25 @@ const RMLogbook: React.FC = () => {
   }, [dailyData?.date]);
 
 
-  // --- PRIMARY STATS CALCULATION ---
-  // We perform this here to ensure the header always reflects the strictly filtered
-  // "My Team" data, regardless of which tab is open or what the child component thinks.
+  // --- PRIMARY STATS CALCULATION (STRICTLY FILTERED) ---
   useEffect(() => {
     if (!dailyData || !allSessions || !currentUser) return;
     
     // 1. FILTER WORKERS: Strictly only those assigned to this Route Manager
+    // FIX: Convert both sides to String() to prevent type mismatch (105 !== "105")
     const myWorkers = dailyData.workers.filter((w: any) => 
-        (w.managerId === currentUser.userId) || (w.manager_id === currentUser.userId)
+        String(w.managerId || w.manager_id) === String(currentUser.userId)
     );
-    const myWorkerIds = myWorkers.map(w => w.userId);
+    
+    // Get IDs of these workers to filter sessions
+    const myWorkerIds = myWorkers.map(w => String(w.userId));
 
     // 2. FILTER SESSIONS: Only sessions belonging to MY workers
-    const mySessions = allSessions.filter(s => myWorkerIds.includes(s.user_id));
+    const mySessions = allSessions.filter(s => myWorkerIds.includes(String(s.user_id)));
 
     // 3. FILTER BOOKINGS: Only unassigned bookings for this Route Manager
-    // (Checks both camelCase and snake_case properties to be safe)
     const myPendingBookings = (dailyData.pendingBookings || []).filter((b: any) => 
-        (b.managerId === currentUser.userId) || (b.manager_id === currentUser.userId)
+        String(b.managerId || b.manager_id) === String(currentUser.userId)
     );
 
     let totalSteps = 0;
@@ -194,14 +194,14 @@ const RMLogbook: React.FC = () => {
 
   // --- PREPARE PROPS FOR CHILDREN ---
   
-  // 1. Filter Workers
+  // 1. Filter Workers (Safe String Comparison)
   const myWorkers = dailyData.workers.filter((w: any) => 
-      (w.managerId === currentUser.userId) || (w.manager_id === currentUser.userId)
+      String(w.managerId || w.manager_id) === String(currentUser.userId)
   );
 
-  // 2. Filter Bookings (for Routes Tab)
+  // 2. Filter Bookings (Safe String Comparison)
   const myPendingBookings = (dailyData.pendingBookings || []).filter((b: any) => 
-      (b.managerId === currentUser.userId) || (b.manager_id === currentUser.userId)
+      String(b.managerId || b.manager_id) === String(currentUser.userId)
   );
 
   return (
@@ -322,11 +322,9 @@ const RMLogbook: React.FC = () => {
             <RMTeamTab
               managerId={currentUser.userId}
               workers={myWorkers} 
-              allSessions={allSessions} // Child filters this itself, but we could pass filtered if needed
+              allSessions={allSessions}
               allManagers={dailyData.managers}
-              // We disconnect the child's ability to overwrite key metrics to ensure 
-              // the parent's filtered logic remains the source of truth for the header.
-              // We only accept specific updates if necessary, or empty function to block it.
+              // Disabled to keep parent logic strictly accurate
               onStatsUpdate={() => {}} 
             />
           )}
@@ -336,7 +334,6 @@ const RMLogbook: React.FC = () => {
               routes={dailyData.routes}
               bookings={myPendingBookings}
               workers={myWorkers} 
-              // Allow routes to update unassigned counts since that logic lives there
               onStatsUpdate={(s) => setStats((prev) => ({ 
                   ...prev, 
                   unassignedRoutes: s.unassignedRoutes, 
