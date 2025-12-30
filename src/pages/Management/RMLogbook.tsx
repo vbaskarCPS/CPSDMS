@@ -112,6 +112,10 @@ const RMLogbook: React.FC = () => {
     };
   }, [dailyData?.date]);
 
+  // Derived calculations for immediate UI updates
+  const currentUnassignedCount = dailyData?.pendingBookings?.length || 0;
+  const currentWorkerCount = dailyData?.workers?.length || 0;
+
   if (loading || !currentUser || !dailyData)
     return (
       <div className="flex h-screen items-center justify-center bg-gray-900">
@@ -163,7 +167,7 @@ const RMLogbook: React.FC = () => {
               }`}
             >
               <Map size={14} /> Routes{' '}
-              {(stats.unassignedRoutes || 0) + (stats.unassignedBookings || 0) > 0 && (
+              {(stats.unassignedRoutes || 0) + (currentUnassignedCount) > 0 && (
                 <span className="flex items-center justify-center w-4 h-4 text-[9px] bg-red-500 text-white rounded-full animate-pulse">
                   !
                 </span>
@@ -179,7 +183,7 @@ const RMLogbook: React.FC = () => {
             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Workers</span>
                 <div className="flex items-center gap-1 text-blue-300 font-bold text-lg">
-                    <Users size={14} className="opacity-70" /> {stats.workerCount}
+                    <Users size={14} className="opacity-70" /> {currentWorkerCount}
                 </div>
             </div>
 
@@ -191,11 +195,13 @@ const RMLogbook: React.FC = () => {
                 </div>
             </div>
 
-            {/* 3. Pending Prebooks */}
+            {/* 3. Pending Prebooks + Unassigned */}
             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Pending</span>
                 <div className="flex items-center gap-1 text-yellow-400 font-bold text-lg">
-                    <Clock size={14} className="opacity-70" /> {stats.pendingPrebooks}
+                    <Clock size={14} className="opacity-70" /> 
+                    {/* Sum of Assigned Pending (Prebooks) + Unassigned Bookings */}
+                    {stats.pendingPrebooks + currentUnassignedCount}
                 </div>
             </div>
 
@@ -211,7 +217,7 @@ const RMLogbook: React.FC = () => {
             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Gross</span>
                 <div className="text-white font-bold text-lg">
-                    ${stats.totalGross?.toFixed(0)}
+                    ${stats.totalGross?.toFixed(2)}
                 </div>
             </div>
 
@@ -238,14 +244,6 @@ const RMLogbook: React.FC = () => {
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Up $</span>
                 <div className="flex items-center gap-1 text-purple-400 font-bold text-lg">
                     <DollarSign size={14} className="opacity-70" /> 
-                    {/* Assuming upsellGross is passed up in totalGross, we might need to separate it if you want specific upsell $ here. 
-                        Currently using a placeholder logic or if you have upsellGross in stats, use it. 
-                        Based on RMTeamTab update, we didn't explicitly add totalUpsellGross to the interface yet, 
-                        but we can calculate or just show count for now. 
-                        Let's use totalUpsellCount for now or 0 if undefined.
-                    */}
-                    {/* FIX: If you want Upsell $, ensure RMTeamTab passes 'totalUpsellGross' */}
-                    {/* For now, leaving as placeholder or deriving from logic if available */}
                     -
                 </div>
             </div>
