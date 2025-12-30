@@ -1,11 +1,11 @@
 // src/pages/Management/RMLogbook.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Users, Map, Loader, Calendar, BookOpen } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { ManagementUser, DailySessionData, LogsheetSession } from '../../types';
 import { sessionService } from '../../lib/sessionService';
-import { supabase } from '../../lib/supabase'; // <--- Added Supabase Import
+import { supabase } from '../../lib/supabase';
 
 import RMTeamTab from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
@@ -29,19 +29,29 @@ const RMLogbook: React.FC = () => {
   const [dailyData, setDailyData] = useState<DailySessionData | null>(null);
   const [allSessions, setAllSessions] = useState<LogsheetSession[]>([]);
 
+  // Debounce Ref to prevent spamming refreshes
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // --- Shared Data Fetcher ---
   const refreshData = async () => {
-    try {
-      // Parallel fetch for speed
-      const [session, sessions] = await Promise.all([
-        sessionService.getDailySession(),
-        sessionService.getLogsheetSessions()
-      ]);
-      setDailyData(session);
-      setAllSessions(sessions);
-    } catch (err) {
-      console.error('Failed to refresh RM Logbook data', err);
-    }
+    // Clear any pending refresh to "debounce" multiple rapid events
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+    // Wait 500ms before actually fetching. 
+    // If another event comes in within 500ms, this timer resets.
+    timeoutRef.current = setTimeout(async () => {
+        try {
+          console.log('🔄 RM Logbook: Refreshing Data...');
+          const [session, sessions] = await Promise.all([
+            sessionService.getDailySession(),
+            sessionService.getLogsheetSessions()
+          ]);
+          setDailyData(session);
+          setAllSessions(sessions);
+        } catch (err) {
+          console.error('Failed to refresh RM Logbook data', err);
+        }
+    }, 500);
   };
 
   // --- Initial Load ---
@@ -58,52 +68,72 @@ const RMLogbook: React.FC = () => {
       setLoading(false);
     };
     init();
+
+    // Cleanup timeout on unmount
+    return () => {
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
   }, [navigate]);
 
-  // --- Realtime Listeners ---
+  // --- Realtime Listeners & Backup Poller ---
   useEffect(() => {
     if (!dailyData?.date) return;
 
-    // Create a subscription to watch for changes
+    console.log('📡 Connecting to Realtime Updates...');
+
     const channel = supabase
       .channel('rm-dashboard-changes')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'logsheet_sessions' },
-        () => {
-          console.log('Realtime: Logsheet update detected');
+        (payload) => {
+          console.log('🔔 Realtime: Logsheet update', payload.eventType);
           refreshData();
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'bookings' },
-        () => {
-          console.log('Realtime: Booking update detected');
+        (payload) => {
+          console.log('🔔 Realtime: Booking update', payload.eventType);
           refreshData();
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'routes' },
-        () => {
-          console.log('Realtime: Route update detected');
+        (payload) => {
+          console.log('🔔 Realtime: Route update', payload.eventType);
           refreshData();
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'transactions' },
-        () => {
-          console.log('Realtime: Transaction update detected');
+        (payload) => {
+          console.log('🔔 Realtime: Transaction update', payload.eventType);
           refreshData();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+              console.log('✅ Realtime Connected!');
+          } else if (status === 'CHANNEL_ERROR') {
+              console.error('❌ Realtime Connection Error. Check console/network.');
+          }
+      });
 
-    // Cleanup subscription on unmount
+    // --- Backup Poller (Every 60 Seconds) ---
+    // This ensures that if the listener fails or disconnects, 
+    // the dashboard still updates eventually.
+    const intervalId = setInterval(() => {
+        console.log('⏰ Backup Poller: Triggering auto-refresh');
+        refreshData();
+    }, 60000); 
+
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(intervalId);
     };
   }, [dailyData?.date]);
 
@@ -183,7 +213,10 @@ const RMLogbook: React.FC = () => {
               bookings={dailyData.pendingBookings}
               workers={dailyData.workers}
               onStatsUpdate={(s) => setStats((prev) => ({ ...prev, ...s }))}
-              onRefresh={refreshData} 
+              onRefresh={() => {
+                  // Immediate manual refresh (bypassing debounce for user actions)
+                  refreshData();
+              }} 
             />
           )}
         </div>
