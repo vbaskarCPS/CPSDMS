@@ -1,3 +1,4 @@
+// src/pages/Management/RMLogbook.tsx
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Users, Map, Loader, Calendar, BookOpen, Activity, DollarSign, Clock } from 'lucide-react';
@@ -106,9 +107,10 @@ const RMLogbook: React.FC = () => {
           }
       });
 
+    // Fallback Refresh: Changed from 60s to 10s
     const intervalId = setInterval(() => {
         refreshData();
-    }, 60000); 
+    }, 10000); 
 
     return () => {
       supabase.removeChannel(channel);
