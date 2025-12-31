@@ -67,16 +67,19 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     const loadData = async () => {
       const myTeam = workers.filter((w) => w.assignedManagerId === managerId);
 
-      // We no longer calculate global stats here.
-      // We only enrich data for display purposes.
-
       const enriched = await Promise.all(
         myTeam.map(async (w) => {
+          // 1. Fetch Bookings (Assignments)
           const allBookings = await sessionService.getWorkerAssignments(w.contractorId);
           const pending = allBookings.filter((b) => b.Completed !== 'x');
-          const session = allSessions.find((s) => s.workerId === w.contractorId);
-          const stats = session?.stats || sessionService.getEmptyStats();
-          const financialStore = session?.financialStore || [];
+
+          // 2. Fetch Fresh Session Data (Stats & Transactions)
+          // We fetch this fresh here to ensure 'Last Address' and Stats are up-to-date immediately
+          // after a job is completed, rather than relying on the potentially stale 'allSessions' prop.
+          const freshSession = await sessionService.getActiveLogsheetSession(w.contractorId);
+          
+          const stats = freshSession?.stats || sessionService.getEmptyStats();
+          const financialStore = freshSession?.financialStore || [];
 
           // Unique Routes
           const uniqueRoutes = Array.from(new Set(
@@ -85,7 +88,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               .filter(r => r && r !== 'x' && r.trim() !== '')
           )) as string[];
 
-          // Last Address
+          // Last Address (Calculated from fresh financialStore)
           let lastAddr = null;
           if (financialStore.length > 0) {
             const sortedTx = [...financialStore].sort((a, b) => 
