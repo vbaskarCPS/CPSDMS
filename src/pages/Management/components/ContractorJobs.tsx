@@ -11,16 +11,48 @@ interface ContractorJobsProps {
   onRevert?: (job: MasterBooking) => void;
 }
 
+// 1. Badge Mapping Helper
+const BADGE_MAP: Record<string, string> = {
+  'star_plan_pro': 'SP PRO',
+  'lawn_rejuv': 'REJUV',
+  'dethatch': 'DET',
+  'grub': 'GRUB'
+};
+
 const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStore, onRevert }) => {
   const [editingTransaction, setEditingTransaction] = useState<SessionTransaction | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
   // --- Merge Bookings & Transactions ---
   const allJobs = useMemo(() => {
-      const combined = [...bookings];
-      const existingIds = new Set(combined.map(b => b['Booking ID']));
+      // Create a map of transactions for quick lookup
+      const txMap = new Map<string, SessionTransaction>();
+      financialStore.forEach(tx => txMap.set(tx.jobId, tx));
 
-      // Merge in transactions from financialStore that aren't already in bookings
+      // 1. Process Existing Bookings (Augment with Transaction Data if available)
+      const augmentedBookings = bookings.map(b => {
+          const tx = txMap.get(b['Booking ID']);
+          if (tx) {
+              // If we have a transaction, attach the specific metadata we need for badges
+              return {
+                  ...b,
+                  // Attach these properties strictly for display logic
+                  ...({
+                      isUpgrade: tx.type === 'Upgrade',
+                      isAddOn: tx.type === 'Add-On',
+                      isNewSale: tx.type === 'Sale',
+                      refId: tx.refId, // <--- CRITICAL: Pass the specific service ID
+                      paymentBreakdown: tx.paymentBreakdown
+                  } as any)
+              };
+          }
+          return b;
+      });
+
+      const existingIds = new Set(augmentedBookings.map(b => b['Booking ID']));
+      const combined = [...augmentedBookings];
+
+      // 2. Add New Transactions (that aren't in bookings)
       financialStore.forEach(tx => {
           if (!existingIds.has(tx.jobId)) {
                const nameParts = (tx.customerName || '').split(' ');
@@ -41,6 +73,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                        isUpgrade: tx.type === 'Upgrade',
                        isAddOn: tx.type === 'Add-On',
                        isNewSale: tx.type === 'Sale',
+                       refId: tx.refId, // <--- CRITICAL: Pass the specific service ID
                        paymentBreakdown: tx.paymentBreakdown
                    } as any)
                };
@@ -98,14 +131,33 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
 
       // --- Badges ---
       let badge = { text: 'PENDING', color: 'bg-gray-700 text-gray-400 border-gray-600' };
+      
       if (isPaid) {
-          if ((job as any).isUpgrade) badge = { text: 'UPGRADE', color: 'bg-orange-900/30 text-orange-400 border-orange-800' };
-          else if ((job as any).isAddOn) badge = { text: 'ADD-ON', color: 'bg-blue-900/30 text-blue-400 border-blue-800' };
-          else if ((job as any).isNewSale) badge = { text: 'SALE', color: 'bg-yellow-900/30 text-yellow-400 border-yellow-800' };
-          else badge = { text: 'DONE', color: 'bg-green-900/30 text-green-400 border-green-800' };
-      } else if (job.Status && job.Status !== 'pending') {
+          const extra = job as any;
+          
+          // Helper to get specific label or fall back to generic
+          const getLabel = (generic: string) => {
+             if (extra.refId && BADGE_MAP[extra.refId]) return BADGE_MAP[extra.refId];
+             return generic;
+          };
+
+          if (extra.isUpgrade) {
+              badge = { text: getLabel('UPGRADE'), color: 'bg-orange-900/30 text-orange-400 border-orange-800' };
+          } 
+          else if (extra.isAddOn) {
+              badge = { text: getLabel('ADD-ON'), color: 'bg-blue-900/30 text-blue-400 border-blue-800' };
+          } 
+          else if (extra.isNewSale) {
+              badge = { text: 'SALE', color: 'bg-yellow-900/30 text-yellow-400 border-yellow-800' };
+          } 
+          else {
+              badge = { text: 'DONE', color: 'bg-green-900/30 text-green-400 border-green-800' };
+          }
+      } 
+      else if (job.Status && job.Status !== 'pending') {
           badge = { text: job.Status.toUpperCase().substring(0, 8), color: 'bg-red-900/30 text-red-400 border-red-800' };
-      } else if (job.Prepaid === 'x') {
+      } 
+      else if (job.Prepaid === 'x') {
           badge = { text: 'PREPAID', color: 'bg-indigo-900/30 text-indigo-400 border-indigo-800' };
       }
 
