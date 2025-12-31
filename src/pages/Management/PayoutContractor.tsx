@@ -1,4 +1,3 @@
-// src/pages/Management/PayoutContractor.tsx
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
@@ -18,7 +17,6 @@ import {
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
 import { LogsheetSession, Worker } from '../../types';
-// IMPORT WITHOUT CURLY BRACES:
 import EditTransactionModal from '../../components/EditTransactionModal'; 
 
 const PayoutContractor: React.FC = () => {
@@ -35,7 +33,6 @@ const PayoutContractor: React.FC = () => {
   const [chequeAmount, setChequeAmount] = useState('');
 
   const [deductions, setDeductions] = useState('');
-  // Machine rental defaults to true as requested
   const [machineRental, setMachineRental] = useState(true); 
 
   // --- MODAL STATE ---
@@ -63,7 +60,6 @@ const PayoutContractor: React.FC = () => {
         if (foundWorker) setWorker(foundWorker);
         if (foundSession) {
           setSession(foundSession);
-          // Pre-fill validation data if it exists
           if (foundSession.validation) {
             setCashBills(foundSession.validation.verifiedCash.toString());
             setChequeAmount(foundSession.validation.verifiedCheque.toString());
@@ -80,7 +76,6 @@ const PayoutContractor: React.FC = () => {
   }, [contractorId]);
 
   // --- HELPER: BADGES ---
-  // Detects specific keywords in item_name to assign badge styles
   const getBadgeStyle = (itemName: string) => {
     const name = (itemName || '').toLowerCase();
     if (name.includes('sp pro')) return { label: 'SP Pro', className: 'bg-blue-900/50 text-blue-400 border border-blue-800' };
@@ -96,37 +91,38 @@ const PayoutContractor: React.FC = () => {
     prodGross: 0, upsellPayable: 0, iosCount: 0, stepCount: 0 
   };
 
-  // 1. Reconciliation Math (System vs Actual)
+  // 1. Reconciliation Math
   const systemTotalCash = stats.prodCash + stats.upsellCash;
   const systemTotalCheque = stats.prodCheque + stats.upsellCheque;
 
   const cashDiff = totalCashInput - systemTotalCash;
   const chequeDiff = totalChequeInput - systemTotalCheque;
 
-  // 2. Adjust Production Credit based on Inputs
-  // IF user is short on cash, actualProdCash drops, which lowers EQ automatically.
   const systemUpsellCash = stats.upsellCash;
   const actualProdCash = totalCashInput - systemUpsellCash;
 
   const systemUpsellCheque = stats.upsellCheque;
   const actualProdCheque = totalChequeInput - systemUpsellCheque;
 
-  // 3. Calculate Actual EQ
+  // 2. EQ Calculations
+  const taxDivisor = 1.05;
+  
+  // System/Projected EQ (based on Stats)
+  const projectedProdPayable = stats.prodGross / taxDivisor;
+  const projectedEQ = projectedProdPayable / 25;
+
+  // Actual EQ (based on Inputs)
   const systemProdNonCash = stats.prodGross - stats.prodCash - stats.prodCheque;
   const actualProdGross = systemProdNonCash + actualProdCash + actualProdCheque;
-
-  const taxDivisor = 1.05;
   const actualProdPayable = actualProdGross / taxDivisor;
   const actualTotalEQ = actualProdPayable / 25;
 
-  // 4. Commissions
-  // Rates
+  // 3. Commissions
   const baseRate = 8.0; 
   const alumniRate = worker?.alumniRate || 0;
   const silverRate = worker?.silverRate || 0;
   const totalRate = baseRate + alumniRate + silverRate;
 
-  // Components
   const productionPay = actualTotalEQ * totalRate;
   const upsellCommission = (stats.upsellPayable || 0) * 0.10;
   const iosCommission = (stats.iosCount || 0) * 5.0;
@@ -161,7 +157,7 @@ const PayoutContractor: React.FC = () => {
       actualTotalEQ,
       finalCommission: finalPay,
       machineRental: machineRental,
-      managerName: 'Admin', // Replace with dynamic user if available
+      managerName: 'Admin',
       timestamp: new Date().toISOString(),
     };
 
@@ -188,6 +184,7 @@ const PayoutContractor: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-gray-100 overflow-hidden">
+      
       {/* HEADER */}
       <div className="bg-gray-800 border-b border-gray-700 p-4 shadow-md z-10">
         <div className="flex items-center justify-between max-w-7xl mx-auto w-full">
@@ -212,12 +209,26 @@ const PayoutContractor: React.FC = () => {
               </div>
             </div>
           </div>
-          <div className="text-right">
-            <div className="text-xs text-gray-500 uppercase font-bold text-blue-400">
-              Est. Payout
+          
+          {/* HEADER STATS */}
+          <div className="flex gap-8 text-right">
+            <div>
+              <div className="text-xs text-gray-500 uppercase font-bold">Projected EQ</div>
+              <div className="text-xl font-bold text-gray-300 font-mono">
+                {projectedEQ.toFixed(2)}
+              </div>
             </div>
-            <div className="text-3xl font-bold text-green-400">
-              ${finalPay.toFixed(2)}
+            <div>
+              <div className="text-xs text-gray-500 uppercase font-bold text-blue-400">Actual EQ</div>
+              <div className="text-xl font-bold text-blue-400 font-mono">
+                {actualTotalEQ.toFixed(2)}
+              </div>
+            </div>
+            <div className="pl-4 border-l border-gray-700">
+              <div className="text-xs text-gray-500 uppercase font-bold text-green-400">Est. Payout</div>
+              <div className="text-xl font-bold text-green-400 font-mono">
+                ${finalPay.toFixed(2)}
+              </div>
             </div>
           </div>
         </div>
@@ -226,72 +237,7 @@ const PayoutContractor: React.FC = () => {
       <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
         <div className="max-w-7xl mx-auto w-full space-y-6">
           
-          {/* 1. VISUAL BREAKDOWN (NEW) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Production */}
-            <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
-               <div className="flex items-center gap-2 mb-3 text-gray-400 text-xs font-bold uppercase tracking-wider">
-                 <Calculator size={14} className="text-blue-400"/> Production Comm
-               </div>
-               <div className="text-2xl font-bold text-white mb-3">
-                 ${productionPay.toFixed(2)}
-               </div>
-               <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
-                  <div className="flex justify-between items-center">
-                    <span>Actual EQ</span>
-                    <span className="font-mono text-blue-300 font-bold">{actualTotalEQ.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between items-center border-t border-gray-700 pt-2">
-                    <span title="Base + Silver + Alumni">Total Rate ({totalRate.toFixed(2)}%)</span>
-                    <span className="font-mono text-gray-300">
-                      {baseRate}% + {silverRate}% + {alumniRate}%
-                    </span>
-                  </div>
-               </div>
-            </div>
-
-            {/* Upsell */}
-            <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
-               <div className="flex items-center gap-2 mb-3 text-gray-400 text-xs font-bold uppercase tracking-wider">
-                 <TrendingUp size={14} className="text-green-400"/> Upsell Comm
-               </div>
-               <div className="text-2xl font-bold text-white mb-3">
-                 ${upsellCommission.toFixed(2)}
-               </div>
-               <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
-                  <div className="flex justify-between items-center">
-                    <span>Payable Upsell</span>
-                    <span className="font-mono text-white">${stats.upsellPayable?.toFixed(2) || '0.00'}</span>
-                  </div>
-                  <div className="flex justify-between items-center border-t border-gray-700 pt-2">
-                    <span>Commission</span>
-                    <span className="font-mono text-gray-300">10%</span>
-                  </div>
-               </div>
-            </div>
-
-            {/* IOS */}
-            <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
-               <div className="flex items-center gap-2 mb-3 text-gray-400 text-xs font-bold uppercase tracking-wider">
-                 <Award size={14} className="text-purple-400"/> IOS / PB Comm
-               </div>
-               <div className="text-2xl font-bold text-white mb-3">
-                 ${iosCommission.toFixed(2)}
-               </div>
-               <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
-                  <div className="flex justify-between items-center">
-                    <span>Count</span>
-                    <span className="font-mono text-white">{stats.iosCount}</span>
-                  </div>
-                  <div className="flex justify-between items-center border-t border-gray-700 pt-2">
-                    <span>Rate</span>
-                    <span className="font-mono text-gray-300">$5.00 / ea</span>
-                  </div>
-               </div>
-            </div>
-          </div>
-
-          {/* 2. TRANSACTION HISTORY (UPDATED) */}
+          {/* 1. TRANSACTION HISTORY (Moved to Top) */}
           <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 overflow-hidden">
             <div className="p-4 bg-gray-800 border-b border-gray-700">
               <h2 className="text-lg font-bold flex items-center gap-2 text-white">
@@ -370,6 +316,71 @@ const PayoutContractor: React.FC = () => {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          {/* 2. VISUAL BREAKDOWN */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Production */}
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
+               <div className="flex items-center gap-2 mb-3 text-gray-400 text-xs font-bold uppercase tracking-wider">
+                 <Calculator size={14} className="text-blue-400"/> Production Comm
+               </div>
+               <div className="text-2xl font-bold text-white mb-3">
+                 ${productionPay.toFixed(2)}
+               </div>
+               <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
+                  <div className="flex justify-between items-center">
+                    <span>Actual EQ</span>
+                    <span className="font-mono text-blue-300 font-bold">{actualTotalEQ.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between items-center border-t border-gray-700 pt-2">
+                    <span title="Base + Silver + Alumni">Total Rate ({totalRate.toFixed(2)}%)</span>
+                    <span className="font-mono text-gray-300">
+                      {baseRate}% + {silverRate}% + {alumniRate}%
+                    </span>
+                  </div>
+               </div>
+            </div>
+
+            {/* Upsell */}
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
+               <div className="flex items-center gap-2 mb-3 text-gray-400 text-xs font-bold uppercase tracking-wider">
+                 <TrendingUp size={14} className="text-green-400"/> Upsell Comm
+               </div>
+               <div className="text-2xl font-bold text-white mb-3">
+                 ${upsellCommission.toFixed(2)}
+               </div>
+               <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
+                  <div className="flex justify-between items-center">
+                    <span>Payable Upsell</span>
+                    <span className="font-mono text-white">${stats.upsellPayable?.toFixed(2) || '0.00'}</span>
+                  </div>
+                  <div className="flex justify-between items-center border-t border-gray-700 pt-2">
+                    <span>Commission</span>
+                    <span className="font-mono text-gray-300">10%</span>
+                  </div>
+               </div>
+            </div>
+
+            {/* IOS */}
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
+               <div className="flex items-center gap-2 mb-3 text-gray-400 text-xs font-bold uppercase tracking-wider">
+                 <Award size={14} className="text-purple-400"/> IOS / PB Comm
+               </div>
+               <div className="text-2xl font-bold text-white mb-3">
+                 ${iosCommission.toFixed(2)}
+               </div>
+               <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
+                  <div className="flex justify-between items-center">
+                    <span>Count</span>
+                    <span className="font-mono text-white">{stats.iosCount}</span>
+                  </div>
+                  <div className="flex justify-between items-center border-t border-gray-700 pt-2">
+                    <span>Rate</span>
+                    <span className="font-mono text-gray-300">$5.00 / ea</span>
+                  </div>
+               </div>
             </div>
           </div>
 
