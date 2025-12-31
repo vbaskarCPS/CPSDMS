@@ -1,12 +1,11 @@
 // src/pages/Management/components/RMRoutesTab.tsx
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  Map as MapIcon, // <--- RENAMED TO AVOID CONFLICT
+  Map as MapIcon, 
   AlertCircle, X, Check, ChevronDown, ChevronUp, 
   MapPin, Phone, User, Users 
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
-import { TabStats } from '../RMLogbook';
 import { RouteData, MasterBooking, Worker } from '../../../types';
 
 interface RMRoutesTabProps {
@@ -14,7 +13,6 @@ interface RMRoutesTabProps {
   routes: RouteData[];
   bookings: MasterBooking[];
   workers: Worker[];
-  onStatsUpdate: (stats: TabStats) => void;
   onRefresh: () => void;
 }
 
@@ -32,7 +30,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   routes,
   bookings,
   workers,
-  onStatsUpdate,
   onRefresh,
 }) => {
   // State
@@ -45,7 +42,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   // Modal State
   const [assignModalData, setAssignModalData] = useState<{
     type: 'ROUTE' | 'JOB';
-    targetId: string; // routeCode OR bookingId
+    targetId: string;
     currentWorkerId: string | null;
     title: string;
   } | null>(null);
@@ -69,14 +66,10 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       groupedBookings[r.routeCode] = [];
     });
 
-    // Distribute bookings
-    let unassignedJobCount = 0;
-    
     bookings.forEach(b => {
       const rCode = b['Route Number'];
       if (rCode && myRouteCodes.has(rCode)) {
         groupedBookings[rCode].push(b);
-        if (!b['Contractor Number']) unassignedJobCount++;
       }
     });
 
@@ -108,17 +101,15 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
 
     setDisplayRoutes(enrichedRoutes);
     
-    onStatsUpdate({
-      unassignedRoutes: enrichedRoutes.filter((r) => !r.assignedWorkerId).length,
-      unassignedBookings: unassignedJobCount
-    });
+    // We no longer call onStatsUpdate here. 
+    // The parent RMLogbook now calculates unassigned stats itself.
+
   }, [managerId, routes, bookings, workers]);
 
   // --- 2. CALCULATE ASSIGNMENTS & SORTING ---
   
-  // Create a map of workerId -> Array of Route Codes they own
   const workerRouteMap = useMemo(() => {
-    const map = new Map<string, string[]>(); // <--- This was crashing before because 'Map' was an Icon!
+    const map = new Map<string, string[]>();
     routes.forEach(r => {
       if (r.assignedWorkerId) {
         const existing = map.get(r.assignedWorkerId) || [];
@@ -129,7 +120,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     return map;
   }, [routes]);
 
-  // Sort Contractors: Available (No Route) First, then Alphabetical
   const sortedContractors = useMemo(() => {
     return [...contractors].sort((a, b) => {
       const aRoutes = workerRouteMap.get(a.contractorId);
@@ -138,12 +128,10 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       const aHasRoute = aRoutes && aRoutes.length > 0;
       const bHasRoute = bRoutes && bRoutes.length > 0;
 
-      // If one has route and other doesn't, put the one WITHOUT route first
       if (aHasRoute !== bHasRoute) {
         return aHasRoute ? 1 : -1;
       }
 
-      // Otherwise sort alphabetically
       return a.firstName.localeCompare(b.firstName);
     });
   }, [contractors, workerRouteMap]);
@@ -166,12 +154,10 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   const handleAssignConfirm = async (workerId: string | null) => {
     if (!assignModalData) return;
 
-    // Perform Assignment in DB
     if (assignModalData.type === 'ROUTE') {
       const routeCode = assignModalData.targetId;
       await sessionService.assignRouteToWorker(routeCode, workerId);
 
-      // Also assign all pending jobs in that route
       const routeItems = displayRoutes.find(r => r.routeCode === routeCode)?.items || [];
       const pendingItems = routeItems.filter(b => b.Status !== 'completed');
       
@@ -184,10 +170,9 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     }
 
     setAssignModalData(null);
-    onRefresh(); // Trigger parent refresh
+    onRefresh(); 
   };
 
-  // --- 4. HELPERS ---
   const getWorkerInfo = (id: string | null) => {
     if (!id) return null;
     return contractors.find((x) => x.contractorId === id);
@@ -371,7 +356,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
             </div>
             
             <div className="space-y-1 max-h-64 overflow-y-auto custom-scrollbar pr-1">
-              {/* UNASSIGN OPTION */}
               <button
                 onClick={() => handleAssignConfirm(null)}
                 className="w-full text-left px-3 py-3 text-red-400 hover:bg-red-900/10 rounded flex items-center gap-2 mb-2 text-sm border border-transparent hover:border-red-900/30 transition-all"
@@ -379,7 +363,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                 <AlertCircle size={16} /> Unassign {assignModalData.type === 'ROUTE' ? 'Route' : 'Job'}
               </button>
 
-              {/* CONTRACTOR LIST - SORTED */}
               {sortedContractors.map((w) => {
                   const isSelected = w.contractorId === assignModalData.currentWorkerId;
                   const assignedRoutes = workerRouteMap.get(w.contractorId);

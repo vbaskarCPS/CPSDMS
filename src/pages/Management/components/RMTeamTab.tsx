@@ -9,11 +9,9 @@ import {
   Trash2, 
   X,
   MapPin,
-  Route as RouteIcon
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
 import { Worker, MasterBooking, LogsheetSession, ManagementUser } from '../../../types';
-import { TabStats } from '../RMLogbook';
 import ContractorJobs from './ContractorJobs';
 
 interface RMTeamTabProps {
@@ -21,10 +19,6 @@ interface RMTeamTabProps {
   workers: Worker[];
   allSessions: LogsheetSession[];
   allManagers?: ManagementUser[];
-  onStatsUpdate: (stats: TabStats) => void;
-  // These props are deprecated in favor of direct service calls to avoid 404s
-  onTransferContractor?: (contractorId: string, newManagerId: string) => Promise<void>;
-  onRemoveContractor?: (contractorId: string) => Promise<void>;
 }
 
 interface TeamMemberDisplay extends Worker {
@@ -47,10 +41,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   workers,
   allSessions,
   allManagers = [],
-  onStatsUpdate,
-  // We accept these but won't use them to prevent the 404 error from the parent
-  onTransferContractor,
-  onRemoveContractor
 }) => {
   const [teamMembers, setTeamMembers] = useState<TeamMemberDisplay[]>([]);
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
@@ -77,9 +67,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     const loadData = async () => {
       const myTeam = workers.filter((w) => w.assignedManagerId === managerId);
 
-      let totalSteps = 0,
-        totalPending = 0,
-        totalEQ = 0;
+      // We no longer calculate global stats here.
+      // We only enrich data for display purposes.
 
       const enriched = await Promise.all(
         myTeam.map(async (w) => {
@@ -105,10 +94,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             lastAddr = sortedTx[0].address;
           }
 
-          totalSteps += stats.stepCount;
-          totalPending += pending.length;
-          totalEQ += stats.totalEQ;
-
           return {
             ...w,
             displayBookings: allBookings,
@@ -128,7 +113,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
       );
 
       setTeamMembers(enriched);
-      onStatsUpdate({ totalSteps, totalPending, totalEQ });
     };
 
     loadData();
@@ -150,10 +134,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     if (!selectedTransferManager) return;
     
     try {
-        // Use service directly to avoid camelCase/snake_case mismatch errors
         await sessionService.transferWorker(contractorId, selectedTransferManager);
-
-        // Success: Remove them from the local list immediately
         setTeamMembers((prev) => prev.filter((m) => m.contractorId !== contractorId));
         setTransferModeId(null);
         setMenuOpenId(null);
@@ -167,10 +148,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   const handleRemove = async (contractorId: string) => {
     if (window.confirm("Are you sure you want to remove this contractor? This will unassign any active routes/bookings.")) {
       try {
-        // Use service directly to ensure clean cascade delete
         await sessionService.deleteWorker(contractorId);
-
-        // Success: Remove from local UI immediately
         setTeamMembers((prev) => prev.filter((m) => m.contractorId !== contractorId));
         setMenuOpenId(null);
       } catch (error) {
@@ -181,12 +159,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   };
 
   const isModifiable = (member: TeamMemberDisplay) => {
-    // We can now allow deleting even if they have bookings, 
-    // because deleteWorker handles the cleanup.
-    // However, usually we still want to block deleting if they have generated revenue (financialStore).
     const hasHistory = member.financialStore.length > 0;
-    
-    // Allow deleting if no financial history
     return !hasHistory;
   };
 

@@ -6,19 +6,30 @@ import { ManagementUser, DailySessionData, LogsheetSession } from '../../types';
 import { sessionService } from '../../lib/sessionService';
 import { supabase } from '../../lib/supabase';
 
-import RMTeamTab, { ExtendedTabStats } from './components/RMTeamTab';
+import RMTeamTab from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
 
-// We now use the extended interface from RMTeamTab to support all metrics
-export type { ExtendedTabStats } from './components/RMTeamTab';
+export interface TabStats {
+  totalSteps: number;
+  totalPending: number;
+  totalEQ: number;
+  workerCount: number;
+  totalGross: number; // This will represent Up $ (Upsell Gross) per your request
+  avgEQ: number;
+  totalUpsellCount: number;
+  
+  // Badge counters
+  unassignedRoutes: number;
+  unassignedBookings: number;
+}
 
 const RMLogbook: React.FC = () => {
   const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<ManagementUser | null>(null);
   const [activeTab, setActiveTab] = useState<'team' | 'routes'>('team');
   
-  // Initialize with zeroes
-  const [stats, setStats] = useState<ExtendedTabStats>({
+  // Initialize Stats
+  const [stats, setStats] = useState<TabStats>({
     totalSteps: 0,
     totalPending: 0,
     totalEQ: 0,
@@ -26,8 +37,6 @@ const RMLogbook: React.FC = () => {
     totalGross: 0,
     avgEQ: 0,
     totalUpsellCount: 0,
-    pendingPrebooks: 0,
-    completedPrebooks: 0,
     unassignedRoutes: 0,
     unassignedBookings: 0
   });
@@ -37,7 +46,6 @@ const RMLogbook: React.FC = () => {
   const [dailyData, setDailyData] = useState<DailySessionData | null>(null);
   const [allSessions, setAllSessions] = useState<LogsheetSession[]>([]);
 
-  // Debounce Ref to prevent spamming refreshes
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // --- Shared Data Fetcher ---
@@ -109,71 +117,71 @@ const RMLogbook: React.FC = () => {
   }, [dailyData?.date]);
 
 
-  // --- CALCULATE FALLBACK STATS (For Routes Tab / Initial Load) ---
-  // If we are on the 'team' tab, we SKIP this and trust the Team Tab component 
-  // to tell us the correct stats (handling transfers, etc).
-  // If we are on 'routes' tab, we calculate defaults from the DB data.
+  // --- CENTRALIZED STAT CALCULATION ---
   useEffect(() => {
-    if (!dailyData || !allSessions) return;
+    if (!dailyData || !allSessions || !currentUser) return;
+
+    // 1. Identify "My Team"
+    const myTeam = dailyData.workers.filter(w => w.assignedManagerId === currentUser.userId);
+    const myTeamIds = new Set(myTeam.map(w => w.contractorId));
+
+    // 2. Identify "My Team's Sessions" (for Steps, EQ, Upsells)
+    const mySessions = allSessions.filter(s => myTeamIds.has(s.workerId));
+
+    // 3. Identify "My Routes" (for Unassigned badges)
+    const myRoutes = dailyData.routes.filter(r => r.managerId === currentUser.userId);
+    const myRouteCodes = new Set(myRoutes.map(r => r.routeCode));
+
+    // --- CALCULATIONS ---
+
+    // A. Worker Count
+    const workerCount = myTeam.length;
+
+    // B. Steps (Sum from sessions)
+    const totalSteps = mySessions.reduce((sum, s) => sum + (s.stats?.stepCount || 0), 0);
+
+    // C. Pending (Sum of incomplete bookings assigned to my team)
+    // We assume dailyData.pendingBookings contains all incomplete jobs for the day
+    const assignedPendingCount = dailyData.pendingBookings.filter(b => 
+        b['Contractor Number'] && myTeamIds.has(b['Contractor Number'])
+    ).length;
     
-    // STOP: If on Team tab, let the child component drive the stats to support transfers/filtering.
-    if (activeTab === 'team') return;
+    // We also include unassigned bookings in the pending count if that is the desired behavior for "Pending"
+    // However, usually "Pending" for a manager means "Total work left to do".
+    // Let's count Unassigned Bookings relevant to this manager's routes separately.
+    const unassignedBookingsCount = dailyData.pendingBookings.filter(b => 
+        b['Route Number'] && myRouteCodes.has(b['Route Number']) && !b['Contractor Number']
+    ).length;
 
-    const activeWorkerIds = dailyData.workers.map(w => w.userId);
-    const activeSessions = allSessions.filter(s => activeWorkerIds.includes(s.user_id));
+    const totalPending = assignedPendingCount + unassignedBookingsCount;
 
-    let totalSteps = 0;
-    let totalPending = 0; 
-    let totalCompleted = 0;
-    let totalGross = 0;
-    let totalUpsellCount = 0;
-    
-    // Sum of all individual EQs to calculate average later
-    let sumOfIndividualEQs = 0;
-    let workersWithActivity = 0;
+    // D. Avg EQ
+    // Formula: (Total EQ of all workers) / (Number of workers)
+    const totalTeamEQ = mySessions.reduce((sum, s) => sum + (s.stats?.totalEQ || 0), 0);
+    const avgEQ = workerCount > 0 ? (totalTeamEQ / workerCount) : 0;
 
-    activeSessions.forEach((session: any) => {
-        const steps = Number(session.steps) || 0;
-        const pending = Number(session.pending_count || session.pending || 0);
-        const completed = Number(session.completed_count || session.completed || 0);
-        const gross = Number(session.total_revenue || session.gross || 0);
-        const upsells = Number(session.upsell_count || session.upsells || 0);
+    // E. Upsell Count
+    const totalUpsellCount = mySessions.reduce((sum, s) => sum + (s.stats?.upsellCount || 0), 0);
 
-        totalSteps += steps;
-        totalPending += pending;
-        totalCompleted += completed;
-        totalGross += gross;
-        totalUpsellCount += upsells;
+    // F. Up $ (Upsell Gross)
+    const totalUpsellGross = mySessions.reduce((sum, s) => sum + (s.stats?.upsellGross || 0), 0);
 
-        // Calculate Individual EQ for aggregation
-        if (steps > 0) {
-            const results = pending + completed;
-            const workerEq = results / steps;
-            sumOfIndividualEQs += workerEq;
-            workersWithActivity++;
-        }
+    // G. Unassigned Routes (Badge)
+    const unassignedRoutesCount = myRoutes.filter(r => !r.assignedWorkerId).length;
+
+    setStats({
+        workerCount,
+        totalSteps,
+        totalPending,
+        avgEQ,
+        totalUpsellCount,
+        totalGross: totalUpsellGross, // Mapping "Up $" to this field
+        totalEQ: totalTeamEQ,
+        unassignedRoutes: unassignedRoutesCount,
+        unassignedBookings: unassignedBookingsCount
     });
 
-    // Calculate Average EQ: (Sum of all EQs) / (Number of Workers)
-    // If we are falling back to DB data, we use workersWithActivity or total workers
-    // Here we use workersWithActivity to be safe, or dailyData.workers.length if you prefer strict DB count
-    const countForAvg = workersWithActivity > 0 ? workersWithActivity : 1;
-    const avgEQ = sumOfIndividualEQs / countForAvg;
-    const currentUnassignedCount = dailyData.pendingBookings?.length || 0;
-
-    setStats(prev => ({
-        ...prev,
-        workerCount: dailyData.workers.length, // Fallback to DB count if not on team tab
-        totalSteps,
-        pendingPrebooks: totalPending,
-        completedPrebooks: totalCompleted,
-        totalGross,
-        totalUpsellCount,
-        avgEQ,
-        unassignedBookings: currentUnassignedCount
-    }));
-
-  }, [dailyData, allSessions, activeTab]);
+  }, [dailyData, allSessions, currentUser]);
 
 
   if (loading || !currentUser || !dailyData)
@@ -182,9 +190,6 @@ const RMLogbook: React.FC = () => {
         <Loader className="animate-spin text-cps-blue" />
       </div>
     );
-
-  // Derived calculation for unassigned count
-  const currentUnassignedCount = dailyData?.pendingBookings?.length || 0;
 
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
@@ -230,7 +235,7 @@ const RMLogbook: React.FC = () => {
               }`}
             >
               <Map size={14} /> Routes{' '}
-              {(stats.unassignedRoutes || 0) + (currentUnassignedCount) > 0 && (
+              {(stats.unassignedRoutes > 0 || stats.unassignedBookings > 0) && (
                 <span className="flex items-center justify-center w-4 h-4 text-[9px] bg-red-500 text-white rounded-full animate-pulse">
                   !
                 </span>
@@ -243,7 +248,6 @@ const RMLogbook: React.FC = () => {
         <div className="grid grid-cols-3 md:grid-cols-6 gap-px bg-gray-700 border-t border-gray-700">
             
             {/* 1. Workers */}
-            {/* Value driven by child component via onStatsUpdate when active */}
             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Workers</span>
                 <div className="flex items-center gap-1 text-blue-300 font-bold text-lg">
@@ -259,12 +263,12 @@ const RMLogbook: React.FC = () => {
                 </div>
             </div>
 
-            {/* 3. Pending (Prebooks + Unassigned) */}
+            {/* 3. Pending (Assigned + Unassigned) */}
             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Pending</span>
                 <div className="flex items-center gap-1 text-yellow-400 font-bold text-lg">
                     <Clock size={14} className="opacity-70" /> 
-                    {stats.pendingPrebooks + currentUnassignedCount}
+                    {stats.totalPending}
                 </div>
             </div>
 
@@ -272,10 +276,9 @@ const RMLogbook: React.FC = () => {
             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Avg EQ</span>
                 <div className={`font-bold text-lg ${
-                    (stats.avgEQ || 0) >= 3 ? 'text-green-400' : (stats.avgEQ || 0) >= 2 ? 'text-yellow-400' : 'text-red-400'
+                    stats.avgEQ >= 3 ? 'text-green-400' : stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
                 }`}>
-                    {/* Always display 2 decimals */}
-                    {(stats.avgEQ || 0).toFixed(2)}
+                    {stats.avgEQ.toFixed(2)}
                 </div>
             </div>
 
@@ -287,12 +290,12 @@ const RMLogbook: React.FC = () => {
                 </div>
             </div>
 
-             {/* 6. Up $ (Revenue) */}
+             {/* 6. Up $ (Upsell Revenue) */}
              <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Up $</span>
                 <div className="flex items-center gap-1 text-purple-400 font-bold text-lg">
                     <DollarSign size={14} className="opacity-70" /> 
-                    {stats.totalGross?.toFixed(2)}
+                    {stats.totalGross.toFixed(2)}
                 </div>
             </div>
 
@@ -308,8 +311,6 @@ const RMLogbook: React.FC = () => {
               workers={dailyData.workers}
               allSessions={allSessions}
               allManagers={dailyData.managers}
-              // We rely on this callback to update stats when transfers/filters happen in the UI
-              onStatsUpdate={(s: any) => setStats((prev) => ({ ...prev, ...s }))}
             />
           )}
           {activeTab === 'routes' && (
@@ -318,11 +319,6 @@ const RMLogbook: React.FC = () => {
               routes={dailyData.routes}
               bookings={dailyData.pendingBookings}
               workers={dailyData.workers}
-              onStatsUpdate={(s) => setStats((prev) => ({ 
-                  ...prev, 
-                  unassignedRoutes: s.unassignedRoutes, 
-                  unassignedBookings: s.unassignedBookings 
-              }))}
               onRefresh={() => {
                   refreshData();
               }} 
