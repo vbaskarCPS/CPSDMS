@@ -334,10 +334,11 @@ const PayoutContractor: React.FC = () => {
                     <span>Actual EQ</span>
                     <span className="font-mono text-blue-300 font-bold">{actualTotalEQ.toFixed(2)}</span>
                   </div>
+                  {/* UPDATED: Displays $ values for rates instead of % */}
                   <div className="flex justify-between items-center border-t border-gray-700 pt-2">
-                    <span title="Base + Silver + Alumni">Total Rate ({totalRate.toFixed(2)}%)</span>
+                    <span title="Base + Silver + Alumni">Total Rate (${totalRate.toFixed(2)})</span>
                     <span className="font-mono text-gray-300">
-                      {baseRate}% + {silverRate}% + {alumniRate}%
+                      ${baseRate.toFixed(2)} + ${silverRate.toFixed(2)} + ${alumniRate.toFixed(2)}
                     </span>
                   </div>
                </div>
