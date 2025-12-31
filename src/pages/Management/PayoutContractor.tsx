@@ -1,5 +1,5 @@
 // src/pages/Management/PayoutContractor.tsx
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -18,7 +18,8 @@ import {
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
 import { LogsheetSession, Worker } from '../../types';
-import { EditTransactionModal } from './EditTransactionModal'; // Ensure this file exists
+// IMPORT WITHOUT CURLY BRACES:
+import EditTransactionModal from '../../components/EditTransactionModal'; 
 
 const PayoutContractor: React.FC = () => {
   const { contractorId } = useParams();
