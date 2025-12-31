@@ -11,12 +11,12 @@ interface ContractorJobsProps {
   onRevert?: (job: MasterBooking) => void;
 }
 
-// 1. Badge Mapping Helper
+// Map the full service names (from AddContractModal) to short badge text
 const BADGE_MAP: Record<string, string> = {
-  'star_plan_pro': 'SP PRO',
-  'lawn_rejuv': 'REJUV',
-  'dethatch': 'DET',
-  'grub': 'GRUB'
+  'Star Plan Pro': 'SP PRO',
+  'Lawn Rejuvenation': 'REJUV',
+  'Dethatching': 'DET',
+  'Grub Control': 'GRUB'
 };
 
 const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStore, onRevert }) => {
@@ -41,7 +41,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                       isUpgrade: tx.type === 'Upgrade',
                       isAddOn: tx.type === 'Add-On',
                       isNewSale: tx.type === 'Sale',
-                      refId: tx.refId, // <--- CRITICAL: Pass the specific service ID
+                      items: tx.items, // <--- Capture the items array to read the service name
                       paymentBreakdown: tx.paymentBreakdown
                   } as any)
               };
@@ -73,7 +73,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                        isUpgrade: tx.type === 'Upgrade',
                        isAddOn: tx.type === 'Add-On',
                        isNewSale: tx.type === 'Sale',
-                       refId: tx.refId, // <--- CRITICAL: Pass the specific service ID
+                       items: tx.items, // <--- Capture the items array here too
                        paymentBreakdown: tx.paymentBreakdown
                    } as any)
                };
@@ -135,9 +135,12 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
       if (isPaid) {
           const extra = job as any;
           
-          // Helper to get specific label or fall back to generic
+          // Helper: Check items[0].name against our map
           const getLabel = (generic: string) => {
-             if (extra.refId && BADGE_MAP[extra.refId]) return BADGE_MAP[extra.refId];
+             if (extra.items && extra.items.length > 0) {
+                 const name = extra.items[0].name;
+                 if (BADGE_MAP[name]) return BADGE_MAP[name];
+             }
              return generic;
           };
 
