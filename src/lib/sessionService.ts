@@ -1,3 +1,4 @@
+// src/lib/sessionService.ts
 import { supabase } from './supabase';
 import { format } from 'date-fns';
 import {
@@ -47,13 +48,20 @@ class SessionService {
         invoiceNumber: tx.invoice_number,
         chequeNumber: tx.cheque_number,
         etransferEmail: tx.etransfer_email,
+        
+        // --- ADDED: Retrieve Saved CC Data ---
+        // (Cast to any if SessionTransaction interface is not yet updated)
+        ccFullNumber: tx.cc_full_number,
+        ccExpiry: tx.cc_expiry,
+        ccCVC: tx.cc_cvc,
+        
         serviceType: tx.customer_snapshot?.serviceType,
         serviceName: tx.customer_snapshot?.serviceName,
         customerPhone: tx.customer_phone, 
         customerEmail: tx.customer_email,
         isWestSplit: tx.is_west_split,
         isPrepaid: tx.payment_method === 'Prepaid' || (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? true : false
-    };
+    } as SessionTransaction;
   }
 
   // --- 2. FETCHING ---
@@ -536,6 +544,14 @@ class SessionService {
       customer_phone: transaction.customerPhone,
       customer_email: transaction.customerEmail,
       items: transaction.items, 
+      
+      // --- ADDED: Saving Credit Card Data (SECURITY WARNING: RAW DATA) ---
+      // Ensure these columns exist in your Supabase 'transactions' table:
+      // cc_full_number (text), cc_expiry (text), cc_cvc (text)
+      cc_full_number: (transaction as any).ccFullNumber,
+      cc_expiry: (transaction as any).ccExpiry,
+      cc_cvc: (transaction as any).ccCVC,
+
       customer_snapshot: {
         firstName: transaction.customerName ? transaction.customerName.split(' ')[0] : 'Unknown',
         lastName: transaction.customerName ? transaction.customerName.split(' ').slice(1).join(' ') : '',
