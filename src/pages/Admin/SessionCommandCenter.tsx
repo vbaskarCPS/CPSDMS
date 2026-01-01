@@ -36,7 +36,7 @@ const SessionCommandCenter: React.FC = () => {
 
   // --- PAYOUT STATE ---
   const [payoutSearch, setPayoutSearch] = useState('');
-  const [payoutSort, setPayoutSort] = useState<SortOption>('steps');
+  const [payoutSort, setPayoutSort] = useState<SortOption>('standard');
 
   // Load active session on mount
   useEffect(() => {
@@ -146,18 +146,16 @@ const SessionCommandCenter: React.FC = () => {
   }, [previewData, currentSession]);
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-6">
+    <div className="min-h-screen bg-gray-900 text-white p-4">
       <div className="max-w-6xl mx-auto">
         
-        {/* HEADER & TABS */}
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-3xl font-bold text-white flex items-center gap-2">
-              <Users className="text-cps-blue" /> Session Command Center
-            </h1>
-            <p className="text-gray-400 mt-1">
-              {currentSession ? `Active Session: ${currentSession.date}` : "No Active Session"}
-            </p>
+        {/* MINIMAL HEADER WITH TABS */}
+        <div className="flex justify-between items-center mb-4">
+          <div className="flex items-center gap-3">
+            <Users className="text-cps-blue" size={20} />
+            <span className="text-sm text-gray-400">
+              {currentSession ? `Active: ${currentSession.date}` : "No Active Session"}
+            </span>
           </div>
           
           <div className="bg-gray-800 rounded-lg p-1 flex border border-gray-700">
@@ -327,48 +325,50 @@ const SessionCommandCenter: React.FC = () => {
 
         {/* --- VIEW 2: PAYOUT TODAY --- */}
         {activeTab === 'payout' && (
-          <div className="space-y-6 animate-fade-in">
-            <div className="flex flex-col sm:flex-row gap-4 justify-between bg-gray-800 p-4 rounded-lg border border-gray-700">
+          <div className="space-y-4 animate-fade-in">
+            {/* Search & Sort Controls */}
+            <div className="flex flex-col sm:flex-row gap-3 bg-gray-800 p-3 rounded-lg border border-gray-700">
               <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                 <input
                   type="text"
                   placeholder="Search workers..."
                   value={payoutSearch}
                   onChange={(e) => setPayoutSearch(e.target.value)}
-                  className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 pl-10 pr-4 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none"
+                  className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 pl-9 pr-4 text-sm text-white focus:ring-2 focus:ring-cps-blue focus:outline-none"
                 />
               </div>
-              <div className="flex items-center gap-2 min-w-[200px]">
-                <Filter className="text-gray-500" size={18} />
+              <div className="flex items-center gap-2 min-w-[180px]">
+                <Filter className="text-gray-500" size={16} />
                 <select
                   value={payoutSort}
                   onChange={(e) => setPayoutSort(e.target.value as SortOption)}
-                  className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none"
+                  className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-sm text-white focus:ring-2 focus:ring-cps-blue focus:outline-none"
                 >
+                  <option value="standard">Standard (by RM)</option>
+                  <option value="alpha">Alphabetical</option>
                   <option value="steps">Sort by Steps</option>
                   <option value="gross">Sort by Gross</option>
                   <option value="upsell">Sort by Upsells</option>
                   <option value="equiv">Sort by EQ</option>
                   <option value="commission">Sort by Payout</option>
-                  <option value="alpha">Alphabetical</option>
                 </select>
               </div>
             </div>
 
-            <div className="bg-gray-800 rounded-xl p-6 border border-gray-700 min-h-[500px] flex flex-col">
-              <h3 className="text-lg font-bold text-white mb-4">
-                Worker Payouts
-              </h3>
+            {/* PayoutToday Component */}
+            <div className="bg-gray-800 rounded-xl border border-gray-700 min-h-[500px] flex flex-col overflow-hidden">
               {currentSession ? (
                 <PayoutToday
                   consoleProfileId={1}
                   date={currentSession.date}
                   sortOption={payoutSort}
                   searchTerm={payoutSearch}
+                  managers={currentSession.managers}
+                  workers={currentSession.workers}
                 />
               ) : (
-                <div className="flex flex-col items-center justify-center flex-1 text-gray-500">
+                <div className="flex flex-col items-center justify-center flex-1 text-gray-500 p-10">
                   <AlertCircle size={48} className="mb-2 opacity-20" />
                   <p>No active session found.</p>
                   <p className="text-sm">

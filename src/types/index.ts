@@ -196,4 +196,4 @@ export interface SessionTransaction {
   paymentBreakdown?: Record<string, number>;
 }
 
-export type SortOption = 'alpha' | 'steps' | 'gross' | 'equiv' | 'upsell' | 'commission';
+export type SortOption = 'standard' | 'alpha' | 'steps' | 'gross' | 'equiv' | 'upsell' | 'commission';
