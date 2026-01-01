@@ -101,25 +101,38 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
 
   // --- Handlers ---
   const handleJobClick = async (job: MasterBooking) => {
-      // Only clickable if it's a completed job
+      // 1. Validate Job status
       const isPaid = job.Completed === 'x' || job.Status === 'completed';
+      
+      // DEBUG: Log click event
+      console.log(`Job Clicked: ${job['First Name']} ${job['Last Name']} (ID: ${job['Booking ID']}) - Paid: ${isPaid}`);
+
       if (!isPaid) return;
 
       const jobId = job['Booking ID'];
+      if (!jobId) {
+          console.error("Critical Error: Job missing Booking ID", job);
+          return;
+      }
+
       setLoadingId(jobId);
 
       try {
-          // 1. Fetch strictly from DB (bypass local store)
+          // 2. Fetch Transaction
+          console.log(`Fetching transaction details for Job ID: ${jobId}`);
           const tx = await sessionService.getTransactionByJobId(jobId);
           
+          // 3. Open Modal
           if (tx) {
+              console.log("Transaction found, opening modal:", tx);
               setEditingTransaction(tx);
           } else {
+              console.warn(`No transaction record found in DB for Job ID: ${jobId}`);
               alert("Transaction record not found in database (it might have been deleted or not synced).");
           }
       } catch (err) {
           console.error("Error fetching transaction:", err);
-          alert("Failed to load transaction details.");
+          alert("Failed to load transaction details. Please check your connection.");
       } finally {
           setLoadingId(null);
       }
@@ -267,6 +280,8 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                 onClose={() => setEditingTransaction(null)}
                 onUpdate={() => {
                     setEditingTransaction(null);
+                    // Optionally trigger a refresh here if you have a refresh prop
+                    // e.g., if props.onRefresh() exists
                 }}
             />
         )}
