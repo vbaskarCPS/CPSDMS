@@ -1,6 +1,6 @@
 // src/components/EditTransactionModal.tsx
 import React, { useState, useEffect } from 'react';
-import { X, Trash2, Save, DollarSign, User, MapPin, Phone, Mail, Tag, AlertCircle } from 'lucide-react';
+import { X, Trash2, Save, DollarSign, User, MapPin, Phone, Mail, AlertCircle } from 'lucide-react'; // Removed Tag icon import as it's no longer used
 import { sessionService } from '../lib/sessionService';
 
 // Flexible interface to handle both SessionTransaction and the PayoutContractor data
@@ -93,7 +93,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
           price: parseFloat(formData.price) || 0,
           displayPrice: formData.displayPrice,
           paymentMethod: formData.paymentMethod,
-          item_name: formData.itemName, // Important for Badges
+          item_name: formData.itemName, // We keep the value in state to preserve it, even if removed from UI
           type: formData.type,
           paymentBreakdown: formData.paymentBreakdown
       };
@@ -235,23 +235,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
             {/* 2. Transaction Details */}
             <div className="border-t border-gray-800 pt-4 space-y-4">
                 
-                {/* Item Name (Crucial for Badges) */}
-                <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Item / Service Name</label>
-                    <div className="relative">
-                        <Tag className="absolute left-3 top-2.5 text-gray-500" size={14} />
-                        <input 
-                            type="text"
-                            value={formData.itemName}
-                            onChange={(e) => handleChange('itemName', e.target.value)}
-                            className="w-full bg-gray-800 border border-gray-600 rounded p-2 pl-9 text-sm text-white focus:border-blue-500 outline-none"
-                            placeholder="e.g. SP Pro, Rejuv, Det"
-                        />
-                    </div>
-                    <p className="text-[10px] text-gray-500 mt-1">
-                        * Use keywords <strong>SP Pro, Rejuv, Det, Grub</strong> to auto-apply badges.
-                    </p>
-                </div>
+                {/* Item Name / Service Name Removed as requested */}
 
                 <div className="grid grid-cols-2 gap-4">
                     <div>
