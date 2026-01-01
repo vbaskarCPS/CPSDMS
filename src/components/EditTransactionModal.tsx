@@ -27,15 +27,15 @@ interface TransactionData {
 }
 
 interface EditTransactionModalProps {
-  transaction: TransactionData;
-  isOpen: boolean; // Added for compatibility with PayoutContractor
+  transaction: TransactionData | null; // Allow null for safer typing
+  isOpen?: boolean; // Made optional so it defaults to true if not passed
   onClose: () => void;
   onUpdate?: () => void; // Optional trigger refresh
 }
 
 const EditTransactionModal: React.FC<EditTransactionModalProps> = ({ 
   transaction, 
-  isOpen, 
+  isOpen = true, // Default to true. If the component is rendered, we assume it should be open.
   onClose, 
   onUpdate 
 }) => {
@@ -80,6 +80,8 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
   };
 
   const handleSave = async () => {
+    if (!transaction) return; // Safety check
+
     setIsSaving(true);
     try {
       const updates = {
@@ -110,6 +112,8 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
   };
 
   const handleRevert = async () => {
+      if (!transaction) return; // Safety check
+
       if (!confirm("Are you sure you want to revert this transaction? This will delete the record and reset the booking to pending (if applicable).")) return;
       
       setIsDeleting(true);
@@ -133,7 +137,8 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
       }
   };
 
-  if (!isOpen) return null;
+  // If not open OR if transaction is missing, do not render
+  if (!isOpen || !transaction) return null;
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm animate-in fade-in duration-200">
