@@ -1,6 +1,6 @@
 // src/components/AddContractModal.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus } from 'lucide-react';
+import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader } from 'lucide-react';
 import { getStorageItem } from '../lib/localStorage';
 import { MasterBooking, Worker, SessionTransaction } from '../types';
 import { sessionService } from '../lib/sessionService';
@@ -65,6 +65,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   const [ccData, setCcData] = useState<{ number: string, expiry: string, cvc: string } | null>(null);
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
+
+  // Saving State (prevents double-click)
+  const [saving, setSaving] = useState(false);
 
   // Territory Helpers
   const [streetName, setStreetName] = useState('');
@@ -159,9 +162,13 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
 
   const handleSubmit = async () => {
     if (!selectedRecipe || !worker) return;
+    if (saving) return; // Prevent double-click
+    
     setError(null);
     if (paymentInfo.method === 'Credit Card' && !isCreditPaid) { setError("Please process card first."); return; }
     if (!paymentInfo.amount) { setError("Enter amount."); return; }
+
+    setSaving(true);
 
     try {
       const isUpgrade = selectedRecipe.type === 'Upgrade';
@@ -279,6 +286,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
     } catch (err) {
       console.error(err);
       setError("Failed to process sale.");
+      setSaving(false);
     }
   };
 
@@ -288,13 +296,13 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
         <div className="p-4 border-b border-gray-700 flex justify-between items-center">
           <div className="flex items-center gap-2">
             {step !== 'SELECT_CONTRACT' && (
-              <button onClick={() => setStep(step === 'ENTER_DETAILS' ? 'SELECT_CLIENT' : 'SELECT_CONTRACT')} className="p-1 hover:bg-gray-800 rounded-full transition-colors">
+              <button onClick={() => setStep(step === 'ENTER_DETAILS' ? 'SELECT_CLIENT' : 'SELECT_CONTRACT')} className="p-1 hover:bg-gray-800 rounded-full transition-colors" disabled={saving}>
                 <ArrowLeft className="text-gray-400" />
               </button>
             )}
             <h2 className="text-xl font-bold text-white">{step === 'SELECT_CONTRACT' ? 'Select Contract' : selectedRecipe?.name}</h2>
           </div>
-          <button onClick={onClose} className="p-1 hover:bg-gray-800 rounded-full"><X className="text-gray-400" /></button>
+          <button onClick={onClose} className="p-1 hover:bg-gray-800 rounded-full" disabled={saving}><X className="text-gray-400" /></button>
         </div>
 
         {error && <div className="bg-red-900/30 border-l-4 border-red-500 p-3 mx-4 mt-4 text-red-200 text-sm flex items-center gap-2"><AlertCircle size={16}/>{error}</div>}
@@ -441,8 +449,20 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
 
         {step === 'ENTER_DETAILS' && (
            <div className="p-4 border-t border-gray-700 flex justify-end">
-              <button onClick={handleSubmit} className="bg-cps-green hover:bg-green-600 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition-all flex items-center gap-2">
-                <Check size={18} /> Complete Sale
+              <button 
+                onClick={handleSubmit} 
+                disabled={saving}
+                className="bg-cps-green hover:bg-green-600 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {saving ? (
+                  <>
+                    <Loader size={18} className="animate-spin" /> Processing...
+                  </>
+                ) : (
+                  <>
+                    <Check size={18} /> Complete Sale
+                  </>
+                )}
               </button>
            </div>
         )}

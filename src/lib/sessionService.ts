@@ -594,19 +594,26 @@ class SessionService {
 
       Object.entries(paymentMap).forEach(([method, amount]) => {
         const val = Number(amount) || 0;
+        
+        // --- IOS FIX: Skip adding IOS payments to any dollar bucket ---
+        // IOS only contributes to iosCount (already incremented above)
+        if (method === 'IOS') {
+          return; // Skip this iteration entirely
+        }
+        
         const addToBucket = (val: number, isProd: boolean) => {
           if (isProd) {
             if ((tx.type === 'Production') && (tx.displayPrice?.startsWith('RJ') || tx.displayPrice?.startsWith('SP'))) {
               stats.prodFlats += val;
             } else if (method.includes('Prepaid')) stats.prodPrepaid += val;
-            else if (method.includes('Billed') || method === 'IOS') stats.prodBilled += val;
+            else if (method.includes('Billed')) stats.prodBilled += val;
             else if (method.includes('Cash')) stats.prodCash += val;
             else if (method.includes('Cheque')) stats.prodCheque += val;
             else if (method.includes('E-Transfer')) stats.prodETransfer += val;
             else if (method.includes('Credit Card')) stats.prodCreditCard += val;
           } else {
             if (method.includes('Prepaid')) stats.upsellPrepaid += val;
-            else if (method.includes('Billed') || method === 'IOS') stats.upsellBilled += val;
+            else if (method.includes('Billed')) stats.upsellBilled += val;
             else if (method.includes('Cash')) stats.upsellCash += val;
             else if (method.includes('Cheque')) stats.upsellCheque += val;
             else if (method.includes('E-Transfer')) stats.upsellETransfer += val;
