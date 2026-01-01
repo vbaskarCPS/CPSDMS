@@ -1,12 +1,73 @@
 // src/pages/Logsheet/components/LogsheetJobCard.tsx
 import React from 'react';
-import { MapPin, ChevronRight, Check, FileText, Phone, Mail, AlertCircle } from 'lucide-react';
+import { MapPin, ChevronRight, Check, FileText, Phone, Mail } from 'lucide-react';
 import { MasterBooking } from '../../../types';
 
 interface LogsheetJobCardProps {
   job: MasterBooking;
   onClick: () => void;
 }
+
+// Helper: Format price to always show 2 decimal places while preserving prefixes
+const formatPrice = (rawPrice: string | number | undefined): string => {
+  if (!rawPrice) return '$0.00';
+  
+  const priceStr = String(rawPrice).trim();
+  
+  // Extract prefix (letters at the start) and numeric portion
+  const prefixMatch = priceStr.match(/^([A-Za-z]+)/);
+  const prefix = prefixMatch ? prefixMatch[1] : '';
+  
+  // Extract numeric portion (everything after prefix)
+  const numericPortion = priceStr.replace(/^[A-Za-z]+/, '').replace(/[^0-9.]/g, '');
+  const numValue = parseFloat(numericPortion) || 0;
+  
+  // Format with 2 decimal places
+  const formatted = numValue.toFixed(2);
+  
+  // If there was a prefix (like RJ, SP), return with prefix
+  if (prefix) {
+    return `${prefix}${formatted}`;
+  }
+  
+  // Otherwise return with dollar sign
+  return `$${formatted}`;
+};
+
+// Helper: Format payment breakdown for display
+const formatPaymentDisplay = (job: MasterBooking): string => {
+  const breakdown = (job as any).paymentBreakdown as Record<string, number> | undefined;
+  const simpleMethod = job['Payment Method'] as string | undefined;
+  
+  // If we have a breakdown object with entries
+  if (breakdown && typeof breakdown === 'object' && Object.keys(breakdown).length > 0) {
+    const entries = Object.entries(breakdown);
+    
+    // Single payment method in breakdown
+    if (entries.length === 1) {
+      return entries[0][0]; // Just return the method name
+    }
+    
+    // Multiple payment methods - show compact breakdown
+    return entries
+      .map(([method, amount]) => {
+        // Shorten method names for compactness
+        const shortMethod = method
+          .replace('Credit Card', 'CC')
+          .replace('E-Transfer', 'E-Tr')
+          .replace('Prepaid', 'PP');
+        return `${shortMethod}: $${Number(amount).toFixed(0)}`;
+      })
+      .join(', ');
+  }
+  
+  // Fall back to simple payment method
+  if (simpleMethod) {
+    return simpleMethod;
+  }
+  
+  return 'Paid';
+};
 
 const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   const isCompleted = job.Completed === 'x';
@@ -21,9 +82,6 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   // Upsell Info
   const isContract = (job as any).isContract;
   const contractTitle = (job as any)['Contract Title'];
-  
-  // Breakdown Data
-  const breakdown = (job as any)['Payment Breakdown'];
   
   // --- COLOR LOGIC ---
   let borderColor = 'border-gray-700';
@@ -46,6 +104,12 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   }
 
   const displayNotes = isContract && contractTitle ? contractTitle : notes;
+  
+  // Format the price
+  const formattedPrice = formatPrice(job.Price);
+  
+  // Format payment info for completed jobs
+  const paymentDisplay = isCompleted ? formatPaymentDisplay(job) : '';
 
   return (
     <div 
@@ -81,20 +145,21 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
         
         <div className="flex flex-col items-end">
             <div className="flex items-center gap-1">
-               {isPrepaid && !breakdown && <span className="text-[9px] bg-green-900/30 text-green-400 px-1.5 py-0.5 rounded border border-green-800 font-bold">PP</span>}
-               <span className={`font-mono font-bold text-lg ${isCompleted ? 'text-gray-300' : (isPrepaid ? 'text-green-300' : 'text-white')}`}>{job.Price}</span>
+               {isPrepaid && !isCompleted && <span className="text-[9px] bg-green-900/30 text-green-400 px-1.5 py-0.5 rounded border border-green-800 font-bold">PP</span>}
+               <span className={`font-mono font-bold text-lg ${isCompleted ? 'text-gray-300' : (isPrepaid ? 'text-green-300' : 'text-white')}`}>
+                 {formattedPrice}
+               </span>
             </div>
-            {/* DISPLAY BREAKDOWN if available */}
-            {breakdown && (
-                <div className="text-[9px] text-gray-400 font-mono text-right leading-tight">
-                    {Object.entries(breakdown).map(([k, v]) => (
-                        <div key={k}>{k}: ${Number(v).toFixed(0)}</div>
-                    ))}
-                </div>
-            )}
         </div>
         
-        {isCompleted ? <div className="flex items-center gap-1 text-green-500 text-xs font-bold mt-1"><Check size={14} strokeWidth={3} /> DONE</div> : <ChevronRight size={16} className="text-gray-500 mt-1" />}
+        {isCompleted ? (
+          <div className="flex items-center gap-1 text-green-500 text-xs font-bold mt-1">
+            <Check size={14} strokeWidth={3} /> 
+            <span className="text-[10px] text-green-400 max-w-[100px] truncate">{paymentDisplay}</span>
+          </div>
+        ) : (
+          <ChevronRight size={16} className="text-gray-500 mt-1" />
+        )}
       </div>
     </div>
   );
