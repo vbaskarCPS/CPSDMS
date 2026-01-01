@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  CheckCircle,
   AlertCircle,
   ChevronRight,
   Loader,
@@ -14,8 +13,10 @@ import {
   CreditCard,
   Receipt,
   Wallet,
+  Trophy,
+  Plus,
 } from 'lucide-react';
-import { Worker, SortOption, ManagementUser, LogsheetSession } from '../../types';
+import { Worker, SortOption, ManagementUser, LogsheetSession, Bonus } from '../../types';
 import { sessionService } from '../../lib/sessionService';
 
 interface PayoutTodayProps {
@@ -55,6 +56,13 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const [items, setItems] = useState<
     { worker: Worker; session: LogsheetSession }[]
   >([]);
+
+  // Bonus Modal State
+  const [showBonusModal, setShowBonusModal] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedWorkerName, setSelectedWorkerName] = useState<string>('');
+  const [bonusAmount, setBonusAmount] = useState('');
+  const [bonusType, setBonusType] = useState('Performance');
 
   const loadData = async () => {
     setLoading(true);
@@ -221,6 +229,48 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     });
   }, [sortedItems, sortOption, managers]);
 
+  // --- BONUS HANDLERS ---
+  const handleOpenBonusModal = (sessionId: string, workerName: string) => {
+    setSelectedSessionId(sessionId);
+    setSelectedWorkerName(workerName);
+    setBonusAmount('');
+    setBonusType('Performance');
+    setShowBonusModal(true);
+  };
+
+  const handleAddBonus = async () => {
+    if (!selectedSessionId || !bonusAmount) return;
+
+    const item = items.find((i) => i.session.id === selectedSessionId);
+    if (!item) return;
+
+    const amt = parseFloat(bonusAmount);
+    if (isNaN(amt) || amt <= 0) return;
+
+    const newBonus: Bonus = { id: Date.now(), type: bonusType, amount: amt };
+
+    const updatedBonuses = [...(item.session.bonuses || []), newBonus];
+
+    const currentPay = item.session.validation?.finalCommission || 0;
+    const newPay = currentPay + amt;
+
+    const updatedValidation = item.session.validation
+      ? {
+          ...item.session.validation,
+          finalCommission: newPay,
+        }
+      : undefined;
+
+    await sessionService.updateLogsheetSession(item.session.id, {
+      bonuses: updatedBonuses,
+      validation: updatedValidation,
+    });
+
+    setShowBonusModal(false);
+    setBonusAmount('');
+    loadData();
+  };
+
   if (loading)
     return (
       <div className="p-10 text-center flex-1 flex items-center justify-center">
@@ -234,12 +284,12 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     const isValidated = session.validation?.isValidated || false;
     const payAmount = session.validation?.finalCommission ?? 0;
     const eq = isValidated ? (session.validation?.actualTotalEQ || 0) : session.stats.totalEQ;
+    const bonusTotal = (session.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
 
     return (
       <div
         key={session.id}
-        onClick={() => navigate(`/admin/payout/${worker.contractorId}?date=${date}`)}
-        className="bg-gray-800 border border-gray-700 py-1.5 px-2 rounded flex items-center gap-2 hover:bg-gray-750 hover:border-gray-600 transition-colors cursor-pointer group text-xs"
+        className="bg-gray-800 border border-gray-700 py-1.5 px-2 rounded flex items-center gap-2 hover:bg-gray-750 hover:border-gray-600 transition-colors group text-xs"
       >
         {/* Status Indicator */}
         <div
@@ -248,8 +298,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           }`}
         />
 
-        {/* Name */}
-        <div className="font-bold text-gray-200 min-w-[120px] truncate">
+        {/* Name - Clickable */}
+        <div 
+          onClick={() => navigate(`/admin/payout/${worker.contractorId}?date=${date}`)}
+          className="font-bold text-gray-200 min-w-[120px] truncate cursor-pointer hover:text-white"
+        >
           {worker.firstName} {worker.lastName}
         </div>
 
@@ -284,7 +337,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           </div>
           <div className="text-center min-w-[50px]">
             <span className="text-[9px] text-gray-600 uppercase block leading-none">Upsell</span>
-            <span className="font-bold text-white">${session.stats.upsellGross.toFixed(0)}</span>
+            <span className="font-bold text-white">${session.stats.upsellGross.toFixed(2)}</span>
           </div>
           <div className="text-center min-w-[40px]">
             <span className="text-[9px] text-gray-600 uppercase block leading-none">EQ</span>
@@ -302,10 +355,36 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           </div>
         </div>
 
+        {/* Bonus Button (Only for Validated) */}
+        {isValidated && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleOpenBonusModal(session.id, `${worker.firstName} ${worker.lastName}`);
+            }}
+            className={`ml-2 px-2 py-1 rounded text-[9px] font-bold flex items-center gap-1 transition-colors ${
+              bonusTotal > 0 
+                ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-700 hover:bg-yellow-900/50' 
+                : 'bg-blue-900/30 text-blue-400 border border-blue-800 hover:bg-blue-900/50'
+            }`}
+          >
+            {bonusTotal > 0 ? (
+              <>
+                <Trophy size={10} /> +${bonusTotal.toFixed(0)}
+              </>
+            ) : (
+              <>
+                <Plus size={10} /> Bonus
+              </>
+            )}
+          </button>
+        )}
+
         {/* Arrow */}
         <ChevronRight
           size={14}
-          className="text-gray-600 group-hover:text-white transition-colors flex-shrink-0"
+          onClick={() => navigate(`/admin/payout/${worker.contractorId}?date=${date}`)}
+          className="text-gray-600 group-hover:text-white transition-colors flex-shrink-0 cursor-pointer"
         />
       </div>
     );
@@ -336,7 +415,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
               <DollarSign size={10} />
               <span className="text-[9px] uppercase font-bold">Prod Gross</span>
             </div>
-            <div className="text-lg font-bold text-green-400">${aggregatedStats.prodGross.toFixed(0)}</div>
+            <div className="text-lg font-bold text-green-400">${aggregatedStats.prodGross.toFixed(2)}</div>
           </div>
           <div className="bg-gray-800 p-2 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
@@ -359,7 +438,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <span className="text-[9px] uppercase font-bold">Up Gross</span>
             </div>
-            <div className="text-lg font-bold text-purple-300">${aggregatedStats.upsellGross.toFixed(0)}</div>
+            <div className="text-lg font-bold text-purple-300">${aggregatedStats.upsellGross.toFixed(2)}</div>
           </div>
         </div>
 
@@ -370,40 +449,40 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
               <Banknote size={9} />
               <span className="text-[8px] uppercase font-bold">Cash</span>
             </div>
-            <div className="text-sm font-bold text-green-300 font-mono">${aggregatedStats.totalCash.toFixed(0)}</div>
+            <div className="text-sm font-bold text-green-300 font-mono">${aggregatedStats.totalCash.toFixed(2)}</div>
           </div>
           <div className="bg-gray-800/80 p-1.5 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <Receipt size={9} />
               <span className="text-[8px] uppercase font-bold">Cheque</span>
             </div>
-            <div className="text-sm font-bold text-blue-300 font-mono">${aggregatedStats.totalCheque.toFixed(0)}</div>
+            <div className="text-sm font-bold text-blue-300 font-mono">${aggregatedStats.totalCheque.toFixed(2)}</div>
           </div>
           <div className="bg-gray-800/80 p-1.5 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <span className="text-[8px] uppercase font-bold">E-Trans</span>
             </div>
-            <div className="text-sm font-bold text-cyan-300 font-mono">${aggregatedStats.totalETransfer.toFixed(0)}</div>
+            <div className="text-sm font-bold text-cyan-300 font-mono">${aggregatedStats.totalETransfer.toFixed(2)}</div>
           </div>
           <div className="bg-gray-800/80 p-1.5 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <CreditCard size={9} />
               <span className="text-[8px] uppercase font-bold">CC</span>
             </div>
-            <div className="text-sm font-bold text-orange-300 font-mono">${aggregatedStats.totalCreditCard.toFixed(0)}</div>
+            <div className="text-sm font-bold text-orange-300 font-mono">${aggregatedStats.totalCreditCard.toFixed(2)}</div>
           </div>
           <div className="bg-gray-800/80 p-1.5 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <Wallet size={9} />
               <span className="text-[8px] uppercase font-bold">Prepaid</span>
             </div>
-            <div className="text-sm font-bold text-indigo-300 font-mono">${aggregatedStats.totalPrepaid.toFixed(0)}</div>
+            <div className="text-sm font-bold text-indigo-300 font-mono">${aggregatedStats.totalPrepaid.toFixed(2)}</div>
           </div>
           <div className="bg-gray-800/80 p-1.5 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <span className="text-[8px] uppercase font-bold">Billed</span>
             </div>
-            <div className="text-sm font-bold text-gray-400 font-mono">${aggregatedStats.totalBilled.toFixed(0)}</div>
+            <div className="text-sm font-bold text-gray-400 font-mono">${aggregatedStats.totalBilled.toFixed(2)}</div>
           </div>
         </div>
       </div>
@@ -438,6 +517,68 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         {/* Other Sorts: Flat List */}
         {sortOption !== 'standard' && sortedItems.map(renderWorkerRow)}
       </div>
+
+      {/* --- BONUS MODAL --- */}
+      {showBonusModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 animate-fade-in">
+          <div className="bg-gray-800 p-6 rounded-lg shadow-xl max-w-sm w-full border border-gray-700">
+            <h3 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
+              <Trophy size={20} className="text-yellow-400" /> Add Bonus
+            </h3>
+            <p className="text-sm text-gray-400 mb-4">{selectedWorkerName}</p>
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">
+                  Amount ($)
+                </label>
+                <div className="relative">
+                  <DollarSign
+                    size={14}
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
+                  />
+                  <input
+                    type="number"
+                    value={bonusAmount}
+                    onChange={(e) => setBonusAmount(e.target.value)}
+                    className="w-full bg-gray-900 border border-gray-600 rounded p-2 pl-8 text-white focus:ring-2 focus:ring-green-500 outline-none"
+                    placeholder="0.00"
+                    autoFocus
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Type</label>
+                <select
+                  value={bonusType}
+                  onChange={(e) => setBonusType(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white focus:ring-2 focus:ring-green-500 outline-none"
+                >
+                  <option>Performance</option>
+                  <option>Rookie of Day</option>
+                  <option>Top Sales</option>
+                  <option>Top EQ</option>
+                  <option>Other</option>
+                </select>
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => setShowBonusModal(false)}
+                  className="flex-1 py-2 text-gray-400 hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleAddBonus}
+                  disabled={!bonusAmount || parseFloat(bonusAmount) <= 0}
+                  className="flex-1 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded font-bold shadow-lg transition-all"
+                >
+                  Add Bonus
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
