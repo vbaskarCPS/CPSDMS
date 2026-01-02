@@ -9,6 +9,12 @@ import { sessionService } from '../../lib/sessionService';
 import { getStorageItem } from '../../lib/localStorage';
 import { Worker, MasterBooking, SessionTransaction } from '../../types';
 import CreditCardModal from '../../components/CreditCardModal';
+import { 
+  formatPhoneNumber, 
+  normalizeEmail,
+  getPhoneValidationError, 
+  getEmailValidationError 
+} from '../../lib/validationUtils';
 
 // --- HELPER: Generate Valid UUIDs ---
 function generateUUID() {
@@ -55,6 +61,36 @@ const JobDetail: React.FC = () => {
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
+
+  // Validation Errors
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [etransferEmailError, setEtransferEmailError] = useState<string | null>(null);
+
+  // --- HANDLERS FOR PHONE & EMAIL ---
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatPhoneNumber(e.target.value);
+    setPhone(formatted);
+    setPhoneError(null);
+  };
+
+  const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setEmail(e.target.value);
+    setEmailError(null);
+  };
+
+  const handleEmailBlur = () => {
+    if (email) setEmail(normalizeEmail(email));
+  };
+
+  const handleEtransferEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setEtransferEmail(e.target.value);
+    setEtransferEmailError(null);
+  };
+
+  const handleEtransferEmailBlur = () => {
+    if (etransferEmail) setEtransferEmail(normalizeEmail(etransferEmail));
+  };
 
   // --- INITIALIZATION ---
   useEffect(() => {
@@ -112,8 +148,8 @@ const JobDetail: React.FC = () => {
     setLastName(job['Last Name'] || '');
     setHouseNumber(hNum);
     setStreetName(sName);
-    setPhone(job['Home Phone'] || job['Cell Phone'] || '');
-    setEmail(job['Email Address'] || '');
+    setPhone(formatPhoneNumber(job['Home Phone'] || job['Cell Phone'] || ''));
+    setEmail(normalizeEmail(job['Email Address'] || ''));
     setRouteNumber(job['Route Number'] || '');
     setOfficeNotes(job['Log Sheet Notes'] || '');
     setPrice(job.Price || '0.00');
@@ -125,7 +161,7 @@ const JobDetail: React.FC = () => {
     // Restore payment details if available
     if ((job as any).invoiceNumber) setInvoiceNumber((job as any).invoiceNumber);
     if ((job as any).chequeNumber) setChequeNumber((job as any).chequeNumber);
-    if ((job as any).etransferEmail) setEtransferEmail((job as any).etransferEmail);
+    if ((job as any).etransferEmail) setEtransferEmail(normalizeEmail((job as any).etransferEmail));
   };
 
   const isPrepaid = originalJob?.Prepaid === 'x';
@@ -140,6 +176,19 @@ const JobDetail: React.FC = () => {
 
   const handleSave = async () => {
     if (!worker || !originalJob) return;
+
+    // --- VALIDATION ---
+    const pError = getPhoneValidationError(phone);
+    const eError = getEmailValidationError(email);
+    const etError = paymentMethod === 'E-Transfer' ? getEmailValidationError(etransferEmail) : null;
+
+    if (pError || eError || etError) {
+      setPhoneError(pError);
+      setEmailError(eError);
+      setEtransferEmailError(etError);
+      return;
+    }
+
     setLoading(true);
 
     const rawPrice = (price || '').toString().trim().toUpperCase();
@@ -262,8 +311,41 @@ const JobDetail: React.FC = () => {
                       <div className="col-span-3"><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Street Name</label><input value={streetName} onChange={e => setStreetName(e.target.value)} disabled={isReadOnly} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" /></div>
                   </div>
                   <div className="grid grid-cols-2 gap-3 md:col-span-3">
-                      <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Phone</label><div className="relative"><Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/><input value={phone} onChange={e => setPhone(e.target.value)} disabled={isReadOnly} className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-9 text-white" /></div></div>
-                      <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Email</label><div className="relative"><Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/><input value={email} onChange={e => setEmail(e.target.value)} disabled={isReadOnly} className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-9 text-white" /></div></div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Phone</label>
+                        <div className="relative">
+                          <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                          <input 
+                            value={phone} 
+                            onChange={handlePhoneChange}
+                            disabled={isReadOnly} 
+                            placeholder="000 000 0000"
+                            maxLength={12}
+                            className={`w-full bg-gray-800 border rounded p-2 pl-9 text-white ${
+                              phoneError ? 'border-red-500' : 'border-gray-700'
+                            }`}
+                          />
+                        </div>
+                        {phoneError && <p className="text-red-400 text-[10px] mt-1">{phoneError}</p>}
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Email</label>
+                        <div className="relative">
+                          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                          <input 
+                            type="email"
+                            value={email} 
+                            onChange={handleEmailChange}
+                            onBlur={handleEmailBlur}
+                            disabled={isReadOnly} 
+                            placeholder="client@example.com"
+                            className={`w-full bg-gray-800 border rounded p-2 pl-9 text-white ${
+                              emailError ? 'border-red-500' : 'border-gray-700'
+                            }`}
+                          />
+                        </div>
+                        {emailError && <p className="text-red-400 text-[10px] mt-1">{emailError}</p>}
+                      </div>
                   </div>
               </div>
            </div>
@@ -314,7 +396,20 @@ const JobDetail: React.FC = () => {
                       <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Invoice #</label><input value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" placeholder="INV-..." /></div>
                   )}
                   {paymentMethod === 'E-Transfer' && !isReadOnly && (
-                      <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Bank Email</label><input type="email" value={etransferEmail} onChange={e => setEtransferEmail(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" placeholder="client@bank.com" /></div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Bank Email</label>
+                        <input 
+                          type="email" 
+                          value={etransferEmail} 
+                          onChange={handleEtransferEmailChange}
+                          onBlur={handleEtransferEmailBlur}
+                          className={`w-full bg-gray-800 border rounded p-2 text-white ${
+                            etransferEmailError ? 'border-red-500' : 'border-gray-700'
+                          }`}
+                          placeholder="client@bank.com" 
+                        />
+                        {etransferEmailError && <p className="text-red-400 text-[10px] mt-1">{etransferEmailError}</p>}
+                      </div>
                   )}
                   {paymentMethod === 'Cheque' && !isReadOnly && (
                       <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cheque #</label><input value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" placeholder="#001" /></div>

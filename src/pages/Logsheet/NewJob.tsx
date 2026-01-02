@@ -1,11 +1,17 @@
 // src/pages/Logsheet/NewJob.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, Save, AlertCircle, RefreshCw, CheckCircle, CreditCard, Mail, DollarSign } from 'lucide-react';
-import { getStorageItem, STORAGE_KEYS } from '../../lib/localStorage';
+import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail } from 'lucide-react';
+import { getStorageItem } from '../../lib/localStorage';
 import { Worker, SessionTransaction } from '../../types';
 import { sessionService } from '../../lib/sessionService'; 
 import CreditCardModal from '../../components/CreditCardModal';
+import { 
+  formatPhoneNumber, 
+  normalizeEmail,
+  getPhoneValidationError, 
+  getEmailValidationError 
+} from '../../lib/validationUtils';
 
 // --- HELPER: Generate Valid UUIDs ---
 // Required for Supabase 'uuid' columns to prevent 500 Errors
@@ -49,6 +55,36 @@ const NewJob: React.FC = () => {
   const [assignedRoutes, setAssignedRoutes] = useState<string[]>([]);
   const [suggestedStreets, setSuggestedStreets] = useState<string[]>([]);
   const [isCustomStreetMode, setIsCustomStreetMode] = useState(false);
+
+  // Validation Errors
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [etransferEmailError, setEtransferEmailError] = useState<string | null>(null);
+
+  // --- HANDLERS FOR PHONE & EMAIL ---
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatPhoneNumber(e.target.value);
+    setPhone(formatted);
+    setPhoneError(null);
+  };
+
+  const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setEmail(e.target.value);
+    setEmailError(null);
+  };
+
+  const handleEmailBlur = () => {
+    if (email) setEmail(normalizeEmail(email));
+  };
+
+  const handleEtransferEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setEtransferEmail(e.target.value);
+    setEtransferEmailError(null);
+  };
+
+  const handleEtransferEmailBlur = () => {
+    if (etransferEmail) setEtransferEmail(normalizeEmail(etransferEmail));
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -121,6 +157,19 @@ const NewJob: React.FC = () => {
     setError(null);
 
     if (!worker) { setError("No worker session."); return; }
+
+    // --- VALIDATION ---
+    const pError = getPhoneValidationError(phone);
+    const eError = getEmailValidationError(email);
+    const etError = paymentMethod === 'E-Transfer' ? getEmailValidationError(etransferEmail) : null;
+
+    if (pError || eError || etError) {
+      setPhoneError(pError);
+      setEmailError(eError);
+      setEtransferEmailError(etError);
+      setError('Please fix validation errors before saving.');
+      return;
+    }
     
     // Ensure session exists
     let activeSession = await sessionService.getActiveLogsheetSession(worker.contractorId);
@@ -231,8 +280,39 @@ const NewJob: React.FC = () => {
                   </div>
               </div>
               <div className="grid grid-cols-2 gap-3 md:col-span-3">
-                  <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Phone</label><input value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" /></div>
-                  <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Email</label><input value={email} onChange={(e) => setEmail(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" /></div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Phone</label>
+                    <div className="relative">
+                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                      <input 
+                        value={phone} 
+                        onChange={handlePhoneChange}
+                        placeholder="000 000 0000"
+                        maxLength={12}
+                        className={`w-full bg-gray-800 border rounded p-2 pl-9 text-white ${
+                          phoneError ? 'border-red-500' : 'border-gray-700'
+                        }`}
+                      />
+                    </div>
+                    {phoneError && <p className="text-red-400 text-[10px] mt-1">{phoneError}</p>}
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Email</label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                      <input 
+                        type="email"
+                        value={email} 
+                        onChange={handleEmailChange}
+                        onBlur={handleEmailBlur}
+                        placeholder="client@example.com"
+                        className={`w-full bg-gray-800 border rounded p-2 pl-9 text-white ${
+                          emailError ? 'border-red-500' : 'border-gray-700'
+                        }`}
+                      />
+                    </div>
+                    {emailError && <p className="text-red-400 text-[10px] mt-1">{emailError}</p>}
+                  </div>
               </div>
             </div>
           </div>
@@ -279,7 +359,20 @@ const NewJob: React.FC = () => {
                     <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Invoice Number</label><input value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" placeholder="INV-..." /></div>
                 )}
                 {paymentMethod === 'E-Transfer' && (
-                    <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Bank Email</label><input type="email" value={etransferEmail} onChange={e => setEtransferEmail(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" placeholder="client@bank.com" /></div>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Bank Email</label>
+                      <input 
+                        type="email" 
+                        value={etransferEmail} 
+                        onChange={handleEtransferEmailChange}
+                        onBlur={handleEtransferEmailBlur}
+                        className={`w-full bg-gray-800 border rounded p-2 text-white ${
+                          etransferEmailError ? 'border-red-500' : 'border-gray-700'
+                        }`}
+                        placeholder="client@bank.com" 
+                      />
+                      {etransferEmailError && <p className="text-red-400 text-[10px] mt-1">{etransferEmailError}</p>}
+                    </div>
                 )}
                 {paymentMethod === 'Cheque' && (
                     <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cheque Number (Optional)</label><input value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" placeholder="#001" /></div>

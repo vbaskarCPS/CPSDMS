@@ -1,10 +1,16 @@
 // src/components/AddContractModal.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader } from 'lucide-react';
+import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader, Phone } from 'lucide-react';
 import { getStorageItem } from '../lib/localStorage';
 import { MasterBooking, Worker, SessionTransaction } from '../types';
 import { sessionService } from '../lib/sessionService';
 import CreditCardModal from './CreditCardModal';
+import { 
+  formatPhoneNumber, 
+  normalizeEmail,
+  getPhoneValidationError, 
+  getEmailValidationError 
+} from '../lib/validationUtils';
 
 // Helper to generate a valid UUID for transactions
 function generateUUID() {
@@ -73,6 +79,40 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   const [streetName, setStreetName] = useState('');
   const [houseNumber, setHouseNumber] = useState('');
 
+  // Validation Errors
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [etransferEmailError, setEtransferEmailError] = useState<string | null>(null);
+
+  // --- HANDLERS FOR PHONE & EMAIL ---
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatPhoneNumber(e.target.value);
+    setFormData({...formData, phone: formatted});
+    setPhoneError(null);
+  };
+
+  const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData({...formData, email: e.target.value});
+    setEmailError(null);
+  };
+
+  const handleEmailBlur = () => {
+    if (formData.email) {
+      setFormData({...formData, email: normalizeEmail(formData.email)});
+    }
+  };
+
+  const handleEtransferEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setExtraPaymentInfo(e.target.value);
+    setEtransferEmailError(null);
+  };
+
+  const handleEtransferEmailBlur = () => {
+    if (extraPaymentInfo) {
+      setExtraPaymentInfo(normalizeEmail(extraPaymentInfo));
+    }
+  };
+
   useEffect(() => {
     const init = async () => {
       const w = getStorageItem<Worker | null>('current_user', null);
@@ -131,6 +171,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
         hasLockedGate: false, hasSprinkler: false 
     });
     setSelectedBooking(null);
+    // Clear validation errors
+    setPhoneError(null);
+    setEmailError(null);
+    setEtransferEmailError(null);
     setStep('SELECT_CLIENT');
   };
 
@@ -140,8 +184,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       firstName: booking['First Name'] || '',
       lastName: booking['Last Name'] || '',
       address: booking['Full Address'] || '',
-      phone: booking['Home Phone'] || booking['Cell Phone'] || '',
-      email: booking['Email Address'] || '',
+      phone: formatPhoneNumber(booking['Home Phone'] || booking['Cell Phone'] || ''),
+      email: normalizeEmail(booking['Email Address'] || ''),
       routeNumber: booking['Route Number'] || '',
       notes: '',
       propertyType: booking['FO/BO/FP'] || 'FP',
@@ -149,6 +193,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       hasSprinkler: false
     });
     setPaymentInfo(prev => ({ ...prev, amount: '0.00' }));
+    // Clear validation errors
+    setPhoneError(null);
+    setEmailError(null);
+    setEtransferEmailError(null);
     setStep('ENTER_DETAILS');
   };
 
@@ -157,6 +205,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
     setSelectedBooking(null);
     setFormData({ firstName: '', lastName: '', address: '', phone: '', email: '', routeNumber: '', notes: '', propertyType: 'FP', hasLockedGate: false, hasSprinkler: false });
     setPaymentInfo(prev => ({ ...prev, amount: '0.00' }));
+    // Clear validation errors
+    setPhoneError(null);
+    setEmailError(null);
+    setEtransferEmailError(null);
     setStep('ENTER_DETAILS');
   };
 
@@ -165,6 +217,20 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
     if (saving) return; // Prevent double-click
     
     setError(null);
+
+    // --- VALIDATION ---
+    const pError = getPhoneValidationError(formData.phone);
+    const eError = getEmailValidationError(formData.email);
+    const etError = paymentInfo.method === 'E-Transfer' ? getEmailValidationError(extraPaymentInfo) : null;
+
+    if (pError || eError || etError) {
+      setPhoneError(pError);
+      setEmailError(eError);
+      setEtransferEmailError(etError);
+      setError('Please fix validation errors before saving.');
+      return;
+    }
+
     if (paymentInfo.method === 'Credit Card' && !isCreditPaid) { setError("Please process card first."); return; }
     if (!paymentInfo.amount) { setError("Enter amount."); return; }
 
@@ -360,8 +426,34 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
                       <input type="text" placeholder="Last Name" value={formData.lastName} onChange={e => setFormData({...formData, lastName: e.target.value})} className="input" />
                       <input type="text" placeholder="#" value={houseNumber} onChange={e => setHouseNumber(e.target.value)} className="input col-span-1" />
                       <input type="text" value={streetName} onChange={e => setStreetName(e.target.value)} className="input w-full col-span-1" placeholder="Street Name"/>
-                      <input type="text" placeholder="Phone" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} className="input" />
-                      <input type="text" placeholder="Email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="input" />
+                      <div className="col-span-1">
+                        <div className="relative">
+                          <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                          <input 
+                            type="text" 
+                            placeholder="000 000 0000" 
+                            value={formData.phone} 
+                            onChange={handlePhoneChange}
+                            maxLength={12}
+                            className={`input pl-9 ${phoneError ? 'border-red-500' : ''}`}
+                          />
+                        </div>
+                        {phoneError && <p className="text-red-400 text-[10px] mt-1">{phoneError}</p>}
+                      </div>
+                      <div className="col-span-1">
+                        <div className="relative">
+                          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                          <input 
+                            type="email" 
+                            placeholder="client@example.com" 
+                            value={formData.email} 
+                            onChange={handleEmailChange}
+                            onBlur={handleEmailBlur}
+                            className={`input pl-9 ${emailError ? 'border-red-500' : ''}`}
+                          />
+                        </div>
+                        {emailError && <p className="text-red-400 text-[10px] mt-1">{emailError}</p>}
+                      </div>
                    </div>
                 )}
                 
@@ -428,7 +520,17 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
                  {paymentInfo.method === 'E-Transfer' && (
                      <div className="relative animate-fade-in">
                         <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
-                        <input type="email" placeholder="Customer Email for E-Transfer" value={extraPaymentInfo} onChange={e => setExtraPaymentInfo(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded-lg py-2 pl-9 pr-4 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none" />
+                        <input 
+                          type="email" 
+                          placeholder="Customer Email for E-Transfer" 
+                          value={extraPaymentInfo} 
+                          onChange={handleEtransferEmailChange}
+                          onBlur={handleEtransferEmailBlur}
+                          className={`w-full bg-gray-800 border rounded-lg py-2 pl-9 pr-4 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none ${
+                            etransferEmailError ? 'border-red-500' : 'border-gray-700'
+                          }`}
+                        />
+                        {etransferEmailError && <p className="text-red-400 text-[10px] mt-1">{etransferEmailError}</p>}
                      </div>
                  )}
 

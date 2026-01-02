@@ -1,6 +1,7 @@
 // src/lib/feedParser.ts
 import * as XLSX from 'xlsx';
 import { DailySessionData, ManagementUser, Worker, RouteData, MasterBooking } from '../types';
+import { formatPhoneNumber, normalizeEmail } from './validationUtils';
 
 // FIX: Create deterministic IDs so re-uploads don't create duplicate users
 const generateConsistentId = (name: string, rolePrefix: string) => {
@@ -97,7 +98,7 @@ export const parseDailySessionXLSX = async (file: File): Promise<DailySessionDat
       contractorId: row['Contractor ID'] ? String(row['Contractor ID']) : generateConsistentId(fullName, 'wk'),
       firstName: row['First Name'],
       lastName: row['Last Name'],
-      cellPhone: row['Cell Phone'],
+      cellPhone: formatPhoneNumber(row['Cell Phone'] || ''),
       status: 'Return', 
       assignedManagerId: assignedManager ? assignedManager.userId : undefined,
       alumniRate: isNaN(alumniRate) ? 0 : alumniRate,
@@ -118,8 +119,8 @@ export const parseDailySessionXLSX = async (file: File): Promise<DailySessionDat
       'House Number': row['House #'],
       'Street Name': row['Street Name'],
       'Full Address': `${row['House #'] || ''} ${row['Street Name'] || ''}`.trim(),
-      'Home Phone': row['Phone #'],
-      'Email Address': row['E-Mail'],
+      'Home Phone': formatPhoneNumber(row['Phone #'] || ''),
+      'Email Address': normalizeEmail(row['E-Mail'] || ''),
       'Price': row['AER. AMT'], 
       'FO/BO/FP': row['Service Type'], 
       'Prepaid': row['PP']?.toLowerCase() === 'x' ? 'x' : undefined,
