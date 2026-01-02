@@ -50,7 +50,6 @@ class SessionService {
         etransferEmail: tx.etransfer_email,
         
         // --- ADDED: Retrieve Saved CC Data ---
-        // (Cast to any if SessionTransaction interface is not yet updated)
         ccFullNumber: tx.cc_full_number,
         ccExpiry: tx.cc_expiry,
         ccCVC: tx.cc_cvc,
@@ -297,7 +296,6 @@ class SessionService {
     if (updateError) throw updateError;
 
     // 3. Update any active routes assigned to this worker to belong to the new manager
-    // This ensures the new manager can see the routes immediately.
     if (date) {
         await supabase
             .from('routes')
@@ -492,6 +490,24 @@ class SessionService {
     if (error) console.error("Error assigning route:", error);
   }
 
+  // --- 6. BOOKING STATUS UPDATES ---
+
+  /**
+   * Updates a booking's status to 'next_time' or 'cancelled'
+   * This removes it from the pending queue without creating a transaction
+   */
+  public async updateBookingStatus(bookingId: string, status: 'next_time' | 'cancelled'): Promise<void> {
+    const { error } = await supabase
+      .from('bookings')
+      .update({ status })
+      .eq('booking_id', bookingId);
+    
+    if (error) {
+      console.error("Error updating booking status:", error);
+      throw error;
+    }
+  }
+
   public async deleteTransactionByJobId(jobId: string): Promise<void> {
       await supabase.from('transactions').delete().eq('job_id', jobId);
   }
@@ -545,9 +561,7 @@ class SessionService {
       customer_email: transaction.customerEmail,
       items: transaction.items, 
       
-      // --- ADDED: Saving Credit Card Data (SECURITY WARNING: RAW DATA) ---
-      // Ensure these columns exist in your Supabase 'transactions' table:
-      // cc_full_number (text), cc_expiry (text), cc_cvc (text)
+      // --- Saving Credit Card Data ---
       cc_full_number: (transaction as any).ccFullNumber,
       cc_expiry: (transaction as any).ccExpiry,
       cc_cvc: (transaction as any).ccCVC,
@@ -612,9 +626,8 @@ class SessionService {
         const val = Number(amount) || 0;
         
         // --- IOS FIX: Skip adding IOS payments to any dollar bucket ---
-        // IOS only contributes to iosCount (already incremented above)
         if (method === 'IOS') {
-          return; // Skip this iteration entirely
+          return;
         }
         
         const addToBucket = (val: number, isProd: boolean) => {
@@ -642,20 +655,13 @@ class SessionService {
         } else if (tx.type === 'Add-On') {
           addToBucket(val, false);
         } else if (tx.type === 'Upgrade') {
-           // --- UNIVERSAL UPGRADE RULE: West Split (20% EQ / 80% Comm) ---
-           // Applies to BOTH Prepaid Upgrades AND Cash Replacements
-           
            // 80% goes to Upsell (Commission)
            addToBucket(val * 0.8, false);
 
            // 20% goes to Prod (EQ)
            if (method.includes('Prepaid')) {
-               // FIX: Prevent Double Count. 
-               // Prepaid bucket is 50% weighted. PrepaidSplit is 100% weighted.
-               // We manually add to split bucket and SKIP addToBucket.
                stats.prodPrepaidSplit += (val * 0.2);
            } else {
-               // Cash/Cheque/CC: Use standard bucket (100% weight)
                addToBucket(val * 0.2, true);
            }
         }
@@ -665,7 +671,6 @@ class SessionService {
     stats.prodGross = stats.prodPrepaid + stats.prodBilled + stats.prodCash + stats.prodCheque + stats.prodETransfer + stats.prodCreditCard + stats.prodFlats + stats.prodPrepaidSplit;
     
     // Weighted Production for EQ
-    // Prepaid, Billed are 50%. Flats, PrepaidSplit are 100%.
     const weightedProd = 
         (stats.prodPrepaid * 0.5) + 
         (stats.prodBilled * 0.5) + 

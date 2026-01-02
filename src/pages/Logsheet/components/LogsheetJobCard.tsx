@@ -1,6 +1,6 @@
 // src/pages/Logsheet/components/LogsheetJobCard.tsx
 import React from 'react';
-import { MapPin, ChevronRight, Check, FileText, Phone, Mail } from 'lucide-react';
+import { MapPin, ChevronRight, Check, FileText, Phone, Mail, Clock, X as XIcon } from 'lucide-react';
 import { MasterBooking } from '../../../types';
 
 interface LogsheetJobCardProps {
@@ -70,7 +70,9 @@ const formatPaymentDisplay = (job: MasterBooking): string => {
 };
 
 const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
-  const isCompleted = job.Completed === 'x';
+  const isCompleted = job.Completed === 'x' || job.Status === 'completed';
+  const isCancelled = job.Status === 'cancelled';
+  const isNextTime = job.Status === 'next_time';
   const isPrepaid = job.Prepaid === 'x';
   
   // Data Extraction
@@ -101,6 +103,12 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
           borderColor = 'border-green-600';
           bgColor = 'bg-green-900/20';
       }
+  } else if (isCancelled) {
+      borderColor = 'border-red-600';
+      bgColor = 'bg-red-900/20';
+  } else if (isNextTime) {
+      borderColor = 'border-orange-500';
+      bgColor = 'bg-orange-900/20';
   }
 
   const displayNotes = isContract && contractTitle ? contractTitle : notes;
@@ -110,6 +118,27 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   
   // Format payment info for completed jobs
   const paymentDisplay = isCompleted ? formatPaymentDisplay(job) : '';
+
+  // Status badge for not-done jobs
+  const getStatusBadge = () => {
+    if (isCancelled) {
+      return (
+        <div className="flex items-center gap-1 text-red-500 text-xs font-bold mt-1">
+          <XIcon size={14} strokeWidth={3} /> 
+          <span className="text-[10px] text-red-400">CANCELLED</span>
+        </div>
+      );
+    }
+    if (isNextTime) {
+      return (
+        <div className="flex items-center gap-1 text-orange-500 text-xs font-bold mt-1">
+          <Clock size={14} strokeWidth={3} /> 
+          <span className="text-[10px] text-orange-400">NEXT TIME</span>
+        </div>
+      );
+    }
+    return null;
+  };
 
   return (
     <div 
@@ -133,8 +162,8 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
         </div>
 
         {displayNotes && (
-            <div className={`text-[10px] rounded p-1.5 flex items-start gap-2 mt-1 leading-tight ${isCompleted ? 'text-gray-300 italic' : 'bg-yellow-900/20 border border-yellow-700/30 text-yellow-200'}`}>
-                {isCompleted ? <Check size={10}/> : <FileText size={10} className="shrink-0 mt-0.5"/>}
+            <div className={`text-[10px] rounded p-1.5 flex items-start gap-2 mt-1 leading-tight ${isCompleted ? 'text-gray-300 italic' : (isCancelled || isNextTime) ? 'text-gray-400 italic' : 'bg-yellow-900/20 border border-yellow-700/30 text-yellow-200'}`}>
+                {isCompleted ? <Check size={10}/> : (isCancelled || isNextTime) ? null : <FileText size={10} className="shrink-0 mt-0.5"/>}
                 {displayNotes}
             </div>
         )}
@@ -145,8 +174,8 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
         
         <div className="flex flex-col items-end">
             <div className="flex items-center gap-1">
-               {isPrepaid && !isCompleted && <span className="text-[9px] bg-green-900/30 text-green-400 px-1.5 py-0.5 rounded border border-green-800 font-bold">PP</span>}
-               <span className={`font-mono font-bold text-lg ${isCompleted ? 'text-gray-300' : (isPrepaid ? 'text-green-300' : 'text-white')}`}>
+               {isPrepaid && !isCompleted && !isCancelled && !isNextTime && <span className="text-[9px] bg-green-900/30 text-green-400 px-1.5 py-0.5 rounded border border-green-800 font-bold">PP</span>}
+               <span className={`font-mono font-bold text-lg ${isCompleted ? 'text-gray-300' : isCancelled ? 'text-red-300 line-through' : isNextTime ? 'text-orange-300' : (isPrepaid ? 'text-green-300' : 'text-white')}`}>
                  {formattedPrice}
                </span>
             </div>
@@ -157,6 +186,8 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
             <Check size={14} strokeWidth={3} /> 
             <span className="text-[10px] text-green-400 max-w-[100px] truncate">{paymentDisplay}</span>
           </div>
+        ) : (isCancelled || isNextTime) ? (
+          getStatusBadge()
         ) : (
           <ChevronRight size={16} className="text-gray-500 mt-1" />
         )}

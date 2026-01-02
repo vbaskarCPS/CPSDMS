@@ -68,7 +68,6 @@ const JobDetail: React.FC = () => {
 
       const decodedId = decodeURIComponent(jobId);
 
-      // FIX: Fetch assignments from Supabase service (Async) instead of empty local store
       try {
         const allJobs = await sessionService.getWorkerAssignments(w.contractorId);
         const foundJob = allJobs.find((j) => j['Booking ID'] === decodedId);
@@ -79,7 +78,6 @@ const JobDetail: React.FC = () => {
           setIsReadOnly(foundJob.Status === 'completed' || foundJob.Completed === 'x');
           loadFormData(foundJob);
         } else {
-          // If not found in assignments, it might be a ghost or error, redirect safely
           console.warn("Job ID not found in assignments:", decodedId);
           alert('Job not found.');
           navigate('/logsheet');
@@ -124,7 +122,7 @@ const JobDetail: React.FC = () => {
     );
     setPropertyType(job['FO/BO/FP'] || 'FP');
 
-    // Restore payment details if available (e.g. from completed record)
+    // Restore payment details if available
     if ((job as any).invoiceNumber) setInvoiceNumber((job as any).invoiceNumber);
     if ((job as any).chequeNumber) setChequeNumber((job as any).chequeNumber);
     if ((job as any).etransferEmail) setEtransferEmail((job as any).etransferEmail);
@@ -154,7 +152,6 @@ const JobDetail: React.FC = () => {
     const fullAddress = `${houseNumber} ${streetName}`.trim();
     const newTxId = generateUUID();
 
-    // 1. Prepare Transaction Record with ALL fields
     const tx: SessionTransaction = {
       id: newTxId,
       jobId: originalJob['Booking ID'],
@@ -190,14 +187,12 @@ const JobDetail: React.FC = () => {
     } as any;
 
     try {
-      // 2. Commit to Database (Supabase)
       await sessionService.completeJob(
         tx,
         originalJob['Booking ID'],
         worker.contractorId
       );
 
-      // 3. Update Local Stats (Optimistic Update)
       const session = await sessionService.getActiveLogsheetSession(
         worker.contractorId
       );
@@ -219,9 +214,18 @@ const JobDetail: React.FC = () => {
     }
   };
 
-  const handleCancel = (status: 'next_time' | 'cancelled') => {
-    alert('Status update pending implementation in LIVE backend.');
-    navigate('/logsheet');
+  const handleCancel = async (status: 'next_time' | 'cancelled') => {
+    if (!originalJob) return;
+    
+    setLoading(true);
+    try {
+      await sessionService.updateBookingStatus(originalJob['Booking ID'], status);
+      navigate('/logsheet');
+    } catch (err) {
+      console.error('Failed to update booking status:', err);
+      alert('Failed to update status. Please try again.');
+      setLoading(false);
+    }
   };
 
   if (loading) return <div className="h-screen bg-black flex items-center justify-center"><Loader className="text-cps-blue animate-spin" /></div>;
@@ -264,13 +268,12 @@ const JobDetail: React.FC = () => {
               </div>
            </div>
 
-           {/* SERVICES & PRICING - FIXED UI OVERLAP */}
+           {/* SERVICES & PRICING */}
            <div className={`bg-gray-900/30 p-4 rounded-lg border border-gray-700/50 ${isReadOnly ? 'opacity-75' : ''}`}>
                <div className="flex justify-between items-center mb-3">
                    <h3 className="text-sm font-bold text-gray-300 uppercase">Services & Pricing</h3>
                    {isReadOnly && <span className="text-xs text-blue-300 flex items-center gap-1"><Lock size={10}/> Locked</span>}
                </div>
-               {/* FIX: Use single column on mobile, double on larger screens */}
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Total Amount ($)</label>
@@ -307,7 +310,6 @@ const JobDetail: React.FC = () => {
                       </select>
                   </div>
                   
-                  {/* Restored Conditional Fields */}
                   {paymentMethod === 'Billed' && !isReadOnly && (
                       <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Invoice #</label><input value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" placeholder="INV-..." /></div>
                   )}
@@ -339,7 +341,37 @@ const JobDetail: React.FC = () => {
              )}
         </div>
       </div>
-      {showCancelModal && <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4"><div className="bg-gray-800 rounded-lg p-6 w-full max-w-sm text-center border border-gray-700 shadow-xl"><h3 className="text-lg font-bold text-white mb-2">Mark as Not Done?</h3><div className="space-y-3"><button onClick={() => handleCancel('next_time')} className="w-full py-3 bg-yellow-600/20 text-yellow-400 border border-yellow-700/50 rounded font-bold">Next Time / 2nd Run</button><button onClick={() => handleCancel('cancelled')} className="w-full py-3 bg-red-600/20 text-red-400 border border-red-700/50 rounded font-bold">Cancelled</button><button onClick={() => setShowCancelModal(false)} className="w-full py-3 text-gray-400 hover:text-white">Go Back</button></div></div></div>}
+
+      {/* CANCEL MODAL */}
+      {showCancelModal && (
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg p-6 w-full max-w-sm text-center border border-gray-700 shadow-xl">
+            <h3 className="text-lg font-bold text-white mb-4">Mark as Not Done?</h3>
+            <p className="text-sm text-gray-400 mb-6">This will remove the job from your pending list.</p>
+            <div className="space-y-3">
+              <button 
+                onClick={() => handleCancel('next_time')} 
+                className="w-full py-3 bg-orange-600/20 text-orange-400 border border-orange-700/50 rounded font-bold hover:bg-orange-600/30 transition-colors"
+              >
+                Next Time / 2nd Run
+              </button>
+              <button 
+                onClick={() => handleCancel('cancelled')} 
+                className="w-full py-3 bg-red-600/20 text-red-400 border border-red-700/50 rounded font-bold hover:bg-red-600/30 transition-colors"
+              >
+                Cancelled
+              </button>
+              <button 
+                onClick={() => setShowCancelModal(false)} 
+                className="w-full py-3 text-gray-400 hover:text-white transition-colors"
+              >
+                Go Back
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showCreditModal && <CreditCardModal amount={price} clientName={`${firstName} ${lastName}`} onClose={() => setShowCreditModal(false)} onProcess={(details) => { setIsCreditPaid(true); setShowCreditModal(false); setCcData(details); }} />}
     </div>
   );

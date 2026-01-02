@@ -1,6 +1,6 @@
 // src/pages/Management/components/ContractorJobs.tsx
 import React, { useState, useMemo } from 'react';
-import { Phone, Mail, Loader } from 'lucide-react';
+import { Phone, Mail, Loader, Clock, X as XIcon } from 'lucide-react';
 import { MasterBooking, SessionTransaction } from '../../../types';
 import EditTransactionModal from '../../../components/EditTransactionModal';
 import { sessionService } from '../../../lib/sessionService';
@@ -33,15 +33,13 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
       const augmentedBookings = bookings.map(b => {
           const tx = txMap.get(b['Booking ID']);
           if (tx) {
-              // If we have a transaction, attach the specific metadata we need for badges
               return {
                   ...b,
-                  // Attach these properties strictly for display logic
                   ...({
                       isUpgrade: tx.type === 'Upgrade',
                       isAddOn: tx.type === 'Add-On',
                       isNewSale: tx.type === 'Sale',
-                      items: tx.items, // <--- Capture the items array to read the service name
+                      items: tx.items,
                       paymentBreakdown: tx.paymentBreakdown
                   } as any)
               };
@@ -68,12 +66,11 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                    'Payment Method': tx.paymentMethod,
                    'Email Address': tx.customerEmail,
                    'Cell Phone': tx.customerPhone,
-                   // Attach extra metadata for badging
                    ...({
                        isUpgrade: tx.type === 'Upgrade',
                        isAddOn: tx.type === 'Add-On',
                        isNewSale: tx.type === 'Sale',
-                       items: tx.items, // <--- Capture the items array here too
+                       items: tx.items,
                        paymentBreakdown: tx.paymentBreakdown
                    } as any)
                };
@@ -86,8 +83,9 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
   // --- Sort & Filter ---
   const sortedBookings = [...allJobs].sort((a, b) => {
       const getScore = (job: MasterBooking) => {
-          if (job.Completed === 'x') return 3;
-          if (job.Status && job.Status !== 'pending') return 2; // Not Done
+          if (job.Completed === 'x' || job.Status === 'completed') return 4;
+          if (job.Status === 'cancelled') return 3;
+          if (job.Status === 'next_time') return 2;
           return 1; // Pending
       };
       const scoreDiff = getScore(a) - getScore(b);
@@ -95,18 +93,19 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
       return (a['Route Number'] || '').localeCompare(b['Route Number'] || '');
   });
 
-  const pendingJobs = sortedBookings.filter(b => (!b.Completed && (!b.Status || b.Status === 'pending')));
-  const notDoneJobs = sortedBookings.filter(b => b.Status && b.Status !== 'pending' && b.Status !== 'completed' && b.Completed !== 'x');
+  const pendingJobs = sortedBookings.filter(b => (
+    !b.Completed && 
+    (!b.Status || b.Status === 'pending')
+  ));
+  
+  const nextTimeJobs = sortedBookings.filter(b => b.Status === 'next_time');
+  const cancelledJobs = sortedBookings.filter(b => b.Status === 'cancelled');
   const completedJobs = sortedBookings.filter(b => b.Completed === 'x' || b.Status === 'completed');
 
   // --- Handlers ---
   const handleJobClick = async (job: MasterBooking) => {
-      // 1. Validate Job status
       const isPaid = job.Completed === 'x' || job.Status === 'completed';
       
-      // DEBUG: Log click event
-      console.log(`Job Clicked: ${job['First Name']} ${job['Last Name']} (ID: ${job['Booking ID']}) - Paid: ${isPaid}`);
-
       if (!isPaid) return;
 
       const jobId = job['Booking ID'];
@@ -118,21 +117,16 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
       setLoadingId(jobId);
 
       try {
-          // 2. Fetch Transaction
-          console.log(`Fetching transaction details for Job ID: ${jobId}`);
           const tx = await sessionService.getTransactionByJobId(jobId);
           
-          // 3. Open Modal
           if (tx) {
-              console.log("Transaction found, opening modal:", tx);
               setEditingTransaction(tx);
           } else {
-              console.warn(`No transaction record found in DB for Job ID: ${jobId}`);
-              alert("Transaction record not found in database (it might have been deleted or not synced).");
+              alert("Transaction record not found in database.");
           }
       } catch (err) {
           console.error("Error fetching transaction:", err);
-          alert("Failed to load transaction details. Please check your connection.");
+          alert("Failed to load transaction details.");
       } finally {
           setLoadingId(null);
       }
@@ -140,6 +134,8 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
 
   const renderJobRow = (job: MasterBooking) => {
       const isPaid = job.Completed === 'x' || job.Status === 'completed';
+      const isCancelled = job.Status === 'cancelled';
+      const isNextTime = job.Status === 'next_time';
       const isLoading = loadingId === job['Booking ID'];
 
       // --- Badges ---
@@ -148,7 +144,6 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
       if (isPaid) {
           const extra = job as any;
           
-          // Helper: Check items[0].name against our map
           const getLabel = (generic: string) => {
              if (extra.items && extra.items.length > 0) {
                  const name = extra.items[0].name;
@@ -170,9 +165,12 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
               badge = { text: 'DONE', color: 'bg-green-900/30 text-green-400 border-green-800' };
           }
       } 
-      else if (job.Status && job.Status !== 'pending') {
-          badge = { text: job.Status.toUpperCase().substring(0, 8), color: 'bg-red-900/30 text-red-400 border-red-800' };
-      } 
+      else if (isCancelled) {
+          badge = { text: 'CANCELLED', color: 'bg-red-900/30 text-red-400 border-red-800' };
+      }
+      else if (isNextTime) {
+          badge = { text: 'NEXT TIME', color: 'bg-orange-900/30 text-orange-400 border-orange-800' };
+      }
       else if (job.Prepaid === 'x') {
           badge = { text: 'PREPAID', color: 'bg-indigo-900/30 text-indigo-400 border-indigo-800' };
       }
@@ -207,7 +205,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                       <span className="font-mono font-bold bg-gray-700 text-gray-300 px-1.5 rounded text-[10px] min-w-[32px] text-center">
                           {job['Route Number'] || '--'}
                       </span>
-                      <span className="font-bold text-gray-200 truncate" title={`${job['First Name']} ${job['Last Name']}`}>
+                      <span className={`font-bold truncate ${isCancelled ? 'text-gray-500 line-through' : 'text-gray-200'}`} title={`${job['First Name']} ${job['Last Name']}`}>
                           {job['First Name']} {job['Last Name']?.charAt(0) || ''}.
                       </span>
                       <span className="text-gray-500 truncate text-[10px] hidden sm:block">
@@ -235,7 +233,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                               {job['FO/BO/FP']}
                           </span>
                       )}
-                      <span className="font-mono font-bold text-gray-300 w-16 text-right">
+                      <span className={`font-mono font-bold w-16 text-right ${isCancelled ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
                           {displayPrice}
                       </span>
                       
@@ -259,10 +257,20 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                     {pendingJobs.map(renderJobRow)}
                 </div>
             )}
-            {notDoneJobs.length > 0 && (
+            {nextTimeJobs.length > 0 && (
                 <div className="space-y-1">
-                    <h4 className="text-[10px] font-bold text-red-400 uppercase px-1 mb-1">Not Done</h4>
-                    {notDoneJobs.map(renderJobRow)}
+                    <h4 className="text-[10px] font-bold text-orange-400 uppercase px-1 mb-1 flex items-center gap-1">
+                        <Clock size={10} /> Next Time
+                    </h4>
+                    {nextTimeJobs.map(renderJobRow)}
+                </div>
+            )}
+            {cancelledJobs.length > 0 && (
+                <div className="space-y-1">
+                    <h4 className="text-[10px] font-bold text-red-400 uppercase px-1 mb-1 flex items-center gap-1">
+                        <XIcon size={10} /> Cancelled
+                    </h4>
+                    {cancelledJobs.map(renderJobRow)}
                 </div>
             )}
             {completedJobs.length > 0 && (
@@ -280,8 +288,6 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                 onClose={() => setEditingTransaction(null)}
                 onUpdate={() => {
                     setEditingTransaction(null);
-                    // Optionally trigger a refresh here if you have a refresh prop
-                    // e.g., if props.onRefresh() exists
                 }}
             />
         )}

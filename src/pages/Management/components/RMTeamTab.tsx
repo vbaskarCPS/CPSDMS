@@ -71,11 +71,16 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         myTeam.map(async (w) => {
           // 1. Fetch Bookings (Assignments)
           const allBookings = await sessionService.getWorkerAssignments(w.contractorId);
-          const pending = allBookings.filter((b) => b.Completed !== 'x');
+          
+          // 2. Calculate Pending - FIXED: Exclude cancelled and next_time
+          const pending = allBookings.filter((b) => 
+            b.Completed !== 'x' && 
+            b.Status !== 'completed' &&
+            b.Status !== 'cancelled' &&
+            b.Status !== 'next_time'
+          );
 
-          // 2. Fetch Fresh Session Data (Stats & Transactions)
-          // We fetch this fresh here to ensure 'Last Address' and Stats are up-to-date immediately
-          // after a job is completed, rather than relying on the potentially stale 'allSessions' prop.
+          // 3. Fetch Fresh Session Data (Stats & Transactions)
           const freshSession = await sessionService.getActiveLogsheetSession(w.contractorId);
           
           const stats = freshSession?.stats || sessionService.getEmptyStats();
@@ -180,7 +185,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           className="relative bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 transition-all shadow-sm"
         >
           {/* Main Card Content */}
-          <div className="p-2 pr-9"> {/* Right padding reserves space for the absolute menu */}
+          <div className="p-2 pr-9">
             
             {/* TOP ROW: Name (Left) + Routes (Right) */}
             <div 
