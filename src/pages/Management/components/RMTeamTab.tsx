@@ -271,7 +271,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               </div>
               <div>
                 <div className="text-gray-500 text-[8px] uppercase">Up Gross</div>
-                <div className="text-green-400 font-bold">${member.stats.gross.toFixed(0)}</div>
+                <div className="text-green-400 font-bold">${member.stats.gross.toFixed(2)}</div>
               </div>
               <div>
                 <div className="text-gray-500 text-[8px] uppercase">Upsell</div>
@@ -279,7 +279,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               </div>
               <div>
                 <div className="text-gray-500 text-[8px] uppercase">EQ</div>
-                <div className="text-blue-300 font-bold">{member.stats.eq.toFixed(1)}</div>
+                <div className="text-blue-300 font-bold">{member.stats.eq.toFixed(2)}</div>
               </div>
             </div>
 
