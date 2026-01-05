@@ -71,7 +71,7 @@ const SessionCommandCenter: React.FC = () => {
   // Check payout completion status
   const payoutStatus = useMemo(() => {
     if (!logsheetSessions.length) {
-      return { hasValidatedPayouts: false, hasBonuses: false, totalWorkers: 0 };
+      return { hasValidatedPayouts: false, hasBonuses: false, totalWorkers: 0, validatedWorkers: 0 };
     }
 
     const validatedCount = logsheetSessions.filter(s => s.validation?.isValidated).length;
@@ -79,10 +79,9 @@ const SessionCommandCenter: React.FC = () => {
 
     return {
       hasValidatedPayouts: validatedCount > 0,
-      hasBonuses: bonusCount > 0,
+      hasBonuses: bonusCount > 0,  // At least one worker has a bonus
       totalWorkers: logsheetSessions.length,
-      validatedWorkers: validatedCount,
-      workersWithBonuses: bonusCount
+      validatedWorkers: validatedCount
     };
   }, [logsheetSessions]);
 
@@ -127,16 +126,16 @@ const SessionCommandCenter: React.FC = () => {
   };
 
   const handleDownload = async () => {
-    // Safety check: Warn if payouts aren't validated or bonuses aren't assigned
+    // Safety check: Warn if payouts aren't validated or no bonuses assigned
     if (!payoutStatus.hasValidatedPayouts || !payoutStatus.hasBonuses) {
       const warnings: string[] = [];
       
       if (!payoutStatus.hasValidatedPayouts) {
-        warnings.push(`⚠️ No payouts have been validated yet (0/${payoutStatus.totalWorkers} workers)`);
+        warnings.push(`⚠️ No payouts have been validated yet (${payoutStatus.validatedWorkers}/${payoutStatus.totalWorkers} workers complete)`);
       }
       
       if (!payoutStatus.hasBonuses) {
-        warnings.push(`⚠️ No bonuses have been assigned yet (0/${payoutStatus.totalWorkers} workers)`);
+        warnings.push(`⚠️ No bonuses have been assigned yet`);
       }
 
       const warningMessage = [
@@ -357,12 +356,12 @@ const SessionCommandCenter: React.FC = () => {
                                 </div>
                                 {!payoutStatus.hasValidatedPayouts && (
                                   <div className="text-yellow-300">
-                                    • No validated payouts ({payoutStatus.validatedWorkers}/{payoutStatus.totalWorkers} complete)
+                                    • No validated payouts ({payoutStatus.validatedWorkers}/{payoutStatus.totalWorkers} workers complete)
                                   </div>
                                 )}
                                 {!payoutStatus.hasBonuses && (
                                   <div className="text-yellow-300">
-                                    • No bonuses assigned ({payoutStatus.workersWithBonuses}/{payoutStatus.totalWorkers} have bonuses)
+                                    • No bonuses have been assigned yet
                                   </div>
                                 )}
                               </div>
