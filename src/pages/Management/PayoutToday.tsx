@@ -185,8 +185,12 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           if (lastNameCompare !== 0) return lastNameCompare;
           return a.worker.firstName.localeCompare(b.worker.firstName);
         }
-        case 'alpha':
-          return a.worker.lastName.localeCompare(b.worker.lastName);
+        case 'alpha': {
+          // Sort by last name, then first name as tiebreaker
+          const lastNameCompare = a.worker.lastName.localeCompare(b.worker.lastName);
+          if (lastNameCompare !== 0) return lastNameCompare;
+          return a.worker.firstName.localeCompare(b.worker.firstName);
+        }
         case 'steps':
           return (b.session.stats.stepCount || 0) - (a.session.stats.stepCount || 0);
         case 'equiv':
