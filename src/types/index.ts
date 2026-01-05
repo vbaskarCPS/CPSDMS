@@ -151,6 +151,9 @@ export interface MasterBooking {
   
   'FO/BO/FP'?: 'FO' | 'BO' | 'FP' | 'SS' | 'SSP' | 'Ramp';
   'Contractor Number'?: string;
+  
+  // Allow additional dynamic properties (like 'Gate', 'House Number', etc.)
+  [key: string]: any;
 }
 
 export interface SoldService {
@@ -166,6 +169,10 @@ export interface SessionTransaction {
   customerId: string;
   customerName: string;
   address: string;
+  
+  // ADDED: Missing contact information properties
+  customerPhone?: string;
+  customerEmail?: string;
   
   workerId: string;
   workerName: string;
@@ -188,6 +195,11 @@ export interface SessionTransaction {
   ccCVC?: string;
   etransferEmail?: string;
   chequeNumber?: string;
+  
+  // ADDED: Missing service-related properties
+  serviceType?: 'FO' | 'BO' | 'FP' | 'SS' | 'SSP' | 'Ramp';
+  serviceName?: string;
+  isPrepaid?: boolean;
   
   // Logic
   isWestSplit?: boolean;   

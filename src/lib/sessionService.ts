@@ -22,10 +22,6 @@ class SessionService {
 
   // --- 1. HELPERS ---
 
-  private getTodayStr(): string {
-    return format(new Date(), 'yyyy-MM-dd');
-  }
-
   // Unified mapper to ensure consistency everywhere
   private mapDbTransaction(tx: any): SessionTransaction {
     return {
@@ -479,8 +475,9 @@ class SessionService {
     return [...pendingMapped, ...completedMapped];
   }
 
-  public getStreetsForRoute(routeCode: string): Promise<string[]> {
-    return supabase.from('routes').select('streets').eq('route_code', routeCode).single().then((res) => res.data?.streets || []);
+  public async getStreetsForRoute(routeCode: string): Promise<string[]> {
+    const res = await supabase.from('routes').select('streets').eq('route_code', routeCode).single();
+    return res.data?.streets || [];
   }
 
   public async getLogsheetSessions(): Promise<LogsheetSession[]> {

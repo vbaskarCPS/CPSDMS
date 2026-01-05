@@ -3,12 +3,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Upload,
-  CheckCircle,
   AlertCircle,
   FileText,
   Users,
   Play,
-  Trash2,
   Search,
   Filter,
   Download,

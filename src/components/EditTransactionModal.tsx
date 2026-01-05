@@ -1,6 +1,6 @@
 // src/components/EditTransactionModal.tsx
 import React, { useState, useEffect } from 'react';
-import { X, Trash2, Save, DollarSign, User, MapPin, Phone, Mail, AlertCircle } from 'lucide-react'; // Removed Tag icon import as it's no longer used
+import { X, Trash2, Save, DollarSign, User, MapPin, Phone, Mail, AlertCircle } from 'lucide-react';
 import { sessionService } from '../lib/sessionService';
 
 // Flexible interface to handle both SessionTransaction and the PayoutContractor data
