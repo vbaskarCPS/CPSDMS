@@ -110,7 +110,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             lastActiveAddress: lastAddr,
             stats: {
               steps: stats.stepCount,
-              gross: stats.prodGross + stats.upsellGross,
+              gross: stats.upsellGross,
               eq: stats.totalEQ,
               pending: pending.length,
               upsellCount: stats.upsellCount,
@@ -270,7 +270,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                 <div className="text-yellow-400 font-bold">{member.stats.pending}</div>
               </div>
               <div>
-                <div className="text-gray-500 text-[8px] uppercase">Gross</div>
+                <div className="text-gray-500 text-[8px] uppercase">Up Gross</div>
                 <div className="text-green-400 font-bold">${member.stats.gross.toFixed(0)}</div>
               </div>
               <div>
