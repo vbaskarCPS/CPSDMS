@@ -3,16 +3,17 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Map as MapIcon, 
   AlertCircle, X, Check, ChevronDown, ChevronUp, 
-  MapPin, Phone, User, Users 
+  MapPin, Phone, User, Users, Shuffle 
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
-import { RouteData, MasterBooking, Worker } from '../../../types';
+import { RouteData, MasterBooking, Worker, ManagementUser } from '../../../types';
 
 interface RMRoutesTabProps {
   managerId: string;
   routes: RouteData[];
   bookings: MasterBooking[];
   workers: Worker[];
+  managers: ManagementUser[];
   onRefresh: () => void;
 }
 
@@ -20,7 +21,7 @@ interface RouteDisplay {
   routeCode: string;
   totalBookings: number;
   prepaidCount: number;
-  totalEQ: number; // Changed from totalValue
+  totalEQ: number;
   assignedWorkerId: string | null;
   items: MasterBooking[];
 }
@@ -30,6 +31,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   routes,
   bookings,
   workers,
+  managers,
   onRefresh,
 }) => {
   // State
@@ -45,10 +47,23 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     type: 'ROUTE' | 'JOB';
     targetId: string;
     currentWorkerId: string | null;
+    routeCode?: string;
+    title: string;
+  } | null>(null);
+
+  const [transferModalData, setTransferModalData] = useState<{
+    type: 'ROUTE' | 'JOB';
+    targetId: string;
+    routeCode: string;
     title: string;
   } | null>(null);
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Filter managers (exclude current manager)
+  const availableManagers = useMemo(() => {
+    return managers.filter(m => m.userId !== managerId && m.role === 'RouteManager');
+  }, [managers, managerId]);
 
   // --- 1. DATA PROCESSING ---
   useEffect(() => {
@@ -201,6 +216,40 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     onRefresh(); 
   };
 
+  const handleTransferConfirm = async (newManagerId: string) => {
+    if (!transferModalData) return;
+
+    if (transferModalData.type === 'ROUTE') {
+      await sessionService.transferRouteToManager(transferModalData.routeCode, newManagerId);
+    } else {
+      await sessionService.transferBookingToManager(
+        transferModalData.targetId,
+        transferModalData.routeCode,
+        newManagerId
+      );
+    }
+
+    setTransferModalData(null);
+    onRefresh();
+  };
+
+  const openTransferModal = () => {
+    if (!assignModalData) return;
+    
+    setTransferModalData({
+      type: assignModalData.type,
+      targetId: assignModalData.targetId,
+      routeCode: assignModalData.type === 'ROUTE' 
+        ? assignModalData.targetId 
+        : (assignModalData.routeCode || ''),
+      title: assignModalData.type === 'ROUTE' 
+        ? `Transfer Route ${assignModalData.targetId}`
+        : 'Transfer Job to Manager'
+    });
+    
+    setAssignModalData(null);
+  };
+
   const getWorkerInfo = (id: string | null) => {
     if (!id) return null;
     return contractors.find((x) => x.contractorId === id);
@@ -256,6 +305,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                             type: 'ROUTE',
                             targetId: route.routeCode,
                             currentWorkerId: route.assignedWorkerId,
+                            routeCode: route.routeCode,
                             title: `Assign Route ${route.routeCode}`
                         });
                     }}
@@ -350,6 +400,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                                                     type: 'JOB',
                                                     targetId: job['Booking ID'],
                                                     currentWorkerId: job['Contractor Number'] || null,
+                                                    routeCode: route.routeCode,
                                                     title: 'Assign Single Job'
                                                 })}
                                                 className={`flex items-center gap-1 px-2 py-1 rounded text-xs border transition-colors ${
@@ -448,6 +499,56 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                       )}
                     </button>
                   );
+              })}
+            </div>
+
+            {/* Transfer to Manager Button - Only if UNASSIGNED and Multiple Managers */}
+            {!assignModalData.currentWorkerId && availableManagers.length > 0 && (
+              <>
+                <div className="border-t border-gray-700 my-3"></div>
+                <button
+                  onClick={openTransferModal}
+                  className="w-full px-3 py-3 text-blue-400 hover:bg-blue-900/10 rounded flex items-center gap-2 text-sm border border-transparent hover:border-blue-900/30 transition-all"
+                >
+                  <Shuffle size={16} /> Transfer to Manager
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* --- TRANSFER TO MANAGER MODAL --- */}
+      {transferModalData && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm animate-fade-in">
+          <div className="bg-gray-900 rounded-lg w-full max-w-sm border border-gray-700 shadow-2xl p-4">
+            <div className="flex justify-between items-center mb-4 pb-2 border-b border-gray-800">
+              <h3 className="font-bold text-white flex items-center gap-2">
+                 <Shuffle size={18} className="text-blue-400" /> 
+                 {transferModalData.title}
+              </h3>
+              <button onClick={() => setTransferModalData(null)}>
+                <X className="text-gray-400 hover:text-white" size={20} />
+              </button>
+            </div>
+            
+            <div className="space-y-1 max-h-64 overflow-y-auto custom-scrollbar pr-1">
+              {availableManagers.map((manager) => {
+                return (
+                  <button
+                    key={manager.userId}
+                    onClick={() => handleTransferConfirm(manager.userId)}
+                    className="w-full text-left px-3 py-3 rounded text-sm flex items-center gap-3 transition-colors text-gray-300 hover:bg-gray-800 border border-transparent hover:border-blue-900/30"
+                  >
+                    <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-700 flex items-center justify-center text-blue-300 font-bold text-xs">
+                      {manager.name.split(' ').map(n => n[0]).join('')}
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="font-medium">{manager.name}</span>
+                      <span className="text-[10px] text-gray-500">Route Manager</span>
+                    </div>
+                  </button>
+                );
               })}
             </div>
           </div>

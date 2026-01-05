@@ -321,6 +321,7 @@ const RMLogbook: React.FC = () => {
               routes={dailyData.routes}
               bookings={dailyData.pendingBookings}
               workers={dailyData.workers}
+              managers={dailyData.managers}
               onRefresh={() => {
                   refreshData();
               }} 

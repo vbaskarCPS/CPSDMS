@@ -305,6 +305,85 @@ class SessionService {
     }
   }
 
+  /**
+   * Transfer route ownership to another manager
+   * Updates the manager_id for the route while keeping worker assignments intact
+   */
+  public async transferRouteToManager(
+    routeCode: string, 
+    newManagerId: string
+  ): Promise<void> {
+    const date = await this.getDailySessionDate();
+    if (!date) return;
+    
+    const { error } = await supabase
+      .from('routes')
+      .update({ manager_id: newManagerId })
+      .eq('route_code', routeCode)
+      .eq('session_date', date);
+    
+    if (error) {
+      console.error("Error transferring route to manager:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Transfer a single booking to another manager
+   * Creates a route entry for the new manager if it doesn't exist
+   * Booking will automatically appear since it matches route_number
+   */
+  public async transferBookingToManager(
+    bookingId: string,
+    routeNumber: string,
+    newManagerId: string
+  ): Promise<void> {
+    const date = await this.getDailySessionDate();
+    if (!date) return;
+
+    // 1. Check if the new manager already has this route
+    const { data: existingRoute } = await supabase
+      .from('routes')
+      .select('*')
+      .eq('route_code', routeNumber)
+      .eq('manager_id', newManagerId)
+      .eq('session_date', date)
+      .maybeSingle();
+
+    // 2. If route doesn't exist, create it
+    if (!existingRoute) {
+      // Get the source route to copy streets
+      const { data: sourceRoute } = await supabase
+        .from('routes')
+        .select('streets')
+        .eq('route_code', routeNumber)
+        .eq('session_date', date)
+        .maybeSingle();
+
+      const streets = sourceRoute?.streets || [];
+
+      // Create new route for target manager
+      const { error: createError } = await supabase
+        .from('routes')
+        .insert({
+          route_code: routeNumber,
+          manager_id: newManagerId,
+          assigned_worker_id: null,
+          streets: streets,
+          session_date: date
+        });
+
+      if (createError) {
+        console.error("Error creating route for new manager:", createError);
+        throw createError;
+      }
+    }
+
+    // 3. Booking automatically appears in new manager's view
+    // since it has route_number that now matches a route owned by new manager
+    // No additional update needed to the booking itself
+  }
+
   // --- 4. AUTHENTICATION ---
 
   public async authenticateRM(username: string, password: string): Promise<ManagementUser | null> {
