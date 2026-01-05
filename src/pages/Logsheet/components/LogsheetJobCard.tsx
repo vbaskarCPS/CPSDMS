@@ -14,6 +14,11 @@ const formatPrice = (rawPrice: string | number | undefined): string => {
   
   const priceStr = String(rawPrice).trim();
   
+  // If price is just letters (RJ, SP), return as-is
+  if (/^[A-Za-z]+$/.test(priceStr)) {
+    return priceStr;
+  }
+  
   // Extract prefix (letters at the start) and numeric portion
   const prefixMatch = priceStr.match(/^([A-Za-z]+)/);
   const prefix = prefixMatch ? prefixMatch[1] : '';
