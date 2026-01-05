@@ -80,7 +80,15 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
 
       // Calculate EQ using sessionService formula
       const totalEQ = routeBookings.reduce((sum, b) => {
-        const price = parseFloat(String(b.Price).replace(/[^0-9.]/g, '')) || 0;
+        const priceStr = String(b.Price);
+        
+        // Handle Office Flats (RJ and SP = 2.00 EQ each)
+        if (priceStr === 'RJ' || priceStr === 'SP') {
+          return sum + 2.00;
+        }
+        
+        // Regular calculation for dollar amounts
+        const price = parseFloat(priceStr.replace(/[^0-9.]/g, '')) || 0;
         const weight = b.Prepaid === 'x' ? 0.5 : 1.0;
         const eq = (price * weight) / 1.05 / 25;
         return sum + eq;
