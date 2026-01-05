@@ -99,7 +99,7 @@ export const parseDailySessionXLSX = async (file: File): Promise<DailySessionDat
       firstName: row['First Name'],
       lastName: row['Last Name'],
       cellPhone: formatPhoneNumber(row['Cell Phone'] || ''),
-      status: 'Return', 
+      status: 'Return' as const,
       assignedManagerId: assignedManager ? assignedManager.userId : undefined,
       alumniRate: isNaN(alumniRate) ? 0 : alumniRate,
       silverRate: isNaN(silverRate) ? 0 : silverRate,

@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Phone, Mail, X, CheckCircle2, Ban, Lock,
-  AlertTriangle, Loader, CheckCircle, FileText
+  Loader, CheckCircle, FileText
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
 import { getStorageItem } from '../../lib/localStorage';
@@ -467,7 +467,7 @@ const JobDetail: React.FC = () => {
         </div>
       )}
 
-      {showCreditModal && <CreditCardModal amount={price} clientName={`${firstName} ${lastName}`} onClose={() => setShowCreditModal(false)} onProcess={(details) => { setIsCreditPaid(true); setShowCreditModal(false); setCcData(details); }} />}
+      {showCreditModal && <CreditCardModal amount={String(price)} clientName={`${firstName} ${lastName}`} onClose={() => setShowCreditModal(false)} onProcess={(details) => { setIsCreditPaid(true); setShowCreditModal(false); setCcData(details); }} />}
     </div>
   );
 };

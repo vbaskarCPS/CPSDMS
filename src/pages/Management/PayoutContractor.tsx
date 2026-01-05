@@ -9,7 +9,6 @@ import {
   Loader,
   Phone,
   Mail,
-  MapPin,
   TrendingUp,
   Award,
   AlertCircle

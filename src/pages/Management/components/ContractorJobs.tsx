@@ -8,7 +8,6 @@ import { sessionService } from '../../../lib/sessionService';
 interface ContractorJobsProps {
   bookings: MasterBooking[];
   financialStore: SessionTransaction[];
-  onRevert?: (job: MasterBooking) => void;
 }
 
 // Map the full service names (from AddContractModal) to short badge text
@@ -19,7 +18,7 @@ const BADGE_MAP: Record<string, string> = {
   'Grub Control': 'GRUB'
 };
 
-const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStore, onRevert }) => {
+const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStore }) => {
   const [editingTransaction, setEditingTransaction] = useState<SessionTransaction | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 

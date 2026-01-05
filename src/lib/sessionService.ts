@@ -1,6 +1,5 @@
 // src/lib/sessionService.ts
 import { supabase } from './supabase';
-import { format } from 'date-fns';
 import {
   DailySessionData,
   ManagementUser,
@@ -588,11 +587,11 @@ class SessionService {
       await supabase.from('transactions').delete().eq('job_id', jobId);
   }
 
-  public async revertTransaction(transactionId: string, bookingId?: string): Promise<void> {
+  public async revertTransaction(transactionId: string, jobId?: string): Promise<void> {
     const { error: txError } = await supabase.from('transactions').delete().eq('id', transactionId);
     if (txError) throw txError;
-    if (bookingId && !bookingId.startsWith('NEW-')) {
-        const { error: bkError } = await supabase.from('bookings').update({ status: 'pending' }).eq('booking_id', bookingId);
+    if (jobId && !jobId.startsWith('NEW-')) {
+        const { error: bkError } = await supabase.from('bookings').update({ status: 'pending' }).eq('booking_id', jobId);
         if (bkError) throw bkError;
     }
   }
@@ -618,9 +617,9 @@ class SessionService {
       if (error) throw error;
   }
 
-  public async completeJob(transaction: SessionTransaction, bookingId: string, workerId: string): Promise<void> {
+  public async completeJob(transaction: SessionTransaction, jobId: string, workerId: string): Promise<void> {
     const payload = {
-      job_id: bookingId, 
+      job_id: jobId, 
       worker_id: workerId,
       timestamp: transaction.timestamp,
       type: transaction.type,
@@ -654,8 +653,8 @@ class SessionService {
 
     let existingId: string | null = null;
     
-    if (bookingId) {
-       const { data } = await supabase.from('transactions').select('id').eq('job_id', bookingId).maybeSingle();
+    if (jobId) {
+       const { data } = await supabase.from('transactions').select('id').eq('job_id', jobId).maybeSingle();
        if (data) existingId = data.id;
     }
 
@@ -667,11 +666,11 @@ class SessionService {
         if (error) throw error;
     }
 
-    if (bookingId && !bookingId.startsWith('NEW-')) {
+    if (jobId && !jobId.startsWith('NEW-')) {
       await supabase.from('bookings').update({
           status: 'completed',
           contractor_id: workerId,
-        }).eq('booking_id', bookingId);
+        }).eq('booking_id', jobId);
     }
   }
 
