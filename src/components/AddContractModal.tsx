@@ -66,6 +66,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   const [answers, setAnswers] = useState<Record<string, string>>({}); 
   const [worker, setWorker] = useState<Worker | null>(null);
   const [availableClients, setAvailableClients] = useState<MasterBooking[]>([]);
+  const [assignedRoutes, setAssignedRoutes] = useState<string[]>([]);
 
   // CC Data
   const [ccData, setCcData] = useState<{ number: string, expiry: string, cvc: string } | null>(null);
@@ -118,6 +119,19 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       const w = getStorageItem<Worker | null>('current_user', null);
       if (!w) { setError("User not found."); return; }
       setWorker(w);
+
+      // Fetch assigned routes
+      try {
+        const dailySession = await sessionService.getDailySession();
+        if (dailySession && dailySession.routes) {
+          const myRoutes = dailySession.routes
+            .filter(r => r.assignedWorkerId === w.contractorId)
+            .map(r => r.routeCode);
+          setAssignedRoutes(myRoutes);
+        }
+      } catch (err) {
+        console.warn("Could not load routes", err);
+      }
 
       const activeSession = await sessionService.getActiveLogsheetSession(w.contractorId);
       if (activeSession) {
@@ -203,7 +217,18 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   const handleNewClient = () => {
     if (selectedRecipe?.type === 'Upgrade') return;
     setSelectedBooking(null);
-    setFormData({ firstName: '', lastName: '', address: '', phone: '', email: '', routeNumber: '', notes: '', propertyType: 'FP', hasLockedGate: false, hasSprinkler: false });
+    setFormData({ 
+      firstName: '', 
+      lastName: '', 
+      address: '', 
+      phone: '', 
+      email: '', 
+      routeNumber: assignedRoutes.length > 0 ? assignedRoutes[0] : '', 
+      notes: '', 
+      propertyType: 'FP', 
+      hasLockedGate: false, 
+      hasSprinkler: false 
+    });
     setPaymentInfo(prev => ({ ...prev, amount: '0.00' }));
     // Clear validation errors
     setPhoneError(null);
@@ -403,7 +428,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
                     <div className="text-gray-500 text-center py-4 italic">No eligible clients found.</div>
                 )}
               </div>
-              {selectedRecipe?.type === 'Add-On' && (
+              {selectedRecipe?.type === 'Add-On' && assignedRoutes.length > 0 && (
                   <button onClick={handleNewClient} className="w-full py-3 bg-gray-800 border border-dashed border-gray-600 text-gray-300 rounded-lg mt-4 flex items-center justify-center gap-2 hover:bg-gray-750 transition-colors">
                       <Plus size={16}/> Create New Client Record
                   </button>
@@ -457,7 +482,21 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
                    </div>
                 )}
                 
-                {/* --- RESTORED: Inputs now outside 'else' block --- */}
+                {/* --- Route Code Dropdown (Only for New Clients) --- */}
+                {!selectedBooking && (
+                  <div className="mt-4 pt-4 border-t border-gray-700">
+                    <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Route Code</label>
+                    <select 
+                      value={formData.routeNumber} 
+                      onChange={e => setFormData({...formData, routeNumber: e.target.value})} 
+                      className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white font-mono"
+                    >
+                      {assignedRoutes.map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </div>
+                )}
+                
+                {/* --- Property Type & Options --- */}
                 <div className="mt-4 pt-4 border-t border-gray-700 grid grid-cols-2 gap-4">
                     <div>
                         <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Property Type</label>

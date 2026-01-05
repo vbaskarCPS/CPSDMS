@@ -107,24 +107,28 @@ const NewJob: React.FC = () => {
 
               setAssignedRoutes(myRoutes);
               
-              if (myRoutes.length > 0) {
-                  setRouteCode(myRoutes[0]);
-              } else {
-                  setRouteCode('SALES');
+              // SAFETY CHECK: If no routes, redirect back
+              if (myRoutes.length === 0) {
+                  alert('You have no assigned routes. Please contact your manager to create sales.');
+                  navigate('/logsheet');
+                  return;
               }
+
+              // Set first route as default
+              setRouteCode(myRoutes[0]);
           } catch(err) {
               console.warn("Offline/No session found", err);
-              setAssignedRoutes([]);
-              setRouteCode('SALES');
+              alert('Unable to load route assignments. Please try again.');
+              navigate('/logsheet');
           }
       }
     };
     init();
-  }, []);
+  }, [navigate]);
 
   // Street Suggestions
   useEffect(() => {
-    if (routeCode && routeCode !== 'SALES') {
+    if (routeCode) {
         sessionService.getStreetsForRoute(routeCode).then(streets => {
             if (streets && streets.length > 0) {
                 setSuggestedStreets(streets);
@@ -235,6 +239,11 @@ const NewJob: React.FC = () => {
     }
   };
 
+  // Safety: If somehow they got here with no routes, show nothing
+  if (assignedRoutes.length === 0) {
+    return null;
+  }
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4 animate-fade-in">
       <div className="bg-gray-800 rounded-lg w-full max-w-3xl max-h-[95vh] flex flex-col border border-gray-700 shadow-2xl">
@@ -254,7 +263,6 @@ const NewJob: React.FC = () => {
                   <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Route Code</label>
                   <select value={routeCode} onChange={(e) => setRouteCode(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white font-mono">
                       {assignedRoutes.map(r => <option key={r} value={r}>{r}</option>)}
-                      <option value="SALES">SALES</option>
                   </select>
               </div>
               <div className="md:col-span-2 grid grid-cols-2 gap-4">
@@ -267,8 +275,8 @@ const NewJob: React.FC = () => {
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Street Name *</label>
                       <div className="flex gap-2">
                           {!isCustomStreetMode ? (
-                              <select value={streetName} onChange={(e) => { if (e.target.value === '__CUSTOM__') { setIsCustomStreetMode(true); setStreetName(''); } else { setStreetName(e.target.value); } }} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" required disabled={!routeCode || routeCode === 'SALES'}>
-                                  <option value="">{routeCode && routeCode !== 'SALES' ? '-- Select Street --' : 'Select Route First'}</option>
+                              <select value={streetName} onChange={(e) => { if (e.target.value === '__CUSTOM__') { setIsCustomStreetMode(true); setStreetName(''); } else { setStreetName(e.target.value); } }} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" required disabled={!routeCode}>
+                                  <option value="">{routeCode ? '-- Select Street --' : 'Select Route First'}</option>
                                   {suggestedStreets.map((s, i) => <option key={i} value={s}>{s}</option>)}
                                   <option value="__CUSTOM__" className="text-blue-400 font-bold">+ Other / Type Custom</option>
                               </select>

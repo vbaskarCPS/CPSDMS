@@ -30,6 +30,7 @@ const Dashboard: React.FC = () => {
     'pending' | 'not_done' | 'completed'
   >('pending');
   const [showContractModal, setShowContractModal] = useState(false);
+  const [hasAssignedRoutes, setHasAssignedRoutes] = useState(false);
 
   // Data State
   const [stats, setStats] = useState<SessionStats>(
@@ -61,6 +62,15 @@ const Dashboard: React.FC = () => {
           storedWorker.contractorId
         );
         setJobs(assignments);
+
+        // 3. Check if worker has assigned routes
+        const dailySession = await sessionService.getDailySession();
+        if (dailySession) {
+          const myRoutes = dailySession.routes.filter(
+            r => r.assignedWorkerId === storedWorker.contractorId
+          );
+          setHasAssignedRoutes(myRoutes.length > 0);
+        }
       } catch (err) {
         console.error('Dashboard Load Error', err);
       } finally {
@@ -93,16 +103,15 @@ const Dashboard: React.FC = () => {
     if (viewFilter === 'pending') {
       return jobs.filter(
         (b) =>
-          b.Status !== 'completed' &&
-          b.Status !== 'cancelled' &&
-          b.Status !== 'next_time'
+          !b.Completed && 
+          (!b.Status || b.Status === 'pending')
       );
     } else if (viewFilter === 'not_done') {
       return jobs.filter(
         (b) => b.Status === 'cancelled' || b.Status === 'next_time'
       );
     } else {
-      return jobs.filter((b) => b.Status === 'completed');
+      return jobs.filter((b) => b.Completed === 'x' || b.Status === 'completed');
     }
   }, [jobs, viewFilter]);
 
@@ -132,12 +141,14 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex gap-2">
-            <button
-              onClick={() => navigate('/logsheet/new')}
-              className="p-2 bg-cps-blue text-white rounded-lg shadow-lg hover:bg-blue-600 transition-colors"
-            >
-              <Plus size={20} />
-            </button>
+            {hasAssignedRoutes && (
+              <button
+                onClick={() => navigate('/logsheet/new')}
+                className="p-2 bg-cps-blue text-white rounded-lg shadow-lg hover:bg-blue-600 transition-colors"
+              >
+                <Plus size={20} />
+              </button>
+            )}
             <button
               onClick={() => setShowContractModal(true)}
               className="p-2 bg-purple-600 text-white rounded-lg shadow-lg hover:bg-purple-500 transition-colors"
