@@ -236,10 +236,10 @@ const RMLogbook: React.FC = () => {
                   : 'text-gray-400 hover:text-white'
               }`}
             >
-              <Map size={14} /> Routes{' '}
-              {(stats.unassignedRoutes > 0 || stats.unassignedBookings > 0) && (
-                <span className="flex items-center justify-center w-4 h-4 text-[9px] bg-red-500 text-white rounded-full animate-pulse">
-                  !
+              <Map size={14} /> Routes
+              {stats.unassignedRoutes > 0 && (
+                <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] bg-red-500 text-white rounded-full font-bold">
+                  {stats.unassignedRoutes}
                 </span>
               )}
             </button>
