@@ -1,5 +1,6 @@
 // src/pages/Admin/SessionCommandCenter.tsx
 import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Upload,
   CheckCircle,
@@ -21,7 +22,13 @@ import { DailySessionData, SortOption } from '../../types';
 import PayoutToday from '../Management/PayoutToday';
 
 const SessionCommandCenter: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'lifecycle' | 'payout'>('lifecycle');
+  const [searchParams, setSearchParams] = useSearchParams();
+  
+  // Initialize activeTab from URL query parameter, defaulting to 'lifecycle'
+  const [activeTab, setActiveTab] = useState<'lifecycle' | 'payout'>(() => {
+    const tabParam = searchParams.get('tab');
+    return tabParam === 'payout' ? 'payout' : 'lifecycle';
+  });
 
   // --- STATE ---
   const [feedFile, setFeedFile] = useState<File | null>(null);
@@ -42,6 +49,12 @@ const SessionCommandCenter: React.FC = () => {
   useEffect(() => {
     loadSession();
   }, []);
+
+  // Update URL when tab changes
+  const handleTabChange = (tab: 'lifecycle' | 'payout') => {
+    setActiveTab(tab);
+    setSearchParams({ tab });
+  };
 
   const loadSession = async () => {
     const session = await sessionService.getDailySession();
@@ -160,7 +173,7 @@ const SessionCommandCenter: React.FC = () => {
           
           <div className="bg-gray-800 rounded-lg p-1 flex border border-gray-700">
             <button
-              onClick={() => setActiveTab('lifecycle')}
+              onClick={() => handleTabChange('lifecycle')}
               className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
                 activeTab === 'lifecycle' ? 'bg-cps-blue text-white shadow' : 'text-gray-400 hover:text-white'
               }`}
@@ -168,7 +181,7 @@ const SessionCommandCenter: React.FC = () => {
               Session Cycle
             </button>
             <button
-              onClick={() => setActiveTab('payout')}
+              onClick={() => handleTabChange('payout')}
               className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
                 activeTab === 'payout' ? 'bg-green-600 text-white shadow' : 'text-gray-400 hover:text-white'
               }`}

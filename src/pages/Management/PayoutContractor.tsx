@@ -210,7 +210,7 @@ const PayoutContractor: React.FC = () => {
       await sessionService.updateLogsheetSession(session.id, {
         validation: validationData,
       });
-      navigate('/admin/command-center');
+      navigate('/admin/command-center?tab=payout');
     } catch (err) {
       alert('Error saving payout: ' + err);
       setLoading(false);
