@@ -18,7 +18,7 @@ import {
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService } from '../../lib/sessionService';
 import { generateSessionExport } from '../../lib/exportService';
-import { DailySessionData, SortOption } from '../../types';
+import { DailySessionData, SortOption, LogsheetSession } from '../../types';
 import PayoutToday from '../Management/PayoutToday';
 
 const SessionCommandCenter: React.FC = () => {
@@ -37,6 +37,7 @@ const SessionCommandCenter: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   
   const [currentSession, setCurrentSession] = useState<DailySessionData | null>(null);
+  const [logsheetSessions, setLogsheetSessions] = useState<LogsheetSession[]>([]);
   
   // End of Day State
   const [hasDownloaded, setHasDownloaded] = useState(false);
@@ -59,7 +60,31 @@ const SessionCommandCenter: React.FC = () => {
   const loadSession = async () => {
     const session = await sessionService.getDailySession();
     setCurrentSession(session);
+    
+    // Load logsheet sessions for validation check
+    if (session) {
+      const sessions = await sessionService.getLogsheetSessions();
+      setLogsheetSessions(sessions);
+    }
   };
+
+  // Check payout completion status
+  const payoutStatus = useMemo(() => {
+    if (!logsheetSessions.length) {
+      return { hasValidatedPayouts: false, hasBonuses: false, totalWorkers: 0 };
+    }
+
+    const validatedCount = logsheetSessions.filter(s => s.validation?.isValidated).length;
+    const bonusCount = logsheetSessions.filter(s => s.bonuses && s.bonuses.length > 0).length;
+
+    return {
+      hasValidatedPayouts: validatedCount > 0,
+      hasBonuses: bonusCount > 0,
+      totalWorkers: logsheetSessions.length,
+      validatedWorkers: validatedCount,
+      workersWithBonuses: bonusCount
+    };
+  }, [logsheetSessions]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -102,6 +127,33 @@ const SessionCommandCenter: React.FC = () => {
   };
 
   const handleDownload = async () => {
+    // Safety check: Warn if payouts aren't validated or bonuses aren't assigned
+    if (!payoutStatus.hasValidatedPayouts || !payoutStatus.hasBonuses) {
+      const warnings: string[] = [];
+      
+      if (!payoutStatus.hasValidatedPayouts) {
+        warnings.push(`⚠️ No payouts have been validated yet (0/${payoutStatus.totalWorkers} workers)`);
+      }
+      
+      if (!payoutStatus.hasBonuses) {
+        warnings.push(`⚠️ No bonuses have been assigned yet (0/${payoutStatus.totalWorkers} workers)`);
+      }
+
+      const warningMessage = [
+        "Warning: Session data may be incomplete",
+        "",
+        ...warnings,
+        "",
+        "Downloading now may result in missing payout data in the export.",
+        "",
+        "Are you sure you want to download?"
+      ].join("\n");
+
+      if (!window.confirm(warningMessage)) {
+        return; // User cancelled
+      }
+    }
+
     setLoading(true);
     try {
         await generateSessionExport();
@@ -294,7 +346,27 @@ const SessionCommandCenter: React.FC = () => {
                     <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 flex flex-col justify-between">
                         <div>
                             <h4 className="text-lg font-bold text-white mb-2">1. Download Data</h4>
-                            <p className="text-sm text-gray-400 mb-4">Export all payouts, transactions, and logsheets for payroll.</p>
+                            <p className="text-sm text-gray-400 mb-2">Export all payouts, transactions, and logsheets for payroll.</p>
+                            
+                            {/* Payout Status Warnings */}
+                            {(!payoutStatus.hasValidatedPayouts || !payoutStatus.hasBonuses) && (
+                              <div className="bg-yellow-900/20 border border-yellow-700/50 rounded p-3 mb-4 text-xs space-y-1">
+                                <div className="flex items-center gap-2 text-yellow-400 font-bold mb-1">
+                                  <AlertCircle size={14} />
+                                  <span>Incomplete Payout Data</span>
+                                </div>
+                                {!payoutStatus.hasValidatedPayouts && (
+                                  <div className="text-yellow-300">
+                                    • No validated payouts ({payoutStatus.validatedWorkers}/{payoutStatus.totalWorkers} complete)
+                                  </div>
+                                )}
+                                {!payoutStatus.hasBonuses && (
+                                  <div className="text-yellow-300">
+                                    • No bonuses assigned ({payoutStatus.workersWithBonuses}/{payoutStatus.totalWorkers} have bonuses)
+                                  </div>
+                                )}
+                              </div>
+                            )}
                         </div>
                         <button 
                             onClick={handleDownload}
