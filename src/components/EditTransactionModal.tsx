@@ -93,8 +93,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
           price: parseFloat(formData.price) || 0,
           displayPrice: formData.displayPrice,
           paymentMethod: formData.paymentMethod,
-          item_name: formData.itemName, // We keep the value in state to preserve it, even if removed from UI
-          type: formData.type,
+          type: formData.type as 'Production' | 'Sale' | 'Upgrade' | 'Add-On',
           paymentBreakdown: formData.paymentBreakdown
       };
       
