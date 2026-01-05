@@ -1,11 +1,11 @@
 // src/pages/Management/RMLogbook.tsx
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Users, Map, Loader, Calendar, BookOpen, Activity, DollarSign, Clock } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { ManagementUser, DailySessionData, LogsheetSession } from '../../types';
 import { sessionService } from '../../lib/sessionService';
-import { supabase } from '../../lib/supabase';
+import { subscribeAsRouteManager } from '../../lib/realtimeService';
 
 import RMTeamTab from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
@@ -88,35 +88,35 @@ const RMLogbook: React.FC = () => {
     };
   }, [navigate]);
 
-  // --- Realtime Listeners ---
+  // --- Compute my team's worker IDs for filtering ---
+  const myTeamIds = useMemo(() => {
+    if (!dailyData || !currentUser) return [];
+    return dailyData.workers
+      .filter(w => w.assignedManagerId === currentUser.userId)
+      .map(w => w.contractorId);
+  }, [dailyData, currentUser]);
+
+  // --- Realtime Subscription (Optimized) ---
   useEffect(() => {
-    if (!dailyData?.date) return;
+    if (!dailyData?.date || !currentUser) return;
 
-    console.log('📡 Connecting to Realtime Updates...');
+    console.log('📡 Connecting to Realtime Updates (Filtered)...');
 
-    const channel = supabase
-      .channel('rm-dashboard-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'logsheet_sessions' }, () => refreshData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, () => refreshData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'routes' }, () => refreshData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => refreshData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => refreshData())
-      .subscribe((status) => {
-          if (status === 'SUBSCRIBED') {
-              console.log('✅ Realtime Connected!');
-          }
-      });
+    // Subscribe with filtering for this manager's team
+    const unsubscribe = subscribeAsRouteManager(
+      currentUser.userId,
+      myTeamIds,
+      refreshData
+    );
 
-    // Fallback Refresh: Changed from 60s to 10s
-    const intervalId = setInterval(() => {
-        refreshData();
-    }, 10000); 
+    // Fallback polling - reduced from 10s to 30s since realtime is better now
+    const intervalId = setInterval(refreshData, 30000);
 
     return () => {
-      supabase.removeChannel(channel);
+      unsubscribe();
       clearInterval(intervalId);
     };
-  }, [dailyData?.date]);
+  }, [dailyData?.date, currentUser?.userId, myTeamIds]);
 
 
   // --- CENTRALIZED STAT CALCULATION ---
@@ -125,10 +125,10 @@ const RMLogbook: React.FC = () => {
 
     // 1. Identify "My Team"
     const myTeam = dailyData.workers.filter(w => w.assignedManagerId === currentUser.userId);
-    const myTeamIds = new Set(myTeam.map(w => w.contractorId));
+    const myTeamIdsSet = new Set(myTeam.map(w => w.contractorId));
 
     // 2. Identify "My Team's Sessions" (for Steps, EQ, Upsells)
-    const mySessions = allSessions.filter(s => myTeamIds.has(s.workerId));
+    const mySessions = allSessions.filter(s => myTeamIdsSet.has(s.workerId));
 
     // 3. Identify "My Routes" (for Unassigned badges)
     const myRoutes = dailyData.routes.filter(r => r.managerId === currentUser.userId);
@@ -145,7 +145,7 @@ const RMLogbook: React.FC = () => {
     // C. Pending (Sum of incomplete bookings assigned to my team)
     // We assume dailyData.pendingBookings contains all incomplete jobs for the day
     const assignedPendingCount = dailyData.pendingBookings.filter(b => 
-        b['Contractor Number'] && myTeamIds.has(b['Contractor Number'])
+        b['Contractor Number'] && myTeamIdsSet.has(b['Contractor Number'])
     ).length;
     
     // We also include unassigned bookings in the pending count if that is the desired behavior for "Pending"

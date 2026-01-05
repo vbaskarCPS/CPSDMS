@@ -17,7 +17,7 @@ import {
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
 import { sessionService } from '../../lib/sessionService';
-import { supabase } from '../../lib/supabase';
+import { subscribeAsContractor } from '../../lib/realtimeService';
 import { Worker, SessionStats, MasterBooking } from '../../types';
 import LogsheetJobCard from './components/LogsheetJobCard';
 import AddContractModal from '../../components/AddContractModal';
@@ -38,6 +38,7 @@ const Dashboard: React.FC = () => {
   const [jobs, setJobs] = useState<MasterBooking[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  // Initial load and data fetching
   useEffect(() => {
     const init = async () => {
       setLoading(true);
@@ -68,24 +69,20 @@ const Dashboard: React.FC = () => {
     };
 
     init();
-
-    // --- REALTIME SUBSCRIPTION ---
-    // Listen for changes to bookings (assignments) so the dashboard updates live
-    const channel = supabase
-      .channel('public:bookings')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'bookings' },
-        () => {
-          setRefreshKey((prev) => prev + 1); // Trigger re-fetch
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
   }, [navigate, refreshKey]);
+
+  // Realtime subscription - separate useEffect to avoid re-subscribing on every refresh
+  useEffect(() => {
+    if (!worker) return;
+
+    // Subscribe to only THIS contractor's data (filtered & debounced)
+    const unsubscribe = subscribeAsContractor(
+      worker.contractorId,
+      () => setRefreshKey((prev) => prev + 1)
+    );
+
+    return () => unsubscribe();
+  }, [worker?.contractorId]);
 
   const handleLogout = () => {
     removeStorageItem('current_user');
