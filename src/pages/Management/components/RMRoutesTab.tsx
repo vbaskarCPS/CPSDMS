@@ -20,7 +20,7 @@ interface RouteDisplay {
   routeCode: string;
   totalBookings: number;
   prepaidCount: number;
-  totalValue: number;
+  totalEQ: number; // Changed from totalValue
   assignedWorkerId: string | null;
   items: MasterBooking[];
 }
@@ -35,6 +35,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   // State
   const [displayRoutes, setDisplayRoutes] = useState<RouteDisplay[]>([]);
   const [contractors, setContractors] = useState<Worker[]>([]);
+  const [sortBy, setSortBy] = useState<'alpha' | 'prebooks' | 'eq'>('alpha');
   
   // Selection State
   const [expandedRoutes, setExpandedRoutes] = useState<Set<string>>(new Set());
@@ -77,36 +78,55 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     const enrichedRoutes = myRoutes.map((r) => {
       const routeBookings = groupedBookings[r.routeCode] || [];
 
-      const value = routeBookings.reduce((sum, b) => {
+      // Calculate EQ using sessionService formula
+      const totalEQ = routeBookings.reduce((sum, b) => {
         const price = parseFloat(String(b.Price).replace(/[^0-9.]/g, '')) || 0;
-        return sum + price;
+        const weight = b.Prepaid === 'x' ? 0.5 : 1.0;
+        const eq = (price * weight) / 1.05 / 25;
+        return sum + eq;
       }, 0);
 
       return {
         routeCode: r.routeCode,
         totalBookings: routeBookings.length,
         prepaidCount: routeBookings.filter((b) => b.Prepaid === 'x').length,
-        totalValue: value,
+        totalEQ: totalEQ,
         assignedWorkerId: r.assignedWorkerId,
         items: routeBookings
       };
     });
 
-    // Sort: Unassigned Routes First, Then High Value
-    enrichedRoutes.sort((a, b) => {
-      if (!a.assignedWorkerId && b.assignedWorkerId) return -1;
-      if (a.assignedWorkerId && !b.assignedWorkerId) return 1;
-      return b.totalValue - a.totalValue;
-    });
-
     setDisplayRoutes(enrichedRoutes);
-    
-    // We no longer call onStatsUpdate here. 
-    // The parent RMLogbook now calculates unassigned stats itself.
 
   }, [managerId, routes, bookings, workers]);
 
-  // --- 2. CALCULATE ASSIGNMENTS & SORTING ---
+  // --- 2. SORTING ---
+  
+  const sortedRoutes = useMemo(() => {
+    const routes = [...displayRoutes];
+    
+    // Unassigned routes always come first
+    const unassigned = routes.filter(r => !r.assignedWorkerId);
+    const assigned = routes.filter(r => r.assignedWorkerId);
+    
+    // Sort each group based on selected criteria
+    const sortFn = (a: RouteDisplay, b: RouteDisplay) => {
+      if (sortBy === 'alpha') {
+        return a.routeCode.localeCompare(b.routeCode);
+      } else if (sortBy === 'prebooks') {
+        return b.prepaidCount - a.prepaidCount;
+      } else { // sortBy === 'eq'
+        return b.totalEQ - a.totalEQ;
+      }
+    };
+    
+    unassigned.sort(sortFn);
+    assigned.sort(sortFn);
+    
+    return [...unassigned, ...assigned];
+  }, [displayRoutes, sortBy]);
+
+  // --- 3. CALCULATE ASSIGNMENTS & SORTING ---
   
   const workerRouteMap = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -136,7 +156,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     });
   }, [contractors, workerRouteMap]);
 
-  // --- 3. ACTIONS ---
+  // --- 4. ACTIONS ---
 
   const handleCopy = (text: string, uniqueId: string) => {
     navigator.clipboard.writeText(text);
@@ -180,13 +200,31 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
 
   return (
     <div className="max-w-4xl mx-auto pb-20 space-y-4">
+      {/* Sort Dropdown */}
+      {displayRoutes.length > 0 && (
+        <div className="flex justify-end mb-4">
+          <div className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 shadow-sm">
+            <span className="text-xs text-gray-400 font-medium">Sort by:</span>
+            <select 
+              value={sortBy} 
+              onChange={(e) => setSortBy(e.target.value as any)}
+              className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cps-blue cursor-pointer"
+            >
+              <option value="alpha">Alphabetically</option>
+              <option value="prebooks">Highest Prebooks</option>
+              <option value="eq">Highest Lined Up (EQ)</option>
+            </select>
+          </div>
+        </div>
+      )}
+
       {displayRoutes.length === 0 && (
           <div className="text-center text-gray-500 py-10 bg-gray-800/30 rounded-lg border border-gray-700/50">
             No routes assigned to you.
           </div>
       )}
 
-      {displayRoutes.map((route) => {
+      {sortedRoutes.map((route) => {
         const assignedRouteWorker = getWorkerInfo(route.assignedWorkerId);
         const isExpanded = expandedRoutes.has(route.routeCode);
 
@@ -244,7 +282,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                 className="flex items-center gap-4 cursor-pointer hover:bg-white/5 rounded px-2 py-1 transition-colors"
               >
                   <div className="text-right">
-                      <div className="text-lg font-bold text-gray-200 font-mono">${route.totalValue.toFixed(0)}</div>
+                      <div className="text-lg font-bold text-gray-200 font-mono">{route.totalEQ.toFixed(2)} EQ</div>
                       <div className="text-[10px] text-gray-500 uppercase font-bold flex gap-2 justify-end">
                           <span>{route.totalBookings} Jobs</span>
                           {route.prepaidCount > 0 && <span className="text-green-500">{route.prepaidCount} PP</span>}
