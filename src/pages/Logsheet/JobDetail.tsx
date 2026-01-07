@@ -33,6 +33,7 @@ const JobDetail: React.FC = () => {
 
   // --- STATE ---
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false); // NEW: Separate saving state
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [worker, setWorker] = useState<Worker | null>(null);
   const [originalJob, setOriginalJob] = useState<MasterBooking | null>(null);
@@ -176,6 +177,9 @@ const JobDetail: React.FC = () => {
 
   const handleSave = async () => {
     if (!worker || !originalJob) return;
+    
+    // NEW: Prevent double-click
+    if (saving) return;
 
     // --- VALIDATION ---
     const pError = getPhoneValidationError(phone);
@@ -189,53 +193,54 @@ const JobDetail: React.FC = () => {
       return;
     }
 
-    setLoading(true);
-
-    const rawPrice = (price || '').toString().trim().toUpperCase();
-    let priceVal = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
-
-    if (rawPrice.startsWith('RJ') || rawPrice.startsWith('SP')) {
-      priceVal = 52.5;
-    }
-
-    const fullAddress = `${houseNumber} ${streetName}`.trim();
-    const newTxId = generateUUID();
-
-    const tx: SessionTransaction = {
-      id: newTxId,
-      jobId: originalJob['Booking ID'],
-      timestamp: new Date().toISOString(),
-      customerId: originalJob['Booking ID'],
-      customerName: `${firstName} ${lastName}`,
-      address: fullAddress,
-      customerPhone: phone,
-      customerEmail: email,
-      workerId: worker.contractorId,
-      workerName: worker.firstName,
-      routeManagerName: 'RM',
-      routeCode: routeNumber,
-      type: 'Production',
-      price: priceVal,
-      displayPrice: rawPrice,
-      isPaid: paymentMethod !== 'Billed',
-      paymentMethod: isPrepaid ? 'Prepaid' : paymentMethod,
-      
-      invoiceNumber: paymentMethod === 'Billed' ? invoiceNumber : undefined,
-      etransferEmail: paymentMethod === 'E-Transfer' ? etransferEmail : undefined,
-      chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : undefined,
-      
-      ccFullNumber: ccData?.number,
-      ccExpiry: ccData?.expiry,
-      ccCVC: ccData?.cvc,
-      items: [{ name: 'Aeration', price: priceVal }],
-      itemDescription: officeNotes,
-      region: 'West',
-      seasonId: 'west-aeration',
-      isWestSplit: false,
-      serviceType: propertyType as any,
-    } as any;
+    // NEW: Set saving state
+    setSaving(true);
 
     try {
+      const rawPrice = (price || '').toString().trim().toUpperCase();
+      let priceVal = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
+
+      if (rawPrice.startsWith('RJ') || rawPrice.startsWith('SP')) {
+        priceVal = 52.5;
+      }
+
+      const fullAddress = `${houseNumber} ${streetName}`.trim();
+      const newTxId = generateUUID();
+
+      const tx: SessionTransaction = {
+        id: newTxId,
+        jobId: originalJob['Booking ID'],
+        timestamp: new Date().toISOString(),
+        customerId: originalJob['Booking ID'],
+        customerName: `${firstName} ${lastName}`,
+        address: fullAddress,
+        customerPhone: phone,
+        customerEmail: email,
+        workerId: worker.contractorId,
+        workerName: worker.firstName,
+        routeManagerName: 'RM',
+        routeCode: routeNumber,
+        type: 'Production',
+        price: priceVal,
+        displayPrice: rawPrice,
+        isPaid: paymentMethod !== 'Billed',
+        paymentMethod: isPrepaid ? 'Prepaid' : paymentMethod,
+        
+        invoiceNumber: paymentMethod === 'Billed' ? invoiceNumber : undefined,
+        etransferEmail: paymentMethod === 'E-Transfer' ? etransferEmail : undefined,
+        chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : undefined,
+        
+        ccFullNumber: ccData?.number,
+        ccExpiry: ccData?.expiry,
+        ccCVC: ccData?.cvc,
+        items: [{ name: 'Aeration', price: priceVal }],
+        itemDescription: officeNotes,
+        region: 'West',
+        seasonId: 'west-aeration',
+        isWestSplit: false,
+        serviceType: propertyType as any,
+      } as any;
+
       await sessionService.completeJob(
         tx,
         originalJob['Booking ID'],
@@ -259,7 +264,7 @@ const JobDetail: React.FC = () => {
     } catch (err) {
       console.error(err);
       alert('Failed to save job. Please try again.');
-      setLoading(false);
+      setSaving(false);
     }
   };
 
@@ -286,11 +291,11 @@ const JobDetail: React.FC = () => {
         {/* HEADER */}
         <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-900/50 rounded-t-lg flex-shrink-0">
           <div className="flex items-center gap-3">
-              <button onClick={() => navigate('/logsheet')} className="p-1 hover:bg-gray-700 rounded text-gray-400"><ArrowLeft size={20} /></button>
+              <button onClick={() => navigate('/logsheet')} className="p-1 hover:bg-gray-700 rounded text-gray-400" disabled={saving}><ArrowLeft size={20} /></button>
               <div><h2 className="text-xl font-bold text-white">Job Details</h2><p className="text-xs text-gray-400">{originalJob?.['Booking ID']}</p></div>
               {isReadOnly && <span className="bg-blue-900/30 text-blue-300 text-xs px-2 py-0.5 rounded border border-blue-800 flex items-center gap-1"><Lock size={10}/> Completed</span>}
           </div>
-          <button onClick={() => navigate('/logsheet')} className="text-gray-400 hover:text-white"><X size={24}/></button>
+          <button onClick={() => navigate('/logsheet')} className="text-gray-400 hover:text-white" disabled={saving}><X size={24}/></button>
         </div>
 
         <div className="overflow-y-auto p-4 space-y-6 flex-grow custom-scrollbar">
@@ -418,7 +423,7 @@ const JobDetail: React.FC = () => {
 
                {paymentMethod === 'Credit Card' && (
                    <div className={`mb-4 p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
-                       <span className="text-sm font-medium">{isCreditPaid ? "Card Processed" : "Payment Required"}</span>
+                       <span className="text-sm font-medium">{isCreditPaid ? "Secured Card Info to HQ" : "Secure Card Info"}</span>
                        {isCreditPaid ? <CheckCircle size={20}/> : <button onClick={() => setShowCreditModal(true)} className="underline text-xs">Open Terminal</button>}
                    </div>
                )}
@@ -428,8 +433,22 @@ const JobDetail: React.FC = () => {
         <div className="p-4 border-t border-gray-700 bg-gray-900/50 rounded-b-lg flex justify-between items-center flex-shrink-0 gap-4">
              {!isReadOnly ? (
                  <>
-                     <button onClick={() => setShowCancelModal(true)} className="flex items-center gap-2 px-4 py-3 bg-red-900/20 hover:bg-red-900/40 text-red-300 border border-red-800 rounded-md font-bold transition-colors"><Ban size={18} /> Cancel / Skip</button>
-                     <button onClick={handleSave} disabled={paymentMethod === 'Credit Card' && !isCreditPaid} className="flex-1 sm:flex-none px-8 py-3 bg-green-600 hover:bg-green-500 text-white rounded-md font-bold shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"><CheckCircle2 size={18} /> Complete Job</button>
+                     <button onClick={() => setShowCancelModal(true)} className="flex items-center gap-2 px-4 py-3 bg-red-900/20 hover:bg-red-900/40 text-red-300 border border-red-800 rounded-md font-bold transition-colors" disabled={saving}><Ban size={18} /> Cancel / Skip</button>
+                     <button 
+                       onClick={handleSave} 
+                       disabled={(paymentMethod === 'Credit Card' && !isCreditPaid) || saving}
+                       className="flex-1 sm:flex-none px-8 py-3 bg-green-600 hover:bg-green-500 text-white rounded-md font-bold shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                     >
+                       {saving ? (
+                         <>
+                           <Loader className="animate-spin" size={18} /> Processing...
+                         </>
+                       ) : (
+                         <>
+                           <CheckCircle2 size={18} /> Complete Job
+                         </>
+                       )}
+                     </button>
                  </>
              ) : (
                  <p className="text-center w-full text-gray-500 italic text-sm">This record is finalized.</p>

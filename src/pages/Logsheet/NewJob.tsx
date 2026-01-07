@@ -41,7 +41,6 @@ const NewJob: React.FC = () => {
   
   // Payment State
   const [paymentMethod, setPaymentMethod] = useState('Cash');
-  const [invoiceNumber, setInvoiceNumber] = useState('');
   const [etransferEmail, setEtransferEmail] = useState('');
   const [chequeNumber, setChequeNumber] = useState('');
   
@@ -60,6 +59,9 @@ const NewJob: React.FC = () => {
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [etransferEmailError, setEtransferEmailError] = useState<string | null>(null);
+
+  // NEW: Saving state to prevent double-click
+  const [saving, setSaving] = useState(false);
 
   // --- HANDLERS FOR PHONE & EMAIL ---
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -158,6 +160,10 @@ const NewJob: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // NEW: Prevent double-click
+    if (saving) return;
+    
     setError(null);
 
     if (!worker) { setError("No worker session."); return; }
@@ -175,67 +181,70 @@ const NewJob: React.FC = () => {
       return;
     }
     
-    // Ensure session exists
-    let activeSession = await sessionService.getActiveLogsheetSession(worker.contractorId);
-    if (!activeSession) { 
-        activeSession = await sessionService.startLogsheetSession(worker.contractorId);
-    }
-
-    const rawPrice = parseFloat(amount) || 0;
-    const transactionPrice = Math.round(rawPrice * 100) / 100;
-    
-    const newTransactionId = generateUUID();
-    const placeholderJobId = `NEW-${Date.now()}`;
-
-    // Create Transaction Record
-    const transactionData: SessionTransaction = {
-        id: newTransactionId,
-        jobId: placeholderJobId, 
-        timestamp: new Date().toISOString(),
-        customerId: "WALKUP",
-        customerName: `${firstName} ${lastName}`,
-        address: `${houseNumber} ${streetName}`.trim(),
-        customerPhone: phone,
-        customerEmail: email,
-        workerId: worker.contractorId,
-        workerName: worker.firstName,
-        
-        routeManagerName: 'RM', 
-        routeCode: routeCode,
-        
-        price: transactionPrice,
-        displayPrice: amount, 
-        type: 'Sale',
-        items: [{ name: 'Aeration', price: transactionPrice }],
-        paymentMethod: paymentMethod,
-        isPaid: paymentMethod !== 'Billed',
-        invoiceNumber: paymentMethod === 'Billed' ? invoiceNumber : undefined,
-        etransferEmail: paymentMethod === 'E-Transfer' ? etransferEmail : undefined,
-        chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : undefined,
-        ccFullNumber: ccData?.number,
-        ccExpiry: ccData?.expiry,
-        ccCVC: ccData?.cvc,
-        itemDescription: 'New Sale',
-        serviceType: propertyType as any, 
-        region: 'West', 
-        seasonId: 'west-aeration',
-        isWestSplit: false
-    } as any;
+    // NEW: Set saving state
+    setSaving(true);
 
     try {
-        await sessionService.completeJob(transactionData, placeholderJobId, worker.contractorId);
+      // Ensure session exists
+      let activeSession = await sessionService.getActiveLogsheetSession(worker.contractorId);
+      if (!activeSession) { 
+          activeSession = await sessionService.startLogsheetSession(worker.contractorId);
+      }
 
-        // Optimistic Update
-        const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
-        if (session) {
-            const newStats = sessionService.recalculateStats(session.financialStore, 5);
-            await sessionService.updateLogsheetSession(session.id, { stats: newStats });
-        }
+      const rawPrice = parseFloat(amount) || 0;
+      const transactionPrice = Math.round(rawPrice * 100) / 100;
+      
+      const newTransactionId = generateUUID();
+      const placeholderJobId = `NEW-${Date.now()}`;
 
-        navigate('/logsheet');
+      // Create Transaction Record
+      const transactionData: SessionTransaction = {
+          id: newTransactionId,
+          jobId: placeholderJobId, 
+          timestamp: new Date().toISOString(),
+          customerId: "WALKUP",
+          customerName: `${firstName} ${lastName}`,
+          address: `${houseNumber} ${streetName}`.trim(),
+          customerPhone: phone,
+          customerEmail: email,
+          workerId: worker.contractorId,
+          workerName: worker.firstName,
+          
+          routeManagerName: 'RM', 
+          routeCode: routeCode,
+          
+          price: transactionPrice,
+          displayPrice: amount, 
+          type: 'Sale',
+          items: [{ name: 'Aeration', price: transactionPrice }],
+          paymentMethod: paymentMethod,
+          isPaid: paymentMethod !== 'Billed',
+          etransferEmail: paymentMethod === 'E-Transfer' ? etransferEmail : undefined,
+          chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : undefined,
+          ccFullNumber: ccData?.number,
+          ccExpiry: ccData?.expiry,
+          ccCVC: ccData?.cvc,
+          itemDescription: 'New Sale',
+          serviceType: propertyType as any, 
+          region: 'West', 
+          seasonId: 'west-aeration',
+          isWestSplit: false
+      } as any;
+
+      await sessionService.completeJob(transactionData, placeholderJobId, worker.contractorId);
+
+      // Optimistic Update
+      const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
+      if (session) {
+          const newStats = sessionService.recalculateStats(session.financialStore, 5);
+          await sessionService.updateLogsheetSession(session.id, { stats: newStats });
+      }
+
+      navigate('/logsheet');
     } catch (err: any) {
-        console.error(err);
-        setError("Failed to save sale: " + err.message);
+      console.error(err);
+      setError("Failed to save sale: " + err.message);
+      setSaving(false);
     }
   };
 
@@ -249,7 +258,7 @@ const NewJob: React.FC = () => {
       <div className="bg-gray-800 rounded-lg w-full max-w-3xl max-h-[95vh] flex flex-col border border-gray-700 shadow-2xl">
         <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-900/50 rounded-t-lg flex-shrink-0">
           <div><h2 className="text-xl font-bold text-white">New Sale</h2></div>
-          <button onClick={() => navigate('/logsheet')} className="text-gray-400 hover:text-white"><X size={24} /></button>
+          <button onClick={() => navigate('/logsheet')} className="text-gray-400 hover:text-white" disabled={saving}><X size={24} /></button>
         </div>
         
         {error && <div className="m-4 p-3 bg-red-900/30 text-red-300 border border-red-700 rounded-md text-sm flex items-center gap-2"><AlertCircle size={16} /> {error}</div>}
@@ -360,12 +369,8 @@ const NewJob: React.FC = () => {
                         <option value="Cheque">Cheque</option>
                         <option value="E-Transfer">E-Transfer</option>
                         <option value="Credit Card">Credit Card</option>
-                        <option value="Billed">Billed (Invoice)</option>
                     </select>
                 </div>
-                {paymentMethod === 'Billed' && (
-                    <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Invoice Number</label><input value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" placeholder="INV-..." /></div>
-                )}
                 {paymentMethod === 'E-Transfer' && (
                     <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Bank Email</label>
@@ -389,7 +394,7 @@ const NewJob: React.FC = () => {
 
             {paymentMethod === 'Credit Card' && (
                 <div className={`mt-3 p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
-                    <span className="text-sm font-medium">{isCreditPaid ? "Credit Card Processed Successfully" : "Click Save to Process Card"}</span>
+                    <span className="text-sm font-medium">{isCreditPaid ? "Secured Card Info to HQ" : "Open Terminal to Secure"}</span>
                     {isCreditPaid ? <CheckCircle size={20}/> : <button type="button" onClick={() => setShowCreditModal(true)} className="text-xs underline">Re-open Card Entry</button>}
                 </div>
             )}
@@ -397,8 +402,22 @@ const NewJob: React.FC = () => {
 
         </form>
         <div className="p-4 border-t border-gray-700 bg-gray-900/50 rounded-b-lg flex justify-end gap-3 flex-shrink-0">
-            <button onClick={() => navigate('/logsheet')} className="px-4 py-3 text-gray-400 hover:text-white font-medium">Cancel</button>
-            <button onClick={handleSubmit} className="px-8 py-3 bg-cps-green hover:bg-green-600 text-white rounded-md font-bold shadow-lg flex items-center gap-2"><Save size={18} /> Save & Complete</button>
+            <button onClick={() => navigate('/logsheet')} className="px-4 py-3 text-gray-400 hover:text-white font-medium" disabled={saving}>Cancel</button>
+            <button 
+              onClick={handleSubmit} 
+              disabled={saving}
+              className="px-8 py-3 bg-cps-green hover:bg-green-600 text-white rounded-md font-bold shadow-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? (
+                <>
+                  <Loader className="animate-spin" size={18} /> Processing...
+                </>
+              ) : (
+                <>
+                  <Save size={18} /> Save & Complete
+                </>
+              )}
+            </button>
         </div>
       </div>
 

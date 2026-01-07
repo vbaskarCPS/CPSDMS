@@ -575,7 +575,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
 
                  {paymentInfo.method === 'Credit Card' && (
                   <div className={`p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
-                      <span className="text-xs font-bold">{isCreditPaid ? "CARD APPROVED" : "PAYMENT REQUIRED"}</span>
+                      <span className="text-xs font-bold">{isCreditPaid ? "SECURED" : "SECURE CARD"}</span>
                       {!isCreditPaid && <button onClick={() => setShowCreditModal(true)} className="underline text-xs">Open Terminal</button>}
                   </div>
                  )}
