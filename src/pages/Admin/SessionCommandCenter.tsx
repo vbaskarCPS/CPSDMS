@@ -11,7 +11,8 @@ import {
   Filter,
   Download,
   Lock,
-  Unlock
+  Unlock,
+  Mail
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService } from '../../lib/sessionService';
@@ -39,6 +40,9 @@ const SessionCommandCenter: React.FC = () => {
   
   // End of Day State
   const [hasDownloaded, setHasDownloaded] = useState(false);
+  
+  // Email Settings
+  const [emailEnabled, setEmailEnabled] = useState(true);
 
   // --- PAYOUT STATE ---
   const [payoutSearch, setPayoutSearch] = useState('');
@@ -109,7 +113,7 @@ const SessionCommandCenter: React.FC = () => {
     if (window.confirm('This will overwrite/start the session in the cloud. Continue?')) {
       setLoading(true);
       try {
-        await sessionService.uploadDailySession(previewData);
+        await sessionService.uploadDailySession(previewData, emailEnabled);
         await loadSession(); // Reload from DB
         setPreviewData(null);
         setFeedFile(null);
@@ -321,16 +325,41 @@ const SessionCommandCenter: React.FC = () => {
                             </table>
                         </div>
 
-                        {/* ACTION: START SESSION */}
+                        {/* EMAIL TOGGLE + START SESSION */}
                         {previewData && !currentSession && (
-                            <div className="mt-8 flex justify-end">
-                                <button 
-                                    onClick={handleStartSession}
-                                    disabled={loading}
-                                    className="bg-green-600 hover:bg-green-500 text-white px-8 py-3 rounded-lg font-bold shadow-lg flex items-center gap-2 transform transition-all hover:scale-105"
-                                >
-                                    <Play size={20} fill="currentColor" /> Initialize Session
-                                </button>
+                            <div className="mt-8 space-y-4">
+                                {/* Email Toggle Checkbox */}
+                                <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700">
+                                  <label className="flex items-start gap-3 cursor-pointer group">
+                                    <input 
+                                      type="checkbox" 
+                                      checked={emailEnabled}
+                                      onChange={(e) => setEmailEnabled(e.target.checked)}
+                                      className="w-5 h-5 mt-0.5 accent-blue-500 cursor-pointer flex-shrink-0"
+                                    />
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-2 text-white font-medium mb-1">
+                                        <Mail size={16} className={emailEnabled ? 'text-green-400' : 'text-gray-500'} />
+                                        <span>Send Receipt Emails</span>
+                                      </div>
+                                      <p className="text-xs text-gray-400 leading-relaxed">
+                                        Automatically email receipts to customers when jobs are completed during this session.
+                                        {!emailEnabled && ' (Currently disabled - no emails will be sent)'}
+                                      </p>
+                                    </div>
+                                  </label>
+                                </div>
+
+                                {/* Initialize Button */}
+                                <div className="flex justify-end">
+                                    <button 
+                                        onClick={handleStartSession}
+                                        disabled={loading}
+                                        className="bg-green-600 hover:bg-green-500 text-white px-8 py-3 rounded-lg font-bold shadow-lg flex items-center gap-2 transform transition-all hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        <Play size={20} fill="currentColor" /> Initialize Session
+                                    </button>
+                                </div>
                             </div>
                         )}
                     </div>

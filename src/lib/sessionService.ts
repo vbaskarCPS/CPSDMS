@@ -146,7 +146,7 @@ class SessionService {
 
   // --- 3. SESSION MANAGEMENT ---
 
-  public async uploadDailySession(data: DailySessionData): Promise<void> {
+  public async uploadDailySession(data: DailySessionData, emailEnabled: boolean = true): Promise<void> {
     const { error: sessError } = await supabase
       .from('daily_sessions')
       .insert({ date: data.date, is_active: true });
@@ -221,6 +221,7 @@ class SessionService {
       date: data.date,
       status: 'OPEN',
       stats: this.getEmptyStats(),
+      email_enabled: emailEnabled, // Use the provided parameter
     }));
     const { error: lsError } = await supabase
       .from('logsheet_sessions')
@@ -531,6 +532,7 @@ class SessionService {
       date: date,
       status: 'OPEN',
       stats: this.getEmptyStats(),
+      email_enabled: true,
     };
     const { error } = await supabase.from('logsheet_sessions').insert(newSession);
     if (error) throw error;
@@ -672,9 +674,121 @@ class SessionService {
           contractor_id: workerId,
         }).eq('booking_id', jobId);
     }
+
+    // --- SEND EMAIL RECEIPT (Non-blocking) ---
+    if (transaction.customerEmail && transaction.customerEmail.trim() !== '') {
+      this.sendReceiptEmail({
+        customerEmail: transaction.customerEmail,
+        customerName: transaction.customerName,
+        customerAddress: transaction.address || '',
+        date: new Date(transaction.timestamp).toLocaleDateString(),
+        serviceName: transaction.items?.[0]?.name || transaction.serviceName || 'Service',
+        amount: transaction.displayPrice || `$${transaction.price.toFixed(2)}`,
+        paymentMethod: transaction.paymentMethod,
+        workerName: transaction.workerName,
+        transactionId: transaction.jobId
+      }).catch(err => {
+        console.error('📧 Email send failed (non-blocking):', err);
+      });
+    }
   }
 
-  // --- 7. UTILS ---
+  // --- 7. EMAIL RECEIPTS ---
+
+  /**
+   * Sends an email receipt via Supabase Edge Function
+   * @param transactionData - The transaction details for the receipt
+   * @returns Promise<boolean> - Success status (non-blocking)
+   */
+  public async sendReceiptEmail(transactionData: {
+    customerEmail: string;
+    customerName: string;
+    customerAddress: string;
+    date: string;
+    serviceName: string;
+    amount: string;
+    paymentMethod: string;
+    workerName: string;
+    transactionId: string;
+  }): Promise<boolean> {
+    // Check if email is enabled for this session
+    try {
+      const date = await this.getDailySessionDate();
+      if (!date) return false;
+
+      const { data: sessionData } = await supabase
+        .from('logsheet_sessions')
+        .select('email_enabled')
+        .eq('date', date)
+        .limit(1)
+        .maybeSingle();
+
+      // If email_enabled is false, skip sending
+      if (sessionData && sessionData.email_enabled === false) {
+        console.log('📧 Email sending disabled for this session');
+        return false;
+      }
+
+      // Call the Edge Function (non-blocking)
+      const { data, error } = await supabase.functions.invoke('bright-processor', {
+        body: transactionData
+      });
+
+      if (error) {
+        console.error('📧 Email send error:', error);
+        return false;
+      }
+
+      console.log('📧 Email sent successfully:', data);
+      return true;
+    } catch (err) {
+      console.error('📧 Email send failed:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Gets email status for a transaction
+   */
+  public async getEmailStatus(transactionId: string): Promise<{
+    sent: boolean;
+    bounced: boolean;
+    reason?: string;
+  } | null> {
+    try {
+      const { data } = await supabase
+        .from('email_logs')
+        .select('status, bounce_reason')
+        .eq('transaction_id', transactionId)
+        .maybeSingle();
+
+      if (!data) return null;
+
+      return {
+        sent: data.status === 'sent',
+        bounced: data.status === 'bounced',
+        reason: data.bounce_reason
+      };
+    } catch (err) {
+      console.error('Error fetching email status:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Toggles email sending for the current session
+   */
+  public async toggleSessionEmail(enabled: boolean): Promise<void> {
+    const date = await this.getDailySessionDate();
+    if (!date) return;
+
+    await supabase
+      .from('logsheet_sessions')
+      .update({ email_enabled: enabled })
+      .eq('date', date);
+  }
+
+  // --- 8. UTILS ---
 
   public getEmptyStats(): SessionStats {
     return {

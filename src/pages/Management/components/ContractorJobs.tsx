@@ -1,5 +1,5 @@
 // src/pages/Management/components/ContractorJobs.tsx
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Phone, Mail, Loader, Clock, X as XIcon } from 'lucide-react';
 import { MasterBooking, SessionTransaction } from '../../../types';
 import EditTransactionModal from '../../../components/EditTransactionModal';
@@ -16,6 +16,47 @@ const BADGE_MAP: Record<string, string> = {
   'Lawn Rejuvenation': 'REJUV',
   'Dethatching': 'DET',
   'Grub Control': 'GRUB'
+};
+
+// --- EMAIL STATUS COMPONENT ---
+const EmailStatusIcon: React.FC<{ transactionId: string; email: string }> = ({ transactionId, email }) => {
+  const [status, setStatus] = useState<{ sent: boolean; bounced: boolean; reason?: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  
+  useEffect(() => {
+    sessionService.getEmailStatus(transactionId)
+      .then(setStatus)
+      .finally(() => setLoading(false));
+  }, [transactionId]);
+  
+  if (loading) {
+    return <Mail size={14} className="text-gray-500 opacity-50 animate-pulse" strokeWidth={2.5} />;
+  }
+  
+  if (!status || !status.sent) {
+    // No email sent (grey)
+    return (
+      <span title="No email sent">
+        <Mail size={14} className="text-gray-600 opacity-30" strokeWidth={2.5} />
+      </span>
+    );
+  }
+  
+  if (status.bounced) {
+    // Email bounced (red)
+    return (
+      <span title={`Email bounced: ${status.reason || 'Unknown reason'}`}>
+        <Mail size={14} className="text-red-500" strokeWidth={2.5} />
+      </span>
+    );
+  }
+  
+  // Email sent successfully (green)
+  return (
+    <span title={`Email sent to ${email}`}>
+      <Mail size={14} className="text-green-500" strokeWidth={2.5} />
+    </span>
+  );
 };
 
 const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStore }) => {
@@ -212,10 +253,16 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
                       </span>
                   </div>
 
-                  {/* Icons */}
+                  {/* Icons with Email Status */}
                   <div className="flex items-center gap-2 flex-shrink-0">
                       <Phone size={14} className={job['Cell Phone'] || job['Home Phone'] ? "text-green-500" : "text-gray-600 opacity-30"} strokeWidth={2.5} />
-                      <Mail size={14} className={job['Email Address'] ? "text-blue-500" : "text-gray-600 opacity-30"} strokeWidth={2.5} />
+                      
+                      {/* Email Icon with Status */}
+                      {isPaid && job['Email Address'] ? (
+                        <EmailStatusIcon transactionId={job['Booking ID']} email={job['Email Address']} />
+                      ) : (
+                        <Mail size={14} className={job['Email Address'] ? "text-blue-500" : "text-gray-600 opacity-30"} strokeWidth={2.5} />
+                      )}
                   </div>
 
                   {/* Payment Info */}

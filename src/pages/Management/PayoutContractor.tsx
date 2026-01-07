@@ -25,6 +25,42 @@ const BADGE_MAP: Record<string, string> = {
   'Grub Control': 'GRUB'
 };
 
+// --- EMAIL STATUS BADGE COMPONENT ---
+const EmailStatusBadge: React.FC<{ transactionId: string; email: string }> = ({ transactionId, email }) => {
+  const [status, setStatus] = useState<{ sent: boolean; bounced: boolean; reason?: string } | null>(null);
+  const [loading, setLoading] = useState(true);
+  
+  useEffect(() => {
+    sessionService.getEmailStatus(transactionId)
+      .then(setStatus)
+      .finally(() => setLoading(false));
+  }, [transactionId]);
+  
+  if (loading) {
+    return (
+      <span className="flex items-center gap-1 text-[10px] text-gray-500 truncate max-w-[150px] animate-pulse">
+        <Mail size={12} strokeWidth={2.5} />
+        {email}
+      </span>
+    );
+  }
+  
+  const isBounced = status?.bounced;
+  const wasSent = status?.sent;
+  
+  return (
+    <span 
+      className={`flex items-center gap-1 text-[10px] truncate max-w-[150px] ${
+        isBounced ? 'text-red-400 font-bold' : wasSent ? 'text-green-400' : 'text-blue-400'
+      }`}
+      title={isBounced ? `⚠️ Bounced: ${status?.reason}` : wasSent ? `✓ Email sent to ${email}` : email}
+    >
+      <Mail size={12} strokeWidth={2.5} />
+      {email}
+    </span>
+  );
+};
+
 const PayoutContractor: React.FC = () => {
   const { contractorId } = useParams();
   const navigate = useNavigate();
@@ -256,7 +292,7 @@ const PayoutContractor: React.FC = () => {
             </span>
           </div>
 
-          {/* Contact Info - Expanded */}
+          {/* Contact Info with Email Status */}
           <div className="flex items-center gap-3 flex-shrink-0">
             {tx.customerPhone ? (
               <span className="flex items-center gap-1 text-[10px] text-green-400">
@@ -266,11 +302,10 @@ const PayoutContractor: React.FC = () => {
             ) : (
               <Phone size={14} className="text-gray-600 opacity-30" strokeWidth={2.5} />
             )}
+            
+            {/* Email with Bounce Detection */}
             {tx.customerEmail ? (
-              <span className="flex items-center gap-1 text-[10px] text-blue-400 truncate max-w-[150px]">
-                <Mail size={12} strokeWidth={2.5} />
-                {tx.customerEmail}
-              </span>
+              <EmailStatusBadge transactionId={tx.jobId} email={tx.customerEmail} />
             ) : (
               <Mail size={14} className="text-gray-600 opacity-30" strokeWidth={2.5} />
             )}
