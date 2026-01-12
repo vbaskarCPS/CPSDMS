@@ -51,6 +51,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   const [transferModeId, setTransferModeId] = useState<string | null>(null);
   const [selectedTransferManager, setSelectedTransferManager] = useState<string>("");
 
+  // Refresh Key to trigger data reload
+  const [refreshKey, setRefreshKey] = useState(0);
+
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -124,7 +127,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     };
 
     loadData();
-  }, [managerId, workers, allSessions]);
+  }, [managerId, workers, allSessions, refreshKey]);
 
   const toggleItem = (id: string) => {
     setExpandedItem(expandedItem === id ? null : id);
@@ -136,6 +139,10 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     navigator.clipboard.writeText(phone);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 1500);
+  };
+
+  const handleRefreshData = () => {
+    setRefreshKey(prev => prev + 1);
   };
 
   const handleTransfer = async (contractorId: string) => {
@@ -368,6 +375,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               <ContractorJobs
                 bookings={member.displayBookings}
                 financialStore={member.financialStore}
+                onRefresh={handleRefreshData}
               />
             </div>
           )}

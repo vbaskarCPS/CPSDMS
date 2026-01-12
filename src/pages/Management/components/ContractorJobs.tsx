@@ -8,6 +8,7 @@ import { sessionService } from '../../../lib/sessionService';
 interface ContractorJobsProps {
   bookings: MasterBooking[];
   financialStore: SessionTransaction[];
+  onRefresh?: () => void;
 }
 
 // Map the full service names (from AddContractModal) to short badge text
@@ -59,7 +60,7 @@ const EmailStatusIcon: React.FC<{ transactionId: string; email: string }> = ({ t
   );
 };
 
-const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStore }) => {
+const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStore, onRefresh }) => {
   const [editingTransaction, setEditingTransaction] = useState<SessionTransaction | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
@@ -169,6 +170,18 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
           alert("Failed to load transaction details.");
       } finally {
           setLoadingId(null);
+      }
+  };
+
+  const handleModalClose = () => {
+      setEditingTransaction(null);
+  };
+
+  const handleModalUpdate = () => {
+      setEditingTransaction(null);
+      // Trigger parent refresh if available
+      if (onRefresh) {
+          onRefresh();
       }
   };
 
@@ -331,10 +344,8 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({ bookings, financialStor
         {editingTransaction && (
             <EditTransactionModal 
                 transaction={editingTransaction}
-                onClose={() => setEditingTransaction(null)}
-                onUpdate={() => {
-                    setEditingTransaction(null);
-                }}
+                onClose={handleModalClose}
+                onUpdate={handleModalUpdate}
             />
         )}
     </>

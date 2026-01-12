@@ -87,6 +87,9 @@ const PayoutContractor: React.FC = () => {
   // --- COPY PHONE STATE ---
   const [copiedPhone, setCopiedPhone] = useState(false);
 
+  // --- REFRESH KEY (triggers data reload) ---
+  const [refreshKey, setRefreshKey] = useState(0);
+
   // Parse Inputs
   const totalCashInput = (parseFloat(cashBills) || 0) + (parseFloat(cashChange) || 0);
   const totalChequeInput = parseFloat(chequeAmount) || 0;
@@ -121,7 +124,7 @@ const PayoutContractor: React.FC = () => {
       }
     };
     init();
-  }, [contractorId]);
+  }, [contractorId, refreshKey]);
 
   // --- HELPER: COPY PHONE ---
   const handleCopyPhone = () => {
@@ -129,6 +132,11 @@ const PayoutContractor: React.FC = () => {
     navigator.clipboard.writeText(worker.cellPhone);
     setCopiedPhone(true);
     setTimeout(() => setCopiedPhone(false), 1500);
+  };
+
+  // --- HELPER: REFRESH DATA ---
+  const handleRefreshData = () => {
+    setRefreshKey(prev => prev + 1);
   };
 
   // --- HELPER: BADGES ---
@@ -653,6 +661,7 @@ const PayoutContractor: React.FC = () => {
             setIsModalOpen(false);
             setSelectedTransaction(null);
           }}
+          onUpdate={handleRefreshData}
           transaction={selectedTransaction}
         />
       )}
