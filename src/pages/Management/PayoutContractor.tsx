@@ -11,7 +11,9 @@ import {
   Mail,
   TrendingUp,
   Award,
-  AlertCircle
+  AlertCircle,
+  Check,
+  Copy
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
 import { LogsheetSession, Worker } from '../../types';
@@ -82,6 +84,9 @@ const PayoutContractor: React.FC = () => {
   const [selectedTransaction, setSelectedTransaction] = useState<any | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
+  // --- COPY PHONE STATE ---
+  const [copiedPhone, setCopiedPhone] = useState(false);
+
   // Parse Inputs
   const totalCashInput = (parseFloat(cashBills) || 0) + (parseFloat(cashChange) || 0);
   const totalChequeInput = parseFloat(chequeAmount) || 0;
@@ -117,6 +122,14 @@ const PayoutContractor: React.FC = () => {
     };
     init();
   }, [contractorId]);
+
+  // --- HELPER: COPY PHONE ---
+  const handleCopyPhone = () => {
+    if (!worker?.cellPhone) return;
+    navigator.clipboard.writeText(worker.cellPhone);
+    setCopiedPhone(true);
+    setTimeout(() => setCopiedPhone(false), 1500);
+  };
 
   // --- HELPER: BADGES ---
   const getBadgeInfo = (tx: any) => {
@@ -357,9 +370,28 @@ const PayoutContractor: React.FC = () => {
               <ArrowLeft size={20} />
             </button>
             <div>
-              <h1 className="text-2xl font-bold text-white">
-                {worker.firstName} {worker.lastName}
-              </h1>
+              <div className="flex items-center gap-3">
+                <h1 className="text-2xl font-bold text-white">
+                  {worker.firstName} {worker.lastName}
+                </h1>
+                
+                {/* Click to Copy Phone */}
+                {worker.cellPhone && (
+                  <button
+                    onClick={handleCopyPhone}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 transition-colors text-sm border border-gray-600"
+                    title="Click to copy phone number"
+                  >
+                    <Phone size={14} className="text-green-400" />
+                    <span className="text-gray-300 font-mono">{worker.cellPhone}</span>
+                    {copiedPhone ? (
+                      <Check size={14} className="text-green-400" />
+                    ) : (
+                      <Copy size={12} className="text-gray-500" />
+                    )}
+                  </button>
+                )}
+              </div>
               <div className="flex items-center gap-4 text-sm text-gray-400 font-mono mt-1">
                 <span className="bg-gray-700 px-2 py-0.5 rounded text-xs">
                   ID: {worker.contractorId}
