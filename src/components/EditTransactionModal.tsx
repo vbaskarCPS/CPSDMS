@@ -58,6 +58,15 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
 
   useEffect(() => {
     if (transaction && isOpen) {
+      const price = String(transaction.price || 0);
+      const method = transaction.paymentMethod || transaction.payment_method || 'Cash';
+      const existingBreakdown = transaction.paymentBreakdown || {};
+      
+      // If no breakdown exists, create one from the payment method and price
+      const breakdown = Object.keys(existingBreakdown).length > 0 
+        ? existingBreakdown 
+        : { [method]: parseFloat(price) || 0 };
+      
       // Map incoming data (handling both snake_case and camelCase variations)
       setFormData({
         customerName: transaction.customerName || transaction.customer_name || '',
@@ -65,18 +74,34 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         phone: transaction.customerPhone || transaction.customer_phone || '',
         email: transaction.customerEmail || transaction.customer_email || '',
         routeCode: transaction.routeCode || '',
-        price: String(transaction.price || 0),
-        displayPrice: transaction.displayPrice || String(transaction.price || 0),
-        paymentMethod: transaction.paymentMethod || transaction.payment_method || 'Cash',
+        price: price,
+        displayPrice: transaction.displayPrice || price,
+        paymentMethod: method,
         itemName: transaction.item_name || transaction.type || '',
         type: transaction.type || 'Production',
-        paymentBreakdown: transaction.paymentBreakdown || {}
+        paymentBreakdown: breakdown
       });
     }
   }, [transaction, isOpen]);
 
   const handleChange = (field: string, value: any) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+    setFormData(prev => {
+      const updated = { ...prev, [field]: value };
+      
+      // When payment method changes to a non-Split value, update the breakdown
+      if (field === 'paymentMethod' && value !== 'Split') {
+        const price = parseFloat(prev.price) || 0;
+        updated.paymentBreakdown = { [value]: price };
+      }
+      
+      // When price changes and method is not Split, update breakdown too
+      if (field === 'price' && prev.paymentMethod !== 'Split') {
+        const newPrice = parseFloat(value) || 0;
+        updated.paymentBreakdown = { [prev.paymentMethod]: newPrice };
+      }
+      
+      return updated;
+    });
   };
 
   const handleSave = async () => {
@@ -185,7 +210,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                     </div>
                 </div>
 
-                {/* Contact Info (New) */}
+                {/* Contact Info */}
                 <div className="grid grid-cols-2 gap-4">
                     <div>
                         <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Phone Number</label>
@@ -233,8 +258,6 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
 
             {/* 2. Transaction Details */}
             <div className="border-t border-gray-800 pt-4 space-y-4">
-                
-                {/* Item Name / Service Name Removed as requested */}
 
                 <div className="grid grid-cols-2 gap-4">
                     <div>
