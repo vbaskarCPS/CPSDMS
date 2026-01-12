@@ -54,8 +54,14 @@ export const generateSessionExport = async () => {
 
   const logsheets = logsheetsReq.data || [];
   const transactions = transactionsReq.data || [];
-  const bookings = bookingsReq.data || [];
   const users = usersReq.data || [];
+
+  // FIXED: Sort bookings by original Excel order (sort_order stored in data column)
+  const bookings = (bookingsReq.data || []).sort((a, b) => {
+    const orderA = a.data?.sort_order ?? Infinity;
+    const orderB = b.data?.sort_order ?? Infinity;
+    return orderA - orderB;
+  });
 
   // Create a Map of Managers for quick lookup
   const managerMap = new Map();
@@ -147,7 +153,7 @@ export const generateSessionExport = async () => {
     };
   });
 
-  // --- TAB 2: BOOKINGS (Restored Headers) ---
+  // --- TAB 2: BOOKINGS (Restored Headers) - Now sorted by original order ---
   const bookingRows = bookings.map((b) => ({
     "Route #": b.route_number,
     "First Name": b.customer_details['First Name'],

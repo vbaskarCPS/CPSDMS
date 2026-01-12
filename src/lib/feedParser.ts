@@ -35,9 +35,10 @@ export const parseDailySessionXLSX = async (file: File): Promise<DailySessionDat
       throw new Error("Invalid Data Feed. Missing required tabs: 'Routes', 'Workers', or 'Bookings'.");
   }
 
-  const routesData: any[] = XLSX.utils.sheet_to_json(routesSheet);
-  const workersData: any[] = XLSX.utils.sheet_to_json(workersSheet);
-  const bookingsData: any[] = XLSX.utils.sheet_to_json(bookingsSheet);
+  // Use { raw: false } to prevent Excel scientific notation issues (e.g., E1000)
+  const routesData: any[] = XLSX.utils.sheet_to_json(routesSheet, { raw: false });
+  const workersData: any[] = XLSX.utils.sheet_to_json(workersSheet, { raw: false });
+  const bookingsData: any[] = XLSX.utils.sheet_to_json(bookingsSheet, { raw: false });
 
   const date = new Date().toISOString().split('T')[0];
   const managersMap = new Map<string, ManagementUser>();
@@ -79,10 +80,26 @@ export const parseDailySessionXLSX = async (file: File): Promise<DailySessionDat
   const managers = Array.from(managersMap.values());
 
   // --- PROCESS WORKERS ---
-  const workers: Worker[] = workersData.map((row: any) => {
+  const workers: Worker[] = workersData.map((row: any, index: number) => {
     const managerName = row['Manager']?.trim();
     const assignedManager = managers.find(m => m.name === managerName);
-    const fullName = `${row['First Name']} ${row['Last Name']}`;
+    const fullName = `${row['First Name'] || ''} ${row['Last Name'] || ''}`.trim();
+
+    // Get Contractor ID - handle null, undefined, empty string, and 0
+    const rawContractorId = row['Contractor ID'];
+    const contractorId = (rawContractorId !== undefined && rawContractorId !== null && String(rawContractorId).trim() !== '') 
+      ? String(rawContractorId).trim()
+      : generateConsistentId(fullName, 'wk');
+
+    // Debug logging for troubleshooting
+    if (!contractorId || contractorId === 'wk_') {
+      console.warn(`⚠️ Workers Row ${index + 2} has invalid ID:`, { 
+        rawId: rawContractorId, 
+        firstName: row['First Name'],
+        lastName: row['Last Name'],
+        generatedId: contractorId 
+      });
+    }
 
     const findVal = (keywords: string[]) => {
       const key = Object.keys(row).find(k => 
@@ -95,16 +112,16 @@ export const parseDailySessionXLSX = async (file: File): Promise<DailySessionDat
     const silverRate = Number(findVal(['Silver']) || 0);
 
     return {
-      contractorId: row['Contractor ID'] ? String(row['Contractor ID']) : generateConsistentId(fullName, 'wk'),
-      firstName: row['First Name'],
-      lastName: row['Last Name'],
+      contractorId,
+      firstName: row['First Name'] || '',
+      lastName: row['Last Name'] || '',
       cellPhone: formatPhoneNumber(row['Cell Phone'] || ''),
       status: 'Return' as const,
       assignedManagerId: assignedManager ? assignedManager.userId : undefined,
       alumniRate: isNaN(alumniRate) ? 0 : alumniRate,
       silverRate: isNaN(silverRate) ? 0 : silverRate,
     };
-  }).filter((w: any) => w.contractorId);
+  }).filter((w: any) => w.contractorId && w.contractorId !== 'wk_');
 
   // --- PROCESS BOOKINGS ---
   const pendingBookings: MasterBooking[] = bookingsData.map((row: any, index: number) => {
@@ -114,10 +131,10 @@ export const parseDailySessionXLSX = async (file: File): Promise<DailySessionDat
     return {
       'Booking ID': `job_${index}_${Date.now()}`, 
       'Route Number': routeNum,
-      'First Name': row['First Name'],
-      'Last Name': row['Last Name'],
-      'House Number': row['House #'],
-      'Street Name': row['Street Name'],
+      'First Name': row['First Name'] || '',
+      'Last Name': row['Last Name'] || '',
+      'House Number': row['House #'] || '',
+      'Street Name': row['Street Name'] || '',
       'Full Address': `${row['House #'] || ''} ${row['Street Name'] || ''}`.trim(),
       'Home Phone': formatPhoneNumber(row['Phone #'] || ''),
       'Email Address': normalizeEmail(row['E-Mail'] || ''),
@@ -128,6 +145,7 @@ export const parseDailySessionXLSX = async (file: File): Promise<DailySessionDat
       'Status': 'pending',
       'Completed': undefined,
       isPrebooked: true,
+      sort_order: index, // ADDED: Preserve original Excel row order
     } as MasterBooking;
   }).filter(Boolean) as MasterBooking[];
 
