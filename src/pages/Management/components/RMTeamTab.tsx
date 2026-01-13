@@ -255,13 +255,13 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           {/* Main Card Content */}
           <div className="p-2 pr-9">
             
-            {/* TOP ROW: Name + Upsell Toggle (Left) + Routes (Right) */}
+            {/* TOP ROW: Name (Left) + Routes (Center) + Upsell Toggle (Right) */}
             <div 
               className="flex items-center justify-between mb-1 cursor-pointer"
               onClick={() => toggleItem(member.contractorId)}
             >
-              {/* Left: Status + Name + Upsell Toggle */}
-              <div className="flex items-center gap-2">
+              {/* Left: Status + Name */}
+              <div className="flex items-center gap-2 min-w-0">
                 <div
                   className={`w-2 h-2 rounded-full flex-shrink-0 ${
                     member.stats.pending > 0 ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'
@@ -271,13 +271,31 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                   {member.firstName} {member.lastName}
                 </h3>
                 
-                {/* Upsell Toggle Switch */}
+                {/* Route Pills - Inline with name */}
+                <div className="flex flex-wrap gap-1 ml-2">
+                  {member.assignedRoutes.length > 0 ? (
+                    member.assignedRoutes.map((route, idx) => (
+                      <span key={idx} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] bg-indigo-900/60 text-indigo-200 border border-indigo-500/30 font-mono">
+                        {route}
+                      </span>
+                    ))
+                  ) : member.displayBookings.length > 0 ? (
+                     <span className="text-[9px] text-gray-500 italic">No Rte</span>
+                  ) : null}
+                </div>
+              </div>
+
+              {/* Right: Upsell Toggle */}
+              <div className="flex items-center gap-1 flex-shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
+                <span className={`text-[8px] font-bold ${member.upsellsEnabled !== false ? 'text-purple-400' : 'text-gray-500'}`}>
+                  UP
+                </span>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     handleToggleUpsells(member.contractorId, member.upsellsEnabled !== false);
                   }}
-                  className={`ml-2 relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 ease-in-out focus:outline-none ${
+                  className={`relative inline-flex h-3 w-5 flex-shrink-0 cursor-pointer rounded-full border transition-colors duration-200 ease-in-out focus:outline-none items-center ${
                     member.upsellsEnabled !== false
                       ? 'bg-purple-600 border-purple-600'
                       : 'bg-gray-600 border-gray-600'
@@ -285,27 +303,11 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                   title={member.upsellsEnabled !== false ? 'Upsells Enabled' : 'Upsells Disabled'}
                 >
                   <span
-                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      member.upsellsEnabled !== false ? 'translate-x-4' : 'translate-x-0'
+                    className={`pointer-events-none inline-block h-2 w-2 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      member.upsellsEnabled !== false ? 'translate-x-[10px]' : 'translate-x-0.5'
                     }`}
                   />
                 </button>
-                <span className={`text-[9px] font-bold ${member.upsellsEnabled !== false ? 'text-purple-400' : 'text-gray-500'}`}>
-                  UP
-                </span>
-              </div>
-
-              {/* Right: Route Pills (Inline) */}
-              <div className="flex flex-wrap justify-end gap-1 ml-2">
-                {member.assignedRoutes.length > 0 ? (
-                  member.assignedRoutes.map((route, idx) => (
-                    <span key={idx} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] bg-indigo-900/60 text-indigo-200 border border-indigo-500/30 font-mono">
-                      {route}
-                    </span>
-                  ))
-                ) : member.displayBookings.length > 0 ? (
-                   <span className="text-[9px] text-gray-500 italic">No Rte</span>
-                ) : null}
               </div>
             </div>
 

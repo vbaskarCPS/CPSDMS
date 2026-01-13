@@ -145,6 +145,7 @@ export const realtimeService = RealtimeService.getInstance();
  * Subscribe to contractor-specific changes
  * Only receives updates for this contractor's data
  * Includes users table for upsell toggle updates
+ * Note: New booking assignments are handled by 10-second polling fallback in Dashboard
  */
 export function subscribeAsContractor(
   contractorId: string,
@@ -153,9 +154,10 @@ export function subscribeAsContractor(
   return realtimeService.subscribe(
     `contractor-${contractorId}`,
     [
-      // All bookings - need to catch new assignments where contractor_id changes TO this worker
+      // Only MY bookings - filtered to this contractor
       { 
-        table: 'bookings'
+        table: 'bookings', 
+        filter: `contractor_id=eq.${contractorId}` 
       },
       // Only MY transactions
       { 
@@ -171,10 +173,6 @@ export function subscribeAsContractor(
       {
         table: 'users',
         filter: `user_id=eq.${contractorId}`
-      },
-      // Route changes (for new route assignments)
-      {
-        table: 'routes'
       },
     ],
     onUpdate,
