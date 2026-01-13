@@ -43,6 +43,14 @@ interface AggregatedStats {
   totalBilled: number;
 }
 
+// Stats for each manager group
+interface ManagerGroupStats {
+  totalSteps: number;
+  totalUpsellGross: number;
+  avgEQ: number;
+  avgCommission: number;
+}
+
 const PayoutToday: React.FC<PayoutTodayProps> = ({
   date,
   sortOption,
@@ -214,15 +222,52 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const groupedByManager = useMemo(() => {
     if (sortOption !== 'standard') return null;
     
-    const groups: Record<string, { manager: ManagementUser | null; items: typeof sortedItems }> = {};
+    const groups: Record<string, { 
+      manager: ManagementUser | null; 
+      items: typeof sortedItems;
+      stats: ManagerGroupStats;
+    }> = {};
     
     sortedItems.forEach(item => {
       const managerId = item.worker.assignedManagerId || 'unassigned';
       if (!groups[managerId]) {
         const manager = managers.find(m => m.userId === managerId) || null;
-        groups[managerId] = { manager, items: [] };
+        groups[managerId] = { 
+          manager, 
+          items: [],
+          stats: { totalSteps: 0, totalUpsellGross: 0, avgEQ: 0, avgCommission: 0 }
+        };
       }
       groups[managerId].items.push(item);
+    });
+
+    // Calculate stats for each group
+    Object.values(groups).forEach(group => {
+      let totalEQ = 0;
+      let totalCommission = 0;
+      
+      group.items.forEach(({ session }) => {
+        const v = session.validation;
+        const isValidated = v?.isValidated || false;
+        
+        // Total Steps
+        group.stats.totalSteps += session.stats.stepCount || 0;
+        
+        // Total Upsell Gross
+        group.stats.totalUpsellGross += session.stats.upsellGross || 0;
+        
+        // EQ (uses actual when validated)
+        const eq = isValidated ? (v?.actualTotalEQ || 0) : (session.stats.totalEQ || 0);
+        totalEQ += eq;
+        
+        // Commission
+        totalCommission += v?.finalCommission || 0;
+      });
+      
+      // Calculate averages
+      const workerCount = group.items.length;
+      group.stats.avgEQ = workerCount > 0 ? totalEQ / workerCount : 0;
+      group.stats.avgCommission = workerCount > 0 ? totalCommission / workerCount : 0;
     });
 
     // Sort groups by manager name
@@ -503,12 +548,42 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         {/* Standard Sort: Grouped by Manager */}
         {sortOption === 'standard' && groupedByManager && groupedByManager.map(([managerId, group]) => (
           <div key={managerId} className="mb-3">
-            {/* Manager Header */}
-            <div className="sticky top-0 bg-gray-900/95 backdrop-blur py-1 px-2 mb-1 z-10 flex items-center gap-2 border-b border-gray-800">
-              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
-                {group.manager?.name || 'Unassigned'}
-              </span>
-              <span className="text-[9px] text-gray-600">({group.items.length})</span>
+            {/* Manager Header with Stats */}
+            <div className="sticky top-0 bg-gray-900/95 backdrop-blur py-1.5 px-3 mb-1 z-10 flex items-center justify-between border-b border-gray-700 rounded-t">
+              {/* Left: Manager Name & Worker Count */}
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold text-gray-300 uppercase tracking-wider">
+                  {group.manager?.name || 'Unassigned'}
+                </span>
+                <span className="text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">
+                  {group.items.length} workers
+                </span>
+              </div>
+              
+              {/* Right: Stats */}
+              <div className="flex items-center gap-4 text-[10px]">
+                <div className="flex items-center gap-1">
+                  <span className="text-gray-500 uppercase">Steps:</span>
+                  <span className="font-bold text-white">{group.stats.totalSteps}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-gray-500 uppercase">Upsell:</span>
+                  <span className="font-bold text-purple-300">${group.stats.totalUpsellGross.toFixed(2)}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-gray-500 uppercase">Avg EQ:</span>
+                  <span className={`font-bold font-mono ${
+                    group.stats.avgEQ >= 3 ? 'text-green-400' : 
+                    group.stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
+                  }`}>
+                    {group.stats.avgEQ.toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-gray-500 uppercase">Avg Comm:</span>
+                  <span className="font-bold text-green-400 font-mono">${group.stats.avgCommission.toFixed(2)}</span>
+                </div>
+              </div>
             </div>
             
             {/* Workers in this group */}
