@@ -17,13 +17,22 @@ interface RMRoutesTabProps {
   onRefresh: () => void;
 }
 
+interface WorkerBreakdown {
+  workerId: string;
+  workerName: string;
+  initials: string;
+  bookingCount: number;
+}
+
 interface RouteDisplay {
   routeCode: string;
   totalBookings: number;
   prepaidCount: number;
   totalEQ: number;
-  assignedWorkerId: string | null;
+  assignedWorkerIds: string[];
   items: MasterBooking[];
+  workerBreakdown: WorkerBreakdown[];
+  unassignedCount: number;
 }
 
 const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
@@ -109,13 +118,42 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
         return sum + eq;
       }, 0);
 
+      // Calculate worker breakdown from bookings
+      const workerCounts: Record<string, { count: number; worker: Worker | null }> = {};
+      let unassignedCount = 0;
+
+      routeBookings.forEach(b => {
+        const contractorId = b['Contractor Number'];
+        if (contractorId) {
+          if (!workerCounts[contractorId]) {
+            const worker = myTeam.find(w => w.contractorId === contractorId) || null;
+            workerCounts[contractorId] = { count: 0, worker };
+          }
+          workerCounts[contractorId].count++;
+        } else {
+          unassignedCount++;
+        }
+      });
+
+      const workerBreakdown: WorkerBreakdown[] = Object.entries(workerCounts)
+        .filter(([_, data]) => data.worker !== null)
+        .map(([workerId, data]) => ({
+          workerId,
+          workerName: `${data.worker!.firstName} ${data.worker!.lastName}`,
+          initials: `${data.worker!.firstName[0]}${data.worker!.lastName[0]}`,
+          bookingCount: data.count
+        }))
+        .sort((a, b) => b.bookingCount - a.bookingCount); // Sort by most bookings first
+
       return {
         routeCode: r.routeCode,
         totalBookings: routeBookings.length,
         prepaidCount: routeBookings.filter((b) => b.Prepaid === 'x').length,
         totalEQ: totalEQ,
-        assignedWorkerId: r.assignedWorkerId,
-        items: routeBookings
+        assignedWorkerIds: r.assignedWorkerIds || [],
+        items: routeBookings,
+        workerBreakdown,
+        unassignedCount
       };
     });
 
@@ -126,11 +164,11 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   // --- 2. SORTING ---
   
   const sortedRoutes = useMemo(() => {
-    const routes = [...displayRoutes];
+    const routeList = [...displayRoutes];
     
-    // Unassigned routes always come first
-    const unassigned = routes.filter(r => !r.assignedWorkerId);
-    const assigned = routes.filter(r => r.assignedWorkerId);
+    // Unassigned routes always come first (no workers assigned at route level)
+    const unassigned = routeList.filter(r => r.assignedWorkerIds.length === 0);
+    const assigned = routeList.filter(r => r.assignedWorkerIds.length > 0);
     
     // Sort each group based on selected criteria
     const sortFn = (a: RouteDisplay, b: RouteDisplay) => {
@@ -154,11 +192,13 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   const workerRouteMap = useMemo(() => {
     const map = new Map<string, string[]>();
     routes.forEach(r => {
-      if (r.assignedWorkerId) {
-        const existing = map.get(r.assignedWorkerId) || [];
-        existing.push(r.routeCode);
-        map.set(r.assignedWorkerId, existing);
-      }
+      (r.assignedWorkerIds || []).forEach(workerId => {
+        const existing = map.get(workerId) || [];
+        if (!existing.includes(r.routeCode)) {
+          existing.push(r.routeCode);
+        }
+        map.set(workerId, existing);
+      });
     });
     return map;
   }, [routes]);
@@ -255,6 +295,168 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     return contractors.find((x) => x.contractorId === id);
   };
 
+  // --- 5. RENDER HELPER: Worker Bubbles ---
+  const renderWorkerBubbles = (route: RouteDisplay) => {
+    const hasAssignments = route.assignedWorkerIds.length > 0;
+    const hasUnassigned = route.unassignedCount > 0;
+    
+    // Case 1: No assignments at all - show single unassigned icon
+    if (!hasAssignments) {
+      return (
+        <button 
+          onClick={(e) => {
+            e.stopPropagation();
+            setAssignModalData({
+              type: 'ROUTE',
+              targetId: route.routeCode,
+              currentWorkerId: null,
+              routeCode: route.routeCode,
+              title: `Assign Route ${route.routeCode}`
+            });
+          }}
+          className="h-10 w-10 rounded-lg flex items-center justify-center font-bold text-sm border shadow-lg transition-transform active:scale-95 bg-gray-700 text-gray-500 border-gray-600 hover:border-red-500 hover:text-red-400"
+        >
+          <Users size={18} />
+        </button>
+      );
+    }
+
+    // Case 2: Single worker assigned (no split)
+    if (route.assignedWorkerIds.length === 1 && !hasUnassigned) {
+      const worker = getWorkerInfo(route.assignedWorkerIds[0]);
+      return (
+        <button 
+          onClick={(e) => {
+            e.stopPropagation();
+            setAssignModalData({
+              type: 'ROUTE',
+              targetId: route.routeCode,
+              currentWorkerId: route.assignedWorkerIds[0],
+              routeCode: route.routeCode,
+              title: `Assign Route ${route.routeCode}`
+            });
+          }}
+          className="h-10 w-10 rounded-lg flex items-center justify-center font-bold text-sm border shadow-lg transition-transform active:scale-95 bg-cps-blue text-white border-blue-500"
+        >
+          {worker && (
+            <span>{worker.firstName[0]}{worker.lastName[0]}</span>
+          )}
+        </button>
+      );
+    }
+
+    // Case 3: Multiple workers or split route - show overlapping bubbles
+    const bubblesToShow: { type: 'worker' | 'unassigned' | 'overflow'; workerId?: string; count?: number }[] = [];
+    
+    // Add worker bubbles based on assignedWorkerIds
+    route.assignedWorkerIds.slice(0, 4).forEach(workerId => {
+      bubblesToShow.push({ type: 'worker', workerId });
+    });
+
+    // Add unassigned bubble if needed (within 4 limit)
+    if (hasUnassigned && bubblesToShow.length < 4) {
+      bubblesToShow.push({ type: 'unassigned', count: route.unassignedCount });
+    }
+
+    // Calculate overflow
+    const totalItems = route.assignedWorkerIds.length + (hasUnassigned ? 1 : 0);
+    const overflow = totalItems - bubblesToShow.length;
+    
+    if (overflow > 0) {
+      // Replace last bubble with overflow indicator
+      bubblesToShow.pop();
+      bubblesToShow.push({ type: 'overflow', count: overflow + 1 });
+    }
+
+    return (
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setAssignModalData({
+            type: 'ROUTE',
+            targetId: route.routeCode,
+            currentWorkerId: route.assignedWorkerIds[0] || null,
+            routeCode: route.routeCode,
+            title: `Assign Route ${route.routeCode}`
+          });
+        }}
+        className="flex items-center -space-x-2 hover:opacity-80 transition-opacity"
+      >
+        {bubblesToShow.map((bubble, idx) => {
+          if (bubble.type === 'worker' && bubble.workerId) {
+            const worker = getWorkerInfo(bubble.workerId);
+            const breakdown = route.workerBreakdown.find(wb => wb.workerId === bubble.workerId);
+            return (
+              <div
+                key={bubble.workerId}
+                className="h-8 w-8 rounded-full flex items-center justify-center text-[10px] font-bold border-2 border-gray-800 bg-cps-blue text-white shadow-md"
+                style={{ zIndex: bubblesToShow.length - idx }}
+                title={worker ? `${worker.firstName} ${worker.lastName}${breakdown ? ` (${breakdown.bookingCount} jobs)` : ''}` : ''}
+              >
+                {worker ? `${worker.firstName[0]}${worker.lastName[0]}` : '??'}
+              </div>
+            );
+          }
+          
+          if (bubble.type === 'unassigned') {
+            return (
+              <div
+                key="unassigned"
+                className="h-8 w-8 rounded-full flex items-center justify-center text-[10px] font-bold border-2 border-gray-800 bg-red-900/50 text-red-400 shadow-md"
+                style={{ zIndex: bubblesToShow.length - idx }}
+                title={`${bubble.count} unassigned jobs`}
+              >
+                {bubble.count}
+              </div>
+            );
+          }
+          
+          if (bubble.type === 'overflow') {
+            return (
+              <div
+                key="overflow"
+                className="h-8 w-8 rounded-full flex items-center justify-center text-[10px] font-bold border-2 border-gray-800 bg-gray-600 text-gray-300 shadow-md"
+                style={{ zIndex: bubblesToShow.length - idx }}
+                title={`+${bubble.count} more`}
+              >
+                +{bubble.count}
+              </div>
+            );
+          }
+          
+          return null;
+        })}
+      </button>
+    );
+  };
+
+  // --- 6. RENDER HELPER: Route Status Text ---
+  const renderRouteStatus = (route: RouteDisplay) => {
+    const hasAssignments = route.assignedWorkerIds.length > 0;
+    
+    // No assignments at all
+    if (!hasAssignments) {
+      return <span className="text-red-400 italic">Unassigned Route</span>;
+    }
+    
+    // Single worker assignment
+    if (route.assignedWorkerIds.length === 1) {
+      const worker = getWorkerInfo(route.assignedWorkerIds[0]);
+      if (worker) {
+        return <span className="text-blue-300">{worker.firstName} {worker.lastName}</span>;
+      }
+    }
+    
+    // Multiple workers (split route)
+    const workerCount = route.assignedWorkerIds.length;
+    const unassignedText = route.unassignedCount > 0 ? ` · ${route.unassignedCount} unassigned` : '';
+    return (
+      <span className="text-amber-400">
+        {workerCount} worker{workerCount !== 1 ? 's' : ''}{unassignedText}
+      </span>
+    );
+  };
+
   return (
     <div className="max-w-4xl mx-auto pb-20 space-y-4">
       {/* Sort Dropdown */}
@@ -282,14 +484,14 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       )}
 
       {sortedRoutes.map((route) => {
-        const assignedRouteWorker = getWorkerInfo(route.assignedWorkerId);
         const isExpanded = expandedRoutes.has(route.routeCode);
+        const hasAnyAssignment = route.assignedWorkerIds.length > 0;
 
         return (
           <div
             key={route.routeCode}
             className={`rounded-lg border transition-all overflow-hidden ${
-              route.assignedWorkerId
+              hasAnyAssignment
                 ? 'bg-gray-800 border-gray-700'
                 : 'bg-gray-800 border-red-900/50 shadow-[0_0_15px_rgba(239,68,68,0.1)]'
             }`}
@@ -298,40 +500,14 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
             <div className="p-3 flex items-center justify-between gap-3 bg-gray-800 relative">
               {/* Route Identity & Assign Button */}
               <div className="flex items-center gap-3">
-                 <button 
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        setAssignModalData({
-                            type: 'ROUTE',
-                            targetId: route.routeCode,
-                            currentWorkerId: route.assignedWorkerId,
-                            routeCode: route.routeCode,
-                            title: `Assign Route ${route.routeCode}`
-                        });
-                    }}
-                    className={`h-10 w-10 rounded-lg flex items-center justify-center font-bold text-sm border shadow-lg transition-transform active:scale-95 ${
-                        assignedRouteWorker 
-                        ? 'bg-cps-blue text-white border-blue-500' 
-                        : 'bg-gray-700 text-gray-500 border-gray-600 hover:border-red-500 hover:text-red-400'
-                    }`}
-                 >
-                    {assignedRouteWorker ? (
-                        <span>{assignedRouteWorker.firstName[0]}{assignedRouteWorker.lastName[0]}</span>
-                    ) : (
-                        <Users size={18} />
-                    )}
-                 </button>
+                {renderWorkerBubbles(route)}
                  
-                 <div>
-                    <h3 className="font-bold text-xl text-white font-mono leading-none">{route.routeCode}</h3>
-                    <div className="text-xs text-gray-400 mt-1 flex items-center gap-2">
-                         {assignedRouteWorker ? (
-                             <span className="text-blue-300">{assignedRouteWorker.firstName} {assignedRouteWorker.lastName}</span>
-                         ) : (
-                             <span className="text-red-400 italic">Unassigned Route</span>
-                         )}
-                    </div>
-                 </div>
+                <div>
+                  <h3 className="font-bold text-xl text-white font-mono leading-none">{route.routeCode}</h3>
+                  <div className="text-xs text-gray-400 mt-1 flex items-center gap-2">
+                    {renderRouteStatus(route)}
+                  </div>
+                </div>
               </div>
 
               {/* Stats & Expand */}

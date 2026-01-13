@@ -99,9 +99,13 @@ const NewJob: React.FC = () => {
               let myRoutes: string[] = [];
 
               if (dailySession && dailySession.routes) {
+                  // Simply check if worker is in assignedWorkerIds array
                   myRoutes = dailySession.routes
-                      .filter(r => r.assignedWorkerId === currentWorker.contractorId)
+                      .filter(r => r.assignedWorkerIds && r.assignedWorkerIds.includes(currentWorker.contractorId))
                       .map(r => r.routeCode);
+                  
+                  // Sort alphabetically for consistent display
+                  myRoutes.sort((a, b) => a.localeCompare(b));
               }
 
               setAssignedRoutes(myRoutes);

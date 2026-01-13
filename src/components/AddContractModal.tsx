@@ -120,13 +120,18 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       if (!w) { setError("User not found."); return; }
       setWorker(w);
 
-      // Fetch assigned routes
+      // Simply check if worker is in assignedWorkerIds array
       try {
         const dailySession = await sessionService.getDailySession();
+        
         if (dailySession && dailySession.routes) {
           const myRoutes = dailySession.routes
-            .filter(r => r.assignedWorkerId === w.contractorId)
+            .filter(r => r.assignedWorkerIds && r.assignedWorkerIds.includes(w.contractorId))
             .map(r => r.routeCode);
+          
+          // Sort alphabetically for consistent display
+          myRoutes.sort((a, b) => a.localeCompare(b));
+          
           setAssignedRoutes(myRoutes);
         }
       } catch (err) {

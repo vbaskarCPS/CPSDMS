@@ -38,7 +38,7 @@ export interface Worker {
 export interface RouteData {
   routeCode: string;
   managerId: string; 
-  assignedWorkerId: string | null; 
+  assignedWorkerIds: string[]; // Changed from assignedWorkerId: string | null
   streets?: string[];
 }
 

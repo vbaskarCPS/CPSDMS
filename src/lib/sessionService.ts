@@ -119,7 +119,7 @@ class SessionService {
     const routes = (routesRes.data || []).map((r) => ({
       routeCode: r.route_code,
       managerId: r.manager_id,
-      assignedWorkerId: r.assigned_worker_id,
+      assignedWorkerIds: r.assigned_worker_ids || [], // Changed from assignedWorkerId
       streets: r.streets,
     }));
 
@@ -182,6 +182,7 @@ class SessionService {
     const routeRows = data.routes.map((r) => ({
       route_code: r.routeCode,
       manager_id: r.managerId,
+      assigned_worker_ids: r.assignedWorkerIds || [], // Changed from assigned_worker_id
       streets: r.streets,
       session_date: data.date,
     }));
@@ -245,8 +246,28 @@ class SessionService {
    * This prevents Foreign Key constraint errors.
    */
   public async deleteWorker(workerId: string): Promise<void> {
-    // 1. Unassign Routes 
-    await supabase.from('routes').update({ assigned_worker_id: null }).eq('assigned_worker_id', workerId);
+    const date = await this.getDailySessionDate();
+    
+    // 1. Remove worker from all route assignments
+    if (date) {
+      const { data: routes } = await supabase
+        .from('routes')
+        .select('route_code, assigned_worker_ids')
+        .eq('session_date', date);
+      
+      if (routes) {
+        for (const route of routes) {
+          if (route.assigned_worker_ids && route.assigned_worker_ids.includes(workerId)) {
+            const updatedIds = route.assigned_worker_ids.filter((id: string) => id !== workerId);
+            await supabase
+              .from('routes')
+              .update({ assigned_worker_ids: updatedIds })
+              .eq('route_code', route.route_code)
+              .eq('session_date', date);
+          }
+        }
+      }
+    }
 
     // 2. Unassign Bookings
     await supabase.from('bookings').update({ contractor_id: null }).eq('contractor_id', workerId);
@@ -291,13 +312,24 @@ class SessionService {
 
     if (updateError) throw updateError;
 
-    // 3. Update any active routes assigned to this worker to belong to the new manager
+    // 3. Update any active routes where this worker is assigned to belong to the new manager
     if (date) {
-        await supabase
-            .from('routes')
-            .update({ manager_id: newManagerId })
-            .eq('assigned_worker_id', workerId)
-            .eq('session_date', date);
+      const { data: routes } = await supabase
+        .from('routes')
+        .select('route_code, assigned_worker_ids')
+        .eq('session_date', date);
+      
+      if (routes) {
+        for (const route of routes) {
+          if (route.assigned_worker_ids && route.assigned_worker_ids.includes(workerId)) {
+            await supabase
+              .from('routes')
+              .update({ manager_id: newManagerId })
+              .eq('route_code', route.route_code)
+              .eq('session_date', date);
+          }
+        }
+      }
     }
   }
 
@@ -364,7 +396,7 @@ class SessionService {
         .insert({
           route_code: routeNumber,
           manager_id: newManagerId,
-          assigned_worker_id: null,
+          assigned_worker_ids: [], // Empty array for new route
           streets: streets,
           session_date: date
         });
@@ -413,13 +445,20 @@ class SessionService {
     const date = await this.getDailySessionDate();
     if (!date) return [];
 
-    const { data: myRoutes } = await supabase.from('routes').select('route_code').eq('assigned_worker_id', workerId).eq('session_date', date);
-    const routeCodes = myRoutes?.map((r) => r.route_code) || [];
+    // Get routes where this worker is in the assignedWorkerIds array
+    const { data: allRoutes } = await supabase
+      .from('routes')
+      .select('route_code, assigned_worker_ids')
+      .eq('session_date', date);
+    
+    const myRouteCodes = (allRoutes || [])
+      .filter(r => r.assigned_worker_ids && r.assigned_worker_ids.includes(workerId))
+      .map(r => r.route_code);
 
     const { data: allBookings } = await supabase.from('bookings').select('*').eq('session_date', date).neq('status', 'completed');
 
     const myPending = (allBookings || []).filter((b) => {
-      const isMyRoute = routeCodes.includes(b.route_number);
+      const isMyRoute = myRouteCodes.includes(b.route_number);
       const isAssignedToMe = b.contractor_id === workerId;
       const isAssignedToOther = b.contractor_id && b.contractor_id !== workerId;
       return (isMyRoute && !isAssignedToOther) || isAssignedToMe;
@@ -548,22 +587,107 @@ class SessionService {
     await supabase.from('logsheet_sessions').update(safeUpdates).eq('id', sessionId);
   }
 
+  /**
+   * Assigns a booking to a worker.
+   * Also adds the worker to the route's assignedWorkerIds if not already there.
+   * When unassigning (workerId = null), removes worker from route if they have no other bookings.
+   */
   public async assignBookingToWorker(bookingId: string, workerId: string | null): Promise<void> {
+    const date = await this.getDailySessionDate();
+    if (!date) return;
+
+    // Get the booking's current state
+    const { data: booking } = await supabase
+      .from('bookings')
+      .select('route_number, contractor_id')
+      .eq('booking_id', bookingId)
+      .single();
+
+    if (!booking || !booking.route_number) {
+      // Just update the booking if we can't find route info
+      await supabase
+        .from('bookings')
+        .update({ contractor_id: workerId })
+        .eq('booking_id', bookingId);
+      return;
+    }
+
+    const routeNumber = booking.route_number;
+    const oldWorkerId = booking.contractor_id;
+
+    // Update the booking
     const { error } = await supabase
       .from('bookings')
       .update({ contractor_id: workerId })
       .eq('booking_id', bookingId);
-    if (error) console.error("Error assigning booking:", error);
+    
+    if (error) {
+      console.error("Error assigning booking:", error);
+      return;
+    }
+
+    // Get the route's current assignedWorkerIds
+    const { data: route } = await supabase
+      .from('routes')
+      .select('assigned_worker_ids')
+      .eq('route_code', routeNumber)
+      .eq('session_date', date)
+      .single();
+
+    if (!route) return;
+
+    let assignedWorkerIds: string[] = route.assigned_worker_ids || [];
+
+    // If assigning to a new worker, add them to the route
+    if (workerId && !assignedWorkerIds.includes(workerId)) {
+      assignedWorkerIds = [...assignedWorkerIds, workerId];
+      await supabase
+        .from('routes')
+        .update({ assigned_worker_ids: assignedWorkerIds })
+        .eq('route_code', routeNumber)
+        .eq('session_date', date);
+    }
+
+    // If unassigning (or reassigning), check if old worker should be removed
+    if (oldWorkerId && oldWorkerId !== workerId) {
+      // Check if old worker has any other bookings on this route
+      const { data: otherBookings } = await supabase
+        .from('bookings')
+        .select('booking_id')
+        .eq('route_number', routeNumber)
+        .eq('contractor_id', oldWorkerId)
+        .eq('session_date', date)
+        .neq('booking_id', bookingId);
+
+      if (!otherBookings || otherBookings.length === 0) {
+        // Remove old worker from route's assignedWorkerIds
+        assignedWorkerIds = assignedWorkerIds.filter(id => id !== oldWorkerId);
+        await supabase
+          .from('routes')
+          .update({ assigned_worker_ids: assignedWorkerIds })
+          .eq('route_code', routeNumber)
+          .eq('session_date', date);
+      }
+    }
   }
 
+  /**
+   * Assigns an entire route to a worker.
+   * If workerId is null, clears the entire assignedWorkerIds array.
+   * If workerId is provided, sets assignedWorkerIds to just that worker.
+   */
   public async assignRouteToWorker(routeCode: string, workerId: string | null): Promise<void> {
     const date = await this.getDailySessionDate();
     if (!date) return;
+    
+    const newAssignedWorkerIds = workerId ? [workerId] : [];
+    
     const { error } = await supabase
       .from('routes')
-      .update({ assigned_worker_id: workerId })
+      .update({ assigned_worker_ids: newAssignedWorkerIds })
       .eq('route_code', routeCode)
       .eq('session_date', date);
+    
     if (error) console.error("Error assigning route:", error);
   }
 
