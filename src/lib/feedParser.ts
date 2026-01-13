@@ -8,8 +8,8 @@ const generateConsistentId = (name: string, rolePrefix: string) => {
     return `${rolePrefix}_${name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
 };
 
-const generateRMCredentials = (fullName: string) => {
-  if (!fullName) return { username: '', password: '' };
+const generateRMUsername = (fullName: string): string => {
+  if (!fullName) return '';
   
   const parts = fullName.trim().split(' ');
   const firstName = parts[0] || '';
@@ -17,10 +17,7 @@ const generateRMCredentials = (fullName: string) => {
 
   const lastPart = lastName.substring(0, 3).toLowerCase();
   const firstPart = firstName.substring(0, 2).toLowerCase();
-  const username = `${lastPart}${firstPart}`;
-  const password = firstName; 
-
-  return { username, password };
+  return `${lastPart}${firstPart}`;
 };
 
 export const parseDailySessionXLSX = async (file: File): Promise<DailySessionData> => {
@@ -30,38 +27,72 @@ export const parseDailySessionXLSX = async (file: File): Promise<DailySessionDat
   const routesSheet = workbook.Sheets['Routes'];
   const workersSheet = workbook.Sheets['Workers'];
   const bookingsSheet = workbook.Sheets['Bookings'];
+  const managersSheet = workbook.Sheets['Managers'];
 
   if (!routesSheet || !workersSheet || !bookingsSheet) {
       throw new Error("Invalid Data Feed. Missing required tabs: 'Routes', 'Workers', or 'Bookings'.");
+  }
+
+  if (!managersSheet) {
+      throw new Error("Invalid Data Feed. Missing required tab: 'Managers'.");
   }
 
   // Use { raw: false } to prevent Excel scientific notation issues (e.g., E1000)
   const routesData: any[] = XLSX.utils.sheet_to_json(routesSheet, { raw: false });
   const workersData: any[] = XLSX.utils.sheet_to_json(workersSheet, { raw: false });
   const bookingsData: any[] = XLSX.utils.sheet_to_json(bookingsSheet, { raw: false });
+  const managersData: any[] = XLSX.utils.sheet_to_json(managersSheet, { raw: false });
 
   const date = new Date().toISOString().split('T')[0];
+  
+  // --- PROCESS MANAGERS (from Managers tab) ---
   const managersMap = new Map<string, ManagementUser>();
+  
+  managersData.forEach((row: any, index: number) => {
+    const managerName = row['Manager Name']?.trim();
+    const phoneNumber = row['Phone Number'] ? String(row['Phone Number']).trim() : '';
+    const password = row['Password'] ? String(row['Password']).trim() : '';
+
+    if (!managerName) {
+      console.warn(`⚠️ Managers Row ${index + 2} has no Manager Name, skipping.`);
+      return;
+    }
+
+    if (!password) {
+      console.warn(`⚠️ Managers Row ${index + 2} (${managerName}) has no Password, skipping.`);
+      return;
+    }
+
+    const username = generateRMUsername(managerName);
+    
+    managersMap.set(managerName, {
+      userId: generateConsistentId(managerName, 'rm'),
+      name: managerName,
+      username,
+      password,
+      phone: formatPhoneNumber(phoneNumber),
+      role: 'RouteManager'
+    });
+  });
+
+  const managers = Array.from(managersMap.values());
+
+  // --- PROCESS ROUTES ---
   const routes: RouteData[] = [];
   
-  // --- PROCESS ROUTES ---
   routesData.forEach((row: any) => {
     const managerName = row['Manager Assignment']?.trim();
     const routeCode = row['RT #']?.trim();
     const streetListRaw = row['Street_List'];
 
+    if (!routeCode) return;
+
+    if (managerName && !managersMap.has(managerName)) {
+      console.warn(`⚠️ Route ${routeCode} references manager "${managerName}" not found in Managers tab. Skipping route.`);
+      return;
+    }
+
     if (managerName && routeCode) {
-      if (!managersMap.has(managerName)) {
-        const { username, password } = generateRMCredentials(managerName);
-        managersMap.set(managerName, {
-          userId: generateConsistentId(managerName, 'rm'), // Deterministic ID
-          name: managerName,
-          username,
-          password,
-          role: 'RouteManager'
-        });
-      }
-      
       let streets: string[] = [];
       if (typeof streetListRaw === 'string') {
           streets = streetListRaw.split(',').map(s => s.trim()).filter(Boolean);
@@ -71,13 +102,11 @@ export const parseDailySessionXLSX = async (file: File): Promise<DailySessionDat
       routes.push({ 
           routeCode, 
           managerId: manager.userId, 
-          assignedWorkerId: null,
+          assignedWorkerIds: [],
           streets 
       });
     }
   });
-
-  const managers = Array.from(managersMap.values());
 
   // --- PROCESS WORKERS ---
   const workers: Worker[] = workersData.map((row: any, index: number) => {

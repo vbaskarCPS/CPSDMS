@@ -13,27 +13,58 @@ import {
   Clock,
   Briefcase,
   FileText,
+  Phone,
+  Check,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
 import { sessionService } from '../../lib/sessionService';
 import { subscribeAsContractor } from '../../lib/realtimeService';
-import { Worker, SessionStats, MasterBooking } from '../../types';
+import { Worker, SessionStats, MasterBooking, ManagementUser } from '../../types';
 import LogsheetJobCard from './components/LogsheetJobCard';
 import AddContractModal from '../../components/AddContractModal';
+
+// Simple Toast Component
+const Toast: React.FC<{ message: string; show: boolean }> = ({ message, show }) => {
+  if (!show) return null;
+  
+  return (
+    <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 animate-fade-in">
+      <div className="bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2">
+        <Check size={16} />
+        <span className="text-sm font-medium">{message}</span>
+      </div>
+    </div>
+  );
+};
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const [worker, setWorker] = useState<Worker | null>(null);
+  const [manager, setManager] = useState<ManagementUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [viewFilter, setViewFilter] = useState<'pending' | 'not_done' | 'completed'>('pending');
   const [showContractModal, setShowContractModal] = useState(false);
   const [hasAssignedRoutes, setHasAssignedRoutes] = useState(false);
+  const [showToast, setShowToast] = useState(false);
 
   // Data State
   const [stats, setStats] = useState<SessionStats>(sessionService.getEmptyStats());
   const [jobs, setJobs] = useState<MasterBooking[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Copy phone to clipboard
+  const handleCopyPhone = async (phone: string) => {
+    try {
+      // Remove formatting for clipboard (just digits)
+      const digitsOnly = phone.replace(/\D/g, '');
+      await navigator.clipboard.writeText(digitsOnly);
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
 
   // Initial load and data fetching
   useEffect(() => {
@@ -62,6 +93,12 @@ const Dashboard: React.FC = () => {
             r => r.assignedWorkerIds && r.assignedWorkerIds.includes(storedWorker.contractorId)
           );
           setHasAssignedRoutes(myRoutes.length > 0);
+        }
+
+        // 4. Fetch Manager Info
+        if (storedWorker.assignedManagerId) {
+          const managerData = await sessionService.getManagerById(storedWorker.assignedManagerId);
+          setManager(managerData);
         }
       } catch (err) {
         console.error('Dashboard Load Error', err);
@@ -111,8 +148,11 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-black pb-20 flex flex-col">
+      {/* Toast Notification */}
+      <Toast message="Copied!" show={showToast} />
+
       <div className="sticky top-0 z-30 bg-black/90 backdrop-blur-md border-b border-gray-800 p-4 pb-2">
-        <div className="flex justify-between items-start mb-4">
+        <div className="flex justify-between items-start mb-2">
           <div>
             <div className="flex items-center gap-2 text-white font-bold text-lg">
               <Calendar size={18} className="text-cps-blue" />
@@ -148,6 +188,23 @@ const Dashboard: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Manager Info Row */}
+        {manager && (
+          <div className="flex items-center gap-2 text-xs text-gray-300 mb-3 bg-gray-900/50 rounded-lg px-3 py-2 border border-gray-800">
+            <span className="text-gray-500">Manager:</span>
+            <span className="font-medium text-white">{manager.name}</span>
+            {manager.phone && (
+              <button
+                onClick={() => handleCopyPhone(manager.phone!)}
+                className="flex items-center gap-1.5 ml-2 px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded-md transition-colors border border-gray-700"
+              >
+                <Phone size={12} className="text-cps-blue" />
+                <span className="text-cps-blue font-mono">{manager.phone}</span>
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-5 gap-1.5 mb-4">
           <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
@@ -248,6 +305,23 @@ const Dashboard: React.FC = () => {
           }}
         />
       )}
+
+      {/* Toast Animation Styles */}
+      <style>{`
+        @keyframes fade-in {
+          from {
+            opacity: 0;
+            transform: translate(-50%, -10px);
+          }
+          to {
+            opacity: 1;
+            transform: translate(-50%, 0);
+          }
+        }
+        .animate-fade-in {
+          animation: fade-in 0.2s ease-out;
+        }
+      `}</style>
     </div>
   );
 };

@@ -138,6 +138,7 @@ class SessionService {
       name: m.name,
       username: m.username,
       password: m.password,
+      phone: m.metadata?.phone || '',
       role: 'RouteManager' as const,
     }));
 
@@ -180,6 +181,29 @@ class SessionService {
     };
   }
 
+  /**
+   * Fetches a manager by their userId
+   */
+  public async getManagerById(managerId: string): Promise<ManagementUser | null> {
+    const { data } = await supabase
+      .from('users')
+      .select('*')
+      .eq('user_id', managerId)
+      .eq('role', 'RouteManager')
+      .maybeSingle();
+    
+    if (!data) return null;
+    
+    return {
+      userId: data.user_id,
+      name: data.name,
+      username: data.username,
+      password: data.password,
+      phone: data.metadata?.phone || '',
+      role: 'RouteManager' as const,
+    };
+  }
+
   // --- 3. SESSION MANAGEMENT ---
 
   public async uploadDailySession(data: DailySessionData, emailEnabled: boolean = true): Promise<void> {
@@ -195,6 +219,9 @@ class SessionService {
         username: m.username,
         password: m.password,
         role: 'RouteManager',
+        metadata: {
+          phone: m.phone,
+        },
       })),
       ...data.workers.map((w) => ({
         user_id: w.contractorId,
@@ -456,7 +483,7 @@ class SessionService {
     }
     const { data } = await supabase.from('users').select('*').ilike('username', username).eq('password', password).eq('role', 'RouteManager').single();
     if (!data) return null;
-    return { userId: data.user_id, name: data.name, username: data.username, role: 'RouteManager' };
+    return { userId: data.user_id, name: data.name, username: data.username, phone: data.metadata?.phone || '', role: 'RouteManager' };
   }
 
   public async authenticateWorker(contractorId: string, password: string): Promise<Worker | null> {

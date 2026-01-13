@@ -5,8 +5,9 @@
 export interface ManagementUser {
   userId: string;
   username: string; // e.g. "basvi"
-  password?: string; // e.g. "Vijay"
+  password?: string; // e.g. "cps4life" (now from Managers tab)
   name: string; // "Vijay Baskaran"
+  phone?: string; // Manager's phone number
   role: 'Admin' | 'RouteManager'; 
 }
 
