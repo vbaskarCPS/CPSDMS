@@ -127,7 +127,15 @@ const Dashboard: React.FC = () => {
       () => setRefreshKey((prev) => prev + 1)
     );
 
-    return () => unsubscribe();
+    // Also poll every 10 seconds as a fallback
+    const pollInterval = setInterval(() => {
+      setRefreshKey((prev) => prev + 1);
+    }, 10000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(pollInterval);
+    };
   }, [worker?.contractorId]);
 
   const handleLogout = () => {
