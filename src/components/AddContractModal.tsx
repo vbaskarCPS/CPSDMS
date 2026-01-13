@@ -472,7 +472,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       }
 
       const tx: SessionTransaction = {
-          id: transactionId.startsWith('NEW-') ? generateUUID() : undefined,
+          id: generateUUID(), // Always generate a new UUID for the transaction record
           jobId: transactionId,
           timestamp: new Date().toISOString(),
           customerId: "CLIENT",
