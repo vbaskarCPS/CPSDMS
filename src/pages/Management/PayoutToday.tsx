@@ -197,9 +197,9 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           return (b.session.stats.totalEQ || 0) - (a.session.stats.totalEQ || 0);
         case 'upsell':
           return (b.session.stats.upsellCount || 0) - (a.session.stats.upsellCount || 0);
-        case 'gross':
-          return (b.session.stats.prodGross + b.session.stats.upsellGross) - 
-                 (a.session.stats.prodGross + a.session.stats.upsellGross);
+        case 'upGross':
+          // Sort by upsell gross only (renamed from 'gross')
+          return (b.session.stats.upsellGross || 0) - (a.session.stats.upsellGross || 0);
         case 'commission':
           const payA = a.session.validation?.finalCommission || 0;
           const payB = b.session.validation?.finalCommission || 0;

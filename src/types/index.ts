@@ -208,4 +208,5 @@ export interface SessionTransaction {
   paymentBreakdown?: Record<string, number>;
 }
 
-export type SortOption = 'standard' | 'alpha' | 'steps' | 'gross' | 'equiv' | 'upsell' | 'commission';
+// Changed 'gross' to 'upGross' for clarity - sorts by upsell gross only
+export type SortOption = 'standard' | 'alpha' | 'steps' | 'upGross' | 'equiv' | 'upsell' | 'commission';

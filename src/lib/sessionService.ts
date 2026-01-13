@@ -58,6 +58,42 @@ class SessionService {
     } as SessionTransaction;
   }
 
+  /**
+   * Recalculates a worker's stats from their transactions and saves to the DB.
+   * Called after any transaction modification to keep stats in sync.
+   */
+  private async recalculateAndSaveWorkerStats(workerId: string): Promise<void> {
+    try {
+      const date = await this.getDailySessionDate();
+      if (!date) return;
+
+      // 1. Fetch all transactions for this worker
+      const { data: transactions } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('worker_id', workerId);
+
+      // 2. Map to SessionTransaction format
+      const cleanFinancials = (transactions || []).map(tx => this.mapDbTransaction(tx));
+
+      // 3. Recalculate stats
+      const newStats = this.recalculateStats(cleanFinancials, 5);
+
+      // 4. Save to logsheet_sessions
+      const { error } = await supabase
+        .from('logsheet_sessions')
+        .update({ stats: newStats })
+        .eq('worker_id', workerId)
+        .eq('date', date);
+
+      if (error) {
+        console.error('Failed to save recalculated stats:', error);
+      }
+    } catch (err) {
+      console.error('recalculateAndSaveWorkerStats error:', err);
+    }
+  }
+
   // --- 2. FETCHING ---
 
   public async getTransactionByJobId(jobId: string): Promise<SessionTransaction | null> {
@@ -714,11 +750,26 @@ class SessionService {
   }
 
   public async revertTransaction(transactionId: string, jobId?: string): Promise<void> {
+    // First, get the worker_id before deleting
+    const { data: txData } = await supabase
+      .from('transactions')
+      .select('worker_id')
+      .eq('id', transactionId)
+      .maybeSingle();
+    
+    const workerId = txData?.worker_id;
+
     const { error: txError } = await supabase.from('transactions').delete().eq('id', transactionId);
     if (txError) throw txError;
+    
     if (jobId && !jobId.startsWith('NEW-')) {
         const { error: bkError } = await supabase.from('bookings').update({ status: 'pending' }).eq('booking_id', jobId);
         if (bkError) throw bkError;
+    }
+
+    // Recalculate and save stats for this worker
+    if (workerId) {
+      await this.recalculateAndSaveWorkerStats(workerId);
     }
   }
 
@@ -741,6 +792,17 @@ class SessionService {
       }
       const { error } = await supabase.from('transactions').update(dbPayload).eq('id', transactionId);
       if (error) throw error;
+
+      // Get the worker_id for this transaction and recalculate stats
+      const { data: txData } = await supabase
+        .from('transactions')
+        .select('worker_id')
+        .eq('id', transactionId)
+        .maybeSingle();
+      
+      if (txData?.worker_id) {
+        await this.recalculateAndSaveWorkerStats(txData.worker_id);
+      }
   }
 
   public async completeJob(transaction: SessionTransaction, jobId: string, workerId: string): Promise<void> {
@@ -798,6 +860,9 @@ class SessionService {
           contractor_id: workerId,
         }).eq('booking_id', jobId);
     }
+
+    // Recalculate and save stats for this worker
+    await this.recalculateAndSaveWorkerStats(workerId);
 
     // --- SEND EMAIL RECEIPT (Non-blocking) ---
     if (transaction.customerEmail && transaction.customerEmail.trim() !== '') {
