@@ -26,16 +26,12 @@ const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const [worker, setWorker] = useState<Worker | null>(null);
   const [loading, setLoading] = useState(true);
-  const [viewFilter, setViewFilter] = useState<
-    'pending' | 'not_done' | 'completed'
-  >('pending');
+  const [viewFilter, setViewFilter] = useState<'pending' | 'not_done' | 'completed'>('pending');
   const [showContractModal, setShowContractModal] = useState(false);
   const [hasAssignedRoutes, setHasAssignedRoutes] = useState(false);
 
   // Data State
-  const [stats, setStats] = useState<SessionStats>(
-    sessionService.getEmptyStats()
-  );
+  const [stats, setStats] = useState<SessionStats>(sessionService.getEmptyStats());
   const [jobs, setJobs] = useState<MasterBooking[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -52,22 +48,18 @@ const Dashboard: React.FC = () => {
 
       try {
         // 1. Ensure Session Exists
-        const session = await sessionService.startLogsheetSession(
-          storedWorker.contractorId
-        );
+        const session = await sessionService.startLogsheetSession(storedWorker.contractorId);
         setStats(session.stats);
 
         // 2. Fetch Assignments (Merges Pending & Completed)
-        const assignments = await sessionService.getWorkerAssignments(
-          storedWorker.contractorId
-        );
+        const assignments = await sessionService.getWorkerAssignments(storedWorker.contractorId);
         setJobs(assignments);
 
-        // 3. Check if worker has assigned routes
+        // 3. Check if worker has assigned routes (supports split routes)
         const dailySession = await sessionService.getDailySession();
         if (dailySession) {
           const myRoutes = dailySession.routes.filter(
-            r => r.assignedWorkerId === storedWorker.contractorId
+            r => r.assignedWorkerIds && r.assignedWorkerIds.includes(storedWorker.contractorId)
           );
           setHasAssignedRoutes(myRoutes.length > 0);
         }
@@ -101,26 +93,21 @@ const Dashboard: React.FC = () => {
 
   const filteredJobs = useMemo(() => {
     if (viewFilter === 'pending') {
-      return jobs.filter(
-        (b) =>
-          !b.Completed && 
-          (!b.Status || b.Status === 'pending')
-      );
+      return jobs.filter((b) => !b.Completed && (!b.Status || b.Status === 'pending'));
     } else if (viewFilter === 'not_done') {
-      return jobs.filter(
-        (b) => b.Status === 'cancelled' || b.Status === 'next_time'
-      );
+      return jobs.filter((b) => b.Status === 'cancelled' || b.Status === 'next_time');
     } else {
       return jobs.filter((b) => b.Completed === 'x' || b.Status === 'completed');
     }
   }, [jobs, viewFilter]);
 
-  if (loading)
+  if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-black">
         <Loader className="animate-spin text-cps-blue" />
       </div>
     );
+  }
 
   return (
     <div className="min-h-screen bg-black pb-20 flex flex-col">
@@ -132,9 +119,7 @@ const Dashboard: React.FC = () => {
               {format(new Date(), 'EEE, MMM d')}
             </div>
             <div className="flex items-center gap-2 text-gray-400 text-xs mt-1">
-              <span>
-                {worker?.firstName} {worker?.lastName}
-              </span>
+              <span>{worker?.firstName} {worker?.lastName}</span>
               <span className="bg-gray-800 px-1.5 rounded border border-gray-700">
                 #{worker?.contractorId}
               </span>
@@ -186,27 +171,21 @@ const Dashboard: React.FC = () => {
               <Briefcase size={10} />
               <span className="text-[9px] uppercase font-bold">EQ</span>
             </div>
-            <p className="text-lg font-bold text-white">
-              {stats.totalEQ.toFixed(1)}
-            </p>
+            <p className="text-lg font-bold text-white">{stats.totalEQ.toFixed(1)}</p>
           </div>
           <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
             <div className="flex items-center gap-1 text-gray-400 mb-1">
               <TrendingUp size={10} />
               <span className="text-[9px] uppercase font-bold">Upsell</span>
             </div>
-            <p className="text-lg font-bold text-green-400">
-              {stats.upsellCount}
-            </p>
+            <p className="text-lg font-bold text-green-400">{stats.upsellCount}</p>
           </div>
           <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
             <div className="flex items-center gap-1 text-gray-400 mb-1">
               <DollarSign size={10} />
               <span className="text-[9px] uppercase font-bold">Gross</span>
             </div>
-            <p className="text-lg font-bold text-green-400">
-              ${stats.upsellGross.toFixed(0)}
-            </p>
+            <p className="text-lg font-bold text-green-400">${stats.upsellGross.toFixed(0)}</p>
           </div>
         </div>
 
@@ -248,18 +227,14 @@ const Dashboard: React.FC = () => {
         {filteredJobs.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-gray-500">
             <CheckCircle2 size={48} className="mb-4 opacity-20" />
-            <p>
-              {viewFilter === 'pending' ? 'All caught up!' : 'No jobs found.'}
-            </p>
+            <p>{viewFilter === 'pending' ? 'All caught up!' : 'No jobs found.'}</p>
           </div>
         ) : (
           filteredJobs.map((job) => (
             <LogsheetJobCard
               key={job['Booking ID']}
               job={job}
-              onClick={() =>
-                navigate(`/job-detail/${encodeURIComponent(job['Booking ID'])}`)
-              }
+              onClick={() => navigate(`/job-detail/${encodeURIComponent(job['Booking ID'])}`)}
             />
           ))
         )}
