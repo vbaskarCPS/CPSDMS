@@ -350,7 +350,7 @@ class SessionService {
     await supabase.from('daily_sessions').delete().eq('date', date);
     await supabase.from('users').delete().in('role', ['Worker', 'RouteManager']);
     localStorage.clear();
-    window.location.href = '/login';
+    window.location.href = '/';
   }
 
   /**
