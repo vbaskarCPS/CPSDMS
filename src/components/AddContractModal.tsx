@@ -24,10 +24,12 @@ function generateUUID() {
 }
 
 const CONTRACT_RECIPES = [
-  { id: 'star_plan_pro', name: 'Star Plan Pro', type: 'Upgrade', basePrice: 150 },
-  { id: 'lawn_rejuv', name: 'Lawn Rejuvenation', type: 'Upgrade', basePrice: 200 },
-  { id: 'dethatch', name: 'Dethatching', type: 'Add-On', basePrice: 100 },
-  { id: 'grub', name: 'Grub Control', type: 'Add-On', basePrice: 50, 
+  { id: 'star_plan_pro', name: 'Star Plan Pro', type: 'Upgrade' },
+  { id: 'lawn_rejuv', name: 'Lawn Rejuvenation', type: 'Upgrade' },
+  { id: 'golf_course', name: 'Golf Course', type: 'Upgrade' },
+  { id: 'dethatch', name: 'Dethatching', type: 'Add-On' },
+  { id: 'rejuv_after_care', name: 'Rejuvenation After Care', type: 'Add-On' },
+  { id: 'grub', name: 'Grub Control', type: 'Add-On', 
     questions: [
       { id: 'timing', label: 'Timing', options: ['Spring', 'Fall', 'Both'] }
     ] 
@@ -153,7 +155,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
               'Status': 'completed',
               'FO/BO/FP': (tx as any).serviceType,
               // Check if they already have a contract
-              isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ'))),
+              isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ') || tx.displayPrice.startsWith('GF'))),
               // Pre-fill Gate info from description
               'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined
           } as MasterBooking));
@@ -180,7 +182,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
     const initialAnswers: Record<string, string> = {};
     if (recipe.questions) recipe.questions.forEach(q => initialAnswers[q.id] = q.options[0]);
     setAnswers(initialAnswers);
-    setPaymentInfo({ amount: '0.00', method: 'Cash' });
+    setPaymentInfo({ amount: '', method: 'Cash' });
     setExtraPaymentInfo('');
     setIsCreditPaid(false);
     setCcData(null);
@@ -211,7 +213,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       hasLockedGate: booking['Gate'] === 'x',
       hasSprinkler: false
     });
-    setPaymentInfo(prev => ({ ...prev, amount: '0.00' }));
+    setPaymentInfo(prev => ({ ...prev, amount: '' }));
     // Clear validation errors
     setPhoneError(null);
     setEmailError(null);
@@ -234,7 +236,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       hasLockedGate: false, 
       hasSprinkler: false 
     });
-    setPaymentInfo(prev => ({ ...prev, amount: '0.00' }));
+    setPaymentInfo(prev => ({ ...prev, amount: '' }));
     // Clear validation errors
     setPhoneError(null);
     setEmailError(null);
@@ -309,9 +311,11 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       if (answers['timing']) finalNotes += ` [${answers['timing']}]`; 
       if (formData.hasLockedGate) finalNotes += ' [LG]';
 
+      // Display price prefix logic - use recipe id for precision
       let displayPricePrefix = '';
-      if (selectedRecipe.name.includes('Star')) displayPricePrefix = 'SP';
-      if (selectedRecipe.name.includes('Rejuv')) displayPricePrefix = 'RJ';
+      if (selectedRecipe.id === 'star_plan_pro') displayPricePrefix = 'SP';
+      if (selectedRecipe.id === 'lawn_rejuv') displayPricePrefix = 'RJ';
+      if (selectedRecipe.id === 'golf_course') displayPricePrefix = 'GF';
       
       const formattedDisplayPrice = `${displayPricePrefix}${finalTotal.toFixed(2)}`;
       const finalAddress = selectedBooking ? selectedBooking['Full Address'] : `${houseNumber} ${streetName}`.trim();

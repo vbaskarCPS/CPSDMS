@@ -16,7 +16,9 @@ const BADGE_MAP: Record<string, string> = {
   'Star Plan Pro': 'SP PRO',
   'Lawn Rejuvenation': 'REJUV',
   'Dethatching': 'DET',
-  'Grub Control': 'GRUB'
+  'Grub Control': 'GRUB',
+  'Golf Course': 'GOLF',
+  'Rejuvenation After Care': 'AC'
 };
 
 // --- EMAIL STATUS COMPONENT ---
