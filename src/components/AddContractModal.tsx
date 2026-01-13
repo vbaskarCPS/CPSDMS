@@ -600,10 +600,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                    </div>
                 ) : (
                    <div className="grid grid-cols-2 gap-3">
-                      <input type="text" placeholder="First Name" value={formData.firstName} onChange={handleFirstNameChange} className="input" />
-                      <input type="text" placeholder="Last Name" value={formData.lastName} onChange={handleLastNameChange} className="input" />
-                      <input type="text" placeholder="#" value={houseNumber} onChange={e => setHouseNumber(e.target.value)} className="input col-span-1" />
-                      <input type="text" value={streetName} onChange={e => setStreetName(e.target.value)} className="input w-full col-span-1" placeholder="Street Name"/>
+                      <input type="text" placeholder="First Name" value={formData.firstName} onChange={handleFirstNameChange} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" />
+                      <input type="text" placeholder="Last Name" value={formData.lastName} onChange={handleLastNameChange} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" />
+                      <input type="text" placeholder="#" value={houseNumber} onChange={e => setHouseNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white col-span-1" />
+                      <input type="text" value={streetName} onChange={e => setStreetName(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white col-span-1" placeholder="Street Name"/>
                       <div className="col-span-1">
                         <div className="relative">
                           <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
@@ -613,7 +613,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                             value={formData.phone} 
                             onChange={handlePhoneChange}
                             maxLength={12}
-                            className={`input pl-9 ${phoneError ? 'border-red-500' : ''}`}
+                            className={`w-full bg-gray-800 border border-gray-700 rounded p-2 pl-9 text-white ${phoneError ? 'border-red-500' : ''}`}
                           />
                         </div>
                         {phoneError && <p className="text-red-400 text-[10px] mt-1">{phoneError}</p>}
@@ -627,7 +627,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                             value={formData.email} 
                             onChange={handleEmailChange}
                             onBlur={handleEmailBlur}
-                            className={`input pl-9 ${emailError ? 'border-red-500' : ''}`}
+                            className={`w-full bg-gray-800 border border-gray-700 rounded p-2 pl-9 text-white ${emailError ? 'border-red-500' : ''}`}
                           />
                         </div>
                         {emailError && <p className="text-red-400 text-[10px] mt-1">{emailError}</p>}
