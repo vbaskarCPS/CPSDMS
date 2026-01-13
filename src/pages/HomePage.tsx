@@ -1,7 +1,7 @@
 // src/pages/HomePage.tsx
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { KeyRound, AlertCircle, ShieldCheck } from 'lucide-react';
+import { KeyRound, AlertCircle, ShieldCheck, Lock } from 'lucide-react';
 import { sessionService } from '../lib/sessionService';
 import { setStorageItem } from '../lib/localStorage';
 
@@ -11,10 +11,14 @@ const HomePage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  
+  // --- SESSION FINALIZED STATE (special error display) ---
+  const [isSessionFinalized, setIsSessionFinalized] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setIsSessionFinalized(false);
     setLoading(true);
 
     try {
@@ -47,7 +51,12 @@ const HomePage: React.FC = () => {
 
       throw new Error('Invalid credentials. Please try again.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed');
+      // --- HANDLE SESSION_FINALIZED ERROR ---
+      if (err instanceof Error && err.message === 'SESSION_FINALIZED') {
+        setIsSessionFinalized(true);
+      } else {
+        setError(err instanceof Error ? err.message : 'Login failed');
+      }
     } finally {
       setLoading(false);
     }
@@ -68,9 +77,29 @@ const HomePage: React.FC = () => {
 
         <div className="bg-gray-800 rounded-lg shadow-lg p-8 border border-gray-700">
           <form onSubmit={handleLogin}>
+            {/* Standard Error */}
             {error && (
               <div className="mb-4 p-3 bg-red-900/30 text-red-300 border border-red-700 rounded-md text-sm flex items-center gap-2">
                 <AlertCircle size={16} /> {error}
+              </div>
+            )}
+
+            {/* Session Finalized Special Message */}
+            {isSessionFinalized && (
+              <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-lg">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-10 h-10 rounded-full bg-green-900/50 border border-green-600 flex items-center justify-center flex-shrink-0">
+                    <Lock size={18} className="text-green-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-green-300 font-bold text-sm">Session Finalized</h3>
+                    <p className="text-green-400/80 text-xs">Your day is complete!</p>
+                  </div>
+                </div>
+                <p className="text-gray-400 text-xs mt-2">
+                  Your payout has been processed and your logsheet is closed for today. 
+                  Great work! See you next time.
+                </p>
               </div>
             )}
 

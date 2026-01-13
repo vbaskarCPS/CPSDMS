@@ -170,7 +170,7 @@ class SessionService {
       'Booking ID': b.booking_id,
       'Route Number': b.route_number,
       'Contractor Number': b.contractor_id,
-      Price: b.price?.toString(), 
+      Price: String(b.price || ''), 
       'Log Sheet Notes': b.log_notes,
       Status: b.status,
       Prepaid: b.is_prepaid ? 'x' : undefined,
@@ -282,6 +282,35 @@ class SessionService {
       .eq('user_id', workerId);
 
     if (updateError) throw updateError;
+  }
+
+  // --- 2d. WORKER SESSION STATUS (LOCKOUT) ---
+
+  /**
+   * Gets the current session status for a worker
+   * Returns 'OPEN', 'PAID', or null if no session exists
+   */
+  public async getWorkerSessionStatus(workerId: string): Promise<string | null> {
+    const date = await this.getDailySessionDate();
+    if (!date) return null;
+
+    const { data } = await supabase
+      .from('logsheet_sessions')
+      .select('status')
+      .eq('worker_id', workerId)
+      .eq('date', date)
+      .maybeSingle();
+
+    return data?.status || null;
+  }
+
+  /**
+   * Checks if a worker is locked out (session has been paid/finalized)
+   * Returns true if locked out, false if still active
+   */
+  public async isWorkerLockedOut(workerId: string): Promise<boolean> {
+    const status = await this.getWorkerSessionStatus(workerId);
+    return status === 'PAID';
   }
 
   // --- 3. SESSION MANAGEMENT ---
@@ -581,6 +610,13 @@ class SessionService {
   public async authenticateWorker(contractorId: string, password: string): Promise<Worker | null> {
     const { data } = await supabase.from('users').select('*').eq('user_id', contractorId).eq('password', password).eq('role', 'Worker').single();
     if (!data) return null;
+    
+    // --- LOCKOUT CHECK: Verify worker's session is not finalized ---
+    const isLockedOut = await this.isWorkerLockedOut(contractorId);
+    if (isLockedOut) {
+      throw new Error('SESSION_FINALIZED');
+    }
+    
     const names = data.name.split(' ');
     return {
       contractorId: data.user_id,

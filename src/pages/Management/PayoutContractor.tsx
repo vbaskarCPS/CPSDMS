@@ -267,6 +267,7 @@ const PayoutContractor: React.FC = () => {
     try {
       await sessionService.updateLogsheetSession(session.id, {
         validation: validationData,
+        status: 'PAID', // <-- LOCKOUT: This locks the worker out of their logsheet
       });
       navigate('/admin/command-center?tab=payout');
     } catch (err) {

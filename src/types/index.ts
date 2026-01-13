@@ -88,7 +88,7 @@ export interface LogsheetSession {
   workerId: string;
   managerName?: string; 
   date: string;
-  status: 'OPEN' | 'COMPLETE' | 'CLOSED'; 
+  status: 'OPEN' | 'COMPLETE' | 'CLOSED' | 'PAID'; // Added 'PAID' for payout lockout
   
   // Note: These arrays are populated by the service after fetching
   dailyRouteStore: MasterBooking[];   
