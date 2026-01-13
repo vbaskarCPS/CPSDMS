@@ -15,8 +15,16 @@ import {
   Wallet,
   Trophy,
   Plus,
+  X,
+  Trash2,
+  Award,
+  Star,
+  Sparkles,
+  HelpCircle,
+  Check,
+  AlertTriangle,
 } from 'lucide-react';
-import { Worker, SortOption, ManagementUser, LogsheetSession, Bonus } from '../../types';
+import { Worker, SortOption, ManagementUser, LogsheetSession, Bonus, BonusType, SessionTransaction } from '../../types';
 import { sessionService } from '../../lib/sessionService';
 
 interface PayoutTodayProps {
@@ -51,6 +59,53 @@ interface ManagerGroupStats {
   avgCommission: number;
 }
 
+// Bonus qualification result
+interface BonusQualification {
+  qualified: boolean;
+  ratioPass: boolean;
+  detailsPass: boolean;
+  doneCount: number;
+  upgradesSalesCount: number;
+  detailsCollected: number;
+  detailsPossible: number;
+}
+
+/**
+ * Checks if a worker qualifies for bonuses based on:
+ * 1. Production Ratio: Upgrades + Sales >= Done (Production)
+ * 2. Client Details: 80% of phone+email collected for Upgrades and Sales
+ */
+function checkBonusQualification(transactions: SessionTransaction[]): BonusQualification {
+  // Count transaction types
+  const doneCount = transactions.filter(tx => tx.type === 'Production').length;
+  const upgradesSalesCount = transactions.filter(tx => tx.type === 'Upgrade' || tx.type === 'Sale').length;
+  
+  // Criteria 1: Ratio (must have at least some upgrades/sales)
+  const ratioPass = upgradesSalesCount > 0 && upgradesSalesCount >= doneCount;
+  
+  // Criteria 2: Client details (80% threshold)
+  const upgradesAndSales = transactions.filter(tx => tx.type === 'Upgrade' || tx.type === 'Sale');
+  const detailsPossible = upgradesAndSales.length * 2; // phone + email each
+  
+  let detailsCollected = 0;
+  upgradesAndSales.forEach(tx => {
+    if (tx.customerPhone && tx.customerPhone.trim() !== '') detailsCollected++;
+    if (tx.customerEmail && tx.customerEmail.trim() !== '') detailsCollected++;
+  });
+  
+  const detailsPass = detailsPossible === 0 ? false : (detailsCollected >= detailsPossible * 0.8);
+  
+  return {
+    qualified: ratioPass && detailsPass,
+    ratioPass,
+    detailsPass,
+    doneCount,
+    upgradesSalesCount,
+    detailsCollected,
+    detailsPossible
+  };
+}
+
 const PayoutToday: React.FC<PayoutTodayProps> = ({
   date,
   sortOption,
@@ -67,10 +122,15 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
   // Bonus Modal State
   const [showBonusModal, setShowBonusModal] = useState(false);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSession, setSelectedSession] = useState<LogsheetSession | null>(null);
   const [selectedWorkerName, setSelectedWorkerName] = useState<string>('');
+  
+  // Bonus form state
+  const [bonusStep, setBonusStep] = useState<'type' | 'details'>('type');
+  const [selectedBonusType, setSelectedBonusType] = useState<BonusType | null>(null);
+  const [bonusPlacing, setBonusPlacing] = useState<number | 'other' | ''>('');
+  const [bonusCustomDesc, setBonusCustomDesc] = useState('');
   const [bonusAmount, setBonusAmount] = useState('');
-  const [bonusType, setBonusType] = useState('Performance');
 
   const loadData = async () => {
     setLoading(true);
@@ -279,45 +339,126 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   }, [sortedItems, sortOption, managers]);
 
   // --- BONUS HANDLERS ---
-  const handleOpenBonusModal = (sessionId: string, workerName: string) => {
-    setSelectedSessionId(sessionId);
+  const handleOpenBonusModal = (session: LogsheetSession, workerName: string) => {
+    setSelectedSession(session);
     setSelectedWorkerName(workerName);
+    // Reset form state
+    setBonusStep('type');
+    setSelectedBonusType(null);
+    setBonusPlacing('');
+    setBonusCustomDesc('');
     setBonusAmount('');
-    setBonusType('Performance');
     setShowBonusModal(true);
   };
 
-  const handleAddBonus = async () => {
-    if (!selectedSessionId || !bonusAmount) return;
+  const handleCloseBonusModal = () => {
+    setShowBonusModal(false);
+    setSelectedSession(null);
+  };
 
-    const item = items.find((i) => i.session.id === selectedSessionId);
-    if (!item) return;
+  const handleSelectBonusType = (type: BonusType) => {
+    setSelectedBonusType(type);
+    setBonusPlacing('');
+    setBonusCustomDesc('');
+    setBonusAmount('');
+    setBonusStep('details');
+  };
+
+  const handleBackToTypeSelection = () => {
+    setBonusStep('type');
+    setSelectedBonusType(null);
+  };
+
+  const handleAddBonus = async () => {
+    if (!selectedSession || !selectedBonusType || !bonusAmount) return;
 
     const amt = parseFloat(bonusAmount);
     if (isNaN(amt) || amt <= 0) return;
 
-    const newBonus: Bonus = { id: Date.now(), type: bonusType, amount: amt };
+    // Validate based on type
+    if (selectedBonusType !== 'Other' && !bonusPlacing) return;
+    if (selectedBonusType === 'Other' && !bonusCustomDesc.trim()) return;
+    if (bonusPlacing === 'other' && !bonusCustomDesc.trim()) return;
 
-    const updatedBonuses = [...(item.session.bonuses || []), newBonus];
+    const newBonus: Bonus = {
+      id: Date.now(),
+      type: selectedBonusType,
+      amount: amt,
+      placing: selectedBonusType !== 'Other' ? bonusPlacing as number | 'other' : undefined,
+      customDescription: selectedBonusType === 'Other' || bonusPlacing === 'other' ? bonusCustomDesc : undefined
+    };
 
-    const currentPay = item.session.validation?.finalCommission || 0;
+    const updatedBonuses = [...(selectedSession.bonuses || []), newBonus];
+
+    const currentPay = selectedSession.validation?.finalCommission || 0;
     const newPay = currentPay + amt;
 
-    const updatedValidation = item.session.validation
+    const updatedValidation = selectedSession.validation
       ? {
-          ...item.session.validation,
+          ...selectedSession.validation,
           finalCommission: newPay,
         }
       : undefined;
 
-    await sessionService.updateLogsheetSession(item.session.id, {
+    await sessionService.updateLogsheetSession(selectedSession.id, {
       bonuses: updatedBonuses,
       validation: updatedValidation,
     });
 
-    setShowBonusModal(false);
+    // Reset form for another entry
+    setBonusStep('type');
+    setSelectedBonusType(null);
+    setBonusPlacing('');
+    setBonusCustomDesc('');
     setBonusAmount('');
+    
     loadData();
+  };
+
+  const handleRemoveBonus = async (bonusId: number) => {
+    if (!selectedSession) return;
+
+    const bonusToRemove = selectedSession.bonuses?.find(b => b.id === bonusId);
+    if (!bonusToRemove) return;
+
+    const updatedBonuses = (selectedSession.bonuses || []).filter(b => b.id !== bonusId);
+
+    const currentPay = selectedSession.validation?.finalCommission || 0;
+    const newPay = currentPay - bonusToRemove.amount;
+
+    const updatedValidation = selectedSession.validation
+      ? {
+          ...selectedSession.validation,
+          finalCommission: newPay,
+        }
+      : undefined;
+
+    await sessionService.updateLogsheetSession(selectedSession.id, {
+      bonuses: updatedBonuses,
+      validation: updatedValidation,
+    });
+
+    loadData();
+  };
+
+  // Format bonus display text
+  const formatBonusDisplay = (bonus: Bonus): string => {
+    if (bonus.type === 'Other') {
+      return bonus.customDescription || 'Other';
+    }
+    
+    if (bonus.placing === 'other') {
+      return `${bonus.type} - ${bonus.customDescription}`;
+    }
+    
+    const placeSuffix = (n: number) => {
+      if (n === 1) return '1st';
+      if (n === 2) return '2nd';
+      if (n === 3) return '3rd';
+      return `${n}th`;
+    };
+    
+    return `${bonus.type} - ${placeSuffix(bonus.placing as number)} Place`;
   };
 
   if (loading)
@@ -334,6 +475,9 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     const payAmount = session.validation?.finalCommission ?? 0;
     const eq = isValidated ? (session.validation?.actualTotalEQ || 0) : session.stats.totalEQ;
     const bonusTotal = (session.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
+    
+    // Check bonus qualification using transactions
+    const qualification = checkBonusQualification(session.financialStore || []);
 
     return (
       <div
@@ -409,12 +553,14 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           <button
             onClick={(e) => {
               e.stopPropagation();
-              handleOpenBonusModal(session.id, `${worker.firstName} ${worker.lastName}`);
+              handleOpenBonusModal(session, `${worker.firstName} ${worker.lastName}`);
             }}
             className={`ml-2 px-2 py-1 rounded text-[9px] font-bold flex items-center gap-1 transition-colors ${
               bonusTotal > 0 
                 ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-700 hover:bg-yellow-900/50' 
-                : 'bg-blue-900/30 text-blue-400 border border-blue-800 hover:bg-blue-900/50'
+                : qualification.qualified
+                  ? 'bg-blue-900/30 text-blue-400 border border-blue-800 hover:bg-blue-900/50'
+                  : 'bg-red-900/30 text-red-400 border border-red-800 hover:bg-red-900/50'
             }`}
           >
             {bonusTotal > 0 ? (
@@ -438,6 +584,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       </div>
     );
   };
+
+  // Get qualification for selected session (for modal display)
+  const selectedQualification = selectedSession 
+    ? checkBonusQualification(selectedSession.financialStore || [])
+    : null;
 
   return (
     <div className="flex flex-col h-full">
@@ -613,63 +764,241 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       </div>
 
       {/* --- BONUS MODAL --- */}
-      {showBonusModal && (
+      {showBonusModal && selectedSession && (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 animate-fade-in">
-          <div className="bg-gray-800 p-6 rounded-lg shadow-xl max-w-sm w-full border border-gray-700">
-            <h3 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
-              <Trophy size={20} className="text-yellow-400" /> Add Bonus
-            </h3>
-            <p className="text-sm text-gray-400 mb-4">{selectedWorkerName}</p>
-            <div className="space-y-4">
+          <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-lg border border-gray-700 max-h-[90vh] flex flex-col">
+            
+            {/* Header */}
+            <div className="p-4 border-b border-gray-700 flex justify-between items-center flex-shrink-0">
               <div>
-                <label className="text-xs text-gray-400 block mb-1">
-                  Amount ($)
-                </label>
-                <div className="relative">
-                  <DollarSign
-                    size={14}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
-                  />
-                  <input
-                    type="number"
-                    value={bonusAmount}
-                    onChange={(e) => setBonusAmount(e.target.value)}
-                    className="w-full bg-gray-900 border border-gray-600 rounded p-2 pl-8 text-white focus:ring-2 focus:ring-green-500 outline-none"
-                    placeholder="0.00"
-                    autoFocus
-                  />
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Trophy size={20} className="text-yellow-400" /> Manage Bonuses
+                </h3>
+                <p className="text-sm text-gray-400">{selectedWorkerName}</p>
+              </div>
+              <button onClick={handleCloseBonusModal} className="text-gray-400 hover:text-white">
+                <X size={24} />
+              </button>
+            </div>
+
+            {/* Qualification Status */}
+            {selectedQualification && (
+              <div className={`mx-4 mt-4 p-3 rounded-lg border ${
+                selectedQualification.qualified 
+                  ? 'bg-green-900/20 border-green-700/50' 
+                  : 'bg-red-900/20 border-red-700/50'
+              }`}>
+                <div className="flex items-center gap-2 mb-2">
+                  {selectedQualification.qualified ? (
+                    <Check size={16} className="text-green-400" />
+                  ) : (
+                    <AlertTriangle size={16} className="text-red-400" />
+                  )}
+                  <span className={`text-sm font-bold ${
+                    selectedQualification.qualified ? 'text-green-400' : 'text-red-400'
+                  }`}>
+                    {selectedQualification.qualified ? 'Qualified for Bonus' : 'Not Qualified for Bonus'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className={`flex items-center gap-1 ${selectedQualification.ratioPass ? 'text-green-400' : 'text-red-400'}`}>
+                    {selectedQualification.ratioPass ? <Check size={12} /> : <X size={12} />}
+                    <span>Ratio: {selectedQualification.upgradesSalesCount} upsells vs {selectedQualification.doneCount} done</span>
+                  </div>
+                  <div className={`flex items-center gap-1 ${selectedQualification.detailsPass ? 'text-green-400' : 'text-red-400'}`}>
+                    {selectedQualification.detailsPass ? <Check size={12} /> : <X size={12} />}
+                    <span>Details: {selectedQualification.detailsCollected}/{selectedQualification.detailsPossible} (80% req)</span>
+                  </div>
                 </div>
               </div>
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Type</label>
-                <select
-                  value={bonusType}
-                  onChange={(e) => setBonusType(e.target.value)}
-                  className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white focus:ring-2 focus:ring-green-500 outline-none"
-                >
-                  <option>Performance</option>
-                  <option>Rookie of Day</option>
-                  <option>Top Sales</option>
-                  <option>Top EQ</option>
-                  <option>Other</option>
-                </select>
+            )}
+
+            {/* Existing Bonuses List */}
+            {selectedSession.bonuses && selectedSession.bonuses.length > 0 && (
+              <div className="mx-4 mt-4">
+                <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Assigned Bonuses</h4>
+                <div className="space-y-2 max-h-32 overflow-y-auto">
+                  {selectedSession.bonuses.map((bonus) => (
+                    <div key={bonus.id} className="flex items-center justify-between bg-gray-900/50 p-2 rounded border border-gray-700">
+                      <div className="flex items-center gap-2">
+                        <Trophy size={14} className="text-yellow-400" />
+                        <span className="text-sm text-white">{formatBonusDisplay(bonus)}</span>
+                        <span className="text-sm font-bold text-green-400">${bonus.amount.toFixed(2)}</span>
+                      </div>
+                      <button
+                        onClick={() => handleRemoveBonus(bonus.id)}
+                        className="text-red-400 hover:text-red-300 p-1"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="flex gap-3 pt-2">
-                <button
-                  onClick={() => setShowBonusModal(false)}
-                  className="flex-1 py-2 text-gray-400 hover:text-white transition-colors"
-                >
-                  Cancel
-                </button>
+            )}
+
+            {/* Scrollable Content Area */}
+            <div className="flex-1 overflow-y-auto p-4">
+              
+              {/* Step 1: Type Selection */}
+              {bonusStep === 'type' && (
+                <div>
+                  <h4 className="text-xs font-bold text-gray-400 uppercase mb-3">Select Bonus Type</h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Performance EQ */}
+                    <button
+                      onClick={() => handleSelectBonusType('Performance EQ')}
+                      className="p-4 bg-gray-900 border border-gray-600 rounded-lg hover:border-blue-500 hover:bg-gray-800 transition-all text-left group"
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="p-2 rounded-full bg-blue-900/30 text-blue-400 group-hover:bg-blue-900/50">
+                          <TrendingUp size={20} />
+                        </div>
+                      </div>
+                      <h5 className="font-bold text-white text-sm">Performance EQ</h5>
+                      <p className="text-[10px] text-gray-500 mt-1">Best EQ performers</p>
+                    </button>
+
+                    {/* Total Upsell */}
+                    <button
+                      onClick={() => handleSelectBonusType('Total Upsell')}
+                      className="p-4 bg-gray-900 border border-gray-600 rounded-lg hover:border-purple-500 hover:bg-gray-800 transition-all text-left group"
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="p-2 rounded-full bg-purple-900/30 text-purple-400 group-hover:bg-purple-900/50">
+                          <DollarSign size={20} />
+                        </div>
+                      </div>
+                      <h5 className="font-bold text-white text-sm">Total Upsell</h5>
+                      <p className="text-[10px] text-gray-500 mt-1">Highest upsell gross</p>
+                    </button>
+
+                    {/* Rookie */}
+                    <button
+                      onClick={() => handleSelectBonusType('Rookie')}
+                      className="p-4 bg-gray-900 border border-gray-600 rounded-lg hover:border-yellow-500 hover:bg-gray-800 transition-all text-left group"
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="p-2 rounded-full bg-yellow-900/30 text-yellow-400 group-hover:bg-yellow-900/50">
+                          <Star size={20} />
+                        </div>
+                      </div>
+                      <h5 className="font-bold text-white text-sm">Rookie</h5>
+                      <p className="text-[10px] text-gray-500 mt-1">Best new worker</p>
+                    </button>
+
+                    {/* Other */}
+                    <button
+                      onClick={() => handleSelectBonusType('Other')}
+                      className="p-4 bg-gray-900 border border-gray-600 rounded-lg hover:border-gray-500 hover:bg-gray-800 transition-all text-left group"
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="p-2 rounded-full bg-gray-700 text-gray-400 group-hover:bg-gray-600">
+                          <Sparkles size={20} />
+                        </div>
+                      </div>
+                      <h5 className="font-bold text-white text-sm">Other</h5>
+                      <p className="text-[10px] text-gray-500 mt-1">Custom bonus type</p>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 2: Details */}
+              {bonusStep === 'details' && selectedBonusType && (
+                <div className="space-y-4">
+                  <button 
+                    onClick={handleBackToTypeSelection}
+                    className="text-sm text-gray-400 hover:text-white flex items-center gap-1"
+                  >
+                    ← Back to type selection
+                  </button>
+
+                  <div className="flex items-center gap-2 p-3 bg-gray-900 rounded-lg border border-gray-700">
+                    {selectedBonusType === 'Performance EQ' && <TrendingUp size={20} className="text-blue-400" />}
+                    {selectedBonusType === 'Total Upsell' && <DollarSign size={20} className="text-purple-400" />}
+                    {selectedBonusType === 'Rookie' && <Star size={20} className="text-yellow-400" />}
+                    {selectedBonusType === 'Other' && <Sparkles size={20} className="text-gray-400" />}
+                    <span className="font-bold text-white">{selectedBonusType}</span>
+                  </div>
+
+                  {/* Placing Selection (for Performance EQ, Total Upsell, Rookie) */}
+                  {selectedBonusType !== 'Other' && (
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-2">Placing</label>
+                      <select
+                        value={bonusPlacing}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setBonusPlacing(val === 'other' ? 'other' : val === '' ? '' : parseInt(val));
+                        }}
+                        className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                      >
+                        <option value="">Select placing...</option>
+                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
+                          <option key={n} value={n}>{n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`} Place</option>
+                        ))}
+                        <option value="other">Other</option>
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Custom Description (for Other type or "other" placing) */}
+                  {(selectedBonusType === 'Other' || bonusPlacing === 'other') && (
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-2">
+                        {selectedBonusType === 'Other' ? 'Bonus Description' : 'Custom Placing Description'}
+                      </label>
+                      <input
+                        type="text"
+                        value={bonusCustomDesc}
+                        onChange={(e) => setBonusCustomDesc(e.target.value)}
+                        placeholder={selectedBonusType === 'Other' ? 'e.g., Team spirit award' : 'e.g., 11th place'}
+                        className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                      />
+                    </div>
+                  )}
+
+                  {/* Amount */}
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-2">Amount ($)</label>
+                    <div className="relative">
+                      <DollarSign
+                        size={14}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
+                      />
+                      <input
+                        type="number"
+                        value={bonusAmount}
+                        onChange={(e) => setBonusAmount(e.target.value)}
+                        className="w-full bg-gray-900 border border-gray-600 rounded p-2 pl-8 text-white focus:ring-2 focus:ring-green-500 outline-none"
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            {bonusStep === 'details' && (
+              <div className="p-4 border-t border-gray-700 flex-shrink-0">
                 <button
                   onClick={handleAddBonus}
-                  disabled={!bonusAmount || parseFloat(bonusAmount) <= 0}
-                  className="flex-1 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded font-bold shadow-lg transition-all"
+                  disabled={
+                    !bonusAmount || 
+                    parseFloat(bonusAmount) <= 0 ||
+                    (selectedBonusType !== 'Other' && !bonusPlacing) ||
+                    (selectedBonusType === 'Other' && !bonusCustomDesc.trim()) ||
+                    (bonusPlacing === 'other' && !bonusCustomDesc.trim())
+                  }
+                  className="w-full py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg font-bold shadow-lg transition-all flex items-center justify-center gap-2"
                 >
-                  Add Bonus
+                  <Plus size={18} /> Add Bonus
                 </button>
               </div>
-            </div>
+            )}
+
           </div>
         </div>
       )}

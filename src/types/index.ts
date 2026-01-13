@@ -11,10 +11,14 @@ export interface ManagementUser {
 }
 
 // --- BONUS STRUCTURE ---
+export type BonusType = 'Performance EQ' | 'Total Upsell' | 'Rookie' | 'Other';
+
 export interface Bonus {
     id: number;
-    type: string;   // e.g., "Performance", "Rookie of Day"
+    type: BonusType;
     amount: number;
+    placing?: number | 'other';      // 1-10 or 'other' (for Performance EQ, Total Upsell, Rookie)
+    customDescription?: string;       // For 'Other' type OR when placing is 'other'
 }
 
 export interface Worker {

@@ -555,11 +555,33 @@ class SessionService {
     return res.data?.streets || [];
   }
 
+  /**
+   * Gets all logsheet sessions for the current day with their transactions populated.
+   * Fetches all transactions in a single query for performance.
+   */
   public async getLogsheetSessions(): Promise<LogsheetSession[]> {
     const date = await this.getDailySessionDate();
     if (!date) return [];
-    const { data } = await supabase.from('logsheet_sessions').select('*').eq('date', date);
-    return (data || []).map((d) => ({
+    
+    // Fetch sessions and all transactions in parallel
+    const [sessionsRes, transactionsRes] = await Promise.all([
+      supabase.from('logsheet_sessions').select('*').eq('date', date),
+      supabase.from('transactions').select('*')
+    ]);
+    
+    const sessions = sessionsRes.data || [];
+    const allTransactions = (transactionsRes.data || []).map(tx => this.mapDbTransaction(tx));
+    
+    // Group transactions by worker_id
+    const transactionsByWorker: Record<string, SessionTransaction[]> = {};
+    allTransactions.forEach(tx => {
+      if (!transactionsByWorker[tx.workerId]) {
+        transactionsByWorker[tx.workerId] = [];
+      }
+      transactionsByWorker[tx.workerId].push(tx);
+    });
+    
+    return sessions.map((d) => ({
       id: d.id,
       workerId: d.worker_id,
       date: d.date,
@@ -568,7 +590,7 @@ class SessionService {
       validation: d.validation,
       bonuses: d.bonuses,
       dailyRouteStore: [],
-      financialStore: [],
+      financialStore: transactionsByWorker[d.worker_id] || [],
     }));
   }
 
@@ -618,7 +640,7 @@ class SessionService {
     const safeUpdates: any = {};
     if (updates.stats) safeUpdates.stats = updates.stats;
     if (updates.validation) safeUpdates.validation = updates.validation;
-    if (updates.bonuses) safeUpdates.bonuses = updates.bonuses;
+    if (updates.bonuses !== undefined) safeUpdates.bonuses = updates.bonuses;
     if (updates.status) safeUpdates.status = updates.status;
     await supabase.from('logsheet_sessions').update(safeUpdates).eq('id', sessionId);
   }
