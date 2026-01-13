@@ -36,6 +36,9 @@ export interface Worker {
   customBaseRate?: number;  // Optional override
   
   assignedManagerId?: string; // Links to ManagementUser.userId
+  
+  // --- UPSELL CONTROL ---
+  upsellsEnabled?: boolean; // Defaults to true if not set
 }
 
 // --- DATA FEED STRUCTURE ---

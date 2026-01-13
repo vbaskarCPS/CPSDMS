@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   ChevronDown, 
   ChevronUp, 
@@ -36,6 +36,8 @@ interface TeamMemberDisplay extends Worker {
   };
 }
 
+type TeamSortOption = 'alpha' | 'steps' | 'equiv' | 'upGross';
+
 const RMTeamTab: React.FC<RMTeamTabProps> = ({
   managerId,
   workers,
@@ -45,6 +47,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   const [teamMembers, setTeamMembers] = useState<TeamMemberDisplay[]>([]);
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Sort State - Default to alphabetical by last name
+  const [sortBy, setSortBy] = useState<TeamSortOption>('alpha');
 
   // Management State
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
@@ -105,8 +110,12 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             lastAddr = sortedTx[0].address;
           }
 
+          // Fetch fresh upsellsEnabled status
+          const upsellsEnabled = await sessionService.getWorkerUpsellsEnabled(w.contractorId);
+
           return {
             ...w,
+            upsellsEnabled,
             displayBookings: allBookings,
             financialStore: financialStore,
             assignedRoutes: uniqueRoutes,
@@ -128,6 +137,24 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
     loadData();
   }, [managerId, workers, allSessions, refreshKey]);
+
+  // Sorted team members
+  const sortedTeamMembers = useMemo(() => {
+    const members = [...teamMembers];
+    
+    switch (sortBy) {
+      case 'alpha':
+        return members.sort((a, b) => a.lastName.localeCompare(b.lastName));
+      case 'steps':
+        return members.sort((a, b) => b.stats.steps - a.stats.steps);
+      case 'equiv':
+        return members.sort((a, b) => b.stats.eq - a.stats.eq);
+      case 'upGross':
+        return members.sort((a, b) => b.stats.upsellGross - a.stats.upsellGross);
+      default:
+        return members;
+    }
+  }, [teamMembers, sortBy]);
 
   const toggleItem = (id: string) => {
     setExpandedItem(expandedItem === id ? null : id);
@@ -173,6 +200,21 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     }
   };
 
+  const handleToggleUpsells = async (contractorId: string, currentValue: boolean) => {
+    try {
+      await sessionService.toggleWorkerUpsells(contractorId, !currentValue);
+      // Update local state immediately for responsiveness
+      setTeamMembers(prev => prev.map(m => 
+        m.contractorId === contractorId 
+          ? { ...m, upsellsEnabled: !currentValue }
+          : m
+      ));
+    } catch (error) {
+      console.error("Failed to toggle upsells:", error);
+      alert("Failed to update upsell setting. Please try again.");
+    }
+  };
+
   const isModifiable = (member: TeamMemberDisplay) => {
     const hasHistory = member.financialStore.length > 0;
     return !hasHistory;
@@ -180,13 +222,32 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
   return (
     <div className="space-y-2 max-w-4xl mx-auto pb-10">
+      {/* Sort Dropdown */}
+      {teamMembers.length > 0 && (
+        <div className="flex justify-end mb-4">
+          <div className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 shadow-sm">
+            <span className="text-xs text-gray-400 font-medium">Sort by:</span>
+            <select 
+              value={sortBy} 
+              onChange={(e) => setSortBy(e.target.value as TeamSortOption)}
+              className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cps-blue cursor-pointer"
+            >
+              <option value="alpha">Last Name (A-Z)</option>
+              <option value="steps">Highest Steps</option>
+              <option value="equiv">Highest Equiv</option>
+              <option value="upGross">Highest Upsell Gross</option>
+            </select>
+          </div>
+        </div>
+      )}
+
       {teamMembers.length === 0 && (
         <div className="text-center text-gray-500 py-10 bg-gray-800/30 rounded-lg">
           No workers assigned to you.
         </div>
       )}
 
-      {teamMembers.map((member) => (
+      {sortedTeamMembers.map((member) => (
         <div
           key={member.contractorId}
           className="relative bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 transition-all shadow-sm"
@@ -194,12 +255,12 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           {/* Main Card Content */}
           <div className="p-2 pr-9">
             
-            {/* TOP ROW: Name (Left) + Routes (Right) */}
+            {/* TOP ROW: Name + Upsell Toggle (Left) + Routes (Right) */}
             <div 
               className="flex items-center justify-between mb-1 cursor-pointer"
               onClick={() => toggleItem(member.contractorId)}
             >
-              {/* Left: Status + Name */}
+              {/* Left: Status + Name + Upsell Toggle */}
               <div className="flex items-center gap-2">
                 <div
                   className={`w-2 h-2 rounded-full flex-shrink-0 ${
@@ -209,6 +270,29 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                 <h3 className="font-bold text-white text-sm whitespace-nowrap">
                   {member.firstName} {member.lastName}
                 </h3>
+                
+                {/* Upsell Toggle Switch */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleToggleUpsells(member.contractorId, member.upsellsEnabled !== false);
+                  }}
+                  className={`ml-2 relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 ease-in-out focus:outline-none ${
+                    member.upsellsEnabled !== false
+                      ? 'bg-purple-600 border-purple-600'
+                      : 'bg-gray-600 border-gray-600'
+                  }`}
+                  title={member.upsellsEnabled !== false ? 'Upsells Enabled' : 'Upsells Disabled'}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      member.upsellsEnabled !== false ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+                <span className={`text-[9px] font-bold ${member.upsellsEnabled !== false ? 'text-purple-400' : 'text-gray-500'}`}>
+                  UP
+                </span>
               </div>
 
               {/* Right: Route Pills (Inline) */}

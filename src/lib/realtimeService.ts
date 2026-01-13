@@ -144,6 +144,7 @@ export const realtimeService = RealtimeService.getInstance();
 /**
  * Subscribe to contractor-specific changes
  * Only receives updates for this contractor's data
+ * Includes users table for upsell toggle updates
  */
 export function subscribeAsContractor(
   contractorId: string,
@@ -166,6 +167,15 @@ export function subscribeAsContractor(
       { 
         table: 'logsheet_sessions', 
         filter: `worker_id=eq.${contractorId}` 
+      },
+      // My user updates (for upsell toggle)
+      {
+        table: 'users',
+        filter: `user_id=eq.${contractorId}`
+      },
+      // Route changes (for new booking assignments)
+      {
+        table: 'routes'
       },
     ],
     onUpdate,
@@ -200,7 +210,8 @@ export function subscribeAsRouteManager(
     configs.push(
       { table: 'bookings' },      // Will filter in handler
       { table: 'transactions' },  // Will filter in handler
-      { table: 'logsheet_sessions' }
+      { table: 'logsheet_sessions' },
+      { table: 'users' }          // For upsell toggle updates
     );
   }
 
@@ -209,7 +220,7 @@ export function subscribeAsRouteManager(
     configs,
     (payload) => {
       // Client-side filter: only trigger update if relevant to our team
-      const workerId = payload.new?.worker_id || payload.new?.contractor_id;
+      const workerId = payload.new?.worker_id || payload.new?.contractor_id || payload.new?.user_id;
       
       if (workerId && !workerIds.includes(workerId)) {
         // Change is for a worker not on our team - ignore

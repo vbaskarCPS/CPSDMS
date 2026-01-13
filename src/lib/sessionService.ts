@@ -155,6 +155,7 @@ class SessionService {
       alumniRate: w.metadata?.alumniRate,
       silverRate: w.metadata?.silverRate,
       assignedManagerId: w.metadata?.assignedManagerId,
+      upsellsEnabled: w.metadata?.upsellsEnabled !== false, // Default to true
     }));
 
     const routes = (routesRes.data || []).map((r) => ({
@@ -242,6 +243,47 @@ class SessionService {
     if (error) throw error;
   }
 
+  // --- 2c. UPSELL CONTROL ---
+
+  /**
+   * Gets the upsellsEnabled status for a worker
+   * Returns true by default if not set
+   */
+  public async getWorkerUpsellsEnabled(workerId: string): Promise<boolean> {
+    const { data } = await supabase
+      .from('users')
+      .select('metadata')
+      .eq('user_id', workerId)
+      .single();
+    
+    if (!data || !data.metadata) return true; // Default to enabled
+    return data.metadata.upsellsEnabled !== false;
+  }
+
+  /**
+   * Toggles upsells for a worker
+   */
+  public async toggleWorkerUpsells(workerId: string, enabled: boolean): Promise<void> {
+    // 1. Fetch current metadata
+    const { data: user, error: fetchError } = await supabase
+      .from('users')
+      .select('metadata')
+      .eq('user_id', workerId)
+      .single();
+    
+    if (fetchError || !user) throw new Error("Worker not found");
+
+    // 2. Update metadata with new upsellsEnabled value
+    const newMetadata = { ...user.metadata, upsellsEnabled: enabled };
+    
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ metadata: newMetadata })
+      .eq('user_id', workerId);
+
+    if (updateError) throw updateError;
+  }
+
   // --- 3. SESSION MANAGEMENT ---
 
   public async uploadDailySession(
@@ -282,6 +324,7 @@ class SessionService {
           alumniRate: w.alumniRate,
           silverRate: w.silverRate,
           assignedManagerId: w.assignedManagerId,
+          upsellsEnabled: true, // Default to enabled for new workers
         },
       })),
     ];
@@ -350,7 +393,7 @@ class SessionService {
     await supabase.from('daily_sessions').delete().eq('date', date);
     await supabase.from('users').delete().in('role', ['Worker', 'RouteManager']);
     localStorage.clear();
-    window.location.href = '/';
+    window.location.href = '/login';
   }
 
   /**
@@ -548,6 +591,7 @@ class SessionService {
       alumniRate: data.metadata?.alumniRate,
       silverRate: data.metadata?.silverRate,
       assignedManagerId: data.metadata?.assignedManagerId,
+      upsellsEnabled: data.metadata?.upsellsEnabled !== false, // Default to true
     };
   }
 

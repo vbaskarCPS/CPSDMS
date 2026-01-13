@@ -65,6 +65,9 @@ const NewJob: React.FC = () => {
   // Upgrade Modal
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
+  // Upsells enabled state
+  const [upsellsEnabled, setUpsellsEnabled] = useState(true);
+
   const [error, setError] = useState<string | null>(null);
   const [worker, setWorker] = useState<Worker | null>(null);
   const [assignedRoutes, setAssignedRoutes] = useState<string[]>([]);
@@ -123,7 +126,8 @@ const NewJob: React.FC = () => {
   };
 
   // Determine if upgrade button should be enabled
-  const canUpgrade = firstName.trim() !== '' && 
+  const canUpgrade = upsellsEnabled &&
+                     firstName.trim() !== '' && 
                      lastName.trim() !== '' && 
                      houseNumber.trim() !== '' && 
                      streetName.trim() !== '';
@@ -156,6 +160,10 @@ const NewJob: React.FC = () => {
               }
 
               setRouteCode(myRoutes[0]);
+              
+              // Fetch upsellsEnabled status
+              const upsellStatus = await sessionService.getWorkerUpsellsEnabled(currentWorker.contractorId);
+              setUpsellsEnabled(upsellStatus);
           } catch(err) {
               console.warn("Offline/No session found", err);
               alert('Unable to load route assignments. Please try again.');
@@ -417,20 +425,22 @@ const NewJob: React.FC = () => {
                       </select>
                       {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
                       
-                      {/* DIRECT UPGRADE BUTTON */}
-                      <button
-                        type="button"
-                        onClick={() => setShowUpgradeModal(true)}
-                        disabled={!canUpgrade}
-                        className={`w-full mt-3 py-2 px-4 rounded-md font-bold text-sm flex items-center justify-center gap-2 transition-colors ${
-                          canUpgrade 
-                            ? 'bg-purple-600 hover:bg-purple-500 text-white border border-purple-500' 
-                            : 'bg-gray-700 text-gray-500 border border-gray-600 cursor-not-allowed'
-                        }`}
-                      >
-                        <TrendingUp size={16} />
-                        Upgrade Instead
-                      </button>
+                      {/* DIRECT UPGRADE BUTTON - Only show if upsells enabled */}
+                      {upsellsEnabled && (
+                        <button
+                          type="button"
+                          onClick={() => setShowUpgradeModal(true)}
+                          disabled={!canUpgrade}
+                          className={`w-full mt-3 py-2 px-4 rounded-md font-bold text-sm flex items-center justify-center gap-2 transition-colors ${
+                            canUpgrade 
+                              ? 'bg-purple-600 hover:bg-purple-500 text-white border border-purple-500' 
+                              : 'bg-gray-700 text-gray-500 border border-gray-600 cursor-not-allowed'
+                          }`}
+                        >
+                          <TrendingUp size={16} />
+                          Upgrade Instead
+                        </button>
+                      )}
                   </div>
                   {paymentMethod === 'E-Transfer' && (
                       <div>

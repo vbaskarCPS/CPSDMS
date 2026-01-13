@@ -47,6 +47,9 @@ const Dashboard: React.FC = () => {
   const [showContractModal, setShowContractModal] = useState(false);
   const [hasAssignedRoutes, setHasAssignedRoutes] = useState(false);
   const [showToast, setShowToast] = useState(false);
+  
+  // Upsells enabled state
+  const [upsellsEnabled, setUpsellsEnabled] = useState(true);
 
   // Data State
   const [stats, setStats] = useState<SessionStats>(sessionService.getEmptyStats());
@@ -100,6 +103,10 @@ const Dashboard: React.FC = () => {
           const managerData = await sessionService.getManagerById(storedWorker.assignedManagerId);
           setManager(managerData);
         }
+
+        // 5. Fetch fresh upsellsEnabled status
+        const upsellStatus = await sessionService.getWorkerUpsellsEnabled(storedWorker.contractorId);
+        setUpsellsEnabled(upsellStatus);
       } catch (err) {
         console.error('Dashboard Load Error', err);
       } finally {
@@ -174,12 +181,15 @@ const Dashboard: React.FC = () => {
                 <Plus size={20} />
               </button>
             )}
-            <button
-              onClick={() => setShowContractModal(true)}
-              className="p-2 bg-purple-600 text-white rounded-lg shadow-lg hover:bg-purple-500 transition-colors"
-            >
-              <FileText size={20} />
-            </button>
+            {/* Only show contracts button if upsells are enabled */}
+            {upsellsEnabled && (
+              <button
+                onClick={() => setShowContractModal(true)}
+                className="p-2 bg-purple-600 text-white rounded-lg shadow-lg hover:bg-purple-500 transition-colors"
+              >
+                <FileText size={20} />
+              </button>
+            )}
             <button
               onClick={handleLogout}
               className="p-2 bg-gray-800 text-red-400 rounded-lg border border-gray-700"
@@ -240,7 +250,7 @@ const Dashboard: React.FC = () => {
           <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
             <div className="flex items-center gap-1 text-gray-400 mb-1">
               <DollarSign size={10} />
-              <span className="text-[9px] uppercase font-bold">Gross</span>
+              <span className="text-[9px] uppercase font-bold">Up Gross</span>
             </div>
             <p className="text-lg font-bold text-green-400">${stats.upsellGross.toFixed(0)}</p>
           </div>

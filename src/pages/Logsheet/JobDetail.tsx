@@ -78,6 +78,9 @@ const JobDetail: React.FC = () => {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
+  // Upsells enabled state
+  const [upsellsEnabled, setUpsellsEnabled] = useState(true);
+
   // Validation Errors
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -146,6 +149,10 @@ const JobDetail: React.FC = () => {
           setOriginalJob(foundJob);
           setIsReadOnly(foundJob.Status === 'completed' || foundJob.Completed === 'x');
           loadFormData(foundJob);
+          
+          // Fetch upsellsEnabled status
+          const upsellStatus = await sessionService.getWorkerUpsellsEnabled(w.contractorId);
+          setUpsellsEnabled(upsellStatus);
         } else {
           console.warn("Job ID not found in assignments:", decodedId);
           alert('Job not found.');
@@ -213,6 +220,7 @@ const JobDetail: React.FC = () => {
   // Determine if upgrade button should be enabled
   const canUpgrade = !isReadOnly && 
                      !isAlreadyUpgrade && 
+                     upsellsEnabled &&
                      firstName.trim() !== '' && 
                      lastName.trim() !== '' && 
                      houseNumber.trim() !== '' && 
@@ -486,8 +494,8 @@ const JobDetail: React.FC = () => {
                       </select>
                       {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
                       
-                      {/* DIRECT UPGRADE BUTTON */}
-                      {!isReadOnly && (
+                      {/* DIRECT UPGRADE BUTTON - Only show if upsells enabled */}
+                      {!isReadOnly && upsellsEnabled && (
                         <button
                           onClick={() => setShowUpgradeModal(true)}
                           disabled={!canUpgrade}
