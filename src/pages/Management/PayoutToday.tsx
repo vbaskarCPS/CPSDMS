@@ -135,9 +135,6 @@ function getMedalEmoji(placing: number | 'other' | undefined): string {
   return '🏆';
 }
 
-/**
- * Format date for display (e.g., "January 13, 2026")
- */
 function formatDateForDisplay(dateStr: string): string {
   const date = new Date(dateStr + 'T12:00:00');
   return date.toLocaleDateString('en-US', { 
@@ -303,15 +300,22 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       });
     });
 
-    const sortByPlacing = (a: BonusWinner, b: BonusWinner) => {
+    // Sort by placing first, then by EQ descending for ties
+    const sortByPlacingThenEQ = (a: BonusWinner, b: BonusWinner) => {
       const aPlacing = typeof a.bonus.placing === 'number' ? a.bonus.placing : 999;
       const bPlacing = typeof b.bonus.placing === 'number' ? b.bonus.placing : 999;
+      
+      // If same placing (tie), sort by higher EQ first
+      if (aPlacing === bPlacing) {
+        return b.eq - a.eq;
+      }
+      
       return aPlacing - bPlacing;
     };
 
-    winners.performanceEQ.sort(sortByPlacing);
-    winners.totalUpsell.sort(sortByPlacing);
-    winners.rookie.sort(sortByPlacing);
+    winners.performanceEQ.sort(sortByPlacingThenEQ);
+    winners.totalUpsell.sort(sortByPlacingThenEQ);
+    winners.rookie.sort(sortByPlacingThenEQ);
 
     return winners;
   }, [items]);
@@ -1046,23 +1050,20 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
       {/* --- BONUS SCREENSHOT MODAL --- */}
       {showScreenshotModal && (
-        <div className="fixed inset-0 bg-gray-900 z-50 flex flex-col">
-          {/* Fixed Stylized Header */}
-          <div className="sticky top-0 z-20 bg-gradient-to-r from-yellow-600 via-amber-500 to-yellow-600 p-6 shadow-2xl">
+        <div 
+          className="fixed inset-0 bg-gray-900 z-50 flex flex-col"
+          style={{ fontFamily: "'Quicksand', 'Nunito', sans-serif" }}
+        >
+          {/* Fixed Dark Red Header */}
+          <div className="sticky top-0 z-20 bg-gradient-to-r from-red-900 via-red-800 to-red-900 p-6 shadow-2xl">
             <div className="max-w-6xl mx-auto flex justify-between items-center">
               <div className="flex items-center gap-4">
                 <div className="text-6xl">🏆</div>
                 <div>
-                  <h1 
-                    className="text-4xl md:text-5xl font-black text-white tracking-tight drop-shadow-lg"
-                    style={{ fontFamily: "'Bangers', 'Impact', cursive", letterSpacing: '0.05em' }}
-                  >
+                  <h1 className="text-4xl md:text-5xl font-black text-white tracking-tight drop-shadow-lg">
                     BONUSES FOR
                   </h1>
-                  <p 
-                    className="text-2xl md:text-3xl font-bold text-yellow-100 mt-1"
-                    style={{ fontFamily: "'Bangers', 'Impact', cursive" }}
-                  >
+                  <p className="text-2xl md:text-3xl font-bold text-red-200 mt-1">
                     {formatDateForDisplay(date)}
                   </p>
                 </div>
@@ -1087,10 +1088,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                     <div className="p-3 rounded-full bg-blue-500/20 border-2 border-blue-400">
                       <TrendingUp size={28} className="text-blue-400" />
                     </div>
-                    <h2 
-                      className="text-3xl font-black text-blue-400 uppercase tracking-wide"
-                      style={{ fontFamily: "'Bangers', 'Impact', cursive" }}
-                    >
+                    <h2 className="text-3xl font-black text-blue-400 uppercase tracking-wide">
                       Performance EQ
                     </h2>
                   </div>
@@ -1123,8 +1121,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                         </div>
 
                         {/* EQ */}
-                        <div className="text-center min-w-[100px]">
-                          <span className={`text-3xl font-black font-mono ${
+                        <div className="text-center min-w-[120px]">
+                          <span className={`text-3xl font-black ${
                             winner.eq >= 50 ? 'text-purple-400' :
                             winner.eq >= 40 ? 'text-yellow-400' :
                             winner.eq >= 30 ? 'text-green-400' : 'text-blue-300'
@@ -1142,11 +1140,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                         </div>
 
                         {/* Final Payout */}
-                        <div className="text-right min-w-[140px]">
-                          <p 
-                            className="text-4xl font-black text-green-400"
-                            style={{ fontFamily: "'Bangers', 'Impact', cursive" }}
-                          >
+                        <div className="text-right min-w-[160px]">
+                          <p className="text-5xl font-black text-green-400">
                             ${winner.finalCommission.toFixed(2)}
                           </p>
                         </div>
@@ -1163,10 +1158,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                     <div className="p-3 rounded-full bg-purple-500/20 border-2 border-purple-400">
                       <DollarSign size={28} className="text-purple-400" />
                     </div>
-                    <h2 
-                      className="text-3xl font-black text-purple-400 uppercase tracking-wide"
-                      style={{ fontFamily: "'Bangers', 'Impact', cursive" }}
-                    >
+                    <h2 className="text-3xl font-black text-purple-400 uppercase tracking-wide">
                       Total Upsell
                     </h2>
                   </div>
@@ -1194,8 +1186,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                         </div>
 
                         {/* Upsell Gross */}
-                        <div className="text-center min-w-[120px]">
-                          <span className="text-3xl font-black text-purple-300 font-mono">
+                        <div className="text-center min-w-[140px]">
+                          <span className="text-3xl font-black text-purple-300">
                             ${winner.upsellGross.toFixed(2)}
                           </span>
                         </div>
@@ -1208,11 +1200,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                         </div>
 
                         {/* Final Payout */}
-                        <div className="text-right min-w-[140px]">
-                          <p 
-                            className="text-4xl font-black text-green-400"
-                            style={{ fontFamily: "'Bangers', 'Impact', cursive" }}
-                          >
+                        <div className="text-right min-w-[160px]">
+                          <p className="text-5xl font-black text-green-400">
                             ${winner.finalCommission.toFixed(2)}
                           </p>
                         </div>
@@ -1229,10 +1218,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                     <div className="p-3 rounded-full bg-yellow-500/20 border-2 border-yellow-400">
                       <Star size={28} className="text-yellow-400" />
                     </div>
-                    <h2 
-                      className="text-3xl font-black text-yellow-400 uppercase tracking-wide"
-                      style={{ fontFamily: "'Bangers', 'Impact', cursive" }}
-                    >
+                    <h2 className="text-3xl font-black text-yellow-400 uppercase tracking-wide">
                       Rookie
                     </h2>
                   </div>
@@ -1265,8 +1251,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                         </div>
 
                         {/* EQ */}
-                        <div className="text-center min-w-[100px]">
-                          <span className={`text-3xl font-black font-mono ${
+                        <div className="text-center min-w-[120px]">
+                          <span className={`text-3xl font-black ${
                             winner.eq >= 50 ? 'text-purple-400' :
                             winner.eq >= 40 ? 'text-yellow-400' :
                             winner.eq >= 30 ? 'text-green-400' : 'text-blue-300'
@@ -1284,11 +1270,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                         </div>
 
                         {/* Final Payout */}
-                        <div className="text-right min-w-[140px]">
-                          <p 
-                            className="text-4xl font-black text-green-400"
-                            style={{ fontFamily: "'Bangers', 'Impact', cursive" }}
-                          >
+                        <div className="text-right min-w-[160px]">
+                          <p className="text-5xl font-black text-green-400">
                             ${winner.finalCommission.toFixed(2)}
                           </p>
                         </div>
@@ -1305,10 +1288,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                     <div className="p-3 rounded-full bg-gray-500/20 border-2 border-gray-400">
                       <Sparkles size={28} className="text-gray-400" />
                     </div>
-                    <h2 
-                      className="text-3xl font-black text-gray-400 uppercase tracking-wide"
-                      style={{ fontFamily: "'Bangers', 'Impact', cursive" }}
-                    >
+                    <h2 className="text-3xl font-black text-gray-400 uppercase tracking-wide">
                       Other Bonuses
                     </h2>
                   </div>
@@ -1324,8 +1304,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                         </div>
 
                         {/* Bonus Type */}
-                        <div className="min-w-[150px]">
-                          <p className="text-lg font-bold text-amber-400">
+                        <div className="min-w-[180px]">
+                          <p className="text-xl font-bold text-amber-400">
                             {winner.bonus.customDescription || 'Other'}
                           </p>
                         </div>
@@ -1345,11 +1325,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                         </div>
 
                         {/* Final Payout */}
-                        <div className="text-right min-w-[140px]">
-                          <p 
-                            className="text-4xl font-black text-green-400"
-                            style={{ fontFamily: "'Bangers', 'Impact', cursive" }}
-                          >
+                        <div className="text-right min-w-[160px]">
+                          <p className="text-5xl font-black text-green-400">
                             ${winner.finalCommission.toFixed(2)}
                           </p>
                         </div>
