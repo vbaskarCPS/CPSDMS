@@ -175,7 +175,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       if (sortBy === 'alpha') {
         return a.routeCode.localeCompare(b.routeCode);
       } else if (sortBy === 'prebooks') {
-        return b.prepaidCount - a.prepaidCount;
+        return b.totalBookings - a.totalBookings;
       } else { // sortBy === 'eq'
         return b.totalEQ - a.totalEQ;
       }
@@ -470,7 +470,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
               className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cps-blue cursor-pointer"
             >
               <option value="alpha">Alphabetically</option>
-              <option value="prebooks">Highest Prebooks</option>
+              <option value="prebooks">Most Bookings</option>
               <option value="eq">Highest Lined Up (EQ)</option>
             </select>
           </div>
