@@ -81,6 +81,166 @@ interface BonusWinner {
   finalCommission: number;
 }
 
+// Dynamic sizing based on total bonus count
+type SizeConfig = {
+  headerPadding: string;
+  headerTrophy: string;
+  headerTitle: string;
+  headerDate: string;
+  sectionGap: string;
+  sectionIcon: number;
+  sectionTitle: string;
+  sectionMargin: string;
+  rowPadding: string;
+  rowGap: string;
+  medalSize: string;
+  placingText: string;
+  nameText: string;
+  achievementSize: string;
+  eqText: string;
+  eqSuffix: string;
+  bonusText: string;
+  payoutText: string;
+  minWidthMedal: string;
+  minWidthEq: string;
+  minWidthBonus: string;
+  minWidthPayout: string;
+};
+
+function getSizeConfig(totalBonuses: number): SizeConfig {
+  if (totalBonuses <= 4) {
+    // Large - few bonuses
+    return {
+      headerPadding: 'p-6',
+      headerTrophy: 'text-6xl',
+      headerTitle: 'text-4xl md:text-5xl',
+      headerDate: 'text-2xl md:text-3xl',
+      sectionGap: 'space-y-8',
+      sectionIcon: 28,
+      sectionTitle: 'text-3xl',
+      sectionMargin: 'mb-5',
+      rowPadding: 'p-5',
+      rowGap: 'gap-6',
+      medalSize: 'text-5xl',
+      placingText: 'text-lg',
+      nameText: 'text-2xl',
+      achievementSize: 'w-14 h-14',
+      eqText: 'text-3xl',
+      eqSuffix: 'text-lg',
+      bonusText: 'text-2xl',
+      payoutText: 'text-5xl',
+      minWidthMedal: 'min-w-[80px]',
+      minWidthEq: 'min-w-[120px]',
+      minWidthBonus: 'min-w-[100px]',
+      minWidthPayout: 'min-w-[160px]',
+    };
+  } else if (totalBonuses <= 8) {
+    // Medium
+    return {
+      headerPadding: 'p-4',
+      headerTrophy: 'text-5xl',
+      headerTitle: 'text-3xl md:text-4xl',
+      headerDate: 'text-xl md:text-2xl',
+      sectionGap: 'space-y-6',
+      sectionIcon: 24,
+      sectionTitle: 'text-2xl',
+      sectionMargin: 'mb-4',
+      rowPadding: 'p-4',
+      rowGap: 'gap-5',
+      medalSize: 'text-4xl',
+      placingText: 'text-base',
+      nameText: 'text-xl',
+      achievementSize: 'w-12 h-12',
+      eqText: 'text-2xl',
+      eqSuffix: 'text-base',
+      bonusText: 'text-xl',
+      payoutText: 'text-4xl',
+      minWidthMedal: 'min-w-[70px]',
+      minWidthEq: 'min-w-[100px]',
+      minWidthBonus: 'min-w-[90px]',
+      minWidthPayout: 'min-w-[140px]',
+    };
+  } else if (totalBonuses <= 12) {
+    // Small
+    return {
+      headerPadding: 'p-3',
+      headerTrophy: 'text-4xl',
+      headerTitle: 'text-2xl md:text-3xl',
+      headerDate: 'text-lg md:text-xl',
+      sectionGap: 'space-y-4',
+      sectionIcon: 20,
+      sectionTitle: 'text-xl',
+      sectionMargin: 'mb-3',
+      rowPadding: 'p-3',
+      rowGap: 'gap-4',
+      medalSize: 'text-3xl',
+      placingText: 'text-sm',
+      nameText: 'text-lg',
+      achievementSize: 'w-10 h-10',
+      eqText: 'text-xl',
+      eqSuffix: 'text-sm',
+      bonusText: 'text-lg',
+      payoutText: 'text-3xl',
+      minWidthMedal: 'min-w-[60px]',
+      minWidthEq: 'min-w-[90px]',
+      minWidthBonus: 'min-w-[80px]',
+      minWidthPayout: 'min-w-[120px]',
+    };
+  } else if (totalBonuses <= 16) {
+    // Extra Small
+    return {
+      headerPadding: 'p-2',
+      headerTrophy: 'text-3xl',
+      headerTitle: 'text-xl md:text-2xl',
+      headerDate: 'text-base md:text-lg',
+      sectionGap: 'space-y-3',
+      sectionIcon: 18,
+      sectionTitle: 'text-lg',
+      sectionMargin: 'mb-2',
+      rowPadding: 'p-2',
+      rowGap: 'gap-3',
+      medalSize: 'text-2xl',
+      placingText: 'text-xs',
+      nameText: 'text-base',
+      achievementSize: 'w-8 h-8',
+      eqText: 'text-lg',
+      eqSuffix: 'text-xs',
+      bonusText: 'text-base',
+      payoutText: 'text-2xl',
+      minWidthMedal: 'min-w-[50px]',
+      minWidthEq: 'min-w-[80px]',
+      minWidthBonus: 'min-w-[70px]',
+      minWidthPayout: 'min-w-[100px]',
+    };
+  } else {
+    // Compact - many bonuses
+    return {
+      headerPadding: 'p-2',
+      headerTrophy: 'text-2xl',
+      headerTitle: 'text-lg md:text-xl',
+      headerDate: 'text-sm md:text-base',
+      sectionGap: 'space-y-2',
+      sectionIcon: 16,
+      sectionTitle: 'text-base',
+      sectionMargin: 'mb-2',
+      rowPadding: 'p-2',
+      rowGap: 'gap-2',
+      medalSize: 'text-xl',
+      placingText: 'text-[10px]',
+      nameText: 'text-sm',
+      achievementSize: 'w-6 h-6',
+      eqText: 'text-base',
+      eqSuffix: 'text-[10px]',
+      bonusText: 'text-sm',
+      payoutText: 'text-xl',
+      minWidthMedal: 'min-w-[40px]',
+      minWidthEq: 'min-w-[70px]',
+      minWidthBonus: 'min-w-[60px]',
+      minWidthPayout: 'min-w-[90px]',
+    };
+  }
+}
+
 function checkBonusQualification(transactions: SessionTransaction[]): BonusQualification {
   const prebookCount = transactions.filter(tx => tx.type === 'Production').length;
   const salesCount = transactions.filter(tx => tx.type === 'Upgrade' || tx.type === 'Sale').length;
@@ -109,13 +269,13 @@ function checkBonusQualification(transactions: SessionTransaction[]): BonusQuali
   };
 }
 
-function getAchievementIcon(eq: number): React.ReactNode {
+function getAchievementIcon(eq: number, sizeClass: string): React.ReactNode {
   if (eq >= 50) {
-    return <img src={SilverHatIcon} alt="Silver Hat" className="w-14 h-14" />;
+    return <img src={SilverHatIcon} alt="Silver Hat" className={sizeClass} />;
   } else if (eq >= 40) {
-    return <img src={GoldJerseyIcon} alt="Gold Jersey" className="w-14 h-14" />;
+    return <img src={GoldJerseyIcon} alt="Gold Jersey" className={sizeClass} />;
   } else if (eq >= 30) {
-    return <img src={GreenJacketIcon} alt="Green Jacket" className="w-14 h-14" />;
+    return <img src={GreenJacketIcon} alt="Green Jacket" className={sizeClass} />;
   }
   return null;
 }
@@ -305,7 +465,6 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       const aPlacing = typeof a.bonus.placing === 'number' ? a.bonus.placing : 999;
       const bPlacing = typeof b.bonus.placing === 'number' ? b.bonus.placing : 999;
       
-      // If same placing (tie), sort by higher EQ first
       if (aPlacing === bPlacing) {
         return b.eq - a.eq;
       }
@@ -320,14 +479,18 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     return winners;
   }, [items]);
 
-  const hasBonuses = useMemo(() => {
+  const totalBonusCount = useMemo(() => {
     return (
-      bonusWinners.performanceEQ.length > 0 ||
-      bonusWinners.totalUpsell.length > 0 ||
-      bonusWinners.rookie.length > 0 ||
-      bonusWinners.other.length > 0
+      bonusWinners.performanceEQ.length +
+      bonusWinners.totalUpsell.length +
+      bonusWinners.rookie.length +
+      bonusWinners.other.length
     );
   }, [bonusWinners]);
+
+  const sizeConfig = useMemo(() => getSizeConfig(totalBonusCount), [totalBonusCount]);
+
+  const hasBonuses = totalBonusCount > 0;
 
   const sortedItems = useMemo(() => {
     let filtered = items;
@@ -652,6 +815,14 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const selectedQualification = selectedSession 
     ? checkBonusQualification(selectedSession.financialStore || [])
     : null;
+
+  // Count sections for spacing calculations
+  const sectionCount = [
+    bonusWinners.performanceEQ.length > 0,
+    bonusWinners.totalUpsell.length > 0,
+    bonusWinners.rookie.length > 0,
+    bonusWinners.other.length > 0
+  ].filter(Boolean).length;
 
   return (
     <div className="flex flex-col h-full">
@@ -1051,97 +1222,86 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       {/* --- BONUS SCREENSHOT MODAL --- */}
       {showScreenshotModal && (
         <div 
-          className="fixed inset-0 bg-gray-900 z-50 flex flex-col"
+          className="fixed inset-0 bg-gray-900 z-50 flex flex-col h-screen overflow-hidden"
           style={{ fontFamily: "'Quicksand', 'Nunito', sans-serif" }}
         >
-          {/* Fixed Dark Red Header */}
-          <div className="sticky top-0 z-20 bg-gradient-to-r from-red-900 via-red-800 to-red-900 p-6 shadow-2xl">
-            <div className="max-w-6xl mx-auto flex justify-between items-center">
-              <div className="flex items-center gap-4">
-                <div className="text-6xl">🏆</div>
-                <div>
-                  <h1 className="text-4xl md:text-5xl font-black text-white tracking-tight drop-shadow-lg">
-                    BONUSES FOR
-                  </h1>
-                  <p className="text-2xl md:text-3xl font-bold text-red-200 mt-1">
-                    {formatDateForDisplay(date)}
-                  </p>
-                </div>
+          {/* Clickable Dark Red Header */}
+          <div 
+            onClick={() => setShowScreenshotModal(false)}
+            className={`bg-gradient-to-r from-red-900 via-red-800 to-red-900 ${sizeConfig.headerPadding} shadow-2xl cursor-pointer hover:from-red-800 hover:via-red-700 hover:to-red-800 transition-colors flex-shrink-0`}
+          >
+            <div className="max-w-6xl mx-auto flex items-center gap-4">
+              <div className={sizeConfig.headerTrophy}>🏆</div>
+              <div>
+                <h1 className={`${sizeConfig.headerTitle} font-black text-white tracking-tight drop-shadow-lg`}>
+                  BONUSES FOR
+                </h1>
+                <p className={`${sizeConfig.headerDate} font-bold text-red-200 mt-1`}>
+                  {formatDateForDisplay(date)}
+                </p>
               </div>
-              <button 
-                onClick={() => setShowScreenshotModal(false)}
-                className="p-3 bg-white/20 hover:bg-white/30 rounded-full text-white transition-colors"
-              >
-                <X size={32} />
-              </button>
             </div>
           </div>
 
-          {/* Scrollable Content */}
-          <div className="flex-1 overflow-y-auto p-6">
-            <div className="max-w-6xl mx-auto space-y-10">
+          {/* Content - fills remaining space */}
+          <div className="flex-1 overflow-hidden p-4">
+            <div className={`max-w-6xl mx-auto h-full flex flex-col ${sizeConfig.sectionGap}`}>
             
               {/* Performance EQ Section */}
               {bonusWinners.performanceEQ.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="p-3 rounded-full bg-blue-500/20 border-2 border-blue-400">
-                      <TrendingUp size={28} className="text-blue-400" />
+                <div className="flex-1 min-h-0 flex flex-col">
+                  <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
+                    <div className="p-2 rounded-full bg-blue-500/20 border-2 border-blue-400">
+                      <TrendingUp size={sizeConfig.sectionIcon} className="text-blue-400" />
                     </div>
-                    <h2 className="text-3xl font-black text-blue-400 uppercase tracking-wide">
+                    <h2 className={`${sizeConfig.sectionTitle} font-black text-blue-400 uppercase tracking-wide`}>
                       Performance EQ
                     </h2>
                   </div>
-                  <div className="space-y-4">
+                  <div className="space-y-2 flex-1 overflow-hidden">
                     {bonusWinners.performanceEQ.map((winner, idx) => (
                       <div 
                         key={idx} 
-                        className="bg-gray-800/80 rounded-2xl border border-gray-700 p-5 flex items-center gap-6 hover:bg-gray-800 transition-colors"
+                        className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
                       >
-                        {/* Medal & Placing */}
-                        <div className="flex flex-col items-center min-w-[80px]">
-                          <span className="text-5xl mb-1">{getMedalEmoji(winner.bonus.placing)}</span>
-                          <span className="text-white font-bold text-lg">
+                        <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
+                          <span className={sizeConfig.medalSize}>{getMedalEmoji(winner.bonus.placing)}</span>
+                          <span className={`text-white font-bold ${sizeConfig.placingText}`}>
                             {winner.bonus.placing === 'other' 
                               ? winner.bonus.customDescription 
                               : getPlacingSuffix(winner.bonus.placing)}
                           </span>
                         </div>
 
-                        {/* Name */}
                         <div className="flex-1">
-                          <p className="text-2xl font-bold text-white">
+                          <p className={`${sizeConfig.nameText} font-bold text-white`}>
                             {winner.firstName} {winner.lastName}
                           </p>
                         </div>
 
-                        {/* Achievement Icon */}
                         <div className="flex flex-col items-center">
-                          {getAchievementIcon(winner.eq)}
+                          {getAchievementIcon(winner.eq, sizeConfig.achievementSize)}
                         </div>
 
-                        {/* EQ */}
-                        <div className="text-center min-w-[120px]">
-                          <span className={`text-3xl font-black ${
+                        <div className={`text-center ${sizeConfig.minWidthEq}`}>
+                          <span className={`${sizeConfig.eqText} font-black ${
                             winner.eq >= 50 ? 'text-purple-400' :
                             winner.eq >= 40 ? 'text-yellow-400' :
                             winner.eq >= 30 ? 'text-green-400' : 'text-blue-300'
                           }`}>
                             {winner.eq.toFixed(2)}
                           </span>
-                          <span className="text-lg text-gray-400 ml-1">EQ</span>
+                          <span className={`${sizeConfig.eqSuffix} text-gray-400 ml-1`}>EQ</span>
                         </div>
 
-                        {/* Bonus */}
-                        <div className="text-center min-w-[100px]">
-                          <span className="text-2xl font-bold text-yellow-400">
+                        <div className={`text-center ${sizeConfig.minWidthBonus}`}>
+                          <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
                             +${winner.bonus.amount.toFixed(0)}
                           </span>
                         </div>
 
-                        {/* Final Payout */}
-                        <div className="text-right min-w-[160px]">
-                          <p className="text-5xl font-black text-green-400">
+                        <div className={`text-right ${sizeConfig.minWidthPayout}`}>
+                          <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
                             ${winner.finalCommission.toFixed(2)}
                           </p>
                         </div>
@@ -1153,55 +1313,50 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
               {/* Total Upsell Section */}
               {bonusWinners.totalUpsell.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="p-3 rounded-full bg-purple-500/20 border-2 border-purple-400">
-                      <DollarSign size={28} className="text-purple-400" />
+                <div className="flex-1 min-h-0 flex flex-col">
+                  <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
+                    <div className="p-2 rounded-full bg-purple-500/20 border-2 border-purple-400">
+                      <DollarSign size={sizeConfig.sectionIcon} className="text-purple-400" />
                     </div>
-                    <h2 className="text-3xl font-black text-purple-400 uppercase tracking-wide">
+                    <h2 className={`${sizeConfig.sectionTitle} font-black text-purple-400 uppercase tracking-wide`}>
                       Total Upsell
                     </h2>
                   </div>
-                  <div className="space-y-4">
+                  <div className="space-y-2 flex-1 overflow-hidden">
                     {bonusWinners.totalUpsell.map((winner, idx) => (
                       <div 
                         key={idx} 
-                        className="bg-gray-800/80 rounded-2xl border border-gray-700 p-5 flex items-center gap-6 hover:bg-gray-800 transition-colors"
+                        className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
                       >
-                        {/* Medal & Placing */}
-                        <div className="flex flex-col items-center min-w-[80px]">
-                          <span className="text-5xl mb-1">{getMedalEmoji(winner.bonus.placing)}</span>
-                          <span className="text-white font-bold text-lg">
+                        <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
+                          <span className={sizeConfig.medalSize}>{getMedalEmoji(winner.bonus.placing)}</span>
+                          <span className={`text-white font-bold ${sizeConfig.placingText}`}>
                             {winner.bonus.placing === 'other' 
                               ? winner.bonus.customDescription 
                               : getPlacingSuffix(winner.bonus.placing)}
                           </span>
                         </div>
 
-                        {/* Name */}
                         <div className="flex-1">
-                          <p className="text-2xl font-bold text-white">
+                          <p className={`${sizeConfig.nameText} font-bold text-white`}>
                             {winner.firstName} {winner.lastName}
                           </p>
                         </div>
 
-                        {/* Upsell Gross */}
-                        <div className="text-center min-w-[140px]">
-                          <span className="text-3xl font-black text-purple-300">
+                        <div className={`text-center ${sizeConfig.minWidthEq}`}>
+                          <span className={`${sizeConfig.eqText} font-black text-purple-300`}>
                             ${winner.upsellGross.toFixed(2)}
                           </span>
                         </div>
 
-                        {/* Bonus */}
-                        <div className="text-center min-w-[100px]">
-                          <span className="text-2xl font-bold text-yellow-400">
+                        <div className={`text-center ${sizeConfig.minWidthBonus}`}>
+                          <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
                             +${winner.bonus.amount.toFixed(0)}
                           </span>
                         </div>
 
-                        {/* Final Payout */}
-                        <div className="text-right min-w-[160px]">
-                          <p className="text-5xl font-black text-green-400">
+                        <div className={`text-right ${sizeConfig.minWidthPayout}`}>
+                          <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
                             ${winner.finalCommission.toFixed(2)}
                           </p>
                         </div>
@@ -1213,65 +1368,59 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
               {/* Rookie Section */}
               {bonusWinners.rookie.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="p-3 rounded-full bg-yellow-500/20 border-2 border-yellow-400">
-                      <Star size={28} className="text-yellow-400" />
+                <div className="flex-1 min-h-0 flex flex-col">
+                  <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
+                    <div className="p-2 rounded-full bg-yellow-500/20 border-2 border-yellow-400">
+                      <Star size={sizeConfig.sectionIcon} className="text-yellow-400" />
                     </div>
-                    <h2 className="text-3xl font-black text-yellow-400 uppercase tracking-wide">
+                    <h2 className={`${sizeConfig.sectionTitle} font-black text-yellow-400 uppercase tracking-wide`}>
                       Rookie
                     </h2>
                   </div>
-                  <div className="space-y-4">
+                  <div className="space-y-2 flex-1 overflow-hidden">
                     {bonusWinners.rookie.map((winner, idx) => (
                       <div 
                         key={idx} 
-                        className="bg-gray-800/80 rounded-2xl border border-gray-700 p-5 flex items-center gap-6 hover:bg-gray-800 transition-colors"
+                        className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
                       >
-                        {/* Medal & Placing */}
-                        <div className="flex flex-col items-center min-w-[80px]">
-                          <span className="text-5xl mb-1">{getMedalEmoji(winner.bonus.placing)}</span>
-                          <span className="text-white font-bold text-lg">
+                        <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
+                          <span className={sizeConfig.medalSize}>{getMedalEmoji(winner.bonus.placing)}</span>
+                          <span className={`text-white font-bold ${sizeConfig.placingText}`}>
                             {winner.bonus.placing === 'other' 
                               ? winner.bonus.customDescription 
                               : getPlacingSuffix(winner.bonus.placing)}
                           </span>
                         </div>
 
-                        {/* Name */}
                         <div className="flex-1">
-                          <p className="text-2xl font-bold text-white">
+                          <p className={`${sizeConfig.nameText} font-bold text-white`}>
                             {winner.firstName} {winner.lastName}
                           </p>
                         </div>
 
-                        {/* Achievement Icon */}
                         <div className="flex flex-col items-center">
-                          {getAchievementIcon(winner.eq)}
+                          {getAchievementIcon(winner.eq, sizeConfig.achievementSize)}
                         </div>
 
-                        {/* EQ */}
-                        <div className="text-center min-w-[120px]">
-                          <span className={`text-3xl font-black ${
+                        <div className={`text-center ${sizeConfig.minWidthEq}`}>
+                          <span className={`${sizeConfig.eqText} font-black ${
                             winner.eq >= 50 ? 'text-purple-400' :
                             winner.eq >= 40 ? 'text-yellow-400' :
                             winner.eq >= 30 ? 'text-green-400' : 'text-blue-300'
                           }`}>
                             {winner.eq.toFixed(2)}
                           </span>
-                          <span className="text-lg text-gray-400 ml-1">EQ</span>
+                          <span className={`${sizeConfig.eqSuffix} text-gray-400 ml-1`}>EQ</span>
                         </div>
 
-                        {/* Bonus */}
-                        <div className="text-center min-w-[100px]">
-                          <span className="text-2xl font-bold text-yellow-400">
+                        <div className={`text-center ${sizeConfig.minWidthBonus}`}>
+                          <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
                             +${winner.bonus.amount.toFixed(0)}
                           </span>
                         </div>
 
-                        {/* Final Payout */}
-                        <div className="text-right min-w-[160px]">
-                          <p className="text-5xl font-black text-green-400">
+                        <div className={`text-right ${sizeConfig.minWidthPayout}`}>
+                          <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
                             ${winner.finalCommission.toFixed(2)}
                           </p>
                         </div>
@@ -1283,50 +1432,45 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
               {/* Other Bonuses Section */}
               {bonusWinners.other.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="p-3 rounded-full bg-gray-500/20 border-2 border-gray-400">
-                      <Sparkles size={28} className="text-gray-400" />
+                <div className="flex-1 min-h-0 flex flex-col">
+                  <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
+                    <div className="p-2 rounded-full bg-gray-500/20 border-2 border-gray-400">
+                      <Sparkles size={sizeConfig.sectionIcon} className="text-gray-400" />
                     </div>
-                    <h2 className="text-3xl font-black text-gray-400 uppercase tracking-wide">
+                    <h2 className={`${sizeConfig.sectionTitle} font-black text-gray-400 uppercase tracking-wide`}>
                       Other Bonuses
                     </h2>
                   </div>
-                  <div className="space-y-4">
+                  <div className="space-y-2 flex-1 overflow-hidden">
                     {bonusWinners.other.map((winner, idx) => (
                       <div 
                         key={idx} 
-                        className="bg-gray-800/80 rounded-2xl border border-gray-700 p-5 flex items-center gap-6 hover:bg-gray-800 transition-colors"
+                        className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
                       >
-                        {/* Trophy */}
-                        <div className="flex flex-col items-center min-w-[80px]">
-                          <span className="text-5xl">🏆</span>
+                        <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
+                          <span className={sizeConfig.medalSize}>🏆</span>
                         </div>
 
-                        {/* Bonus Type */}
-                        <div className="min-w-[180px]">
-                          <p className="text-xl font-bold text-amber-400">
+                        <div className="min-w-[120px]">
+                          <p className={`${sizeConfig.placingText} font-bold text-amber-400`}>
                             {winner.bonus.customDescription || 'Other'}
                           </p>
                         </div>
 
-                        {/* Name */}
                         <div className="flex-1">
-                          <p className="text-2xl font-bold text-white">
+                          <p className={`${sizeConfig.nameText} font-bold text-white`}>
                             {winner.firstName} {winner.lastName}
                           </p>
                         </div>
 
-                        {/* Bonus */}
-                        <div className="text-center min-w-[100px]">
-                          <span className="text-2xl font-bold text-yellow-400">
+                        <div className={`text-center ${sizeConfig.minWidthBonus}`}>
+                          <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
                             +${winner.bonus.amount.toFixed(0)}
                           </span>
                         </div>
 
-                        {/* Final Payout */}
-                        <div className="text-right min-w-[160px]">
-                          <p className="text-5xl font-black text-green-400">
+                        <div className={`text-right ${sizeConfig.minWidthPayout}`}>
+                          <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
                             ${winner.finalCommission.toFixed(2)}
                           </p>
                         </div>
@@ -1338,9 +1482,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
               {/* No Bonuses Message */}
               {!hasBonuses && (
-                <div className="text-center py-20 text-gray-500">
-                  <Trophy size={80} className="mx-auto mb-4 opacity-30" />
-                  <p className="text-2xl">No bonuses have been assigned yet.</p>
+                <div className="flex-1 flex items-center justify-center text-gray-500">
+                  <div className="text-center">
+                    <Trophy size={80} className="mx-auto mb-4 opacity-30" />
+                    <p className="text-2xl">No bonuses have been assigned yet.</p>
+                  </div>
                 </div>
               )}
 
