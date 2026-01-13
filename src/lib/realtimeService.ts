@@ -153,10 +153,9 @@ export function subscribeAsContractor(
   return realtimeService.subscribe(
     `contractor-${contractorId}`,
     [
-      // Only MY bookings
+      // All bookings - need to catch new assignments where contractor_id changes TO this worker
       { 
-        table: 'bookings', 
-        filter: `contractor_id=eq.${contractorId}` 
+        table: 'bookings'
       },
       // Only MY transactions
       { 
@@ -173,7 +172,7 @@ export function subscribeAsContractor(
         table: 'users',
         filter: `user_id=eq.${contractorId}`
       },
-      // Route changes (for new booking assignments)
+      // Route changes (for new route assignments)
       {
         table: 'routes'
       },
