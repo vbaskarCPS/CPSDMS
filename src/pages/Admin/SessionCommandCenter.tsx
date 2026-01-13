@@ -26,8 +26,6 @@ import { getDateTabError } from '../../lib/googleSheetsConfig';
 import { DailySessionData, SortOption, LogsheetSession } from '../../types';
 import PayoutToday from '../Management/PayoutToday';
 
-type ImportMode = 'file' | 'sheets';
-
 const SessionCommandCenter: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   
@@ -53,7 +51,7 @@ const SessionCommandCenter: React.FC = () => {
   const [emailEnabled, setEmailEnabled] = useState(true);
 
   // --- GOOGLE SHEETS STATE ---
-  const [importMode, setImportMode] = useState<ImportMode>('file');
+  const [showFileUpload, setShowFileUpload] = useState(false);
   const [dateTab, setDateTab] = useState('');
   const [dateTabError, setDateTabError] = useState<string | null>(null);
   const [isGoogleConnected, setIsGoogleConnected] = useState(false);
@@ -209,7 +207,8 @@ const SessionCommandCenter: React.FC = () => {
     setSheetsExportResult(null);
 
     try {
-      const result = await exportToGoogleSheets();
+      // Pass the dateTab if we have it from import, otherwise let it auto-generate
+      const result = await exportToGoogleSheets(dateTab || undefined);
       setSheetsExportResult(result);
       setHasDownloaded(true); // Allow closing session after sheets export too
     } catch (err) {
@@ -230,7 +229,7 @@ const SessionCommandCenter: React.FC = () => {
         await loadSession(); // Reload from DB
         setPreviewData(null);
         setFeedFile(null);
-        setDateTab('');
+        // Keep dateTab for export later
         alert('Session Started Successfully!');
       } catch (err) {
         console.error(err);
@@ -289,6 +288,7 @@ const SessionCommandCenter: React.FC = () => {
         setCurrentSession(null);
         setHasDownloaded(false);
         setSheetsExportResult(null);
+        setDateTab('');
       } catch (err) {
         alert('Error: ' + err);
       } finally {
@@ -363,50 +363,13 @@ const SessionCommandCenter: React.FC = () => {
                 <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 shadow-lg">
                     <div className="max-w-lg mx-auto">
                         <div className="w-16 h-16 bg-gray-900 rounded-full flex items-center justify-center mx-auto mb-4 border border-gray-700">
-                            <Upload className="text-cps-blue" size={32} />
+                            <Sheet className="text-green-400" size={32} />
                         </div>
                         <h2 className="text-xl font-bold text-white mb-2 text-center">Initialize New Session</h2>
-                        <p className="text-gray-400 text-sm mb-6 text-center">Upload a file or import from Google Sheets to generate assignments.</p>
+                        <p className="text-gray-400 text-sm mb-6 text-center">Import from Google Sheets to generate assignments.</p>
                         
-                        {/* Import Mode Toggle */}
-                        <div className="flex bg-gray-900 rounded-lg p-1 mb-6 border border-gray-700">
-                          <button
-                            onClick={() => { setImportMode('file'); setError(null); setPreviewData(null); }}
-                            className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-                              importMode === 'file' ? 'bg-cps-blue text-white shadow' : 'text-gray-400 hover:text-white'
-                            }`}
-                          >
-                            <FileText size={16} /> Upload File
-                          </button>
-                          <button
-                            onClick={() => { setImportMode('sheets'); setError(null); setPreviewData(null); setFeedFile(null); }}
-                            className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-                              importMode === 'sheets' ? 'bg-green-600 text-white shadow' : 'text-gray-400 hover:text-white'
-                            }`}
-                          >
-                            <Sheet size={16} /> Google Sheets
-                          </button>
-                        </div>
-
-                        {/* FILE UPLOAD MODE */}
-                        {importMode === 'file' && (
-                          <div className="relative">
-                              <input
-                                  type="file"
-                                  accept=".xlsx, .xls"
-                                  onChange={handleFileChange}
-                                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                              />
-                              <div className="bg-gray-900 border-2 border-dashed border-gray-600 hover:border-cps-blue rounded-lg p-4 transition-colors text-center">
-                                  <span className="text-sm font-bold text-gray-300">
-                                      {feedFile ? feedFile.name : "Click to Select File"}
-                                  </span>
-                              </div>
-                          </div>
-                        )}
-
-                        {/* GOOGLE SHEETS MODE */}
-                        {importMode === 'sheets' && (
+                        {/* GOOGLE SHEETS IMPORT (Default) */}
+                        {!showFileUpload && (
                           <div className="space-y-4">
                             {/* Connection Status */}
                             {!isGoogleConnected ? (
@@ -449,7 +412,7 @@ const SessionCommandCenter: React.FC = () => {
                                     onChange={(e) => handleDateTabChange(e.target.value)}
                                     placeholder="Feb01"
                                     className={`w-full bg-gray-900 border rounded-lg py-3 px-4 text-white focus:ring-2 focus:outline-none ${
-                                      dateTabError ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-cps-blue'
+                                      dateTabError ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-green-500'
                                     }`}
                                   />
                                   {dateTabError && (
@@ -472,6 +435,41 @@ const SessionCommandCenter: React.FC = () => {
                                 </button>
                               </>
                             )}
+
+                            {/* Toggle to File Upload */}
+                            <button
+                              onClick={() => setShowFileUpload(true)}
+                              className="w-full text-gray-500 hover:text-gray-300 text-xs py-2 flex items-center justify-center gap-2 transition-colors"
+                            >
+                              <Upload size={14} /> Or upload Excel file manually
+                            </button>
+                          </div>
+                        )}
+
+                        {/* FILE UPLOAD (Secondary) */}
+                        {showFileUpload && (
+                          <div className="space-y-4">
+                            <div className="relative">
+                                <input
+                                    type="file"
+                                    accept=".xlsx, .xls"
+                                    onChange={handleFileChange}
+                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                />
+                                <div className="bg-gray-900 border-2 border-dashed border-gray-600 hover:border-cps-blue rounded-lg p-4 transition-colors text-center">
+                                    <span className="text-sm font-bold text-gray-300">
+                                        {feedFile ? feedFile.name : "Click to Select File"}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* Toggle back to Google Sheets */}
+                            <button
+                              onClick={() => { setShowFileUpload(false); setFeedFile(null); setPreviewData(null); setError(null); }}
+                              className="w-full text-gray-500 hover:text-gray-300 text-xs py-2 flex items-center justify-center gap-2 transition-colors"
+                            >
+                              <Sheet size={14} /> Back to Google Sheets import
+                            </button>
                           </div>
                         )}
 
@@ -568,22 +566,34 @@ const SessionCommandCenter: React.FC = () => {
                 </div>
             )}
 
-            {/* 3. DOWNLOAD & EXPORT & CLOSE (Only Active Session) */}
+            {/* 3. EXPORT & CLOSE (Only Active Session) */}
             {currentSession && (
                 <div className="space-y-6 pt-4 border-t border-gray-800">
-                    {/* Export Row */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* Download Excel */}
-                        <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 flex flex-col justify-between">
-                            <div>
+                    {/* Primary: Export to Google Sheets */}
+                    <div className="bg-gray-800 p-6 rounded-xl border border-gray-700">
+                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                            <div className="flex-1">
                                 <h4 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
-                                  <Download size={20} className="text-cps-blue" />
-                                  Download Excel
+                                  <Sheet size={20} className="text-green-400" />
+                                  Export to Google Sheets
                                 </h4>
-                                <p className="text-sm text-gray-400 mb-2">Export all payouts, transactions, and logsheets as an Excel file.</p>
+                                <p className="text-sm text-gray-400">Push data directly to Masterbookings and Workerbook sheets.</p>
                                 
-                                {(!payoutStatus.hasValidatedPayouts || !payoutStatus.hasBonuses) && (
-                                  <div className="bg-yellow-900/20 border border-yellow-700/50 rounded p-3 mb-4 text-xs space-y-1">
+                                {sheetsExportResult && (
+                                  <div className="bg-green-900/20 border border-green-700/50 rounded p-3 mt-3 text-xs space-y-1">
+                                    <div className="flex items-center gap-2 text-green-400 font-bold mb-1">
+                                      <CheckCircle size={14} />
+                                      <span>Export Complete</span>
+                                    </div>
+                                    <div className="text-green-300">• {sheetsExportResult.bookingsUpdated} bookings updated</div>
+                                    <div className="text-green-300">• {sheetsExportResult.accountsAppended} accounts added</div>
+                                    <div className="text-green-300">• {sheetsExportResult.logsheetsAppended} logsheets added</div>
+                                    <div className="text-green-300">• {sheetsExportResult.statsAppended} payout stats added</div>
+                                  </div>
+                                )}
+
+                                {(!payoutStatus.hasValidatedPayouts || !payoutStatus.hasBonuses) && !sheetsExportResult && (
+                                  <div className="bg-yellow-900/20 border border-yellow-700/50 rounded p-3 mt-3 text-xs space-y-1">
                                     <div className="flex items-center gap-2 text-yellow-400 font-bold mb-1">
                                       <AlertCircle size={14} />
                                       <span>Incomplete Payout Data</span>
@@ -602,45 +612,9 @@ const SessionCommandCenter: React.FC = () => {
                                 )}
                             </div>
                             <button 
-                                onClick={handleDownload}
-                                disabled={loading}
-                                className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors ${
-                                    hasDownloaded 
-                                    ? 'bg-green-900/30 text-green-400 border border-green-700' 
-                                    : 'bg-cps-blue hover:bg-blue-600 text-white'
-                                }`}
-                            >
-                                {loading ? <Loader className="animate-spin" size={20} /> : <Download size={20} />}
-                                {hasDownloaded ? 'Download Again' : 'Download Excel'}
-                            </button>
-                        </div>
-
-                        {/* Export to Google Sheets */}
-                        <div className="bg-gray-800 p-6 rounded-xl border border-gray-700 flex flex-col justify-between">
-                            <div>
-                                <h4 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
-                                  <Sheet size={20} className="text-green-400" />
-                                  Export to Google Sheets
-                                </h4>
-                                <p className="text-sm text-gray-400 mb-2">Push data directly to Masterbookings and Workerbook sheets.</p>
-                                
-                                {sheetsExportResult && (
-                                  <div className="bg-green-900/20 border border-green-700/50 rounded p-3 mb-4 text-xs space-y-1">
-                                    <div className="flex items-center gap-2 text-green-400 font-bold mb-1">
-                                      <CheckCircle size={14} />
-                                      <span>Export Complete</span>
-                                    </div>
-                                    <div className="text-green-300">• {sheetsExportResult.bookingsUpdated} bookings updated</div>
-                                    <div className="text-green-300">• {sheetsExportResult.accountsAppended} accounts added</div>
-                                    <div className="text-green-300">• {sheetsExportResult.logsheetsAppended} logsheets added</div>
-                                    <div className="text-green-300">• {sheetsExportResult.statsAppended} payout stats added</div>
-                                  </div>
-                                )}
-                            </div>
-                            <button 
                                 onClick={handleExportToSheets}
                                 disabled={sheetsLoading}
-                                className={`w-full py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors ${
+                                className={`py-3 px-6 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors whitespace-nowrap ${
                                     sheetsExportResult 
                                     ? 'bg-green-900/30 text-green-400 border border-green-700' 
                                     : 'bg-green-600 hover:bg-green-500 text-white'
@@ -649,6 +623,18 @@ const SessionCommandCenter: React.FC = () => {
                                 {sheetsLoading ? <Loader className="animate-spin" size={20} /> : <CloudUpload size={20} />}
                                 {sheetsExportResult ? 'Export Again' : 'Export to Sheets'}
                             </button>
+                        </div>
+
+                        {/* Secondary: Download Excel */}
+                        <div className="mt-4 pt-4 border-t border-gray-700">
+                          <button 
+                              onClick={handleDownload}
+                              disabled={loading}
+                              className="text-gray-400 hover:text-white text-sm flex items-center gap-2 transition-colors"
+                          >
+                              {loading ? <Loader className="animate-spin" size={14} /> : <Download size={14} />}
+                              {hasDownloaded ? 'Download Excel again' : 'Or download as Excel file'}
+                          </button>
                         </div>
                     </div>
 
@@ -667,7 +653,7 @@ const SessionCommandCenter: React.FC = () => {
                                 <p className="text-sm text-gray-400">
                                     {hasDownloaded 
                                         ? "Session data is secured. You may now close the session." 
-                                        : "Requires data download or export before closing to prevent data loss."}
+                                        : "Requires data export before closing to prevent data loss."}
                                 </p>
                             </div>
                             <button 
@@ -737,7 +723,7 @@ const SessionCommandCenter: React.FC = () => {
                   <AlertCircle size={48} className="mb-2 opacity-20" />
                   <p>No active session found.</p>
                   <p className="text-sm">
-                    Upload a feed to start payout calculations.
+                    Import from Google Sheets to start payout calculations.
                   </p>
                 </div>
               )}

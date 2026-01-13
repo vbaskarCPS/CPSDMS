@@ -46,6 +46,15 @@ const parseAddress = (addr: string): { streetNum: string; streetName: string } =
   return { streetNum, streetName };
 };
 
+// Helper: Convert YYYY-MM-DD to MmmDD format (e.g., "2024-02-01" -> "Feb01")
+const dateToTabFormat = (dateStr: string): string => {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const date = new Date(dateStr);
+  const month = months[date.getMonth()];
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${month}${day}`;
+};
+
 // Shared data fetching function
 const fetchExportData = async () => {
   // 1. Get Date
@@ -304,7 +313,7 @@ export const generateSessionExport = async () => {
 };
 
 // --- GOOGLE SHEETS EXPORT ---
-export const exportToGoogleSheets = async (): Promise<{
+export const exportToGoogleSheets = async (dateTabOverride?: string): Promise<{
   bookingsUpdated: number;
   accountsAppended: number;
   logsheetsAppended: number;
@@ -320,18 +329,21 @@ export const exportToGoogleSheets = async (): Promise<{
 
   const { date, logsheets, transactions, bookings, users, managerMap } = await fetchExportData();
 
-  // --- 1. UPDATE COMPLETED BOOKINGS in Feed Placeholder ---
-  const completedBookings = bookings
-    .filter(b => b.status === 'completed')
+  // Get dateTab - use override if provided, otherwise convert from session date
+  const dateTab = dateTabOverride || dateToTabFormat(date);
+
+  // --- 1. UPDATE COMPLETED & CANCELLED BOOKINGS in Feed Placeholder ---
+  const completedOrCancelledBookings = bookings
+    .filter(b => b.status === 'completed' || b.status === 'cancelled')
     .map(b => ({
       routeNumber: b.route_number,
       firstName: b.customer_details['First Name'] || '',
       lastName: b.customer_details['Last Name'] || '',
-      dateCompleted: date,
+      dateCompleted: b.status === 'completed' ? date : 'Cancelled',
       contractorId: b.contractor_id || '',
     }));
 
-  const bookingsUpdated = await googleSheetsService.updateCompletedBookings(completedBookings);
+  const bookingsUpdated = await googleSheetsService.updateCompletedBookings(completedOrCancelledBookings);
 
   // --- 2. APPEND ACCOUNTS (Credit Card, E-Transfer, Billed only) ---
   const accountsData = transactions
@@ -391,10 +403,10 @@ export const exportToGoogleSheets = async (): Promise<{
 
   await googleSheetsService.appendLogsheets(logsheetsData);
 
-  // --- 4. APPEND PAYOUT STATS ---
+  // --- 4. APPEND PAYOUT STATS (with dateTab in column A) ---
   const statsData = generateStatsRows(logsheets, users, managerMap);
 
-  await googleSheetsService.appendPayoutStats(statsData);
+  await googleSheetsService.appendPayoutStats(dateTab, statsData);
 
   return {
     bookingsUpdated,

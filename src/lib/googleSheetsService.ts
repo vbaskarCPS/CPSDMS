@@ -172,7 +172,7 @@ class GoogleSheetsService {
   }
 
   /**
-   * Update cells in a sheet
+   * Update cells in a sheet (RAW to preserve destination formatting)
    */
   private async sheetsUpdate(spreadsheetId: string, range: string, values: any[][]): Promise<void> {
     if (!this.accessToken) {
@@ -180,7 +180,7 @@ class GoogleSheetsService {
     }
 
     const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=RAW`,
       {
         method: 'PUT',
         headers: {
@@ -198,7 +198,7 @@ class GoogleSheetsService {
   }
 
   /**
-   * Append rows to a sheet
+   * Append rows to a sheet (RAW to preserve destination formatting)
    */
   private async sheetsAppend(spreadsheetId: string, range: string, values: any[][]): Promise<void> {
     if (!this.accessToken) {
@@ -206,7 +206,7 @@ class GoogleSheetsService {
     }
 
     const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
       {
         method: 'POST',
         headers: {
@@ -224,7 +224,7 @@ class GoogleSheetsService {
   }
 
   /**
-   * Batch update multiple ranges
+   * Batch update multiple ranges (RAW to preserve destination formatting)
    */
   private async sheetsBatchUpdate(spreadsheetId: string, data: { range: string; values: any[][] }[]): Promise<void> {
     if (!this.accessToken) {
@@ -240,7 +240,7 @@ class GoogleSheetsService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          valueInputOption: 'USER_ENTERED',
+          valueInputOption: 'RAW',
           data,
         }),
       }
@@ -450,14 +450,14 @@ class GoogleSheetsService {
   // --- WRITE OPERATIONS ---
 
   /**
-   * Update completed bookings back to Feed Placeholder (cols L & M)
+   * Update completed/cancelled bookings back to Feed Placeholder (cols L & M)
    */
   public async updateCompletedBookings(
     bookings: Array<{
       routeNumber: string;
       firstName: string;
       lastName: string;
-      dateCompleted: string;
+      dateCompleted: string; // Date or "Cancelled"
       contractorId: string;
     }>
   ): Promise<number> {
@@ -470,7 +470,7 @@ class GoogleSheetsService {
     const updates: { range: string; values: any[][] }[] = [];
     let matchCount = 0;
 
-    // For each completed booking, find the matching row
+    // For each completed/cancelled booking, find the matching row
     for (const booking of bookings) {
       for (let i = 2; i < currentData.length; i++) {
         const row = currentData[i];
@@ -601,8 +601,10 @@ class GoogleSheetsService {
 
   /**
    * Append payout stats to Payout Stats tab in Workerbook
+   * @param dateTab - The date tab name (e.g., "Feb01") to be written to column A
    */
   public async appendPayoutStats(
+    dateTab: string,
     stats: Array<{
       contractorId: string;
       firstName: string;
@@ -641,7 +643,9 @@ class GoogleSheetsService {
   ): Promise<void> {
     if (stats.length === 0) return;
 
+    // Column A is now the date tab, shift all other columns right
     const rows = stats.map(s => [
+      dateTab, // NEW: Column A - Date tab (e.g., "Feb01")
       s.contractorId,
       s.firstName,
       s.lastName,
@@ -679,7 +683,7 @@ class GoogleSheetsService {
 
     await this.sheetsAppend(
       GOOGLE_SHEETS_CONFIG.spreadsheets.workerbook,
-      `'${GOOGLE_SHEETS_CONFIG.tabs.payoutStats}'!A:AG`,
+      `'${GOOGLE_SHEETS_CONFIG.tabs.payoutStats}'!A:AH`, // Extended to AH for new column
       rows
     );
   }
