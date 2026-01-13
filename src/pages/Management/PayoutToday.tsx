@@ -17,10 +17,8 @@ import {
   Plus,
   X,
   Trash2,
-  Award,
   Star,
   Sparkles,
-  HelpCircle,
   Check,
   AlertTriangle,
 } from 'lucide-react';
@@ -64,24 +62,24 @@ interface BonusQualification {
   qualified: boolean;
   ratioPass: boolean;
   detailsPass: boolean;
-  doneCount: number;
-  upgradesSalesCount: number;
+  prebookCount: number;      // renamed from doneCount
+  salesCount: number;        // renamed from upgradesSalesCount
   detailsCollected: number;
   detailsPossible: number;
 }
 
 /**
  * Checks if a worker qualifies for bonuses based on:
- * 1. Production Ratio: Upgrades + Sales >= Done (Production)
+ * 1. Production Ratio: Upgrades + Sales >= Production (Prebooks)
  * 2. Client Details: 80% of phone+email collected for Upgrades and Sales
  */
 function checkBonusQualification(transactions: SessionTransaction[]): BonusQualification {
   // Count transaction types
-  const doneCount = transactions.filter(tx => tx.type === 'Production').length;
-  const upgradesSalesCount = transactions.filter(tx => tx.type === 'Upgrade' || tx.type === 'Sale').length;
+  const prebookCount = transactions.filter(tx => tx.type === 'Production').length;
+  const salesCount = transactions.filter(tx => tx.type === 'Upgrade' || tx.type === 'Sale').length;
   
   // Criteria 1: Ratio (must have at least some upgrades/sales)
-  const ratioPass = upgradesSalesCount > 0 && upgradesSalesCount >= doneCount;
+  const ratioPass = salesCount > 0 && salesCount >= prebookCount;
   
   // Criteria 2: Client details (80% threshold)
   const upgradesAndSales = transactions.filter(tx => tx.type === 'Upgrade' || tx.type === 'Sale');
@@ -99,8 +97,8 @@ function checkBonusQualification(transactions: SessionTransaction[]): BonusQuali
     qualified: ratioPass && detailsPass,
     ratioPass,
     detailsPass,
-    doneCount,
-    upgradesSalesCount,
+    prebookCount,
+    salesCount,
     detailsCollected,
     detailsPossible
   };
@@ -405,13 +403,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       validation: updatedValidation,
     });
 
-    // Reset form for another entry
-    setBonusStep('type');
-    setSelectedBonusType(null);
-    setBonusPlacing('');
-    setBonusCustomDesc('');
-    setBonusAmount('');
-    
+    // Close modal and refresh data
+    handleCloseBonusModal();
     loadData();
   };
 
@@ -438,6 +431,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       validation: updatedValidation,
     });
 
+    // Close modal and refresh data
+    handleCloseBonusModal();
     loadData();
   };
 
@@ -548,32 +543,37 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           </div>
         </div>
 
-        {/* Bonus Button (Only for Validated) */}
-        {isValidated && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleOpenBonusModal(session, `${worker.firstName} ${worker.lastName}`);
-            }}
-            className={`ml-2 px-2 py-1 rounded text-[9px] font-bold flex items-center gap-1 transition-colors ${
-              bonusTotal > 0 
-                ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-700 hover:bg-yellow-900/50' 
-                : qualification.qualified
-                  ? 'bg-blue-900/30 text-blue-400 border border-blue-800 hover:bg-blue-900/50'
-                  : 'bg-red-900/30 text-red-400 border border-red-800 hover:bg-red-900/50'
-            }`}
-          >
-            {bonusTotal > 0 ? (
-              <>
-                <Trophy size={10} /> +${bonusTotal.toFixed(0)}
-              </>
-            ) : (
-              <>
-                <Plus size={10} /> Bonus
-              </>
-            )}
-          </button>
-        )}
+        {/* Bonus Button Area - Always takes same space for alignment */}
+        <div className="ml-2 min-w-[70px] flex justify-center">
+          {isValidated ? (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleOpenBonusModal(session, `${worker.firstName} ${worker.lastName}`);
+              }}
+              className={`px-2 py-1 rounded text-[9px] font-bold flex items-center gap-1 transition-colors ${
+                bonusTotal > 0 
+                  ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-700 hover:bg-yellow-900/50' 
+                  : qualification.qualified
+                    ? 'bg-blue-900/30 text-blue-400 border border-blue-800 hover:bg-blue-900/50'
+                    : 'bg-red-900/30 text-red-400 border border-red-800 hover:bg-red-900/50'
+              }`}
+            >
+              {bonusTotal > 0 ? (
+                <>
+                  <Trophy size={10} /> +${bonusTotal.toFixed(0)}
+                </>
+              ) : (
+                <>
+                  <Plus size={10} /> Bonus
+                </>
+              )}
+            </button>
+          ) : (
+            /* Empty placeholder for non-validated to maintain alignment */
+            <div className="w-[60px]" />
+          )}
+        </div>
 
         {/* Arrow */}
         <ChevronRight
@@ -745,8 +745,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                 </div>
               </div>
 
-              {/* Spacer to match bonus button width */}
-              <div className="w-[60px]" />
+              {/* Spacer to match bonus button area */}
+              <div className="ml-2 min-w-[70px]" />
 
               {/* Chevron placeholder to align with worker rows */}
               <div className="w-[14px]" />
@@ -803,7 +803,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div className={`flex items-center gap-1 ${selectedQualification.ratioPass ? 'text-green-400' : 'text-red-400'}`}>
                     {selectedQualification.ratioPass ? <Check size={12} /> : <X size={12} />}
-                    <span>Ratio: {selectedQualification.upgradesSalesCount} upsells vs {selectedQualification.doneCount} done</span>
+                    <span>Ratio: {selectedQualification.salesCount} Sales vs {selectedQualification.prebookCount} Prebooks</span>
                   </div>
                   <div className={`flex items-center gap-1 ${selectedQualification.detailsPass ? 'text-green-400' : 'text-red-400'}`}>
                     {selectedQualification.detailsPass ? <Check size={12} /> : <X size={12} />}
