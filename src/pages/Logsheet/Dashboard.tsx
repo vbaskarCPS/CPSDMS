@@ -15,7 +15,6 @@ import {
   FileText,
   Phone,
   Check,
-  Lock,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
@@ -39,68 +38,6 @@ const Toast: React.FC<{ message: string; show: boolean }> = ({ message, show }) 
   );
 };
 
-// --- LOCKOUT SCREEN COMPONENT ---
-const LockoutScreen: React.FC<{ workerName: string; onLogout: () => void }> = ({ workerName, onLogout }) => {
-  const [countdown, setCountdown] = useState(5);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          onLogout();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [onLogout]);
-
-  return (
-    <div className="min-h-screen bg-black flex flex-col items-center justify-center p-6">
-      <div className="bg-gray-800 rounded-2xl border border-gray-700 p-8 max-w-md w-full text-center shadow-2xl">
-        {/* Icon */}
-        <div className="w-20 h-20 rounded-full bg-green-900/30 border-2 border-green-500 flex items-center justify-center mx-auto mb-6">
-          <Lock size={36} className="text-green-400" />
-        </div>
-
-        {/* Title */}
-        <h1 className="text-2xl font-bold text-white mb-2">
-          Session Finalized
-        </h1>
-        
-        {/* Subtitle */}
-        <p className="text-gray-400 mb-6">
-          Great work today, <span className="text-white font-medium">{workerName}</span>!
-        </p>
-
-        {/* Message */}
-        <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700 mb-6">
-          <p className="text-gray-300 text-sm">
-            Your payout has been processed and your logsheet is now closed for today.
-          </p>
-        </div>
-
-        {/* Countdown */}
-        <p className="text-gray-500 text-sm mb-4">
-          Logging out in <span className="text-white font-mono font-bold">{countdown}</span> seconds...
-        </p>
-
-        {/* Manual Logout Button */}
-        <button
-          onClick={onLogout}
-          className="w-full py-3 rounded-lg font-bold text-sm flex items-center justify-center gap-2 bg-gray-700 hover:bg-gray-600 text-white transition-colors"
-        >
-          <LogOut size={16} />
-          Log Out Now
-        </button>
-      </div>
-    </div>
-  );
-};
-
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const [worker, setWorker] = useState<Worker | null>(null);
@@ -113,9 +50,6 @@ const Dashboard: React.FC = () => {
   
   // Upsells enabled state
   const [upsellsEnabled, setUpsellsEnabled] = useState(true);
-
-  // --- LOCKOUT STATE ---
-  const [isLockedOut, setIsLockedOut] = useState(false);
 
   // Data State
   const [stats, setStats] = useState<SessionStats>(sessionService.getEmptyStats());
@@ -147,14 +81,6 @@ const Dashboard: React.FC = () => {
       setWorker(storedWorker);
 
       try {
-        // --- LOCKOUT CHECK: Check session status first ---
-        const sessionStatus = await sessionService.getWorkerSessionStatus(storedWorker.contractorId);
-        if (sessionStatus === 'PAID') {
-          setIsLockedOut(true);
-          setLoading(false);
-          return; // Don't load any more data
-        }
-
         // 1. Ensure Session Exists
         const session = await sessionService.startLogsheetSession(storedWorker.contractorId);
         setStats(session.stats);
@@ -201,20 +127,18 @@ const Dashboard: React.FC = () => {
       () => setRefreshKey((prev) => prev + 1)
     );
 
-    // Also poll every 10 seconds as a fallback
-    const pollInterval = setInterval(() => {
-      setRefreshKey((prev) => prev + 1);
-    }, 10000);
-
-    return () => {
-      unsubscribe();
-      clearInterval(pollInterval);
-    };
+    return () => unsubscribe();
   }, [worker?.contractorId]);
 
   const handleLogout = () => {
     removeStorageItem('current_user');
     navigate('/');
+  };
+
+  // Handle tab switch - refresh data when changing views
+  const handleTabSwitch = (tab: 'pending' | 'not_done' | 'completed') => {
+    setViewFilter(tab);
+    setRefreshKey((prev) => prev + 1);
   };
 
   const filteredJobs = useMemo(() => {
@@ -226,16 +150,6 @@ const Dashboard: React.FC = () => {
       return jobs.filter((b) => b.Completed === 'x' || b.Status === 'completed');
     }
   }, [jobs, viewFilter]);
-
-  // --- LOCKOUT SCREEN ---
-  if (isLockedOut && worker) {
-    return (
-      <LockoutScreen 
-        workerName={`${worker.firstName} ${worker.lastName}`}
-        onLogout={handleLogout}
-      />
-    );
-  }
 
   if (loading) {
     return (
@@ -350,7 +264,7 @@ const Dashboard: React.FC = () => {
 
         <div className="flex bg-gray-800 rounded-lg p-1 border border-gray-700 mb-2">
           <button
-            onClick={() => setViewFilter('pending')}
+            onClick={() => handleTabSwitch('pending')}
             className={`flex-1 py-2 rounded-md text-xs font-bold transition-colors ${
               viewFilter === 'pending'
                 ? 'bg-cps-blue text-white shadow'
@@ -360,7 +274,7 @@ const Dashboard: React.FC = () => {
             Pending
           </button>
           <button
-            onClick={() => setViewFilter('not_done')}
+            onClick={() => handleTabSwitch('not_done')}
             className={`flex-1 py-2 rounded-md text-xs font-bold transition-colors ${
               viewFilter === 'not_done'
                 ? 'bg-red-900/50 text-red-200'
@@ -370,7 +284,7 @@ const Dashboard: React.FC = () => {
             Not Done
           </button>
           <button
-            onClick={() => setViewFilter('completed')}
+            onClick={() => handleTabSwitch('completed')}
             className={`flex-1 py-2 rounded-md text-xs font-bold transition-colors ${
               viewFilter === 'completed'
                 ? 'bg-green-700 text-white shadow'
