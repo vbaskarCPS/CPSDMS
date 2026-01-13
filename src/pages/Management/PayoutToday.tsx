@@ -548,42 +548,57 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         {/* Standard Sort: Grouped by Manager */}
         {sortOption === 'standard' && groupedByManager && groupedByManager.map(([managerId, group]) => (
           <div key={managerId} className="mb-3">
-            {/* Manager Header with Stats */}
-            <div className="sticky top-0 bg-gray-900/95 backdrop-blur py-1.5 px-3 mb-1 z-10 flex items-center justify-between border-b border-gray-700 rounded-t">
-              {/* Left: Manager Name & Worker Count */}
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-bold text-gray-300 uppercase tracking-wider">
-                  {group.manager?.name || 'Unassigned'}
-                </span>
-                <span className="text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">
-                  {group.items.length} workers
-                </span>
+            {/* Manager Header Card - Same size as worker rows */}
+            <div className="sticky top-0 z-10 bg-gray-700 border border-gray-600 py-1.5 px-2 rounded flex items-center gap-2 text-xs mb-1">
+              {/* Manager Icon Indicator */}
+              <div className="w-0.5 h-5 rounded-full flex-shrink-0 bg-blue-500" />
+
+              {/* Manager Name */}
+              <div className="font-bold text-white min-w-[120px] truncate uppercase tracking-wide">
+                {group.manager?.name || 'Unassigned'}
               </div>
-              
-              {/* Right: Stats */}
-              <div className="flex items-center gap-4 text-[10px]">
-                <div className="flex items-center gap-1">
-                  <span className="text-gray-500 uppercase">Steps:</span>
+
+              {/* Worker Count Badge */}
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 min-w-[55px] justify-center bg-blue-900/30 text-blue-400 border border-blue-800">
+                <Users size={8} />
+                {group.items.length}
+              </span>
+
+              {/* Spacer */}
+              <div className="flex-1" />
+
+              {/* Stats - Matching worker row layout */}
+              <div className="flex items-center gap-3 text-gray-400">
+                <div className="text-center min-w-[40px]">
+                  <span className="text-[9px] text-gray-500 uppercase block leading-none">Steps</span>
                   <span className="font-bold text-white">{group.stats.totalSteps}</span>
                 </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-gray-500 uppercase">Upsell:</span>
+                <div className="text-center min-w-[50px]">
+                  <span className="text-[9px] text-gray-500 uppercase block leading-none">Upsell</span>
                   <span className="font-bold text-purple-300">${group.stats.totalUpsellGross.toFixed(2)}</span>
                 </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-gray-500 uppercase">Avg EQ:</span>
-                  <span className={`font-bold font-mono ${
+                <div className="text-center min-w-[40px]">
+                  <span className="text-[9px] text-gray-500 uppercase block leading-none">Avg EQ</span>
+                  <span className={`font-mono font-bold ${
                     group.stats.avgEQ >= 3 ? 'text-green-400' : 
                     group.stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
                   }`}>
                     {group.stats.avgEQ.toFixed(2)}
                   </span>
                 </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-gray-500 uppercase">Avg Comm:</span>
-                  <span className="font-bold text-green-400 font-mono">${group.stats.avgCommission.toFixed(2)}</span>
+                <div className="text-center min-w-[55px]">
+                  <span className="text-[9px] text-gray-500 uppercase block leading-none">Avg Comm</span>
+                  <span className="font-mono font-bold text-green-400">
+                    ${group.stats.avgCommission.toFixed(2)}
+                  </span>
                 </div>
               </div>
+
+              {/* Spacer to match bonus button width */}
+              <div className="w-[60px]" />
+
+              {/* Chevron placeholder to align with worker rows */}
+              <div className="w-[14px]" />
             </div>
             
             {/* Workers in this group */}
