@@ -298,11 +298,11 @@ const SessionCommandCenter: React.FC = () => {
     try {
         await generateSessionExport();
         // Downloading always enables close (regardless of import source)
-        if (importMeta) {
-          const updatedMeta = { ...importMeta, sheetsExported: true };
-          await sessionService.updateSessionImportMeta(updatedMeta);
-          setImportMeta(updatedMeta);
-        }
+        const updatedMeta = importMeta 
+          ? { ...importMeta, sheetsExported: true }
+          : { source: 'file' as const, sheetsExported: true };
+        await sessionService.updateSessionImportMeta(updatedMeta);
+        setImportMeta(updatedMeta);
     } catch (err) {
         alert("Export failed: " + err);
     } finally {
