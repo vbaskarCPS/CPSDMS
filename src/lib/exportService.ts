@@ -19,17 +19,14 @@ const getClientTypeBadge = (tx: any): string => {
   const itemName = tx.items?.[0]?.name || '';
   const type = tx.type || '';
 
-  // 1. Check item name against BADGE_MAP first
   if (BADGE_MAP[itemName]) {
     return BADGE_MAP[itemName];
   }
 
-  // 2. Fall back to type-based labels
   if (type === 'Upgrade') return 'UPGRADE';
   if (type === 'Add-On') return 'ADD-ON';
   if (type === 'Sale') return 'SALE';
   
-  // Default (Production)
   return 'DONE';
 };
 
@@ -46,24 +43,13 @@ const parseAddress = (addr: string): { streetNum: string; streetName: string } =
   return { streetNum, streetName };
 };
 
-// Helper: Convert YYYY-MM-DD to MmmDD format (e.g., "2024-02-01" -> "Feb01")
-const dateToTabFormat = (dateStr: string): string => {
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const date = new Date(dateStr);
-  const month = months[date.getMonth()];
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${month}${day}`;
-};
-
 // Shared data fetching function
 const fetchExportData = async () => {
-  // 1. Get Date
   const date = await sessionService.getDailySessionDate();
   if (!date) {
     throw new Error('No active session found.');
   }
 
-  // 2. Fetch ALL Data from Supabase (Parallel)
   const [logsheetsReq, transactionsReq, bookingsReq, usersReq] =
     await Promise.all([
       supabase.from('logsheet_sessions').select('*').eq('date', date),
@@ -76,14 +62,12 @@ const fetchExportData = async () => {
   const transactions = transactionsReq.data || [];
   const users = usersReq.data || [];
 
-  // FIXED: Sort bookings by original Excel order (sort_order stored in data column)
   const bookings = (bookingsReq.data || []).sort((a, b) => {
     const orderA = a.data?.sort_order ?? Infinity;
     const orderB = b.data?.sort_order ?? Infinity;
     return orderA - orderB;
   });
 
-  // Create a Map of Managers for quick lookup
   const managerMap = new Map();
   users
     .filter((u) => u.role === 'RouteManager')
@@ -99,13 +83,11 @@ const generateStatsRows = (logsheets: any[], users: any[], managerMap: Map<strin
     const stats = session.stats || {};
     const val = session.validation || {};
 
-    // Manager Name Lookup
     let managerName = session.managerName || '';
     if (!managerName && worker?.metadata?.assignedManagerId) {
       managerName = managerMap.get(worker.metadata.assignedManagerId) || '';
     }
 
-    // Determine Resolved Amounts (Actual vs System)
     const actualProdCash = val.isValidated
       ? val.actualProdCash
       : stats.prodCash + stats.upsellCash;
@@ -118,13 +100,11 @@ const generateStatsRows = (logsheets: any[], users: any[], managerMap: Map<strin
 
     const finalPay = val.finalCommission || 0;
 
-    // Rates
     const baseRate = 8.0;
     const alumniRate = worker?.metadata?.alumniRate || 0;
     const silverRate = worker?.metadata?.silverRate || 0;
     const payoutRate = baseRate + alumniRate + silverRate;
     
-    // Commissions
     const prodComm = actualTotalEQ * payoutRate;
     const upsellComm = (stats.upsellPayable || 0) * 0.1;
     const iosComm = (stats.iosCount || 0) * 5.0;
@@ -176,7 +156,6 @@ const generateStatsRows = (logsheets: any[], users: any[], managerMap: Map<strin
 export const generateSessionExport = async () => {
   const { date, logsheets, transactions, bookings, users, managerMap } = await fetchExportData();
 
-  // --- TAB 1: STATS ---
   const statsData = generateStatsRows(logsheets, users, managerMap);
   const statsRows = statsData.map(s => ({
     "Contractor ID": s.contractorId,
@@ -214,7 +193,6 @@ export const generateSessionExport = async () => {
     "Final Pay": s.finalPay,
   }));
 
-  // --- TAB 2: BOOKINGS ---
   const bookingRows = bookings.map((b) => ({
     "Route #": b.route_number,
     "First Name": b.customer_details['First Name'],
@@ -231,7 +209,6 @@ export const generateSessionExport = async () => {
     "Worker": b.contractor_id || ''
   }));
 
-  // --- TAB 3: LOGSHEETS ---
   const logsheetRows = transactions.map((tx) => {
     const worker = users.find((u) => u.user_id === tx.worker_id);
     const { streetNum, streetName } = parseAddress(tx.customer_snapshot?.address);
@@ -253,7 +230,6 @@ export const generateSessionExport = async () => {
     };
   });
 
-  // --- TAB 4: ACCOUNTS ---
   const accountsRows = transactions
     .filter(tx => ['Credit Card', 'Billed', 'E-Transfer'].includes(tx.payment_method))
     .map(tx => {
@@ -285,40 +261,39 @@ export const generateSessionExport = async () => {
         };
     });
 
-  // --- BUILD WORKBOOK ---
   const wb = XLSX.utils.book_new();
   
-  // TAB 1: Stats
   const wsStats = XLSX.utils.json_to_sheet(statsRows);
   setColumnWidths(wsStats, [14, 12, 12, 15, 10, 10, 10, 10, 10, 12, 12, 10, 10, 14, 10, 10, 10, 10, 10, 12, 14, 14, 12, 10, 12, 10, 14, 14, 12, 12, 10, 10, 10]);
   XLSX.utils.book_append_sheet(wb, wsStats, 'Stats');
 
-  // TAB 2: Bookings
   const wsBookings = XLSX.utils.json_to_sheet(bookingRows);
   setColumnWidths(wsBookings, [8, 12, 12, 8, 25, 20, 14, 25, 10, 4, 10, 18, 15]);
   XLSX.utils.book_append_sheet(wb, wsBookings, 'Bookings');
 
-  // TAB 3: Logsheets
   const wsLogsheets = XLSX.utils.json_to_sheet(logsheetRows);
   setColumnWidths(wsLogsheets, [8, 12, 12, 8, 25, 14, 25, 10, 10, 30, 10, 12, 18]);
   XLSX.utils.book_append_sheet(wb, wsLogsheets, 'Logsheets');
 
-  // TAB 4: Accounts
   const wsAccounts = XLSX.utils.json_to_sheet(accountsRows);
   setColumnWidths(wsAccounts, [8, 12, 12, 8, 25, 14, 25, 10, 10, 30, 10, 12, 18, 25, 10, 6]);
   XLSX.utils.book_append_sheet(wb, wsAccounts, 'Accounts');
 
-  // WRITE FILE
   XLSX.writeFile(wb, `Data Out - ${date}.xlsx`);
 };
 
 // --- GOOGLE SHEETS EXPORT ---
-export const exportToGoogleSheets = async (dateTabOverride?: string): Promise<{
+// Requires dateTab (the same one used during import, e.g., "Feb01")
+export const exportToGoogleSheets = async (dateTab: string): Promise<{
   bookingsUpdated: number;
   accountsAppended: number;
   logsheetsAppended: number;
   statsAppended: number;
 }> => {
+  if (!dateTab) {
+    throw new Error('dateTab is required for Google Sheets export. This session may not have been imported from Google Sheets.');
+  }
+
   // Ensure authenticated
   if (!googleSheetsService.isAuthenticated()) {
     const authenticated = await googleSheetsService.authenticate();
@@ -328,9 +303,6 @@ export const exportToGoogleSheets = async (dateTabOverride?: string): Promise<{
   }
 
   const { date, logsheets, transactions, bookings, users, managerMap } = await fetchExportData();
-
-  // Get dateTab - use override if provided, otherwise convert from session date
-  const dateTab = dateTabOverride || dateToTabFormat(date);
 
   // --- 1. UPDATE COMPLETED & CANCELLED BOOKINGS in Feed Placeholder ---
   const completedOrCancelledBookings = bookings

@@ -32,6 +32,13 @@ declare global {
   }
 }
 
+// Export types for import metadata
+export interface ImportMeta {
+  source: 'sheets' | 'file';
+  dateTab?: string; // Only present if source is 'sheets'
+  sheetsExported?: boolean;
+}
+
 class GoogleSheetsService {
   private static instance: GoogleSheetsService;
   private accessToken: string | null = null;
@@ -50,9 +57,6 @@ class GoogleSheetsService {
 
   // --- INITIALIZATION ---
 
-  /**
-   * Initialize the Google API client library
-   */
   public async initGapi(): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.gapiLoaded) {
@@ -79,9 +83,6 @@ class GoogleSheetsService {
     });
   }
 
-  /**
-   * Initialize the Google Identity Services token client
-   */
   public initTokenClient(): void {
     if (this.gisLoaded) return;
 
@@ -102,16 +103,10 @@ class GoogleSheetsService {
     this.gisLoaded = true;
   }
 
-  /**
-   * Check if user is authenticated
-   */
   public isAuthenticated(): boolean {
     return !!this.accessToken;
   }
 
-  /**
-   * Request access token (opens Google sign-in popup)
-   */
   public async authenticate(): Promise<boolean> {
     await this.initGapi();
     this.initTokenClient();
@@ -127,27 +122,19 @@ class GoogleSheetsService {
       };
 
       if (this.accessToken) {
-        // Already have token, request a fresh one
         this.tokenClient.requestAccessToken({ prompt: '' });
       } else {
-        // First time, show consent screen
         this.tokenClient.requestAccessToken({ prompt: 'consent' });
       }
     });
   }
 
-  /**
-   * Sign out and clear token
-   */
   public signOut(): void {
     this.accessToken = null;
   }
 
   // --- HELPER METHODS ---
 
-  /**
-   * Make authenticated request to Sheets API
-   */
   private async sheetsGet(spreadsheetId: string, range: string): Promise<any[][]> {
     if (!this.accessToken) {
       throw new Error('Not authenticated. Call authenticate() first.');
@@ -171,9 +158,6 @@ class GoogleSheetsService {
     return data.values || [];
   }
 
-  /**
-   * Update cells in a sheet (RAW to preserve destination formatting)
-   */
   private async sheetsUpdate(spreadsheetId: string, range: string, values: any[][]): Promise<void> {
     if (!this.accessToken) {
       throw new Error('Not authenticated. Call authenticate() first.');
@@ -198,7 +182,7 @@ class GoogleSheetsService {
   }
 
   /**
-   * Append rows to a sheet (RAW to preserve destination formatting)
+   * Append rows to a sheet using OVERWRITE to preserve row formatting
    */
   private async sheetsAppend(spreadsheetId: string, range: string, values: any[][]): Promise<void> {
     if (!this.accessToken) {
@@ -206,7 +190,7 @@ class GoogleSheetsService {
     }
 
     const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=OVERWRITE`,
       {
         method: 'POST',
         headers: {
@@ -223,9 +207,6 @@ class GoogleSheetsService {
     }
   }
 
-  /**
-   * Batch update multiple ranges (RAW to preserve destination formatting)
-   */
   private async sheetsBatchUpdate(spreadsheetId: string, data: { range: string; values: any[][] }[]): Promise<void> {
     if (!this.accessToken) {
       throw new Error('Not authenticated. Call authenticate() first.');
@@ -252,7 +233,6 @@ class GoogleSheetsService {
     }
   }
 
-  // Generate consistent IDs (same as feedParser)
   private generateConsistentId(name: string, rolePrefix: string): string {
     return `${rolePrefix}_${name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
   }
@@ -269,9 +249,6 @@ class GoogleSheetsService {
 
   // --- READ OPERATIONS ---
 
-  /**
-   * Check if a tab exists in the Workerbook
-   */
   public async checkTabExists(tabName: string): Promise<boolean> {
     try {
       await this.sheetsGet(GOOGLE_SHEETS_CONFIG.spreadsheets.workerbook, `'${tabName}'!A1`);
@@ -286,19 +263,18 @@ class GoogleSheetsService {
 
   /**
    * Import session data from Google Sheets
+   * The returned data includes _importMeta with source and dateTab
    */
   public async importSessionData(dateTab: string): Promise<DailySessionData> {
     if (!isValidDateTab(dateTab)) {
       throw new Error(`Invalid date tab format: ${dateTab}. Use MmmDD format (e.g., Feb01)`);
     }
 
-    // Check if tab exists
     const tabExists = await this.checkTabExists(dateTab);
     if (!tabExists) {
       throw new Error(`Tab "${dateTab}" not found in Workerbook. Please check the tab name.`);
     }
 
-    // Fetch all data in parallel
     const [routesData, bookingsData, workersData, managersData] = await Promise.all([
       this.sheetsGet(GOOGLE_SHEETS_CONFIG.spreadsheets.masterbookings, `'${GOOGLE_SHEETS_CONFIG.tabs.routes}'!A:G`),
       this.sheetsGet(GOOGLE_SHEETS_CONFIG.spreadsheets.masterbookings, `'${GOOGLE_SHEETS_CONFIG.tabs.feedPlaceholder}'!A:M`),
@@ -308,8 +284,7 @@ class GoogleSheetsService {
 
     const date = new Date().toISOString().split('T')[0];
 
-    // --- PROCESS MANAGERS (from Managers tab) ---
-    // Row 0 = header, data starts row 1
+    // --- PROCESS MANAGERS ---
     const managersMap = new Map<string, ManagementUser>();
     
     for (let i = 1; i < managersData.length; i++) {
@@ -338,15 +313,13 @@ class GoogleSheetsService {
     const managers = Array.from(managersMap.values());
 
     // --- PROCESS ROUTES ---
-    // Row 0 = header, data starts row 1
-    // Col A = Manager Assignment, Col D = RT #, Col E = Street_List
     const routes: RouteData[] = [];
 
     for (let i = 1; i < routesData.length; i++) {
       const row = routesData[i];
       const managerName = row[0]?.toString().trim();
-      const routeCode = row[3]?.toString().trim(); // Column D (index 3)
-      const streetListRaw = row[4]?.toString() || ''; // Column E (index 4)
+      const routeCode = row[3]?.toString().trim();
+      const streetListRaw = row[4]?.toString() || '';
 
       if (!routeCode) continue;
 
@@ -368,17 +341,13 @@ class GoogleSheetsService {
       }
     }
 
-    // --- PROCESS WORKERS (from dated tab) ---
-    // Row 0 = date/stats row, Row 1 = header, data starts row 2
-    // Filter by Column K (index 10) = 'x' (Show)
-    // Cols: B=CN# (1), C=First (2), D=Last (3), E=Cell (4), F=Alm (5), G=Slv (6), H=Manager (7), K=Show (10)
+    // --- PROCESS WORKERS ---
     const workers: Worker[] = [];
 
     for (let i = 2; i < workersData.length; i++) {
       const row = workersData[i];
       const showValue = row[10]?.toString().trim().toLowerCase();
 
-      // Only include workers who have "x" in the Show column
       if (showValue !== 'x') continue;
 
       const contractorId = row[1]?.toString().trim() || '';
@@ -408,10 +377,7 @@ class GoogleSheetsService {
       });
     }
 
-    // --- PROCESS BOOKINGS (from Feed Placeholder) ---
-    // Row 0 = empty, Row 1 = header, data starts row 2
-    // Cols: A=Route# (0), B=First (1), C=Last (2), D=House# (3), E=Street (4), 
-    //       F=Call1st (5), G=Phone (6), H=Email (7), I=ServiceType (8), J=PP (9), K=Amount (10)
+    // --- PROCESS BOOKINGS ---
     const pendingBookings: MasterBooking[] = [];
 
     for (let i = 2; i < bookingsData.length; i++) {
@@ -437,31 +403,43 @@ class GoogleSheetsService {
         'Status': 'pending',
         'Completed': undefined,
         isPrebooked: true,
-        sort_order: i - 2, // Preserve order
-        _sourceRow: i + 1, // Store the actual row number for updating later (1-indexed for Sheets)
+        sort_order: i - 2,
+        _sourceRow: i + 1,
       };
 
       pendingBookings.push(booking);
     }
 
-    return { date, managers, workers, routes, pendingBookings };
+    // Return with import metadata embedded
+    const result: DailySessionData = { 
+      date, 
+      managers, 
+      workers, 
+      routes, 
+      pendingBookings,
+    };
+
+    // Add import metadata (will be stored in session)
+    (result as any)._importMeta = {
+      source: 'sheets',
+      dateTab: dateTab,
+      sheetsExported: false
+    } as ImportMeta;
+
+    return result;
   }
 
   // --- WRITE OPERATIONS ---
 
-  /**
-   * Update completed/cancelled bookings back to Feed Placeholder (cols L & M)
-   */
   public async updateCompletedBookings(
     bookings: Array<{
       routeNumber: string;
       firstName: string;
       lastName: string;
-      dateCompleted: string; // Date or "Cancelled"
+      dateCompleted: string;
       contractorId: string;
     }>
   ): Promise<number> {
-    // First, read the current Feed Placeholder to find matching rows
     const currentData = await this.sheetsGet(
       GOOGLE_SHEETS_CONFIG.spreadsheets.masterbookings,
       `'${GOOGLE_SHEETS_CONFIG.tabs.feedPlaceholder}'!A:M`
@@ -470,7 +448,6 @@ class GoogleSheetsService {
     const updates: { range: string; values: any[][] }[] = [];
     let matchCount = 0;
 
-    // For each completed/cancelled booking, find the matching row
     for (const booking of bookings) {
       for (let i = 2; i < currentData.length; i++) {
         const row = currentData[i];
@@ -478,20 +455,18 @@ class GoogleSheetsService {
         const rowFirst = row[1]?.toString().trim().toLowerCase();
         const rowLast = row[2]?.toString().trim().toLowerCase();
 
-        // Match by Route + First + Last name
         if (
           rowRoute === booking.routeNumber &&
           rowFirst === booking.firstName.toLowerCase() &&
           rowLast === booking.lastName.toLowerCase()
         ) {
-          // Update columns L and M (indices 11 and 12, but in Sheets it's columns L:M)
-          const rowNum = i + 1; // 1-indexed for Sheets
+          const rowNum = i + 1;
           updates.push({
             range: `'${GOOGLE_SHEETS_CONFIG.tabs.feedPlaceholder}'!L${rowNum}:M${rowNum}`,
             values: [[booking.dateCompleted, booking.contractorId]],
           });
           matchCount++;
-          break; // Found the match, move to next booking
+          break;
         }
       }
     }
@@ -503,9 +478,6 @@ class GoogleSheetsService {
     return matchCount;
   }
 
-  /**
-   * Append accounts data to Accounts tab
-   */
   public async appendAccounts(
     accounts: Array<{
       routeNumber: string;
@@ -554,9 +526,6 @@ class GoogleSheetsService {
     );
   }
 
-  /**
-   * Append logsheet entries to Logsheets tab
-   */
   public async appendLogsheets(
     logsheets: Array<{
       routeNumber: string;
@@ -599,10 +568,6 @@ class GoogleSheetsService {
     );
   }
 
-  /**
-   * Append payout stats to Payout Stats tab in Workerbook
-   * @param dateTab - The date tab name (e.g., "Feb01") to be written to column A
-   */
   public async appendPayoutStats(
     dateTab: string,
     stats: Array<{
@@ -643,9 +608,8 @@ class GoogleSheetsService {
   ): Promise<void> {
     if (stats.length === 0) return;
 
-    // Column A is now the date tab, shift all other columns right
     const rows = stats.map(s => [
-      dateTab, // NEW: Column A - Date tab (e.g., "Feb01")
+      dateTab,
       s.contractorId,
       s.firstName,
       s.lastName,
@@ -683,7 +647,7 @@ class GoogleSheetsService {
 
     await this.sheetsAppend(
       GOOGLE_SHEETS_CONFIG.spreadsheets.workerbook,
-      `'${GOOGLE_SHEETS_CONFIG.tabs.payoutStats}'!A:AH`, // Extended to AH for new column
+      `'${GOOGLE_SHEETS_CONFIG.tabs.payoutStats}'!A:AH`,
       rows
     );
   }

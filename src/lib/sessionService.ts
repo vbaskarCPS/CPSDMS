@@ -10,6 +10,10 @@ import {
   SessionTransaction
 } from '../types';
 
+// Import metadata type - re-export for other modules
+import { ImportMeta } from './googleSheetsService';
+export type { ImportMeta };
+
 class SessionService {
   private static instance: SessionService;
   private constructor() {}
@@ -204,12 +208,57 @@ class SessionService {
     };
   }
 
+  // --- 2b. IMPORT METADATA ---
+
+  /**
+   * Get import metadata for the current session
+   */
+  public async getSessionImportMeta(): Promise<ImportMeta | null> {
+    const date = await this.getDailySessionDate();
+    if (!date) return null;
+
+    const { data, error } = await supabase
+      .from('daily_sessions')
+      .select('import_meta')
+      .eq('date', date)
+      .single();
+
+    if (error || !data) return null;
+    return data.import_meta as ImportMeta | null;
+  }
+
+  /**
+   * Update import metadata for the current session
+   */
+  public async updateSessionImportMeta(meta: ImportMeta): Promise<void> {
+    const date = await this.getDailySessionDate();
+    if (!date) throw new Error('No active session');
+
+    const { error } = await supabase
+      .from('daily_sessions')
+      .update({ import_meta: meta })
+      .eq('date', date);
+
+    if (error) throw error;
+  }
+
   // --- 3. SESSION MANAGEMENT ---
 
-  public async uploadDailySession(data: DailySessionData, emailEnabled: boolean = true): Promise<void> {
+  public async uploadDailySession(
+    data: DailySessionData, 
+    emailEnabled: boolean = true,
+    importMeta?: ImportMeta
+  ): Promise<void> {
+    // Extract import meta from data if passed via _importMeta property, or use provided param
+    const meta = importMeta || (data as any)._importMeta || { source: 'file', sheetsExported: false };
+
     const { error: sessError } = await supabase
       .from('daily_sessions')
-      .insert({ date: data.date, is_active: true });
+      .insert({ 
+        date: data.date, 
+        is_active: true,
+        import_meta: meta
+      });
     if (sessError) throw sessError;
 
     const allUsers = [

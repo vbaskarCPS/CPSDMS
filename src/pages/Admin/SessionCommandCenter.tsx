@@ -21,7 +21,7 @@ import {
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService } from '../../lib/sessionService';
 import { generateSessionExport, exportToGoogleSheets } from '../../lib/exportService';
-import { googleSheetsService } from '../../lib/googleSheetsService';
+import { googleSheetsService, ImportMeta } from '../../lib/googleSheetsService';
 import { getDateTabError } from '../../lib/googleSheetsConfig';
 import { DailySessionData, SortOption, LogsheetSession } from '../../types';
 import PayoutToday from '../Management/PayoutToday';
@@ -29,7 +29,6 @@ import PayoutToday from '../Management/PayoutToday';
 const SessionCommandCenter: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   
-  // Initialize activeTab from URL query parameter, defaulting to 'lifecycle'
   const [activeTab, setActiveTab] = useState<'lifecycle' | 'payout'>(() => {
     const tabParam = searchParams.get('tab');
     return tabParam === 'payout' ? 'payout' : 'lifecycle';
@@ -44,8 +43,8 @@ const SessionCommandCenter: React.FC = () => {
   const [currentSession, setCurrentSession] = useState<DailySessionData | null>(null);
   const [logsheetSessions, setLogsheetSessions] = useState<LogsheetSession[]>([]);
   
-  // End of Day State
-  const [hasDownloaded, setHasDownloaded] = useState(false);
+  // Import metadata (persisted in DB)
+  const [importMeta, setImportMeta] = useState<ImportMeta | null>(null);
   
   // Email Settings
   const [emailEnabled, setEmailEnabled] = useState(true);
@@ -67,12 +66,17 @@ const SessionCommandCenter: React.FC = () => {
   const [payoutSearch, setPayoutSearch] = useState('');
   const [payoutSort, setPayoutSort] = useState<SortOption>('standard');
 
+  // Computed: Can close session (either exported to sheets or downloaded)
+  const canCloseSession = importMeta?.sheetsExported || false;
+
+  // Computed: Is imported from Google Sheets
+  const isFromSheets = importMeta?.source === 'sheets';
+
   // Load active session on mount
   useEffect(() => {
     loadSession();
   }, []);
 
-  // Update URL when tab changes
   const handleTabChange = (tab: 'lifecycle' | 'payout') => {
     setActiveTab(tab);
     setSearchParams({ tab });
@@ -82,8 +86,17 @@ const SessionCommandCenter: React.FC = () => {
     const session = await sessionService.getDailySession();
     setCurrentSession(session);
     
-    // Load logsheet sessions for validation check
     if (session) {
+      // Load import metadata from session
+      const meta = await sessionService.getSessionImportMeta();
+      setImportMeta(meta);
+      
+      // If we have a dateTab from the stored meta, use it
+      if (meta?.dateTab) {
+        setDateTab(meta.dateTab);
+      }
+      
+      // Load logsheet sessions for validation check
       const sessions = await sessionService.getLogsheetSessions();
       setLogsheetSessions(sessions);
     }
@@ -117,6 +130,8 @@ const SessionCommandCenter: React.FC = () => {
 
     try {
       const data = await parseDailySessionXLSX(file);
+      // Add file import metadata
+      (data as any)._importMeta = { source: 'file', sheetsExported: false } as ImportMeta;
       setPreviewData(data);
     } catch (err) {
       console.error(err);
@@ -175,6 +190,11 @@ const SessionCommandCenter: React.FC = () => {
   };
 
   const handleExportToSheets = async () => {
+    if (!isFromSheets || !importMeta?.dateTab) {
+      setError('Google Sheets export is only available for sessions imported from Google Sheets.');
+      return;
+    }
+
     // Safety check: Warn if payouts aren't validated or no bonuses assigned
     if (!payoutStatus.hasValidatedPayouts || !payoutStatus.hasBonuses) {
       const warnings: string[] = [];
@@ -207,10 +227,14 @@ const SessionCommandCenter: React.FC = () => {
     setSheetsExportResult(null);
 
     try {
-      // Pass the dateTab if we have it from import, otherwise let it auto-generate
-      const result = await exportToGoogleSheets(dateTab || undefined);
+      // Use the dateTab from importMeta (same one used during import)
+      const result = await exportToGoogleSheets(importMeta.dateTab);
       setSheetsExportResult(result);
-      setHasDownloaded(true); // Allow closing session after sheets export too
+      
+      // Update import meta to mark as exported
+      const updatedMeta = { ...importMeta, sheetsExported: true };
+      await sessionService.updateSessionImportMeta(updatedMeta);
+      setImportMeta(updatedMeta);
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : 'Failed to export to Google Sheets.');
@@ -225,11 +249,13 @@ const SessionCommandCenter: React.FC = () => {
     if (window.confirm('This will overwrite/start the session in the cloud. Continue?')) {
       setLoading(true);
       try {
-        await sessionService.uploadDailySession(previewData, emailEnabled);
+        // Extract import meta from preview data
+        const meta = (previewData as any)._importMeta as ImportMeta || { source: 'file', sheetsExported: false };
+        
+        await sessionService.uploadDailySession(previewData, emailEnabled, meta);
         await loadSession(); // Reload from DB
         setPreviewData(null);
         setFeedFile(null);
-        // Keep dateTab for export later
         alert('Session Started Successfully!');
       } catch (err) {
         console.error(err);
@@ -271,7 +297,12 @@ const SessionCommandCenter: React.FC = () => {
     setLoading(true);
     try {
         await generateSessionExport();
-        setHasDownloaded(true);
+        // For file-based sessions, downloading enables close
+        if (!isFromSheets && importMeta) {
+          const updatedMeta = { ...importMeta, sheetsExported: true }; // Reusing flag for "can close"
+          await sessionService.updateSessionImportMeta(updatedMeta);
+          setImportMeta(updatedMeta);
+        }
     } catch (err) {
         alert("Export failed: " + err);
     } finally {
@@ -286,7 +317,7 @@ const SessionCommandCenter: React.FC = () => {
       try {
         await sessionService.adminResetDailySession(currentSession.date);
         setCurrentSession(null);
-        setHasDownloaded(false);
+        setImportMeta(null);
         setSheetsExportResult(null);
         setDateTab('');
       } catch (err) {
@@ -332,6 +363,11 @@ const SessionCommandCenter: React.FC = () => {
             <span className="text-sm text-gray-400">
               {currentSession ? `Active: ${currentSession.date}` : "No Active Session"}
             </span>
+            {importMeta?.source === 'sheets' && importMeta.dateTab && (
+              <span className="text-xs bg-green-900/30 text-green-400 px-2 py-0.5 rounded border border-green-700/50">
+                {importMeta.dateTab}
+              </span>
+            )}
           </div>
           
           <div className="bg-gray-800 rounded-lg p-1 flex border border-gray-700">
@@ -569,30 +605,83 @@ const SessionCommandCenter: React.FC = () => {
             {/* 3. EXPORT & CLOSE (Only Active Session) */}
             {currentSession && (
                 <div className="space-y-6 pt-4 border-t border-gray-800">
-                    {/* Primary: Export to Google Sheets */}
+                    {/* Primary Export: Google Sheets (only if imported from sheets) */}
+                    {isFromSheets && (
+                      <div className="bg-gray-800 p-6 rounded-xl border border-gray-700">
+                          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                              <div className="flex-1">
+                                  <h4 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                                    <Sheet size={20} className="text-green-400" />
+                                    Export to Google Sheets
+                                    <span className="text-xs bg-green-900/30 text-green-400 px-2 py-0.5 rounded ml-2">
+                                      → {importMeta?.dateTab}
+                                    </span>
+                                  </h4>
+                                  <p className="text-sm text-gray-400">Push data directly to Masterbookings and Workerbook sheets.</p>
+                                  
+                                  {sheetsExportResult && (
+                                    <div className="bg-green-900/20 border border-green-700/50 rounded p-3 mt-3 text-xs space-y-1">
+                                      <div className="flex items-center gap-2 text-green-400 font-bold mb-1">
+                                        <CheckCircle size={14} />
+                                        <span>Export Complete</span>
+                                      </div>
+                                      <div className="text-green-300">• {sheetsExportResult.bookingsUpdated} bookings updated</div>
+                                      <div className="text-green-300">• {sheetsExportResult.accountsAppended} accounts added</div>
+                                      <div className="text-green-300">• {sheetsExportResult.logsheetsAppended} logsheets added</div>
+                                      <div className="text-green-300">• {sheetsExportResult.statsAppended} payout stats added</div>
+                                    </div>
+                                  )}
+
+                                  {(!payoutStatus.hasValidatedPayouts || !payoutStatus.hasBonuses) && !sheetsExportResult && (
+                                    <div className="bg-yellow-900/20 border border-yellow-700/50 rounded p-3 mt-3 text-xs space-y-1">
+                                      <div className="flex items-center gap-2 text-yellow-400 font-bold mb-1">
+                                        <AlertCircle size={14} />
+                                        <span>Incomplete Payout Data</span>
+                                      </div>
+                                      {!payoutStatus.hasValidatedPayouts && (
+                                        <div className="text-yellow-300">
+                                          • No validated payouts ({payoutStatus.validatedWorkers}/{payoutStatus.totalWorkers} workers complete)
+                                        </div>
+                                      )}
+                                      {!payoutStatus.hasBonuses && (
+                                        <div className="text-yellow-300">
+                                          • No bonuses have been assigned yet
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                              </div>
+                              <button 
+                                  onClick={handleExportToSheets}
+                                  disabled={sheetsLoading}
+                                  className={`py-3 px-6 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors whitespace-nowrap ${
+                                      importMeta?.sheetsExported 
+                                      ? 'bg-green-900/30 text-green-400 border border-green-700' 
+                                      : 'bg-green-600 hover:bg-green-500 text-white'
+                                  }`}
+                              >
+                                  {sheetsLoading ? <Loader className="animate-spin" size={20} /> : <CloudUpload size={20} />}
+                                  {importMeta?.sheetsExported ? 'Export Again' : 'Export to Sheets'}
+                              </button>
+                          </div>
+                      </div>
+                    )}
+
+                    {/* File-based session or secondary download option */}
                     <div className="bg-gray-800 p-6 rounded-xl border border-gray-700">
                         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                             <div className="flex-1">
                                 <h4 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
-                                  <Sheet size={20} className="text-green-400" />
-                                  Export to Google Sheets
+                                  <Download size={20} className="text-cps-blue" />
+                                  {isFromSheets ? 'Download Excel Backup' : 'Download Session Data'}
                                 </h4>
-                                <p className="text-sm text-gray-400">Push data directly to Masterbookings and Workerbook sheets.</p>
+                                <p className="text-sm text-gray-400">
+                                  {isFromSheets 
+                                    ? 'Download a local Excel file as backup.' 
+                                    : 'Export all payouts, transactions, and logsheets as an Excel file.'}
+                                </p>
                                 
-                                {sheetsExportResult && (
-                                  <div className="bg-green-900/20 border border-green-700/50 rounded p-3 mt-3 text-xs space-y-1">
-                                    <div className="flex items-center gap-2 text-green-400 font-bold mb-1">
-                                      <CheckCircle size={14} />
-                                      <span>Export Complete</span>
-                                    </div>
-                                    <div className="text-green-300">• {sheetsExportResult.bookingsUpdated} bookings updated</div>
-                                    <div className="text-green-300">• {sheetsExportResult.accountsAppended} accounts added</div>
-                                    <div className="text-green-300">• {sheetsExportResult.logsheetsAppended} logsheets added</div>
-                                    <div className="text-green-300">• {sheetsExportResult.statsAppended} payout stats added</div>
-                                  </div>
-                                )}
-
-                                {(!payoutStatus.hasValidatedPayouts || !payoutStatus.hasBonuses) && !sheetsExportResult && (
+                                {!isFromSheets && (!payoutStatus.hasValidatedPayouts || !payoutStatus.hasBonuses) && (
                                   <div className="bg-yellow-900/20 border border-yellow-700/50 rounded p-3 mt-3 text-xs space-y-1">
                                     <div className="flex items-center gap-2 text-yellow-400 font-bold mb-1">
                                       <AlertCircle size={14} />
@@ -612,29 +701,17 @@ const SessionCommandCenter: React.FC = () => {
                                 )}
                             </div>
                             <button 
-                                onClick={handleExportToSheets}
-                                disabled={sheetsLoading}
+                                onClick={handleDownload}
+                                disabled={loading}
                                 className={`py-3 px-6 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors whitespace-nowrap ${
-                                    sheetsExportResult 
-                                    ? 'bg-green-900/30 text-green-400 border border-green-700' 
-                                    : 'bg-green-600 hover:bg-green-500 text-white'
+                                  isFromSheets 
+                                    ? 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                                    : 'bg-cps-blue hover:bg-blue-600 text-white'
                                 }`}
                             >
-                                {sheetsLoading ? <Loader className="animate-spin" size={20} /> : <CloudUpload size={20} />}
-                                {sheetsExportResult ? 'Export Again' : 'Export to Sheets'}
+                                {loading ? <Loader className="animate-spin" size={20} /> : <Download size={20} />}
+                                Download Excel
                             </button>
-                        </div>
-
-                        {/* Secondary: Download Excel */}
-                        <div className="mt-4 pt-4 border-t border-gray-700">
-                          <button 
-                              onClick={handleDownload}
-                              disabled={loading}
-                              className="text-gray-400 hover:text-white text-sm flex items-center gap-2 transition-colors"
-                          >
-                              {loading ? <Loader className="animate-spin" size={14} /> : <Download size={14} />}
-                              {hasDownloaded ? 'Download Excel again' : 'Or download as Excel file'}
-                          </button>
                         </div>
                     </div>
 
@@ -646,26 +723,28 @@ const SessionCommandCenter: React.FC = () => {
                     )}
 
                     {/* Close Session */}
-                    <div className={`bg-gray-800 p-6 rounded-xl border border-gray-700 transition-opacity ${!hasDownloaded ? 'opacity-50' : 'opacity-100'}`}>
+                    <div className={`bg-gray-800 p-6 rounded-xl border border-gray-700 transition-opacity ${!canCloseSession ? 'opacity-50' : 'opacity-100'}`}>
                         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                             <div>
                                 <h4 className="text-lg font-bold text-white mb-1">Close Session</h4>
                                 <p className="text-sm text-gray-400">
-                                    {hasDownloaded 
+                                    {canCloseSession 
                                         ? "Session data is secured. You may now close the session." 
-                                        : "Requires data export before closing to prevent data loss."}
+                                        : isFromSheets 
+                                          ? "Export to Google Sheets before closing to prevent data loss."
+                                          : "Download session data before closing to prevent data loss."}
                                 </p>
                             </div>
                             <button 
                                 onClick={handleCloseSession}
-                                disabled={!hasDownloaded}
+                                disabled={!canCloseSession}
                                 className={`py-3 px-6 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors whitespace-nowrap ${
-                                    hasDownloaded 
+                                    canCloseSession 
                                     ? 'bg-red-600 hover:bg-red-500 text-white cursor-pointer' 
                                     : 'bg-gray-700 text-gray-500 cursor-not-allowed'
                                 }`}
                             >
-                                {hasDownloaded ? <Unlock size={20} /> : <Lock size={20} />} 
+                                {canCloseSession ? <Unlock size={20} /> : <Lock size={20} />} 
                                 Close & Wipe Session
                             </button>
                         </div>
