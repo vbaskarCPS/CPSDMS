@@ -19,9 +19,9 @@ import {
   Sheet,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
-import { sessionService } from '../../lib/sessionService';
+import { sessionService, ImportMeta } from '../../lib/sessionService';
 import { generateSessionExport, exportToGoogleSheets } from '../../lib/exportService';
-import { googleSheetsService, ImportMeta } from '../../lib/googleSheetsService';
+import { googleSheetsService } from '../../lib/googleSheetsService';
 import { getDateTabError } from '../../lib/googleSheetsConfig';
 import { DailySessionData, SortOption, LogsheetSession } from '../../types';
 import PayoutToday from '../Management/PayoutToday';
@@ -297,9 +297,9 @@ const SessionCommandCenter: React.FC = () => {
     setLoading(true);
     try {
         await generateSessionExport();
-        // For file-based sessions, downloading enables close
-        if (!isFromSheets && importMeta) {
-          const updatedMeta = { ...importMeta, sheetsExported: true }; // Reusing flag for "can close"
+        // Downloading always enables close (regardless of import source)
+        if (importMeta) {
+          const updatedMeta = { ...importMeta, sheetsExported: true };
           await sessionService.updateSessionImportMeta(updatedMeta);
           setImportMeta(updatedMeta);
         }
