@@ -1,11 +1,12 @@
 // src/pages/Logsheet/NewJob.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader } from 'lucide-react';
+import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { Worker, SessionTransaction } from '../../types';
 import { sessionService } from '../../lib/sessionService'; 
 import CreditCardModal from '../../components/CreditCardModal';
+import AddContractModal from '../../components/AddContractModal';
 import { 
   formatPhoneNumber, 
   normalizeEmail,
@@ -24,6 +25,19 @@ function generateUUID() {
   });
 }
 
+// --- HELPER: Capitalize first letter after spaces and hyphens ---
+function capitalizeWords(value: string): string {
+  return value
+    .split(' ')
+    .map(word => 
+      word
+        .split('-')
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join('-')
+    )
+    .join(' ');
+}
+
 const NewJob: React.FC = () => {
   const navigate = useNavigate();
 
@@ -38,8 +52,8 @@ const NewJob: React.FC = () => {
   const [amount, setAmount] = useState(''); 
   const [propertyType, setPropertyType] = useState('FP'); 
   
-  // Payment State
-  const [paymentMethod, setPaymentMethod] = useState('Cash');
+  // Payment State - Default to empty string to force selection
+  const [paymentMethod, setPaymentMethod] = useState('');
   const [etransferEmail, setEtransferEmail] = useState('');
   const [chequeNumber, setChequeNumber] = useState('');
   
@@ -47,6 +61,9 @@ const NewJob: React.FC = () => {
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
   const [ccData, setCcData] = useState<any>(null);
+
+  // Upgrade Modal
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [worker, setWorker] = useState<Worker | null>(null);
@@ -58,9 +75,19 @@ const NewJob: React.FC = () => {
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [etransferEmailError, setEtransferEmailError] = useState<string | null>(null);
+  const [paymentMethodError, setPaymentMethodError] = useState<string | null>(null);
 
   // Saving state to prevent double-click
   const [saving, setSaving] = useState(false);
+
+  // --- HANDLERS FOR NAME FIELDS ---
+  const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFirstName(capitalizeWords(e.target.value));
+  };
+
+  const handleLastNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setLastName(capitalizeWords(e.target.value));
+  };
 
   // --- HANDLERS FOR PHONE & EMAIL ---
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -87,6 +114,20 @@ const NewJob: React.FC = () => {
     if (etransferEmail) setEtransferEmail(normalizeEmail(etransferEmail));
   };
 
+  // --- HANDLER FOR PAYMENT METHOD ---
+  const handlePaymentMethodChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value;
+    setPaymentMethod(value);
+    setPaymentMethodError(null);
+    if (value === 'Credit Card') setShowCreditModal(true);
+  };
+
+  // Determine if upgrade button should be enabled
+  const canUpgrade = firstName.trim() !== '' && 
+                     lastName.trim() !== '' && 
+                     houseNumber.trim() !== '' && 
+                     streetName.trim() !== '';
+
   useEffect(() => {
     const init = async () => {
       const currentWorker = getStorageItem<Worker | null>('current_user', null);
@@ -99,12 +140,10 @@ const NewJob: React.FC = () => {
               let myRoutes: string[] = [];
 
               if (dailySession && dailySession.routes) {
-                  // Simply check if worker is in assignedWorkerIds array
                   myRoutes = dailySession.routes
                       .filter(r => r.assignedWorkerIds && r.assignedWorkerIds.includes(currentWorker.contractorId))
                       .map(r => r.routeCode);
                   
-                  // Sort alphabetically for consistent display
                   myRoutes.sort((a, b) => a.localeCompare(b));
               }
 
@@ -150,11 +189,6 @@ const NewJob: React.FC = () => {
       const tax = current * 0.05; 
       setAmount((Math.round((current + tax) * 100) / 100).toFixed(2)); 
   };
-  
-  const handlePaymentMethodChange = (method: string) => { 
-      setPaymentMethod(method); 
-      if (method === 'Credit Card') setShowCreditModal(true); 
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -169,11 +203,13 @@ const NewJob: React.FC = () => {
     const pError = getPhoneValidationError(phone);
     const eError = getEmailValidationError(email);
     const etError = paymentMethod === 'E-Transfer' ? getEmailValidationError(etransferEmail) : null;
+    const pmError = !paymentMethod ? 'Please select a payment method' : null;
 
-    if (pError || eError || etError) {
+    if (pError || eError || etError || pmError) {
       setPhoneError(pError);
       setEmailError(eError);
       setEtransferEmailError(etError);
+      setPaymentMethodError(pmError);
       setError('Please fix validation errors before saving.');
       return;
     }
@@ -241,6 +277,18 @@ const NewJob: React.FC = () => {
     }
   };
 
+  // Build the client data for direct upgrade
+  const getUpgradeClientData = () => ({
+    firstName,
+    lastName,
+    houseNumber,
+    streetName,
+    phone,
+    email,
+    routeCode,
+    propertyType
+  });
+
   if (assignedRoutes.length === 0) {
     return null;
   }
@@ -268,8 +316,8 @@ const NewJob: React.FC = () => {
                     </select>
                 </div>
                 <div className="md:col-span-2 grid grid-cols-2 gap-4">
-                    <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">First Name *</label><input value={firstName} onChange={(e) => setFirstName(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" required /></div>
-                    <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Last Name *</label><input value={lastName} onChange={(e) => setLastName(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" required /></div>
+                    <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">First Name *</label><input value={firstName} onChange={handleFirstNameChange} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" required /></div>
+                    <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Last Name *</label><input value={lastName} onChange={handleLastNameChange} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" required /></div>
                 </div>
                 <div className="md:col-span-3 grid grid-cols-4 gap-4">
                     <div className="col-span-1"><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">House # *</label><input value={houseNumber} onChange={(e) => setHouseNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" required /></div>
@@ -354,12 +402,35 @@ const NewJob: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Payment Method</label>
-                      <select value={paymentMethod} onChange={(e) => handlePaymentMethodChange(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white">
+                      <select 
+                        value={paymentMethod} 
+                        onChange={handlePaymentMethodChange} 
+                        className={`w-full bg-gray-800 border rounded p-2 text-white ${
+                          paymentMethodError ? 'border-red-500' : 'border-gray-700'
+                        }`}
+                      >
+                          <option value="">-- Select Payment --</option>
                           <option value="Cash">Cash</option>
                           <option value="Cheque">Cheque</option>
                           <option value="E-Transfer">E-Transfer</option>
                           <option value="Credit Card">Credit Card</option>
                       </select>
+                      {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
+                      
+                      {/* DIRECT UPGRADE BUTTON */}
+                      <button
+                        type="button"
+                        onClick={() => setShowUpgradeModal(true)}
+                        disabled={!canUpgrade}
+                        className={`w-full mt-3 py-2 px-4 rounded-md font-bold text-sm flex items-center justify-center gap-2 transition-colors ${
+                          canUpgrade 
+                            ? 'bg-purple-600 hover:bg-purple-500 text-white border border-purple-500' 
+                            : 'bg-gray-700 text-gray-500 border border-gray-600 cursor-not-allowed'
+                        }`}
+                      >
+                        <TrendingUp size={16} />
+                        Upgrade Instead
+                      </button>
                   </div>
                   {paymentMethod === 'E-Transfer' && (
                       <div>
@@ -428,6 +499,15 @@ const NewJob: React.FC = () => {
                   });
               }} 
           />
+      )}
+
+      {/* DIRECT UPGRADE MODAL */}
+      {showUpgradeModal && (
+        <AddContractModal
+          onClose={() => setShowUpgradeModal(false)}
+          directUpgradeClient={getUpgradeClientData()}
+          onSuccess={() => navigate('/logsheet')}
+        />
       )}
     </div>
   );

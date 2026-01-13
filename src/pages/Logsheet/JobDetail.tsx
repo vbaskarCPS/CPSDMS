@@ -3,12 +3,13 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Phone, Mail, X, CheckCircle2, Ban, Lock,
-  Loader, CheckCircle, FileText
+  Loader, CheckCircle, FileText, TrendingUp
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
 import { getStorageItem } from '../../lib/localStorage';
 import { Worker, MasterBooking, SessionTransaction } from '../../types';
 import CreditCardModal from '../../components/CreditCardModal';
+import AddContractModal from '../../components/AddContractModal';
 import { 
   formatPhoneNumber, 
   normalizeEmail,
@@ -27,13 +28,26 @@ function generateUUID() {
   });
 }
 
+// --- HELPER: Capitalize first letter after spaces and hyphens ---
+function capitalizeWords(value: string): string {
+  return value
+    .split(' ')
+    .map(word => 
+      word
+        .split('-')
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join('-')
+    )
+    .join(' ');
+}
+
 const JobDetail: React.FC = () => {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
 
   // --- STATE ---
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false); // NEW: Separate saving state
+  const [saving, setSaving] = useState(false);
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [worker, setWorker] = useState<Worker | null>(null);
   const [originalJob, setOriginalJob] = useState<MasterBooking | null>(null);
@@ -51,8 +65,8 @@ const JobDetail: React.FC = () => {
   const [propertyType, setPropertyType] = useState('FP');
   const [routeNumber, setRouteNumber] = useState('');
 
-  // Payment
-  const [paymentMethod, setPaymentMethod] = useState('Billed');
+  // Payment - Default to empty string to force selection
+  const [paymentMethod, setPaymentMethod] = useState('');
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [etransferEmail, setEtransferEmail] = useState('');
   const [chequeNumber, setChequeNumber] = useState('');
@@ -62,11 +76,22 @@ const JobDetail: React.FC = () => {
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
   // Validation Errors
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [etransferEmailError, setEtransferEmailError] = useState<string | null>(null);
+  const [paymentMethodError, setPaymentMethodError] = useState<string | null>(null);
+
+  // --- HANDLERS FOR NAME FIELDS ---
+  const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFirstName(capitalizeWords(e.target.value));
+  };
+
+  const handleLastNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setLastName(capitalizeWords(e.target.value));
+  };
 
   // --- HANDLERS FOR PHONE & EMAIL ---
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -93,6 +118,14 @@ const JobDetail: React.FC = () => {
     if (etransferEmail) setEtransferEmail(normalizeEmail(etransferEmail));
   };
 
+  // --- HANDLER FOR PAYMENT METHOD ---
+  const handlePaymentMethodChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value;
+    setPaymentMethod(value);
+    setPaymentMethodError(null);
+    if (value === 'Credit Card') setShowCreditModal(true);
+  };
+
   // --- INITIALIZATION ---
   useEffect(() => {
     const init = async () => {
@@ -111,7 +144,6 @@ const JobDetail: React.FC = () => {
 
         if (foundJob) {
           setOriginalJob(foundJob);
-          // Check if status is completed OR if the legacy 'Completed' flag is set
           setIsReadOnly(foundJob.Status === 'completed' || foundJob.Completed === 'x');
           loadFormData(foundJob);
         } else {
@@ -154,9 +186,14 @@ const JobDetail: React.FC = () => {
     setRouteNumber(job['Route Number'] || '');
     setOfficeNotes(job['Log Sheet Notes'] || '');
     setPrice(job.Price || '0.00');
-    setPaymentMethod(
-      job['Payment Method'] || (job.Prepaid === 'x' ? 'Prepaid' : 'Billed')
-    );
+    
+    // Set payment method: Prepaid if prepaid, otherwise blank to force selection
+    if (job.Prepaid === 'x') {
+      setPaymentMethod('Prepaid');
+    } else {
+      setPaymentMethod('');
+    }
+    
     setPropertyType(job['FO/BO/FP'] || 'FP');
 
     // Restore payment details if available
@@ -166,6 +203,20 @@ const JobDetail: React.FC = () => {
   };
 
   const isPrepaid = originalJob?.Prepaid === 'x';
+  
+  // Check if job is already an upgrade from the office (price starts with SP, RJ, or GF)
+  const isAlreadyUpgrade = (() => {
+    const priceStr = String(originalJob?.Price || '').toUpperCase();
+    return priceStr.startsWith('SP') || priceStr.startsWith('RJ') || priceStr.startsWith('GF');
+  })();
+
+  // Determine if upgrade button should be enabled
+  const canUpgrade = !isReadOnly && 
+                     !isAlreadyUpgrade && 
+                     firstName.trim() !== '' && 
+                     lastName.trim() !== '' && 
+                     houseNumber.trim() !== '' && 
+                     streetName.trim() !== '';
 
   const handleTaxClick = () => {
     if (isPrepaid || isReadOnly) return;
@@ -178,22 +229,22 @@ const JobDetail: React.FC = () => {
   const handleSave = async () => {
     if (!worker || !originalJob) return;
     
-    // NEW: Prevent double-click
     if (saving) return;
 
     // --- VALIDATION ---
     const pError = getPhoneValidationError(phone);
     const eError = getEmailValidationError(email);
     const etError = paymentMethod === 'E-Transfer' ? getEmailValidationError(etransferEmail) : null;
+    const pmError = !isPrepaid && !paymentMethod ? 'Please select a payment method' : null;
 
-    if (pError || eError || etError) {
+    if (pError || eError || etError || pmError) {
       setPhoneError(pError);
       setEmailError(eError);
       setEtransferEmailError(etError);
+      setPaymentMethodError(pmError);
       return;
     }
 
-    // NEW: Set saving state
     setSaving(true);
 
     try {
@@ -282,6 +333,26 @@ const JobDetail: React.FC = () => {
     }
   };
 
+  // Build the MasterBooking object for direct upgrade
+  const getUpgradeBooking = (): MasterBooking => {
+    return {
+      ...originalJob,
+      'Booking ID': originalJob?.['Booking ID'] || '',
+      'First Name': firstName,
+      'Last Name': lastName,
+      'Full Address': `${houseNumber} ${streetName}`.trim(),
+      'House Number': houseNumber,
+      'Street Name': streetName,
+      'Home Phone': phone,
+      'Cell Phone': phone,
+      'Email Address': email,
+      'Route Number': routeNumber,
+      'FO/BO/FP': propertyType,
+      'Price': price,
+      'Prepaid': originalJob?.Prepaid,
+    } as MasterBooking;
+  };
+
   if (loading) return <div className="h-screen bg-black flex items-center justify-center"><Loader className="text-cps-blue animate-spin" /></div>;
 
   return (
@@ -308,8 +379,8 @@ const JobDetail: React.FC = () => {
                       <input value={routeNumber} disabled className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white font-mono opacity-50 cursor-not-allowed"/>
                   </div>
                   <div className="md:col-span-2 grid grid-cols-2 gap-4">
-                      <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">First Name</label><input value={firstName} onChange={e => setFirstName(e.target.value)} disabled={isReadOnly} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" /></div>
-                      <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Last Name</label><input value={lastName} onChange={e => setLastName(e.target.value)} disabled={isReadOnly} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" /></div>
+                      <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">First Name</label><input value={firstName} onChange={handleFirstNameChange} disabled={isReadOnly} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" /></div>
+                      <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Last Name</label><input value={lastName} onChange={handleLastNameChange} disabled={isReadOnly} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" /></div>
                   </div>
                   <div className="md:col-span-3 grid grid-cols-4 gap-4">
                       <div className="col-span-1"><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">House #</label><input value={houseNumber} onChange={e => setHouseNumber(e.target.value)} disabled={isReadOnly} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" /></div>
@@ -392,9 +463,44 @@ const JobDetail: React.FC = () => {
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                   <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Payment Method</label>
-                      <select value={paymentMethod} onChange={e => { setPaymentMethod(e.target.value); if(e.target.value==='Credit Card') setShowCreditModal(true); }} className={`w-full bg-gray-800 border border-gray-700 rounded p-2 text-white outline-none ${(isPrepaid || isReadOnly) ? 'cursor-not-allowed opacity-50' : ''}`} disabled={isPrepaid || isReadOnly}>
-                          {isPrepaid ? <option value="Prepaid">Prepaid</option> : <><option value="Billed">Billed</option><option value="Cash">Cash</option><option value="Cheque">Cheque</option><option value="E-Transfer">E-Transfer</option><option value="Credit Card">Credit Card</option></>}
+                      <select 
+                        value={paymentMethod} 
+                        onChange={handlePaymentMethodChange} 
+                        className={`w-full bg-gray-800 border rounded p-2 text-white outline-none ${
+                          (isPrepaid || isReadOnly) ? 'cursor-not-allowed opacity-50' : ''
+                        } ${paymentMethodError ? 'border-red-500' : 'border-gray-700'}`} 
+                        disabled={isPrepaid || isReadOnly}
+                      >
+                          {isPrepaid ? (
+                            <option value="Prepaid">Prepaid</option>
+                          ) : (
+                            <>
+                              <option value="">-- Select Payment --</option>
+                              <option value="Billed">Billed</option>
+                              <option value="Cash">Cash</option>
+                              <option value="Cheque">Cheque</option>
+                              <option value="E-Transfer">E-Transfer</option>
+                              <option value="Credit Card">Credit Card</option>
+                            </>
+                          )}
                       </select>
+                      {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
+                      
+                      {/* DIRECT UPGRADE BUTTON */}
+                      {!isReadOnly && (
+                        <button
+                          onClick={() => setShowUpgradeModal(true)}
+                          disabled={!canUpgrade}
+                          className={`w-full mt-3 py-2 px-4 rounded-md font-bold text-sm flex items-center justify-center gap-2 transition-colors ${
+                            canUpgrade 
+                              ? 'bg-purple-600 hover:bg-purple-500 text-white border border-purple-500' 
+                              : 'bg-gray-700 text-gray-500 border border-gray-600 cursor-not-allowed'
+                          }`}
+                        >
+                          <TrendingUp size={16} />
+                          {isAlreadyUpgrade ? 'Already Upgraded' : 'Upgrade Instead'}
+                        </button>
+                      )}
                   </div>
                   
                   {paymentMethod === 'Billed' && !isReadOnly && (
@@ -487,6 +593,15 @@ const JobDetail: React.FC = () => {
       )}
 
       {showCreditModal && <CreditCardModal amount={String(price)} clientName={`${firstName} ${lastName}`} onClose={() => setShowCreditModal(false)} onProcess={(details) => { setIsCreditPaid(true); setShowCreditModal(false); setCcData(details); }} />}
+
+      {/* DIRECT UPGRADE MODAL */}
+      {showUpgradeModal && (
+        <AddContractModal
+          onClose={() => setShowUpgradeModal(false)}
+          directUpgradeBooking={getUpgradeBooking()}
+          onSuccess={() => navigate('/logsheet')}
+        />
+      )}
     </div>
   );
 };

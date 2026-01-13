@@ -23,6 +23,19 @@ function generateUUID() {
   });
 }
 
+// --- HELPER: Capitalize first letter after spaces and hyphens ---
+function capitalizeWords(value: string): string {
+  return value
+    .split(' ')
+    .map(word => 
+      word
+        .split('-')
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join('-')
+    )
+    .join(' ');
+}
+
 const CONTRACT_RECIPES = [
   { id: 'star_plan_pro', name: 'Star Plan Pro', type: 'Upgrade' },
   { id: 'lawn_rejuv', name: 'Lawn Rejuvenation', type: 'Upgrade' },
@@ -36,13 +49,37 @@ const CONTRACT_RECIPES = [
   },
 ];
 
+// Direct upgrade client data (for NewJob - no existing booking)
+interface DirectUpgradeClient {
+  firstName: string;
+  lastName: string;
+  houseNumber: string;
+  streetName: string;
+  phone: string;
+  email: string;
+  routeCode: string;
+  propertyType: string;
+}
+
 interface AddContractModalProps {
   onClose: () => void;
+  // Optional props for direct upgrade flow
+  directUpgradeBooking?: MasterBooking; // From JobDetail - has Booking ID
+  directUpgradeClient?: DirectUpgradeClient; // From NewJob - no existing booking
+  onSuccess?: () => void; // Callback for successful completion
 }
 
 type Step = 'SELECT_CONTRACT' | 'SELECT_CLIENT' | 'ENTER_DETAILS';
 
-const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
+const AddContractModal: React.FC<AddContractModalProps> = ({ 
+  onClose, 
+  directUpgradeBooking, 
+  directUpgradeClient,
+  onSuccess 
+}) => {
+  // Determine if we're in direct upgrade mode
+  const isDirectUpgrade = !!(directUpgradeBooking || directUpgradeClient);
+  
   const [step, setStep] = useState<Step>('SELECT_CONTRACT');
   const [availableRecipes] = useState(CONTRACT_RECIPES);
   const [selectedRecipe, setSelectedRecipe] = useState<typeof CONTRACT_RECIPES[0] | null>(null);
@@ -63,7 +100,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
     hasSprinkler: false
   });
   
-  const [paymentInfo, setPaymentInfo] = useState({ amount: '', method: 'Cash' });
+  // Payment - Default to empty string to force selection
+  const [paymentInfo, setPaymentInfo] = useState({ amount: '', method: '' });
   const [extraPaymentInfo, setExtraPaymentInfo] = useState(''); 
   const [answers, setAnswers] = useState<Record<string, string>>({}); 
   const [worker, setWorker] = useState<Worker | null>(null);
@@ -78,7 +116,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   // Saving State (prevents double-click)
   const [saving, setSaving] = useState(false);
 
-  // Territory Helpers
+  // Territory Helpers (for new clients without selectedBooking)
   const [streetName, setStreetName] = useState('');
   const [houseNumber, setHouseNumber] = useState('');
 
@@ -86,6 +124,16 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [etransferEmailError, setEtransferEmailError] = useState<string | null>(null);
+  const [paymentMethodError, setPaymentMethodError] = useState<string | null>(null);
+
+  // --- HANDLERS FOR NAME FIELDS ---
+  const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData({...formData, firstName: capitalizeWords(e.target.value)});
+  };
+
+  const handleLastNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData({...formData, lastName: capitalizeWords(e.target.value)});
+  };
 
   // --- HANDLERS FOR PHONE & EMAIL ---
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -116,13 +164,27 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
     }
   };
 
+  // --- HANDLER FOR PAYMENT METHOD ---
+  const handlePaymentMethodChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value;
+    setPaymentInfo({...paymentInfo, method: value});
+    setPaymentMethodError(null);
+    if (value === 'Credit Card') setShowCreditModal(true);
+  };
+
+  // --- TAX CALCULATOR ---
+  const handleTaxClick = () => {
+    const current = parseFloat(paymentInfo.amount) || 0;
+    const tax = current * 0.05;
+    setPaymentInfo({...paymentInfo, amount: (Math.round((current + tax) * 100) / 100).toFixed(2)});
+  };
+
   useEffect(() => {
     const init = async () => {
       const w = getStorageItem<Worker | null>('current_user', null);
       if (!w) { setError("User not found."); return; }
       setWorker(w);
 
-      // Simply check if worker is in assignedWorkerIds array
       try {
         const dailySession = await sessionService.getDailySession();
         
@@ -131,7 +193,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
             .filter(r => r.assignedWorkerIds && r.assignedWorkerIds.includes(w.contractorId))
             .map(r => r.routeCode);
           
-          // Sort alphabetically for consistent display
           myRoutes.sort((a, b) => a.localeCompare(b));
           
           setAssignedRoutes(myRoutes);
@@ -140,39 +201,46 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
         console.warn("Could not load routes", err);
       }
 
-      const activeSession = await sessionService.getActiveLogsheetSession(w.contractorId);
-      if (activeSession) {
-          const clients = activeSession.financialStore.map(tx => ({
-              'Booking ID': tx.jobId,
-              'First Name': tx.customerName.split(' ')[0],
-              'Last Name': tx.customerName.split(' ').slice(1).join(' '),
-              'Full Address': tx.address,
-              'Route Number': tx.routeCode,
-              'Price': tx.displayPrice || tx.price.toString(),
-              'Home Phone': (tx as any).customerPhone || '',
-              'Email Address': (tx as any).customerEmail || '',
-              'Prepaid': (tx as any).isPrepaid ? 'x' : undefined,
-              'Status': 'completed',
-              'FO/BO/FP': (tx as any).serviceType,
-              // Check if they already have a contract
-              isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ') || tx.displayPrice.startsWith('GF'))),
-              // Pre-fill Gate info from description
-              'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined
-          } as MasterBooking));
-          setAvailableClients(clients);
+      // Only load available clients if NOT in direct upgrade mode
+      if (!isDirectUpgrade) {
+        const activeSession = await sessionService.getActiveLogsheetSession(w.contractorId);
+        if (activeSession) {
+            const clients = activeSession.financialStore.map(tx => ({
+                'Booking ID': tx.jobId,
+                'First Name': tx.customerName.split(' ')[0],
+                'Last Name': tx.customerName.split(' ').slice(1).join(' '),
+                'Full Address': tx.address,
+                'Route Number': tx.routeCode,
+                'Price': tx.displayPrice || tx.price.toString(),
+                'Home Phone': (tx as any).customerPhone || '',
+                'Email Address': (tx as any).customerEmail || '',
+                'Prepaid': (tx as any).isPrepaid ? 'x' : undefined,
+                'Status': 'completed',
+                'FO/BO/FP': (tx as any).serviceType,
+                isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ') || tx.displayPrice.startsWith('GF'))),
+                'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined
+            } as MasterBooking));
+            setAvailableClients(clients);
+        }
       }
     };
     init();
-  }, []);
+  }, [isDirectUpgrade]);
+
+  // Filter recipes based on mode (direct upgrade only shows Upgrade types)
+  const displayedRecipes = useMemo(() => {
+    if (isDirectUpgrade) {
+      return availableRecipes.filter(r => r.type === 'Upgrade');
+    }
+    return availableRecipes;
+  }, [availableRecipes, isDirectUpgrade]);
 
   // Filter Logic: Dynamically filter based on Recipe Type
   const filteredClients = useMemo(() => {
       if (!selectedRecipe) return [];
       if (selectedRecipe.type === 'Upgrade') {
-          // UPGRADES: Only existing customers who do NOT have a contract yet
           return availableClients.filter(c => !c.isContract);
       } else {
-          // ADD-ONS: Any existing customer (Contract or not)
           return availableClients;
       }
   }, [availableClients, selectedRecipe]);
@@ -182,21 +250,62 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
     const initialAnswers: Record<string, string> = {};
     if (recipe.questions) recipe.questions.forEach(q => initialAnswers[q.id] = q.options[0]);
     setAnswers(initialAnswers);
-    setPaymentInfo({ amount: '', method: 'Cash' });
+    setPaymentInfo({ amount: '', method: '' });
     setExtraPaymentInfo('');
     setIsCreditPaid(false);
     setCcData(null);
-    setFormData({ 
-        firstName: '', lastName: '', address: '', phone: '', email: '', 
-        routeNumber: '', notes: '', propertyType: 'FP', 
-        hasLockedGate: false, hasSprinkler: false 
-    });
-    setSelectedBooking(null);
+    
     // Clear validation errors
     setPhoneError(null);
     setEmailError(null);
     setEtransferEmailError(null);
-    setStep('SELECT_CLIENT');
+    setPaymentMethodError(null);
+
+    // DIRECT UPGRADE MODE: Pre-fill data and skip client selection
+    if (directUpgradeBooking) {
+      // From JobDetail - has existing booking
+      setSelectedBooking(directUpgradeBooking);
+      setFormData({
+        firstName: directUpgradeBooking['First Name'] || '',
+        lastName: directUpgradeBooking['Last Name'] || '',
+        address: directUpgradeBooking['Full Address'] || '',
+        phone: formatPhoneNumber(directUpgradeBooking['Home Phone'] || directUpgradeBooking['Cell Phone'] || ''),
+        email: normalizeEmail(directUpgradeBooking['Email Address'] || ''),
+        routeNumber: directUpgradeBooking['Route Number'] || '',
+        notes: '',
+        propertyType: directUpgradeBooking['FO/BO/FP'] || 'FP',
+        hasLockedGate: directUpgradeBooking['Gate'] === 'x',
+        hasSprinkler: false
+      });
+      setStep('ENTER_DETAILS');
+    } else if (directUpgradeClient) {
+      // From NewJob - no existing booking, just client data
+      setSelectedBooking(null);
+      setFormData({
+        firstName: directUpgradeClient.firstName,
+        lastName: directUpgradeClient.lastName,
+        address: `${directUpgradeClient.houseNumber} ${directUpgradeClient.streetName}`.trim(),
+        phone: directUpgradeClient.phone,
+        email: directUpgradeClient.email,
+        routeNumber: directUpgradeClient.routeCode,
+        notes: '',
+        propertyType: directUpgradeClient.propertyType || 'FP',
+        hasLockedGate: false,
+        hasSprinkler: false
+      });
+      setHouseNumber(directUpgradeClient.houseNumber);
+      setStreetName(directUpgradeClient.streetName);
+      setStep('ENTER_DETAILS');
+    } else {
+      // Normal flow - go to client selection
+      setFormData({ 
+          firstName: '', lastName: '', address: '', phone: '', email: '', 
+          routeNumber: '', notes: '', propertyType: 'FP', 
+          hasLockedGate: false, hasSprinkler: false 
+      });
+      setSelectedBooking(null);
+      setStep('SELECT_CLIENT');
+    }
   };
 
   const handleClientSelect = (booking: MasterBooking) => {
@@ -214,10 +323,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       hasSprinkler: false
     });
     setPaymentInfo(prev => ({ ...prev, amount: '' }));
-    // Clear validation errors
     setPhoneError(null);
     setEmailError(null);
     setEtransferEmailError(null);
+    setPaymentMethodError(null);
     setStep('ENTER_DETAILS');
   };
 
@@ -237,16 +346,33 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       hasSprinkler: false 
     });
     setPaymentInfo(prev => ({ ...prev, amount: '' }));
-    // Clear validation errors
     setPhoneError(null);
     setEmailError(null);
     setEtransferEmailError(null);
+    setPaymentMethodError(null);
     setStep('ENTER_DETAILS');
+  };
+
+  // Handle back button - in direct upgrade mode, go back to contract selection (not client selection)
+  const handleBack = () => {
+    if (step === 'ENTER_DETAILS') {
+      if (isDirectUpgrade) {
+        // Direct upgrade: go back to contract selection
+        setStep('SELECT_CONTRACT');
+        setSelectedRecipe(null);
+      } else {
+        // Normal flow: go back to client selection
+        setStep('SELECT_CLIENT');
+      }
+    } else if (step === 'SELECT_CLIENT') {
+      setStep('SELECT_CONTRACT');
+      setSelectedRecipe(null);
+    }
   };
 
   const handleSubmit = async () => {
     if (!selectedRecipe || !worker) return;
-    if (saving) return; // Prevent double-click
+    if (saving) return;
     
     setError(null);
 
@@ -254,11 +380,13 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
     const pError = getPhoneValidationError(formData.phone);
     const eError = getEmailValidationError(formData.email);
     const etError = paymentInfo.method === 'E-Transfer' ? getEmailValidationError(extraPaymentInfo) : null;
+    const pmError = !paymentInfo.method ? 'Please select a payment method' : null;
 
-    if (pError || eError || etError) {
+    if (pError || eError || etError || pmError) {
       setPhoneError(pError);
       setEmailError(eError);
       setEtransferEmailError(etError);
+      setPaymentMethodError(pmError);
       setError('Please fix validation errors before saving.');
       return;
     }
@@ -273,16 +401,18 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       const isIOS = paymentInfo.method === 'IOS';
       const inputAmount = parseFloat(paymentInfo.amount);
 
-      // --- LOGIC FIX: CALCULATE TRUE TOTAL & BREAKDOWN ---
       let finalTotal = inputAmount;
       let creditAmount = 0;
       let isPrepaidSplit = false; 
 
       const paymentBreakdown: Record<string, number> = {};
 
-      // SCENARIO 1: PREPAID UPGRADE (The "Credit" Logic)
-      if (isUpgrade && selectedBooking && selectedBooking.Prepaid === 'x') {
-          creditAmount = parseFloat(String(selectedBooking.Price).replace(/[^0-9.]/g, '')) || 0;
+      // Check prepaid status - works for both directUpgradeBooking and selectedBooking
+      const bookingForPrepaidCheck = directUpgradeBooking || selectedBooking;
+      const isPrepaid = bookingForPrepaidCheck?.Prepaid === 'x';
+
+      if (isUpgrade && bookingForPrepaidCheck && isPrepaid) {
+          creditAmount = parseFloat(String(bookingForPrepaidCheck.Price).replace(/[^0-9.]/g, '')) || 0;
           finalTotal = creditAmount + inputAmount;
           
           paymentBreakdown['Prepaid'] = creditAmount;
@@ -291,15 +421,13 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           
           isPrepaidSplit = true; 
       } 
-      // SCENARIO 2: NON-PREPAID UPGRADE (The "Replace" Logic)
-      else if (isUpgrade && selectedBooking) {
+      else if (isUpgrade && bookingForPrepaidCheck) {
           finalTotal = inputAmount;
           const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
           paymentBreakdown[currentMethodKey] = inputAmount;
           
-          isPrepaidSplit = true; // All upgrades now follow West Split rules
+          isPrepaidSplit = true;
       }
-      // SCENARIO 3: ADD-ON or NEW CLIENT
       else {
           finalTotal = inputAmount;
           const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
@@ -311,29 +439,37 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
       if (answers['timing']) finalNotes += ` [${answers['timing']}]`; 
       if (formData.hasLockedGate) finalNotes += ' [LG]';
 
-      // Display price prefix logic - use recipe id for precision
       let displayPricePrefix = '';
       if (selectedRecipe.id === 'star_plan_pro') displayPricePrefix = 'SP';
       if (selectedRecipe.id === 'lawn_rejuv') displayPricePrefix = 'RJ';
       if (selectedRecipe.id === 'golf_course') displayPricePrefix = 'GF';
       
       const formattedDisplayPrice = `${displayPricePrefix}${finalTotal.toFixed(2)}`;
-      const finalAddress = selectedBooking ? selectedBooking['Full Address'] : `${houseNumber} ${streetName}`.trim();
-
-      // --- CRITICAL FIX START: ID GENERATION ---
-      // 1. If it's an UPGRADE, we MUST reuse the existing Booking ID to overwrite/upgrade the job.
-      // 2. If it's an ADD-ON (even for an existing client), we MUST generate a NEW ID to create a separate transaction.
       
-      let transactionId: string;
+      // Determine final address
+      let finalAddress: string;
+      if (directUpgradeBooking) {
+        finalAddress = directUpgradeBooking['Full Address'] || '';
+      } else if (directUpgradeClient) {
+        finalAddress = `${houseNumber} ${streetName}`.trim();
+      } else if (selectedBooking) {
+        finalAddress = selectedBooking['Full Address'] || '';
+      } else {
+        finalAddress = `${houseNumber} ${streetName}`.trim();
+      }
 
-      if (isUpgrade && selectedBooking) {
-          // Reuse existing ID to upgrade the row
+      // Determine transaction ID
+      let transactionId: string;
+      if (isUpgrade && directUpgradeBooking) {
+          // Direct upgrade from JobDetail - reuse booking ID
+          transactionId = directUpgradeBooking['Booking ID'];
+      } else if (isUpgrade && selectedBooking) {
+          // Normal upgrade flow - reuse booking ID
           transactionId = selectedBooking['Booking ID'];
       } else {
-          // New ID for Add-Ons or New Clients
+          // New client or add-on - generate new ID
           transactionId = `NEW-${generateUUID()}`;
       }
-      // --- CRITICAL FIX END ---
 
       const tx: SessionTransaction = {
           id: transactionId.startsWith('NEW-') ? generateUUID() : undefined,
@@ -381,6 +517,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
           await sessionService.updateLogsheetSession(session.id, { stats: session.stats });
       }
 
+      // Call onSuccess callback if provided, otherwise just close
+      if (onSuccess) {
+        onSuccess();
+      }
       onClose();
 
     } catch (err) {
@@ -396,11 +536,15 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
         <div className="p-4 border-b border-gray-700 flex justify-between items-center">
           <div className="flex items-center gap-2">
             {step !== 'SELECT_CONTRACT' && (
-              <button onClick={() => setStep(step === 'ENTER_DETAILS' ? 'SELECT_CLIENT' : 'SELECT_CONTRACT')} className="p-1 hover:bg-gray-800 rounded-full transition-colors" disabled={saving}>
+              <button onClick={handleBack} className="p-1 hover:bg-gray-800 rounded-full transition-colors" disabled={saving}>
                 <ArrowLeft className="text-gray-400" />
               </button>
             )}
-            <h2 className="text-xl font-bold text-white">{step === 'SELECT_CONTRACT' ? 'Select Contract' : selectedRecipe?.name}</h2>
+            <h2 className="text-xl font-bold text-white">
+              {step === 'SELECT_CONTRACT' 
+                ? (isDirectUpgrade ? 'Select Upgrade Type' : 'Select Contract') 
+                : selectedRecipe?.name}
+            </h2>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-gray-800 rounded-full" disabled={saving}><X className="text-gray-400" /></button>
         </div>
@@ -410,7 +554,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
         <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
           {step === 'SELECT_CONTRACT' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {availableRecipes.map(recipe => (
+              {displayedRecipes.map(recipe => (
                 <button key={recipe.id} onClick={() => handleRecipeSelect(recipe)} className="bg-gray-800 p-4 rounded-lg border border-gray-700 hover:bg-gray-750 hover:border-cps-blue transition-all text-left group">
                   <h3 className="font-bold text-white group-hover:text-cps-blue mb-1">{recipe.name}</h3>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded ${recipe.type === 'Upgrade' ? 'bg-purple-900/30 text-purple-300' : 'bg-blue-900/30 text-blue-300'}`}>{recipe.type}</span>
@@ -449,15 +593,15 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
             <div className="space-y-6">
               <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
                 <h4 className="text-sm font-medium text-gray-400 mb-2">Client Details</h4>
-                {selectedBooking ? (
+                {(selectedBooking || directUpgradeBooking) ? (
                    <div className="flex justify-between items-start">
                       <div><div className="font-bold text-white text-lg">{formData.firstName} {formData.lastName}</div><div className="text-gray-300">{formData.address}</div></div>
                       <div className="text-right text-sm text-gray-500"><div>{formData.phone}</div><div>{formData.email}</div></div>
                    </div>
                 ) : (
                    <div className="grid grid-cols-2 gap-3">
-                      <input type="text" placeholder="First Name" value={formData.firstName} onChange={e => setFormData({...formData, firstName: e.target.value})} className="input" />
-                      <input type="text" placeholder="Last Name" value={formData.lastName} onChange={e => setFormData({...formData, lastName: e.target.value})} className="input" />
+                      <input type="text" placeholder="First Name" value={formData.firstName} onChange={handleFirstNameChange} className="input" />
+                      <input type="text" placeholder="Last Name" value={formData.lastName} onChange={handleLastNameChange} className="input" />
                       <input type="text" placeholder="#" value={houseNumber} onChange={e => setHouseNumber(e.target.value)} className="input col-span-1" />
                       <input type="text" value={streetName} onChange={e => setStreetName(e.target.value)} className="input w-full col-span-1" placeholder="Street Name"/>
                       <div className="col-span-1">
@@ -491,8 +635,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
                    </div>
                 )}
                 
-                {/* --- Route Code Dropdown (Only for New Clients) --- */}
-                {!selectedBooking && (
+                {!selectedBooking && !directUpgradeBooking && (
                   <div className="mt-4 pt-4 border-t border-gray-700">
                     <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Route Code</label>
                     <select 
@@ -505,7 +648,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
                   </div>
                 )}
                 
-                {/* --- Property Type & Options --- */}
                 <div className="mt-4 pt-4 border-t border-gray-700 grid grid-cols-2 gap-4">
                     <div>
                         <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Property Type</label>
@@ -540,7 +682,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
               <div className="space-y-3">
                  <label className="block text-sm font-medium text-gray-300">Total Price</label>
                  <div className="flex gap-3">
-                    {/* --- FIX: Always show price input, even if IOS --- */}
                     <div className="relative flex-1">
                         <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
                         <input 
@@ -556,14 +697,26 @@ const AddContractModal: React.FC<AddContractModalProps> = ({ onClose }) => {
                         />
                     </div>
                     
-                    <select value={paymentInfo.method} onChange={e => { setPaymentInfo({...paymentInfo, method: e.target.value}); if(e.target.value === 'Credit Card') setShowCreditModal(true); }} className="bg-gray-800 border border-gray-700 rounded-lg px-3 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none">
-                       <option value="Cash">Cash</option>
-                       <option value="Cheque">Cheque</option>
-                       <option value="Credit Card">Credit Card</option>
-                       <option value="E-Transfer">E-Transfer</option>
-                       {selectedRecipe?.id === 'dethatch' && <option value="IOS">Invoice On Site</option>}
-                    </select>
+                    <button type="button" onClick={handleTaxClick} className="px-3 bg-gray-700 text-gray-300 rounded-lg border border-gray-600 hover:bg-gray-600 font-bold text-xs">+ Tax</button>
+                    
+                    <div>
+                      <select 
+                        value={paymentInfo.method} 
+                        onChange={handlePaymentMethodChange} 
+                        className={`bg-gray-800 border rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none h-full ${
+                          paymentMethodError ? 'border-red-500' : 'border-gray-700'
+                        }`}
+                      >
+                         <option value="">-- Select --</option>
+                         <option value="Cash">Cash</option>
+                         <option value="Cheque">Cheque</option>
+                         <option value="Credit Card">Credit Card</option>
+                         <option value="E-Transfer">E-Transfer</option>
+                         {selectedRecipe?.id === 'dethatch' && <option value="IOS">Invoice On Site</option>}
+                      </select>
+                    </div>
                  </div>
+                 {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
                  
                  {paymentInfo.method === 'E-Transfer' && (
                      <div className="relative animate-fade-in">
