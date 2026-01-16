@@ -57,6 +57,19 @@ const NewJob: React.FC = () => {
   const [etransferEmail, setEtransferEmail] = useState('');
   const [chequeNumber, setChequeNumber] = useState('');
   
+  // Split Payment State
+  const [isSplitPayment, setIsSplitPayment] = useState(false);
+  const [splitAmounts, setSplitAmounts] = useState({
+    cash: '',
+    cheque: '',
+    etransfer: '',
+    creditCard: ''
+  });
+  const [splitEtransferEmail, setSplitEtransferEmail] = useState('');
+  const [splitChequeNumber, setSplitChequeNumber] = useState('');
+  const [splitCcPaid, setSplitCcPaid] = useState(false);
+  const [splitCcData, setSplitCcData] = useState<any>(null);
+  
   // Credit Card Data
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
@@ -78,10 +91,32 @@ const NewJob: React.FC = () => {
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [etransferEmailError, setEtransferEmailError] = useState<string | null>(null);
+  const [splitEtransferEmailError, setSplitEtransferEmailError] = useState<string | null>(null);
   const [paymentMethodError, setPaymentMethodError] = useState<string | null>(null);
 
   // Saving state to prevent double-click
   const [saving, setSaving] = useState(false);
+
+  // --- SPLIT PAYMENT HELPERS ---
+  const getSplitTotal = () => {
+    const cash = parseFloat(splitAmounts.cash) || 0;
+    const cheque = parseFloat(splitAmounts.cheque) || 0;
+    const etransfer = parseFloat(splitAmounts.etransfer) || 0;
+    const creditCard = parseFloat(splitAmounts.creditCard) || 0;
+    return Math.round((cash + cheque + etransfer + creditCard) * 100) / 100;
+  };
+
+  const hasSplitCreditCard = () => {
+    return (parseFloat(splitAmounts.creditCard) || 0) > 0;
+  };
+
+  const hasSplitEtransfer = () => {
+    return (parseFloat(splitAmounts.etransfer) || 0) > 0;
+  };
+
+  const hasSplitCheque = () => {
+    return (parseFloat(splitAmounts.cheque) || 0) > 0;
+  };
 
   // --- HANDLERS FOR NAME FIELDS ---
   const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -117,12 +152,33 @@ const NewJob: React.FC = () => {
     if (etransferEmail) setEtransferEmail(normalizeEmail(etransferEmail));
   };
 
+  const handleSplitEtransferEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSplitEtransferEmail(e.target.value);
+    setSplitEtransferEmailError(null);
+  };
+
+  const handleSplitEtransferEmailBlur = () => {
+    if (splitEtransferEmail) setSplitEtransferEmail(normalizeEmail(splitEtransferEmail));
+  };
+
   // --- HANDLER FOR PAYMENT METHOD ---
   const handlePaymentMethodChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
     setPaymentMethod(value);
     setPaymentMethodError(null);
-    if (value === 'Credit Card') setShowCreditModal(true);
+    
+    if (value === 'Split Payment') {
+      setIsSplitPayment(true);
+      // Reset split state
+      setSplitAmounts({ cash: '', cheque: '', etransfer: '', creditCard: '' });
+      setSplitEtransferEmail('');
+      setSplitChequeNumber('');
+      setSplitCcPaid(false);
+      setSplitCcData(null);
+    } else {
+      setIsSplitPayment(false);
+      if (value === 'Credit Card') setShowCreditModal(true);
+    }
   };
 
   // Determine if upgrade button should be enabled
@@ -210,14 +266,49 @@ const NewJob: React.FC = () => {
     // --- VALIDATION ---
     const pError = getPhoneValidationError(phone);
     const eError = getEmailValidationError(email);
-    const etError = paymentMethod === 'E-Transfer' ? getEmailValidationError(etransferEmail) : null;
-    const pmError = !paymentMethod ? 'Please select a payment method' : null;
+    
+    // Split payment validation
+    if (isSplitPayment) {
+      const splitTotal = getSplitTotal();
+      if (splitTotal <= 0) {
+        setError('Please enter at least one payment amount.');
+        return;
+      }
+      
+      // E-Transfer email validation
+      if (hasSplitEtransfer()) {
+        const etError = getEmailValidationError(splitEtransferEmail);
+        if (etError) {
+          setSplitEtransferEmailError(etError);
+          setError('Please fix validation errors before saving.');
+          return;
+        }
+      }
+      
+      // Credit card validation
+      if (hasSplitCreditCard() && !splitCcPaid) {
+        setError('Please process the credit card payment before saving.');
+        return;
+      }
+    } else {
+      // Non-split validation
+      const etError = paymentMethod === 'E-Transfer' ? getEmailValidationError(etransferEmail) : null;
+      const pmError = !paymentMethod ? 'Please select a payment method' : null;
 
-    if (pError || eError || etError || pmError) {
+      if (pError || eError || etError || pmError) {
+        setPhoneError(pError);
+        setEmailError(eError);
+        setEtransferEmailError(etError);
+        setPaymentMethodError(pmError);
+        setError('Please fix validation errors before saving.');
+        return;
+      }
+    }
+
+    // General validation
+    if (pError || eError) {
       setPhoneError(pError);
       setEmailError(eError);
-      setEtransferEmailError(etError);
-      setPaymentMethodError(pmError);
       setError('Please fix validation errors before saving.');
       return;
     }
@@ -230,8 +321,39 @@ const NewJob: React.FC = () => {
           activeSession = await sessionService.startLogsheetSession(worker.contractorId);
       }
 
-      const rawPrice = parseFloat(amount) || 0;
-      const transactionPrice = Math.round(rawPrice * 100) / 100;
+      let transactionPrice: number;
+      let finalPaymentMethod: string;
+      let paymentBreakdown: Record<string, number> | undefined;
+      let finalEtransferEmail: string | undefined;
+      let finalChequeNumber: string | undefined;
+      let finalCcData: any = null;
+
+      if (isSplitPayment) {
+        transactionPrice = getSplitTotal();
+        finalPaymentMethod = 'Split';
+        paymentBreakdown = {};
+        
+        const cashAmt = parseFloat(splitAmounts.cash) || 0;
+        const chequeAmt = parseFloat(splitAmounts.cheque) || 0;
+        const etransferAmt = parseFloat(splitAmounts.etransfer) || 0;
+        const creditCardAmt = parseFloat(splitAmounts.creditCard) || 0;
+        
+        if (cashAmt > 0) paymentBreakdown['Cash'] = cashAmt;
+        if (chequeAmt > 0) paymentBreakdown['Cheque'] = chequeAmt;
+        if (etransferAmt > 0) paymentBreakdown['E-Transfer'] = etransferAmt;
+        if (creditCardAmt > 0) paymentBreakdown['Credit Card'] = creditCardAmt;
+        
+        if (hasSplitEtransfer()) finalEtransferEmail = splitEtransferEmail;
+        if (hasSplitCheque()) finalChequeNumber = splitChequeNumber;
+        if (hasSplitCreditCard()) finalCcData = splitCcData;
+      } else {
+        const rawPrice = parseFloat(amount) || 0;
+        transactionPrice = Math.round(rawPrice * 100) / 100;
+        finalPaymentMethod = paymentMethod;
+        finalEtransferEmail = paymentMethod === 'E-Transfer' ? etransferEmail : undefined;
+        finalChequeNumber = paymentMethod === 'Cheque' ? chequeNumber : undefined;
+        finalCcData = ccData;
+      }
       
       const newTransactionId = generateUUID();
       const placeholderJobId = `NEW-${Date.now()}`;
@@ -252,16 +374,17 @@ const NewJob: React.FC = () => {
           routeCode: routeCode,
           
           price: transactionPrice,
-          displayPrice: amount, 
+          displayPrice: isSplitPayment ? transactionPrice.toFixed(2) : amount, 
           type: 'Sale',
           items: [{ name: 'Aeration', price: transactionPrice }],
-          paymentMethod: paymentMethod,
-          isPaid: paymentMethod !== 'Billed',
-          etransferEmail: paymentMethod === 'E-Transfer' ? etransferEmail : undefined,
-          chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : undefined,
-          ccFullNumber: ccData?.number,
-          ccExpiry: ccData?.expiry,
-          ccCVC: ccData?.cvc,
+          paymentMethod: finalPaymentMethod,
+          paymentBreakdown: paymentBreakdown,
+          isPaid: finalPaymentMethod !== 'Billed',
+          etransferEmail: finalEtransferEmail,
+          chequeNumber: finalChequeNumber,
+          ccFullNumber: finalCcData?.number,
+          ccExpiry: finalCcData?.expiry,
+          ccCVC: finalCcData?.cvc,
           itemDescription: 'New Sale',
           serviceType: propertyType as any, 
           region: 'West', 
@@ -390,9 +513,23 @@ const NewJob: React.FC = () => {
                     <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Total Amount ($)</label>
                         <div className="flex gap-2">
-                            <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="flex-grow bg-gray-800 border border-gray-700 rounded p-2 text-xl font-mono font-bold text-green-400" placeholder="0.00" step="0.01"/>
-                            <button type="button" onClick={handleTaxClick} className="px-3 bg-gray-700 text-gray-300 rounded border border-gray-600 hover:bg-gray-600 font-bold text-xs">+ Tax</button>
+                            <input 
+                              type="number" 
+                              value={isSplitPayment ? getSplitTotal().toFixed(2) : amount} 
+                              onChange={(e) => setAmount(e.target.value)} 
+                              className={`flex-grow bg-gray-800 border border-gray-700 rounded p-2 text-xl font-mono font-bold text-green-400 ${isSplitPayment ? 'opacity-50 cursor-not-allowed' : ''}`} 
+                              placeholder="0.00" 
+                              step="0.01"
+                              disabled={isSplitPayment}
+                              readOnly={isSplitPayment}
+                            />
+                            {!isSplitPayment && (
+                              <button type="button" onClick={handleTaxClick} className="px-3 bg-gray-700 text-gray-300 rounded border border-gray-600 hover:bg-gray-600 font-bold text-xs">+ Tax</button>
+                            )}
                         </div>
+                        {isSplitPayment && (
+                          <p className="text-gray-500 text-[10px] mt-1">Total calculated from split amounts</p>
+                        )}
                     </div>
                     <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Property Type</label>
@@ -422,6 +559,7 @@ const NewJob: React.FC = () => {
                           <option value="Cheque">Cheque</option>
                           <option value="E-Transfer">E-Transfer</option>
                           <option value="Credit Card">Credit Card</option>
+                          <option value="Split Payment">Split Payment</option>
                       </select>
                       {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
                       
@@ -442,7 +580,7 @@ const NewJob: React.FC = () => {
                         </button>
                       )}
                   </div>
-                  {paymentMethod === 'E-Transfer' && (
+                  {paymentMethod === 'E-Transfer' && !isSplitPayment && (
                       <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Bank Email</label>
                         <input 
@@ -458,12 +596,122 @@ const NewJob: React.FC = () => {
                         {etransferEmailError && <p className="text-red-400 text-[10px] mt-1">{etransferEmailError}</p>}
                       </div>
                   )}
-                  {paymentMethod === 'Cheque' && (
+                  {paymentMethod === 'Cheque' && !isSplitPayment && (
                       <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cheque Number (Optional)</label><input value={chequeNumber} onChange={e => setChequeNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" placeholder="#001" /></div>
                   )}
               </div>
 
-              {paymentMethod === 'Credit Card' && (
+              {/* SPLIT PAYMENT SECTION */}
+              {isSplitPayment && (
+                <div className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-600 space-y-4">
+                  <div className="flex justify-between items-center">
+                    <h4 className="text-sm font-bold text-gray-300">Split Payment Amounts</h4>
+                    <div className="text-right">
+                      <span className="text-[10px] text-gray-500 uppercase">Total</span>
+                      <p className="text-lg font-mono font-bold text-green-400">${getSplitTotal().toFixed(2)}</p>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cash</label>
+                      <input 
+                        type="number" 
+                        value={splitAmounts.cash} 
+                        onChange={e => setSplitAmounts({...splitAmounts, cash: e.target.value})}
+                        className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white font-mono" 
+                        placeholder="0.00"
+                        step="0.01"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cheque</label>
+                      <input 
+                        type="number" 
+                        value={splitAmounts.cheque} 
+                        onChange={e => setSplitAmounts({...splitAmounts, cheque: e.target.value})}
+                        className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white font-mono" 
+                        placeholder="0.00"
+                        step="0.01"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">E-Transfer</label>
+                      <input 
+                        type="number" 
+                        value={splitAmounts.etransfer} 
+                        onChange={e => setSplitAmounts({...splitAmounts, etransfer: e.target.value})}
+                        className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white font-mono" 
+                        placeholder="0.00"
+                        step="0.01"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Credit Card</label>
+                      <input 
+                        type="number" 
+                        value={splitAmounts.creditCard} 
+                        onChange={e => setSplitAmounts({...splitAmounts, creditCard: e.target.value})}
+                        className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white font-mono" 
+                        placeholder="0.00"
+                        step="0.01"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Conditional fields for split payment */}
+                  {hasSplitCheque() && (
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cheque Number</label>
+                      <input 
+                        value={splitChequeNumber} 
+                        onChange={e => setSplitChequeNumber(e.target.value)}
+                        className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white" 
+                        placeholder="#001"
+                      />
+                    </div>
+                  )}
+
+                  {hasSplitEtransfer() && (
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">E-Transfer Email *</label>
+                      <input 
+                        type="email"
+                        value={splitEtransferEmail} 
+                        onChange={handleSplitEtransferEmailChange}
+                        onBlur={handleSplitEtransferEmailBlur}
+                        className={`w-full bg-gray-700 border rounded p-2 text-white ${
+                          splitEtransferEmailError ? 'border-red-500' : 'border-gray-600'
+                        }`}
+                        placeholder="client@bank.com"
+                      />
+                      {splitEtransferEmailError && <p className="text-red-400 text-[10px] mt-1">{splitEtransferEmailError}</p>}
+                    </div>
+                  )}
+
+                  {hasSplitCreditCard() && (
+                    <div className={`p-3 rounded border flex items-center justify-between ${splitCcPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
+                      <div>
+                        <span className="text-sm font-medium">{splitCcPaid ? "Card Info Secured" : "Process Credit Card"}</span>
+                        <p className="text-[10px] opacity-75">Amount: ${(parseFloat(splitAmounts.creditCard) || 0).toFixed(2)}</p>
+                      </div>
+                      {splitCcPaid ? (
+                        <CheckCircle size={20}/>
+                      ) : (
+                        <button 
+                          type="button" 
+                          onClick={() => setShowCreditModal(true)} 
+                          className="px-3 py-1 bg-blue-600 hover:bg-blue-500 rounded text-white text-xs font-bold"
+                        >
+                          Open Terminal
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {paymentMethod === 'Credit Card' && !isSplitPayment && (
                   <div className={`mt-3 p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
                       <span className="text-sm font-medium">{isCreditPaid ? "Secured Card Info to HQ" : "Open Terminal to Secure"}</span>
                       {isCreditPaid ? <CheckCircle size={20}/> : <button type="button" onClick={() => setShowCreditModal(true)} className="text-xs underline">Re-open Card Entry</button>}
@@ -477,7 +725,7 @@ const NewJob: React.FC = () => {
               <button type="button" onClick={() => navigate('/logsheet')} className="px-4 py-3 text-gray-400 hover:text-white font-medium" disabled={saving}>Cancel</button>
               <button 
                 type="submit"
-                disabled={saving}
+                disabled={saving || (paymentMethod === 'Credit Card' && !isCreditPaid && !isSplitPayment) || (isSplitPayment && hasSplitCreditCard() && !splitCcPaid)}
                 className="px-8 py-3 bg-cps-green hover:bg-green-600 text-white rounded-md font-bold shadow-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? (
@@ -496,17 +744,26 @@ const NewJob: React.FC = () => {
 
       {showCreditModal && (
           <CreditCardModal 
-              amount={amount} 
+              amount={isSplitPayment ? splitAmounts.creditCard : amount} 
               clientName={`${firstName} ${lastName}`} 
               onClose={() => setShowCreditModal(false)} 
               onProcess={(details) => { 
-                  setIsCreditPaid(true); 
-                  setShowCreditModal(false); 
-                  setCcData({
+                  if (isSplitPayment) {
+                    setSplitCcPaid(true);
+                    setSplitCcData({
                       number: details.number,
                       expiry: details.expiry,
                       cvc: details.cvc
-                  });
+                    });
+                  } else {
+                    setIsCreditPaid(true); 
+                    setCcData({
+                        number: details.number,
+                        expiry: details.expiry,
+                        cvc: details.cvc
+                    });
+                  }
+                  setShowCreditModal(false); 
               }} 
           />
       )}

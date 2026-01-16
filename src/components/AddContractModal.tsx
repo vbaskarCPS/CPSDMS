@@ -1,6 +1,6 @@
 // src/components/AddContractModal.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader, Phone } from 'lucide-react';
+import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader, Phone, CheckCircle } from 'lucide-react';
 import { getStorageItem } from '../lib/localStorage';
 import { MasterBooking, Worker, SessionTransaction } from '../types';
 import { sessionService } from '../lib/sessionService';
@@ -120,11 +120,34 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const [streetName, setStreetName] = useState('');
   const [houseNumber, setHouseNumber] = useState('');
 
+  // Split Payment State
+  const [splitCash, setSplitCash] = useState('');
+  const [splitCheque, setSplitCheque] = useState('');
+  const [splitEtransfer, setSplitEtransfer] = useState('');
+  const [splitCreditCard, setSplitCreditCard] = useState('');
+  const [splitEtransferEmail, setSplitEtransferEmail] = useState('');
+  const [splitChequeNumber, setSplitChequeNumber] = useState('');
+
   // Validation Errors
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [etransferEmailError, setEtransferEmailError] = useState<string | null>(null);
+  const [splitEtransferEmailError, setSplitEtransferEmailError] = useState<string | null>(null);
   const [paymentMethodError, setPaymentMethodError] = useState<string | null>(null);
+
+  // --- COMPUTED: Is Split Payment Mode ---
+  const isSplitPayment = paymentInfo.method === 'Split Payment';
+
+  // --- COMPUTED: Split Payment Total ---
+  const splitTotal = 
+    (parseFloat(splitCash) || 0) + 
+    (parseFloat(splitCheque) || 0) + 
+    (parseFloat(splitEtransfer) || 0) + 
+    (parseFloat(splitCreditCard) || 0);
+
+  // --- COMPUTED: Split CC needs processing ---
+  const splitCCAmount = parseFloat(splitCreditCard) || 0;
+  const splitCCNeedsProcessing = splitCCAmount > 0 && !isCreditPaid;
 
   // --- HANDLERS FOR NAME FIELDS ---
   const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -164,11 +187,40 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     }
   };
 
+  // Split E-Transfer Email handlers
+  const handleSplitEtransferEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSplitEtransferEmail(e.target.value);
+    setSplitEtransferEmailError(null);
+  };
+
+  const handleSplitEtransferEmailBlur = () => {
+    if (splitEtransferEmail) {
+      setSplitEtransferEmail(normalizeEmail(splitEtransferEmail));
+    }
+  };
+
   // --- HANDLER FOR PAYMENT METHOD ---
   const handlePaymentMethodChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
     setPaymentInfo({...paymentInfo, method: value});
     setPaymentMethodError(null);
+    
+    // Reset split fields when changing payment method
+    if (value !== 'Split Payment') {
+      setSplitCash('');
+      setSplitCheque('');
+      setSplitEtransfer('');
+      setSplitCreditCard('');
+      setSplitEtransferEmail('');
+      setSplitChequeNumber('');
+    }
+    
+    // Reset CC data when changing away from CC or Split
+    if (value !== 'Credit Card' && value !== 'Split Payment') {
+      setIsCreditPaid(false);
+      setCcData(null);
+    }
+    
     if (value === 'Credit Card') setShowCreditModal(true);
   };
 
@@ -255,10 +307,19 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     setIsCreditPaid(false);
     setCcData(null);
     
+    // Reset split payment fields
+    setSplitCash('');
+    setSplitCheque('');
+    setSplitEtransfer('');
+    setSplitCreditCard('');
+    setSplitEtransferEmail('');
+    setSplitChequeNumber('');
+    
     // Clear validation errors
     setPhoneError(null);
     setEmailError(null);
     setEtransferEmailError(null);
+    setSplitEtransferEmailError(null);
     setPaymentMethodError(null);
 
     // DIRECT UPGRADE MODE: Pre-fill data and skip client selection
@@ -326,6 +387,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     setPhoneError(null);
     setEmailError(null);
     setEtransferEmailError(null);
+    setSplitEtransferEmailError(null);
     setPaymentMethodError(null);
     setStep('ENTER_DETAILS');
   };
@@ -349,6 +411,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     setPhoneError(null);
     setEmailError(null);
     setEtransferEmailError(null);
+    setSplitEtransferEmailError(null);
     setPaymentMethodError(null);
     setStep('ENTER_DETAILS');
   };
@@ -379,60 +442,117 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     // --- VALIDATION ---
     const pError = getPhoneValidationError(formData.phone);
     const eError = getEmailValidationError(formData.email);
-    const etError = paymentInfo.method === 'E-Transfer' ? getEmailValidationError(extraPaymentInfo) : null;
+    
+    let etError: string | null = null;
+    let splitEtError: string | null = null;
+    
+    if (isSplitPayment) {
+      // Validate split e-transfer email if split e-transfer amount > 0
+      if ((parseFloat(splitEtransfer) || 0) > 0) {
+        splitEtError = getEmailValidationError(splitEtransferEmail);
+      }
+    } else {
+      etError = paymentInfo.method === 'E-Transfer' ? getEmailValidationError(extraPaymentInfo) : null;
+    }
+    
     const pmError = !paymentInfo.method ? 'Please select a payment method' : null;
 
-    if (pError || eError || etError || pmError) {
+    // Split payment specific validation
+    if (isSplitPayment && splitTotal <= 0) {
+      setPhoneError(pError);
+      setEmailError(eError);
+      setPaymentMethodError('Please enter at least one split payment amount.');
+      setError('Please enter at least one split payment amount.');
+      return;
+    }
+
+    if (pError || eError || etError || splitEtError || pmError) {
       setPhoneError(pError);
       setEmailError(eError);
       setEtransferEmailError(etError);
+      setSplitEtransferEmailError(splitEtError);
       setPaymentMethodError(pmError);
       setError('Please fix validation errors before saving.');
       return;
     }
 
-    if (paymentInfo.method === 'Credit Card' && !isCreditPaid) { setError("Please process card first."); return; }
-    if (!paymentInfo.amount) { setError("Enter amount."); return; }
+    if (paymentInfo.method === 'Credit Card' && !isCreditPaid && !isSplitPayment) { 
+      setError("Please process card first."); 
+      return; 
+    }
+    
+    if (isSplitPayment && splitCCNeedsProcessing) {
+      setError("Please process credit card first.");
+      return;
+    }
+    
+    if (!isSplitPayment && !paymentInfo.amount) { 
+      setError("Enter amount."); 
+      return; 
+    }
 
     setSaving(true);
 
     try {
       const isUpgrade = selectedRecipe.type === 'Upgrade';
       const isIOS = paymentInfo.method === 'IOS';
-      const inputAmount = parseFloat(paymentInfo.amount);
 
-      let finalTotal = inputAmount;
+      let finalTotal: number;
       let creditAmount = 0;
       let isPrepaidSplit = false; 
-
-      const paymentBreakdown: Record<string, number> = {};
+      let finalPaymentMethod: string;
+      let paymentBreakdown: Record<string, number> = {};
 
       // Check prepaid status - works for both directUpgradeBooking and selectedBooking
       const bookingForPrepaidCheck = directUpgradeBooking || selectedBooking;
       const isPrepaid = bookingForPrepaidCheck?.Prepaid === 'x';
 
-      if (isUpgrade && bookingForPrepaidCheck && isPrepaid) {
+      if (isSplitPayment) {
+        // Split payment mode
+        finalTotal = Math.round(splitTotal * 100) / 100;
+        finalPaymentMethod = 'Split';
+        
+        // Build breakdown with only non-zero values
+        if ((parseFloat(splitCash) || 0) > 0) paymentBreakdown['Cash'] = parseFloat(splitCash);
+        if ((parseFloat(splitCheque) || 0) > 0) paymentBreakdown['Cheque'] = parseFloat(splitCheque);
+        if ((parseFloat(splitEtransfer) || 0) > 0) paymentBreakdown['E-Transfer'] = parseFloat(splitEtransfer);
+        if ((parseFloat(splitCreditCard) || 0) > 0) paymentBreakdown['Credit Card'] = parseFloat(splitCreditCard);
+        
+        // Handle prepaid credit for upgrades with split payment
+        if (isUpgrade && bookingForPrepaidCheck && isPrepaid) {
           creditAmount = parseFloat(String(bookingForPrepaidCheck.Price).replace(/[^0-9.]/g, '')) || 0;
-          finalTotal = creditAmount + inputAmount;
-          
+          finalTotal = creditAmount + splitTotal;
           paymentBreakdown['Prepaid'] = creditAmount;
-          const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
-          paymentBreakdown[currentMethodKey] = inputAmount;
-          
-          isPrepaidSplit = true; 
-      } 
-      else if (isUpgrade && bookingForPrepaidCheck) {
-          finalTotal = inputAmount;
-          const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
-          paymentBreakdown[currentMethodKey] = inputAmount;
-          
           isPrepaidSplit = true;
-      }
-      else {
-          finalTotal = inputAmount;
-          const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
-          paymentBreakdown[currentMethodKey] = inputAmount;
-          isPrepaidSplit = false;
+        }
+      } else {
+        // Regular payment mode
+        const inputAmount = parseFloat(paymentInfo.amount);
+        finalPaymentMethod = isIOS ? 'IOS' : paymentInfo.method;
+
+        if (isUpgrade && bookingForPrepaidCheck && isPrepaid) {
+            creditAmount = parseFloat(String(bookingForPrepaidCheck.Price).replace(/[^0-9.]/g, '')) || 0;
+            finalTotal = creditAmount + inputAmount;
+            
+            paymentBreakdown['Prepaid'] = creditAmount;
+            const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
+            paymentBreakdown[currentMethodKey] = inputAmount;
+            
+            isPrepaidSplit = true; 
+        } 
+        else if (isUpgrade && bookingForPrepaidCheck) {
+            finalTotal = inputAmount;
+            const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
+            paymentBreakdown[currentMethodKey] = inputAmount;
+            
+            isPrepaidSplit = true;
+        }
+        else {
+            finalTotal = inputAmount;
+            const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
+            paymentBreakdown[currentMethodKey] = inputAmount;
+            isPrepaidSplit = false;
+        }
       }
 
       let finalNotes = formData.notes;
@@ -491,14 +611,23 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
           displayPrice: formattedDisplayPrice, 
           serviceName: selectedRecipe.name, 
           
-          paymentMethod: isIOS ? 'IOS' : paymentInfo.method,
+          paymentMethod: finalPaymentMethod,
           paymentBreakdown: paymentBreakdown, 
-          isPaid: !isIOS && paymentInfo.method !== 'Billed',
+          isPaid: !isIOS && finalPaymentMethod !== 'Billed',
           
           ccFullNumber: ccData?.number,
           ccExpiry: ccData?.expiry,
           ccCVC: ccData?.cvc,
-          etransferEmail: paymentInfo.method === 'E-Transfer' ? extraPaymentInfo : undefined,
+          
+          // For regular E-Transfer or Split with E-Transfer
+          etransferEmail: isSplitPayment 
+            ? ((parseFloat(splitEtransfer) || 0) > 0 ? splitEtransferEmail : undefined)
+            : (paymentInfo.method === 'E-Transfer' ? extraPaymentInfo : undefined),
+          
+          // For Split with Cheque
+          chequeNumber: isSplitPayment
+            ? ((parseFloat(splitCheque) || 0) > 0 ? splitChequeNumber : undefined)
+            : undefined,
           
           isWestSplit: isPrepaidSplit, 
           
@@ -687,17 +816,22 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                         <input 
                             type="number" 
                             placeholder="0.00" 
-                            value={paymentInfo.amount} 
+                            value={isSplitPayment ? splitTotal.toFixed(2) : paymentInfo.amount} 
                             onChange={e => setPaymentInfo({...paymentInfo, amount: e.target.value})}
                             onBlur={e => {
-                                const val = parseFloat(e.target.value);
-                                if(!isNaN(val)) setPaymentInfo(prev => ({...prev, amount: (Math.round(val * 100) / 100).toFixed(2) }));
+                                if (!isSplitPayment) {
+                                  const val = parseFloat(e.target.value);
+                                  if(!isNaN(val)) setPaymentInfo(prev => ({...prev, amount: (Math.round(val * 100) / 100).toFixed(2) }));
+                                }
                             }} 
-                            className="w-full bg-gray-800 border border-gray-700 rounded-lg py-2 pl-9 pr-4 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none" 
+                            className={`w-full bg-gray-800 border border-gray-700 rounded-lg py-2 pl-9 pr-4 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none ${isSplitPayment ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            disabled={isSplitPayment}
                         />
                     </div>
                     
-                    <button type="button" onClick={handleTaxClick} className="px-3 bg-gray-700 text-gray-300 rounded-lg border border-gray-600 hover:bg-gray-600 font-bold text-xs">+ Tax</button>
+                    {!isSplitPayment && (
+                      <button type="button" onClick={handleTaxClick} className="px-3 bg-gray-700 text-gray-300 rounded-lg border border-gray-600 hover:bg-gray-600 font-bold text-xs">+ Tax</button>
+                    )}
                     
                     <div>
                       <select 
@@ -712,13 +846,17 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                          <option value="Cheque">Cheque</option>
                          <option value="Credit Card">Credit Card</option>
                          <option value="E-Transfer">E-Transfer</option>
+                         <option value="Split Payment">Split Payment</option>
                          {selectedRecipe?.id === 'dethatch' && <option value="IOS">Invoice On Site</option>}
                       </select>
                     </div>
                  </div>
                  {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
+                 {isSplitPayment && (
+                   <p className="text-[10px] text-gray-500">Total calculated from split amounts</p>
+                 )}
                  
-                 {paymentInfo.method === 'E-Transfer' && (
+                 {paymentInfo.method === 'E-Transfer' && !isSplitPayment && (
                      <div className="relative animate-fade-in">
                         <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
                         <input 
@@ -735,10 +873,140 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                      </div>
                  )}
 
-                 {paymentInfo.method === 'Credit Card' && (
+                 {paymentInfo.method === 'Credit Card' && !isSplitPayment && (
                   <div className={`p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
                       <span className="text-xs font-bold">{isCreditPaid ? "SECURED" : "SECURE CARD"}</span>
                       {!isCreditPaid && <button onClick={() => setShowCreditModal(true)} className="underline text-xs">Open Terminal</button>}
+                  </div>
+                 )}
+
+                 {/* SPLIT PAYMENT FIELDS */}
+                 {isSplitPayment && (
+                  <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-600 space-y-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-sm font-bold text-gray-300">Split Payment Amounts</h4>
+                      <div className="text-sm font-mono font-bold text-green-400">
+                        Total: ${splitTotal.toFixed(2)}
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      {/* Cash */}
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cash</label>
+                        <div className="relative">
+                          <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                          <input 
+                            type="number" 
+                            value={splitCash} 
+                            onChange={(e) => setSplitCash(e.target.value)}
+                            className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-8 text-white"
+                            placeholder="0.00"
+                            step="0.01"
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* Cheque */}
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cheque</label>
+                        <div className="relative">
+                          <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                          <input 
+                            type="number" 
+                            value={splitCheque} 
+                            onChange={(e) => setSplitCheque(e.target.value)}
+                            className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-8 text-white"
+                            placeholder="0.00"
+                            step="0.01"
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* E-Transfer */}
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">E-Transfer</label>
+                        <div className="relative">
+                          <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                          <input 
+                            type="number" 
+                            value={splitEtransfer} 
+                            onChange={(e) => setSplitEtransfer(e.target.value)}
+                            className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-8 text-white"
+                            placeholder="0.00"
+                            step="0.01"
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* Credit Card */}
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Credit Card</label>
+                        <div className="relative">
+                          <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                          <input 
+                            type="number" 
+                            value={splitCreditCard} 
+                            onChange={(e) => {
+                              setSplitCreditCard(e.target.value);
+                              // Reset CC paid status if amount changes
+                              if (isCreditPaid) {
+                                setIsCreditPaid(false);
+                                setCcData(null);
+                              }
+                            }}
+                            className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-8 text-white"
+                            placeholder="0.00"
+                            step="0.01"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Conditional: Cheque Number */}
+                    {(parseFloat(splitCheque) || 0) > 0 && (
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cheque Number</label>
+                        <input 
+                          value={splitChequeNumber} 
+                          onChange={e => setSplitChequeNumber(e.target.value)} 
+                          className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" 
+                          placeholder="#001" 
+                        />
+                      </div>
+                    )}
+                    
+                    {/* Conditional: E-Transfer Email */}
+                    {(parseFloat(splitEtransfer) || 0) > 0 && (
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">E-Transfer Email *</label>
+                        <input 
+                          type="email" 
+                          value={splitEtransferEmail} 
+                          onChange={handleSplitEtransferEmailChange}
+                          onBlur={handleSplitEtransferEmailBlur}
+                          className={`w-full bg-gray-800 border rounded p-2 text-white ${
+                            splitEtransferEmailError ? 'border-red-500' : 'border-gray-700'
+                          }`}
+                          placeholder="client@bank.com" 
+                        />
+                        {splitEtransferEmailError && <p className="text-red-400 text-[10px] mt-1">{splitEtransferEmailError}</p>}
+                      </div>
+                    )}
+                    
+                    {/* Conditional: Credit Card Processing */}
+                    {splitCCAmount > 0 && (
+                      <div className={`p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
+                        <span className="text-sm font-medium">
+                          {isCreditPaid ? `Card Secured for $${splitCCAmount.toFixed(2)}` : `Process $${splitCCAmount.toFixed(2)} on Card`}
+                        </span>
+                        {isCreditPaid ? (
+                          <CheckCircle size={20}/>
+                        ) : (
+                          <button type="button" onClick={() => setShowCreditModal(true)} className="text-xs underline">Open Terminal</button>
+                        )}
+                      </div>
+                    )}
                   </div>
                  )}
               </div>
@@ -754,7 +1022,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
            <div className="p-4 border-t border-gray-700 flex justify-end">
               <button 
                 onClick={handleSubmit} 
-                disabled={saving}
+                disabled={saving || (paymentInfo.method === 'Credit Card' && !isCreditPaid && !isSplitPayment) || (isSplitPayment && splitCCNeedsProcessing)}
                 className="bg-cps-green hover:bg-green-600 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? (
@@ -773,7 +1041,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
 
       {showCreditModal && (
           <CreditCardModal 
-             amount={paymentInfo.amount}
+             amount={isSplitPayment ? splitCreditCard : paymentInfo.amount}
              clientName={`${formData.firstName} ${formData.lastName}`}
              onClose={() => setShowCreditModal(false)} 
              onProcess={(details) => {
@@ -784,7 +1052,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                      expiry: details.expiry,
                      cvc: details.cvc
                  });
-                 setFormData(prev => ({ ...prev, notes: `${prev.notes} [CC Paid]`.trim() }));
+                 if (!isSplitPayment) {
+                   setFormData(prev => ({ ...prev, notes: `${prev.notes} [CC Paid]`.trim() }));
+                 }
              }}
           />
       )}

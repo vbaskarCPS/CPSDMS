@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Phone, Mail, X, CheckCircle2, Ban, Lock,
-  Loader, CheckCircle, FileText, TrendingUp
+  Loader, CheckCircle, FileText, TrendingUp, DollarSign
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
 import { getStorageItem } from '../../lib/localStorage';
@@ -72,6 +72,14 @@ const JobDetail: React.FC = () => {
   const [chequeNumber, setChequeNumber] = useState('');
   const [ccData, setCcData] = useState<any>(null);
 
+  // Split Payment State
+  const [splitCash, setSplitCash] = useState('');
+  const [splitCheque, setSplitCheque] = useState('');
+  const [splitEtransfer, setSplitEtransfer] = useState('');
+  const [splitCreditCard, setSplitCreditCard] = useState('');
+  const [splitEtransferEmail, setSplitEtransferEmail] = useState('');
+  const [splitChequeNumber, setSplitChequeNumber] = useState('');
+
   // Modals
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
@@ -85,7 +93,22 @@ const JobDetail: React.FC = () => {
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [etransferEmailError, setEtransferEmailError] = useState<string | null>(null);
+  const [splitEtransferEmailError, setSplitEtransferEmailError] = useState<string | null>(null);
   const [paymentMethodError, setPaymentMethodError] = useState<string | null>(null);
+
+  // --- COMPUTED: Is Split Payment Mode ---
+  const isSplitPayment = paymentMethod === 'Split Payment';
+
+  // --- COMPUTED: Split Payment Total ---
+  const splitTotal = 
+    (parseFloat(splitCash) || 0) + 
+    (parseFloat(splitCheque) || 0) + 
+    (parseFloat(splitEtransfer) || 0) + 
+    (parseFloat(splitCreditCard) || 0);
+
+  // --- COMPUTED: Split CC needs processing ---
+  const splitCCAmount = parseFloat(splitCreditCard) || 0;
+  const splitCCNeedsProcessing = splitCCAmount > 0 && !isCreditPaid;
 
   // --- HANDLERS FOR NAME FIELDS ---
   const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -121,11 +144,38 @@ const JobDetail: React.FC = () => {
     if (etransferEmail) setEtransferEmail(normalizeEmail(etransferEmail));
   };
 
+  // Split E-Transfer Email handlers
+  const handleSplitEtransferEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSplitEtransferEmail(e.target.value);
+    setSplitEtransferEmailError(null);
+  };
+
+  const handleSplitEtransferEmailBlur = () => {
+    if (splitEtransferEmail) setSplitEtransferEmail(normalizeEmail(splitEtransferEmail));
+  };
+
   // --- HANDLER FOR PAYMENT METHOD ---
   const handlePaymentMethodChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
     setPaymentMethod(value);
     setPaymentMethodError(null);
+    
+    // Reset split fields when changing payment method
+    if (value !== 'Split Payment') {
+      setSplitCash('');
+      setSplitCheque('');
+      setSplitEtransfer('');
+      setSplitCreditCard('');
+      setSplitEtransferEmail('');
+      setSplitChequeNumber('');
+    }
+    
+    // Reset CC data when changing away from CC or Split
+    if (value !== 'Credit Card' && value !== 'Split Payment') {
+      setIsCreditPaid(false);
+      setCcData(null);
+    }
+    
     if (value === 'Credit Card') setShowCreditModal(true);
   };
 
@@ -242,13 +292,34 @@ const JobDetail: React.FC = () => {
     // --- VALIDATION ---
     const pError = getPhoneValidationError(phone);
     const eError = getEmailValidationError(email);
-    const etError = paymentMethod === 'E-Transfer' ? getEmailValidationError(etransferEmail) : null;
+    
+    let etError: string | null = null;
+    let splitEtError: string | null = null;
+    
+    if (isSplitPayment) {
+      // Validate split e-transfer email if split e-transfer amount > 0
+      if ((parseFloat(splitEtransfer) || 0) > 0) {
+        splitEtError = getEmailValidationError(splitEtransferEmail);
+      }
+    } else {
+      etError = paymentMethod === 'E-Transfer' ? getEmailValidationError(etransferEmail) : null;
+    }
+    
     const pmError = !isPrepaid && !paymentMethod ? 'Please select a payment method' : null;
 
-    if (pError || eError || etError || pmError) {
+    // Split payment specific validation
+    if (isSplitPayment && splitTotal <= 0) {
+      setPhoneError(pError);
+      setEmailError(eError);
+      setPaymentMethodError('Please enter at least one split payment amount.');
+      return;
+    }
+
+    if (pError || eError || etError || splitEtError || pmError) {
       setPhoneError(pError);
       setEmailError(eError);
       setEtransferEmailError(etError);
+      setSplitEtransferEmailError(splitEtError);
       setPaymentMethodError(pmError);
       return;
     }
@@ -256,11 +327,32 @@ const JobDetail: React.FC = () => {
     setSaving(true);
 
     try {
-      const rawPrice = (price || '').toString().trim().toUpperCase();
-      let priceVal = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
+      // Determine final price and payment info based on mode
+      let priceVal: number;
+      let finalPaymentMethod: string;
+      let paymentBreakdown: Record<string, number> | undefined;
+      let rawPrice: string;
 
-      if (rawPrice.startsWith('RJ') || rawPrice.startsWith('SP')) {
-        priceVal = 52.5;
+      if (isSplitPayment) {
+        priceVal = Math.round(splitTotal * 100) / 100;
+        finalPaymentMethod = 'Split';
+        rawPrice = priceVal.toFixed(2);
+        
+        // Build breakdown with only non-zero values
+        paymentBreakdown = {};
+        if ((parseFloat(splitCash) || 0) > 0) paymentBreakdown['Cash'] = parseFloat(splitCash);
+        if ((parseFloat(splitCheque) || 0) > 0) paymentBreakdown['Cheque'] = parseFloat(splitCheque);
+        if ((parseFloat(splitEtransfer) || 0) > 0) paymentBreakdown['E-Transfer'] = parseFloat(splitEtransfer);
+        if ((parseFloat(splitCreditCard) || 0) > 0) paymentBreakdown['Credit Card'] = parseFloat(splitCreditCard);
+      } else {
+        rawPrice = (price || '').toString().trim().toUpperCase();
+        priceVal = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
+
+        if (rawPrice.startsWith('RJ') || rawPrice.startsWith('SP')) {
+          priceVal = 52.5;
+        }
+        
+        finalPaymentMethod = isPrepaid ? 'Prepaid' : paymentMethod;
       }
 
       const fullAddress = `${houseNumber} ${streetName}`.trim();
@@ -282,12 +374,21 @@ const JobDetail: React.FC = () => {
         type: 'Production',
         price: priceVal,
         displayPrice: rawPrice,
-        isPaid: paymentMethod !== 'Billed',
-        paymentMethod: isPrepaid ? 'Prepaid' : paymentMethod,
+        isPaid: finalPaymentMethod !== 'Billed',
+        paymentMethod: finalPaymentMethod,
+        paymentBreakdown: paymentBreakdown,
         
         invoiceNumber: paymentMethod === 'Billed' ? invoiceNumber : undefined,
-        etransferEmail: paymentMethod === 'E-Transfer' ? etransferEmail : undefined,
-        chequeNumber: paymentMethod === 'Cheque' ? chequeNumber : undefined,
+        
+        // For regular E-Transfer or Split with E-Transfer
+        etransferEmail: isSplitPayment 
+          ? ((parseFloat(splitEtransfer) || 0) > 0 ? splitEtransferEmail : undefined)
+          : (paymentMethod === 'E-Transfer' ? etransferEmail : undefined),
+        
+        // For regular Cheque or Split with Cheque
+        chequeNumber: isSplitPayment
+          ? ((parseFloat(splitCheque) || 0) > 0 ? splitChequeNumber : undefined)
+          : (paymentMethod === 'Cheque' ? chequeNumber : undefined),
         
         ccFullNumber: ccData?.number,
         ccExpiry: ccData?.expiry,
@@ -405,9 +506,7 @@ const JobDetail: React.FC = () => {
                             disabled={isReadOnly} 
                             placeholder="000 000 0000"
                             maxLength={12}
-                            className={`w-full bg-gray-800 border rounded p-2 pl-9 text-white ${
-                              phoneError ? 'border-red-500' : 'border-gray-700'
-                            }`}
+                            className={`w-full bg-gray-800 border rounded p-2 pl-9 text-white ${phoneError ? 'border-red-500' : 'border-gray-700'}`}
                           />
                         </div>
                         {phoneError && <p className="text-red-400 text-[10px] mt-1">{phoneError}</p>}
@@ -423,9 +522,7 @@ const JobDetail: React.FC = () => {
                             onBlur={handleEmailBlur}
                             disabled={isReadOnly} 
                             placeholder="client@example.com"
-                            className={`w-full bg-gray-800 border rounded p-2 pl-9 text-white ${
-                              emailError ? 'border-red-500' : 'border-gray-700'
-                            }`}
+                            className={`w-full bg-gray-800 border rounded p-2 pl-9 text-white ${emailError ? 'border-red-500' : 'border-gray-700'}`}
                           />
                         </div>
                         {emailError && <p className="text-red-400 text-[10px] mt-1">{emailError}</p>}
@@ -444,9 +541,16 @@ const JobDetail: React.FC = () => {
                   <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Total Amount ($)</label>
                       <div className="flex gap-2">
-                          <input type="text" value={price} onChange={e => setPrice(e.target.value)} className={`flex-grow bg-gray-800 border border-gray-700 rounded p-2 text-xl font-mono font-bold text-green-400 outline-none ${(isPrepaid || isReadOnly) ? 'cursor-not-allowed opacity-50' : ''}`} disabled={isPrepaid || isReadOnly}/>
-                          {!isPrepaid && !isReadOnly && <button type="button" onClick={handleTaxClick} className="px-3 bg-gray-700 text-gray-300 rounded border border-gray-600 hover:bg-gray-600 font-bold text-xs">+ Tax</button>}
+                          <input 
+                            type="text" 
+                            value={isSplitPayment ? splitTotal.toFixed(2) : price} 
+                            onChange={e => setPrice(e.target.value)} 
+                            className={`flex-grow bg-gray-800 border border-gray-700 rounded p-2 text-xl font-mono font-bold text-green-400 outline-none ${(isPrepaid || isReadOnly || isSplitPayment) ? 'cursor-not-allowed opacity-50' : ''}`} 
+                            disabled={isPrepaid || isReadOnly || isSplitPayment}
+                          />
+                          {!isPrepaid && !isReadOnly && !isSplitPayment && <button type="button" onClick={handleTaxClick} className="px-3 bg-gray-700 text-gray-300 rounded border border-gray-600 hover:bg-gray-600 font-bold text-xs">+ Tax</button>}
                       </div>
+                      {isSplitPayment && <p className="text-[10px] text-gray-500 mt-1">Total calculated from split amounts</p>}
                   </div>
                   <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Property Type</label>
@@ -474,9 +578,7 @@ const JobDetail: React.FC = () => {
                       <select 
                         value={paymentMethod} 
                         onChange={handlePaymentMethodChange} 
-                        className={`w-full bg-gray-800 border rounded p-2 text-white outline-none ${
-                          (isPrepaid || isReadOnly) ? 'cursor-not-allowed opacity-50' : ''
-                        } ${paymentMethodError ? 'border-red-500' : 'border-gray-700'}`} 
+                        className={`w-full bg-gray-800 border rounded p-2 text-white outline-none ${(isPrepaid || isReadOnly) ? 'cursor-not-allowed opacity-50' : ''} ${paymentMethodError ? 'border-red-500' : 'border-gray-700'}`} 
                         disabled={isPrepaid || isReadOnly}
                       >
                           {isPrepaid ? (
@@ -489,6 +591,7 @@ const JobDetail: React.FC = () => {
                               <option value="Cheque">Cheque</option>
                               <option value="E-Transfer">E-Transfer</option>
                               <option value="Credit Card">Credit Card</option>
+                              <option value="Split Payment">Split Payment</option>
                             </>
                           )}
                       </select>
@@ -499,11 +602,7 @@ const JobDetail: React.FC = () => {
                         <button
                           onClick={() => setShowUpgradeModal(true)}
                           disabled={!canUpgrade}
-                          className={`w-full mt-3 py-2 px-4 rounded-md font-bold text-sm flex items-center justify-center gap-2 transition-colors ${
-                            canUpgrade 
-                              ? 'bg-purple-600 hover:bg-purple-500 text-white border border-purple-500' 
-                              : 'bg-gray-700 text-gray-500 border border-gray-600 cursor-not-allowed'
-                          }`}
+                          className={`w-full mt-3 py-2 px-4 rounded-md font-bold text-sm flex items-center justify-center gap-2 transition-colors ${canUpgrade ? 'bg-purple-600 hover:bg-purple-500 text-white border border-purple-500' : 'bg-gray-700 text-gray-500 border border-gray-600 cursor-not-allowed'}`}
                         >
                           <TrendingUp size={16} />
                           {isAlreadyUpgrade ? 'Already Upgraded' : 'Upgrade Instead'}
@@ -522,9 +621,7 @@ const JobDetail: React.FC = () => {
                           value={etransferEmail} 
                           onChange={handleEtransferEmailChange}
                           onBlur={handleEtransferEmailBlur}
-                          className={`w-full bg-gray-800 border rounded p-2 text-white ${
-                            etransferEmailError ? 'border-red-500' : 'border-gray-700'
-                          }`}
+                          className={`w-full bg-gray-800 border rounded p-2 text-white ${etransferEmailError ? 'border-red-500' : 'border-gray-700'}`}
                           placeholder="client@bank.com" 
                         />
                         {etransferEmailError && <p className="text-red-400 text-[10px] mt-1">{etransferEmailError}</p>}
@@ -535,7 +632,70 @@ const JobDetail: React.FC = () => {
                   )}
                </div>
 
-               {paymentMethod === 'Credit Card' && (
+               {/* SPLIT PAYMENT FIELDS */}
+               {isSplitPayment && !isReadOnly && (
+                <div className="mb-4 p-4 bg-gray-800/50 rounded-lg border border-gray-600 space-y-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-bold text-gray-300">Split Payment Amounts</h4>
+                    <div className="text-sm font-mono font-bold text-green-400">Total: ${splitTotal.toFixed(2)}</div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cash</label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                        <input type="number" value={splitCash} onChange={(e) => setSplitCash(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-8 text-white" placeholder="0.00" step="0.01"/>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cheque</label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                        <input type="number" value={splitCheque} onChange={(e) => setSplitCheque(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-8 text-white" placeholder="0.00" step="0.01"/>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">E-Transfer</label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                        <input type="number" value={splitEtransfer} onChange={(e) => setSplitEtransfer(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-8 text-white" placeholder="0.00" step="0.01"/>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Credit Card</label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                        <input type="number" value={splitCreditCard} onChange={(e) => { setSplitCreditCard(e.target.value); if (isCreditPaid) { setIsCreditPaid(false); setCcData(null); }}} className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-8 text-white" placeholder="0.00" step="0.01"/>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {(parseFloat(splitCheque) || 0) > 0 && (
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cheque Number</label>
+                      <input value={splitChequeNumber} onChange={e => setSplitChequeNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" placeholder="#001"/>
+                    </div>
+                  )}
+                  
+                  {(parseFloat(splitEtransfer) || 0) > 0 && (
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">E-Transfer Email *</label>
+                      <input type="email" value={splitEtransferEmail} onChange={handleSplitEtransferEmailChange} onBlur={handleSplitEtransferEmailBlur} className={`w-full bg-gray-800 border rounded p-2 text-white ${splitEtransferEmailError ? 'border-red-500' : 'border-gray-700'}`} placeholder="client@bank.com"/>
+                      {splitEtransferEmailError && <p className="text-red-400 text-[10px] mt-1">{splitEtransferEmailError}</p>}
+                    </div>
+                  )}
+                  
+                  {splitCCAmount > 0 && (
+                    <div className={`p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
+                      <span className="text-sm font-medium">{isCreditPaid ? `Card Secured for $${splitCCAmount.toFixed(2)}` : `Process $${splitCCAmount.toFixed(2)} on Card`}</span>
+                      {isCreditPaid ? <CheckCircle size={20}/> : <button type="button" onClick={() => setShowCreditModal(true)} className="text-xs underline">Open Terminal</button>}
+                    </div>
+                  )}
+                </div>
+               )}
+
+               {paymentMethod === 'Credit Card' && !isSplitPayment && (
                    <div className={`mb-4 p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
                        <span className="text-sm font-medium">{isCreditPaid ? "Secured Card Info to HQ" : "Secure Card Info"}</span>
                        {isCreditPaid ? <CheckCircle size={20}/> : <button onClick={() => setShowCreditModal(true)} className="underline text-xs">Open Terminal</button>}
@@ -550,18 +710,10 @@ const JobDetail: React.FC = () => {
                      <button onClick={() => setShowCancelModal(true)} className="flex items-center gap-2 px-4 py-3 bg-red-900/20 hover:bg-red-900/40 text-red-300 border border-red-800 rounded-md font-bold transition-colors" disabled={saving}><Ban size={18} /> Cancel / Skip</button>
                      <button 
                        onClick={handleSave} 
-                       disabled={(paymentMethod === 'Credit Card' && !isCreditPaid) || saving}
+                       disabled={(paymentMethod === 'Credit Card' && !isCreditPaid && !isSplitPayment) || (isSplitPayment && splitCCNeedsProcessing) || saving}
                        className="flex-1 sm:flex-none px-8 py-3 bg-green-600 hover:bg-green-500 text-white rounded-md font-bold shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                      >
-                       {saving ? (
-                         <>
-                           <Loader className="animate-spin" size={18} /> Processing...
-                         </>
-                       ) : (
-                         <>
-                           <CheckCircle2 size={18} /> Complete Job
-                         </>
-                       )}
+                       {saving ? (<><Loader className="animate-spin" size={18} /> Processing...</>) : (<><CheckCircle2 size={18} /> Complete Job</>)}
                      </button>
                  </>
              ) : (
@@ -577,30 +729,15 @@ const JobDetail: React.FC = () => {
             <h3 className="text-lg font-bold text-white mb-4">Mark as Not Done?</h3>
             <p className="text-sm text-gray-400 mb-6">This will remove the job from your pending list.</p>
             <div className="space-y-3">
-              <button 
-                onClick={() => handleCancel('next_time')} 
-                className="w-full py-3 bg-orange-600/20 text-orange-400 border border-orange-700/50 rounded font-bold hover:bg-orange-600/30 transition-colors"
-              >
-                Next Time / 2nd Run
-              </button>
-              <button 
-                onClick={() => handleCancel('cancelled')} 
-                className="w-full py-3 bg-red-600/20 text-red-400 border border-red-700/50 rounded font-bold hover:bg-red-600/30 transition-colors"
-              >
-                Cancelled
-              </button>
-              <button 
-                onClick={() => setShowCancelModal(false)} 
-                className="w-full py-3 text-gray-400 hover:text-white transition-colors"
-              >
-                Go Back
-              </button>
+              <button onClick={() => handleCancel('next_time')} className="w-full py-3 bg-orange-600/20 text-orange-400 border border-orange-700/50 rounded font-bold hover:bg-orange-600/30 transition-colors">Next Time / 2nd Run</button>
+              <button onClick={() => handleCancel('cancelled')} className="w-full py-3 bg-red-600/20 text-red-400 border border-red-700/50 rounded font-bold hover:bg-red-600/30 transition-colors">Cancelled</button>
+              <button onClick={() => setShowCancelModal(false)} className="w-full py-3 text-gray-400 hover:text-white transition-colors">Go Back</button>
             </div>
           </div>
         </div>
       )}
 
-      {showCreditModal && <CreditCardModal amount={String(price)} clientName={`${firstName} ${lastName}`} onClose={() => setShowCreditModal(false)} onProcess={(details) => { setIsCreditPaid(true); setShowCreditModal(false); setCcData(details); }} />}
+      {showCreditModal && <CreditCardModal amount={isSplitPayment ? splitCreditCard : String(price)} clientName={`${firstName} ${lastName}`} onClose={() => setShowCreditModal(false)} onProcess={(details) => { setIsCreditPaid(true); setShowCreditModal(false); setCcData(details); }} />}
 
       {/* DIRECT UPGRADE MODAL */}
       {showUpgradeModal && (
