@@ -13,7 +13,13 @@ import {
   Award,
   AlertCircle,
   Check,
-  Copy
+  Copy,
+  Wallet,
+  CreditCard,
+  Receipt,
+  Banknote,
+  Trophy,
+  Trash2,
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
 import { LogsheetSession, Worker } from '../../types';
@@ -174,7 +180,11 @@ const PayoutContractor: React.FC = () => {
   // --- CALCULATIONS ---
   const stats = session?.stats || {
     prodCash: 0, upsellCash: 0, prodCheque: 0, upsellCheque: 0,
-    prodGross: 0, upsellPayable: 0, iosCount: 0, stepCount: 0
+    prodGross: 0, upsellPayable: 0, iosCount: 0, stepCount: 0,
+    prodETransfer: 0, upsellETransfer: 0,
+    prodCreditCard: 0, upsellCreditCard: 0,
+    prodFlats: 0, prodPrepaid: 0, prodPrepaidSplit: 0, upsellPrepaid: 0,
+    prodBilled: 0,
   };
 
   // 1. Reconciliation Math
@@ -189,6 +199,12 @@ const PayoutContractor: React.FC = () => {
 
   const systemUpsellCheque = stats.upsellCheque;
   const actualProdCheque = totalChequeInput - systemUpsellCheque;
+
+  // Combined totals for display-only payment methods
+  const totalETransfer = (stats.prodETransfer || 0) + (stats.upsellETransfer || 0);
+  const totalCreditCard = (stats.prodCreditCard || 0) + (stats.upsellCreditCard || 0);
+  const totalPrepaid = (stats.prodFlats || 0) + (stats.prodPrepaid || 0) + (stats.prodPrepaidSplit || 0) + (stats.upsellPrepaid || 0);
+  const totalBilled = stats.prodBilled || 0;
 
   // 2. EQ Calculations
   const taxDivisor = 1.05;
@@ -245,6 +261,39 @@ const PayoutContractor: React.FC = () => {
     }
   };
 
+  const handleRemoveBonus = async (bonusId: number) => {
+    if (!session) return;
+
+    const bonusToRemove = session.bonuses?.find(b => b.id === bonusId);
+    if (!bonusToRemove) return;
+
+    if (!window.confirm(`Remove ${bonusToRemove.type} bonus of $${bonusToRemove.amount.toFixed(2)}?`)) {
+      return;
+    }
+
+    const updatedBonuses = (session.bonuses || []).filter(b => b.id !== bonusId);
+
+    const currentPay = session.validation?.finalCommission || 0;
+    const newPay = currentPay - bonusToRemove.amount;
+
+    const updatedValidation = session.validation
+      ? {
+          ...session.validation,
+          finalCommission: newPay,
+        }
+      : undefined;
+
+    try {
+      await sessionService.updateLogsheetSession(session.id, {
+        bonuses: updatedBonuses,
+        validation: updatedValidation,
+      });
+      handleRefreshData();
+    } catch (err) {
+      alert('Error removing bonus: ' + err);
+    }
+  };
+
   const handleFinalize = async () => {
     if (!session) return;
     setLoading(true);
@@ -274,6 +323,20 @@ const PayoutContractor: React.FC = () => {
       alert('Error saving payout: ' + err);
       setLoading(false);
     }
+  };
+
+  // --- HELPER: Format bonus display ---
+  const formatBonusDisplay = (bonus: any): string => {
+    if (bonus.type === 'Other') {
+      return bonus.customDescription || 'Other';
+    }
+    
+    if (bonus.placing === 'other') {
+      return `${bonus.type} - ${bonus.customDescription}`;
+    }
+    
+    const placingStr = bonus.placing === 1 ? '1st' : bonus.placing === 2 ? '2nd' : bonus.placing === 3 ? '3rd' : `${bonus.placing}th`;
+    return `${bonus.type} - ${placingStr} Place`;
   };
 
   // --- RENDER TRANSACTION ROW ---
@@ -526,133 +589,263 @@ const PayoutContractor: React.FC = () => {
             </div>
           </div>
 
-          {/* 3. RECONCILIATION & FINAL ACTIONS */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-10">
+          {/* 3. RECONCILIATION (Full Width) */}
+          <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <Receipt size={20} className="text-green-400" /> Reconciliation
+            </h3>
 
-            {/* Cash/Cheque Inputs */}
-            <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5">
-              <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                <Truck size={20} className="text-green-400" /> Reconciliation
-              </h3>
-
-              {/* Cash Section */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700 mb-4">
-                <div className="flex justify-between mb-2">
-                  <label className="text-sm font-bold text-gray-300">Cash Collected</label>
-                  <span className="text-sm text-gray-400">
-                    Expected: ${systemTotalCash.toFixed(2)}
-                  </span>
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* Cash Input */}
+              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-2 mb-3">
+                  <Banknote size={18} className="text-green-400" />
+                  <span className="text-sm font-bold text-gray-300">Cash Collected</span>
                 </div>
-                <div className="flex gap-4 mb-2">
+                <div className="text-xs text-gray-500 mb-2">
+                  Expected: <span className="font-mono text-green-300">${systemTotalCash.toFixed(2)}</span>
+                </div>
+                <div className="flex gap-2 mb-2">
                   <input
                     type="number"
                     value={cashBills}
                     onChange={(e) => setCashBills(e.target.value)}
-                    className="flex-1 bg-gray-800 border border-gray-600 rounded p-2 text-white placeholder-gray-500"
+                    className="flex-1 bg-gray-800 border border-gray-600 rounded p-2 text-white placeholder-gray-500 text-sm"
                     placeholder="Bills ($)"
                   />
                   <input
                     type="number"
                     value={cashChange}
                     onChange={(e) => setCashChange(e.target.value)}
-                    className="flex-1 bg-gray-800 border border-gray-600 rounded p-2 text-white placeholder-gray-500"
+                    className="flex-1 bg-gray-800 border border-gray-600 rounded p-2 text-white placeholder-gray-500 text-sm"
                     placeholder="Change ($)"
                   />
                 </div>
                 {cashDiff !== 0 && (
-                  <div className={`text-xs flex items-center gap-2 p-2 rounded ${cashDiff < 0 ? 'text-red-400 bg-red-900/20' : 'text-green-400 bg-green-900/20'}`}>
-                    <AlertCircle size={12} />
+                  <div className={`text-sm flex items-center gap-2 p-3 rounded-lg font-bold ${
+                    cashDiff < 0 
+                      ? 'text-red-300 bg-red-900/40 border border-red-700' 
+                      : 'text-green-300 bg-green-900/40 border border-green-700'
+                  }`}>
+                    <AlertCircle size={18} />
                     <span>
-                      {cashDiff < 0 ? 'Shortage' : 'Overage'}: {cashDiff > 0 ? '+' : ''}{cashDiff.toFixed(2)}
-                      (Adjusts EQ)
+                      {cashDiff < 0 ? 'SHORTAGE' : 'OVERAGE'}: {cashDiff > 0 ? '+' : ''}${cashDiff.toFixed(2)}
                     </span>
                   </div>
                 )}
               </div>
 
-              {/* Cheque Section */}
+              {/* Cheque Input */}
               <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                <div className="flex justify-between mb-2">
-                  <label className="text-sm font-bold text-gray-300">Cheques Collected</label>
-                  <span className="text-sm text-gray-400">
-                    Expected: ${systemTotalCheque.toFixed(2)}
-                  </span>
+                <div className="flex items-center gap-2 mb-3">
+                  <Receipt size={18} className="text-blue-400" />
+                  <span className="text-sm font-bold text-gray-300">Cheques Collected</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-2">
+                  Expected: <span className="font-mono text-blue-300">${systemTotalCheque.toFixed(2)}</span>
                 </div>
                 <input
                   type="number"
                   value={chequeAmount}
                   onChange={(e) => setChequeAmount(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white mb-2 placeholder-gray-500"
+                  className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white mb-2 placeholder-gray-500 text-sm"
                   placeholder="0.00"
                 />
                 {chequeDiff !== 0 && (
-                  <div className={`text-xs flex items-center gap-2 p-2 rounded ${chequeDiff < 0 ? 'text-red-400 bg-red-900/20' : 'text-green-400 bg-green-900/20'}`}>
-                    <AlertCircle size={12} />
+                  <div className={`text-sm flex items-center gap-2 p-3 rounded-lg font-bold ${
+                    chequeDiff < 0 
+                      ? 'text-red-300 bg-red-900/40 border border-red-700' 
+                      : 'text-green-300 bg-green-900/40 border border-green-700'
+                  }`}>
+                    <AlertCircle size={18} />
                     <span>
-                      {chequeDiff < 0 ? 'Shortage' : 'Overage'}: {chequeDiff > 0 ? '+' : ''}{chequeDiff.toFixed(2)}
-                      (Adjusts EQ)
+                      {chequeDiff < 0 ? 'SHORTAGE' : 'OVERAGE'}: {chequeDiff > 0 ? '+' : ''}${chequeDiff.toFixed(2)}
                     </span>
                   </div>
                 )}
               </div>
-            </div>
 
-            {/* Final Summary */}
-            <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5 flex flex-col justify-between">
-              <div>
-                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                  <Calculator size={20} className="text-blue-400" /> Deductions
-                </h3>
-
-                <div className="space-y-4">
-                  <div className="bg-gray-900/50 p-3 rounded border border-gray-700 flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-gray-300 text-sm">
-                      <Truck size={16} />
-                      <span>Machine Rental Fee ($10.00)</span>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={machineRental}
-                      onChange={(e) => setMachineRental(e.target.checked)}
-                      className="w-5 h-5 accent-blue-500 rounded cursor-pointer"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-xs text-gray-400 uppercase font-bold mb-1 block">Other Deductions</label>
-                    <input
-                      type="number"
-                      value={deductions}
-                      onChange={(e) => setDeductions(e.target.value)}
-                      className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white placeholder-gray-500"
-                      placeholder="0.00"
-                    />
-                  </div>
+              {/* E-Transfer (Display Only) */}
+              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-2 mb-3">
+                  <Wallet size={18} className="text-cyan-400" />
+                  <span className="text-sm font-bold text-gray-300">E-Transfer</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-2">System Total</div>
+                <div className="text-2xl font-bold font-mono text-cyan-400">
+                  ${totalETransfer.toFixed(2)}
                 </div>
               </div>
 
-              <div className="mt-8 pt-4 border-t border-gray-600">
-                <div className="flex justify-between items-end mb-4">
-                  <span className="text-lg font-bold text-white">
-                    Final Payout
-                  </span>
-                  <div className="text-right">
+              {/* Credit Card (Display Only) */}
+              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-2 mb-3">
+                  <CreditCard size={18} className="text-orange-400" />
+                  <span className="text-sm font-bold text-gray-300">Credit Card</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-2">System Total</div>
+                <div className="text-2xl font-bold font-mono text-orange-400">
+                  ${totalCreditCard.toFixed(2)}
+                </div>
+              </div>
+
+              {/* Prepaid (Display Only) */}
+              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-2 mb-3">
+                  <Wallet size={18} className="text-indigo-400" />
+                  <span className="text-sm font-bold text-gray-300">Prepaid</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-2">System Total</div>
+                <div className="text-2xl font-bold font-mono text-indigo-400">
+                  ${totalPrepaid.toFixed(2)}
+                </div>
+              </div>
+
+              {/* Billed (Display Only) */}
+              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-2 mb-3">
+                  <Receipt size={18} className="text-gray-400" />
+                  <span className="text-sm font-bold text-gray-300">Billed</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-2">System Total</div>
+                <div className="text-2xl font-bold font-mono text-gray-400">
+                  ${totalBilled.toFixed(2)}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 4. DEDUCTIONS & FINAL PAYOUT (Full Width) */}
+          <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5 mb-10">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <Calculator size={20} className="text-blue-400" /> Deductions & Final Payout
+            </h3>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Deductions Column */}
+              <div className="space-y-4">
+                <div className="bg-gray-900/50 p-3 rounded border border-gray-700 flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-gray-300 text-sm">
+                    <Truck size={16} />
+                    <span>Machine Rental Fee ($10.00)</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={machineRental}
+                    onChange={(e) => setMachineRental(e.target.checked)}
+                    className="w-5 h-5 accent-blue-500 rounded cursor-pointer"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs text-gray-400 uppercase font-bold mb-1 block">Other Deductions</label>
+                  <input
+                    type="number"
+                    value={deductions}
+                    onChange={(e) => setDeductions(e.target.value)}
+                    className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white placeholder-gray-500"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
+              {/* Bonuses Column */}
+              <div>
+                <label className="text-xs text-gray-400 uppercase font-bold mb-2 block flex items-center gap-2">
+                  <Trophy size={14} className="text-yellow-400" /> Bonuses
+                </label>
+                {session.bonuses && session.bonuses.length > 0 ? (
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {session.bonuses.map((bonus) => (
+                      <div 
+                        key={bonus.id} 
+                        className="flex items-center justify-between bg-yellow-900/20 p-2 rounded border border-yellow-700/50"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Trophy size={14} className="text-yellow-400" />
+                          <span className="text-sm text-white">{formatBonusDisplay(bonus)}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-green-400">+${bonus.amount.toFixed(2)}</span>
+                          <button
+                            onClick={() => handleRemoveBonus(bonus.id)}
+                            className="text-red-400 hover:text-red-300 p-1"
+                            title="Remove bonus"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="text-right text-sm text-yellow-400 font-bold pt-1 border-t border-gray-700">
+                      Total Bonuses: +${bonusTotal.toFixed(2)}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-gray-900/50 p-4 rounded border border-gray-700 text-center text-gray-500 text-sm">
+                    No bonuses assigned
+                  </div>
+                )}
+              </div>
+
+              {/* Final Payout Column */}
+              <div className="flex flex-col justify-between">
+                <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700 mb-4">
+                  <div className="text-xs text-gray-500 uppercase font-bold mb-2">Breakdown</div>
+                  <div className="space-y-1 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Production</span>
+                      <span className="font-mono text-white">${productionPay.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Upsell</span>
+                      <span className="font-mono text-white">${upsellCommission.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">IOS/PB</span>
+                      <span className="font-mono text-white">${iosCommission.toFixed(2)}</span>
+                    </div>
+                    {bonusTotal > 0 && (
+                      <div className="flex justify-between text-yellow-400">
+                        <span>Bonuses</span>
+                        <span className="font-mono">+${bonusTotal.toFixed(2)}</span>
+                      </div>
+                    )}
+                    {machineDeduction > 0 && (
+                      <div className="flex justify-between text-red-400">
+                        <span>Machine Rental</span>
+                        <span className="font-mono">-${machineDeduction.toFixed(2)}</span>
+                      </div>
+                    )}
+                    {totalDeductions > 0 && (
+                      <div className="flex justify-between text-red-400">
+                        <span>Other Deductions</span>
+                        <span className="font-mono">-${totalDeductions.toFixed(2)}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex justify-between items-end mb-4">
+                    <span className="text-lg font-bold text-white">Final Payout</span>
                     <span className="text-3xl font-bold text-green-400 font-mono tracking-tight">
                       ${finalPay.toFixed(2)}
                     </span>
                   </div>
-                </div>
 
-                <button
-                  onClick={handleFinalize}
-                  className="w-full py-3 rounded-lg font-bold text-lg flex items-center justify-center gap-2 shadow-lg bg-green-600 hover:bg-green-500 text-white transition-all active:scale-[0.98]"
-                >
-                  <CheckCircle size={20} />{' '}
-                  {session.validation?.isValidated ? 'Update Payout' : 'Finalize & Paid'}
-                </button>
+                  <button
+                    onClick={handleFinalize}
+                    className="w-full py-3 rounded-lg font-bold text-lg flex items-center justify-center gap-2 shadow-lg bg-green-600 hover:bg-green-500 text-white transition-all active:scale-[0.98]"
+                  >
+                    <CheckCircle size={20} />{' '}
+                    {session.validation?.isValidated ? 'Update Payout' : 'Finalize & Paid'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
+
         </div>
       </div>
 
