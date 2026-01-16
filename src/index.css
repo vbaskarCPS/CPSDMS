@@ -212,10 +212,75 @@ body {
     -moz-transform-origin: 0 0;
   }
   
-  /* Prevent horizontal scroll from zoom */
   body {
     overflow-x: hidden;
-    width: 108.7%; /* 1/0.92 to compensate */
+    width: 108.7%;
+  }
+
+  /* Smaller form elements */
+  input,
+  select,
+  textarea {
+    font-size: 13px !important;
+    padding: 6px 8px !important;
+    min-height: 36px;
+  }
+
+  input[type="number"],
+  input[type="email"],
+  input[type="tel"],
+  input[type="text"] {
+    font-size: 13px !important;
+  }
+
+  /* Inputs with left icons - preserve padding-left */
+  input.pl-9,
+  input.pl-8 {
+    padding-left: 32px !important;
+  }
+
+  /* Labels */
+  label {
+    font-size: 9px !important;
+  }
+
+  /* Modal padding reduction */
+  .p-4 {
+    padding: 10px !important;
+  }
+
+  .p-6 {
+    padding: 12px !important;
+  }
+
+  /* Headings in modals */
+  h2, h3, h4 {
+    font-size: 14px !important;
+  }
+
+  /* Spacing between elements */
+  .space-y-6 > * + * {
+    margin-top: 12px !important;
+  }
+
+  .space-y-4 > * + * {
+    margin-top: 8px !important;
+  }
+
+  .gap-4 {
+    gap: 10px !important;
+  }
+
+  .gap-3 {
+    gap: 8px !important;
+  }
+
+  .mb-4 {
+    margin-bottom: 10px !important;
+  }
+
+  .mb-3 {
+    margin-bottom: 8px !important;
   }
 }
 
@@ -227,10 +292,190 @@ body {
     -moz-transform-origin: 0 0;
   }
   
-  /* Prevent horizontal scroll from zoom */
   body {
     overflow-x: hidden;
-    width: 117.65%; /* 1/0.85 to compensate */
+    width: 117.65%;
+  }
+
+  /* Aggressive form element sizing */
+  input,
+  select,
+  textarea {
+    font-size: 11px !important;
+    padding: 5px 6px !important;
+    min-height: 32px;
+    border-radius: 4px !important;
+  }
+
+  input[type="number"],
+  input[type="email"],
+  input[type="tel"],
+  input[type="text"] {
+    font-size: 11px !important;
+  }
+
+  /* Inputs with left icons */
+  input.pl-9,
+  input.pl-8 {
+    padding-left: 28px !important;
+  }
+
+  /* Icons inside inputs - make smaller */
+  input + svg,
+  .relative svg {
+    width: 12px !important;
+    height: 12px !important;
+  }
+
+  /* Labels - very compact */
+  label {
+    font-size: 8px !important;
+    margin-bottom: 2px !important;
+  }
+
+  /* The [10px] labels */
+  .text-\[10px\] {
+    font-size: 8px !important;
+  }
+
+  .text-\[9px\] {
+    font-size: 7px !important;
+  }
+
+  /* Modal padding - very compact */
+  .p-4 {
+    padding: 8px !important;
+  }
+
+  .p-6 {
+    padding: 10px !important;
+  }
+
+  .p-3 {
+    padding: 6px !important;
+  }
+
+  /* Modal headers */
+  h2 {
+    font-size: 13px !important;
+  }
+
+  h3 {
+    font-size: 11px !important;
+  }
+
+  h4 {
+    font-size: 10px !important;
+  }
+
+  /* General text */
+  .text-xl {
+    font-size: 14px !important;
+  }
+
+  .text-lg {
+    font-size: 12px !important;
+  }
+
+  .text-sm {
+    font-size: 10px !important;
+  }
+
+  .text-xs {
+    font-size: 9px !important;
+  }
+
+  /* Spacing - very compact */
+  .space-y-6 > * + * {
+    margin-top: 8px !important;
+  }
+
+  .space-y-4 > * + * {
+    margin-top: 6px !important;
+  }
+
+  .space-y-3 > * + * {
+    margin-top: 5px !important;
+  }
+
+  .gap-4 {
+    gap: 8px !important;
+  }
+
+  .gap-3 {
+    gap: 6px !important;
+  }
+
+  .gap-2 {
+    gap: 4px !important;
+  }
+
+  .mb-4 {
+    margin-bottom: 8px !important;
+  }
+
+  .mb-3 {
+    margin-bottom: 6px !important;
+  }
+
+  .mb-2 {
+    margin-bottom: 4px !important;
+  }
+
+  /* Buttons - compact but still tappable */
+  button {
+    font-size: 11px !important;
+    padding: 6px 10px !important;
+    min-height: 32px;
+  }
+
+  /* Grid adjustments for split payment */
+  .grid-cols-2 {
+    gap: 6px !important;
+  }
+
+  .grid-cols-4 {
+    gap: 4px !important;
+  }
+
+  /* Border radius - slightly smaller */
+  .rounded-lg {
+    border-radius: 6px !important;
+  }
+
+  .rounded-xl {
+    border-radius: 8px !important;
+  }
+
+  /* Placeholder text */
+  input::placeholder,
+  textarea::placeholder {
+    font-size: 10px !important;
+  }
+
+  /* Select dropdowns */
+  select option {
+    font-size: 11px !important;
+  }
+
+  /* Property type buttons (FP/FO/BO) */
+  .flex > button.flex-1 {
+    padding: 4px 2px !important;
+    font-size: 10px !important;
+  }
+
+  /* Credit card modal specific */
+  .font-mono {
+    font-size: 11px !important;
+  }
+
+  /* Price display */
+  .text-2xl {
+    font-size: 16px !important;
+  }
+
+  .text-green-400.font-mono {
+    font-size: 13px !important;
   }
 }
 
@@ -244,6 +489,24 @@ body {
   
   body {
     overflow-x: hidden;
-    width: 133.33%; /* 1/0.75 to compensate */
+    width: 133.33%;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 10px !important;
+    padding: 4px 5px !important;
+    min-height: 28px;
+  }
+
+  label {
+    font-size: 7px !important;
+  }
+
+  button {
+    font-size: 10px !important;
+    padding: 5px 8px !important;
+    min-height: 28px;
   }
 }
