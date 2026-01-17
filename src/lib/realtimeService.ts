@@ -298,3 +298,47 @@ class RealtimeService {
 }
 
 export const realtimeService = RealtimeService.getInstance();
+
+// --- CONVENIENCE EXPORTS FOR ROLE-BASED SUBSCRIPTIONS ---
+
+/**
+ * Subscribe to all relevant realtime updates for a Contractor (Worker).
+ * Subscribes to: transactions, bookings, logsheet sessions, routes
+ * Returns an unsubscribe function to clean up all subscriptions.
+ */
+export function subscribeAsContractor(callback: SubscriptionCallback): () => void {
+  const unsubTx = realtimeService.subscribeToTransactions(callback);
+  const unsubBookings = realtimeService.subscribeToBookings(callback);
+  const unsubSessions = realtimeService.subscribeToLogsheetSessions(callback);
+  const unsubRoutes = realtimeService.subscribeToRoutes(callback);
+
+  // Return combined unsubscribe function
+  return () => {
+    unsubTx();
+    unsubBookings();
+    unsubSessions();
+    unsubRoutes();
+  };
+}
+
+/**
+ * Subscribe to all relevant realtime updates for a Route Manager.
+ * Subscribes to: transactions, bookings, logsheet sessions, routes, users
+ * Returns an unsubscribe function to clean up all subscriptions.
+ */
+export function subscribeAsRouteManager(callback: SubscriptionCallback): () => void {
+  const unsubTx = realtimeService.subscribeToTransactions(callback);
+  const unsubBookings = realtimeService.subscribeToBookings(callback);
+  const unsubSessions = realtimeService.subscribeToLogsheetSessions(callback);
+  const unsubRoutes = realtimeService.subscribeToRoutes(callback);
+  const unsubUsers = realtimeService.subscribeToUsers(callback);
+
+  // Return combined unsubscribe function
+  return () => {
+    unsubTx();
+    unsubBookings();
+    unsubSessions();
+    unsubRoutes();
+    unsubUsers();
+  };
+}
