@@ -1,5 +1,18 @@
 // src/types/index.ts
 
+// --- COMMAND CENTER (Multi-tenant) ---
+export type Region = 'West' | 'Central' | 'East';
+
+export interface CommandCenter {
+  id: string;
+  username: string;
+  displayName: string;
+  region: Region;
+  workerbookSheetId: string;
+  masterbookingsSheetId: string;
+  createdAt?: string;
+}
+
 // --- USER & AUTH ---
 
 export interface ManagementUser {
@@ -9,6 +22,7 @@ export interface ManagementUser {
   name: string; // "Vijay Baskaran"
   phone?: string; // Manager's phone number
   role: 'Admin' | 'RouteManager'; 
+  commandCenterId?: string; // Links to CommandCenter.id
 }
 
 // --- BONUS STRUCTURE ---
@@ -36,6 +50,7 @@ export interface Worker {
   customBaseRate?: number;  // Optional override
   
   assignedManagerId?: string; // Links to ManagementUser.userId
+  commandCenterId?: string;   // Links to CommandCenter.id
   
   // --- UPSELL CONTROL ---
   upsellsEnabled?: boolean; // Defaults to true if not set
@@ -48,6 +63,7 @@ export interface RouteData {
   managerId: string; 
   assignedWorkerIds: string[]; // Changed from assignedWorkerId: string | null
   streets?: string[];
+  commandCenterId?: string; // Links to CommandCenter.id
 }
 
 export interface DailySessionData {
@@ -55,7 +71,8 @@ export interface DailySessionData {
   managers: ManagementUser[]; 
   workers: Worker[]; 
   routes: RouteData[]; 
-  pendingBookings: MasterBooking[]; 
+  pendingBookings: MasterBooking[];
+  commandCenterId?: string; // Links to CommandCenter.id
 }
 
 // --- PAYOUT VALIDATION ---
@@ -98,7 +115,9 @@ export interface LogsheetSession {
 
   // Payout Data
   validation?: SessionValidation;
-  bonuses?: Bonus[]; 
+  bonuses?: Bonus[];
+  
+  commandCenterId?: string; // Links to CommandCenter.id
 }
 
 export interface SessionStats {
@@ -160,6 +179,8 @@ export interface MasterBooking {
   'FO/BO/FP'?: 'FO' | 'BO' | 'FP' | 'SS' | 'SSP' | 'Ramp';
   'Contractor Number'?: string;
   
+  commandCenterId?: string; // Links to CommandCenter.id
+  
   // Allow additional dynamic properties (like 'Gate', 'House Number', etc.)
   [key: string]: any;
 }
@@ -214,6 +235,8 @@ export interface SessionTransaction {
   refId?: string;
   itemDescription?: string;
   paymentBreakdown?: Record<string, number>;
+  
+  commandCenterId?: string; // Links to CommandCenter.id
 }
 
 // Changed 'gross' to 'upGross' for clarity - sorts by upsell gross only

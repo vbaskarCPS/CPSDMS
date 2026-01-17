@@ -1,182 +1,205 @@
 // src/lib/feedParser.ts
 import * as XLSX from 'xlsx';
+import { commandCenterService } from './commandCenterService';
 import { DailySessionData, ManagementUser, Worker, RouteData, MasterBooking } from '../types';
 import { formatPhoneNumber, normalizeEmail } from './validationUtils';
 
-// FIX: Create deterministic IDs so re-uploads don't create duplicate users
-const generateConsistentId = (name: string, rolePrefix: string) => {
-    return `${rolePrefix}_${name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-};
-
-const generateRMUsername = (fullName: string): string => {
-  if (!fullName) return '';
+/**
+ * Parses a Daily Session Excel file and returns structured data.
+ * Associates all data with the current command center.
+ */
+export async function parseDailySessionXLSX(file: File): Promise<DailySessionData> {
+  const ccId = commandCenterService.getCurrentCommandCenterId();
   
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        
+        // Expected sheets
+        const managersSheet = workbook.Sheets['Managers'];
+        const workersSheet = workbook.Sheets['Workers'];
+        const routesSheet = workbook.Sheets['Routes'];
+        const bookingsSheet = workbook.Sheets['Bookings'];
+        
+        if (!managersSheet || !workersSheet || !routesSheet) {
+          throw new Error('Missing required sheets. Expected: Managers, Workers, Routes');
+        }
+        
+        // Parse managers
+        const managersRaw = XLSX.utils.sheet_to_json<any>(managersSheet, { defval: '' });
+        const managers: ManagementUser[] = [];
+        const managersMap = new Map<string, ManagementUser>();
+        
+        managersRaw.forEach((row, idx) => {
+          const name = row['Manager Name']?.toString().trim() || row['Name']?.toString().trim();
+          const password = row['Password']?.toString().trim();
+          const phone = row['Phone']?.toString().trim() || '';
+          
+          if (!name) return;
+          if (!password) {
+            console.warn(`⚠️ Manager "${name}" has no password, skipping.`);
+            return;
+          }
+          
+          const userId = generateConsistentId(name, 'rm');
+          const username = generateRMUsername(name);
+          
+          const manager: ManagementUser = {
+            userId,
+            name,
+            username,
+            password,
+            phone: formatPhoneNumber(phone),
+            role: 'RouteManager',
+            commandCenterId: ccId || undefined,
+          };
+          
+          managers.push(manager);
+          managersMap.set(name, manager);
+        });
+        
+        // Parse workers
+        const workersRaw = XLSX.utils.sheet_to_json<any>(workersSheet, { defval: '' });
+        const workers: Worker[] = [];
+        
+        workersRaw.forEach((row) => {
+          const contractorId = row['Contractor ID']?.toString().trim() || row['ID']?.toString().trim();
+          const firstName = row['First Name']?.toString().trim() || '';
+          const lastName = row['Last Name']?.toString().trim() || '';
+          const cellPhone = row['Cell Phone']?.toString().trim() || row['Phone']?.toString().trim() || '';
+          const email = row['Email']?.toString().trim() || '';
+          const managerName = row['Manager']?.toString().trim() || '';
+          const alumniRate = parseFloat(row['Alumni Rate']) || 0.40;
+          const silverRate = parseFloat(row['Silver Rate']) || 0.50;
+          const status = row['Status']?.toString().trim() || 'Return';
+          
+          if (!contractorId) {
+            console.warn(`⚠️ Worker ${firstName} ${lastName} has no contractor ID, skipping.`);
+            return;
+          }
+          
+          const assignedManager = managersMap.get(managerName);
+          
+          workers.push({
+            contractorId,
+            firstName,
+            lastName,
+            cellPhone: formatPhoneNumber(cellPhone),
+            email: normalizeEmail(email),
+            status: status as 'Rookie' | 'Return' | 'Alumni',
+            alumniRate,
+            silverRate,
+            assignedManagerId: assignedManager?.userId,
+            upsellsEnabled: true,
+            commandCenterId: ccId || undefined,
+          });
+        });
+        
+        // Parse routes
+        const routesRaw = XLSX.utils.sheet_to_json<any>(routesSheet, { defval: '' });
+        const routes: RouteData[] = [];
+        
+        routesRaw.forEach((row) => {
+          const routeCode = row['Route Code']?.toString().trim() || row['Route']?.toString().trim();
+          const managerName = row['Manager']?.toString().trim() || '';
+          const streetsRaw = row['Streets']?.toString() || '';
+          
+          if (!routeCode) return;
+          
+          const manager = managersMap.get(managerName);
+          if (managerName && !manager) {
+            console.warn(`⚠️ Route ${routeCode} references manager "${managerName}" not found. Skipping.`);
+            return;
+          }
+          
+          const streets = streetsRaw.split(',').map(s => s.trim()).filter(Boolean);
+          
+          routes.push({
+            routeCode,
+            managerId: manager?.userId || '',
+            assignedWorkerIds: [],
+            streets,
+            commandCenterId: ccId || undefined,
+          });
+        });
+        
+        // Parse bookings (optional)
+        const pendingBookings: MasterBooking[] = [];
+        
+        if (bookingsSheet) {
+          const bookingsRaw = XLSX.utils.sheet_to_json<any>(bookingsSheet, { defval: '' });
+          
+          bookingsRaw.forEach((row, idx) => {
+            const routeNumber = row['Route']?.toString().trim() || row['Route Number']?.toString().trim();
+            if (!routeNumber) return;
+            
+            const booking: MasterBooking = {
+              'Booking ID': row['Booking ID']?.toString() || `job_${idx}_${Date.now()}`,
+              'Route Number': routeNumber,
+              'First Name': row['First Name']?.toString().trim() || '',
+              'Last Name': row['Last Name']?.toString().trim() || '',
+              'Full Address': row['Address']?.toString().trim() || row['Full Address']?.toString().trim() || '',
+              'Home Phone': formatPhoneNumber(row['Phone']?.toString() || row['Home Phone']?.toString() || ''),
+              'Cell Phone': formatPhoneNumber(row['Cell Phone']?.toString() || ''),
+              'Email Address': normalizeEmail(row['Email']?.toString() || row['Email Address']?.toString() || ''),
+              'Price': row['Price']?.toString() || '',
+              'FO/BO/FP': row['Service Type']?.toString().trim() as any || row['FO/BO/FP']?.toString().trim() as any,
+              'Prepaid': row['Prepaid']?.toString().toLowerCase() === 'x' || row['Prepaid']?.toString().toLowerCase() === 'yes' ? 'x' : undefined,
+              'Log Sheet Notes': row['Notes']?.toString() || row['Log Sheet Notes']?.toString() || '',
+              'Status': 'pending',
+              isPrebooked: true,
+              sort_order: idx,
+              commandCenterId: ccId || undefined,
+            };
+            
+            pendingBookings.push(booking);
+          });
+        }
+        
+        // Get today's date
+        const date = new Date().toISOString().split('T')[0];
+        
+        const result: DailySessionData = {
+          date,
+          managers,
+          workers,
+          routes,
+          pendingBookings,
+          commandCenterId: ccId || undefined,
+        };
+        
+        // Add import metadata for file-based imports
+        (result as any)._importMeta = {
+          source: 'file',
+          sheetsExported: false
+        };
+        
+        resolve(result);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// Helper functions
+function generateConsistentId(name: string, rolePrefix: string): string {
+  return `${rolePrefix}_${name.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+}
+
+function generateRMUsername(fullName: string): string {
+  if (!fullName) return '';
   const parts = fullName.trim().split(' ');
   const firstName = parts[0] || '';
-  const lastName = parts.slice(1).join(' ') || firstName; 
-
+  const lastName = parts.slice(1).join(' ') || firstName;
   const lastPart = lastName.substring(0, 3).toLowerCase();
   const firstPart = firstName.substring(0, 2).toLowerCase();
   return `${lastPart}${firstPart}`;
-};
-
-export const parseDailySessionXLSX = async (file: File): Promise<DailySessionData> => {
-  const data = await file.arrayBuffer();
-  const workbook = XLSX.read(data);
-
-  const routesSheet = workbook.Sheets['Routes'];
-  const workersSheet = workbook.Sheets['Workers'];
-  const bookingsSheet = workbook.Sheets['Bookings'];
-  const managersSheet = workbook.Sheets['Managers'];
-
-  if (!routesSheet || !workersSheet || !bookingsSheet) {
-      throw new Error("Invalid Data Feed. Missing required tabs: 'Routes', 'Workers', or 'Bookings'.");
-  }
-
-  if (!managersSheet) {
-      throw new Error("Invalid Data Feed. Missing required tab: 'Managers'.");
-  }
-
-  // Use { raw: false } to prevent Excel scientific notation issues (e.g., E1000)
-  const routesData: any[] = XLSX.utils.sheet_to_json(routesSheet, { raw: false });
-  const workersData: any[] = XLSX.utils.sheet_to_json(workersSheet, { raw: false });
-  const bookingsData: any[] = XLSX.utils.sheet_to_json(bookingsSheet, { raw: false });
-  const managersData: any[] = XLSX.utils.sheet_to_json(managersSheet, { raw: false });
-
-  const date = new Date().toISOString().split('T')[0];
-  
-  // --- PROCESS MANAGERS (from Managers tab) ---
-  const managersMap = new Map<string, ManagementUser>();
-  
-  managersData.forEach((row: any, index: number) => {
-    const managerName = row['Manager Name']?.trim();
-    const phoneNumber = row['Phone Number'] ? String(row['Phone Number']).trim() : '';
-    const password = row['Password'] ? String(row['Password']).trim() : '';
-
-    if (!managerName) {
-      console.warn(`⚠️ Managers Row ${index + 2} has no Manager Name, skipping.`);
-      return;
-    }
-
-    if (!password) {
-      console.warn(`⚠️ Managers Row ${index + 2} (${managerName}) has no Password, skipping.`);
-      return;
-    }
-
-    const username = generateRMUsername(managerName);
-    
-    managersMap.set(managerName, {
-      userId: generateConsistentId(managerName, 'rm'),
-      name: managerName,
-      username,
-      password,
-      phone: formatPhoneNumber(phoneNumber),
-      role: 'RouteManager'
-    });
-  });
-
-  const managers = Array.from(managersMap.values());
-
-  // --- PROCESS ROUTES ---
-  const routes: RouteData[] = [];
-  
-  routesData.forEach((row: any) => {
-    const managerName = row['Manager Assignment']?.trim();
-    const routeCode = row['RT #']?.trim();
-    const streetListRaw = row['Street_List'];
-
-    if (!routeCode) return;
-
-    if (managerName && !managersMap.has(managerName)) {
-      console.warn(`⚠️ Route ${routeCode} references manager "${managerName}" not found in Managers tab. Skipping route.`);
-      return;
-    }
-
-    if (managerName && routeCode) {
-      let streets: string[] = [];
-      if (typeof streetListRaw === 'string') {
-          streets = streetListRaw.split(',').map(s => s.trim()).filter(Boolean);
-      }
-
-      const manager = managersMap.get(managerName)!;
-      routes.push({ 
-          routeCode, 
-          managerId: manager.userId, 
-          assignedWorkerIds: [],
-          streets 
-      });
-    }
-  });
-
-  // --- PROCESS WORKERS ---
-  const workers: Worker[] = workersData.map((row: any, index: number) => {
-    const managerName = row['Manager']?.trim();
-    const assignedManager = managers.find(m => m.name === managerName);
-    const fullName = `${row['First Name'] || ''} ${row['Last Name'] || ''}`.trim();
-
-    // Get Contractor ID - handle null, undefined, empty string, and 0
-    const rawContractorId = row['Contractor ID'];
-    const contractorId = (rawContractorId !== undefined && rawContractorId !== null && String(rawContractorId).trim() !== '') 
-      ? String(rawContractorId).trim()
-      : generateConsistentId(fullName, 'wk');
-
-    // Debug logging for troubleshooting
-    if (!contractorId || contractorId === 'wk_') {
-      console.warn(`⚠️ Workers Row ${index + 2} has invalid ID:`, { 
-        rawId: rawContractorId, 
-        firstName: row['First Name'],
-        lastName: row['Last Name'],
-        generatedId: contractorId 
-      });
-    }
-
-    const findVal = (keywords: string[]) => {
-      const key = Object.keys(row).find(k => 
-        keywords.some(kw => k.toLowerCase().includes(kw.toLowerCase()))
-      );
-      return key ? row[key] : undefined;
-    };
-
-    const alumniRate = Number(findVal(['Alumni']) || 0);
-    const silverRate = Number(findVal(['Silver']) || 0);
-
-    return {
-      contractorId,
-      firstName: row['First Name'] || '',
-      lastName: row['Last Name'] || '',
-      cellPhone: formatPhoneNumber(row['Cell Phone'] || ''),
-      status: 'Return' as const,
-      assignedManagerId: assignedManager ? assignedManager.userId : undefined,
-      alumniRate: isNaN(alumniRate) ? 0 : alumniRate,
-      silverRate: isNaN(silverRate) ? 0 : silverRate,
-    };
-  }).filter((w: any) => w.contractorId && w.contractorId !== 'wk_');
-
-  // --- PROCESS BOOKINGS ---
-  const pendingBookings: MasterBooking[] = bookingsData.map((row: any, index: number) => {
-    const routeNum = row['Route #'];
-    if (!routeNum) return null;
-
-    return {
-      'Booking ID': `job_${index}_${Date.now()}`, 
-      'Route Number': routeNum,
-      'First Name': row['First Name'] || '',
-      'Last Name': row['Last Name'] || '',
-      'House Number': row['House #'] || '',
-      'Street Name': row['Street Name'] || '',
-      'Full Address': `${row['House #'] || ''} ${row['Street Name'] || ''}`.trim(),
-      'Home Phone': formatPhoneNumber(row['Phone #'] || ''),
-      'Email Address': normalizeEmail(row['E-Mail'] || ''),
-      'Price': row['AER. AMT'], 
-      'FO/BO/FP': row['Service Type'], 
-      'Prepaid': row['PP']?.toLowerCase() === 'x' ? 'x' : undefined,
-      'Log Sheet Notes': row['Call 1st'] || '', 
-      'Status': 'pending',
-      'Completed': undefined,
-      isPrebooked: true,
-      sort_order: index, // ADDED: Preserve original Excel row order
-    } as MasterBooking;
-  }).filter(Boolean) as MasterBooking[];
-
-  return { date, managers, workers, routes, pendingBookings };
-};
+}

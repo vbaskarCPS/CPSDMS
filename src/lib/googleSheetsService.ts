@@ -1,5 +1,6 @@
 // src/lib/googleSheetsService.ts
-import { GOOGLE_SHEETS_CONFIG, isValidDateTab } from './googleSheetsConfig';
+import { getGoogleSheetsConfig, GOOGLE_OAUTH_CONFIG, SHEET_TABS, isValidDateTab } from './googleSheetsConfig';
+import { commandCenterService } from './commandCenterService';
 import { DailySessionData, ManagementUser, Worker, RouteData, MasterBooking } from '../types';
 import { formatPhoneNumber, normalizeEmail } from './validationUtils';
 
@@ -55,6 +56,15 @@ class GoogleSheetsService {
     return GoogleSheetsService.instance;
   }
 
+  // --- GET CURRENT CONFIG (throws if no CC context) ---
+  private getConfig() {
+    const config = getGoogleSheetsConfig();
+    if (!config) {
+      throw new Error('No command center context. Please log in to a command center first.');
+    }
+    return config;
+  }
+
   // --- INITIALIZATION ---
 
   public async initGapi(): Promise<void> {
@@ -91,8 +101,8 @@ class GoogleSheetsService {
     }
 
     this.tokenClient = window.google.accounts.oauth2.initTokenClient({
-      client_id: GOOGLE_SHEETS_CONFIG.clientId,
-      scope: GOOGLE_SHEETS_CONFIG.scopes,
+      client_id: GOOGLE_OAUTH_CONFIG.clientId,
+      scope: GOOGLE_OAUTH_CONFIG.scopes,
       callback: (response: any) => {
         if (response.access_token) {
           this.accessToken = response.access_token;
@@ -250,8 +260,9 @@ class GoogleSheetsService {
   // --- READ OPERATIONS ---
 
   public async checkTabExists(tabName: string): Promise<boolean> {
+    const config = this.getConfig();
     try {
-      await this.sheetsGet(GOOGLE_SHEETS_CONFIG.spreadsheets.workerbook, `'${tabName}'!A1`);
+      await this.sheetsGet(config.spreadsheets.workerbook, `'${tabName}'!A1`);
       return true;
     } catch (err: any) {
       if (err.message?.includes('Unable to parse range')) {
@@ -266,6 +277,9 @@ class GoogleSheetsService {
    * The returned data includes _importMeta with source and dateTab
    */
   public async importSessionData(dateTab: string): Promise<DailySessionData> {
+    const config = this.getConfig();
+    const ccId = commandCenterService.getCurrentCommandCenterId();
+    
     if (!isValidDateTab(dateTab)) {
       throw new Error(`Invalid date tab format: ${dateTab}. Use MmmDD format (e.g., Feb01)`);
     }
@@ -276,10 +290,10 @@ class GoogleSheetsService {
     }
 
     const [routesData, bookingsData, workersData, managersData] = await Promise.all([
-      this.sheetsGet(GOOGLE_SHEETS_CONFIG.spreadsheets.masterbookings, `'${GOOGLE_SHEETS_CONFIG.tabs.routes}'!A:G`),
-      this.sheetsGet(GOOGLE_SHEETS_CONFIG.spreadsheets.masterbookings, `'${GOOGLE_SHEETS_CONFIG.tabs.feedPlaceholder}'!A:M`),
-      this.sheetsGet(GOOGLE_SHEETS_CONFIG.spreadsheets.workerbook, `'${dateTab}'!A:K`),
-      this.sheetsGet(GOOGLE_SHEETS_CONFIG.spreadsheets.workerbook, `'${GOOGLE_SHEETS_CONFIG.tabs.managers}'!A:G`),
+      this.sheetsGet(config.spreadsheets.masterbookings, `'${SHEET_TABS.routes}'!A:G`),
+      this.sheetsGet(config.spreadsheets.masterbookings, `'${SHEET_TABS.feedPlaceholder}'!A:M`),
+      this.sheetsGet(config.spreadsheets.workerbook, `'${dateTab}'!A:K`),
+      this.sheetsGet(config.spreadsheets.workerbook, `'${SHEET_TABS.managers}'!A:G`),
     ]);
 
     const date = new Date().toISOString().split('T')[0];
@@ -307,6 +321,7 @@ class GoogleSheetsService {
         password,
         phone: formatPhoneNumber(phoneNumber),
         role: 'RouteManager',
+        commandCenterId: ccId || undefined,
       });
     }
 
@@ -337,6 +352,7 @@ class GoogleSheetsService {
           managerId: manager.userId,
           assignedWorkerIds: [],
           streets,
+          commandCenterId: ccId || undefined,
         });
       }
     }
@@ -374,6 +390,7 @@ class GoogleSheetsService {
         assignedManagerId: assignedManager?.userId,
         alumniRate,
         silverRate,
+        commandCenterId: ccId || undefined,
       });
     }
 
@@ -405,6 +422,7 @@ class GoogleSheetsService {
         isPrebooked: true,
         sort_order: i - 2,
         _sourceRow: i + 1,
+        commandCenterId: ccId || undefined,
       };
 
       pendingBookings.push(booking);
@@ -417,6 +435,7 @@ class GoogleSheetsService {
       workers, 
       routes, 
       pendingBookings,
+      commandCenterId: ccId || undefined,
     };
 
     // Add import metadata (will be stored in session)
@@ -440,9 +459,11 @@ class GoogleSheetsService {
       contractorId: string;
     }>
   ): Promise<number> {
+    const config = this.getConfig();
+    
     const currentData = await this.sheetsGet(
-      GOOGLE_SHEETS_CONFIG.spreadsheets.masterbookings,
-      `'${GOOGLE_SHEETS_CONFIG.tabs.feedPlaceholder}'!A:M`
+      config.spreadsheets.masterbookings,
+      `'${SHEET_TABS.feedPlaceholder}'!A:M`
     );
 
     const updates: { range: string; values: any[][] }[] = [];
@@ -462,7 +483,7 @@ class GoogleSheetsService {
         ) {
           const rowNum = i + 1;
           updates.push({
-            range: `'${GOOGLE_SHEETS_CONFIG.tabs.feedPlaceholder}'!L${rowNum}:M${rowNum}`,
+            range: `'${SHEET_TABS.feedPlaceholder}'!L${rowNum}:M${rowNum}`,
             values: [[booking.dateCompleted, booking.contractorId]],
           });
           matchCount++;
@@ -472,7 +493,7 @@ class GoogleSheetsService {
     }
 
     if (updates.length > 0) {
-      await this.sheetsBatchUpdate(GOOGLE_SHEETS_CONFIG.spreadsheets.masterbookings, updates);
+      await this.sheetsBatchUpdate(config.spreadsheets.masterbookings, updates);
     }
 
     return matchCount;
@@ -500,6 +521,8 @@ class GoogleSheetsService {
   ): Promise<void> {
     if (accounts.length === 0) return;
 
+    const config = this.getConfig();
+
     const rows = accounts.map(a => [
       a.routeNumber,
       a.firstName,
@@ -520,8 +543,8 @@ class GoogleSheetsService {
     ]);
 
     await this.sheetsAppend(
-      GOOGLE_SHEETS_CONFIG.spreadsheets.masterbookings,
-      `'${GOOGLE_SHEETS_CONFIG.tabs.accounts}'!A:P`,
+      config.spreadsheets.masterbookings,
+      `'${SHEET_TABS.accounts}'!A:P`,
       rows
     );
   }
@@ -545,6 +568,8 @@ class GoogleSheetsService {
   ): Promise<void> {
     if (logsheets.length === 0) return;
 
+    const config = this.getConfig();
+
     const rows = logsheets.map(l => [
       l.routeNumber,
       l.firstName,
@@ -562,8 +587,8 @@ class GoogleSheetsService {
     ]);
 
     await this.sheetsAppend(
-      GOOGLE_SHEETS_CONFIG.spreadsheets.masterbookings,
-      `'${GOOGLE_SHEETS_CONFIG.tabs.logsheets}'!A:M`,
+      config.spreadsheets.masterbookings,
+      `'${SHEET_TABS.logsheets}'!A:M`,
       rows
     );
   }
@@ -608,6 +633,8 @@ class GoogleSheetsService {
   ): Promise<void> {
     if (stats.length === 0) return;
 
+    const config = this.getConfig();
+
     const rows = stats.map(s => [
       dateTab,
       s.contractorId,
@@ -646,8 +673,8 @@ class GoogleSheetsService {
     ]);
 
     await this.sheetsAppend(
-      GOOGLE_SHEETS_CONFIG.spreadsheets.workerbook,
-      `'${GOOGLE_SHEETS_CONFIG.tabs.payoutStats}'!A:AH`,
+      config.spreadsheets.workerbook,
+      `'${SHEET_TABS.payoutStats}'!A:AH`,
       rows
     );
   }

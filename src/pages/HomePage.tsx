@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { KeyRound, AlertCircle, ShieldCheck, Lock } from 'lucide-react';
 import { sessionService } from '../lib/sessionService';
+import { commandCenterService, isSuperAdminCredentials } from '../lib/commandCenterService';
 import { setStorageItem } from '../lib/localStorage';
 
 const HomePage: React.FC = () => {
@@ -22,25 +23,36 @@ const HomePage: React.FC = () => {
     setLoading(true);
 
     try {
-      // 1. Check Admin
-      if (username === 'admin' && password === 'admin') {
+      // 1. Check Super Admin (Administrator/cps26records)
+      if (isSuperAdminCredentials(username, password)) {
+        // Clear any existing CC context
+        commandCenterService.clearCurrentCommandCenter();
+        commandCenterService.setSuperAdminMode(false);
+        navigate('/super-admin');
+        return;
+      }
+
+      // 2. Check Command Center login
+      const cc = await commandCenterService.authenticateCommandCenter(username, password);
+      if (cc) {
+        commandCenterService.setCurrentCommandCenter(cc);
+        commandCenterService.setSuperAdminMode(false);
         navigate('/admin');
         return;
       }
 
-      // 2. Check Route Manager
+      // 3. Check Route Manager
+      // Note: authenticateRM will set the CC context automatically based on the user's CC
       const rm = await sessionService.authenticateRM(username, password);
       if (rm) {
-        setStorageItem('current_user', rm); // Persist session locally
+        setStorageItem('current_user', rm);
         navigate('/rm-logbook');
         return;
       }
 
-      // 3. Check Worker
-      const worker = await sessionService.authenticateWorker(
-        username,
-        password
-      );
+      // 4. Check Worker
+      // Note: authenticateWorker will set the CC context automatically based on the user's CC
+      const worker = await sessionService.authenticateWorker(username, password);
       if (worker) {
         setStorageItem('current_user', worker);
         // Ensure session exists in cloud

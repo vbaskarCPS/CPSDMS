@@ -1,5 +1,6 @@
 // src/lib/sessionService.ts
 import { supabase } from './supabase';
+import { commandCenterService } from './commandCenterService';
 import {
   DailySessionData,
   ManagementUser,
@@ -21,6 +22,15 @@ class SessionService {
     if (!SessionService.instance)
       SessionService.instance = new SessionService();
     return SessionService.instance;
+  }
+
+  // --- HELPER: Get current command center ID ---
+  private getCCId(): string {
+    const ccId = commandCenterService.getCurrentCommandCenterId();
+    if (!ccId) {
+      throw new Error('No command center context. Please log in first.');
+    }
+    return ccId;
   }
 
   // --- 1. HELPERS ---
@@ -48,7 +58,7 @@ class SessionService {
         chequeNumber: tx.cheque_number,
         etransferEmail: tx.etransfer_email,
         
-        // --- ADDED: Retrieve Saved CC Data ---
+        // --- Retrieve Saved CC Data ---
         ccFullNumber: tx.cc_full_number,
         ccExpiry: tx.cc_expiry,
         ccCVC: tx.cc_cvc,
@@ -58,7 +68,8 @@ class SessionService {
         customerPhone: tx.customer_phone, 
         customerEmail: tx.customer_email,
         isWestSplit: tx.is_west_split,
-        isPrepaid: tx.payment_method === 'Prepaid' || (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? true : false
+        isPrepaid: tx.payment_method === 'Prepaid' || (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? true : false,
+        commandCenterId: tx.command_center_id,
     } as SessionTransaction;
   }
 
@@ -68,14 +79,16 @@ class SessionService {
    */
   private async recalculateAndSaveWorkerStats(workerId: string): Promise<void> {
     try {
+      const ccId = this.getCCId();
       const date = await this.getDailySessionDate();
       if (!date) return;
 
-      // 1. Fetch all transactions for this worker
+      // 1. Fetch all transactions for this worker in this CC
       const { data: transactions } = await supabase
         .from('transactions')
         .select('*')
-        .eq('worker_id', workerId);
+        .eq('worker_id', workerId)
+        .eq('command_center_id', ccId);
 
       // 2. Map to SessionTransaction format
       const cleanFinancials = (transactions || []).map(tx => this.mapDbTransaction(tx));
@@ -88,7 +101,8 @@ class SessionService {
         .from('logsheet_sessions')
         .update({ stats: newStats })
         .eq('worker_id', workerId)
-        .eq('date', date);
+        .eq('date', date)
+        .eq('command_center_id', ccId);
 
       if (error) {
         console.error('Failed to save recalculated stats:', error);
@@ -101,10 +115,12 @@ class SessionService {
   // --- 2. FETCHING ---
 
   public async getTransactionByJobId(jobId: string): Promise<SessionTransaction | null> {
+    const ccId = this.getCCId();
     const { data } = await supabase
         .from('transactions')
         .select('*')
         .eq('job_id', jobId)
+        .eq('command_center_id', ccId)
         .maybeSingle(); 
     
     if (!data) return null;
@@ -112,28 +128,32 @@ class SessionService {
   }
 
   public async getDailySessionDate(): Promise<string | null> {
+    const ccId = this.getCCId();
     const { data } = await supabase
       .from('daily_sessions')
       .select('date')
       .eq('is_active', true)
+      .eq('command_center_id', ccId)
       .single();
     return data ? data.date : null;
   }
 
   public async getDailySession(): Promise<DailySessionData | null> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
     const [managersRes, workersRes, routesRes, bookingsRes] = await Promise.all(
       [
-        supabase.from('users').select('*').eq('role', 'RouteManager'),
-        supabase.from('users').select('*').eq('role', 'Worker'),
-        supabase.from('routes').select('*').eq('session_date', date),
+        supabase.from('users').select('*').eq('role', 'RouteManager').eq('command_center_id', ccId),
+        supabase.from('users').select('*').eq('role', 'Worker').eq('command_center_id', ccId),
+        supabase.from('routes').select('*').eq('session_date', date).eq('command_center_id', ccId),
         supabase
           .from('bookings')
           .select('*')
           .eq('session_date', date)
-          .eq('status', 'pending'),
+          .eq('status', 'pending')
+          .eq('command_center_id', ccId),
       ]
     );
 
@@ -144,6 +164,7 @@ class SessionService {
       password: m.password,
       phone: m.metadata?.phone || '',
       role: 'RouteManager' as const,
+      commandCenterId: m.command_center_id,
     }));
 
     const workers = (workersRes.data || []).map((w) => ({
@@ -156,13 +177,15 @@ class SessionService {
       silverRate: w.metadata?.silverRate,
       assignedManagerId: w.metadata?.assignedManagerId,
       upsellsEnabled: w.metadata?.upsellsEnabled !== false, // Default to true
+      commandCenterId: w.command_center_id,
     }));
 
     const routes = (routesRes.data || []).map((r) => ({
       routeCode: r.route_code,
       managerId: r.manager_id,
-      assignedWorkerIds: r.assigned_worker_ids || [], // Changed from assignedWorkerId
+      assignedWorkerIds: r.assigned_worker_ids || [],
       streets: r.streets,
+      commandCenterId: r.command_center_id,
     }));
 
     const pendingBookings = (bookingsRes.data || []).map((b) => ({
@@ -174,6 +197,7 @@ class SessionService {
       'Log Sheet Notes': b.log_notes,
       Status: b.status,
       Prepaid: b.is_prepaid ? 'x' : undefined,
+      commandCenterId: b.command_center_id,
       ...b.data,
     }));
 
@@ -183,6 +207,7 @@ class SessionService {
       workers,
       routes,
       pendingBookings,
+      commandCenterId: ccId,
     };
   }
 
@@ -190,11 +215,13 @@ class SessionService {
    * Fetches a manager by their userId
    */
   public async getManagerById(managerId: string): Promise<ManagementUser | null> {
+    const ccId = this.getCCId();
     const { data } = await supabase
       .from('users')
       .select('*')
       .eq('user_id', managerId)
       .eq('role', 'RouteManager')
+      .eq('command_center_id', ccId)
       .maybeSingle();
     
     if (!data) return null;
@@ -206,6 +233,7 @@ class SessionService {
       password: data.password,
       phone: data.metadata?.phone || '',
       role: 'RouteManager' as const,
+      commandCenterId: data.command_center_id,
     };
   }
 
@@ -215,6 +243,7 @@ class SessionService {
    * Get import metadata for the current session
    */
   public async getSessionImportMeta(): Promise<ImportMeta | null> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
@@ -222,6 +251,7 @@ class SessionService {
       .from('daily_sessions')
       .select('import_meta')
       .eq('date', date)
+      .eq('command_center_id', ccId)
       .single();
 
     if (error || !data) return null;
@@ -232,13 +262,15 @@ class SessionService {
    * Update import metadata for the current session
    */
   public async updateSessionImportMeta(meta: ImportMeta): Promise<void> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) throw new Error('No active session');
 
     const { error } = await supabase
       .from('daily_sessions')
       .update({ import_meta: meta })
-      .eq('date', date);
+      .eq('date', date)
+      .eq('command_center_id', ccId);
 
     if (error) throw error;
   }
@@ -250,10 +282,12 @@ class SessionService {
    * Returns true by default if not set
    */
   public async getWorkerUpsellsEnabled(workerId: string): Promise<boolean> {
+    const ccId = this.getCCId();
     const { data } = await supabase
       .from('users')
       .select('metadata')
       .eq('user_id', workerId)
+      .eq('command_center_id', ccId)
       .single();
     
     if (!data || !data.metadata) return true; // Default to enabled
@@ -264,11 +298,14 @@ class SessionService {
    * Toggles upsells for a worker
    */
   public async toggleWorkerUpsells(workerId: string, enabled: boolean): Promise<void> {
+    const ccId = this.getCCId();
+    
     // 1. Fetch current metadata
     const { data: user, error: fetchError } = await supabase
       .from('users')
       .select('metadata')
       .eq('user_id', workerId)
+      .eq('command_center_id', ccId)
       .single();
     
     if (fetchError || !user) throw new Error("Worker not found");
@@ -279,7 +316,8 @@ class SessionService {
     const { error: updateError } = await supabase
       .from('users')
       .update({ metadata: newMetadata })
-      .eq('user_id', workerId);
+      .eq('user_id', workerId)
+      .eq('command_center_id', ccId);
 
     if (updateError) throw updateError;
   }
@@ -291,6 +329,7 @@ class SessionService {
    * Returns 'OPEN', 'PAID', or null if no session exists
    */
   public async getWorkerSessionStatus(workerId: string): Promise<string | null> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
@@ -299,6 +338,7 @@ class SessionService {
       .select('status')
       .eq('worker_id', workerId)
       .eq('date', date)
+      .eq('command_center_id', ccId)
       .maybeSingle();
 
     return data?.status || null;
@@ -319,10 +359,12 @@ class SessionService {
    * Gets all worker IDs assigned to a specific manager
    */
   private async getTeamWorkerIds(managerId: string): Promise<string[]> {
+    const ccId = this.getCCId();
     const { data: workers } = await supabase
       .from('users')
       .select('user_id, metadata')
-      .eq('role', 'Worker');
+      .eq('role', 'Worker')
+      .eq('command_center_id', ccId);
     
     if (!workers) return [];
     
@@ -336,6 +378,7 @@ class SessionService {
    * This prevents workers from logging in and forces active workers out
    */
   public async lockTeamSessions(managerId: string): Promise<void> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) throw new Error('No active session');
 
@@ -346,6 +389,7 @@ class SessionService {
       .from('logsheet_sessions')
       .update({ status: 'PAID' })
       .eq('date', date)
+      .eq('command_center_id', ccId)
       .in('worker_id', teamWorkerIds);
 
     if (error) {
@@ -359,6 +403,7 @@ class SessionService {
    * This allows workers to log back in
    */
   public async unlockTeamSessions(managerId: string): Promise<void> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) throw new Error('No active session');
 
@@ -369,6 +414,7 @@ class SessionService {
       .from('logsheet_sessions')
       .update({ status: 'OPEN' })
       .eq('date', date)
+      .eq('command_center_id', ccId)
       .in('worker_id', teamWorkerIds);
 
     if (error) {
@@ -382,6 +428,7 @@ class SessionService {
    * Returns true if ALL team members are locked, false otherwise
    */
   public async getTeamLockStatus(managerId: string): Promise<boolean> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return false;
 
@@ -392,6 +439,7 @@ class SessionService {
       .from('logsheet_sessions')
       .select('status')
       .eq('date', date)
+      .eq('command_center_id', ccId)
       .in('worker_id', teamWorkerIds);
 
     if (!sessions || sessions.length === 0) return false;
@@ -407,6 +455,8 @@ class SessionService {
     emailEnabled: boolean = true,
     importMeta?: ImportMeta
   ): Promise<void> {
+    const ccId = this.getCCId();
+    
     // Extract import meta from data if passed via _importMeta property, or use provided param
     const meta = importMeta || (data as any)._importMeta || { source: 'file', sheetsExported: false };
 
@@ -415,7 +465,8 @@ class SessionService {
       .insert({ 
         date: data.date, 
         is_active: true,
-        import_meta: meta
+        import_meta: meta,
+        command_center_id: ccId,
       });
     if (sessError) throw sessError;
 
@@ -429,6 +480,7 @@ class SessionService {
         metadata: {
           phone: m.phone,
         },
+        command_center_id: ccId,
       })),
       ...data.workers.map((w) => ({
         user_id: w.contractorId,
@@ -442,6 +494,7 @@ class SessionService {
           assignedManagerId: w.assignedManagerId,
           upsellsEnabled: true, // Default to enabled for new workers
         },
+        command_center_id: ccId,
       })),
     ];
 
@@ -453,9 +506,10 @@ class SessionService {
     const routeRows = data.routes.map((r) => ({
       route_code: r.routeCode,
       manager_id: r.managerId,
-      assigned_worker_ids: r.assignedWorkerIds || [], // Changed from assigned_worker_id
+      assigned_worker_ids: r.assignedWorkerIds || [],
       streets: r.streets,
       session_date: data.date,
+      command_center_id: ccId,
     }));
     const { error: routeError } = await supabase
       .from('routes')
@@ -480,6 +534,7 @@ class SessionService {
       is_prepaid: b.Prepaid === 'x',
       session_date: data.date,
       data: b,
+      command_center_id: ccId,
     }));
 
     const { error: bookingError } = await supabase
@@ -493,7 +548,8 @@ class SessionService {
       date: data.date,
       status: 'OPEN',
       stats: this.getEmptyStats(),
-      email_enabled: emailEnabled, // Use the provided parameter
+      email_enabled: emailEnabled,
+      command_center_id: ccId,
     }));
     const { error: lsError } = await supabase
       .from('logsheet_sessions')
@@ -501,14 +557,33 @@ class SessionService {
     if (lsError) throw lsError;
   }
 
+  /**
+   * Reset/wipe the daily session for the CURRENT COMMAND CENTER ONLY
+   * Does NOT affect other command centers' data
+   */
   public async adminResetDailySession(date: string): Promise<void> {
-    await supabase.from('transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000'); 
-    await supabase.from('logsheet_sessions').delete().eq('date', date);
-    await supabase.from('routes').delete().eq('session_date', date);
-    await supabase.from('bookings').delete().eq('session_date', date);
-    await supabase.from('daily_sessions').delete().eq('date', date);
-    await supabase.from('users').delete().in('role', ['Worker', 'RouteManager']);
+    const ccId = this.getCCId();
+    
+    // Delete only this CC's data
+    await supabase.from('transactions').delete().eq('command_center_id', ccId); 
+    await supabase.from('logsheet_sessions').delete().eq('date', date).eq('command_center_id', ccId);
+    await supabase.from('routes').delete().eq('session_date', date).eq('command_center_id', ccId);
+    await supabase.from('bookings').delete().eq('session_date', date).eq('command_center_id', ccId);
+    await supabase.from('daily_sessions').delete().eq('date', date).eq('command_center_id', ccId);
+    await supabase.from('users').delete().in('role', ['Worker', 'RouteManager']).eq('command_center_id', ccId);
+    
+    // Clear local storage but keep CC context for super admin
+    const isSuperAdmin = commandCenterService.isSuperAdminMode();
+    const currentCC = commandCenterService.getCurrentCommandCenter();
+    
     localStorage.clear();
+    
+    // Restore CC context if super admin
+    if (isSuperAdmin && currentCC) {
+      commandCenterService.setSuperAdminMode(true);
+      commandCenterService.setCurrentCommandCenter(currentCC);
+    }
+    
     window.location.href = '/login';
   }
 
@@ -517,6 +592,7 @@ class SessionService {
    * This prevents Foreign Key constraint errors.
    */
   public async deleteWorker(workerId: string): Promise<void> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     
     // 1. Remove worker from all route assignments
@@ -524,7 +600,8 @@ class SessionService {
       const { data: routes } = await supabase
         .from('routes')
         .select('route_code, assigned_worker_ids')
-        .eq('session_date', date);
+        .eq('session_date', date)
+        .eq('command_center_id', ccId);
       
       if (routes) {
         for (const route of routes) {
@@ -534,23 +611,24 @@ class SessionService {
               .from('routes')
               .update({ assigned_worker_ids: updatedIds })
               .eq('route_code', route.route_code)
-              .eq('session_date', date);
+              .eq('session_date', date)
+              .eq('command_center_id', ccId);
           }
         }
       }
     }
 
     // 2. Unassign Bookings
-    await supabase.from('bookings').update({ contractor_id: null }).eq('contractor_id', workerId);
+    await supabase.from('bookings').update({ contractor_id: null }).eq('contractor_id', workerId).eq('command_center_id', ccId);
 
     // 3. Delete Logsheet Session
-    await supabase.from('logsheet_sessions').delete().eq('worker_id', workerId);
+    await supabase.from('logsheet_sessions').delete().eq('worker_id', workerId).eq('command_center_id', ccId);
 
     // 4. Delete Transactions
-    await supabase.from('transactions').delete().eq('worker_id', workerId);
+    await supabase.from('transactions').delete().eq('worker_id', workerId).eq('command_center_id', ccId);
 
-    // 5. Delete User (Using snake_case 'user_id' to avoid 404s)
-    const { error } = await supabase.from('users').delete().eq('user_id', workerId);
+    // 5. Delete User
+    const { error } = await supabase.from('users').delete().eq('user_id', workerId).eq('command_center_id', ccId);
     
     if (error) {
         console.error("Failed to delete user:", error);
@@ -562,6 +640,7 @@ class SessionService {
    * Transfers a worker to a new manager by updating metadata and active routes.
    */
   public async transferWorker(workerId: string, newManagerId: string): Promise<void> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
 
     // 1. Fetch current user metadata
@@ -569,6 +648,7 @@ class SessionService {
         .from('users')
         .select('metadata')
         .eq('user_id', workerId)
+        .eq('command_center_id', ccId)
         .single();
     
     if (fetchError || !user) throw new Error("Worker not found");
@@ -579,7 +659,8 @@ class SessionService {
     const { error: updateError } = await supabase
         .from('users')
         .update({ metadata: newMetadata })
-        .eq('user_id', workerId);
+        .eq('user_id', workerId)
+        .eq('command_center_id', ccId);
 
     if (updateError) throw updateError;
 
@@ -588,7 +669,8 @@ class SessionService {
       const { data: routes } = await supabase
         .from('routes')
         .select('route_code, assigned_worker_ids')
-        .eq('session_date', date);
+        .eq('session_date', date)
+        .eq('command_center_id', ccId);
       
       if (routes) {
         for (const route of routes) {
@@ -597,7 +679,8 @@ class SessionService {
               .from('routes')
               .update({ manager_id: newManagerId })
               .eq('route_code', route.route_code)
-              .eq('session_date', date);
+              .eq('session_date', date)
+              .eq('command_center_id', ccId);
           }
         }
       }
@@ -612,6 +695,7 @@ class SessionService {
     routeCode: string, 
     newManagerId: string
   ): Promise<void> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return;
     
@@ -619,7 +703,8 @@ class SessionService {
       .from('routes')
       .update({ manager_id: newManagerId })
       .eq('route_code', routeCode)
-      .eq('session_date', date);
+      .eq('session_date', date)
+      .eq('command_center_id', ccId);
     
     if (error) {
       console.error("Error transferring route to manager:", error);
@@ -637,6 +722,7 @@ class SessionService {
     routeNumber: string,
     newManagerId: string
   ): Promise<void> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return;
 
@@ -647,6 +733,7 @@ class SessionService {
       .eq('route_code', routeNumber)
       .eq('manager_id', newManagerId)
       .eq('session_date', date)
+      .eq('command_center_id', ccId)
       .maybeSingle();
 
     // 2. If route doesn't exist, create it
@@ -657,6 +744,7 @@ class SessionService {
         .select('streets')
         .eq('route_code', routeNumber)
         .eq('session_date', date)
+        .eq('command_center_id', ccId)
         .maybeSingle();
 
       const streets = sourceRoute?.streets || [];
@@ -667,9 +755,10 @@ class SessionService {
         .insert({
           route_code: routeNumber,
           manager_id: newManagerId,
-          assigned_worker_ids: [], // Empty array for new route
+          assigned_worker_ids: [],
           streets: streets,
-          session_date: date
+          session_date: date,
+          command_center_id: ccId,
         });
 
       if (createError) {
@@ -677,28 +766,66 @@ class SessionService {
         throw createError;
       }
     }
-
-    // 3. Booking automatically appears in new manager's view
-    // since it has route_number that now matches a route owned by new manager
-    // No additional update needed to the booking itself
   }
 
   // --- 4. AUTHENTICATION ---
 
+  /**
+   * Authenticate Route Manager (also handles command center admin login)
+   * Note: Super admin (Administrator/cps26records) is handled at the login page level
+   */
   public async authenticateRM(username: string, password: string): Promise<ManagementUser | null> {
-    if (username === 'admin' && password === 'admin') {
-      return { userId: 'admin', name: 'Administrator', username: 'admin', role: 'Admin' };
-    }
-    const { data } = await supabase.from('users').select('*').ilike('username', username).eq('password', password).eq('role', 'RouteManager').single();
+    // First, try to find the user across all command centers (RM login)
+    const { data } = await supabase
+      .from('users')
+      .select('*')
+      .ilike('username', username)
+      .eq('password', password)
+      .eq('role', 'RouteManager')
+      .maybeSingle();
+    
     if (!data) return null;
-    return { userId: data.user_id, name: data.name, username: data.username, phone: data.metadata?.phone || '', role: 'RouteManager' };
+    
+    // Set the command center context based on the user's CC
+    if (data.command_center_id) {
+      const cc = await commandCenterService.getCommandCenterById(data.command_center_id);
+      if (cc) {
+        commandCenterService.setCurrentCommandCenter(cc);
+      }
+    }
+    
+    return { 
+      userId: data.user_id, 
+      name: data.name, 
+      username: data.username, 
+      phone: data.metadata?.phone || '', 
+      role: 'RouteManager',
+      commandCenterId: data.command_center_id,
+    };
   }
 
   public async authenticateWorker(contractorId: string, password: string): Promise<Worker | null> {
-    const { data } = await supabase.from('users').select('*').eq('user_id', contractorId).eq('password', password).eq('role', 'Worker').single();
+    // Find worker across all command centers
+    const { data } = await supabase
+      .from('users')
+      .select('*')
+      .eq('user_id', contractorId)
+      .eq('password', password)
+      .eq('role', 'Worker')
+      .maybeSingle();
+    
     if (!data) return null;
     
+    // Set the command center context based on the user's CC
+    if (data.command_center_id) {
+      const cc = await commandCenterService.getCommandCenterById(data.command_center_id);
+      if (cc) {
+        commandCenterService.setCurrentCommandCenter(cc);
+      }
+    }
+    
     // --- LOCKOUT CHECK: Verify worker's session is not finalized ---
+    // Need to set CC context first before checking lockout
     const isLockedOut = await this.isWorkerLockedOut(contractorId);
     if (isLockedOut) {
       throw new Error('SESSION_FINALIZED');
@@ -714,13 +841,15 @@ class SessionService {
       alumniRate: data.metadata?.alumniRate,
       silverRate: data.metadata?.silverRate,
       assignedManagerId: data.metadata?.assignedManagerId,
-      upsellsEnabled: data.metadata?.upsellsEnabled !== false, // Default to true
+      upsellsEnabled: data.metadata?.upsellsEnabled !== false,
+      commandCenterId: data.command_center_id,
     };
   }
 
   // --- 5. LOGSHEETS & TRANSACTIONS ---
 
   public async getWorkerAssignments(workerId: string): Promise<MasterBooking[]> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return [];
 
@@ -728,13 +857,19 @@ class SessionService {
     const { data: allRoutes } = await supabase
       .from('routes')
       .select('route_code, assigned_worker_ids')
-      .eq('session_date', date);
+      .eq('session_date', date)
+      .eq('command_center_id', ccId);
     
     const myRouteCodes = (allRoutes || [])
       .filter(r => r.assigned_worker_ids && r.assigned_worker_ids.includes(workerId))
       .map(r => r.route_code);
 
-    const { data: allBookings } = await supabase.from('bookings').select('*').eq('session_date', date).neq('status', 'completed');
+    const { data: allBookings } = await supabase
+      .from('bookings')
+      .select('*')
+      .eq('session_date', date)
+      .eq('command_center_id', ccId)
+      .neq('status', 'completed');
 
     const myPending = (allBookings || []).filter((b) => {
       const isMyRoute = myRouteCodes.includes(b.route_number);
@@ -746,7 +881,8 @@ class SessionService {
     const { data: myTransactions } = await supabase
       .from('transactions')
       .select('*')
-      .eq('worker_id', workerId);
+      .eq('worker_id', workerId)
+      .eq('command_center_id', ccId);
 
     const pendingMapped = myPending.map((b) => ({
       ...b.data,
@@ -758,6 +894,7 @@ class SessionService {
       Price: b.price?.toString(),
       'Log Sheet Notes': b.log_notes,
       Prepaid: b.is_prepaid ? 'x' : undefined,
+      commandCenterId: b.command_center_id,
     }));
 
     // Use shared mapper for consistency
@@ -787,6 +924,7 @@ class SessionService {
             isAddOn: mapped.type === 'Add-On',
             isNewSale: mapped.type === 'Sale',
             Prepaid: mapped.isPrepaid ? 'x' : undefined,
+            commandCenterId: mapped.commandCenterId,
         };
     });
 
@@ -794,7 +932,17 @@ class SessionService {
   }
 
   public async getStreetsForRoute(routeCode: string): Promise<string[]> {
-    const res = await supabase.from('routes').select('streets').eq('route_code', routeCode).single();
+    const ccId = this.getCCId();
+    const date = await this.getDailySessionDate();
+    
+    const res = await supabase
+      .from('routes')
+      .select('streets')
+      .eq('route_code', routeCode)
+      .eq('command_center_id', ccId)
+      .eq('session_date', date)
+      .maybeSingle();
+      
     return res.data?.streets || [];
   }
 
@@ -803,13 +951,14 @@ class SessionService {
    * Fetches all transactions in a single query for performance.
    */
   public async getLogsheetSessions(): Promise<LogsheetSession[]> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return [];
     
     // Fetch sessions and all transactions in parallel
     const [sessionsRes, transactionsRes] = await Promise.all([
-      supabase.from('logsheet_sessions').select('*').eq('date', date),
-      supabase.from('transactions').select('*')
+      supabase.from('logsheet_sessions').select('*').eq('date', date).eq('command_center_id', ccId),
+      supabase.from('transactions').select('*').eq('command_center_id', ccId)
     ]);
     
     const sessions = sessionsRes.data || [];
@@ -834,17 +983,29 @@ class SessionService {
       bonuses: d.bonuses,
       dailyRouteStore: [],
       financialStore: transactionsByWorker[d.worker_id] || [],
+      commandCenterId: d.command_center_id,
     }));
   }
 
   public async getActiveLogsheetSession(workerId: string): Promise<LogsheetSession | null> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
-    const { data } = await supabase.from('logsheet_sessions').select('*').eq('worker_id', workerId).eq('date', date).single();
+    const { data } = await supabase
+      .from('logsheet_sessions')
+      .select('*')
+      .eq('worker_id', workerId)
+      .eq('date', date)
+      .eq('command_center_id', ccId)
+      .single();
     if (!data) return null;
 
-    const { data: financials } = await supabase.from('transactions').select('*').eq('worker_id', workerId);
+    const { data: financials } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('worker_id', workerId)
+      .eq('command_center_id', ccId);
     const cleanFinancials = (financials || []).map(tx => this.mapDbTransaction(tx));
     const liveStats = this.recalculateStats(cleanFinancials, 5);
 
@@ -858,10 +1019,12 @@ class SessionService {
       bonuses: data.bonuses,
       dailyRouteStore: [],
       financialStore: cleanFinancials,
+      commandCenterId: data.command_center_id,
     };
   }
 
   public async startLogsheetSession(workerId: string): Promise<LogsheetSession> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) throw new Error('No active session day found');
     const existing = await this.getActiveLogsheetSession(workerId);
@@ -873,6 +1036,7 @@ class SessionService {
       status: 'OPEN',
       stats: this.getEmptyStats(),
       email_enabled: true,
+      command_center_id: ccId,
     };
     const { error } = await supabase.from('logsheet_sessions').insert(newSession);
     if (error) throw error;
@@ -880,12 +1044,17 @@ class SessionService {
   }
 
   public async updateLogsheetSession(sessionId: string, updates: Partial<LogsheetSession>): Promise<void> {
+    const ccId = this.getCCId();
     const safeUpdates: any = {};
     if (updates.stats) safeUpdates.stats = updates.stats;
     if (updates.validation) safeUpdates.validation = updates.validation;
     if (updates.bonuses !== undefined) safeUpdates.bonuses = updates.bonuses;
     if (updates.status) safeUpdates.status = updates.status;
-    await supabase.from('logsheet_sessions').update(safeUpdates).eq('id', sessionId);
+    await supabase
+      .from('logsheet_sessions')
+      .update(safeUpdates)
+      .eq('id', sessionId)
+      .eq('command_center_id', ccId);
   }
 
   /**
@@ -894,6 +1063,7 @@ class SessionService {
    * When unassigning (workerId = null), removes worker from route if they have no other bookings.
    */
   public async assignBookingToWorker(bookingId: string, workerId: string | null): Promise<void> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return;
 
@@ -902,6 +1072,7 @@ class SessionService {
       .from('bookings')
       .select('route_number, contractor_id')
       .eq('booking_id', bookingId)
+      .eq('command_center_id', ccId)
       .single();
 
     if (!booking || !booking.route_number) {
@@ -909,7 +1080,8 @@ class SessionService {
       await supabase
         .from('bookings')
         .update({ contractor_id: workerId })
-        .eq('booking_id', bookingId);
+        .eq('booking_id', bookingId)
+        .eq('command_center_id', ccId);
       return;
     }
 
@@ -920,7 +1092,8 @@ class SessionService {
     const { error } = await supabase
       .from('bookings')
       .update({ contractor_id: workerId })
-      .eq('booking_id', bookingId);
+      .eq('booking_id', bookingId)
+      .eq('command_center_id', ccId);
     
     if (error) {
       console.error("Error assigning booking:", error);
@@ -933,7 +1106,8 @@ class SessionService {
       .select('assigned_worker_ids')
       .eq('route_code', routeNumber)
       .eq('session_date', date)
-      .single();
+      .eq('command_center_id', ccId)
+      .maybeSingle();
 
     if (!route) return;
 
@@ -946,7 +1120,8 @@ class SessionService {
         .from('routes')
         .update({ assigned_worker_ids: assignedWorkerIds })
         .eq('route_code', routeNumber)
-        .eq('session_date', date);
+        .eq('session_date', date)
+        .eq('command_center_id', ccId);
     }
 
     // If unassigning (or reassigning), check if old worker should be removed
@@ -958,6 +1133,7 @@ class SessionService {
         .eq('route_number', routeNumber)
         .eq('contractor_id', oldWorkerId)
         .eq('session_date', date)
+        .eq('command_center_id', ccId)
         .neq('booking_id', bookingId);
 
       if (!otherBookings || otherBookings.length === 0) {
@@ -967,7 +1143,8 @@ class SessionService {
           .from('routes')
           .update({ assigned_worker_ids: assignedWorkerIds })
           .eq('route_code', routeNumber)
-          .eq('session_date', date);
+          .eq('session_date', date)
+          .eq('command_center_id', ccId);
       }
     }
   }
@@ -978,6 +1155,7 @@ class SessionService {
    * If workerId is provided, sets assignedWorkerIds to just that worker.
    */
   public async assignRouteToWorker(routeCode: string, workerId: string | null): Promise<void> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return;
     
@@ -987,7 +1165,8 @@ class SessionService {
       .from('routes')
       .update({ assigned_worker_ids: newAssignedWorkerIds })
       .eq('route_code', routeCode)
-      .eq('session_date', date);
+      .eq('session_date', date)
+      .eq('command_center_id', ccId);
     
     if (error) console.error("Error assigning route:", error);
   }
@@ -999,10 +1178,12 @@ class SessionService {
    * This removes it from the pending queue without creating a transaction
    */
   public async updateBookingStatus(bookingId: string, status: 'next_time' | 'cancelled'): Promise<void> {
+    const ccId = this.getCCId();
     const { error } = await supabase
       .from('bookings')
       .update({ status })
-      .eq('booking_id', bookingId);
+      .eq('booking_id', bookingId)
+      .eq('command_center_id', ccId);
     
     if (error) {
       console.error("Error updating booking status:", error);
@@ -1011,24 +1192,36 @@ class SessionService {
   }
 
   public async deleteTransactionByJobId(jobId: string): Promise<void> {
-      await supabase.from('transactions').delete().eq('job_id', jobId);
+    const ccId = this.getCCId();
+    await supabase.from('transactions').delete().eq('job_id', jobId).eq('command_center_id', ccId);
   }
 
   public async revertTransaction(transactionId: string, jobId?: string): Promise<void> {
+    const ccId = this.getCCId();
+    
     // First, get the worker_id before deleting
     const { data: txData } = await supabase
       .from('transactions')
       .select('worker_id')
       .eq('id', transactionId)
+      .eq('command_center_id', ccId)
       .maybeSingle();
     
     const workerId = txData?.worker_id;
 
-    const { error: txError } = await supabase.from('transactions').delete().eq('id', transactionId);
+    const { error: txError } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('id', transactionId)
+      .eq('command_center_id', ccId);
     if (txError) throw txError;
     
     if (jobId && !jobId.startsWith('NEW-')) {
-        const { error: bkError } = await supabase.from('bookings').update({ status: 'pending' }).eq('booking_id', jobId);
+        const { error: bkError } = await supabase
+          .from('bookings')
+          .update({ status: 'pending' })
+          .eq('booking_id', jobId)
+          .eq('command_center_id', ccId);
         if (bkError) throw bkError;
     }
 
@@ -1040,14 +1233,16 @@ class SessionService {
 
   /**
    * Updates a transaction with partial data.
-   * FIXED: Now properly maps all fields and MERGES customer_snapshot instead of overwriting.
    */
   public async updateTransaction(transactionId: string, updates: Partial<SessionTransaction>): Promise<void> {
+      const ccId = this.getCCId();
+      
       // 1. Fetch existing transaction to get current customer_snapshot
       const { data: existingTx } = await supabase
         .from('transactions')
         .select('*')
         .eq('id', transactionId)
+        .eq('command_center_id', ccId)
         .maybeSingle();
 
       const existingSnapshot = existingTx?.customer_snapshot || {};
@@ -1061,8 +1256,6 @@ class SessionService {
       if (updates.paymentMethod !== undefined) dbPayload.payment_method = updates.paymentMethod;
       if (updates.paymentBreakdown !== undefined) dbPayload.payment_breakdown = updates.paymentBreakdown;
       if (updates.type !== undefined) dbPayload.type = updates.type;
-      
-      // --- ADDED: Missing direct column mappings ---
       if (updates.customerPhone !== undefined) dbPayload.customer_phone = updates.customerPhone;
       if (updates.customerEmail !== undefined) dbPayload.customer_email = updates.customerEmail;
       if (updates.itemDescription !== undefined) dbPayload.item_description = updates.itemDescription;
@@ -1072,15 +1265,13 @@ class SessionService {
       if (updates.invoiceNumber !== undefined) dbPayload.invoice_number = updates.invoiceNumber;
       if (updates.isWestSplit !== undefined) dbPayload.is_west_split = updates.isWestSplit;
       
-      // --- FIXED: customer_snapshot - MERGE with existing instead of overwrite ---
-      // Only update if any relevant fields are provided
+      // customer_snapshot - MERGE with existing instead of overwrite
       if (updates.customerName !== undefined || 
           updates.address !== undefined || 
           updates.routeCode !== undefined ||
           updates.serviceType !== undefined ||
           updates.serviceName !== undefined) {
           
-          // Start with existing snapshot values
           const mergedSnapshot = {
               firstName: existingSnapshot.firstName || '',
               lastName: existingSnapshot.lastName || '',
@@ -1090,7 +1281,6 @@ class SessionService {
               serviceName: existingSnapshot.serviceName || ''
           };
           
-          // Only override fields that are explicitly provided in updates
           if (updates.customerName !== undefined) {
               mergedSnapshot.firstName = updates.customerName.split(' ')[0] || '';
               mergedSnapshot.lastName = updates.customerName.split(' ').slice(1).join(' ') || '';
@@ -1112,7 +1302,11 @@ class SessionService {
       }
 
       // 3. Update the transaction
-      const { error } = await supabase.from('transactions').update(dbPayload).eq('id', transactionId);
+      const { error } = await supabase
+        .from('transactions')
+        .update(dbPayload)
+        .eq('id', transactionId)
+        .eq('command_center_id', ccId);
       if (error) throw error;
 
       // 4. Recalculate stats for the worker
@@ -1123,6 +1317,8 @@ class SessionService {
   }
 
   public async completeJob(transaction: SessionTransaction, jobId: string, workerId: string): Promise<void> {
+    const ccId = this.getCCId();
+    
     const payload = {
       job_id: jobId, 
       worker_id: workerId,
@@ -1141,7 +1337,7 @@ class SessionService {
       customer_email: transaction.customerEmail,
       items: transaction.items, 
       
-      // --- Saving Credit Card Data ---
+      // Saving Credit Card Data
       cc_full_number: (transaction as any).ccFullNumber,
       cc_expiry: (transaction as any).ccExpiry,
       cc_cvc: (transaction as any).ccCVC,
@@ -1154,17 +1350,27 @@ class SessionService {
         serviceType: transaction.serviceType,
         serviceName: transaction.serviceName 
       },
+      command_center_id: ccId,
     };
 
     let existingId: string | null = null;
     
     if (jobId) {
-       const { data } = await supabase.from('transactions').select('id').eq('job_id', jobId).maybeSingle();
+       const { data } = await supabase
+         .from('transactions')
+         .select('id')
+         .eq('job_id', jobId)
+         .eq('command_center_id', ccId)
+         .maybeSingle();
        if (data) existingId = data.id;
     }
 
     if (existingId) {
-        const { error } = await supabase.from('transactions').update(payload).eq('id', existingId);
+        const { error } = await supabase
+          .from('transactions')
+          .update(payload)
+          .eq('id', existingId)
+          .eq('command_center_id', ccId);
         if (error) throw error;
     } else {
         const { error } = await supabase.from('transactions').insert({ ...payload, id: transaction.id });
@@ -1172,10 +1378,14 @@ class SessionService {
     }
 
     if (jobId && !jobId.startsWith('NEW-')) {
-      await supabase.from('bookings').update({
+      await supabase
+        .from('bookings')
+        .update({
           status: 'completed',
           contractor_id: workerId,
-        }).eq('booking_id', jobId);
+        })
+        .eq('booking_id', jobId)
+        .eq('command_center_id', ccId);
     }
 
     // Recalculate and save stats for this worker
@@ -1201,11 +1411,6 @@ class SessionService {
 
   // --- 7. EMAIL RECEIPTS ---
 
-  /**
-   * Sends an email receipt via Supabase Edge Function
-   * @param transactionData - The transaction details for the receipt
-   * @returns Promise<boolean> - Success status (non-blocking)
-   */
   public async sendReceiptEmail(transactionData: {
     customerEmail: string;
     customerName: string;
@@ -1217,8 +1422,8 @@ class SessionService {
     workerName: string;
     transactionId: string;
   }): Promise<boolean> {
-    // Check if email is enabled for this session
     try {
+      const ccId = this.getCCId();
       const date = await this.getDailySessionDate();
       if (!date) return false;
 
@@ -1226,16 +1431,15 @@ class SessionService {
         .from('logsheet_sessions')
         .select('email_enabled')
         .eq('date', date)
+        .eq('command_center_id', ccId)
         .limit(1)
         .maybeSingle();
 
-      // If email_enabled is false, skip sending
       if (sessionData && sessionData.email_enabled === false) {
         console.log('📧 Email sending disabled for this session');
         return false;
       }
 
-      // Call the Edge Function (non-blocking)
       const { data, error } = await supabase.functions.invoke('bright-processor', {
         body: transactionData
       });
@@ -1253,9 +1457,6 @@ class SessionService {
     }
   }
 
-  /**
-   * Gets email status for a transaction
-   */
   public async getEmailStatus(transactionId: string): Promise<{
     sent: boolean;
     bounced: boolean;
@@ -1281,17 +1482,16 @@ class SessionService {
     }
   }
 
-  /**
-   * Toggles email sending for the current session
-   */
   public async toggleSessionEmail(enabled: boolean): Promise<void> {
+    const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return;
 
     await supabase
       .from('logsheet_sessions')
       .update({ email_enabled: enabled })
-      .eq('date', date);
+      .eq('date', date)
+      .eq('command_center_id', ccId);
   }
 
   // --- 8. UTILS ---
@@ -1320,7 +1520,7 @@ class SessionService {
       Object.entries(paymentMap).forEach(([method, amount]) => {
         const val = Number(amount) || 0;
         
-        // --- IOS FIX: Skip adding IOS payments to any dollar bucket ---
+        // IOS FIX: Skip adding IOS payments to any dollar bucket
         if (method === 'IOS') {
           return;
         }

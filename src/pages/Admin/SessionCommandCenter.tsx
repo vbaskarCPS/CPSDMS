@@ -1,6 +1,6 @@
 // src/pages/Admin/SessionCommandCenter.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Upload,
   AlertCircle,
@@ -17,22 +17,39 @@ import {
   Loader,
   CheckCircle,
   Sheet,
+  LogOut,
+  ArrowLeft,
+  Building2,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
 import { generateSessionExport, exportToGoogleSheets } from '../../lib/exportService';
 import { googleSheetsService } from '../../lib/googleSheetsService';
 import { getDateTabError } from '../../lib/googleSheetsConfig';
+import { commandCenterService } from '../../lib/commandCenterService';
+import { removeStorageItem } from '../../lib/localStorage';
 import { DailySessionData, SortOption, LogsheetSession } from '../../types';
 import PayoutToday from '../Management/PayoutToday';
 
 const SessionCommandCenter: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   
   const [activeTab, setActiveTab] = useState<'lifecycle' | 'payout'>(() => {
     const tabParam = searchParams.get('tab');
     return tabParam === 'payout' ? 'payout' : 'lifecycle';
   });
+
+  // --- COMMAND CENTER CONTEXT ---
+  const currentCC = commandCenterService.getCurrentCommandCenter();
+  const isSuperAdminMode = commandCenterService.isSuperAdminMode();
+
+  // Redirect if no CC context
+  useEffect(() => {
+    if (!currentCC) {
+      navigate('/login');
+    }
+  }, [currentCC, navigate]);
 
   // --- STATE ---
   const [feedFile, setFeedFile] = useState<File | null>(null);
@@ -74,8 +91,10 @@ const SessionCommandCenter: React.FC = () => {
 
   // Load active session on mount
   useEffect(() => {
-    loadSession();
-  }, []);
+    if (currentCC) {
+      loadSession();
+    }
+  }, [currentCC]);
 
   const handleTabChange = (tab: 'lifecycle' | 'payout') => {
     setActiveTab(tab);
@@ -83,22 +102,27 @@ const SessionCommandCenter: React.FC = () => {
   };
 
   const loadSession = async () => {
-    const session = await sessionService.getDailySession();
-    setCurrentSession(session);
-    
-    if (session) {
-      // Load import metadata from session
-      const meta = await sessionService.getSessionImportMeta();
-      setImportMeta(meta);
+    try {
+      const session = await sessionService.getDailySession();
+      setCurrentSession(session);
       
-      // If we have a dateTab from the stored meta, use it
-      if (meta?.dateTab) {
-        setDateTab(meta.dateTab);
+      if (session) {
+        // Load import metadata from session
+        const meta = await sessionService.getSessionImportMeta();
+        setImportMeta(meta);
+        
+        // If we have a dateTab from the stored meta, use it
+        if (meta?.dateTab) {
+          setDateTab(meta.dateTab);
+        }
+        
+        // Load logsheet sessions for validation check
+        const sessions = await sessionService.getLogsheetSessions();
+        setLogsheetSessions(sessions);
       }
-      
-      // Load logsheet sessions for validation check
-      const sessions = await sessionService.getLogsheetSessions();
-      setLogsheetSessions(sessions);
+    } catch (err) {
+      console.error('Error loading session:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load session');
     }
   };
 
@@ -328,6 +352,20 @@ const SessionCommandCenter: React.FC = () => {
     }
   };
 
+  // --- SUPER ADMIN: Exit impersonation ---
+  const handleExitImpersonation = () => {
+    // Keep super admin mode but navigate back to CC list
+    navigate('/super-admin');
+  };
+
+  // --- LOGOUT ---
+  const handleLogout = () => {
+    removeStorageItem('current_user');
+    commandCenterService.clearCurrentCommandCenter();
+    commandCenterService.setSuperAdminMode(false);
+    navigate('/login');
+  };
+
   // --- REPORT GENERATION HELPERS ---
   const generateManagerReport = (data: DailySessionData) => {
       return data.managers.map(m => {
@@ -352,17 +390,53 @@ const SessionCommandCenter: React.FC = () => {
       return [];
   }, [previewData, currentSession]);
 
+  // Don't render if no CC context
+  if (!currentCC) {
+    return null;
+  }
+
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4">
       <div className="max-w-6xl mx-auto">
         
+        {/* SUPER ADMIN IMPERSONATION BANNER */}
+        {isSuperAdminMode && (
+          <div className="mb-4 bg-purple-900/30 border border-purple-700 rounded-lg p-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Building2 className="text-purple-400" size={20} />
+              <span className="text-purple-300 font-medium">
+                Viewing as: <span className="text-white font-bold">{currentCC.displayName}</span>
+              </span>
+              <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                currentCC.region === 'West' ? 'bg-blue-900/50 text-blue-300' :
+                currentCC.region === 'Central' ? 'bg-green-900/50 text-green-300' :
+                'bg-orange-900/50 text-orange-300'
+              }`}>
+                {currentCC.region}
+              </span>
+            </div>
+            <button
+              onClick={handleExitImpersonation}
+              className="flex items-center gap-2 text-purple-300 hover:text-white transition-colors text-sm"
+            >
+              <ArrowLeft size={16} />
+              Back to Admin
+            </button>
+          </div>
+        )}
+
         {/* MINIMAL HEADER WITH TABS */}
         <div className="flex justify-between items-center mb-4">
           <div className="flex items-center gap-3">
             <Users className="text-cps-blue" size={20} />
-            <span className="text-sm text-gray-400">
-              {currentSession ? `Active: ${currentSession.date}` : "No Active Session"}
-            </span>
+            <div className="flex flex-col">
+              <span className="text-sm text-gray-400">
+                {currentSession ? `Active: ${currentSession.date}` : "No Active Session"}
+              </span>
+              {!isSuperAdminMode && (
+                <span className="text-xs text-gray-500">{currentCC.displayName}</span>
+              )}
+            </div>
             {importMeta?.source === 'sheets' && importMeta.dateTab && (
               <span className="text-xs bg-green-900/30 text-green-400 px-2 py-0.5 rounded border border-green-700/50">
                 {importMeta.dateTab}
@@ -370,23 +444,35 @@ const SessionCommandCenter: React.FC = () => {
             )}
           </div>
           
-          <div className="bg-gray-800 rounded-lg p-1 flex border border-gray-700">
-            <button
-              onClick={() => handleTabChange('lifecycle')}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                activeTab === 'lifecycle' ? 'bg-cps-blue text-white shadow' : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              Session Cycle
-            </button>
-            <button
-              onClick={() => handleTabChange('payout')}
-              className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                activeTab === 'payout' ? 'bg-green-600 text-white shadow' : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              Payout Today
-            </button>
+          <div className="flex items-center gap-4">
+            <div className="bg-gray-800 rounded-lg p-1 flex border border-gray-700">
+              <button
+                onClick={() => handleTabChange('lifecycle')}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                  activeTab === 'lifecycle' ? 'bg-cps-blue text-white shadow' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Session Cycle
+              </button>
+              <button
+                onClick={() => handleTabChange('payout')}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                  activeTab === 'payout' ? 'bg-green-600 text-white shadow' : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Payout Today
+              </button>
+            </div>
+
+            {!isSuperAdminMode && (
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors text-sm"
+              >
+                <LogOut size={16} />
+                Logout
+              </button>
+            )}
           </div>
         </div>
 

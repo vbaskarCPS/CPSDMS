@@ -1,47 +1,50 @@
 // src/App.tsx
 import React from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 
-// --- Auth ---
+// Pages
 import HomePage from './pages/HomePage';
+import SessionCommandCenter from './pages/Admin/SessionCommandCenter';
+import CommandCenterCreator from './pages/SuperAdmin/CommandCenterCreator';
 
-// --- Staff Portal ---
-import Dashboard from './pages/Logsheet/Dashboard';
-import JobDetail from './pages/Logsheet/JobDetail';
-import NewJob from './pages/Logsheet/NewJob';
-import NotFound from './pages/Logsheet/NotFound';
+// Lazy load less frequently used pages
+const RMLogbook = React.lazy(() => import('./pages/Management/RMLogbook'));
+const Logsheet = React.lazy(() => import('./pages/Logsheet/Logsheet'));
 
-// --- Management Portal ---
-import RMLogbook from './pages/Management/RMLogbook';
+// Loading fallback
+const LoadingFallback = () => (
+  <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+    <div className="text-white text-lg animate-pulse">Loading...</div>
+  </div>
+);
 
-// --- Admin ---
-import SessionCommandCenter from './pages/Admin/SessionCommandCenter'; 
-import PayoutContractor from './pages/Management/PayoutContractor'; // <--- IMPORT THIS
-
-const App: React.FC = () => {
+function App() {
   return (
-    <Routes>
-      <Route path="/" element={<HomePage />} />
-      
-      {/* --- STAFF ROUTES --- */}
-      <Route path="/logsheet" element={<Dashboard />} />
-      <Route path="/job-detail/:jobId" element={<JobDetail />} />
-      <Route path="/logsheet/new" element={<NewJob />} />
+    <Router>
+      <React.Suspense fallback={<LoadingFallback />}>
+        <Routes>
+          {/* Public Routes */}
+          <Route path="/login" element={<HomePage />} />
+          <Route path="/" element={<Navigate to="/login" replace />} />
 
-      {/* --- MANAGEMENT ROUTES --- */}
-      <Route path="/rm-logbook" element={<RMLogbook />} />
+          {/* Super Admin Route */}
+          <Route path="/super-admin" element={<CommandCenterCreator />} />
 
-      {/* --- ADMIN ROUTES --- */}
-      <Route path="/admin/command-center" element={<SessionCommandCenter />} />
-      <Route path="/admin" element={<Navigate to="/admin/command-center" replace />} />
-      
-      {/* NEW ROUTE FOR PAYOUT CONTRACTOR */}
-      <Route path="/admin/payout/:contractorId" element={<PayoutContractor />} />
+          {/* Command Center Admin Route */}
+          <Route path="/admin" element={<SessionCommandCenter />} />
 
-      {/* 404 */}
-      <Route path="*" element={<NotFound />} />
-    </Routes>
+          {/* Route Manager Routes */}
+          <Route path="/rm-logbook" element={<RMLogbook />} />
+
+          {/* Worker Routes */}
+          <Route path="/logsheet" element={<Logsheet />} />
+
+          {/* Catch-all redirect */}
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </React.Suspense>
+    </Router>
   );
-};
+}
 
 export default App;
