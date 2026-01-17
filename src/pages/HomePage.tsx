@@ -12,14 +12,13 @@ const HomePage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  
   const [isSessionFinalized, setIsSessionFinalized] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // DEBUG ALERT - will show a popup
-    alert(`Username: "${username}" | Password: "${password}" | Match: ${isSuperAdminCredentials(username, password)}`);
+    // DEBUG - show alert
+    alert(`Login attempt: "${username}" / "${password}" | SuperAdmin Match: ${isSuperAdminCredentials(username, password)}`);
     
     setError('');
     setIsSessionFinalized(false);
@@ -70,6 +69,11 @@ const HomePage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
+      {/* DEBUG BANNER - DELETE THIS LATER */}
+      <div className="fixed top-0 left-0 right-0 bg-red-600 text-white text-center py-2 font-bold z-50">
+        DEBUG MODE - If you see this, the file is loading correctly
+      </div>
+      
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-800 mb-4 border border-gray-700">
