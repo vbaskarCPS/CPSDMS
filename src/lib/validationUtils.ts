@@ -167,3 +167,53 @@ export function extractGoogleSheetId(input: string): string | null {
   const match = input.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
   return match ? match[1] : null;
 }
+
+/**
+ * Gets a validation error message for a phone number.
+ * Returns null if valid, error message if invalid.
+ */
+export function getPhoneValidationError(phone: string): string | null {
+  if (!phone || phone.trim() === '') {
+    return null; // Empty is okay, not required
+  }
+  
+  const digits = phone.replace(/\D/g, '');
+  
+  if (digits.length < 7) {
+    return 'Phone number is too short';
+  }
+  
+  if (digits.length > 11) {
+    return 'Phone number is too long';
+  }
+  
+  if (digits.length === 11 && digits[0] !== '1') {
+    return 'Invalid phone number format';
+  }
+  
+  if (digits.length !== 7 && digits.length !== 10 && digits.length !== 11) {
+    return 'Phone number must be 7, 10, or 11 digits';
+  }
+  
+  return null; // Valid
+}
+
+/**
+ * Gets a validation error message for an email address.
+ * Returns null if valid, error message if invalid.
+ */
+export function getEmailValidationError(email: string): string | null {
+  if (!email || email.trim() === '') {
+    return null; // Empty is okay, not required
+  }
+  
+  const trimmed = email.trim();
+  
+  // Basic email validation
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(trimmed)) {
+    return 'Please enter a valid email address';
+  }
+  
+  return null; // Valid
+}
