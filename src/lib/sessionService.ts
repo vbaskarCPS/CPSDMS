@@ -951,35 +951,87 @@ class SessionService {
     }
   }
 
+  /**
+   * Updates a transaction with partial data.
+   * FIXED: Now properly maps all fields and MERGES customer_snapshot instead of overwriting.
+   */
   public async updateTransaction(transactionId: string, updates: Partial<SessionTransaction>): Promise<void> {
+      // 1. Fetch existing transaction to get current customer_snapshot
+      const { data: existingTx } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('id', transactionId)
+        .maybeSingle();
+
+      const existingSnapshot = existingTx?.customer_snapshot || {};
+
+      // 2. Build the database payload with ALL supported fields
       const dbPayload: any = {};
+      
+      // Direct column mappings
       if (updates.price !== undefined) dbPayload.price = updates.price;
       if (updates.displayPrice !== undefined) dbPayload.display_price = updates.displayPrice;
       if (updates.paymentMethod !== undefined) dbPayload.payment_method = updates.paymentMethod;
       if (updates.paymentBreakdown !== undefined) dbPayload.payment_breakdown = updates.paymentBreakdown;
       if (updates.type !== undefined) dbPayload.type = updates.type;
-      if (updates.customerName || updates.address || updates.routeCode) {
-          dbPayload.customer_snapshot = {
-              firstName: updates.customerName?.split(' ')[0] || '',
-              lastName: updates.customerName?.split(' ').slice(1).join(' ') || '',
-              address: updates.address || '',
-              routeCode: updates.routeCode || '',
-              serviceType: updates.serviceType || 'FP',
-              serviceName: updates.serviceName || ''
+      
+      // --- ADDED: Missing direct column mappings ---
+      if (updates.customerPhone !== undefined) dbPayload.customer_phone = updates.customerPhone;
+      if (updates.customerEmail !== undefined) dbPayload.customer_email = updates.customerEmail;
+      if (updates.itemDescription !== undefined) dbPayload.item_description = updates.itemDescription;
+      if (updates.items !== undefined) dbPayload.items = updates.items;
+      if (updates.etransferEmail !== undefined) dbPayload.etransfer_email = updates.etransferEmail;
+      if (updates.chequeNumber !== undefined) dbPayload.cheque_number = updates.chequeNumber;
+      if (updates.invoiceNumber !== undefined) dbPayload.invoice_number = updates.invoiceNumber;
+      if (updates.isWestSplit !== undefined) dbPayload.is_west_split = updates.isWestSplit;
+      
+      // --- FIXED: customer_snapshot - MERGE with existing instead of overwrite ---
+      // Only update if any relevant fields are provided
+      if (updates.customerName !== undefined || 
+          updates.address !== undefined || 
+          updates.routeCode !== undefined ||
+          updates.serviceType !== undefined ||
+          updates.serviceName !== undefined) {
+          
+          // Start with existing snapshot values
+          const mergedSnapshot = {
+              firstName: existingSnapshot.firstName || '',
+              lastName: existingSnapshot.lastName || '',
+              address: existingSnapshot.address || '',
+              routeCode: existingSnapshot.routeCode || '',
+              serviceType: existingSnapshot.serviceType || 'FP',
+              serviceName: existingSnapshot.serviceName || ''
           };
+          
+          // Only override fields that are explicitly provided in updates
+          if (updates.customerName !== undefined) {
+              mergedSnapshot.firstName = updates.customerName.split(' ')[0] || '';
+              mergedSnapshot.lastName = updates.customerName.split(' ').slice(1).join(' ') || '';
+          }
+          if (updates.address !== undefined) {
+              mergedSnapshot.address = updates.address;
+          }
+          if (updates.routeCode !== undefined) {
+              mergedSnapshot.routeCode = updates.routeCode;
+          }
+          if (updates.serviceType !== undefined) {
+              mergedSnapshot.serviceType = updates.serviceType;
+          }
+          if (updates.serviceName !== undefined) {
+              mergedSnapshot.serviceName = updates.serviceName;
+          }
+          
+          dbPayload.customer_snapshot = mergedSnapshot;
       }
+
+      // 3. Update the transaction
       const { error } = await supabase.from('transactions').update(dbPayload).eq('id', transactionId);
       if (error) throw error;
 
-      // Get the worker_id for this transaction and recalculate stats
-      const { data: txData } = await supabase
-        .from('transactions')
-        .select('worker_id')
-        .eq('id', transactionId)
-        .maybeSingle();
-      
-      if (txData?.worker_id) {
-        await this.recalculateAndSaveWorkerStats(txData.worker_id);
+      // 4. Recalculate stats for the worker
+      const workerId = existingTx?.worker_id;
+      if (workerId) {
+        await this.recalculateAndSaveWorkerStats(workerId);
       }
   }
 
