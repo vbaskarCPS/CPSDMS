@@ -9,7 +9,7 @@ import CommandCenterCreator from './pages/SuperAdmin/CommandCenterCreator';
 
 // Lazy load less frequently used pages
 const RMLogbook = React.lazy(() => import('./pages/Management/RMLogbook'));
-const Logsheet = React.lazy(() => import('./pages/Logsheet/Logsheet'));
+const Logsheet = React.lazy(() => import('./pages/Logsheet/Dashboard'));
 
 // Loading fallback
 const LoadingFallback = () => (
