@@ -27,6 +27,9 @@ import {
 } from '../../lib/emailTemplateService';
 import { EmailTemplate, EmailTemplateType } from '../../types';
 
+// --- LOGO URL (Hardcoded) ---
+const LOGO_URL = 'https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png';
+
 // --- RICH TEXT EDITOR COMPONENT ---
 interface RichTextEditorProps {
   value: string;
@@ -305,10 +308,10 @@ const generateHtmlFromContent = (
       <td align="center">
         <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
           
-          <!-- Header -->
+          <!-- Header with Logo -->
           <tr>
-            <td style="background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); padding: 30px; border-radius: 12px 12px 0 0; text-align: center;">
-              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: bold;">{{companyName}}</h1>
+            <td style="background: linear-gradient(135deg, #1f2937 0%, #374151 100%); padding: 30px; border-radius: 12px 12px 0 0; text-align: center;">
+              <img src="${LOGO_URL}" alt="{{companyName}}" style="max-width: 200px; height: auto;" />
             </td>
           </tr>
           
