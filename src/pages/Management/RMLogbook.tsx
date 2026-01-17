@@ -1,7 +1,7 @@
 // src/pages/Management/RMLogbook.tsx
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Map, Loader, Calendar, BookOpen, Activity, DollarSign, Clock } from 'lucide-react';
+import { Users, Map, Loader, BookOpen, Activity, DollarSign, Clock, Lock, Unlock } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { ManagementUser, DailySessionData, LogsheetSession } from '../../types';
 import { sessionService } from '../../lib/sessionService';
@@ -28,6 +28,10 @@ const RMLogbook: React.FC = () => {
   const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<ManagementUser | null>(null);
   const [activeTab, setActiveTab] = useState<'team' | 'routes'>('team');
+  
+  // Lock State
+  const [isTeamLocked, setIsTeamLocked] = useState(false);
+  const [lockLoading, setLockLoading] = useState(false);
   
   // Initialize Stats
   const [stats, setStats] = useState<TabStats>({
@@ -68,6 +72,36 @@ const RMLogbook: React.FC = () => {
     }, 500);
   };
 
+  // --- Check Team Lock Status ---
+  const checkLockStatus = async (userId: string) => {
+    try {
+      const locked = await sessionService.getTeamLockStatus(userId);
+      setIsTeamLocked(locked);
+    } catch (err) {
+      console.error('Failed to check lock status:', err);
+    }
+  };
+
+  // --- Toggle Lock ---
+  const handleToggleLock = async () => {
+    if (!currentUser || lockLoading) return;
+    
+    setLockLoading(true);
+    try {
+      if (isTeamLocked) {
+        await sessionService.unlockTeamSessions(currentUser.userId);
+        setIsTeamLocked(false);
+      } else {
+        await sessionService.lockTeamSessions(currentUser.userId);
+        setIsTeamLocked(true);
+      }
+    } catch (err) {
+      console.error('Failed to toggle lock:', err);
+    } finally {
+      setLockLoading(false);
+    }
+  };
+
   // --- Initial Load ---
   useEffect(() => {
     const init = async () => {
@@ -79,6 +113,7 @@ const RMLogbook: React.FC = () => {
       setCurrentUser(user);
 
       await refreshData();
+      await checkLockStatus(user.userId);
       setLoading(false);
     };
     init();
@@ -169,7 +204,7 @@ const RMLogbook: React.FC = () => {
     const totalUpsellGross = mySessions.reduce((sum, s) => sum + (s.stats?.upsellGross || 0), 0);
 
     // G. Unassigned Routes (Badge)
-    const unassignedRoutesCount = myRoutes.filter(r => !r.assignedWorkerId).length;
+    const unassignedRoutesCount = myRoutes.filter(r => !r.assignedWorkerIds || r.assignedWorkerIds.length === 0).length;
 
     setStats({
         workerCount,
@@ -195,109 +230,125 @@ const RMLogbook: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
-      {/* HEADER & DASHBOARD */}
+      {/* HEADER - Compact Single Row */}
       <div className="bg-gray-800 border-b border-gray-700 shadow-md sticky top-0 z-10">
         
-        {/* Top Row: Title, Date, Tabs */}
-        <div className="flex flex-col md:flex-row justify-between items-center gap-4 p-4 pb-2">
-          <div>
-            <h1 className="text-xl font-bold text-white flex items-center gap-2">
-              <BookOpen className="text-cps-blue" size={20} /> 
-              RM Logbook
-            </h1>
-            <p className="text-[10px] text-gray-400 font-mono uppercase tracking-wider">
+        {/* Single Row Header: Logo/Name | Lock | Tabs */}
+        <div className="flex items-center justify-between gap-2 p-2 px-3">
+          {/* Left: Logo + Name */}
+          <div className="flex items-center gap-2 min-w-0">
+            <BookOpen className="text-cps-blue flex-shrink-0" size={18} />
+            <span className="text-sm font-bold text-white truncate">
               {currentUser.name}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 bg-gray-900 px-3 py-1 rounded-full border border-gray-700">
-            <Calendar size={14} className="text-gray-400" />
-            <span className="font-mono font-bold text-sm text-gray-200">
-              {dailyData.date}
             </span>
           </div>
 
-          <div className="flex gap-1 bg-gray-900/50 p-1 rounded-lg border border-gray-700/50">
+          {/* Right: Lock Button + Tabs */}
+          <div className="flex items-center gap-2">
+            {/* Lock Toggle Button */}
             <button
-              onClick={() => setActiveTab('team')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                activeTab === 'team'
-                  ? 'bg-gray-700 text-white shadow-sm'
-                  : 'text-gray-400 hover:text-white'
+              onClick={handleToggleLock}
+              disabled={lockLoading}
+              className={`flex items-center justify-center w-9 h-9 rounded-lg transition-all ${
+                lockLoading 
+                  ? 'bg-gray-700 cursor-wait' 
+                  : isTeamLocked 
+                    ? 'bg-red-600 hover:bg-red-500 text-white' 
+                    : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
               }`}
+              title={isTeamLocked ? 'Team Locked - Click to Unlock' : 'Team Unlocked - Click to Lock'}
             >
-              <Users size={14} /> Team
-            </button>
-            <button
-              onClick={() => setActiveTab('routes')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                activeTab === 'routes'
-                  ? 'bg-gray-700 text-white shadow-sm'
-                  : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              <Map size={14} /> Routes
-              {stats.unassignedRoutes > 0 && (
-                <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] bg-red-500 text-white rounded-full font-bold">
-                  {stats.unassignedRoutes}
-                </span>
+              {lockLoading ? (
+                <Loader size={16} className="animate-spin" />
+              ) : isTeamLocked ? (
+                <Lock size={16} />
+              ) : (
+                <Unlock size={16} />
               )}
             </button>
+
+            {/* Tab Buttons */}
+            <div className="flex gap-1 bg-gray-900/50 p-1 rounded-lg border border-gray-700/50">
+              <button
+                onClick={() => setActiveTab('team')}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  activeTab === 'team'
+                    ? 'bg-gray-700 text-white shadow-sm'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                <Users size={14} /> Team
+              </button>
+              <button
+                onClick={() => setActiveTab('routes')}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  activeTab === 'routes'
+                    ? 'bg-gray-700 text-white shadow-sm'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                <Map size={14} /> Routes
+                {stats.unassignedRoutes > 0 && (
+                  <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] bg-red-500 text-white rounded-full font-bold">
+                    {stats.unassignedRoutes}
+                  </span>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Bottom Row: 6-Metric Stats Grid */}
-        <div className="grid grid-cols-3 md:grid-cols-6 gap-px bg-gray-700 border-t border-gray-700">
+        {/* Stats Grid Row */}
+        <div className="grid grid-cols-6 gap-px bg-gray-700 border-t border-gray-700">
             
             {/* 1. Workers */}
-            <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
-                <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Workers</span>
-                <div className="flex items-center gap-1 text-blue-300 font-bold text-lg">
-                    <Users size={14} className="opacity-70" /> {stats.workerCount}
+            <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Workers</span>
+                <div className="flex items-center gap-1 text-blue-300 font-bold text-base">
+                    <Users size={12} className="opacity-70" /> {stats.workerCount}
                 </div>
             </div>
 
             {/* 2. Steps */}
-            <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
-                <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Steps</span>
-                <div className="flex items-center gap-1 text-white font-bold text-lg">
-                    <Activity size={14} className="opacity-70 text-green-400" /> {stats.totalSteps}
+            <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Steps</span>
+                <div className="flex items-center gap-1 text-white font-bold text-base">
+                    <Activity size={12} className="opacity-70 text-green-400" /> {stats.totalSteps}
                 </div>
             </div>
 
-            {/* 3. Pending (Assigned + Unassigned) */}
-            <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
-                <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Pending</span>
-                <div className="flex items-center gap-1 text-yellow-400 font-bold text-lg">
-                    <Clock size={14} className="opacity-70" /> 
-                    {stats.totalPending}
+            {/* 3. Pending */}
+            <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Pending</span>
+                <div className="flex items-center gap-1 text-yellow-400 font-bold text-base">
+                    <Clock size={12} className="opacity-70" /> {stats.totalPending}
                 </div>
             </div>
 
-            {/* 4. Avg EQ (2 Decimals) */}
-            <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
-                <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Avg EQ</span>
-                <div className={`font-bold text-lg ${
+            {/* 4. Avg EQ */}
+            <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Avg EQ</span>
+                <div className={`font-bold text-base ${
                     stats.avgEQ >= 3 ? 'text-green-400' : stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
                 }`}>
                     {stats.avgEQ.toFixed(2)}
                 </div>
             </div>
 
-             {/* 5. Upsells Count */}
-             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
-                <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Upsells</span>
-                <div className="text-purple-300 font-bold text-lg">
+             {/* 5. Upsells */}
+             <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Upsells</span>
+                <div className="text-purple-300 font-bold text-base">
                     {stats.totalUpsellCount}
                 </div>
             </div>
 
-             {/* 6. Up $ (Upsell Revenue) */}
-             <div className="bg-gray-800 p-2 flex flex-col items-center justify-center group hover:bg-gray-750 transition-colors">
-                <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-0.5">Up $</span>
-                <div className="flex items-center gap-1 text-purple-400 font-bold text-lg">
-                    <DollarSign size={14} className="opacity-70" /> 
-                    {stats.totalGross.toFixed(2)}
+             {/* 6. Up $ */}
+             <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Up $</span>
+                <div className="flex items-center gap-0.5 text-purple-400 font-bold text-base">
+                    <DollarSign size={12} className="opacity-70" /> 
+                    {stats.totalGross.toFixed(0)}
                 </div>
             </div>
 

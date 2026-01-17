@@ -313,6 +313,93 @@ class SessionService {
     return status === 'PAID';
   }
 
+  // --- 2e. TEAM LOCK MANAGEMENT (Route Manager) ---
+
+  /**
+   * Gets all worker IDs assigned to a specific manager
+   */
+  private async getTeamWorkerIds(managerId: string): Promise<string[]> {
+    const { data: workers } = await supabase
+      .from('users')
+      .select('user_id, metadata')
+      .eq('role', 'Worker');
+    
+    if (!workers) return [];
+    
+    return workers
+      .filter(w => w.metadata?.assignedManagerId === managerId)
+      .map(w => w.user_id);
+  }
+
+  /**
+   * Locks all team members' sessions (sets status to 'PAID')
+   * This prevents workers from logging in and forces active workers out
+   */
+  public async lockTeamSessions(managerId: string): Promise<void> {
+    const date = await this.getDailySessionDate();
+    if (!date) throw new Error('No active session');
+
+    const teamWorkerIds = await this.getTeamWorkerIds(managerId);
+    if (teamWorkerIds.length === 0) return;
+
+    const { error } = await supabase
+      .from('logsheet_sessions')
+      .update({ status: 'PAID' })
+      .eq('date', date)
+      .in('worker_id', teamWorkerIds);
+
+    if (error) {
+      console.error('Failed to lock team sessions:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Unlocks all team members' sessions (sets status to 'OPEN')
+   * This allows workers to log back in
+   */
+  public async unlockTeamSessions(managerId: string): Promise<void> {
+    const date = await this.getDailySessionDate();
+    if (!date) throw new Error('No active session');
+
+    const teamWorkerIds = await this.getTeamWorkerIds(managerId);
+    if (teamWorkerIds.length === 0) return;
+
+    const { error } = await supabase
+      .from('logsheet_sessions')
+      .update({ status: 'OPEN' })
+      .eq('date', date)
+      .in('worker_id', teamWorkerIds);
+
+    if (error) {
+      console.error('Failed to unlock team sessions:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Checks if all team members are locked (status = 'PAID')
+   * Returns true if ALL team members are locked, false otherwise
+   */
+  public async getTeamLockStatus(managerId: string): Promise<boolean> {
+    const date = await this.getDailySessionDate();
+    if (!date) return false;
+
+    const teamWorkerIds = await this.getTeamWorkerIds(managerId);
+    if (teamWorkerIds.length === 0) return false;
+
+    const { data: sessions } = await supabase
+      .from('logsheet_sessions')
+      .select('status')
+      .eq('date', date)
+      .in('worker_id', teamWorkerIds);
+
+    if (!sessions || sessions.length === 0) return false;
+
+    // All team members must be locked for this to return true
+    return sessions.every(s => s.status === 'PAID');
+  }
+
   // --- 3. SESSION MANAGEMENT ---
 
   public async uploadDailySession(

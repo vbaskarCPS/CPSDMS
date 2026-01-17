@@ -20,6 +20,7 @@ import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
 import { sessionService } from '../../lib/sessionService';
 import { subscribeAsContractor } from '../../lib/realtimeService';
+import { supabase } from '../../lib/supabase';
 import { Worker, SessionStats, MasterBooking, ManagementUser } from '../../types';
 import LogsheetJobCard from './components/LogsheetJobCard';
 import AddContractModal from '../../components/AddContractModal';
@@ -69,6 +70,13 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  // Force logout helper
+  const forceLogout = () => {
+    console.log('🔒 Session locked - forcing logout');
+    removeStorageItem('current_user');
+    navigate('/');
+  };
+
   // Initial load and data fetching
   useEffect(() => {
     const init = async () => {
@@ -81,6 +89,13 @@ const Dashboard: React.FC = () => {
       setWorker(storedWorker);
 
       try {
+        // --- LOCKOUT CHECK: Verify session is still open ---
+        const isLockedOut = await sessionService.isWorkerLockedOut(storedWorker.contractorId);
+        if (isLockedOut) {
+          forceLogout();
+          return;
+        }
+
         // 1. Ensure Session Exists
         const session = await sessionService.startLogsheetSession(storedWorker.contractorId);
         setStats(session.stats);
@@ -116,6 +131,36 @@ const Dashboard: React.FC = () => {
 
     init();
   }, [navigate, refreshKey]);
+
+  // --- FORCE LOGOUT LISTENER: Subscribe to session status changes ---
+  useEffect(() => {
+    if (!worker) return;
+
+    // Subscribe to logsheet_sessions table for this worker
+    const channel = supabase
+      .channel(`lockout-${worker.contractorId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'logsheet_sessions',
+          filter: `worker_id=eq.${worker.contractorId}`
+        },
+        (payload) => {
+          console.log('📡 Session status change detected:', payload);
+          // Check if status changed to PAID (locked)
+          if (payload.new && payload.new.status === 'PAID') {
+            forceLogout();
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [worker?.contractorId, navigate]);
 
   // Realtime subscription - separate useEffect to avoid re-subscribing on every refresh
   useEffect(() => {
