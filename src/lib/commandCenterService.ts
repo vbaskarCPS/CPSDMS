@@ -243,6 +243,88 @@ class CommandCenterService {
     if (error) throw new Error(error.message);
   }
 
+  // --- UNIVERSAL WIPE (Super Admin Only) ---
+
+  /**
+   * Wipe ALL data from ALL tables across ALL command centers.
+   * This resets the entire application to a fresh state.
+   * 
+   * DANGER: This is irreversible and deletes everything!
+   * 
+   * Deletion order respects foreign key constraints:
+   * 1. bookings (refs users, daily_sessions, command_centers)
+   * 2. logsheet_sessions (refs users, daily_sessions, command_centers)
+   * 3. routes (refs users, daily_sessions, command_centers)
+   * 4. transactions (refs users, command_centers)
+   * 5. email_logs (standalone)
+   * 6. users (refs command_centers)
+   * 7. daily_sessions (refs command_centers)
+   * 8. command_centers (parent table)
+   */
+  public async universalWipe(): Promise<void> {
+    // Delete in FK-safe order (children before parents)
+    
+    // 1. bookings
+    const { error: bookingsError } = await supabase
+      .from('bookings')
+      .delete()
+      .neq('booking_id', ''); // Delete all rows
+    if (bookingsError) throw new Error(`Failed to delete bookings: ${bookingsError.message}`);
+
+    // 2. logsheet_sessions
+    const { error: logsheetError } = await supabase
+      .from('logsheet_sessions')
+      .delete()
+      .neq('id', '');
+    if (logsheetError) throw new Error(`Failed to delete logsheet_sessions: ${logsheetError.message}`);
+
+    // 3. routes
+    const { error: routesError } = await supabase
+      .from('routes')
+      .delete()
+      .neq('route_code', '');
+    if (routesError) throw new Error(`Failed to delete routes: ${routesError.message}`);
+
+    // 4. transactions
+    const { error: transactionsError } = await supabase
+      .from('transactions')
+      .delete()
+      .neq('id', '');
+    if (transactionsError) throw new Error(`Failed to delete transactions: ${transactionsError.message}`);
+
+    // 5. email_logs
+    const { error: emailLogsError } = await supabase
+      .from('email_logs')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all rows (UUID comparison)
+    if (emailLogsError) throw new Error(`Failed to delete email_logs: ${emailLogsError.message}`);
+
+    // 6. users
+    const { error: usersError } = await supabase
+      .from('users')
+      .delete()
+      .neq('user_id', '');
+    if (usersError) throw new Error(`Failed to delete users: ${usersError.message}`);
+
+    // 7. daily_sessions
+    const { error: dailySessionsError } = await supabase
+      .from('daily_sessions')
+      .delete()
+      .neq('date', '1900-01-01'); // Delete all rows
+    if (dailySessionsError) throw new Error(`Failed to delete daily_sessions: ${dailySessionsError.message}`);
+
+    // 8. command_centers
+    const { error: commandCentersError } = await supabase
+      .from('command_centers')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000');
+    if (commandCentersError) throw new Error(`Failed to delete command_centers: ${commandCentersError.message}`);
+
+    // Clear local storage
+    this.clearCurrentCommandCenter();
+    this.setSuperAdminMode(false);
+  }
+
   // --- VALIDATION ---
 
   /**

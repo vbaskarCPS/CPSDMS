@@ -5,7 +5,6 @@ import {
   Plus,
   Trash2,
   Edit2,
-  LogIn,
   X,
   Check,
   AlertCircle,
@@ -17,6 +16,8 @@ import {
   Loader,
   LogOut,
   ChevronRight,
+  AlertTriangle,
+  Skull,
 } from 'lucide-react';
 import {
   commandCenterService,
@@ -51,6 +52,11 @@ const CommandCenterCreator: React.FC = () => {
     masterbookingsUrl: '',
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  // Universal Wipe Modal state
+  const [showWipeModal, setShowWipeModal] = useState(false);
+  const [wipeConfirmText, setWipeConfirmText] = useState('');
+  const [wiping, setWiping] = useState(false);
 
   // --- LOAD DATA ---
   useEffect(() => {
@@ -221,6 +227,42 @@ const CommandCenterCreator: React.FC = () => {
     navigate('/login');
   };
 
+  // --- UNIVERSAL WIPE HANDLERS ---
+  const openWipeModal = () => {
+    setWipeConfirmText('');
+    setShowWipeModal(true);
+  };
+
+  const closeWipeModal = () => {
+    setShowWipeModal(false);
+    setWipeConfirmText('');
+  };
+
+  const handleUniversalWipe = async () => {
+    if (wipeConfirmText !== 'DELETE ALL') return;
+
+    setWiping(true);
+    setError(null);
+
+    try {
+      await commandCenterService.universalWipe();
+      
+      // Clear local storage
+      removeStorageItem('current_user');
+      commandCenterService.clearCurrentCommandCenter();
+      commandCenterService.setSuperAdminMode(true); // Keep super admin mode
+      
+      // Reload the empty list
+      await loadCommandCenters();
+      closeWipeModal();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to wipe data');
+      setWiping(false);
+    }
+  };
+
+  const isWipeConfirmed = wipeConfirmText === 'DELETE ALL';
+
   // --- RENDER ---
   return (
     <div className="min-h-screen bg-gray-900 text-white">
@@ -362,6 +404,32 @@ const CommandCenterCreator: React.FC = () => {
             ))}
           </div>
         )}
+
+        {/* DANGER ZONE */}
+        <div className="mt-12 pt-8 border-t border-gray-800">
+          <div className="bg-red-950/30 rounded-xl border border-red-900/50 p-6">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 bg-red-900/50 rounded-lg flex items-center justify-center border border-red-700 flex-shrink-0">
+                <Skull className="text-red-400" size={24} />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-red-400 mb-2">Danger Zone</h3>
+                <p className="text-sm text-gray-400 mb-4">
+                  Universal wipe will permanently delete <strong className="text-red-300">ALL data</strong> from the 
+                  entire application including all command centers, users, sessions, transactions, bookings, 
+                  and email logs. This action cannot be undone.
+                </p>
+                <button
+                  onClick={openWipeModal}
+                  className="bg-red-900/50 hover:bg-red-900 text-red-300 hover:text-red-200 px-6 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors border border-red-800"
+                >
+                  <AlertTriangle size={18} />
+                  Universal Wipe
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* CREATE/EDIT MODAL */}
@@ -544,6 +612,87 @@ const CommandCenterCreator: React.FC = () => {
                   <Check size={16} />
                 )}
                 {editingCC ? 'Save Changes' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* UNIVERSAL WIPE MODAL */}
+      {showWipeModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
+          <div className="bg-gray-900 rounded-xl border border-red-900 w-full max-w-md">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-red-900/50 flex items-center gap-3">
+              <div className="w-10 h-10 bg-red-900/50 rounded-lg flex items-center justify-center">
+                <Skull className="text-red-400" size={20} />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-red-400">Universal Wipe</h2>
+                <p className="text-xs text-gray-500">This action cannot be undone</p>
+              </div>
+              <button onClick={closeWipeModal} className="ml-auto text-gray-500 hover:text-white">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6">
+              <div className="bg-red-950/50 border border-red-900/50 rounded-lg p-4 mb-6">
+                <h3 className="text-sm font-bold text-red-300 mb-2 flex items-center gap-2">
+                  <AlertTriangle size={16} />
+                  This will permanently delete:
+                </h3>
+                <ul className="text-sm text-gray-400 space-y-1 ml-6">
+                  <li>• All command centers ({commandCenters.length})</li>
+                  <li>• All workers and route managers</li>
+                  <li>• All daily sessions</li>
+                  <li>• All logsheet sessions</li>
+                  <li>• All transactions</li>
+                  <li>• All bookings and routes</li>
+                  <li>• All email logs</li>
+                </ul>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Type <code className="bg-gray-800 px-2 py-0.5 rounded text-red-400 font-mono">DELETE ALL</code> to confirm
+                </label>
+                <input
+                  type="text"
+                  value={wipeConfirmText}
+                  onChange={(e) => setWipeConfirmText(e.target.value)}
+                  placeholder="DELETE ALL"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg py-3 px-4 text-white font-mono text-center focus:ring-2 focus:ring-red-500 focus:outline-none focus:border-red-500"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-gray-800 flex justify-end gap-3">
+              <button
+                onClick={closeWipeModal}
+                className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUniversalWipe}
+                disabled={!isWipeConfirmed || wiping}
+                className={`px-6 py-2 rounded-lg font-bold flex items-center gap-2 transition-all ${
+                  isWipeConfirmed
+                    ? 'bg-red-600 hover:bg-red-500 text-white cursor-pointer'
+                    : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                }`}
+              >
+                {wiping ? (
+                  <Loader className="animate-spin" size={16} />
+                ) : (
+                  <Trash2 size={16} />
+                )}
+                Wipe Everything
               </button>
             </div>
           </div>
