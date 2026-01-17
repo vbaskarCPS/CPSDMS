@@ -16,15 +16,12 @@ const HomePage: React.FC = () => {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // DEBUG - show alert
-    alert(`Login attempt: "${username}" / "${password}" | SuperAdmin Match: ${isSuperAdminCredentials(username, password)}`);
-    
     setError('');
     setIsSessionFinalized(false);
     setLoading(true);
 
     try {
+      // 1. Check Super Admin (Administrator/cps26records)
       if (isSuperAdminCredentials(username, password)) {
         commandCenterService.clearCurrentCommandCenter();
         commandCenterService.setSuperAdminMode(false);
@@ -32,6 +29,7 @@ const HomePage: React.FC = () => {
         return;
       }
 
+      // 2. Check Command Center login
       const cc = await commandCenterService.authenticateCommandCenter(username, password);
       if (cc) {
         commandCenterService.setCurrentCommandCenter(cc);
@@ -40,6 +38,7 @@ const HomePage: React.FC = () => {
         return;
       }
 
+      // 3. Check Route Manager
       const rm = await sessionService.authenticateRM(username, password);
       if (rm) {
         setStorageItem('current_user', rm);
@@ -47,6 +46,7 @@ const HomePage: React.FC = () => {
         return;
       }
 
+      // 4. Check Worker
       const worker = await sessionService.authenticateWorker(username, password);
       if (worker) {
         setStorageItem('current_user', worker);
@@ -69,11 +69,6 @@ const HomePage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
-      {/* DEBUG BANNER - DELETE THIS LATER */}
-      <div className="fixed top-0 left-0 right-0 bg-red-600 text-white text-center py-2 font-bold z-50">
-        DEBUG MODE - If you see this, the file is loading correctly
-      </div>
-      
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-800 mb-4 border border-gray-700">
