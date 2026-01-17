@@ -36,11 +36,48 @@ const setColumnWidths = (ws: XLSX.WorkSheet, widths: number[]) => {
 };
 
 // Helper: Extract street number and name from address
+// Handles formats: "123", "10-1000", "123A", "123 1/2", "10-1000A", etc.
 const parseAddress = (addr: string): { streetNum: string; streetName: string } => {
-  const addrParts = (addr || '').split(' ');
-  const streetNum = /^\d+$/.test(addrParts[0]) ? addrParts[0] : '';
-  const streetName = /^\d+$/.test(addrParts[0]) ? addrParts.slice(1).join(' ') : addr;
-  return { streetNum, streetName };
+  if (!addr || typeof addr !== 'string') {
+    return { streetNum: '', streetName: '' };
+  }
+
+  const trimmed = addr.trim();
+  if (!trimmed) {
+    return { streetNum: '', streetName: '' };
+  }
+
+  // Regex to match common house number formats:
+  // - Simple numbers: 123
+  // - Hyphenated (unit-building): 10-1000, 5–20 (en-dash), 5—20 (em-dash)
+  // - With letter suffix: 123A, 10-1000B
+  // - Fractional: 123 1/2
+  // - Combinations: 10-1000A 1/2
+  const houseNumberPattern = /^(\d+(?:[-–—]\d+)?[A-Za-z]?(?:\s+\d+\/\d+)?)\s+(.+)$/;
+  
+  const match = trimmed.match(houseNumberPattern);
+  
+  if (match) {
+    return {
+      streetNum: match[1],
+      streetName: match[2]
+    };
+  }
+
+  // Fallback: Check if the entire string is just a house number (no street name)
+  const houseOnlyPattern = /^\d+(?:[-–—]\d+)?[A-Za-z]?(?:\s+\d+\/\d+)?$/;
+  if (houseOnlyPattern.test(trimmed)) {
+    return {
+      streetNum: trimmed,
+      streetName: ''
+    };
+  }
+
+  // No recognizable house number pattern - return entire address as street name
+  return {
+    streetNum: '',
+    streetName: trimmed
+  };
 };
 
 // Shared data fetching function
