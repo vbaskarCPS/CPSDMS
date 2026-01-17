@@ -13,37 +13,26 @@ const HomePage: React.FC = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   
-  // --- SESSION FINALIZED STATE (special error display) ---
   const [isSessionFinalized, setIsSessionFinalized] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // DEBUG ALERT - will show a popup
+    alert(`Username: "${username}" | Password: "${password}" | Match: ${isSuperAdminCredentials(username, password)}`);
+    
     setError('');
     setIsSessionFinalized(false);
     setLoading(true);
 
     try {
-      // DEBUG - remove after testing
-      console.log('=== LOGIN DEBUG ===');
-      console.log('Entered username:', JSON.stringify(username));
-      console.log('Entered password:', JSON.stringify(password));
-      console.log('Expected username:', JSON.stringify('Administrator'));
-      console.log('Expected password:', JSON.stringify('cps26records'));
-      console.log('Username match:', username === 'Administrator');
-      console.log('Password match:', password === 'cps26records');
-      console.log('isSuperAdminCredentials result:', isSuperAdminCredentials(username, password));
-      console.log('===================');
-
-      // 1. Check Super Admin (Administrator/cps26records)
       if (isSuperAdminCredentials(username, password)) {
-        // Clear any existing CC context
         commandCenterService.clearCurrentCommandCenter();
         commandCenterService.setSuperAdminMode(false);
         navigate('/super-admin');
         return;
       }
 
-      // 2. Check Command Center login
       const cc = await commandCenterService.authenticateCommandCenter(username, password);
       if (cc) {
         commandCenterService.setCurrentCommandCenter(cc);
@@ -52,8 +41,6 @@ const HomePage: React.FC = () => {
         return;
       }
 
-      // 3. Check Route Manager
-      // Note: authenticateRM will set the CC context automatically based on the user's CC
       const rm = await sessionService.authenticateRM(username, password);
       if (rm) {
         setStorageItem('current_user', rm);
@@ -61,12 +48,9 @@ const HomePage: React.FC = () => {
         return;
       }
 
-      // 4. Check Worker
-      // Note: authenticateWorker will set the CC context automatically based on the user's CC
       const worker = await sessionService.authenticateWorker(username, password);
       if (worker) {
         setStorageItem('current_user', worker);
-        // Ensure session exists in cloud
         await sessionService.startLogsheetSession(worker.contractorId);
         navigate('/logsheet');
         return;
@@ -74,7 +58,6 @@ const HomePage: React.FC = () => {
 
       throw new Error('Invalid credentials. Please try again.');
     } catch (err) {
-      // --- HANDLE SESSION_FINALIZED ERROR ---
       if (err instanceof Error && err.message === 'SESSION_FINALIZED') {
         setIsSessionFinalized(true);
       } else {
@@ -100,14 +83,12 @@ const HomePage: React.FC = () => {
 
         <div className="bg-gray-800 rounded-lg shadow-lg p-8 border border-gray-700">
           <form onSubmit={handleLogin}>
-            {/* Standard Error */}
             {error && (
               <div className="mb-4 p-3 bg-red-900/30 text-red-300 border border-red-700 rounded-md text-sm flex items-center gap-2">
                 <AlertCircle size={16} /> {error}
               </div>
             )}
 
-            {/* Session Finalized Special Message */}
             {isSessionFinalized && (
               <div className="mb-4 p-4 bg-green-900/20 border border-green-700 rounded-lg">
                 <div className="flex items-center gap-3 mb-2">
