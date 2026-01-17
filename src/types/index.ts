@@ -10,6 +10,7 @@ export interface CommandCenter {
   region: Region;
   workerbookSheetId: string;
   masterbookingsSheetId: string;
+  replyToEmail?: string;
   createdAt?: string;
 }
 
@@ -241,3 +242,56 @@ export interface SessionTransaction {
 
 // Changed 'gross' to 'upGross' for clarity - sorts by upsell gross only
 export type SortOption = 'standard' | 'alpha' | 'steps' | 'upGross' | 'equiv' | 'upsell' | 'commission';
+
+// --- EMAIL TEMPLATES ---
+
+export type EmailTemplateType = 
+  // General types
+  | 'production'
+  | 'sale'
+  | 'billed'
+  | 'prepaid'
+  // West Upgrades
+  | 'upgrade_star_plan_pro'
+  | 'upgrade_lawn_rejuv'
+  | 'upgrade_golf_course'
+  // West Add-Ons
+  | 'addon_dethatch'
+  | 'addon_rejuv_after_care'
+  | 'addon_grub';
+
+export interface EmailTemplate {
+  id: string;
+  commandCenterId: string;
+  templateType: EmailTemplateType;
+  templateName: string;
+  subject: string;
+  htmlContent: string;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface EmailTemplateBlock {
+  id: string;
+  type: 'header' | 'greeting' | 'content' | 'service_details' | 'payment_details' | 'footer';
+  content: string;
+  settings?: Record<string, any>;
+}
+
+export interface EmailTemplateStructure {
+  blocks: EmailTemplateBlock[];
+  styles?: {
+    primaryColor?: string;
+    fontFamily?: string;
+  };
+}
+
+// Template type metadata for UI
+export interface EmailTemplateTypeInfo {
+  type: EmailTemplateType;
+  name: string;
+  category: 'general' | 'upgrade' | 'addon';
+  description: string;
+  region?: Region;
+}

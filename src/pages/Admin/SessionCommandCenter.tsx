@@ -20,6 +20,7 @@ import {
   LogOut,
   ArrowLeft,
   Building2,
+  Settings,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
@@ -671,8 +672,8 @@ const SessionCommandCenter: React.FC = () => {
                         {/* EMAIL TOGGLE + START SESSION */}
                         {previewData && !currentSession && (
                             <div className="mt-8 space-y-4">
-                                <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700">
-                                  <label className="flex items-start gap-3 cursor-pointer group">
+                                <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700 flex items-center justify-between">
+                                  <label className="flex items-start gap-3 cursor-pointer group flex-1">
                                     <input 
                                       type="checkbox" 
                                       checked={emailEnabled}
@@ -690,6 +691,14 @@ const SessionCommandCenter: React.FC = () => {
                                       </p>
                                     </div>
                                   </label>
+                                  
+                                  <button
+                                    onClick={() => navigate('/admin/email-templates')}
+                                    className="ml-4 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg flex items-center gap-2 transition-colors text-sm"
+                                  >
+                                    <Settings size={14} />
+                                    Templates
+                                  </button>
                                 </div>
 
                                 <div className="flex justify-end">
@@ -702,6 +711,25 @@ const SessionCommandCenter: React.FC = () => {
                                     </button>
                                 </div>
                             </div>
+                        )}
+                        
+                        {/* EMAIL TEMPLATES BUTTON (When session is active) */}
+                        {currentSession && !previewData && (
+                          <div className="mt-6 pt-6 border-t border-gray-700">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <Mail size={18} className="text-gray-500" />
+                                <span className="text-sm text-gray-400">Email receipts are {emailEnabled ? 'enabled' : 'disabled'} for this session</span>
+                              </div>
+                              <button
+                                onClick={() => navigate('/admin/email-templates')}
+                                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg flex items-center gap-2 transition-colors text-sm"
+                              >
+                                <Settings size={16} />
+                                Email Templates
+                              </button>
+                            </div>
+                          </div>
                         )}
                     </div>
                 </div>

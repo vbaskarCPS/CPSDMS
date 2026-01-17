@@ -10,6 +10,8 @@ import CommandCenterCreator from './pages/SuperAdmin/CommandCenterCreator';
 // Lazy load less frequently used pages
 const RMLogbook = React.lazy(() => import('./pages/Management/RMLogbook'));
 const Logsheet = React.lazy(() => import('./pages/Logsheet/Dashboard'));
+const EmailTemplates = React.lazy(() => import('./pages/Admin/EmailTemplates'));
+const EmailTemplateEditor = React.lazy(() => import('./pages/Admin/EmailTemplateEditor'));
 
 // Loading fallback
 const LoadingFallback = () => (
@@ -29,8 +31,10 @@ function App() {
         {/* Super Admin Route */}
         <Route path="/super-admin" element={<CommandCenterCreator />} />
 
-        {/* Command Center Admin Route */}
+        {/* Command Center Admin Routes */}
         <Route path="/admin" element={<SessionCommandCenter />} />
+        <Route path="/admin/email-templates" element={<EmailTemplates />} />
+        <Route path="/admin/email-templates/:templateType" element={<EmailTemplateEditor />} />
 
         {/* Route Manager Routes */}
         <Route path="/rm-logbook" element={<RMLogbook />} />

@@ -12,6 +12,7 @@ export interface CommandCenter {
   region: Region;
   workerbookSheetId: string;
   masterbookingsSheetId: string;
+  replyToEmail?: string;
   createdAt?: string;
 }
 
@@ -162,6 +163,7 @@ class CommandCenterService {
     region: Region;
     workerbookSheetId: string;
     masterbookingsSheetId: string;
+    replyToEmail?: string;
   }): Promise<CommandCenter> {
     // Validate username uniqueness across all login types
     const isAvailable = await this.isUsernameAvailable(cc.username);
@@ -178,6 +180,7 @@ class CommandCenterService {
         region: cc.region,
         workerbook_sheet_id: cc.workerbookSheetId,
         masterbookings_sheet_id: cc.masterbookingsSheetId,
+        reply_to_email: cc.replyToEmail,
       })
       .select()
       .single();
@@ -197,6 +200,7 @@ class CommandCenterService {
     region: Region;
     workerbookSheetId: string;
     masterbookingsSheetId: string;
+    replyToEmail: string;
   }>): Promise<CommandCenter> {
     // If username is being changed, check availability
     if (updates.username) {
@@ -216,6 +220,7 @@ class CommandCenterService {
     if (updates.region) dbUpdates.region = updates.region;
     if (updates.workerbookSheetId) dbUpdates.workerbook_sheet_id = updates.workerbookSheetId;
     if (updates.masterbookingsSheetId) dbUpdates.masterbookings_sheet_id = updates.masterbookingsSheetId;
+    if (updates.replyToEmail !== undefined) dbUpdates.reply_to_email = updates.replyToEmail;
 
     const { data, error } = await supabase
       .from('command_centers')
@@ -257,9 +262,10 @@ class CommandCenterService {
    * 3. routes (refs users, daily_sessions, command_centers)
    * 4. transactions (refs users, command_centers)
    * 5. email_logs (standalone)
-   * 6. users (refs command_centers)
-   * 7. daily_sessions (refs command_centers)
-   * 8. command_centers (parent table)
+   * 6. email_templates (refs command_centers)
+   * 7. users (refs command_centers)
+   * 8. daily_sessions (refs command_centers)
+   * 9. command_centers (parent table)
    */
   public async universalWipe(): Promise<void> {
     // Delete in FK-safe order (children before parents)
@@ -299,21 +305,28 @@ class CommandCenterService {
       .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all rows (UUID comparison)
     if (emailLogsError) throw new Error(`Failed to delete email_logs: ${emailLogsError.message}`);
 
-    // 6. users
+    // 6. email_templates
+    const { error: emailTemplatesError } = await supabase
+      .from('email_templates')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000');
+    if (emailTemplatesError) throw new Error(`Failed to delete email_templates: ${emailTemplatesError.message}`);
+
+    // 7. users
     const { error: usersError } = await supabase
       .from('users')
       .delete()
       .neq('user_id', '');
     if (usersError) throw new Error(`Failed to delete users: ${usersError.message}`);
 
-    // 7. daily_sessions
+    // 8. daily_sessions
     const { error: dailySessionsError } = await supabase
       .from('daily_sessions')
       .delete()
       .neq('date', '1900-01-01'); // Delete all rows
     if (dailySessionsError) throw new Error(`Failed to delete daily_sessions: ${dailySessionsError.message}`);
 
-    // 8. command_centers
+    // 9. command_centers
     const { error: commandCentersError } = await supabase
       .from('command_centers')
       .delete()
@@ -376,6 +389,7 @@ class CommandCenterService {
       region: data.region as Region,
       workerbookSheetId: data.workerbook_sheet_id,
       masterbookingsSheetId: data.masterbookings_sheet_id,
+      replyToEmail: data.reply_to_email,
       createdAt: data.created_at,
     };
   }
