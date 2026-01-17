@@ -23,6 +23,17 @@ const HomePage: React.FC = () => {
     setLoading(true);
 
     try {
+      // DEBUG - remove after testing
+      console.log('=== LOGIN DEBUG ===');
+      console.log('Entered username:', JSON.stringify(username));
+      console.log('Entered password:', JSON.stringify(password));
+      console.log('Expected username:', JSON.stringify('Administrator'));
+      console.log('Expected password:', JSON.stringify('cps26records'));
+      console.log('Username match:', username === 'Administrator');
+      console.log('Password match:', password === 'cps26records');
+      console.log('isSuperAdminCredentials result:', isSuperAdminCredentials(username, password));
+      console.log('===================');
+
       // 1. Check Super Admin (Administrator/cps26records)
       if (isSuperAdminCredentials(username, password)) {
         // Clear any existing CC context
