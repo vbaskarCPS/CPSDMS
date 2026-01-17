@@ -10,6 +10,9 @@ import CommandCenterCreator from './pages/SuperAdmin/CommandCenterCreator';
 // Lazy load less frequently used pages
 const RMLogbook = React.lazy(() => import('./pages/Management/RMLogbook'));
 const Logsheet = React.lazy(() => import('./pages/Logsheet/Dashboard'));
+const NewJob = React.lazy(() => import('./pages/Logsheet/NewJob'));
+const JobDetail = React.lazy(() => import('./pages/Logsheet/JobDetail'));
+const NotFound = React.lazy(() => import('./pages/Logsheet/NotFound'));
 const EmailTemplates = React.lazy(() => import('./pages/Admin/EmailTemplates'));
 const EmailTemplateEditor = React.lazy(() => import('./pages/Admin/EmailTemplateEditor'));
 
@@ -41,9 +44,11 @@ function App() {
 
         {/* Worker Routes */}
         <Route path="/logsheet" element={<Logsheet />} />
+        <Route path="/logsheet/new" element={<NewJob />} />
+        <Route path="/job-detail/:jobId" element={<JobDetail />} />
 
-        {/* Catch-all redirect */}
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        {/* 404 Not Found */}
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </React.Suspense>
   );
