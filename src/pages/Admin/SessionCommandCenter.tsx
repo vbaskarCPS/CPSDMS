@@ -1,5 +1,5 @@
 // src/pages/Admin/SessionCommandCenter.tsx
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Upload,
@@ -40,9 +40,25 @@ const SessionCommandCenter: React.FC = () => {
     return tabParam === 'payout' ? 'payout' : 'lifecycle';
   });
 
-  // --- COMMAND CENTER CONTEXT ---
-  const currentCC = commandCenterService.getCurrentCommandCenter();
-  const isSuperAdminMode = commandCenterService.isSuperAdminMode();
+  // --- COMMAND CENTER CONTEXT (stored in state to avoid infinite loops) ---
+  const [currentCC, setCurrentCC] = useState(() => commandCenterService.getCurrentCommandCenter());
+  const [isSuperAdminMode, setIsSuperAdminMode] = useState(() => commandCenterService.isSuperAdminMode());
+
+  // Sync CC from localStorage on storage events (for cross-tab updates)
+  useEffect(() => {
+    const handleStorageUpdate = () => {
+      setCurrentCC(commandCenterService.getCurrentCommandCenter());
+      setIsSuperAdminMode(commandCenterService.isSuperAdminMode());
+    };
+
+    window.addEventListener('storageUpdated', handleStorageUpdate);
+    window.addEventListener('storage', handleStorageUpdate);
+    
+    return () => {
+      window.removeEventListener('storageUpdated', handleStorageUpdate);
+      window.removeEventListener('storage', handleStorageUpdate);
+    };
+  }, []);
 
   // Redirect if no CC context
   useEffect(() => {
@@ -89,19 +105,10 @@ const SessionCommandCenter: React.FC = () => {
   // Computed: Is imported from Google Sheets
   const isFromSheets = importMeta?.source === 'sheets';
 
-  // Load active session on mount
-  useEffect(() => {
-    if (currentCC) {
-      loadSession();
-    }
-  }, [currentCC]);
-
-  const handleTabChange = (tab: 'lifecycle' | 'payout') => {
-    setActiveTab(tab);
-    setSearchParams({ tab });
-  };
-
-  const loadSession = async () => {
+  // Load session function (memoized to avoid recreation)
+  const loadSession = useCallback(async () => {
+    if (!currentCC) return;
+    
     try {
       const session = await sessionService.getDailySession();
       setCurrentSession(session);
@@ -124,6 +131,18 @@ const SessionCommandCenter: React.FC = () => {
       console.error('Error loading session:', err);
       setError(err instanceof Error ? err.message : 'Failed to load session');
     }
+  }, [currentCC]);
+
+  // Load active session on mount and when CC changes
+  useEffect(() => {
+    if (currentCC?.id) {
+      loadSession();
+    }
+  }, [currentCC?.id, loadSession]);
+
+  const handleTabChange = (tab: 'lifecycle' | 'payout') => {
+    setActiveTab(tab);
+    setSearchParams({ tab });
   };
 
   // Check payout completion status
