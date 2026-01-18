@@ -1,6 +1,7 @@
 // src/lib/commandCenterService.ts
 import { supabase } from './supabase';
 import { getStorageItem, setStorageItem, removeStorageItem } from './localStorage';
+import { SeasonType, SeasonConfig, SEASON_CONFIGS, TeamSplitConfig } from '../types';
 
 // --- TYPES ---
 export type Region = 'West' | 'Central' | 'East';
@@ -59,8 +60,85 @@ export const getTaxRateForRegion = (region: Region): number => {
 };
 
 // --- CHECK IF REGION HAS UPGRADES ---
-export const regionHasUpgrades = (region: Region): boolean => {
+export const regionHasUpgrades = (region: Region, seasonType?: SeasonType): boolean => {
+  if (region !== 'West') return false;
+  
+  // In lawn_rejuv season, no upgrades available
+  if (seasonType === 'lawn_rejuv') return false;
+  
+  return true;
+};
+
+// --- CHECK IF REGION SUPPORTS SEASON SELECTION ---
+export const regionHasSeasonSelection = (region: Region): boolean => {
   return region === 'West';
+};
+
+// --- GET SEASON CONFIG ---
+export const getSeasonConfig = (seasonType: SeasonType): SeasonConfig => {
+  return SEASON_CONFIGS[seasonType];
+};
+
+// --- GET OFFICE FLAT VALUE ---
+export const getOfficeFlatValue = (code: string, seasonType: SeasonType): number | null => {
+  const config = getSeasonConfig(seasonType);
+  const flat = config.officeFlats.find(f => f.code === code);
+  return flat ? flat.value : null;
+};
+
+// --- CHECK IF CODE IS OFFICE FLAT ---
+export const isOfficeFlat = (displayPrice: string | undefined, seasonType: SeasonType): boolean => {
+  if (!displayPrice) return false;
+  const config = getSeasonConfig(seasonType);
+  return config.officeFlats.some(f => displayPrice.startsWith(f.code));
+};
+
+// --- GET EQ RATE ---
+export const getEQRate = (seasonType: SeasonType, teamSize: number): number => {
+  const config = getSeasonConfig(seasonType);
+  return teamSize >= 2 ? config.eqRateTeam : config.eqRateSolo;
+};
+
+// --- GET PREPAID WEIGHT ---
+export const getPrepaidWeight = (seasonType: SeasonType): number => {
+  return getSeasonConfig(seasonType).prepaidWeight;
+};
+
+// --- GET BILLED WEIGHT ---
+export const getBilledWeight = (seasonType: SeasonType): number => {
+  return getSeasonConfig(seasonType).billedWeight;
+};
+
+// --- CHECK IF SEASON HAS TEAMS ---
+export const seasonHasTeams = (seasonType: SeasonType): boolean => {
+  return seasonType === 'lawn_rejuv';
+};
+
+// --- GET AVAILABLE ADD-ONS FOR SEASON ---
+export const getAvailableAddOns = (seasonType: SeasonType): string[] => {
+  return getSeasonConfig(seasonType).availableAddOns;
+};
+
+// --- CREATE DEFAULT EQUAL SPLIT ---
+export const createEqualSplit = (workerIds: string[]): TeamSplitConfig => {
+  if (workerIds.length === 0) return {};
+  
+  const equalPercent = Math.floor(100 / workerIds.length);
+  const remainder = 100 - (equalPercent * workerIds.length);
+  
+  const split: TeamSplitConfig = {};
+  workerIds.forEach((id, index) => {
+    // Give the remainder to the first worker
+    split[id] = equalPercent + (index === 0 ? remainder : 0);
+  });
+  
+  return split;
+};
+
+// --- VALIDATE SPLIT TOTALS 100% ---
+export const validateSplitTotal = (split: TeamSplitConfig): boolean => {
+  const total = Object.values(split).reduce((sum, val) => sum + val, 0);
+  return Math.abs(total - 100) < 0.01; // Allow small floating point variance
 };
 
 class CommandCenterService {
@@ -109,11 +187,19 @@ class CommandCenterService {
   }
 
   /**
-   * Check if current region has upgrades
+   * Check if current region has upgrades (season-aware)
    */
-  public currentRegionHasUpgrades(): boolean {
+  public currentRegionHasUpgrades(seasonType?: SeasonType): boolean {
     const region = this.getCurrentRegion();
-    return region ? regionHasUpgrades(region) : false;
+    return region ? regionHasUpgrades(region, seasonType) : false;
+  }
+
+  /**
+   * Check if current region supports season selection
+   */
+  public currentRegionHasSeasonSelection(): boolean {
+    const region = this.getCurrentRegion();
+    return region ? regionHasSeasonSelection(region) : false;
   }
 
   /**

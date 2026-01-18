@@ -3,6 +3,32 @@
 // --- COMMAND CENTER (Multi-tenant) ---
 export type Region = 'West' | 'Central' | 'East';
 
+// --- SEASON TYPES (West Region Only) ---
+export type SeasonType = 'aeration' | 'lawn_rejuv';
+
+// --- SERVICE FLAGS (Lawn Rejuvenation) ---
+export interface ServiceFlags {
+  aeration?: boolean;    // A
+  dethatch?: boolean;    // D
+  fertilizer?: boolean;  // F
+  seed?: boolean;        // S
+  lime?: boolean;        // L
+}
+
+// Service flag keys for iteration
+export const SERVICE_FLAG_KEYS: (keyof ServiceFlags)[] = [
+  'aeration', 'dethatch', 'fertilizer', 'seed', 'lime'
+];
+
+// Service flag display labels
+export const SERVICE_FLAG_LABELS: Record<keyof ServiceFlags, { short: string; full: string }> = {
+  aeration: { short: 'A', full: 'Aeration' },
+  dethatch: { short: 'D', full: 'Dethatch' },
+  fertilizer: { short: 'F', full: 'Fertilizer' },
+  seed: { short: 'S', full: 'Seed' },
+  lime: { short: 'L', full: 'Lime' },
+};
+
 export interface CommandCenter {
   id: string;
   username: string;
@@ -35,6 +61,8 @@ export interface Bonus {
     amount: number;
     placing?: number | 'other';      // 1-10 or 'other' (for Performance EQ, Total Upsell, Rookie)
     customDescription?: string;       // For 'Other' type OR when placing is 'other'
+    // For team seasons: how to split this bonus among team members
+    splitPercentages?: Record<string, number>; // workerId -> percentage (0-100)
 }
 
 export interface Worker {
@@ -55,6 +83,17 @@ export interface Worker {
   
   // --- UPSELL CONTROL ---
   upsellsEnabled?: boolean; // Defaults to true if not set
+  
+  // --- TEAM SUPPORT (Lawn Rejuv Season) ---
+  teamId?: string; // e.g., "v1", "v2", "1", "2" - workers with same teamId share a cart
+}
+
+// --- TEAM/CART STRUCTURE (Lawn Rejuv) ---
+export interface TeamCart {
+  teamId: string;
+  workerIds: string[];
+  workers: Worker[];
+  logsheetSessionId?: string;
 }
 
 // --- DATA FEED STRUCTURE ---
@@ -62,7 +101,7 @@ export interface Worker {
 export interface RouteData {
   routeCode: string;
   managerId: string; 
-  assignedWorkerIds: string[]; // Changed from assignedWorkerId: string | null
+  assignedWorkerIds: string[]; // For aeration: individual workers. For lawn_rejuv: can include team representatives
   streets?: string[];
   commandCenterId?: string; // Links to CommandCenter.id
 }
@@ -74,6 +113,12 @@ export interface DailySessionData {
   routes: RouteData[]; 
   pendingBookings: MasterBooking[];
   commandCenterId?: string; // Links to CommandCenter.id
+  
+  // --- SEASON SUPPORT ---
+  seasonType?: SeasonType; // 'aeration' | 'lawn_rejuv' (West only, defaults to 'aeration')
+  
+  // --- TEAM CARTS (Lawn Rejuv only) ---
+  teamCarts?: TeamCart[]; // Grouped workers by teamId
 }
 
 // --- PAYOUT VALIDATION ---
@@ -99,11 +144,17 @@ export interface SessionValidation {
     timestamp?: string;
 }
 
+// --- TEAM SPLIT CONFIGURATION ---
+export interface TeamSplitConfig {
+  // workerId -> percentage (0-100, should sum to 100)
+  [workerId: string]: number;
+}
+
 // --- LOGSHEET SESSION ---
 
 export interface LogsheetSession {
   id: string;
-  workerId: string;
+  workerId: string; // Primary worker (or first team member)
   managerName?: string; 
   date: string;
   status: 'OPEN' | 'COMPLETE' | 'CLOSED' | 'PAID'; // Added 'PAID' for payout lockout
@@ -119,6 +170,11 @@ export interface LogsheetSession {
   bonuses?: Bonus[];
   
   commandCenterId?: string; // Links to CommandCenter.id
+  
+  // --- TEAM SUPPORT (Lawn Rejuv Season) ---
+  teamWorkerIds?: string[]; // All worker IDs in this team/cart (includes primary workerId)
+  equivSplit?: TeamSplitConfig; // How to split EQ among team members
+  upsellSplit?: TeamSplitConfig; // How to split upsell commission among team members
 }
 
 export interface SessionStats {
@@ -148,6 +204,31 @@ export interface SessionStats {
     stepCount: number;
     upsellCount: number;
     iosCount: number;
+}
+
+// --- PER-WORKER PAYOUT (for team seasons) ---
+export interface WorkerPayoutBreakdown {
+  workerId: string;
+  workerName: string;
+  
+  // Split percentages applied
+  equivSplitPercent: number;
+  upsellSplitPercent: number;
+  
+  // Calculated values
+  assignedEQ: number;           // totalEQ * equivSplitPercent
+  baseCommission: number;       // assignedEQ * eqRate
+  alumniBonus: number;          // baseCommission * alumniRate
+  silverBonus: number;          // baseCommission * silverRate
+  productionCommission: number; // baseCommission + alumniBonus + silverBonus
+  
+  upsellCommission: number;     // upsellPayable * upsellSplitPercent * 0.15
+  iosCommission: number;        // iosCount * $5 * upsellSplitPercent
+  
+  bonusAmount: number;          // Sum of bonuses with splits applied
+  deductions: number;           // Cash/cheque diff + machine rental (split evenly?)
+  
+  finalCommission: number;      // Total payout for this worker
 }
 
 // --- BOOKINGS & TRANSACTIONS ---
@@ -182,6 +263,9 @@ export interface MasterBooking {
   
   commandCenterId?: string; // Links to CommandCenter.id
   
+  // --- SERVICE FLAGS (Lawn Rejuv Season) ---
+  services?: ServiceFlags; // Which services are included (A/D/F/S/L)
+  
   // Allow additional dynamic properties (like 'Gate', 'House Number', etc.)
   [key: string]: any;
 }
@@ -200,7 +284,7 @@ export interface SessionTransaction {
   customerName: string;
   address: string;
   
-  // ADDED: Missing contact information properties
+  // Contact information
   customerPhone?: string;
   customerEmail?: string;
   
@@ -226,7 +310,7 @@ export interface SessionTransaction {
   etransferEmail?: string;
   chequeNumber?: string;
   
-  // ADDED: Missing service-related properties
+  // Service-related properties
   serviceType?: 'FO' | 'BO' | 'FP' | 'SS' | 'SSP' | 'Ramp';
   serviceName?: string;
   isPrepaid?: boolean;
@@ -238,6 +322,12 @@ export interface SessionTransaction {
   paymentBreakdown?: Record<string, number>;
   
   commandCenterId?: string; // Links to CommandCenter.id
+  
+  // --- SERVICE FLAGS (Lawn Rejuv Season) ---
+  services?: ServiceFlags; // Which services were performed (A/D/F/S/L)
+  
+  // --- TEAM SUPPORT ---
+  completedByWorkerIds?: string[]; // All workers who contributed (for team export)
 }
 
 // Changed 'gross' to 'upGross' for clarity - sorts by upsell gross only
@@ -251,14 +341,15 @@ export type EmailTemplateType =
   | 'sale'
   | 'billed'
   | 'prepaid'
-  // West Upgrades
+  // West Upgrades (Aeration only)
   | 'upgrade_star_plan_pro'
   | 'upgrade_lawn_rejuv'
   | 'upgrade_golf_course'
-  // West Add-Ons
+  // West Add-Ons (Aeration)
   | 'addon_dethatch'
   | 'addon_rejuv_after_care'
   | 'addon_grub'
+  // West Add-Ons (Lawn Rejuv) - Grub and After Care only
   // Central Add-Ons
   | 'addon_window_washing'
   // East Add-Ons
@@ -299,4 +390,59 @@ export interface EmailTemplateTypeInfo {
   category: 'general' | 'upgrade' | 'addon';
   description: string;
   region?: Region;
+  seasonType?: SeasonType; // Which season this template applies to
 }
+
+// --- SEASON CONFIGURATION CONSTANTS ---
+export interface SeasonConfig {
+  seasonType: SeasonType;
+  displayName: string;
+  
+  // Pricing
+  prepaidWeight: number;      // 0.5 for aeration, 0.7 for lawn_rejuv
+  billedWeight: number;       // 0.5 for both
+  
+  // EQ Calculation
+  eqRateSolo: number;         // $25 for aeration, $6 for lawn_rejuv
+  eqRateTeam: number;         // $25 for aeration, $8 for lawn_rejuv (2+ members)
+  
+  // Office Flats
+  officeFlats: {
+    code: string;
+    value: number;
+  }[];
+  
+  // Available add-ons/upgrades
+  hasUpgrades: boolean;
+  availableAddOns: string[];  // refIds
+}
+
+export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
+  aeration: {
+    seasonType: 'aeration',
+    displayName: 'Aeration Season',
+    prepaidWeight: 0.5,
+    billedWeight: 0.5,
+    eqRateSolo: 25,
+    eqRateTeam: 25,
+    officeFlats: [
+      { code: 'SP', value: 52.5 },
+      { code: 'RJ', value: 52.5 },
+    ],
+    hasUpgrades: true,
+    availableAddOns: ['dethatch', 'rejuv_after_care', 'grub'],
+  },
+  lawn_rejuv: {
+    seasonType: 'lawn_rejuv',
+    displayName: 'Lawn Rejuvenation Season',
+    prepaidWeight: 0.7,
+    billedWeight: 0.5,
+    eqRateSolo: 6,
+    eqRateTeam: 8,
+    officeFlats: [
+      { code: 'FSL', value: 157.5 },
+    ],
+    hasUpgrades: false,
+    availableAddOns: ['grub', 'rejuv_after_care'], // Only these two in lawn_rejuv
+  },
+};
