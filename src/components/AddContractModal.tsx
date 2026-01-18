@@ -5,6 +5,7 @@ import { getStorageItem } from '../lib/localStorage';
 import { commandCenterService, getTaxRateForRegion, Region } from '../lib/commandCenterService';
 import { MasterBooking, Worker, SessionTransaction } from '../types';
 import { sessionService } from '../lib/sessionService';
+import { trainingService } from '../lib/trainingService';
 import CreditCardModal from './CreditCardModal';
 import { 
   formatPhoneNumber, 
@@ -43,10 +44,10 @@ interface ContractRecipe {
   name: string;
   type: 'Upgrade' | 'Add-On';
   region: Region;
-  propertyTypes: string[]; // Empty array means no property type selector
+  propertyTypes: string[];
   hasIOS: boolean;
-  displayPrefix?: string; // Only for West upgrades (SP, RJ, GF)
-  badge?: string; // Badge code for display (WW, DWS, RAMP)
+  displayPrefix?: string;
+  badge?: string;
   questions?: { id: string; label: string; options: string[] }[];
 }
 
@@ -85,10 +86,9 @@ interface DirectUpgradeClient {
 
 interface AddContractModalProps {
   onClose: () => void;
-  // Optional props for direct upgrade flow
-  directUpgradeBooking?: MasterBooking; // From JobDetail - has Booking ID
-  directUpgradeClient?: DirectUpgradeClient; // From NewJob - no existing booking
-  onSuccess?: () => void; // Callback for successful completion
+  directUpgradeBooking?: MasterBooking;
+  directUpgradeClient?: DirectUpgradeClient;
+  onSuccess?: () => void;
 }
 
 type Step = 'SELECT_CONTRACT' | 'SELECT_CLIENT' | 'ENTER_DETAILS';
@@ -99,6 +99,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   directUpgradeClient,
   onSuccess 
 }) => {
+  // Check if in training mode
+  const isTrainingMode = trainingService.isTrainingMode();
+  
   // Determine if we're in direct upgrade mode
   const isDirectUpgrade = !!(directUpgradeBooking || directUpgradeClient);
   
@@ -107,8 +110,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const [selectedBooking, setSelectedBooking] = useState<MasterBooking | null>(null);
   const [error, setError] = useState<string | null>(null);
   
-  // Region and Tax Rate
-  const [region, setRegion] = useState<Region>('West');
+  // Region and Tax Rate - Training mode always uses West
+  const [region, setRegion] = useState<Region>(isTrainingMode ? 'West' : 'West');
   const [taxRate, setTaxRate] = useState(5);
   
   // Data
@@ -138,10 +141,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
 
-  // Saving State (prevents double-click)
+  // Saving State
   const [saving, setSaving] = useState(false);
 
-  // Territory Helpers (for new clients without selectedBooking)
+  // Territory Helpers
   const [streetName, setStreetName] = useState('');
   const [houseNumber, setHouseNumber] = useState('');
 
@@ -160,35 +163,27 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const [splitEtransferEmailError, setSplitEtransferEmailError] = useState<string | null>(null);
   const [paymentMethodError, setPaymentMethodError] = useState<string | null>(null);
 
-  // --- COMPUTED: Is Split Payment Mode ---
+  // --- COMPUTED VALUES ---
   const isSplitPayment = paymentInfo.method === 'Split Payment';
 
-  // --- COMPUTED: Split Payment Total ---
   const splitTotal = 
     (parseFloat(splitCash) || 0) + 
     (parseFloat(splitCheque) || 0) + 
     (parseFloat(splitEtransfer) || 0) + 
     (parseFloat(splitCreditCard) || 0);
 
-  // --- COMPUTED: Split CC needs processing ---
   const splitCCAmount = parseFloat(splitCreditCard) || 0;
   const splitCCNeedsProcessing = splitCCAmount > 0 && !isCreditPaid;
 
-  // --- COMPUTED: Available recipes for current region ---
   const availableRecipes = useMemo(() => {
     return CONTRACT_RECIPES.filter(r => r.region === region);
   }, [region]);
 
-  // --- COMPUTED: Does selected recipe have property types? ---
   const hasPropertyTypes = selectedRecipe && selectedRecipe.propertyTypes.length > 0;
-
-  // --- COMPUTED: Does selected recipe support IOS? ---
   const supportsIOS = selectedRecipe?.hasIOS || false;
-
-  // --- COMPUTED: Should show Locked Gate and Sprinkler options? (West only) ---
   const showGateAndSprinkler = selectedRecipe?.region === 'West';
 
-  // --- HANDLERS FOR NAME FIELDS ---
+  // --- HANDLERS ---
   const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData({...formData, firstName: capitalizeWords(e.target.value)});
   };
@@ -197,7 +192,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     setFormData({...formData, lastName: capitalizeWords(e.target.value)});
   };
 
-  // --- HANDLERS FOR PHONE & EMAIL ---
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const formatted = formatPhoneNumber(e.target.value);
     setFormData({...formData, phone: formatted});
@@ -226,7 +220,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     }
   };
 
-  // Split E-Transfer Email handlers
   const handleSplitEtransferEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSplitEtransferEmail(e.target.value);
     setSplitEtransferEmailError(null);
@@ -238,13 +231,11 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     }
   };
 
-  // --- HANDLER FOR PAYMENT METHOD ---
   const handlePaymentMethodChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
     setPaymentInfo({...paymentInfo, method: value});
     setPaymentMethodError(null);
     
-    // Reset split fields when changing payment method
     if (value !== 'Split Payment') {
       setSplitCash('');
       setSplitCheque('');
@@ -254,7 +245,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       setSplitChequeNumber('');
     }
     
-    // Reset CC data when changing away from CC or Split
     if (value !== 'Credit Card' && value !== 'Split Payment') {
       setIsCreditPaid(false);
       setCcData(null);
@@ -263,7 +253,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     if (value === 'Credit Card') setShowCreditModal(true);
   };
 
-  // --- TAX CALCULATOR ---
   const handleTaxClick = () => {
     const current = parseFloat(paymentInfo.amount) || 0;
     const tax = current * (taxRate / 100);
@@ -276,72 +265,108 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       if (!w) { setError("User not found."); return; }
       setWorker(w);
 
-      // Get region and tax rate from command center
-      const cc = commandCenterService.getCurrentCommandCenter();
-      if (cc) {
-        setRegion(cc.region);
-        setTaxRate(getTaxRateForRegion(cc.region));
-      }
-
-      try {
-        const dailySession = await sessionService.getDailySession();
+      // Training mode: Always use West region with 5% tax
+      if (isTrainingMode) {
+        setRegion('West');
+        setTaxRate(5);
         
+        // Get routes from training service
+        const dailySession = await trainingService.getDailySession();
         if (dailySession && dailySession.routes) {
           const myRoutes = dailySession.routes
-            .filter(r => r.assignedWorkerIds && r.assignedWorkerIds.includes(w.contractorId))
-            .map(r => r.routeCode);
-          
-          myRoutes.sort((a, b) => a.localeCompare(b));
-          
+            .filter((r: any) => r.assignedWorkerIds && r.assignedWorkerIds.includes(w.contractorId))
+            .map((r: any) => r.routeCode);
+          myRoutes.sort((a: string, b: string) => a.localeCompare(b));
           setAssignedRoutes(myRoutes);
         }
-      } catch (err) {
-        console.warn("Could not load routes", err);
-      }
 
-      // Only load available clients if NOT in direct upgrade mode
-      if (!isDirectUpgrade) {
-        const activeSession = await sessionService.getActiveLogsheetSession(w.contractorId);
-        if (activeSession) {
+        // Load available clients for training mode (only if not direct upgrade)
+        if (!isDirectUpgrade) {
+          const activeSession = await trainingService.getActiveLogsheetSession(w.contractorId);
+          if (activeSession) {
             const clients = activeSession.financialStore.map(tx => ({
-                'Booking ID': tx.jobId,
-                'First Name': tx.customerName.split(' ')[0],
-                'Last Name': tx.customerName.split(' ').slice(1).join(' '),
-                'Full Address': tx.address,
-                'Route Number': tx.routeCode,
-                'Price': tx.displayPrice || tx.price.toString(),
-                'Home Phone': (tx as any).customerPhone || '',
-                'Email Address': (tx as any).customerEmail || '',
-                'Prepaid': (tx as any).isPrepaid ? 'x' : undefined,
-                'Status': 'completed',
-                'FO/BO/FP': (tx as any).serviceType,
-                isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ') || tx.displayPrice.startsWith('GF'))),
-                'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined
+              'Booking ID': tx.jobId,
+              'First Name': tx.customerName.split(' ')[0],
+              'Last Name': tx.customerName.split(' ').slice(1).join(' '),
+              'Full Address': tx.address,
+              'Route Number': tx.routeCode,
+              'Price': tx.displayPrice || tx.price.toString(),
+              'Home Phone': tx.customerPhone || '',
+              'Email Address': tx.customerEmail || '',
+              'Prepaid': tx.isPrepaid ? 'x' : undefined,
+              'Status': 'completed',
+              'FO/BO/FP': tx.serviceType,
+              isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ') || tx.displayPrice.startsWith('GF'))),
+              'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined
             } as MasterBooking));
             setAvailableClients(clients);
+          }
+        }
+      } else {
+        // Production mode: Get region from command center
+        const cc = commandCenterService.getCurrentCommandCenter();
+        if (cc) {
+          setRegion(cc.region);
+          setTaxRate(getTaxRateForRegion(cc.region));
+        }
+
+        try {
+          const dailySession = await sessionService.getDailySession();
+          
+          if (dailySession && dailySession.routes) {
+            const myRoutes = dailySession.routes
+              .filter(r => r.assignedWorkerIds && r.assignedWorkerIds.includes(w.contractorId))
+              .map(r => r.routeCode);
+            
+            myRoutes.sort((a, b) => a.localeCompare(b));
+            setAssignedRoutes(myRoutes);
+          }
+        } catch (err) {
+          console.warn("Could not load routes", err);
+        }
+
+        // Only load available clients if NOT in direct upgrade mode
+        if (!isDirectUpgrade) {
+          const activeSession = await sessionService.getActiveLogsheetSession(w.contractorId);
+          if (activeSession) {
+            const clients = activeSession.financialStore.map(tx => ({
+              'Booking ID': tx.jobId,
+              'First Name': tx.customerName.split(' ')[0],
+              'Last Name': tx.customerName.split(' ').slice(1).join(' '),
+              'Full Address': tx.address,
+              'Route Number': tx.routeCode,
+              'Price': tx.displayPrice || tx.price.toString(),
+              'Home Phone': (tx as any).customerPhone || '',
+              'Email Address': (tx as any).customerEmail || '',
+              'Prepaid': (tx as any).isPrepaid ? 'x' : undefined,
+              'Status': 'completed',
+              'FO/BO/FP': (tx as any).serviceType,
+              isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ') || tx.displayPrice.startsWith('GF'))),
+              'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined
+            } as MasterBooking));
+            setAvailableClients(clients);
+          }
         }
       }
     };
     init();
-  }, [isDirectUpgrade]);
+  }, [isDirectUpgrade, isTrainingMode]);
 
-  // Filter recipes based on mode (direct upgrade only shows Upgrade types for West)
+  // Filter recipes based on mode
   const displayedRecipes = useMemo(() => {
     if (isDirectUpgrade) {
-      // Direct upgrade mode - only show upgrades (West only has upgrades)
       return availableRecipes.filter(r => r.type === 'Upgrade');
     }
     return availableRecipes;
   }, [availableRecipes, isDirectUpgrade]);
 
-  // Filter Logic: Dynamically filter based on Recipe Type
   const filteredClients = useMemo(() => {
-      if (!selectedRecipe) return [];
-      if (selectedRecipe.type === 'Upgrade') {
-          return availableClients.filter(c => !c.isContract);
-      } else {
-          return availableClients;
-      }
+    if (!selectedRecipe) return [];
+    if (selectedRecipe.type === 'Upgrade') {
+      return availableClients.filter(c => !c.isContract);
+    } else {
+      return availableClients;
+    }
   }, [availableClients, selectedRecipe]);
 
   const handleRecipeSelect = (recipe: ContractRecipe) => {
@@ -354,7 +379,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     setIsCreditPaid(false);
     setCcData(null);
     
-    // Reset split payment fields
     setSplitCash('');
     setSplitCheque('');
     setSplitEtransfer('');
@@ -362,19 +386,15 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     setSplitEtransferEmail('');
     setSplitChequeNumber('');
     
-    // Clear validation errors
     setPhoneError(null);
     setEmailError(null);
     setEtransferEmailError(null);
     setSplitEtransferEmailError(null);
     setPaymentMethodError(null);
 
-    // Set default property type based on recipe
     const defaultPropertyType = recipe.propertyTypes.length > 0 ? recipe.propertyTypes[0] : '';
 
-    // DIRECT UPGRADE MODE: Pre-fill data and skip client selection
     if (directUpgradeBooking) {
-      // From JobDetail - has existing booking
       setSelectedBooking(directUpgradeBooking);
       setFormData({
         firstName: directUpgradeBooking['First Name'] || '',
@@ -390,7 +410,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       });
       setStep('ENTER_DETAILS');
     } else if (directUpgradeClient) {
-      // From NewJob - no existing booking, just client data
       setSelectedBooking(null);
       setFormData({
         firstName: directUpgradeClient.firstName,
@@ -408,11 +427,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       setStreetName(directUpgradeClient.streetName);
       setStep('ENTER_DETAILS');
     } else {
-      // Normal flow - go to client selection
       setFormData({ 
-          firstName: '', lastName: '', address: '', phone: '', email: '', 
-          routeNumber: '', notes: '', propertyType: defaultPropertyType, 
-          hasLockedGate: false, hasSprinkler: false 
+        firstName: '', lastName: '', address: '', phone: '', email: '', 
+        routeNumber: '', notes: '', propertyType: defaultPropertyType, 
+        hasLockedGate: false, hasSprinkler: false 
       });
       setSelectedBooking(null);
       setStep('SELECT_CLIENT');
@@ -468,15 +486,12 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     setStep('ENTER_DETAILS');
   };
 
-  // Handle back button - in direct upgrade mode, go back to contract selection (not client selection)
   const handleBack = () => {
     if (step === 'ENTER_DETAILS') {
       if (isDirectUpgrade) {
-        // Direct upgrade: go back to contract selection
         setStep('SELECT_CONTRACT');
         setSelectedRecipe(null);
       } else {
-        // Normal flow: go back to client selection
         setStep('SELECT_CLIENT');
       }
     } else if (step === 'SELECT_CLIENT') {
@@ -499,7 +514,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     let splitEtError: string | null = null;
     
     if (isSplitPayment) {
-      // Validate split e-transfer email if split e-transfer amount > 0
       if ((parseFloat(splitEtransfer) || 0) > 0) {
         splitEtError = getEmailValidationError(splitEtransferEmail);
       }
@@ -509,7 +523,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     
     const pmError = !paymentInfo.method ? 'Please select a payment method' : null;
 
-    // Split payment specific validation
     if (isSplitPayment && splitTotal <= 0) {
       setPhoneError(pError);
       setEmailError(eError);
@@ -555,22 +568,18 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       let finalPaymentMethod: string;
       let paymentBreakdown: Record<string, number> = {};
 
-      // Check prepaid status - works for both directUpgradeBooking and selectedBooking
       const bookingForPrepaidCheck = directUpgradeBooking || selectedBooking;
       const isPrepaid = bookingForPrepaidCheck?.Prepaid === 'x';
 
       if (isSplitPayment) {
-        // Split payment mode
         finalTotal = Math.round(splitTotal * 100) / 100;
         finalPaymentMethod = 'Split';
         
-        // Build breakdown with only non-zero values
         if ((parseFloat(splitCash) || 0) > 0) paymentBreakdown['Cash'] = parseFloat(splitCash);
         if ((parseFloat(splitCheque) || 0) > 0) paymentBreakdown['Cheque'] = parseFloat(splitCheque);
         if ((parseFloat(splitEtransfer) || 0) > 0) paymentBreakdown['E-Transfer'] = parseFloat(splitEtransfer);
         if ((parseFloat(splitCreditCard) || 0) > 0) paymentBreakdown['Credit Card'] = parseFloat(splitCreditCard);
         
-        // Handle prepaid credit for upgrades with split payment
         if (isUpgrade && bookingForPrepaidCheck && isPrepaid) {
           creditAmount = parseFloat(String(bookingForPrepaidCheck.Price).replace(/[^0-9.]/g, '')) || 0;
           finalTotal = creditAmount + splitTotal;
@@ -578,32 +587,31 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
           isPrepaidSplit = true;
         }
       } else {
-        // Regular payment mode
         const inputAmount = parseFloat(paymentInfo.amount);
         finalPaymentMethod = isIOS ? 'IOS' : paymentInfo.method;
 
         if (isUpgrade && bookingForPrepaidCheck && isPrepaid) {
-            creditAmount = parseFloat(String(bookingForPrepaidCheck.Price).replace(/[^0-9.]/g, '')) || 0;
-            finalTotal = creditAmount + inputAmount;
-            
-            paymentBreakdown['Prepaid'] = creditAmount;
-            const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
-            paymentBreakdown[currentMethodKey] = inputAmount;
-            
-            isPrepaidSplit = true; 
+          creditAmount = parseFloat(String(bookingForPrepaidCheck.Price).replace(/[^0-9.]/g, '')) || 0;
+          finalTotal = creditAmount + inputAmount;
+          
+          paymentBreakdown['Prepaid'] = creditAmount;
+          const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
+          paymentBreakdown[currentMethodKey] = inputAmount;
+          
+          isPrepaidSplit = true; 
         } 
         else if (isUpgrade && bookingForPrepaidCheck) {
-            finalTotal = inputAmount;
-            const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
-            paymentBreakdown[currentMethodKey] = inputAmount;
-            
-            isPrepaidSplit = true;
+          finalTotal = inputAmount;
+          const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
+          paymentBreakdown[currentMethodKey] = inputAmount;
+          
+          isPrepaidSplit = true;
         }
         else {
-            finalTotal = inputAmount;
-            const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
-            paymentBreakdown[currentMethodKey] = inputAmount;
-            isPrepaidSplit = false;
+          finalTotal = inputAmount;
+          const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
+          paymentBreakdown[currentMethodKey] = inputAmount;
+          isPrepaidSplit = false;
         }
       }
 
@@ -611,17 +619,13 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       if (answers['timing']) finalNotes += ` [${answers['timing']}]`; 
       if (formData.hasLockedGate) finalNotes += ' [LG]';
 
-      // Build display price - only West upgrades have prefixes
       let formattedDisplayPrice: string;
       if (selectedRecipe.displayPrefix) {
-        // West upgrade - use prefix
         formattedDisplayPrice = `${selectedRecipe.displayPrefix}${finalTotal.toFixed(2)}`;
       } else {
-        // Central/East or West add-ons - no prefix
         formattedDisplayPrice = finalTotal.toFixed(2);
       }
       
-      // Determine final address
       let finalAddress: string;
       if (directUpgradeBooking) {
         finalAddress = directUpgradeBooking['Full Address'] || '';
@@ -633,77 +637,81 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
         finalAddress = `${houseNumber} ${streetName}`.trim();
       }
 
-      // Determine transaction ID
       let transactionId: string;
       if (isUpgrade && directUpgradeBooking) {
-          // Direct upgrade from JobDetail - reuse booking ID
-          transactionId = directUpgradeBooking['Booking ID'];
+        transactionId = directUpgradeBooking['Booking ID'];
       } else if (isUpgrade && selectedBooking) {
-          // Normal upgrade flow - reuse booking ID
-          transactionId = selectedBooking['Booking ID'];
+        transactionId = selectedBooking['Booking ID'];
       } else {
-          // New client or add-on - generate new ID
-          transactionId = `NEW-${generateUUID()}`;
+        transactionId = `NEW-${generateUUID()}`;
       }
 
       const tx: SessionTransaction = {
-          id: generateUUID(), // Always generate a new UUID for the transaction record
-          jobId: transactionId,
-          timestamp: new Date().toISOString(),
-          customerId: "CLIENT",
-          customerName: `${formData.firstName} ${formData.lastName}`,
-          address: finalAddress,
-          customerPhone: formData.phone,
-          customerEmail: formData.email,
-          
-          workerId: worker.contractorId,
-          workerName: worker.firstName,
-          routeManagerName: 'RM',
-          routeCode: formData.routeNumber,
-          
-          type: selectedRecipe.type as any,
-          price: finalTotal, 
-          displayPrice: formattedDisplayPrice, 
-          serviceName: selectedRecipe.name, 
-          
-          paymentMethod: finalPaymentMethod,
-          paymentBreakdown: paymentBreakdown, 
-          isPaid: !isIOS && finalPaymentMethod !== 'Billed',
-          
-          ccFullNumber: ccData?.number,
-          ccExpiry: ccData?.expiry,
-          ccCVC: ccData?.cvc,
-          
-          // For regular E-Transfer or Split with E-Transfer
-          etransferEmail: isSplitPayment 
-            ? ((parseFloat(splitEtransfer) || 0) > 0 ? splitEtransferEmail : undefined)
-            : (paymentInfo.method === 'E-Transfer' ? extraPaymentInfo : undefined),
-          
-          // For Split with Cheque
-          chequeNumber: isSplitPayment
-            ? ((parseFloat(splitCheque) || 0) > 0 ? splitChequeNumber : undefined)
-            : undefined,
-          
-          isWestSplit: isPrepaidSplit, 
-          
-          refId: selectedRecipe.id,
-          items: [{ name: selectedRecipe.name, price: finalTotal }],
-          itemDescription: finalNotes.trim(),
-          serviceType: hasPropertyTypes ? formData.propertyType as any : undefined,
-          
-          region: region, 
-          seasonId: `${region.toLowerCase()}-aeration`
+        id: generateUUID(),
+        jobId: transactionId,
+        timestamp: new Date().toISOString(),
+        customerId: "CLIENT",
+        customerName: `${formData.firstName} ${formData.lastName}`,
+        address: finalAddress,
+        customerPhone: formData.phone,
+        customerEmail: formData.email,
+        
+        workerId: worker.contractorId,
+        workerName: worker.firstName,
+        routeManagerName: 'RM',
+        routeCode: formData.routeNumber,
+        
+        type: selectedRecipe.type as any,
+        price: finalTotal, 
+        displayPrice: formattedDisplayPrice, 
+        serviceName: selectedRecipe.name, 
+        
+        paymentMethod: finalPaymentMethod,
+        paymentBreakdown: paymentBreakdown, 
+        isPaid: !isIOS && finalPaymentMethod !== 'Billed',
+        
+        ccFullNumber: ccData?.number,
+        ccExpiry: ccData?.expiry,
+        ccCVC: ccData?.cvc,
+        
+        etransferEmail: isSplitPayment 
+          ? ((parseFloat(splitEtransfer) || 0) > 0 ? splitEtransferEmail : undefined)
+          : (paymentInfo.method === 'E-Transfer' ? extraPaymentInfo : undefined),
+        
+        chequeNumber: isSplitPayment
+          ? ((parseFloat(splitCheque) || 0) > 0 ? splitChequeNumber : undefined)
+          : undefined,
+        
+        isWestSplit: isPrepaidSplit, 
+        
+        refId: selectedRecipe.id,
+        items: [{ name: selectedRecipe.name, price: finalTotal }],
+        itemDescription: finalNotes.trim(),
+        serviceType: hasPropertyTypes ? formData.propertyType as any : undefined,
+        
+        region: region, 
+        seasonId: `${region.toLowerCase()}-aeration`
       } as any;
 
-      await sessionService.completeJob(tx, tx.jobId, worker.contractorId);
+      // Use appropriate service based on training mode
+      if (isTrainingMode) {
+        await trainingService.completeJob(tx, tx.jobId, worker.contractorId);
 
-      const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
-      if (session) {
+        const session = await trainingService.getActiveLogsheetSession(worker.contractorId);
+        if (session) {
+          const newStats = trainingService.recalculateStats(session.financialStore, taxRate);
+          await trainingService.updateLogsheetSession(session.id, { stats: newStats });
+        }
+      } else {
+        await sessionService.completeJob(tx, tx.jobId, worker.contractorId);
+
+        const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
+        if (session) {
           const newStats = sessionService.recalculateStats(session.financialStore, taxRate);
           await sessionService.updateLogsheetSession(session.id, { stats: newStats });
+        }
       }
 
-      // Call onSuccess callback if provided, otherwise just close
       if (onSuccess) {
         onSuccess();
       }
@@ -731,6 +739,11 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                 ? (isDirectUpgrade ? 'Select Upgrade Type' : 'Select Contract') 
                 : selectedRecipe?.name}
             </h2>
+            {isTrainingMode && (
+              <span className="ml-2 px-2 py-0.5 bg-yellow-900/50 border border-yellow-600 rounded text-yellow-400 text-[10px] font-bold">
+                TRAINING
+              </span>
+            )}
           </div>
           <button onClick={onClose} className="p-1 hover:bg-gray-800 rounded-full" disabled={saving}><X className="text-gray-400" /></button>
         </div>
@@ -760,23 +773,23 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
               <h3 className="text-sm text-gray-400 font-medium">Select Client</h3>
               <div className="max-h-[60vh] overflow-y-auto space-y-1 border border-gray-700/50 rounded-lg p-1 custom-scrollbar mt-2">
                 {filteredClients.length > 0 ? (
-                    filteredClients.map(b => (
-                        <button key={b['Booking ID']} onClick={() => handleClientSelect(b)} className="w-full text-left p-3 rounded flex justify-between items-center group transition-colors border border-transparent hover:bg-gray-800 hover:border-gray-700">
-                            <div className="flex items-center gap-3 min-w-0">
-                                <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 group-hover:bg-gray-600 group-hover:text-white"><User size={16} /></div>
-                                <div className="min-w-0"><div className="font-bold text-gray-200 group-hover:text-white truncate">{b['Full Address']}</div><div className="text-xs text-gray-500 flex items-center gap-1 truncate">{b['First Name']} {b['Last Name']}</div></div>
-                            </div>
-                            {b.isContract && <span className="text-[9px] bg-purple-900 text-purple-200 px-1 rounded border border-purple-700">Package</span>}
-                        </button>
-                    ))
+                  filteredClients.map(b => (
+                    <button key={b['Booking ID']} onClick={() => handleClientSelect(b)} className="w-full text-left p-3 rounded flex justify-between items-center group transition-colors border border-transparent hover:bg-gray-800 hover:border-gray-700">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 group-hover:bg-gray-600 group-hover:text-white"><User size={16} /></div>
+                        <div className="min-w-0"><div className="font-bold text-gray-200 group-hover:text-white truncate">{b['Full Address']}</div><div className="text-xs text-gray-500 flex items-center gap-1 truncate">{b['First Name']} {b['Last Name']}</div></div>
+                      </div>
+                      {b.isContract && <span className="text-[9px] bg-purple-900 text-purple-200 px-1 rounded border border-purple-700">Package</span>}
+                    </button>
+                  ))
                 ) : (
-                    <div className="text-gray-500 text-center py-4 italic">No eligible clients found.</div>
+                  <div className="text-gray-500 text-center py-4 italic">No eligible clients found.</div>
                 )}
               </div>
               {selectedRecipe?.type === 'Add-On' && assignedRoutes.length > 0 && (
-                  <button onClick={handleNewClient} className="w-full py-3 bg-gray-800 border border-dashed border-gray-600 text-gray-300 rounded-lg mt-4 flex items-center justify-center gap-2 hover:bg-gray-750 transition-colors">
-                      <Plus size={16}/> Create New Client Record
-                  </button>
+                <button onClick={handleNewClient} className="w-full py-3 bg-gray-800 border border-dashed border-gray-600 text-gray-300 rounded-lg mt-4 flex items-center justify-center gap-2 hover:bg-gray-750 transition-colors">
+                  <Plus size={16}/> Create New Client Record
+                </button>
               )}
             </div>
           )}
@@ -786,45 +799,45 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
               <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
                 <h4 className="text-sm font-medium text-gray-400 mb-2">Client Details</h4>
                 {(selectedBooking || directUpgradeBooking) ? (
-                   <div className="flex justify-between items-start">
-                      <div><div className="font-bold text-white text-lg">{formData.firstName} {formData.lastName}</div><div className="text-gray-300">{formData.address}</div></div>
-                      <div className="text-right text-sm text-gray-500"><div>{formData.phone}</div><div>{formData.email}</div></div>
-                   </div>
+                  <div className="flex justify-between items-start">
+                    <div><div className="font-bold text-white text-lg">{formData.firstName} {formData.lastName}</div><div className="text-gray-300">{formData.address}</div></div>
+                    <div className="text-right text-sm text-gray-500"><div>{formData.phone}</div><div>{formData.email}</div></div>
+                  </div>
                 ) : (
-                   <div className="grid grid-cols-2 gap-3">
-                      <input type="text" placeholder="First Name" value={formData.firstName} onChange={handleFirstNameChange} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" />
-                      <input type="text" placeholder="Last Name" value={formData.lastName} onChange={handleLastNameChange} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" />
-                      <input type="text" placeholder="#" value={houseNumber} onChange={e => setHouseNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white col-span-1" />
-                      <input type="text" value={streetName} onChange={e => setStreetName(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white col-span-1" placeholder="Street Name"/>
-                      <div className="col-span-1">
-                        <div className="relative">
-                          <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
-                          <input 
-                            type="text" 
-                            placeholder="000 000 0000" 
-                            value={formData.phone} 
-                            onChange={handlePhoneChange}
-                            maxLength={12}
-                            className={`w-full bg-gray-800 border border-gray-700 rounded p-2 pl-9 text-white ${phoneError ? 'border-red-500' : ''}`}
-                          />
-                        </div>
-                        {phoneError && <p className="text-red-400 text-[10px] mt-1">{phoneError}</p>}
+                  <div className="grid grid-cols-2 gap-3">
+                    <input type="text" placeholder="First Name" value={formData.firstName} onChange={handleFirstNameChange} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" />
+                    <input type="text" placeholder="Last Name" value={formData.lastName} onChange={handleLastNameChange} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" />
+                    <input type="text" placeholder="#" value={houseNumber} onChange={e => setHouseNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white col-span-1" />
+                    <input type="text" value={streetName} onChange={e => setStreetName(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white col-span-1" placeholder="Street Name"/>
+                    <div className="col-span-1">
+                      <div className="relative">
+                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                        <input 
+                          type="text" 
+                          placeholder="000 000 0000" 
+                          value={formData.phone} 
+                          onChange={handlePhoneChange}
+                          maxLength={12}
+                          className={`w-full bg-gray-800 border border-gray-700 rounded p-2 pl-9 text-white ${phoneError ? 'border-red-500' : ''}`}
+                        />
                       </div>
-                      <div className="col-span-1">
-                        <div className="relative">
-                          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
-                          <input 
-                            type="email" 
-                            placeholder="client@example.com" 
-                            value={formData.email} 
-                            onChange={handleEmailChange}
-                            onBlur={handleEmailBlur}
-                            className={`w-full bg-gray-800 border border-gray-700 rounded p-2 pl-9 text-white ${emailError ? 'border-red-500' : ''}`}
-                          />
-                        </div>
-                        {emailError && <p className="text-red-400 text-[10px] mt-1">{emailError}</p>}
+                      {phoneError && <p className="text-red-400 text-[10px] mt-1">{phoneError}</p>}
+                    </div>
+                    <div className="col-span-1">
+                      <div className="relative">
+                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
+                        <input 
+                          type="email" 
+                          placeholder="client@example.com" 
+                          value={formData.email} 
+                          onChange={handleEmailChange}
+                          onBlur={handleEmailBlur}
+                          className={`w-full bg-gray-800 border border-gray-700 rounded p-2 pl-9 text-white ${emailError ? 'border-red-500' : ''}`}
+                        />
                       </div>
-                   </div>
+                      {emailError && <p className="text-red-400 text-[10px] mt-1">{emailError}</p>}
+                    </div>
+                  </div>
                 )}
                 
                 {!selectedBooking && !directUpgradeBooking && (
@@ -840,31 +853,28 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                   </div>
                 )}
                 
-                {/* Property Type & Gate/Sprinkler Options - Only show if at least one is applicable */}
                 {(hasPropertyTypes || showGateAndSprinkler) && (
                   <div className="mt-4 pt-4 border-t border-gray-700 grid grid-cols-2 gap-4">
-                      {/* Property Type - Only show if recipe has property types */}
-                      {hasPropertyTypes && (
-                        <div className={!showGateAndSprinkler ? 'col-span-2' : ''}>
-                            <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Property Type</label>
-                            <div className="flex gap-1">
-                                {selectedRecipe!.propertyTypes.map(t => (
-                                    <button key={t} onClick={() => setFormData({...formData, propertyType: t})} className={`flex-1 py-1.5 text-xs rounded border transition-colors ${formData.propertyType === t ? 'bg-cps-blue border-cps-blue text-white' : 'bg-gray-700 border-gray-600 text-gray-400'}`}>{t}</button>
-                                ))}
-                            </div>
+                    {hasPropertyTypes && (
+                      <div className={!showGateAndSprinkler ? 'col-span-2' : ''}>
+                        <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Property Type</label>
+                        <div className="flex gap-1">
+                          {selectedRecipe!.propertyTypes.map(t => (
+                            <button key={t} onClick={() => setFormData({...formData, propertyType: t})} className={`flex-1 py-1.5 text-xs rounded border transition-colors ${formData.propertyType === t ? 'bg-cps-blue border-cps-blue text-white' : 'bg-gray-700 border-gray-600 text-gray-400'}`}>{t}</button>
+                          ))}
                         </div>
-                      )}
-                      {/* Locked Gate & Sprinkler - Only show for West region */}
-                      {showGateAndSprinkler && (
-                        <div className={`flex flex-col gap-2 justify-center ${!hasPropertyTypes ? 'col-span-2' : ''}`}>
-                            <button onClick={() => setFormData({...formData, hasLockedGate: !formData.hasLockedGate})} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded border transition-colors ${formData.hasLockedGate ? 'bg-orange-900/30 border-orange-600 text-orange-200' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
-                                <Lock size={12}/> Locked Gate {formData.hasLockedGate && <Check size={10}/>}
-                            </button>
-                            <button onClick={() => setFormData({...formData, hasSprinkler: !formData.hasSprinkler})} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded border transition-colors ${formData.hasSprinkler ? 'bg-blue-900/30 border-blue-600 text-blue-200' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
-                                <Droplets size={12}/> Sprinklers {formData.hasSprinkler && <Check size={10}/>}
-                            </button>
-                        </div>
-                      )}
+                      </div>
+                    )}
+                    {showGateAndSprinkler && (
+                      <div className={`flex flex-col gap-2 justify-center ${!hasPropertyTypes ? 'col-span-2' : ''}`}>
+                        <button onClick={() => setFormData({...formData, hasLockedGate: !formData.hasLockedGate})} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded border transition-colors ${formData.hasLockedGate ? 'bg-orange-900/30 border-orange-600 text-orange-200' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
+                          <Lock size={12}/> Locked Gate {formData.hasLockedGate && <Check size={10}/>}
+                        </button>
+                        <button onClick={() => setFormData({...formData, hasSprinkler: !formData.hasSprinkler})} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded border transition-colors ${formData.hasSprinkler ? 'bg-blue-900/30 border-blue-600 text-blue-200' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
+                          <Droplets size={12}/> Sprinklers {formData.hasSprinkler && <Check size={10}/>}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -881,79 +891,79 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
               ))}
 
               <div className="space-y-3">
-                 <label className="block text-sm font-medium text-gray-300">Total Price</label>
-                 <div className="flex gap-3">
-                    <div className="relative flex-1">
-                        <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
-                        <input 
-                            type="number" 
-                            placeholder="0.00" 
-                            value={isSplitPayment ? splitTotal.toFixed(2) : paymentInfo.amount} 
-                            onChange={e => setPaymentInfo({...paymentInfo, amount: e.target.value})}
-                            onBlur={e => {
-                                if (!isSplitPayment) {
-                                  const val = parseFloat(e.target.value);
-                                  if(!isNaN(val)) setPaymentInfo(prev => ({...prev, amount: (Math.round(val * 100) / 100).toFixed(2) }));
-                                }
-                            }} 
-                            className={`w-full bg-gray-800 border border-gray-700 rounded-lg py-2 pl-9 pr-4 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none ${isSplitPayment ? 'opacity-50 cursor-not-allowed' : ''}`}
-                            disabled={isSplitPayment}
-                        />
-                    </div>
-                    
-                    {!isSplitPayment && (
-                      <button type="button" onClick={handleTaxClick} className="px-3 bg-gray-700 text-gray-300 rounded-lg border border-gray-600 hover:bg-gray-600 font-bold text-xs">+ Tax</button>
-                    )}
-                    
-                    <div>
-                      <select 
-                        value={paymentInfo.method} 
-                        onChange={handlePaymentMethodChange} 
-                        className={`bg-gray-800 border rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none h-full ${
-                          paymentMethodError ? 'border-red-500' : 'border-gray-700'
-                        }`}
-                      >
-                         <option value="">-- Select --</option>
-                         <option value="Cash">Cash</option>
-                         <option value="Cheque">Cheque</option>
-                         <option value="Credit Card">Credit Card</option>
-                         <option value="E-Transfer">E-Transfer</option>
-                         <option value="Split Payment">Split Payment</option>
-                         {supportsIOS && <option value="IOS">Invoice On Site</option>}
-                      </select>
-                    </div>
-                 </div>
-                 {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
-                 {isSplitPayment && (
-                   <p className="text-[10px] text-gray-500">Total calculated from split amounts</p>
-                 )}
-                 
-                 {paymentInfo.method === 'E-Transfer' && !isSplitPayment && (
-                     <div className="relative animate-fade-in">
-                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
-                        <input 
-                          type="email" 
-                          placeholder="Customer Email for E-Transfer" 
-                          value={extraPaymentInfo} 
-                          onChange={handleEtransferEmailChange}
-                          onBlur={handleEtransferEmailBlur}
-                          className={`w-full bg-gray-800 border rounded-lg py-2 pl-9 pr-4 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none ${
-                            etransferEmailError ? 'border-red-500' : 'border-gray-700'
-                          }`}
-                        />
-                        {etransferEmailError && <p className="text-red-400 text-[10px] mt-1">{etransferEmailError}</p>}
-                     </div>
-                 )}
-
-                 {paymentInfo.method === 'Credit Card' && !isSplitPayment && (
-                  <div className={`p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
-                      <span className="text-xs font-bold">{isCreditPaid ? "SECURED" : "SECURE CARD"}</span>
-                      {!isCreditPaid && <button onClick={() => setShowCreditModal(true)} className="underline text-xs">Open Terminal</button>}
+                <label className="block text-sm font-medium text-gray-300">Total Price</label>
+                <div className="flex gap-3">
+                  <div className="relative flex-1">
+                    <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
+                    <input 
+                      type="number" 
+                      placeholder="0.00" 
+                      value={isSplitPayment ? splitTotal.toFixed(2) : paymentInfo.amount} 
+                      onChange={e => setPaymentInfo({...paymentInfo, amount: e.target.value})}
+                      onBlur={e => {
+                        if (!isSplitPayment) {
+                          const val = parseFloat(e.target.value);
+                          if(!isNaN(val)) setPaymentInfo(prev => ({...prev, amount: (Math.round(val * 100) / 100).toFixed(2) }));
+                        }
+                      }} 
+                      className={`w-full bg-gray-800 border border-gray-700 rounded-lg py-2 pl-9 pr-4 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none ${isSplitPayment ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      disabled={isSplitPayment}
+                    />
                   </div>
-                 )}
+                  
+                  {!isSplitPayment && (
+                    <button type="button" onClick={handleTaxClick} className="px-3 bg-gray-700 text-gray-300 rounded-lg border border-gray-600 hover:bg-gray-600 font-bold text-xs">+ Tax</button>
+                  )}
+                  
+                  <div>
+                    <select 
+                      value={paymentInfo.method} 
+                      onChange={handlePaymentMethodChange} 
+                      className={`bg-gray-800 border rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none h-full ${
+                        paymentMethodError ? 'border-red-500' : 'border-gray-700'
+                      }`}
+                    >
+                      <option value="">-- Select --</option>
+                      <option value="Cash">Cash</option>
+                      <option value="Cheque">Cheque</option>
+                      <option value="Credit Card">Credit Card</option>
+                      <option value="E-Transfer">E-Transfer</option>
+                      <option value="Split Payment">Split Payment</option>
+                      {supportsIOS && <option value="IOS">Invoice On Site</option>}
+                    </select>
+                  </div>
+                </div>
+                {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
+                {isSplitPayment && (
+                  <p className="text-[10px] text-gray-500">Total calculated from split amounts</p>
+                )}
+                
+                {paymentInfo.method === 'E-Transfer' && !isSplitPayment && (
+                  <div className="relative animate-fade-in">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 w-4 h-4" />
+                    <input 
+                      type="email" 
+                      placeholder="Customer Email for E-Transfer" 
+                      value={extraPaymentInfo} 
+                      onChange={handleEtransferEmailChange}
+                      onBlur={handleEtransferEmailBlur}
+                      className={`w-full bg-gray-800 border rounded-lg py-2 pl-9 pr-4 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none ${
+                        etransferEmailError ? 'border-red-500' : 'border-gray-700'
+                      }`}
+                    />
+                    {etransferEmailError && <p className="text-red-400 text-[10px] mt-1">{etransferEmailError}</p>}
+                  </div>
+                )}
 
-                 {/* SPLIT PAYMENT FIELDS */}
-                 {isSplitPayment && (
+                {paymentInfo.method === 'Credit Card' && !isSplitPayment && (
+                  <div className={`p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
+                    <span className="text-xs font-bold">{isCreditPaid ? "SECURED" : "SECURE CARD"}</span>
+                    {!isCreditPaid && <button onClick={() => setShowCreditModal(true)} className="underline text-xs">Open Terminal</button>}
+                  </div>
+                )}
+
+                {/* SPLIT PAYMENT FIELDS */}
+                {isSplitPayment && (
                   <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-600 space-y-4">
                     <div className="flex items-center justify-between mb-2">
                       <h4 className="text-sm font-bold text-gray-300">Split Payment Amounts</h4>
@@ -963,7 +973,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                     </div>
                     
                     <div className="grid grid-cols-2 gap-3">
-                      {/* Cash */}
                       <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cash</label>
                         <div className="relative">
@@ -979,7 +988,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                         </div>
                       </div>
                       
-                      {/* Cheque */}
                       <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cheque</label>
                         <div className="relative">
@@ -995,7 +1003,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                         </div>
                       </div>
                       
-                      {/* E-Transfer */}
                       <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">E-Transfer</label>
                         <div className="relative">
@@ -1011,7 +1018,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                         </div>
                       </div>
                       
-                      {/* Credit Card */}
                       <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Credit Card</label>
                         <div className="relative">
@@ -1021,7 +1027,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                             value={splitCreditCard} 
                             onChange={(e) => {
                               setSplitCreditCard(e.target.value);
-                              // Reset CC paid status if amount changes
                               if (isCreditPaid) {
                                 setIsCreditPaid(false);
                                 setCcData(null);
@@ -1035,7 +1040,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Conditional: Cheque Number */}
                     {(parseFloat(splitCheque) || 0) > 0 && (
                       <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cheque Number</label>
@@ -1048,7 +1052,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                       </div>
                     )}
                     
-                    {/* Conditional: E-Transfer Email */}
                     {(parseFloat(splitEtransfer) || 0) > 0 && (
                       <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">E-Transfer Email *</label>
@@ -1066,7 +1069,6 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                       </div>
                     )}
                     
-                    {/* Conditional: Credit Card Processing */}
                     {splitCCAmount > 0 && (
                       <div className={`p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
                         <span className="text-sm font-medium">
@@ -1080,55 +1082,55 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                       </div>
                     )}
                   </div>
-                 )}
+                )}
               </div>
 
               <div className="pt-4">
-                 <textarea placeholder="Additional Notes..." value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm text-white resize-none h-20 focus:ring-2 focus:ring-cps-blue focus:outline-none" />
+                <textarea placeholder="Additional Notes..." value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm text-white resize-none h-20 focus:ring-2 focus:ring-cps-blue focus:outline-none" />
               </div>
             </div>
           )}
         </div>
 
         {step === 'ENTER_DETAILS' && (
-           <div className="p-4 border-t border-gray-700 flex justify-end">
-              <button 
-                onClick={handleSubmit} 
-                disabled={saving || (paymentInfo.method === 'Credit Card' && !isCreditPaid && !isSplitPayment) || (isSplitPayment && splitCCNeedsProcessing)}
-                className="bg-cps-green hover:bg-green-600 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {saving ? (
-                  <>
-                    <Loader size={18} className="animate-spin" /> Processing...
-                  </>
-                ) : (
-                  <>
-                    <Check size={18} /> Complete Sale
-                  </>
-                )}
-              </button>
-           </div>
+          <div className="p-4 border-t border-gray-700 flex justify-end">
+            <button 
+              onClick={handleSubmit} 
+              disabled={saving || (paymentInfo.method === 'Credit Card' && !isCreditPaid && !isSplitPayment) || (isSplitPayment && splitCCNeedsProcessing)}
+              className="bg-cps-green hover:bg-green-600 text-white px-6 py-2 rounded-lg font-bold shadow-lg transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? (
+                <>
+                  <Loader size={18} className="animate-spin" /> Processing...
+                </>
+              ) : (
+                <>
+                  <Check size={18} /> Complete Sale
+                </>
+              )}
+            </button>
+          </div>
         )}
       </div>
 
       {showCreditModal && (
-          <CreditCardModal 
-             amount={isSplitPayment ? splitCreditCard : paymentInfo.amount}
-             clientName={`${formData.firstName} ${formData.lastName}`}
-             onClose={() => setShowCreditModal(false)} 
-             onProcess={(details) => {
-                 setIsCreditPaid(true);
-                 setShowCreditModal(false);
-                 setCcData({
-                     number: details.number,
-                     expiry: details.expiry,
-                     cvc: details.cvc
-                 });
-                 if (!isSplitPayment) {
-                   setFormData(prev => ({ ...prev, notes: `${prev.notes} [CC Paid]`.trim() }));
-                 }
-             }}
-          />
+        <CreditCardModal 
+          amount={isSplitPayment ? splitCreditCard : paymentInfo.amount}
+          clientName={`${formData.firstName} ${formData.lastName}`}
+          onClose={() => setShowCreditModal(false)} 
+          onProcess={(details) => {
+            setIsCreditPaid(true);
+            setShowCreditModal(false);
+            setCcData({
+              number: details.number,
+              expiry: details.expiry,
+              cvc: details.cvc
+            });
+            if (!isSplitPayment) {
+              setFormData(prev => ({ ...prev, notes: `${prev.notes} [CC Paid]`.trim() }));
+            }
+          }}
+        />
       )}
     </div>
   );
