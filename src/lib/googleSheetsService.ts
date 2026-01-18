@@ -1,7 +1,27 @@
 // src/lib/googleSheetsService.ts
-import { getGoogleSheetsConfig, GOOGLE_OAUTH_CONFIG, SHEET_TABS, isValidDateTab } from './googleSheetsConfig';
-import { commandCenterService } from './commandCenterService';
-import { DailySessionData, ManagementUser, Worker, RouteData, MasterBooking } from '../types';
+import { 
+  getGoogleSheetsConfig, 
+  GOOGLE_OAUTH_CONFIG, 
+  SHEET_TABS, 
+  isValidDateTab,
+  getFeedColumnsConfig,
+  getFeedRange,
+  isServiceIncluded,
+  WORKERBOOK_COLUMNS,
+  AERATION_FEED_COLUMNS,
+  LAWN_REJUV_FEED_COLUMNS
+} from './googleSheetsConfig';
+import { commandCenterService, seasonHasTeams } from './commandCenterService';
+import { 
+  DailySessionData, 
+  ManagementUser, 
+  Worker, 
+  RouteData, 
+  MasterBooking,
+  SeasonType,
+  ServiceFlags,
+  TeamCart
+} from '../types';
 import { formatPhoneNumber, normalizeEmail } from './validationUtils';
 
 // Type declarations for Google Identity Services
@@ -36,8 +56,9 @@ declare global {
 // Export types for import metadata
 export interface ImportMeta {
   source: 'sheets' | 'file';
-  dateTab?: string; // Only present if source is 'sheets'
+  dateTab?: string;
   sheetsExported?: boolean;
+  seasonType?: SeasonType;
 }
 
 class GoogleSheetsService {
@@ -191,9 +212,6 @@ class GoogleSheetsService {
     }
   }
 
-  /**
-   * Append rows to a sheet using OVERWRITE to preserve row formatting
-   */
   private async sheetsAppend(spreadsheetId: string, range: string, values: any[][]): Promise<void> {
     if (!this.accessToken) {
       throw new Error('Not authenticated. Call authenticate() first.');
@@ -257,6 +275,35 @@ class GoogleSheetsService {
     return `${lastPart}${firstPart}`;
   }
 
+  /**
+   * Parse service flags from row data (Lawn Rejuv only)
+   */
+  private parseServiceFlags(row: any[], colConfig: typeof LAWN_REJUV_FEED_COLUMNS['mapping']): ServiceFlags {
+    return {
+      aeration: isServiceIncluded(row[colConfig.serviceAeration]),
+      dethatch: isServiceIncluded(row[colConfig.serviceDethatch]),
+      fertilizer: isServiceIncluded(row[colConfig.serviceFertilizer]),
+      seed: isServiceIncluded(row[colConfig.serviceSeed]),
+      lime: isServiceIncluded(row[colConfig.serviceLime]),
+    };
+  }
+
+  /**
+   * Convert ServiceFlags to display string like "(ADFS)" or "(ADF)"
+   */
+  public serviceFlagsToString(services?: ServiceFlags): string {
+    if (!services) return '';
+    
+    let result = '';
+    if (services.aeration) result += 'A';
+    if (services.dethatch) result += 'D';
+    if (services.fertilizer) result += 'F';
+    if (services.seed) result += 'S';
+    if (services.lime) result += 'L';
+    
+    return result ? `(${result})` : '';
+  }
+
   // --- READ OPERATIONS ---
 
   public async checkTabExists(tabName: string): Promise<boolean> {
@@ -274,11 +321,13 @@ class GoogleSheetsService {
 
   /**
    * Import session data from Google Sheets
-   * The returned data includes _importMeta with source and dateTab
+   * @param dateTab - The date tab name (e.g., "Feb01")
+   * @param seasonType - The season type ('aeration' or 'lawn_rejuv')
    */
-  public async importSessionData(dateTab: string): Promise<DailySessionData> {
+  public async importSessionData(dateTab: string, seasonType: SeasonType = 'aeration'): Promise<DailySessionData> {
     const config = this.getConfig();
     const ccId = commandCenterService.getCurrentCommandCenterId();
+    const isTeamSeason = seasonHasTeams(seasonType);
     
     if (!isValidDateTab(dateTab)) {
       throw new Error(`Invalid date tab format: ${dateTab}. Use MmmDD format (e.g., Feb01)`);
@@ -289,10 +338,17 @@ class GoogleSheetsService {
       throw new Error(`Tab "${dateTab}" not found in Workerbook. Please check the tab name.`);
     }
 
+    // Get the appropriate feed range based on season
+    const feedRange = getFeedRange(seasonType);
+    const feedColumns = getFeedColumnsConfig(seasonType);
+    
+    // For team seasons, we need to read column I (Teams) from workerbook
+    const workerbookRange = isTeamSeason ? `'${dateTab}'!A:K` : `'${dateTab}'!A:K`;
+
     const [routesData, bookingsData, workersData, managersData] = await Promise.all([
       this.sheetsGet(config.spreadsheets.masterbookings, `'${SHEET_TABS.routes}'!A:G`),
-      this.sheetsGet(config.spreadsheets.masterbookings, `'${SHEET_TABS.feedPlaceholder}'!A:M`),
-      this.sheetsGet(config.spreadsheets.workerbook, `'${dateTab}'!A:K`),
+      this.sheetsGet(config.spreadsheets.masterbookings, `'${SHEET_TABS.feedPlaceholder}'!${feedRange}`),
+      this.sheetsGet(config.spreadsheets.workerbook, workerbookRange),
       this.sheetsGet(config.spreadsheets.workerbook, `'${SHEET_TABS.managers}'!A:G`),
     ]);
 
@@ -359,20 +415,24 @@ class GoogleSheetsService {
 
     // --- PROCESS WORKERS ---
     const workers: Worker[] = [];
+    const workerColMap = WORKERBOOK_COLUMNS.mapping;
 
-    for (let i = 2; i < workersData.length; i++) {
+    for (let i = WORKERBOOK_COLUMNS.dataStartRow; i < workersData.length; i++) {
       const row = workersData[i];
-      const showValue = row[10]?.toString().trim().toLowerCase();
+      const showValue = row[workerColMap.showFlag]?.toString().trim().toLowerCase();
 
       if (showValue !== 'x') continue;
 
-      const contractorId = row[1]?.toString().trim() || '';
-      const firstName = row[2]?.toString().trim() || '';
-      const lastName = row[3]?.toString().trim() || '';
-      const cellPhone = row[4]?.toString().trim() || '';
-      const alumniRate = parseFloat(row[5]) || 0;
-      const silverRate = parseFloat(row[6]) || 0;
-      const managerName = row[7]?.toString().trim() || '';
+      const contractorId = row[workerColMap.contractorId]?.toString().trim() || '';
+      const firstName = row[workerColMap.firstName]?.toString().trim() || '';
+      const lastName = row[workerColMap.lastName]?.toString().trim() || '';
+      const cellPhone = row[workerColMap.cellPhone]?.toString().trim() || '';
+      const alumniRate = parseFloat(row[workerColMap.alumniRate]) || 0;
+      const silverRate = parseFloat(row[workerColMap.silverRate]) || 0;
+      const managerName = row[workerColMap.managerName]?.toString().trim() || '';
+      
+      // Team ID (only relevant for lawn_rejuv season)
+      const teamId = isTeamSeason ? row[workerColMap.teamId]?.toString().trim() || '' : '';
 
       if (!contractorId) {
         console.warn(`⚠️ Worker ${firstName} ${lastName} has no contractor ID, skipping.`);
@@ -391,38 +451,68 @@ class GoogleSheetsService {
         alumniRate,
         silverRate,
         commandCenterId: ccId || undefined,
+        teamId: teamId || undefined,
       });
+    }
+
+    // --- BUILD TEAM CARTS (Lawn Rejuv only) ---
+    let teamCarts: TeamCart[] | undefined;
+    
+    if (isTeamSeason) {
+      const teamMap = new Map<string, Worker[]>();
+      
+      workers.forEach(w => {
+        const tid = w.teamId || w.contractorId; // Solo workers use their own ID as team
+        if (!teamMap.has(tid)) {
+          teamMap.set(tid, []);
+        }
+        teamMap.get(tid)!.push(w);
+      });
+      
+      teamCarts = Array.from(teamMap.entries()).map(([teamId, teamWorkers]) => ({
+        teamId,
+        workerIds: teamWorkers.map(w => w.contractorId),
+        workers: teamWorkers,
+      }));
     }
 
     // --- PROCESS BOOKINGS ---
     const pendingBookings: MasterBooking[] = [];
+    const colMap = feedColumns.mapping;
 
     for (let i = 2; i < bookingsData.length; i++) {
       const row = bookingsData[i];
-      const routeNum = row[0]?.toString().trim();
+      const routeNum = row[colMap.routeNumber]?.toString().trim();
 
       if (!routeNum) continue;
+
+      // Parse service flags for lawn_rejuv season
+      let services: ServiceFlags | undefined;
+      if (seasonType === 'lawn_rejuv') {
+        services = this.parseServiceFlags(row, colMap as typeof LAWN_REJUV_FEED_COLUMNS['mapping']);
+      }
 
       const booking: MasterBooking = {
         'Booking ID': `job_${i}_${Date.now()}`,
         'Route Number': routeNum,
-        'First Name': row[1]?.toString().trim() || '',
-        'Last Name': row[2]?.toString().trim() || '',
-        'House Number': row[3]?.toString().trim() || '',
-        'Street Name': row[4]?.toString().trim() || '',
-        'Full Address': `${row[3] || ''} ${row[4] || ''}`.trim(),
-        'Home Phone': formatPhoneNumber(row[6]?.toString() || ''),
-        'Email Address': normalizeEmail(row[7]?.toString() || ''),
-        'Price': row[10]?.toString() || '',
-        'FO/BO/FP': row[8]?.toString().trim() as any,
-        'Prepaid': row[9]?.toString().toLowerCase() === 'x' ? 'x' : undefined,
-        'Log Sheet Notes': row[5]?.toString() || '',
+        'First Name': row[colMap.firstName]?.toString().trim() || '',
+        'Last Name': row[colMap.lastName]?.toString().trim() || '',
+        'House Number': row[colMap.houseNumber]?.toString().trim() || '',
+        'Street Name': row[colMap.streetName]?.toString().trim() || '',
+        'Full Address': `${row[colMap.houseNumber] || ''} ${row[colMap.streetName] || ''}`.trim(),
+        'Home Phone': formatPhoneNumber(row[colMap.phone]?.toString() || ''),
+        'Email Address': normalizeEmail(row[colMap.email]?.toString() || ''),
+        'Price': row[colMap.price]?.toString() || '',
+        'FO/BO/FP': row[colMap.serviceType]?.toString().trim() as any,
+        'Prepaid': row[colMap.prepaid]?.toString().toLowerCase() === 'x' ? 'x' : undefined,
+        'Log Sheet Notes': row[colMap.logNotes]?.toString() || '',
         'Status': 'pending',
         'Completed': undefined,
         isPrebooked: true,
         sort_order: i - 2,
         _sourceRow: i + 1,
         commandCenterId: ccId || undefined,
+        services,
       };
 
       pendingBookings.push(booking);
@@ -436,13 +526,16 @@ class GoogleSheetsService {
       routes, 
       pendingBookings,
       commandCenterId: ccId || undefined,
+      seasonType,
+      teamCarts,
     };
 
     // Add import metadata (will be stored in session)
     (result as any)._importMeta = {
       source: 'sheets',
       dateTab: dateTab,
-      sheetsExported: false
+      sheetsExported: false,
+      seasonType,
     } as ImportMeta;
 
     return result;
@@ -450,20 +543,28 @@ class GoogleSheetsService {
 
   // --- WRITE OPERATIONS ---
 
+  /**
+   * Update completed bookings in Feed Placeholder
+   * Season-aware: writes to different columns based on season type
+   */
   public async updateCompletedBookings(
     bookings: Array<{
       routeNumber: string;
       firstName: string;
       lastName: string;
       dateCompleted: string;
-      contractorId: string;
-    }>
+      contractorId: string; // Can be comma-separated for teams
+      services?: ServiceFlags; // For lawn_rejuv
+    }>,
+    seasonType: SeasonType = 'aeration'
   ): Promise<number> {
     const config = this.getConfig();
+    const feedRange = getFeedRange(seasonType);
+    const feedColumns = getFeedColumnsConfig(seasonType);
     
     const currentData = await this.sheetsGet(
       config.spreadsheets.masterbookings,
-      `'${SHEET_TABS.feedPlaceholder}'!A:M`
+      `'${SHEET_TABS.feedPlaceholder}'!${feedRange}`
     );
 
     const updates: { range: string; values: any[][] }[] = [];
@@ -482,10 +583,29 @@ class GoogleSheetsService {
           rowLast === booking.lastName.toLowerCase()
         ) {
           const rowNum = i + 1;
-          updates.push({
-            range: `'${SHEET_TABS.feedPlaceholder}'!L${rowNum}:M${rowNum}`,
-            values: [[booking.dateCompleted, booking.contractorId]],
-          });
+          
+          if (seasonType === 'lawn_rejuv') {
+            // Lawn Rejuv: Update service flags (L-P) and completion (Q-R)
+            const serviceValues = [
+              booking.services?.aeration ? 'x' : '',
+              booking.services?.dethatch ? 'x' : '',
+              booking.services?.fertilizer ? 'x' : '',
+              booking.services?.seed ? 'x' : '',
+              booking.services?.lime ? 'x' : '',
+              booking.dateCompleted,
+              booking.contractorId,
+            ];
+            updates.push({
+              range: `'${SHEET_TABS.feedPlaceholder}'!L${rowNum}:R${rowNum}`,
+              values: [serviceValues],
+            });
+          } else {
+            // Aeration: Update completion columns (L-M)
+            updates.push({
+              range: `'${SHEET_TABS.feedPlaceholder}'!L${rowNum}:M${rowNum}`,
+              values: [[booking.dateCompleted, booking.contractorId]],
+            });
+          }
           matchCount++;
           break;
         }
@@ -499,6 +619,10 @@ class GoogleSheetsService {
     return matchCount;
   }
 
+  /**
+   * Append accounts (Sales/Upgrades)
+   * Includes service flags notation for lawn_rejuv
+   */
   public async appendAccounts(
     accounts: Array<{
       routeNumber: string;
@@ -517,30 +641,39 @@ class GoogleSheetsService {
       paymentDetails: string;
       expiry: string;
       cvc: string;
+      services?: ServiceFlags; // For lawn_rejuv
     }>
   ): Promise<void> {
     if (accounts.length === 0) return;
 
     const config = this.getConfig();
 
-    const rows = accounts.map(a => [
-      a.routeNumber,
-      a.firstName,
-      a.lastName,
-      a.streetNum,
-      a.streetName,
-      a.phone,
-      a.email,
-      a.clientType,
-      a.propertyType,
-      a.notes,
-      a.price,
-      a.paymentType,
-      a.contractorName,
-      a.paymentDetails,
-      a.expiry,
-      a.cvc,
-    ]);
+    const rows = accounts.map(a => {
+      // Add service flags to notes if present
+      const servicesStr = this.serviceFlagsToString(a.services);
+      const notesWithServices = servicesStr 
+        ? `${a.notes} ${servicesStr}`.trim() 
+        : a.notes;
+      
+      return [
+        a.routeNumber,
+        a.firstName,
+        a.lastName,
+        a.streetNum,
+        a.streetName,
+        a.phone,
+        a.email,
+        a.clientType,
+        a.propertyType,
+        notesWithServices,
+        a.price,
+        a.paymentType,
+        a.contractorName,
+        a.paymentDetails,
+        a.expiry,
+        a.cvc,
+      ];
+    });
 
     await this.sheetsAppend(
       config.spreadsheets.masterbookings,
@@ -549,6 +682,10 @@ class GoogleSheetsService {
     );
   }
 
+  /**
+   * Append logsheets (completed jobs)
+   * Includes service flags notation for lawn_rejuv
+   */
   public async appendLogsheets(
     logsheets: Array<{
       routeNumber: string;
@@ -563,28 +700,37 @@ class GoogleSheetsService {
       notes: string;
       price: number;
       paymentType: string;
-      contractorName: string;
+      contractorName: string; // Can include multiple names for teams
+      services?: ServiceFlags;
     }>
   ): Promise<void> {
     if (logsheets.length === 0) return;
 
     const config = this.getConfig();
 
-    const rows = logsheets.map(l => [
-      l.routeNumber,
-      l.firstName,
-      l.lastName,
-      l.streetNum,
-      l.streetName,
-      l.phone,
-      l.email,
-      l.clientType,
-      l.propertyType,
-      l.notes,
-      l.price,
-      l.paymentType,
-      l.contractorName,
-    ]);
+    const rows = logsheets.map(l => {
+      // Add service flags to notes if present
+      const servicesStr = this.serviceFlagsToString(l.services);
+      const notesWithServices = servicesStr 
+        ? `${l.notes} ${servicesStr}`.trim() 
+        : l.notes;
+      
+      return [
+        l.routeNumber,
+        l.firstName,
+        l.lastName,
+        l.streetNum,
+        l.streetName,
+        l.phone,
+        l.email,
+        l.clientType,
+        l.propertyType,
+        notesWithServices,
+        l.price,
+        l.paymentType,
+        l.contractorName,
+      ];
+    });
 
     await this.sheetsAppend(
       config.spreadsheets.masterbookings,
@@ -629,6 +775,10 @@ class GoogleSheetsService {
       deductions: number;
       bonuses: number;
       finalPay: number;
+      // Team fields
+      teamId?: string;
+      equivSplitPercent?: number;
+      upsellSplitPercent?: number;
     }>
   ): Promise<void> {
     if (stats.length === 0) return;
@@ -670,11 +820,15 @@ class GoogleSheetsService {
       s.deductions,
       s.bonuses,
       s.finalPay,
+      // Additional team columns
+      s.teamId || '',
+      s.equivSplitPercent !== undefined ? s.equivSplitPercent : '',
+      s.upsellSplitPercent !== undefined ? s.upsellSplitPercent : '',
     ]);
 
     await this.sheetsAppend(
       config.spreadsheets.workerbook,
-      `'${SHEET_TABS.payoutStats}'!A:AH`,
+      `'${SHEET_TABS.payoutStats}'!A:AK`,
       rows
     );
   }

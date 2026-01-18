@@ -1,6 +1,15 @@
 // src/lib/sessionService.ts
 import { supabase } from './supabase';
-import { commandCenterService } from './commandCenterService';
+import { 
+  commandCenterService, 
+  getSeasonConfig, 
+  getPrepaidWeight, 
+  getBilledWeight,
+  getEQRate,
+  isOfficeFlat,
+  seasonHasTeams,
+  createEqualSplit
+} from './commandCenterService';
 import {
   DailySessionData,
   ManagementUser,
@@ -8,7 +17,12 @@ import {
   LogsheetSession,
   SessionStats,
   MasterBooking,
-  SessionTransaction
+  SessionTransaction,
+  SeasonType,
+  TeamCart,
+  TeamSplitConfig,
+  WorkerPayoutBreakdown,
+  ServiceFlags
 } from '../types';
 
 // Import metadata type - re-export for other modules
@@ -38,6 +52,22 @@ class SessionService {
     return commandCenterService.getCurrentTaxRate();
   }
 
+  // --- HELPER: Get current session's season type ---
+  public async getSessionSeasonType(): Promise<SeasonType> {
+    const ccId = this.getCCId();
+    const date = await this.getDailySessionDate();
+    if (!date) return 'aeration';
+
+    const { data } = await supabase
+      .from('daily_sessions')
+      .select('season_type')
+      .eq('date', date)
+      .eq('command_center_id', ccId)
+      .single();
+
+    return (data?.season_type as SeasonType) || 'aeration';
+  }
+
   // --- 1. HELPERS ---
 
   // Unified mapper to ensure consistency everywhere
@@ -63,7 +93,6 @@ class SessionService {
         chequeNumber: tx.cheque_number,
         etransferEmail: tx.etransfer_email,
         
-        // --- Retrieve Saved CC Data ---
         ccFullNumber: tx.cc_full_number,
         ccExpiry: tx.cc_expiry,
         ccCVC: tx.cc_cvc,
@@ -75,6 +104,8 @@ class SessionService {
         isWestSplit: tx.is_west_split,
         isPrepaid: tx.payment_method === 'Prepaid' || (tx.payment_breakdown && tx.payment_breakdown['Prepaid']) ? true : false,
         commandCenterId: tx.command_center_id,
+        services: tx.services,
+        completedByWorkerIds: tx.completed_by_worker_ids,
     } as SessionTransaction;
   }
 
@@ -88,6 +119,9 @@ class SessionService {
       const date = await this.getDailySessionDate();
       if (!date) return;
 
+      // Get season type for this session
+      const seasonType = await this.getSessionSeasonType();
+
       // 1. Fetch all transactions for this worker in this CC
       const { data: transactions } = await supabase
         .from('transactions')
@@ -98,9 +132,9 @@ class SessionService {
       // 2. Map to SessionTransaction format
       const cleanFinancials = (transactions || []).map(tx => this.mapDbTransaction(tx));
 
-      // 3. Recalculate stats with region-appropriate tax rate
+      // 3. Recalculate stats with region-appropriate tax rate and season config
       const taxRate = this.getCurrentTaxRate();
-      const newStats = this.recalculateStats(cleanFinancials, taxRate);
+      const newStats = this.recalculateStats(cleanFinancials, taxRate, seasonType);
 
       // 4. Save to logsheet_sessions
       const { error } = await supabase
@@ -115,6 +149,15 @@ class SessionService {
       }
     } catch (err) {
       console.error('recalculateAndSaveWorkerStats error:', err);
+    }
+  }
+
+  /**
+   * For team sessions, recalculate stats for all team members
+   */
+  private async recalculateTeamStats(teamWorkerIds: string[]): Promise<void> {
+    for (const workerId of teamWorkerIds) {
+      await this.recalculateAndSaveWorkerStats(workerId);
     }
   }
 
@@ -149,6 +192,16 @@ class SessionService {
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
+    // Get season type
+    const { data: sessionData } = await supabase
+      .from('daily_sessions')
+      .select('season_type')
+      .eq('date', date)
+      .eq('command_center_id', ccId)
+      .single();
+    
+    const seasonType = (sessionData?.season_type as SeasonType) || 'aeration';
+
     const [managersRes, workersRes, routesRes, bookingsRes] = await Promise.all(
       [
         supabase.from('users').select('*').eq('role', 'RouteManager').eq('command_center_id', ccId),
@@ -173,7 +226,7 @@ class SessionService {
       commandCenterId: m.command_center_id,
     }));
 
-    const workers = (workersRes.data || []).map((w) => ({
+    const workers: Worker[] = (workersRes.data || []).map((w) => ({
       contractorId: w.user_id,
       firstName: w.name.split(' ')[0],
       lastName: w.name.split(' ').slice(1).join(' '),
@@ -182,9 +235,29 @@ class SessionService {
       alumniRate: w.metadata?.alumniRate,
       silverRate: w.metadata?.silverRate,
       assignedManagerId: w.metadata?.assignedManagerId,
-      upsellsEnabled: w.metadata?.upsellsEnabled !== false, // Default to true
+      upsellsEnabled: w.metadata?.upsellsEnabled !== false,
       commandCenterId: w.command_center_id,
+      teamId: w.metadata?.teamId,
     }));
+
+    // Build team carts if this is a team season
+    let teamCarts: TeamCart[] | undefined;
+    if (seasonHasTeams(seasonType)) {
+      const teamMap = new Map<string, Worker[]>();
+      workers.forEach(w => {
+        const tid = w.teamId || w.contractorId;
+        if (!teamMap.has(tid)) {
+          teamMap.set(tid, []);
+        }
+        teamMap.get(tid)!.push(w);
+      });
+      
+      teamCarts = Array.from(teamMap.entries()).map(([teamId, teamWorkers]) => ({
+        teamId,
+        workerIds: teamWorkers.map(w => w.contractorId),
+        workers: teamWorkers,
+      }));
+    }
 
     const routes = (routesRes.data || []).map((r) => ({
       routeCode: r.route_code,
@@ -204,6 +277,7 @@ class SessionService {
       Status: b.status,
       Prepaid: b.is_prepaid ? 'x' : undefined,
       commandCenterId: b.command_center_id,
+      services: b.services,
       ...b.data,
     }));
 
@@ -214,6 +288,8 @@ class SessionService {
       routes,
       pendingBookings,
       commandCenterId: ccId,
+      seasonType,
+      teamCarts,
     };
   }
 
@@ -245,9 +321,6 @@ class SessionService {
 
   // --- 2b. IMPORT METADATA ---
 
-  /**
-   * Get import metadata for the current session
-   */
   public async getSessionImportMeta(): Promise<ImportMeta | null> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
@@ -264,9 +337,6 @@ class SessionService {
     return data.import_meta as ImportMeta | null;
   }
 
-  /**
-   * Update import metadata for the current session
-   */
   public async updateSessionImportMeta(meta: ImportMeta): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
@@ -283,10 +353,6 @@ class SessionService {
 
   // --- 2c. UPSELL CONTROL ---
 
-  /**
-   * Gets the upsellsEnabled status for a worker
-   * Returns true by default if not set
-   */
   public async getWorkerUpsellsEnabled(workerId: string): Promise<boolean> {
     const ccId = this.getCCId();
     const { data } = await supabase
@@ -296,17 +362,13 @@ class SessionService {
       .eq('command_center_id', ccId)
       .single();
     
-    if (!data || !data.metadata) return true; // Default to enabled
+    if (!data || !data.metadata) return true;
     return data.metadata.upsellsEnabled !== false;
   }
 
-  /**
-   * Toggles upsells for a worker
-   */
   public async toggleWorkerUpsells(workerId: string, enabled: boolean): Promise<void> {
     const ccId = this.getCCId();
     
-    // 1. Fetch current metadata
     const { data: user, error: fetchError } = await supabase
       .from('users')
       .select('metadata')
@@ -316,7 +378,6 @@ class SessionService {
     
     if (fetchError || !user) throw new Error("Worker not found");
 
-    // 2. Update metadata with new upsellsEnabled value
     const newMetadata = { ...user.metadata, upsellsEnabled: enabled };
     
     const { error: updateError } = await supabase
@@ -330,15 +391,25 @@ class SessionService {
 
   // --- 2d. WORKER SESSION STATUS (LOCKOUT) ---
 
-  /**
-   * Gets the current session status for a worker
-   * Returns 'OPEN', 'PAID', or null if no session exists
-   */
   public async getWorkerSessionStatus(workerId: string): Promise<string | null> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
+    // Check if worker is part of a team session
+    const { data: teamSession } = await supabase
+      .from('logsheet_sessions')
+      .select('status')
+      .eq('date', date)
+      .eq('command_center_id', ccId)
+      .contains('team_worker_ids', [workerId])
+      .maybeSingle();
+
+    if (teamSession) {
+      return teamSession.status;
+    }
+
+    // Check individual session
     const { data } = await supabase
       .from('logsheet_sessions')
       .select('status')
@@ -350,20 +421,13 @@ class SessionService {
     return data?.status || null;
   }
 
-  /**
-   * Checks if a worker is locked out (session has been paid/finalized)
-   * Returns true if locked out, false if still active
-   */
   public async isWorkerLockedOut(workerId: string): Promise<boolean> {
     const status = await this.getWorkerSessionStatus(workerId);
     return status === 'PAID';
   }
 
-  // --- 2e. TEAM LOCK MANAGEMENT (Route Manager) ---
+  // --- 2e. TEAM LOCK MANAGEMENT ---
 
-  /**
-   * Gets all worker IDs assigned to a specific manager
-   */
   private async getTeamWorkerIds(managerId: string): Promise<string[]> {
     const ccId = this.getCCId();
     const { data: workers } = await supabase
@@ -379,10 +443,6 @@ class SessionService {
       .map(w => w.user_id);
   }
 
-  /**
-   * Locks all team members' sessions (sets status to 'PAID')
-   * This prevents workers from logging in and forces active workers out
-   */
   public async lockTeamSessions(managerId: string): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
@@ -404,10 +464,6 @@ class SessionService {
     }
   }
 
-  /**
-   * Unlocks all team members' sessions (sets status to 'OPEN')
-   * This allows workers to log back in
-   */
   public async unlockTeamSessions(managerId: string): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
@@ -429,10 +485,6 @@ class SessionService {
     }
   }
 
-  /**
-   * Checks if all team members are locked (status = 'PAID')
-   * Returns true if ALL team members are locked, false otherwise
-   */
   public async getTeamLockStatus(managerId: string): Promise<boolean> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
@@ -450,8 +502,29 @@ class SessionService {
 
     if (!sessions || sessions.length === 0) return false;
 
-    // All team members must be locked for this to return true
     return sessions.every(s => s.status === 'PAID');
+  }
+
+  // --- 2f. TEAM CART HELPERS ---
+
+  /**
+   * Get the team cart for a worker (if in a team season)
+   */
+  public async getWorkerTeamCart(workerId: string): Promise<TeamCart | null> {
+    const dailySession = await this.getDailySession();
+    if (!dailySession || !dailySession.teamCarts) return null;
+
+    return dailySession.teamCarts.find(cart => 
+      cart.workerIds.includes(workerId)
+    ) || null;
+  }
+
+  /**
+   * Get all team members for a worker
+   */
+  public async getTeamMembers(workerId: string): Promise<Worker[]> {
+    const cart = await this.getWorkerTeamCart(workerId);
+    return cart?.workers || [];
   }
 
   // --- 3. SESSION MANAGEMENT ---
@@ -462,9 +535,14 @@ class SessionService {
     importMeta?: ImportMeta
   ): Promise<void> {
     const ccId = this.getCCId();
+    const seasonType = data.seasonType || 'aeration';
+    const isTeamSeason = seasonHasTeams(seasonType);
     
-    // Extract import meta from data if passed via _importMeta property, or use provided param
-    const meta = importMeta || (data as any)._importMeta || { source: 'file', sheetsExported: false };
+    const meta = importMeta || (data as any)._importMeta || { 
+      source: 'file', 
+      sheetsExported: false,
+      seasonType 
+    };
 
     const { error: sessError } = await supabase
       .from('daily_sessions')
@@ -473,6 +551,7 @@ class SessionService {
         is_active: true,
         import_meta: meta,
         command_center_id: ccId,
+        season_type: seasonType,
       });
     if (sessError) throw sessError;
 
@@ -498,7 +577,8 @@ class SessionService {
           alumniRate: w.alumniRate,
           silverRate: w.silverRate,
           assignedManagerId: w.assignedManagerId,
-          upsellsEnabled: true, // Default to enabled for new workers
+          upsellsEnabled: true,
+          teamId: w.teamId, // Store team ID in metadata
         },
         command_center_id: ccId,
       })),
@@ -541,6 +621,7 @@ class SessionService {
       session_date: data.date,
       data: b,
       command_center_id: ccId,
+      services: b.services, // Store service flags
     }));
 
     const { error: bookingError } = await supabase
@@ -548,29 +629,53 @@ class SessionService {
       .insert(bookingRows);
     if (bookingError) throw bookingError;
 
-    const logsheetRows = data.workers.map((w) => ({
-      id: `sess_${w.contractorId}_${Date.now()}`,
-      worker_id: w.contractorId,
-      date: data.date,
-      status: 'OPEN',
-      stats: this.getEmptyStats(),
-      email_enabled: emailEnabled,
-      command_center_id: ccId,
-    }));
-    const { error: lsError } = await supabase
-      .from('logsheet_sessions')
-      .insert(logsheetRows);
-    if (lsError) throw lsError;
+    // Create logsheet sessions
+    if (isTeamSeason && data.teamCarts) {
+      // Team season: one session per cart
+      const logsheetRows = data.teamCarts.map((cart) => {
+        const primaryWorker = cart.workers[0];
+        const equalSplit = createEqualSplit(cart.workerIds);
+        
+        return {
+          id: `sess_${cart.teamId}_${Date.now()}`,
+          worker_id: primaryWorker.contractorId,
+          team_worker_ids: cart.workerIds,
+          date: data.date,
+          status: 'OPEN',
+          stats: this.getEmptyStats(),
+          email_enabled: emailEnabled,
+          command_center_id: ccId,
+          equiv_split: equalSplit,
+          upsell_split: equalSplit,
+        };
+      });
+      
+      const { error: lsError } = await supabase
+        .from('logsheet_sessions')
+        .insert(logsheetRows);
+      if (lsError) throw lsError;
+    } else {
+      // Aeration season: one session per worker
+      const logsheetRows = data.workers.map((w) => ({
+        id: `sess_${w.contractorId}_${Date.now()}`,
+        worker_id: w.contractorId,
+        date: data.date,
+        status: 'OPEN',
+        stats: this.getEmptyStats(),
+        email_enabled: emailEnabled,
+        command_center_id: ccId,
+      }));
+      
+      const { error: lsError } = await supabase
+        .from('logsheet_sessions')
+        .insert(logsheetRows);
+      if (lsError) throw lsError;
+    }
   }
 
-  /**
-   * Reset/wipe the daily session for the CURRENT COMMAND CENTER ONLY
-   * Does NOT affect other command centers' data
-   */
   public async adminResetDailySession(date: string): Promise<void> {
     const ccId = this.getCCId();
     
-    // Delete only this CC's data
     await supabase.from('transactions').delete().eq('command_center_id', ccId); 
     await supabase.from('logsheet_sessions').delete().eq('date', date).eq('command_center_id', ccId);
     await supabase.from('routes').delete().eq('session_date', date).eq('command_center_id', ccId);
@@ -578,13 +683,11 @@ class SessionService {
     await supabase.from('daily_sessions').delete().eq('date', date).eq('command_center_id', ccId);
     await supabase.from('users').delete().in('role', ['Worker', 'RouteManager']).eq('command_center_id', ccId);
     
-    // Clear local storage but keep CC context for super admin
     const isSuperAdmin = commandCenterService.isSuperAdminMode();
     const currentCC = commandCenterService.getCurrentCommandCenter();
     
     localStorage.clear();
     
-    // Restore CC context if super admin
     if (isSuperAdmin && currentCC) {
       commandCenterService.setSuperAdminMode(true);
       commandCenterService.setCurrentCommandCenter(currentCC);
@@ -593,15 +696,10 @@ class SessionService {
     window.location.href = '/login';
   }
 
-  /**
-   * Safely removes a worker by clearing their dependencies first.
-   * This prevents Foreign Key constraint errors.
-   */
   public async deleteWorker(workerId: string): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     
-    // 1. Remove worker from all route assignments
     if (date) {
       const { data: routes } = await supabase
         .from('routes')
@@ -624,16 +722,10 @@ class SessionService {
       }
     }
 
-    // 2. Unassign Bookings
     await supabase.from('bookings').update({ contractor_id: null }).eq('contractor_id', workerId).eq('command_center_id', ccId);
-
-    // 3. Delete Logsheet Session
     await supabase.from('logsheet_sessions').delete().eq('worker_id', workerId).eq('command_center_id', ccId);
-
-    // 4. Delete Transactions
     await supabase.from('transactions').delete().eq('worker_id', workerId).eq('command_center_id', ccId);
 
-    // 5. Delete User
     const { error } = await supabase.from('users').delete().eq('user_id', workerId).eq('command_center_id', ccId);
     
     if (error) {
@@ -642,14 +734,10 @@ class SessionService {
     }
   }
 
-  /**
-   * Transfers a worker to a new manager by updating metadata and active routes.
-   */
   public async transferWorker(workerId: string, newManagerId: string): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
 
-    // 1. Fetch current user metadata
     const { data: user, error: fetchError } = await supabase
         .from('users')
         .select('metadata')
@@ -659,7 +747,6 @@ class SessionService {
     
     if (fetchError || !user) throw new Error("Worker not found");
 
-    // 2. Update Metadata with new Manager ID
     const newMetadata = { ...user.metadata, assignedManagerId: newManagerId };
     
     const { error: updateError } = await supabase
@@ -670,7 +757,6 @@ class SessionService {
 
     if (updateError) throw updateError;
 
-    // 3. Update any active routes where this worker is assigned to belong to the new manager
     if (date) {
       const { data: routes } = await supabase
         .from('routes')
@@ -693,14 +779,7 @@ class SessionService {
     }
   }
 
-  /**
-   * Transfer route ownership to another manager
-   * Updates the manager_id for the route while keeping worker assignments intact
-   */
-  public async transferRouteToManager(
-    routeCode: string, 
-    newManagerId: string
-  ): Promise<void> {
+  public async transferRouteToManager(routeCode: string, newManagerId: string): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return;
@@ -718,11 +797,6 @@ class SessionService {
     }
   }
 
-  /**
-   * Transfer a single booking to another manager
-   * Creates a route entry for the new manager if it doesn't exist
-   * Booking will automatically appear since it matches route_number
-   */
   public async transferBookingToManager(
     bookingId: string,
     routeNumber: string,
@@ -732,7 +806,6 @@ class SessionService {
     const date = await this.getDailySessionDate();
     if (!date) return;
 
-    // 1. Check if the new manager already has this route
     const { data: existingRoute } = await supabase
       .from('routes')
       .select('*')
@@ -742,9 +815,7 @@ class SessionService {
       .eq('command_center_id', ccId)
       .maybeSingle();
 
-    // 2. If route doesn't exist, create it
     if (!existingRoute) {
-      // Get the source route to copy streets
       const { data: sourceRoute } = await supabase
         .from('routes')
         .select('streets')
@@ -755,7 +826,6 @@ class SessionService {
 
       const streets = sourceRoute?.streets || [];
 
-      // Create new route for target manager
       const { error: createError } = await supabase
         .from('routes')
         .insert({
@@ -776,12 +846,7 @@ class SessionService {
 
   // --- 4. AUTHENTICATION ---
 
-  /**
-   * Authenticate Route Manager (also handles command center admin login)
-   * Note: Super admin (Administrator/cps26records) is handled at the login page level
-   */
   public async authenticateRM(username: string, password: string): Promise<ManagementUser | null> {
-    // First, try to find the user across all command centers (RM login)
     const { data } = await supabase
       .from('users')
       .select('*')
@@ -792,7 +857,6 @@ class SessionService {
     
     if (!data) return null;
     
-    // Set the command center context based on the user's CC
     if (data.command_center_id) {
       const cc = await commandCenterService.getCommandCenterById(data.command_center_id);
       if (cc) {
@@ -810,8 +874,11 @@ class SessionService {
     };
   }
 
+  /**
+   * Authenticate worker - supports team-based authentication
+   * In team seasons, any team member's login accesses the shared cart
+   */
   public async authenticateWorker(contractorId: string, password: string): Promise<Worker | null> {
-    // Find worker across all command centers
     const { data } = await supabase
       .from('users')
       .select('*')
@@ -822,7 +889,6 @@ class SessionService {
     
     if (!data) return null;
     
-    // Set the command center context based on the user's CC
     if (data.command_center_id) {
       const cc = await commandCenterService.getCommandCenterById(data.command_center_id);
       if (cc) {
@@ -830,8 +896,6 @@ class SessionService {
       }
     }
     
-    // --- LOCKOUT CHECK: Verify worker's session is not finalized ---
-    // Need to set CC context first before checking lockout
     const isLockedOut = await this.isWorkerLockedOut(contractorId);
     if (isLockedOut) {
       throw new Error('SESSION_FINALIZED');
@@ -849,6 +913,7 @@ class SessionService {
       assignedManagerId: data.metadata?.assignedManagerId,
       upsellsEnabled: data.metadata?.upsellsEnabled !== false,
       commandCenterId: data.command_center_id,
+      teamId: data.metadata?.teamId,
     };
   }
 
@@ -859,7 +924,6 @@ class SessionService {
     const date = await this.getDailySessionDate();
     if (!date) return [];
 
-    // Get routes where this worker is in the assignedWorkerIds array
     const { data: allRoutes } = await supabase
       .from('routes')
       .select('route_code, assigned_worker_ids')
@@ -901,9 +965,9 @@ class SessionService {
       'Log Sheet Notes': b.log_notes,
       Prepaid: b.is_prepaid ? 'x' : undefined,
       commandCenterId: b.command_center_id,
+      services: b.services,
     }));
 
-    // Use shared mapper for consistency
     const completedMapped = (myTransactions || []).map(tx => {
         const mapped = this.mapDbTransaction(tx);
         return {
@@ -931,6 +995,7 @@ class SessionService {
             isNewSale: mapped.type === 'Sale',
             Prepaid: mapped.isPrepaid ? 'x' : undefined,
             commandCenterId: mapped.commandCenterId,
+            services: mapped.services,
         };
     });
 
@@ -952,16 +1017,11 @@ class SessionService {
     return res.data?.streets || [];
   }
 
-  /**
-   * Gets all logsheet sessions for the current day with their transactions populated.
-   * Fetches all transactions in a single query for performance.
-   */
   public async getLogsheetSessions(): Promise<LogsheetSession[]> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return [];
     
-    // Fetch sessions and all transactions in parallel
     const [sessionsRes, transactionsRes] = await Promise.all([
       supabase.from('logsheet_sessions').select('*').eq('date', date).eq('command_center_id', ccId),
       supabase.from('transactions').select('*').eq('command_center_id', ccId)
@@ -970,7 +1030,6 @@ class SessionService {
     const sessions = sessionsRes.data || [];
     const allTransactions = (transactionsRes.data || []).map(tx => this.mapDbTransaction(tx));
     
-    // Group transactions by worker_id
     const transactionsByWorker: Record<string, SessionTransaction[]> = {};
     allTransactions.forEach(tx => {
       if (!transactionsByWorker[tx.workerId]) {
@@ -990,6 +1049,9 @@ class SessionService {
       dailyRouteStore: [],
       financialStore: transactionsByWorker[d.worker_id] || [],
       commandCenterId: d.command_center_id,
+      teamWorkerIds: d.team_worker_ids,
+      equivSplit: d.equiv_split,
+      upsellSplit: d.upsell_split,
     }));
   }
 
@@ -998,37 +1060,54 @@ class SessionService {
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
-    const { data } = await supabase
+    // Check for team session first
+    const { data: teamSession } = await supabase
+      .from('logsheet_sessions')
+      .select('*')
+      .eq('date', date)
+      .eq('command_center_id', ccId)
+      .contains('team_worker_ids', [workerId])
+      .maybeSingle();
+
+    const sessionData = teamSession || (await supabase
       .from('logsheet_sessions')
       .select('*')
       .eq('worker_id', workerId)
       .eq('date', date)
       .eq('command_center_id', ccId)
-      .single();
-    if (!data) return null;
+      .single()).data;
 
+    if (!sessionData) return null;
+
+    // Get all transactions for workers in this session
+    const workerIds = sessionData.team_worker_ids || [sessionData.worker_id];
+    
     const { data: financials } = await supabase
       .from('transactions')
       .select('*')
-      .eq('worker_id', workerId)
+      .in('worker_id', workerIds)
       .eq('command_center_id', ccId);
+    
     const cleanFinancials = (financials || []).map(tx => this.mapDbTransaction(tx));
     
-    // Use region-appropriate tax rate
     const taxRate = this.getCurrentTaxRate();
-    const liveStats = this.recalculateStats(cleanFinancials, taxRate);
+    const seasonType = await this.getSessionSeasonType();
+    const liveStats = this.recalculateStats(cleanFinancials, taxRate, seasonType);
 
     return {
-      id: data.id,
-      workerId: data.worker_id,
-      date: data.date,
-      status: data.status,
+      id: sessionData.id,
+      workerId: sessionData.worker_id,
+      date: sessionData.date,
+      status: sessionData.status,
       stats: liveStats,
-      validation: data.validation,
-      bonuses: data.bonuses,
+      validation: sessionData.validation,
+      bonuses: sessionData.bonuses,
       dailyRouteStore: [],
       financialStore: cleanFinancials,
-      commandCenterId: data.command_center_id,
+      commandCenterId: sessionData.command_center_id,
+      teamWorkerIds: sessionData.team_worker_ids,
+      equivSplit: sessionData.equiv_split,
+      upsellSplit: sessionData.upsell_split,
     };
   }
 
@@ -1036,8 +1115,10 @@ class SessionService {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) throw new Error('No active session day found');
+    
     const existing = await this.getActiveLogsheetSession(workerId);
     if (existing) return existing;
+    
     const newSession = {
       id: `sess_${workerId}_${Date.now()}`,
       worker_id: workerId,
@@ -1047,18 +1128,24 @@ class SessionService {
       email_enabled: true,
       command_center_id: ccId,
     };
+    
     const { error } = await supabase.from('logsheet_sessions').insert(newSession);
     if (error) throw error;
+    
     return this.getActiveLogsheetSession(workerId) as Promise<LogsheetSession>;
   }
 
   public async updateLogsheetSession(sessionId: string, updates: Partial<LogsheetSession>): Promise<void> {
     const ccId = this.getCCId();
     const safeUpdates: any = {};
+    
     if (updates.stats) safeUpdates.stats = updates.stats;
     if (updates.validation) safeUpdates.validation = updates.validation;
     if (updates.bonuses !== undefined) safeUpdates.bonuses = updates.bonuses;
     if (updates.status) safeUpdates.status = updates.status;
+    if (updates.equivSplit) safeUpdates.equiv_split = updates.equivSplit;
+    if (updates.upsellSplit) safeUpdates.upsell_split = updates.upsellSplit;
+    
     await supabase
       .from('logsheet_sessions')
       .update(safeUpdates)
@@ -1067,16 +1154,32 @@ class SessionService {
   }
 
   /**
-   * Assigns a booking to a worker.
-   * Also adds the worker to the route's assignedWorkerIds if not already there.
-   * When unassigning (workerId = null), removes worker from route if they have no other bookings.
+   * Update team split percentages
    */
+  public async updateTeamSplits(
+    sessionId: string, 
+    equivSplit: TeamSplitConfig, 
+    upsellSplit: TeamSplitConfig
+  ): Promise<void> {
+    const ccId = this.getCCId();
+    
+    const { error } = await supabase
+      .from('logsheet_sessions')
+      .update({ 
+        equiv_split: equivSplit, 
+        upsell_split: upsellSplit 
+      })
+      .eq('id', sessionId)
+      .eq('command_center_id', ccId);
+
+    if (error) throw error;
+  }
+
   public async assignBookingToWorker(bookingId: string, workerId: string | null): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return;
 
-    // Get the booking's current state
     const { data: booking } = await supabase
       .from('bookings')
       .select('route_number, contractor_id')
@@ -1085,7 +1188,6 @@ class SessionService {
       .single();
 
     if (!booking || !booking.route_number) {
-      // Just update the booking if we can't find route info
       await supabase
         .from('bookings')
         .update({ contractor_id: workerId })
@@ -1097,7 +1199,6 @@ class SessionService {
     const routeNumber = booking.route_number;
     const oldWorkerId = booking.contractor_id;
 
-    // Update the booking
     const { error } = await supabase
       .from('bookings')
       .update({ contractor_id: workerId })
@@ -1109,7 +1210,6 @@ class SessionService {
       return;
     }
 
-    // Get the route's current assignedWorkerIds
     const { data: route } = await supabase
       .from('routes')
       .select('assigned_worker_ids')
@@ -1122,7 +1222,6 @@ class SessionService {
 
     let assignedWorkerIds: string[] = route.assigned_worker_ids || [];
 
-    // If assigning to a new worker, add them to the route
     if (workerId && !assignedWorkerIds.includes(workerId)) {
       assignedWorkerIds = [...assignedWorkerIds, workerId];
       await supabase
@@ -1133,9 +1232,7 @@ class SessionService {
         .eq('command_center_id', ccId);
     }
 
-    // If unassigning (or reassigning), check if old worker should be removed
     if (oldWorkerId && oldWorkerId !== workerId) {
-      // Check if old worker has any other bookings on this route
       const { data: otherBookings } = await supabase
         .from('bookings')
         .select('booking_id')
@@ -1146,7 +1243,6 @@ class SessionService {
         .neq('booking_id', bookingId);
 
       if (!otherBookings || otherBookings.length === 0) {
-        // Remove old worker from route's assignedWorkerIds
         assignedWorkerIds = assignedWorkerIds.filter(id => id !== oldWorkerId);
         await supabase
           .from('routes')
@@ -1158,11 +1254,6 @@ class SessionService {
     }
   }
 
-  /**
-   * Assigns an entire route to a worker.
-   * If workerId is null, clears the entire assignedWorkerIds array.
-   * If workerId is provided, sets assignedWorkerIds to just that worker.
-   */
   public async assignRouteToWorker(routeCode: string, workerId: string | null): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
@@ -1182,10 +1273,6 @@ class SessionService {
 
   // --- 6. BOOKING STATUS UPDATES ---
 
-  /**
-   * Updates a booking's status to 'next_time' or 'cancelled'
-   * This removes it from the pending queue without creating a transaction
-   */
   public async updateBookingStatus(bookingId: string, status: 'next_time' | 'cancelled'): Promise<void> {
     const ccId = this.getCCId();
     const { error } = await supabase
@@ -1208,7 +1295,6 @@ class SessionService {
   public async revertTransaction(transactionId: string, jobId?: string): Promise<void> {
     const ccId = this.getCCId();
     
-    // First, get the worker_id before deleting
     const { data: txData } = await supabase
       .from('transactions')
       .select('worker_id')
@@ -1234,19 +1320,14 @@ class SessionService {
         if (bkError) throw bkError;
     }
 
-    // Recalculate and save stats for this worker
     if (workerId) {
       await this.recalculateAndSaveWorkerStats(workerId);
     }
   }
 
-  /**
-   * Updates a transaction with partial data.
-   */
   public async updateTransaction(transactionId: string, updates: Partial<SessionTransaction>): Promise<void> {
       const ccId = this.getCCId();
       
-      // 1. Fetch existing transaction to get current customer_snapshot
       const { data: existingTx } = await supabase
         .from('transactions')
         .select('*')
@@ -1256,10 +1337,8 @@ class SessionService {
 
       const existingSnapshot = existingTx?.customer_snapshot || {};
 
-      // 2. Build the database payload with ALL supported fields
       const dbPayload: any = {};
       
-      // Direct column mappings
       if (updates.price !== undefined) dbPayload.price = updates.price;
       if (updates.displayPrice !== undefined) dbPayload.display_price = updates.displayPrice;
       if (updates.paymentMethod !== undefined) dbPayload.payment_method = updates.paymentMethod;
@@ -1273,8 +1352,8 @@ class SessionService {
       if (updates.chequeNumber !== undefined) dbPayload.cheque_number = updates.chequeNumber;
       if (updates.invoiceNumber !== undefined) dbPayload.invoice_number = updates.invoiceNumber;
       if (updates.isWestSplit !== undefined) dbPayload.is_west_split = updates.isWestSplit;
+      if (updates.services !== undefined) dbPayload.services = updates.services;
       
-      // customer_snapshot - MERGE with existing instead of overwrite
       if (updates.customerName !== undefined || 
           updates.address !== undefined || 
           updates.routeCode !== undefined ||
@@ -1310,7 +1389,6 @@ class SessionService {
           dbPayload.customer_snapshot = mergedSnapshot;
       }
 
-      // 3. Update the transaction
       const { error } = await supabase
         .from('transactions')
         .update(dbPayload)
@@ -1318,14 +1396,18 @@ class SessionService {
         .eq('command_center_id', ccId);
       if (error) throw error;
 
-      // 4. Recalculate stats for the worker
       const workerId = existingTx?.worker_id;
       if (workerId) {
         await this.recalculateAndSaveWorkerStats(workerId);
       }
   }
 
-  public async completeJob(transaction: SessionTransaction, jobId: string, workerId: string): Promise<void> {
+  public async completeJob(
+    transaction: SessionTransaction, 
+    jobId: string, 
+    workerId: string,
+    teamWorkerIds?: string[] // For team seasons
+  ): Promise<void> {
     const ccId = this.getCCId();
     
     const payload = {
@@ -1345,8 +1427,9 @@ class SessionService {
       customer_phone: transaction.customerPhone,
       customer_email: transaction.customerEmail,
       items: transaction.items, 
+      services: transaction.services,
+      completed_by_worker_ids: teamWorkerIds || [workerId],
       
-      // Saving Credit Card Data
       cc_full_number: (transaction as any).ccFullNumber,
       cc_expiry: (transaction as any).ccExpiry,
       cc_cvc: (transaction as any).ccCVC,
@@ -1397,10 +1480,14 @@ class SessionService {
         .eq('command_center_id', ccId);
     }
 
-    // Recalculate and save stats for this worker
-    await this.recalculateAndSaveWorkerStats(workerId);
+    // Recalculate stats
+    if (teamWorkerIds && teamWorkerIds.length > 1) {
+      await this.recalculateTeamStats(teamWorkerIds);
+    } else {
+      await this.recalculateAndSaveWorkerStats(workerId);
+    }
 
-    // --- SEND EMAIL RECEIPT (Non-blocking) ---
+    // Send email receipt
     if (transaction.customerEmail && transaction.customerEmail.trim() !== '') {
       this.sendReceiptEmail({
         customerEmail: transaction.customerEmail,
@@ -1515,9 +1602,23 @@ class SessionService {
     };
   }
 
-  public recalculateStats(financials: SessionTransaction[], taxRate: number = 5): SessionStats {
+  /**
+   * Season-aware stats recalculation
+   * - Handles FSL flat for lawn_rejuv (instead of SP/RJ)
+   * - Uses season-specific prepaid/billed weights
+   * - Calculates EQ based on season rates
+   */
+  public recalculateStats(
+    financials: SessionTransaction[], 
+    taxRate: number = 5,
+    seasonType: SeasonType = 'aeration'
+  ): SessionStats {
     const stats = this.getEmptyStats();
     const taxDivisor = 1 + taxRate / 100;
+    const config = getSeasonConfig(seasonType);
+    
+    // Get flat codes for this season
+    const flatCodes = config.officeFlats.map(f => f.code);
 
     financials.forEach((tx) => {
       if (['Production', 'Sale', 'Upgrade'].includes(tx.type)) stats.stepCount++;
@@ -1529,14 +1630,17 @@ class SessionService {
       Object.entries(paymentMap).forEach(([method, amount]) => {
         const val = Number(amount) || 0;
         
-        // IOS FIX: Skip adding IOS payments to any dollar bucket
         if (method === 'IOS') {
           return;
         }
         
         const addToBucket = (val: number, isProd: boolean) => {
           if (isProd) {
-            if ((tx.type === 'Production') && (tx.displayPrice?.startsWith('RJ') || tx.displayPrice?.startsWith('SP'))) {
+            // Check for season-appropriate flats
+            const isFlat = tx.type === 'Production' && 
+              flatCodes.some(code => tx.displayPrice?.startsWith(code));
+            
+            if (isFlat) {
               stats.prodFlats += val;
             } else if (method.includes('Prepaid')) stats.prodPrepaid += val;
             else if (method.includes('Billed')) stats.prodBilled += val;
@@ -1559,10 +1663,7 @@ class SessionService {
         } else if (tx.type === 'Add-On') {
           addToBucket(val, false);
         } else if (tx.type === 'Upgrade') {
-           // 80% goes to Upsell (Commission)
            addToBucket(val * 0.8, false);
-
-           // 20% goes to Prod (EQ)
            if (method.includes('Prepaid')) {
                stats.prodPrepaidSplit += (val * 0.2);
            } else {
@@ -1572,12 +1673,16 @@ class SessionService {
       });
     });
 
-    stats.prodGross = stats.prodPrepaid + stats.prodBilled + stats.prodCash + stats.prodCheque + stats.prodETransfer + stats.prodCreditCard + stats.prodFlats + stats.prodPrepaidSplit;
+    stats.prodGross = stats.prodPrepaid + stats.prodBilled + stats.prodCash + stats.prodCheque + 
+                      stats.prodETransfer + stats.prodCreditCard + stats.prodFlats + stats.prodPrepaidSplit;
     
-    // Weighted Production for EQ
+    // Season-aware weighted production calculation
+    const prepaidWeight = config.prepaidWeight;
+    const billedWeight = config.billedWeight;
+    
     const weightedProd = 
-        (stats.prodPrepaid * 0.5) + 
-        (stats.prodBilled * 0.5) + 
+        (stats.prodPrepaid * prepaidWeight) + 
+        (stats.prodBilled * billedWeight) + 
         stats.prodCash + 
         stats.prodCheque + 
         stats.prodETransfer + 
@@ -1586,11 +1691,107 @@ class SessionService {
         stats.prodPrepaidSplit;
 
     stats.prodPayable = weightedProd / taxDivisor;
+    
+    // EQ calculation uses $25 base regardless of season
+    // (The EQ rate for payout comes later in commission calculation)
     stats.totalEQ = stats.prodPayable / 25;
-    stats.upsellGross = stats.upsellBilled + stats.upsellCash + stats.upsellCheque + stats.upsellETransfer + stats.upsellCreditCard + stats.upsellPrepaid;
+    
+    stats.upsellGross = stats.upsellBilled + stats.upsellCash + stats.upsellCheque + 
+                        stats.upsellETransfer + stats.upsellCreditCard + stats.upsellPrepaid;
     stats.upsellPayable = stats.upsellGross / taxDivisor;
 
     return stats;
+  }
+
+  // --- 9. TEAM PAYOUT CALCULATIONS ---
+
+  /**
+   * Calculate individual worker payouts for a team session
+   */
+  public calculateTeamPayouts(
+    session: LogsheetSession,
+    workers: Worker[],
+    seasonType: SeasonType
+  ): WorkerPayoutBreakdown[] {
+    const stats = session.stats;
+    const equivSplit = session.equivSplit || createEqualSplit(session.teamWorkerIds || [session.workerId]);
+    const upsellSplit = session.upsellSplit || equivSplit;
+    const config = getSeasonConfig(seasonType);
+    const teamSize = session.teamWorkerIds?.length || 1;
+    const eqRate = getEQRate(seasonType, teamSize);
+    
+    const breakdowns: WorkerPayoutBreakdown[] = [];
+    
+    const workerMap = new Map(workers.map(w => [w.contractorId, w]));
+    
+    for (const workerId of Object.keys(equivSplit)) {
+      const worker = workerMap.get(workerId);
+      if (!worker) continue;
+      
+      const equivPercent = equivSplit[workerId] / 100;
+      const upsellPercent = upsellSplit[workerId] / 100;
+      
+      // Calculate assigned EQ
+      const assignedEQ = stats.totalEQ * equivPercent;
+      
+      // Base commission (EQ * rate)
+      const baseCommission = assignedEQ * eqRate;
+      
+      // Apply individual rates
+      const alumniRate = worker.alumniRate || 0;
+      const silverRate = worker.silverRate || 0;
+      const alumniBonus = baseCommission * alumniRate;
+      const silverBonus = baseCommission * silverRate;
+      const productionCommission = baseCommission + alumniBonus + silverBonus;
+      
+      // Upsell commission (15% of upsell payable, split by upsell %)
+      const upsellCommission = stats.upsellPayable * upsellPercent * 0.15;
+      
+      // IOS commission ($5 per IOS, split by upsell %)
+      const iosCommission = stats.iosCount * 5 * upsellPercent;
+      
+      // Bonuses (with their own split percentages)
+      let bonusAmount = 0;
+      if (session.bonuses) {
+        for (const bonus of session.bonuses) {
+          const bonusSplit = bonus.splitPercentages?.[workerId] || equivPercent * 100;
+          bonusAmount += bonus.amount * (bonusSplit / 100);
+        }
+      }
+      
+      // Deductions (split evenly for now)
+      const validation = session.validation;
+      let deductions = 0;
+      if (validation) {
+        const totalDeductions = 
+          Math.abs(validation.cashDiff) + 
+          Math.abs(validation.chequeDiff) + 
+          (validation.machineRental ? 10 : 0);
+        deductions = totalDeductions * equivPercent;
+      }
+      
+      const finalCommission = productionCommission + upsellCommission + iosCommission + 
+                             bonusAmount - deductions;
+      
+      breakdowns.push({
+        workerId,
+        workerName: `${worker.firstName} ${worker.lastName}`,
+        equivSplitPercent: equivSplit[workerId],
+        upsellSplitPercent: upsellSplit[workerId],
+        assignedEQ,
+        baseCommission,
+        alumniBonus,
+        silverBonus,
+        productionCommission,
+        upsellCommission,
+        iosCommission,
+        bonusAmount,
+        deductions,
+        finalCommission,
+      });
+    }
+    
+    return breakdowns;
   }
 }
 

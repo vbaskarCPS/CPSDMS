@@ -1,10 +1,10 @@
 // src/lib/exportService.ts
 import * as XLSX from 'xlsx';
 import { supabase } from './supabase';
-import { commandCenterService } from './commandCenterService';
+import { commandCenterService, seasonHasTeams, getSeasonConfig } from './commandCenterService';
 import { sessionService } from './sessionService';
 import { googleSheetsService } from './googleSheetsService';
-import { LogsheetSession, Worker, ManagementUser } from '../types';
+import { LogsheetSession, Worker, ManagementUser, SeasonType, ServiceFlags } from '../types';
 
 // Helper to get CC ID with error handling
 const getCCId = (): string => {
@@ -16,6 +16,22 @@ const getCCId = (): string => {
 };
 
 /**
+ * Convert ServiceFlags to display string like "(ADFS)"
+ */
+function serviceFlagsToString(services?: ServiceFlags): string {
+  if (!services) return '';
+  
+  let result = '';
+  if (services.aeration) result += 'A';
+  if (services.dethatch) result += 'D';
+  if (services.fertilizer) result += 'F';
+  if (services.seed) result += 'S';
+  if (services.lime) result += 'L';
+  
+  return result ? `(${result})` : '';
+}
+
+/**
  * Generates and downloads a comprehensive Excel export of all session data.
  * All data is scoped to the current command center.
  */
@@ -24,12 +40,17 @@ export async function generateSessionExport(): Promise<void> {
   const date = await sessionService.getDailySessionDate();
   if (!date) throw new Error('No active session');
 
+  // Get season type
+  const seasonType = await sessionService.getSessionSeasonType();
+  const isTeamSeason = seasonHasTeams(seasonType);
+
   // Fetch all data scoped by command center
-  const [sessionsRes, transactionsRes, usersRes, bookingsRes] = await Promise.all([
+  const [sessionsRes, transactionsRes, usersRes, bookingsRes, dailySessionRes] = await Promise.all([
     supabase.from('logsheet_sessions').select('*').eq('date', date).eq('command_center_id', ccId),
     supabase.from('transactions').select('*').eq('command_center_id', ccId),
     supabase.from('users').select('*').eq('command_center_id', ccId),
     supabase.from('bookings').select('*').eq('session_date', date).eq('command_center_id', ccId),
+    supabase.from('daily_sessions').select('season_type').eq('date', date).eq('command_center_id', ccId).single(),
   ]);
 
   const sessions = sessionsRes.data || [];
@@ -72,9 +93,14 @@ export async function generateSessionExport(): Promise<void> {
     
     const totalBonuses = bonuses.reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
     
+    // Team info
+    const teamWorkerIds = session.team_worker_ids || [];
+    const teamMembers = teamWorkerIds.map((id: string) => workersMap.get(id)?.name || id).join(', ');
+    
     return {
       'Contractor ID': session.worker_id,
       'Worker Name': workerName,
+      'Team Members': isTeamSeason ? teamMembers : '',
       'Manager': managerName,
       'Status': session.status,
       'Steps': stats.stepCount || 0,
@@ -94,47 +120,60 @@ export async function generateSessionExport(): Promise<void> {
       'Final Commission': validation.finalCommission || 0,
       'Validated': validation.isValidated ? 'Yes' : 'No',
       'Validated By': validation.managerName || '',
+      'Season Type': seasonType,
     };
   });
 
   // === SHEET 2: Transactions ===
-  const txRows = transactions.map(tx => ({
-    'Transaction ID': tx.id,
-    'Job ID': tx.job_id,
-    'Worker ID': tx.worker_id,
-    'Worker Name': workersMap.get(tx.worker_id)?.name || tx.worker_id,
-    'Timestamp': tx.timestamp,
-    'Type': tx.type,
-    'Price': tx.price,
-    'Display Price': tx.display_price,
-    'Payment Method': tx.payment_method,
-    'Customer Name': `${tx.customer_snapshot?.firstName || ''} ${tx.customer_snapshot?.lastName || ''}`.trim(),
-    'Address': tx.customer_snapshot?.address || tx.address,
-    'Route': tx.customer_snapshot?.routeCode || tx.route_code,
-    'Service Type': tx.customer_snapshot?.serviceType,
-    'Phone': tx.customer_phone,
-    'Email': tx.customer_email,
-    'Invoice #': tx.invoice_number,
-    'Cheque #': tx.cheque_number,
-    'E-Transfer Email': tx.etransfer_email,
-  }));
+  const txRows = transactions.map(tx => {
+    const servicesStr = serviceFlagsToString(tx.services);
+    const completedBy = tx.completed_by_worker_ids?.join(', ') || tx.worker_id;
+    
+    return {
+      'Transaction ID': tx.id,
+      'Job ID': tx.job_id,
+      'Worker ID': tx.worker_id,
+      'Worker Name': workersMap.get(tx.worker_id)?.name || tx.worker_id,
+      'Completed By': completedBy,
+      'Timestamp': tx.timestamp,
+      'Type': tx.type,
+      'Price': tx.price,
+      'Display Price': tx.display_price,
+      'Payment Method': tx.payment_method,
+      'Customer Name': `${tx.customer_snapshot?.firstName || ''} ${tx.customer_snapshot?.lastName || ''}`.trim(),
+      'Address': tx.customer_snapshot?.address || tx.address,
+      'Route': tx.customer_snapshot?.routeCode || tx.route_code,
+      'Service Type': tx.customer_snapshot?.serviceType,
+      'Services': servicesStr,
+      'Phone': tx.customer_phone,
+      'Email': tx.customer_email,
+      'Invoice #': tx.invoice_number,
+      'Cheque #': tx.cheque_number,
+      'E-Transfer Email': tx.etransfer_email,
+    };
+  });
 
   // === SHEET 3: Bookings ===
-  const bookingRows = bookings.map(b => ({
-    'Booking ID': b.booking_id,
-    'Route': b.route_number,
-    'Status': b.status,
-    'Contractor': b.contractor_id,
-    'Price': b.price,
-    'First Name': b.customer_details?.['First Name'],
-    'Last Name': b.customer_details?.['Last Name'],
-    'Address': b.customer_details?.['Full Address'],
-    'Phone': b.customer_details?.['Home Phone'],
-    'Email': b.customer_details?.['Email Address'],
-    'Service Type': b.customer_details?.['FO/BO/FP'],
-    'Prepaid': b.is_prepaid ? 'Yes' : 'No',
-    'Notes': b.log_notes,
-  }));
+  const bookingRows = bookings.map(b => {
+    const servicesStr = serviceFlagsToString(b.services);
+    
+    return {
+      'Booking ID': b.booking_id,
+      'Route': b.route_number,
+      'Status': b.status,
+      'Contractor': b.contractor_id,
+      'Price': b.price,
+      'First Name': b.customer_details?.['First Name'],
+      'Last Name': b.customer_details?.['Last Name'],
+      'Address': b.customer_details?.['Full Address'],
+      'Phone': b.customer_details?.['Home Phone'],
+      'Email': b.customer_details?.['Email Address'],
+      'Service Type': b.customer_details?.['FO/BO/FP'],
+      'Services': servicesStr,
+      'Prepaid': b.is_prepaid ? 'Yes' : 'No',
+      'Notes': b.log_notes,
+    };
+  });
 
   // === SHEET 4: Bonuses Detail ===
   const bonusRows: any[] = [];
@@ -151,9 +190,63 @@ export async function generateSessionExport(): Promise<void> {
         'Amount': bonus.amount,
         'Placing': bonus.placing || '',
         'Description': bonus.customDescription || '',
+        'Split Percentages': bonus.splitPercentages ? JSON.stringify(bonus.splitPercentages) : '',
       });
     });
   });
+
+  // === SHEET 5: Team Payouts (Team season only) ===
+  let teamPayoutRows: any[] = [];
+  if (isTeamSeason) {
+    const workers = Array.from(workersMap.values()).map(u => ({
+      contractorId: u.user_id,
+      firstName: u.name.split(' ')[0],
+      lastName: u.name.split(' ').slice(1).join(' '),
+      alumniRate: u.metadata?.alumniRate || 0,
+      silverRate: u.metadata?.silverRate || 0,
+    }));
+    
+    for (const session of sessions) {
+      if (!session.team_worker_ids || session.team_worker_ids.length <= 1) continue;
+      
+      const sessionObj = {
+        id: session.id,
+        workerId: session.worker_id,
+        date: session.date,
+        status: session.status,
+        stats: session.stats,
+        validation: session.validation,
+        bonuses: session.bonuses,
+        teamWorkerIds: session.team_worker_ids,
+        equivSplit: session.equiv_split,
+        upsellSplit: session.upsell_split,
+        dailyRouteStore: [],
+        financialStore: [],
+      };
+      
+      const payouts = sessionService.calculateTeamPayouts(sessionObj as any, workers as any, seasonType);
+      
+      for (const payout of payouts) {
+        teamPayoutRows.push({
+          'Session ID': session.id,
+          'Worker ID': payout.workerId,
+          'Worker Name': payout.workerName,
+          'Equiv Split %': payout.equivSplitPercent,
+          'Upsell Split %': payout.upsellSplitPercent,
+          'Assigned EQ': payout.assignedEQ.toFixed(2),
+          'Base Commission': payout.baseCommission.toFixed(2),
+          'Alumni Bonus': payout.alumniBonus.toFixed(2),
+          'Silver Bonus': payout.silverBonus.toFixed(2),
+          'Production Commission': payout.productionCommission.toFixed(2),
+          'Upsell Commission': payout.upsellCommission.toFixed(2),
+          'IOS Commission': payout.iosCommission.toFixed(2),
+          'Bonus Amount': payout.bonusAmount.toFixed(2),
+          'Deductions': payout.deductions.toFixed(2),
+          'Final Commission': payout.finalCommission.toFixed(2),
+        });
+      }
+    }
+  }
 
   // Create workbook
   const wb = XLSX.utils.book_new();
@@ -171,6 +264,11 @@ export async function generateSessionExport(): Promise<void> {
     const ws4 = XLSX.utils.json_to_sheet(bonusRows);
     XLSX.utils.book_append_sheet(wb, ws4, 'Bonuses');
   }
+  
+  if (teamPayoutRows.length > 0) {
+    const ws5 = XLSX.utils.json_to_sheet(teamPayoutRows);
+    XLSX.utils.book_append_sheet(wb, ws5, 'Team Payouts');
+  }
 
   // Download
   const cc = commandCenterService.getCurrentCommandCenter();
@@ -182,6 +280,7 @@ export async function generateSessionExport(): Promise<void> {
  * Exports session data to Google Sheets.
  * Updates completed bookings, appends accounts/logsheets/payout stats.
  * All data is scoped to the current command center.
+ * Season-aware: handles service flags and team data.
  */
 export async function exportToGoogleSheets(dateTab: string): Promise<{
   bookingsUpdated: number;
@@ -198,6 +297,10 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     const connected = await googleSheetsService.authenticate();
     if (!connected) throw new Error('Failed to authenticate with Google');
   }
+
+  // Get season type
+  const seasonType = await sessionService.getSessionSeasonType();
+  const isTeamSeason = seasonHasTeams(seasonType);
 
   // Fetch all data scoped by command center
   const [sessionsRes, transactionsRes, usersRes] = await Promise.all([
@@ -225,15 +328,24 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   // === 1. Update Completed Bookings in Feed Placeholder ===
   const completedBookings = transactions
     .filter(tx => tx.type === 'Production' && tx.job_id && !tx.job_id.startsWith('NEW-'))
-    .map(tx => ({
-      routeNumber: tx.customer_snapshot?.routeCode || '',
-      firstName: tx.customer_snapshot?.firstName || '',
-      lastName: tx.customer_snapshot?.lastName || '',
-      dateCompleted: new Date(tx.timestamp).toLocaleDateString(),
-      contractorId: tx.worker_id,
-    }));
+    .map(tx => {
+      // For teams, join all worker IDs with commas
+      const contractorIds = tx.completed_by_worker_ids?.join(',') || tx.worker_id;
+      
+      return {
+        routeNumber: tx.customer_snapshot?.routeCode || '',
+        firstName: tx.customer_snapshot?.firstName || '',
+        lastName: tx.customer_snapshot?.lastName || '',
+        dateCompleted: new Date(tx.timestamp).toLocaleDateString(),
+        contractorId: contractorIds,
+        services: tx.services as ServiceFlags | undefined,
+      };
+    });
 
-  const bookingsUpdated = await googleSheetsService.updateCompletedBookings(completedBookings);
+  const bookingsUpdated = await googleSheetsService.updateCompletedBookings(
+    completedBookings,
+    seasonType
+  );
 
   // === 2. Append Accounts (Sales/Upgrades with payment info) ===
   const accountTransactions = transactions.filter(tx => 
@@ -246,6 +358,14 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     const streetParts = address.split(' ');
     const streetNum = streetParts[0] || '';
     const streetName = streetParts.slice(1).join(' ') || '';
+    
+    // For teams, get all worker names
+    let contractorName = worker?.name || tx.worker_id;
+    if (tx.completed_by_worker_ids && tx.completed_by_worker_ids.length > 1) {
+      contractorName = tx.completed_by_worker_ids
+        .map((id: string) => workersMap.get(id)?.name || id)
+        .join(', ');
+    }
     
     return {
       routeNumber: tx.customer_snapshot?.routeCode || '',
@@ -260,10 +380,11 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       notes: tx.item_description || '',
       price: tx.price || 0,
       paymentType: tx.payment_method || '',
-      contractorName: worker?.name || tx.worker_id,
+      contractorName,
       paymentDetails: tx.cc_full_number || tx.cheque_number || tx.etransfer_email || tx.invoice_number || '',
       expiry: tx.cc_expiry || '',
       cvc: tx.cc_cvc || '',
+      services: tx.services as ServiceFlags | undefined,
     };
   });
 
@@ -281,6 +402,14 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       const streetNum = streetParts[0] || '';
       const streetName = streetParts.slice(1).join(' ') || '';
       
+      // For teams, get all worker names
+      let contractorName = worker?.name || tx.worker_id;
+      if (tx.completed_by_worker_ids && tx.completed_by_worker_ids.length > 1) {
+        contractorName = tx.completed_by_worker_ids
+          .map((id: string) => workersMap.get(id)?.name || id)
+          .join(', ');
+      }
+      
       return {
         routeNumber: tx.customer_snapshot?.routeCode || '',
         firstName: tx.customer_snapshot?.firstName || '',
@@ -294,7 +423,8 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
         notes: tx.item_description || '',
         price: tx.price || 0,
         paymentType: tx.payment_method || '',
-        contractorName: worker?.name || tx.worker_id,
+        contractorName,
+        services: tx.services as ServiceFlags | undefined,
       };
     });
 
@@ -303,6 +433,8 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   }
 
   // === 4. Append Payout Stats ===
+  const config = getSeasonConfig(seasonType);
+  
   const statsData = sessions.map(session => {
     const worker = workersMap.get(session.worker_id);
     const workerName = worker?.name || '';
@@ -320,13 +452,28 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     
     const totalBonuses = bonuses.reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
     
-    // Calculate commissions
+    // Team info
+    const teamWorkerIds = session.team_worker_ids || [];
+    const teamSize = teamWorkerIds.length || 1;
+    const teamId = worker?.metadata?.teamId || '';
+    
+    // Calculate commissions with season-aware rates
     const payoutRate = worker?.metadata?.alumniRate || 0.40;
-    const productionComm = (stats.prodPayable || 0) * payoutRate;
+    const eqRate = teamSize >= 2 ? config.eqRateTeam : config.eqRateSolo;
+    
+    // For team seasons, EQ commission is calculated differently
+    const productionComm = isTeamSeason
+      ? (stats.totalEQ || 0) * eqRate * (1 + payoutRate)
+      : (stats.prodPayable || 0) * payoutRate;
+    
     const upsellComm = (stats.upsellPayable || 0) * 0.15;
     const iosComm = (stats.iosCount || 0) * 5;
     const machineRental = validation.machineRental ? 10 : 0;
     const deductions = (validation.cashDiff || 0) + (validation.chequeDiff || 0) + machineRental;
+    
+    // Equiv split percentage for this worker (if team)
+    const equivSplitPercent = session.equiv_split?.[session.worker_id] || 100;
+    const upsellSplitPercent = session.upsell_split?.[session.worker_id] || 100;
     
     return {
       contractorId: session.worker_id,
@@ -362,6 +509,9 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       deductions,
       bonuses: totalBonuses,
       finalPay: validation.finalCommission || 0,
+      teamId,
+      equivSplitPercent,
+      upsellSplitPercent,
     };
   });
 
