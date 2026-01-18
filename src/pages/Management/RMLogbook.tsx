@@ -1,14 +1,15 @@
 // src/pages/Management/RMLogbook.tsx
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Map, Loader, BookOpen, Activity, DollarSign, Clock, Lock, Unlock } from 'lucide-react';
+import { Users, Map, Loader, BookOpen, Activity, DollarSign, Clock, Lock, Unlock, Truck, Leaf } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
-import { ManagementUser, DailySessionData, LogsheetSession } from '../../types';
+import { ManagementUser, DailySessionData, LogsheetSession, SeasonType, TeamCart } from '../../types';
 import { sessionService } from '../../lib/sessionService';
 import { subscribeAsRouteManager } from '../../lib/realtimeService';
 
 import RMTeamTab from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
+import RMCartsTab from './components/RMCartsTab';
 
 export interface TabStats {
   totalSteps: number;
@@ -22,12 +23,15 @@ export interface TabStats {
   // Badge counters
   unassignedRoutes: number;
   unassignedBookings: number;
+  
+  // Teams (Lawn Rejuv)
+  cartCount?: number;
 }
 
 const RMLogbook: React.FC = () => {
   const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<ManagementUser | null>(null);
-  const [activeTab, setActiveTab] = useState<'team' | 'routes'>('team');
+  const [activeTab, setActiveTab] = useState<'team' | 'routes' | 'carts'>('team');
   
   // Lock State
   const [isTeamLocked, setIsTeamLocked] = useState(false);
@@ -43,13 +47,18 @@ const RMLogbook: React.FC = () => {
     avgEQ: 0,
     totalUpsellCount: 0,
     unassignedRoutes: 0,
-    unassignedBookings: 0
+    unassignedBookings: 0,
+    cartCount: 0
   });
 
   // Data State
   const [loading, setLoading] = useState(true);
   const [dailyData, setDailyData] = useState<DailySessionData | null>(null);
   const [allSessions, setAllSessions] = useState<LogsheetSession[]>([]);
+  
+  // Season Type
+  const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
+  const isLawnRejuv = seasonType === 'lawn_rejuv';
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -66,6 +75,11 @@ const RMLogbook: React.FC = () => {
           ]);
           setDailyData(session);
           setAllSessions(sessions);
+          
+          // Update season type from session
+          if (session?.seasonType) {
+            setSeasonType(session.seasonType);
+          }
         } catch (err) {
           console.error('Failed to refresh RM Logbook data', err);
         }
@@ -130,6 +144,35 @@ const RMLogbook: React.FC = () => {
       .filter(w => w.assignedManagerId === currentUser.userId)
       .map(w => w.contractorId);
   }, [dailyData, currentUser]);
+
+  // --- Compute team carts (Lawn Rejuv only) ---
+  const myTeamCarts = useMemo(() => {
+    if (!dailyData || !currentUser || !isLawnRejuv) return [];
+    
+    // Get workers assigned to this manager
+    const myWorkers = dailyData.workers.filter(w => w.assignedManagerId === currentUser.userId);
+    
+    // Group by teamId
+    const cartMap = new Map<string, TeamCart>();
+    
+    myWorkers.forEach(worker => {
+      const teamId = worker.teamId || worker.contractorId; // Solo workers get their own "cart"
+      
+      if (!cartMap.has(teamId)) {
+        cartMap.set(teamId, {
+          teamId,
+          workerIds: [],
+          workers: []
+        });
+      }
+      
+      const cart = cartMap.get(teamId)!;
+      cart.workerIds.push(worker.contractorId);
+      cart.workers.push(worker);
+    });
+    
+    return Array.from(cartMap.values());
+  }, [dailyData, currentUser, isLawnRejuv]);
 
   // --- Realtime Subscription (Optimized) ---
   useEffect(() => {
@@ -206,6 +249,9 @@ const RMLogbook: React.FC = () => {
     // G. Unassigned Routes (Badge)
     const unassignedRoutesCount = myRoutes.filter(r => !r.assignedWorkerIds || r.assignedWorkerIds.length === 0).length;
 
+    // H. Cart Count (Lawn Rejuv)
+    const cartCount = myTeamCarts.length;
+
     setStats({
         workerCount,
         totalSteps,
@@ -215,10 +261,11 @@ const RMLogbook: React.FC = () => {
         totalGross: totalUpsellGross, // Mapping "Up $" to this field
         totalEQ: totalTeamEQ,
         unassignedRoutes: unassignedRoutesCount,
-        unassignedBookings: unassignedBookingsCount
+        unassignedBookings: unassignedBookingsCount,
+        cartCount
     });
 
-  }, [dailyData, allSessions, currentUser]);
+  }, [dailyData, allSessions, currentUser, myTeamCarts]);
 
 
   if (loading || !currentUser || !dailyData)
@@ -235,12 +282,19 @@ const RMLogbook: React.FC = () => {
         
         {/* Single Row Header: Logo/Name | Lock | Tabs */}
         <div className="flex items-center justify-between gap-2 p-2 px-3">
-          {/* Left: Logo + Name */}
+          {/* Left: Logo + Name + Season Badge */}
           <div className="flex items-center gap-2 min-w-0">
             <BookOpen className="text-cps-blue flex-shrink-0" size={18} />
             <span className="text-sm font-bold text-white truncate">
               {currentUser.name}
             </span>
+            {/* Season Badge */}
+            {isLawnRejuv && (
+              <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-green-900/30 text-green-400 border border-green-700/50">
+                <Leaf size={10} />
+                Rejuv
+              </span>
+            )}
           </div>
 
           {/* Right: Lock Button + Tabs */}
@@ -279,6 +333,26 @@ const RMLogbook: React.FC = () => {
               >
                 <Users size={14} /> Team
               </button>
+              
+              {/* Carts Tab - Only for Lawn Rejuv */}
+              {isLawnRejuv && (
+                <button
+                  onClick={() => setActiveTab('carts')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    activeTab === 'carts'
+                      ? 'bg-green-700 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <Truck size={14} /> Carts
+                  {stats.cartCount && stats.cartCount > 0 && (
+                    <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] bg-green-500 text-white rounded-full font-bold">
+                      {stats.cartCount}
+                    </span>
+                  )}
+                </button>
+              )}
+              
               <button
                 onClick={() => setActiveTab('routes')}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
@@ -299,15 +373,35 @@ const RMLogbook: React.FC = () => {
         </div>
 
         {/* Stats Grid Row */}
-        <div className="grid grid-cols-6 gap-px bg-gray-700 border-t border-gray-700">
+        <div className={`grid gap-px bg-gray-700 border-t border-gray-700 ${isLawnRejuv ? 'grid-cols-7' : 'grid-cols-6'}`}>
             
-            {/* 1. Workers */}
+            {/* 1. Workers / Carts */}
             <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">
+                  {isLawnRejuv ? 'Carts' : 'Workers'}
+                </span>
+                <div className="flex items-center gap-1 text-blue-300 font-bold text-base">
+                    {isLawnRejuv ? (
+                      <>
+                        <Truck size={12} className="opacity-70" /> {stats.cartCount}
+                      </>
+                    ) : (
+                      <>
+                        <Users size={12} className="opacity-70" /> {stats.workerCount}
+                      </>
+                    )}
+                </div>
+            </div>
+
+            {/* Workers count (Lawn Rejuv only - additional column) */}
+            {isLawnRejuv && (
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
                 <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Workers</span>
                 <div className="flex items-center gap-1 text-blue-300 font-bold text-base">
                     <Users size={12} className="opacity-70" /> {stats.workerCount}
                 </div>
-            </div>
+              </div>
+            )}
 
             {/* 2. Steps */}
             <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
@@ -364,6 +458,16 @@ const RMLogbook: React.FC = () => {
               workers={dailyData.workers}
               allSessions={allSessions}
               allManagers={dailyData.managers}
+              seasonType={seasonType}
+            />
+          )}
+          {activeTab === 'carts' && isLawnRejuv && (
+            <RMCartsTab
+              managerId={currentUser.userId}
+              teamCarts={myTeamCarts}
+              allSessions={allSessions}
+              bookings={dailyData.pendingBookings}
+              onRefresh={refreshData}
             />
           )}
           {activeTab === 'routes' && (
@@ -373,6 +477,8 @@ const RMLogbook: React.FC = () => {
               bookings={dailyData.pendingBookings}
               workers={dailyData.workers}
               managers={dailyData.managers}
+              seasonType={seasonType}
+              teamCarts={myTeamCarts}
               onRefresh={() => {
                   refreshData();
               }} 

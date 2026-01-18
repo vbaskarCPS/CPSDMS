@@ -20,15 +20,17 @@ import {
   LogOut,
   ArrowLeft,
   Building2,
+  Leaf,
+  Wind,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
 import { generateSessionExport, exportToGoogleSheets } from '../../lib/exportService';
 import { googleSheetsService } from '../../lib/googleSheetsService';
 import { getDateTabError } from '../../lib/googleSheetsConfig';
-import { commandCenterService } from '../../lib/commandCenterService';
+import { commandCenterService, regionHasSeasonSelection } from '../../lib/commandCenterService';
 import { removeStorageItem } from '../../lib/localStorage';
-import { DailySessionData, SortOption, LogsheetSession } from '../../types';
+import { DailySessionData, SortOption, LogsheetSession, SeasonType, SEASON_CONFIGS } from '../../types';
 import PayoutToday from '../Management/PayoutToday';
 
 const SessionCommandCenter: React.FC = () => {
@@ -82,6 +84,10 @@ const SessionCommandCenter: React.FC = () => {
   // Email Settings
   const [emailEnabled, setEmailEnabled] = useState(true);
 
+  // --- SEASON TYPE STATE (West Region Only) ---
+  const [selectedSeasonType, setSelectedSeasonType] = useState<SeasonType>('aeration');
+  const canSelectSeason = currentCC ? regionHasSeasonSelection(currentCC.region) : false;
+
   // --- GOOGLE SHEETS STATE ---
   const [showFileUpload, setShowFileUpload] = useState(false);
   const [dateTab, setDateTab] = useState('');
@@ -121,6 +127,13 @@ const SessionCommandCenter: React.FC = () => {
         // If we have a dateTab from the stored meta, use it
         if (meta?.dateTab) {
           setDateTab(meta.dateTab);
+        }
+        
+        // If we have a seasonType from the stored meta, use it
+        if (meta?.seasonType) {
+          setSelectedSeasonType(meta.seasonType);
+        } else if (session.seasonType) {
+          setSelectedSeasonType(session.seasonType);
         }
         
         // Load logsheet sessions for validation check
@@ -173,8 +186,13 @@ const SessionCommandCenter: React.FC = () => {
 
     try {
       const data = await parseDailySessionXLSX(file);
-      // Add file import metadata
-      (data as any)._importMeta = { source: 'file', sheetsExported: false } as ImportMeta;
+      // Add file import metadata with season type
+      (data as any)._importMeta = { 
+        source: 'file', 
+        sheetsExported: false,
+        seasonType: selectedSeasonType 
+      } as ImportMeta;
+      data.seasonType = selectedSeasonType;
       setPreviewData(data);
     } catch (err) {
       console.error(err);
@@ -222,7 +240,8 @@ const SessionCommandCenter: React.FC = () => {
     setPreviewData(null);
 
     try {
-      const data = await googleSheetsService.importSessionData(dateTab);
+      // Pass the selected season type to the import function
+      const data = await googleSheetsService.importSessionData(dateTab, selectedSeasonType);
       setPreviewData(data);
     } catch (err) {
       console.error(err);
@@ -293,7 +312,14 @@ const SessionCommandCenter: React.FC = () => {
       setLoading(true);
       try {
         // Extract import meta from preview data
-        const meta = (previewData as any)._importMeta as ImportMeta || { source: 'file', sheetsExported: false };
+        const meta = (previewData as any)._importMeta as ImportMeta || { 
+          source: 'file', 
+          sheetsExported: false,
+          seasonType: selectedSeasonType 
+        };
+        
+        // Ensure season type is set
+        previewData.seasonType = selectedSeasonType;
         
         await sessionService.uploadDailySession(previewData, emailEnabled, meta);
         await loadSession(); // Reload from DB
@@ -363,6 +389,7 @@ const SessionCommandCenter: React.FC = () => {
         setImportMeta(null);
         setSheetsExportResult(null);
         setDateTab('');
+        setSelectedSeasonType('aeration');
       } catch (err) {
         alert('Error: ' + err);
       } finally {
@@ -408,6 +435,12 @@ const SessionCommandCenter: React.FC = () => {
       if (currentSession) return generateManagerReport(currentSession);
       return [];
   }, [previewData, currentSession]);
+
+  // Get season config for display
+  const seasonConfig = SEASON_CONFIGS[selectedSeasonType];
+  const currentSessionSeasonConfig = currentSession?.seasonType 
+    ? SEASON_CONFIGS[currentSession.seasonType] 
+    : null;
 
   // Don't render if no CC context
   if (!currentCC) {
@@ -456,6 +489,17 @@ const SessionCommandCenter: React.FC = () => {
                 <span className="text-xs text-gray-500">{currentCC.displayName}</span>
               )}
             </div>
+            {/* Season Type Badge for Active Session */}
+            {currentSessionSeasonConfig && (
+              <span className={`text-xs px-2 py-0.5 rounded border flex items-center gap-1 ${
+                currentSession?.seasonType === 'lawn_rejuv'
+                  ? 'bg-green-900/30 text-green-400 border-green-700/50'
+                  : 'bg-blue-900/30 text-blue-400 border-blue-700/50'
+              }`}>
+                {currentSession?.seasonType === 'lawn_rejuv' ? <Leaf size={12} /> : <Wind size={12} />}
+                {currentSessionSeasonConfig.displayName}
+              </span>
+            )}
             {importMeta?.source === 'sheets' && importMeta.dateTab && (
               <span className="text-xs bg-green-900/30 text-green-400 px-2 py-0.5 rounded border border-green-700/50">
                 {importMeta.dateTab}
@@ -517,6 +561,62 @@ const SessionCommandCenter: React.FC = () => {
                         </div>
                         <h2 className="text-xl font-bold text-white mb-2 text-center">Initialize New Session</h2>
                         <p className="text-gray-400 text-sm mb-6 text-center">Import from Google Sheets to generate assignments.</p>
+                        
+                        {/* SEASON TYPE SELECTOR (West Region Only) */}
+                        {canSelectSeason && (
+                          <div className="mb-6">
+                            <label className="block text-sm font-medium text-gray-400 mb-2">
+                              Season Type
+                            </label>
+                            <div className="grid grid-cols-2 gap-3">
+                              <button
+                                onClick={() => setSelectedSeasonType('aeration')}
+                                className={`p-4 rounded-lg border-2 transition-all flex flex-col items-center gap-2 ${
+                                  selectedSeasonType === 'aeration'
+                                    ? 'border-blue-500 bg-blue-900/20 text-blue-300'
+                                    : 'border-gray-600 bg-gray-900 text-gray-400 hover:border-gray-500'
+                                }`}
+                              >
+                                <Wind size={24} className={selectedSeasonType === 'aeration' ? 'text-blue-400' : 'text-gray-500'} />
+                                <span className="font-bold">Aeration</span>
+                                <span className="text-[10px] text-gray-500">
+                                  $25/EQ • SP/RJ Flats • 50% Prepaid
+                                </span>
+                              </button>
+                              <button
+                                onClick={() => setSelectedSeasonType('lawn_rejuv')}
+                                className={`p-4 rounded-lg border-2 transition-all flex flex-col items-center gap-2 ${
+                                  selectedSeasonType === 'lawn_rejuv'
+                                    ? 'border-green-500 bg-green-900/20 text-green-300'
+                                    : 'border-gray-600 bg-gray-900 text-gray-400 hover:border-gray-500'
+                                }`}
+                              >
+                                <Leaf size={24} className={selectedSeasonType === 'lawn_rejuv' ? 'text-green-400' : 'text-gray-500'} />
+                                <span className="font-bold">Lawn Rejuv</span>
+                                <span className="text-[10px] text-gray-500">
+                                  Teams • $6-8/EQ • FSL Flat • 70% Prepaid
+                                </span>
+                              </button>
+                            </div>
+                            
+                            {/* Season Info Banner */}
+                            <div className={`mt-3 p-3 rounded-lg border text-xs ${
+                              selectedSeasonType === 'lawn_rejuv'
+                                ? 'bg-green-900/10 border-green-700/50 text-green-300'
+                                : 'bg-blue-900/10 border-blue-700/50 text-blue-300'
+                            }`}>
+                              <div className="font-bold mb-1">{seasonConfig.displayName}</div>
+                              <div className="text-gray-400 space-y-0.5">
+                                <div>• EQ Rate: ${seasonConfig.eqRateSolo} solo{selectedSeasonType === 'lawn_rejuv' ? `, $${seasonConfig.eqRateTeam} team` : ''}</div>
+                                <div>• Prepaid Weight: {seasonConfig.prepaidWeight * 100}%</div>
+                                <div>• Office Flats: {seasonConfig.officeFlats.map(f => `${f.code} ($${f.value})`).join(', ')}</div>
+                                {selectedSeasonType === 'lawn_rejuv' && (
+                                  <div>• Services: A/D/F/S/L (Aeration, Dethatch, Fertilizer, Seed, Lime)</div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
                         
                         {/* GOOGLE SHEETS IMPORT (Default) */}
                         {!showFileUpload && (
@@ -637,8 +737,10 @@ const SessionCommandCenter: React.FC = () => {
                             <FileText size={20} className="text-green-400"/> 
                             {previewData ? "Session Preview Report" : "Live Session Report"}
                         </h3>
-                        {previewData && <span className="text-xs bg-yellow-900/30 text-yellow-300 px-2 py-1 rounded border border-yellow-700/50">PREVIEW MODE</span>}
-                        {currentSession && !previewData && <span className="text-xs bg-green-900/30 text-green-300 px-2 py-1 rounded border border-green-700/50">LIVE</span>}
+                        <div className="flex items-center gap-2">
+                          {previewData && <span className="text-xs bg-yellow-900/30 text-yellow-300 px-2 py-1 rounded border border-yellow-700/50">PREVIEW MODE</span>}
+                          {currentSession && !previewData && <span className="text-xs bg-green-900/30 text-green-300 px-2 py-1 rounded border border-green-700/50">LIVE</span>}
+                        </div>
                     </div>
                     
                     <div className="p-6">
