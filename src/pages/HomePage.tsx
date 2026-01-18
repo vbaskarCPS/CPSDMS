@@ -92,7 +92,7 @@ const HomePage: React.FC = () => {
             <img 
               src={LOGO_URL} 
               alt="Company Logo" 
-              className="h-16 mx-auto"
+              className="h-24 mx-auto"
             />
           </div>
           <h1 className="text-3xl font-extrabold text-white">
@@ -101,10 +101,10 @@ const HomePage: React.FC = () => {
           <p className="text-sm text-gray-400">Universal Login</p>
         </div>
 
-        <div className="bg-gray-800 rounded-lg shadow-lg p-8 border border-gray-700">
+        <div className="bg-black rounded-lg shadow-lg p-8 border-2 border-red-600">
           <form onSubmit={handleLogin}>
             {error && (
-              <div className="mb-4 p-3 bg-red-900/30 text-red-300 border border-red-700 rounded-md text-sm flex items-center gap-2">
+              <div className="mb-4 p-3 bg-red-900/50 text-red-200 border border-red-500 rounded-md text-sm flex items-center gap-2">
                 <AlertCircle size={16} /> {error}
               </div>
             )}
@@ -128,19 +128,19 @@ const HomePage: React.FC = () => {
             )}
 
             <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-300 mb-2">
+              <label className="block text-sm font-medium text-white mb-2">
                 Username / ID
               </label>
               <div className="relative">
                 <KeyRound
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-red-400"
                   size={20}
                 />
                 <input
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full pl-10 pr-3 py-2 bg-gray-700/40 border border-gray-600/50 rounded-md text-gray-100 focus:outline-none focus:border-cps-blue focus:ring-1 focus:ring-cps-blue"
+                  className="w-full pl-10 pr-3 py-2 bg-black border border-red-600 rounded-md text-white placeholder-gray-500 focus:outline-none focus:border-red-400 focus:ring-1 focus:ring-red-400"
                   placeholder="Enter Username or Contractor ID"
                   required
                 />
@@ -148,19 +148,19 @@ const HomePage: React.FC = () => {
             </div>
 
             <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-300 mb-2">
+              <label className="block text-sm font-medium text-white mb-2">
                 Password
               </label>
               <div className="relative">
                 <KeyRound
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-red-400"
                   size={20}
                 />
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-10 pr-3 py-2 bg-gray-700/40 border border-gray-600/50 rounded-md text-gray-100 focus:outline-none focus:border-cps-blue focus:ring-1 focus:ring-cps-blue"
+                  className="w-full pl-10 pr-3 py-2 bg-black border border-red-600 rounded-md text-white placeholder-gray-500 focus:outline-none focus:border-red-400 focus:ring-1 focus:ring-red-400"
                   placeholder="Your First Name or Password"
                   required
                 />
@@ -170,17 +170,17 @@ const HomePage: React.FC = () => {
             <button
               type="submit"
               disabled={loading}
-              className="w-full text-white py-2 px-4 rounded-md bg-cps-blue hover:bg-blue-600 transition-colors disabled:opacity-50 font-bold shadow-lg"
+              className="w-full text-white py-2 px-4 rounded-md bg-red-600 hover:bg-red-500 transition-colors disabled:opacity-50 font-bold shadow-lg"
             >
               {loading ? 'Authenticating...' : 'Sign In'}
             </button>
           </form>
 
           {/* Training Mode Hint */}
-          <div className="mt-6 pt-4 border-t border-gray-700">
-            <div className="flex items-center gap-2 text-gray-500 text-xs">
-              <GraduationCap size={14} />
-              <span>New? Try training mode: <code className="bg-gray-700 px-1.5 py-0.5 rounded text-gray-300">Training / training</code></span>
+          <div className="mt-6 pt-4 border-t border-red-900">
+            <div className="flex items-center gap-2 text-gray-400 text-xs">
+              <GraduationCap size={14} className="text-red-400" />
+              <span>New? Try training mode: <code className="bg-red-900/50 px-1.5 py-0.5 rounded text-white border border-red-700">Training / training</code></span>
             </div>
           </div>
         </div>
