@@ -29,6 +29,13 @@ export const EMAIL_TEMPLATE_TYPES: EmailTemplateTypeInfo[] = [
   { type: 'addon_dethatch', name: 'Dethatching', category: 'addon', description: 'Dethatching add-on confirmation', region: 'West' },
   { type: 'addon_rejuv_after_care', name: 'Rejuvenation After Care', category: 'addon', description: 'Rejuv After Care add-on confirmation', region: 'West' },
   { type: 'addon_grub', name: 'Grub Control', category: 'addon', description: 'Grub Control add-on confirmation', region: 'West' },
+  
+  // Central Add-Ons
+  { type: 'addon_window_washing', name: 'Window Washing', category: 'addon', description: 'Window Washing add-on confirmation', region: 'Central' },
+  
+  // East Add-Ons
+  { type: 'addon_driveway_sealing', name: 'Driveway Sealing', category: 'addon', description: 'Driveway Sealing add-on confirmation', region: 'East' },
+  { type: 'addon_hot_asphalt', name: 'Hot Asphalt', category: 'addon', description: 'Hot Asphalt add-on confirmation', region: 'East' },
 ];
 
 // --- DEFAULT TEMPLATE SUBJECTS ---
@@ -43,6 +50,9 @@ export const DEFAULT_SUBJECTS: Record<EmailTemplateType, string> = {
   addon_dethatch: 'Your Dethatching Service Confirmation',
   addon_rejuv_after_care: 'Your Rejuvenation After Care Confirmation',
   addon_grub: 'Your Grub Control Confirmation',
+  addon_window_washing: 'Your Window Washing Service Confirmation',
+  addon_driveway_sealing: 'Your Driveway Sealing Service Confirmation',
+  addon_hot_asphalt: 'Your Hot Asphalt Service Confirmation',
 };
 
 // --- AVAILABLE TEMPLATE VARIABLES ---
@@ -405,7 +415,7 @@ class EmailTemplateService {
       return 'prepaid';
     }
     
-    // Check for upgrade types
+    // Check for upgrade types (West only)
     if (type === 'Upgrade') {
       if (refId === 'star_plan_pro') return 'upgrade_star_plan_pro';
       if (refId === 'lawn_rejuv') return 'upgrade_lawn_rejuv';
@@ -416,9 +426,15 @@ class EmailTemplateService {
     
     // Check for add-on types
     if (type === 'Add-On') {
+      // West add-ons
       if (refId === 'dethatch') return 'addon_dethatch';
       if (refId === 'rejuv_after_care') return 'addon_rejuv_after_care';
       if (refId === 'grub') return 'addon_grub';
+      // Central add-ons
+      if (refId === 'window_washing') return 'addon_window_washing';
+      // East add-ons
+      if (refId === 'driveway_sealing') return 'addon_driveway_sealing';
+      if (refId === 'hot_asphalt') return 'addon_hot_asphalt';
       // Default to production if unknown add-on
       return 'production';
     }

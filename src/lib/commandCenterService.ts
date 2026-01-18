@@ -46,6 +46,23 @@ export const isSuperAdminCredentials = (username: string, password: string): boo
   return username === SUPER_ADMIN_USERNAME && password === SUPER_ADMIN_PASSWORD;
 };
 
+// --- TAX RATE HELPER ---
+export const getTaxRateForRegion = (region: Region): number => {
+  switch (region) {
+    case 'East':
+      return 13;
+    case 'Central':
+    case 'West':
+    default:
+      return 5;
+  }
+};
+
+// --- CHECK IF REGION HAS UPGRADES ---
+export const regionHasUpgrades = (region: Region): boolean => {
+  return region === 'West';
+};
+
 class CommandCenterService {
   private static instance: CommandCenterService;
   
@@ -73,6 +90,30 @@ class CommandCenterService {
   public getCurrentCommandCenterId(): string | null {
     const cc = this.getCurrentCommandCenter();
     return cc?.id || null;
+  }
+
+  /**
+   * Get the current region
+   */
+  public getCurrentRegion(): Region | null {
+    const cc = this.getCurrentCommandCenter();
+    return cc?.region || null;
+  }
+
+  /**
+   * Get the tax rate for the current command center
+   */
+  public getCurrentTaxRate(): number {
+    const region = this.getCurrentRegion();
+    return region ? getTaxRateForRegion(region) : 5;
+  }
+
+  /**
+   * Check if current region has upgrades
+   */
+  public currentRegionHasUpgrades(): boolean {
+    const region = this.getCurrentRegion();
+    return region ? regionHasUpgrades(region) : false;
   }
 
   /**

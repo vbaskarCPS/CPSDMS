@@ -33,6 +33,11 @@ class SessionService {
     return ccId;
   }
 
+  // --- HELPER: Get current tax rate based on region ---
+  private getCurrentTaxRate(): number {
+    return commandCenterService.getCurrentTaxRate();
+  }
+
   // --- 1. HELPERS ---
 
   // Unified mapper to ensure consistency everywhere
@@ -93,8 +98,9 @@ class SessionService {
       // 2. Map to SessionTransaction format
       const cleanFinancials = (transactions || []).map(tx => this.mapDbTransaction(tx));
 
-      // 3. Recalculate stats
-      const newStats = this.recalculateStats(cleanFinancials, 5);
+      // 3. Recalculate stats with region-appropriate tax rate
+      const taxRate = this.getCurrentTaxRate();
+      const newStats = this.recalculateStats(cleanFinancials, taxRate);
 
       // 4. Save to logsheet_sessions
       const { error } = await supabase
@@ -1007,7 +1013,10 @@ class SessionService {
       .eq('worker_id', workerId)
       .eq('command_center_id', ccId);
     const cleanFinancials = (financials || []).map(tx => this.mapDbTransaction(tx));
-    const liveStats = this.recalculateStats(cleanFinancials, 5);
+    
+    // Use region-appropriate tax rate
+    const taxRate = this.getCurrentTaxRate();
+    const liveStats = this.recalculateStats(cleanFinancials, taxRate);
 
     return {
       id: data.id,

@@ -258,7 +258,12 @@ export type EmailTemplateType =
   // West Add-Ons
   | 'addon_dethatch'
   | 'addon_rejuv_after_care'
-  | 'addon_grub';
+  | 'addon_grub'
+  // Central Add-Ons
+  | 'addon_window_washing'
+  // East Add-Ons
+  | 'addon_driveway_sealing'
+  | 'addon_hot_asphalt';
 
 export interface EmailTemplate {
   id: string;
