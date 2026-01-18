@@ -1,12 +1,15 @@
 // src/pages/HomePage.tsx
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { KeyRound, AlertCircle, ShieldCheck, Lock, GraduationCap } from 'lucide-react';
+import { KeyRound, AlertCircle, Lock, GraduationCap } from 'lucide-react';
 import { sessionService } from '../lib/sessionService';
 import { commandCenterService, isSuperAdminCredentials } from '../lib/commandCenterService';
 import { setStorageItem } from '../lib/localStorage';
 import { isTrainingCredentials, TRAINING_WORKER } from '../lib/trainingData';
 import { trainingService } from '../lib/trainingService';
+
+// Logo URL (same as email templates)
+const LOGO_URL = 'https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png';
 
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
@@ -23,7 +26,7 @@ const HomePage: React.FC = () => {
     setLoading(true);
 
     try {
-      // 0. Check Training Mode (training/training)
+      // 0. Check Training Mode (Training/training)
       if (isTrainingCredentials(username, password)) {
         trainingService.enableTrainingMode();
         setStorageItem('current_user', TRAINING_WORKER);
@@ -85,11 +88,15 @@ const HomePage: React.FC = () => {
     <div className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-800 mb-4 border border-gray-700">
-            <ShieldCheck className="h-8 w-8 text-cps-blue" />
+          <div className="mb-4">
+            <img 
+              src={LOGO_URL} 
+              alt="Company Logo" 
+              className="h-16 mx-auto"
+            />
           </div>
-          <h1 className="text-2xl font-bold text-white">
-            British Columbia Aeration DMS
+          <h1 className="text-3xl font-extrabold text-white">
+            Digital Management System
           </h1>
           <p className="text-sm text-gray-400">Universal Login</p>
         </div>
@@ -173,7 +180,7 @@ const HomePage: React.FC = () => {
           <div className="mt-6 pt-4 border-t border-gray-700">
             <div className="flex items-center gap-2 text-gray-500 text-xs">
               <GraduationCap size={14} />
-              <span>New? Try training mode: <code className="bg-gray-700 px-1.5 py-0.5 rounded text-gray-300">training / training</code></span>
+              <span>New? Try training mode: <code className="bg-gray-700 px-1.5 py-0.5 rounded text-gray-300">Training / training</code></span>
             </div>
           </div>
         </div>
