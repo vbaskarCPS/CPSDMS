@@ -11,7 +11,12 @@ const BADGE_MAP: Record<string, string> = {
   'Dethatching': 'DET',
   'Grub Control': 'GRUB',
   'Golf Course': 'GOLF',
-  'Rejuvenation After Care': 'AC'
+  'Rejuvenation After Care': 'AC',
+  // Central Add-Ons
+  'Window Washing': 'WW',
+  // East Add-Ons
+  'Driveway Sealing': 'DWS',
+  'Hot Asphalt': 'RAMP'
 };
 
 // Display price prefix mapping
@@ -152,8 +157,9 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
     }
     
     if (type === 'Add-On') {
-      // IOS only for Dethatching
-      if (itemName === 'Dethatching') {
+      // IOS only for Dethatching, Window Washing, Driveway Sealing, Hot Asphalt
+      const iosEligible = ['Dethatching', 'Window Washing', 'Driveway Sealing', 'Hot Asphalt'];
+      if (iosEligible.includes(itemName)) {
         return [...baseMethods, 'IOS'];
       }
       return baseMethods;
@@ -162,6 +168,27 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
     // Sale, Upgrade
     return baseMethods;
   }, [formData.type, formData.items]);
+
+  // Get property type options based on service name
+  const propertyTypeOptions = useMemo(() => {
+    const serviceName = formData.items?.[0]?.name || '';
+    
+    // Driveway Sealing uses SS/SSP
+    if (serviceName === 'Driveway Sealing') {
+      return ['SS', 'SSP'];
+    }
+    
+    // Window Washing and Hot Asphalt have no property type
+    if (serviceName === 'Window Washing' || serviceName === 'Hot Asphalt') {
+      return [];
+    }
+    
+    // Default West property types
+    return ['FP', 'FO', 'BO'];
+  }, [formData.items]);
+
+  // Should show property type selector?
+  const showPropertyType = propertyTypeOptions.length > 0;
 
   // Extract display price prefix from existing displayPrice
   const getDisplayPricePrefix = (displayPrice: string | undefined, items: Array<{ name: string; price: number }> | undefined): string => {
@@ -594,27 +621,29 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                     </div>
                 </div>
 
-                {/* Property Type */}
-                <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Property Type</label>
-                    <div className="flex gap-1">
-                        {['FP', 'FO', 'BO'].map(t => (
-                            <button 
-                                key={t} 
-                                type="button"
-                                onClick={() => !isPrepaid && handleChange('serviceType', t)} 
-                                disabled={isPrepaid}
-                                className={`flex-1 py-1.5 text-xs rounded border transition-colors ${
-                                    formData.serviceType === t 
-                                        ? 'bg-blue-600 border-blue-500 text-white' 
-                                        : 'bg-gray-700 border-gray-600 text-gray-400 hover:bg-gray-600'
-                                } ${isPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
-                            >
-                                {t}
-                            </button>
-                        ))}
-                    </div>
-                </div>
+                {/* Property Type - Only show if applicable for this service */}
+                {showPropertyType && (
+                  <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Property Type</label>
+                      <div className="flex gap-1">
+                          {propertyTypeOptions.map(t => (
+                              <button 
+                                  key={t} 
+                                  type="button"
+                                  onClick={() => !isPrepaid && handleChange('serviceType', t)} 
+                                  disabled={isPrepaid}
+                                  className={`flex-1 py-1.5 text-xs rounded border transition-colors ${
+                                      formData.serviceType === t 
+                                          ? 'bg-blue-600 border-blue-500 text-white' 
+                                          : 'bg-gray-700 border-gray-600 text-gray-400 hover:bg-gray-600'
+                                  } ${isPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                              >
+                                  {t}
+                              </button>
+                          ))}
+                      </div>
+                  </div>
+                )}
             </div>
 
             {/* 2. Transaction Details */}

@@ -185,6 +185,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   // --- COMPUTED: Does selected recipe support IOS? ---
   const supportsIOS = selectedRecipe?.hasIOS || false;
 
+  // --- COMPUTED: Should show Locked Gate and Sprinkler options? (West only) ---
+  const showGateAndSprinkler = selectedRecipe?.region === 'West';
+
   // --- HANDLERS FOR NAME FIELDS ---
   const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData({...formData, firstName: capitalizeWords(e.target.value)});
@@ -837,27 +840,33 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                   </div>
                 )}
                 
-                <div className="mt-4 pt-4 border-t border-gray-700 grid grid-cols-2 gap-4">
-                    {/* Property Type - Only show if recipe has property types */}
-                    {hasPropertyTypes && (
-                      <div>
-                          <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Property Type</label>
-                          <div className="flex gap-1">
-                              {selectedRecipe!.propertyTypes.map(t => (
-                                  <button key={t} onClick={() => setFormData({...formData, propertyType: t})} className={`flex-1 py-1.5 text-xs rounded border transition-colors ${formData.propertyType === t ? 'bg-cps-blue border-cps-blue text-white' : 'bg-gray-700 border-gray-600 text-gray-400'}`}>{t}</button>
-                              ))}
-                          </div>
-                      </div>
-                    )}
-                    <div className={`flex flex-col gap-2 justify-center ${!hasPropertyTypes ? 'col-span-2' : ''}`}>
-                        <button onClick={() => setFormData({...formData, hasLockedGate: !formData.hasLockedGate})} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded border transition-colors ${formData.hasLockedGate ? 'bg-orange-900/30 border-orange-600 text-orange-200' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
-                            <Lock size={12}/> Locked Gate {formData.hasLockedGate && <Check size={10}/>}
-                        </button>
-                        <button onClick={() => setFormData({...formData, hasSprinkler: !formData.hasSprinkler})} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded border transition-colors ${formData.hasSprinkler ? 'bg-blue-900/30 border-blue-600 text-blue-200' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
-                            <Droplets size={12}/> Sprinklers {formData.hasSprinkler && <Check size={10}/>}
-                        </button>
-                    </div>
-                </div>
+                {/* Property Type & Gate/Sprinkler Options - Only show if at least one is applicable */}
+                {(hasPropertyTypes || showGateAndSprinkler) && (
+                  <div className="mt-4 pt-4 border-t border-gray-700 grid grid-cols-2 gap-4">
+                      {/* Property Type - Only show if recipe has property types */}
+                      {hasPropertyTypes && (
+                        <div className={!showGateAndSprinkler ? 'col-span-2' : ''}>
+                            <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Property Type</label>
+                            <div className="flex gap-1">
+                                {selectedRecipe!.propertyTypes.map(t => (
+                                    <button key={t} onClick={() => setFormData({...formData, propertyType: t})} className={`flex-1 py-1.5 text-xs rounded border transition-colors ${formData.propertyType === t ? 'bg-cps-blue border-cps-blue text-white' : 'bg-gray-700 border-gray-600 text-gray-400'}`}>{t}</button>
+                                ))}
+                            </div>
+                        </div>
+                      )}
+                      {/* Locked Gate & Sprinkler - Only show for West region */}
+                      {showGateAndSprinkler && (
+                        <div className={`flex flex-col gap-2 justify-center ${!hasPropertyTypes ? 'col-span-2' : ''}`}>
+                            <button onClick={() => setFormData({...formData, hasLockedGate: !formData.hasLockedGate})} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded border transition-colors ${formData.hasLockedGate ? 'bg-orange-900/30 border-orange-600 text-orange-200' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
+                                <Lock size={12}/> Locked Gate {formData.hasLockedGate && <Check size={10}/>}
+                            </button>
+                            <button onClick={() => setFormData({...formData, hasSprinkler: !formData.hasSprinkler})} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded border transition-colors ${formData.hasSprinkler ? 'bg-blue-900/30 border-blue-600 text-blue-200' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
+                                <Droplets size={12}/> Sprinklers {formData.hasSprinkler && <Check size={10}/>}
+                            </button>
+                        </div>
+                      )}
+                  </div>
+                )}
               </div>
 
               {selectedRecipe?.questions?.map(q => (

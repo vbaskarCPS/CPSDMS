@@ -32,7 +32,12 @@ const BADGE_MAP: Record<string, string> = {
   'Dethatching': 'DET',
   'Grub Control': 'GRUB',
   'Golf Course': 'GOLF',
-  'Rejuvenation After Care': 'AC'
+  'Rejuvenation After Care': 'AC',
+  // Central Add-Ons
+  'Window Washing': 'WW',
+  // East Add-Ons
+  'Driveway Sealing': 'DWS',
+  'Hot Asphalt': 'RAMP'
 };
 
 // --- EMAIL STATUS BADGE COMPONENT ---
