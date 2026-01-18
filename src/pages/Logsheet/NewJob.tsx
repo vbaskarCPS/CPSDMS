@@ -1,11 +1,12 @@
 // src/pages/Logsheet/NewJob.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp } from 'lucide-react';
+import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { commandCenterService, getTaxRateForRegion, Region } from '../../lib/commandCenterService';
 import { Worker, SessionTransaction } from '../../types';
-import { sessionService } from '../../lib/sessionService'; 
+import { sessionService } from '../../lib/sessionService';
+import { trainingService } from '../../lib/trainingService';
 import CreditCardModal from '../../components/CreditCardModal';
 import AddContractModal from '../../components/AddContractModal';
 import { 
@@ -41,6 +42,9 @@ function capitalizeWords(value: string): string {
 
 const NewJob: React.FC = () => {
   const navigate = useNavigate();
+
+  // --- Training mode state ---
+  const [isTrainingMode, setIsTrainingMode] = useState(false);
 
   // --- Region and Tax Rate State ---
   const [region, setRegion] = useState<Region>('West');
@@ -199,26 +203,37 @@ const NewJob: React.FC = () => {
 
   useEffect(() => {
     const init = async () => {
+      // Check training mode
+      const trainingMode = trainingService.isTrainingMode();
+      setIsTrainingMode(trainingMode);
+
       const currentWorker = getStorageItem<Worker | null>('current_user', null);
       
-      // Get region and tax rate from command center
-      const cc = commandCenterService.getCurrentCommandCenter();
-      if (cc) {
-        setRegion(cc.region);
-        setTaxRate(getTaxRateForRegion(cc.region));
+      // Get region and tax rate
+      if (trainingMode) {
+        // Training is always West
+        setRegion('West');
+        setTaxRate(5);
+      } else {
+        const cc = commandCenterService.getCurrentCommandCenter();
+        if (cc) {
+          setRegion(cc.region);
+          setTaxRate(getTaxRateForRegion(cc.region));
+        }
       }
       
       if (currentWorker) {
           setWorker(currentWorker);
           
           try {
-              const dailySession = await sessionService.getDailySession();
+              const service = trainingMode ? trainingService : sessionService;
+              const dailySession = await service.getDailySession();
               let myRoutes: string[] = [];
 
               if (dailySession && dailySession.routes) {
                   myRoutes = dailySession.routes
-                      .filter(r => r.assignedWorkerIds && r.assignedWorkerIds.includes(currentWorker.contractorId))
-                      .map(r => r.routeCode);
+                      .filter((r: any) => r.assignedWorkerIds && r.assignedWorkerIds.includes(currentWorker.contractorId))
+                      .map((r: any) => r.routeCode);
                   
                   myRoutes.sort((a, b) => a.localeCompare(b));
               }
@@ -234,7 +249,7 @@ const NewJob: React.FC = () => {
               setRouteCode(myRoutes[0]);
               
               // Fetch upsellsEnabled status
-              const upsellStatus = await sessionService.getWorkerUpsellsEnabled(currentWorker.contractorId);
+              const upsellStatus = await service.getWorkerUpsellsEnabled(currentWorker.contractorId);
               setUpsellsEnabled(upsellStatus);
           } catch(err) {
               console.warn("Offline/No session found", err);
@@ -248,7 +263,8 @@ const NewJob: React.FC = () => {
 
   useEffect(() => {
     if (routeCode) {
-        sessionService.getStreetsForRoute(routeCode).then(streets => {
+        const service = isTrainingMode ? trainingService : sessionService;
+        service.getStreetsForRoute(routeCode).then(streets => {
             if (streets && streets.length > 0) {
                 setSuggestedStreets(streets);
                 setIsCustomStreetMode(false);
@@ -262,7 +278,7 @@ const NewJob: React.FC = () => {
         setSuggestedStreets([]);
         setIsCustomStreetMode(true);
     }
-  }, [routeCode]);
+  }, [routeCode, isTrainingMode]);
 
   const handleTaxClick = () => { 
       const current = parseFloat(amount) || 0; 
@@ -332,9 +348,11 @@ const NewJob: React.FC = () => {
     setSaving(true);
 
     try {
-      let activeSession = await sessionService.getActiveLogsheetSession(worker.contractorId);
+      const service = isTrainingMode ? trainingService : sessionService;
+      
+      let activeSession = await service.getActiveLogsheetSession(worker.contractorId);
       if (!activeSession) { 
-          activeSession = await sessionService.startLogsheetSession(worker.contractorId);
+          activeSession = await service.startLogsheetSession(worker.contractorId);
       }
 
       let transactionPrice: number;
@@ -408,12 +426,12 @@ const NewJob: React.FC = () => {
           isWestSplit: false
       } as any;
 
-      await sessionService.completeJob(transactionData, placeholderJobId, worker.contractorId);
+      await service.completeJob(transactionData, placeholderJobId, worker.contractorId);
 
-      const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
+      const session = await service.getActiveLogsheetSession(worker.contractorId);
       if (session) {
-          const newStats = sessionService.recalculateStats(session.financialStore, taxRate);
-          await sessionService.updateLogsheetSession(session.id, { stats: newStats });
+          const newStats = service.recalculateStats(session.financialStore, taxRate);
+          await service.updateLogsheetSession(session.id, { stats: newStats });
       }
 
       navigate('/logsheet');
@@ -444,7 +462,14 @@ const NewJob: React.FC = () => {
     <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4 animate-fade-in">
       <div className="bg-gray-800 rounded-lg w-full max-w-3xl max-h-[95vh] flex flex-col border border-gray-700 shadow-2xl">
         <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-900/50 rounded-t-lg flex-shrink-0">
-          <div><h2 className="text-xl font-bold text-white">New Sale</h2></div>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-bold text-white">New Sale</h2>
+            {isTrainingMode && (
+              <span className="bg-yellow-900/30 text-yellow-400 text-[10px] px-1.5 py-0.5 rounded border border-yellow-700 flex items-center gap-1">
+                <GraduationCap size={10}/> Training
+              </span>
+            )}
+          </div>
           <button onClick={() => navigate('/logsheet')} className="text-gray-400 hover:text-white" disabled={saving}><X size={24} /></button>
         </div>
         
@@ -790,6 +815,7 @@ const NewJob: React.FC = () => {
           onClose={() => setShowUpgradeModal(false)}
           directUpgradeClient={getUpgradeClientData()}
           onSuccess={() => navigate('/logsheet')}
+          isTrainingMode={isTrainingMode}
         />
       )}
     </div>

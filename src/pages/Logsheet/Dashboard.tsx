@@ -15,10 +15,12 @@ import {
   FileText,
   Phone,
   Check,
+  GraduationCap,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
 import { sessionService } from '../../lib/sessionService';
+import { trainingService } from '../../lib/trainingService';
 import { subscribeAsContractor } from '../../lib/realtimeService';
 import { supabase } from '../../lib/supabase';
 import { Worker, SessionStats, MasterBooking, ManagementUser } from '../../types';
@@ -39,6 +41,15 @@ const Toast: React.FC<{ message: string; show: boolean }> = ({ message, show }) 
   );
 };
 
+// Training Mode Banner Component
+const TrainingBanner: React.FC = () => (
+  <div className="bg-gradient-to-r from-yellow-600 to-orange-600 text-white px-4 py-2 flex items-center justify-center gap-2 text-sm font-bold">
+    <GraduationCap size={18} />
+    <span>TRAINING MODE</span>
+    <span className="text-yellow-200 font-normal">— Practice with mock data. No real records affected.</span>
+  </div>
+);
+
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const [worker, setWorker] = useState<Worker | null>(null);
@@ -48,6 +59,9 @@ const Dashboard: React.FC = () => {
   const [showContractModal, setShowContractModal] = useState(false);
   const [hasAssignedRoutes, setHasAssignedRoutes] = useState(false);
   const [showToast, setShowToast] = useState(false);
+  
+  // Training mode state
+  const [isTrainingMode, setIsTrainingMode] = useState(false);
   
   // Upsells enabled state
   const [upsellsEnabled, setUpsellsEnabled] = useState(true);
@@ -60,7 +74,6 @@ const Dashboard: React.FC = () => {
   // Copy phone to clipboard
   const handleCopyPhone = async (phone: string) => {
     try {
-      // Remove formatting for clipboard (just digits)
       const digitsOnly = phone.replace(/\D/g, '');
       await navigator.clipboard.writeText(digitsOnly);
       setShowToast(true);
@@ -74,6 +87,9 @@ const Dashboard: React.FC = () => {
   const forceLogout = () => {
     console.log('🔒 Session locked - forcing logout');
     removeStorageItem('current_user');
+    if (isTrainingMode) {
+      trainingService.disableTrainingMode();
+    }
     navigate('/');
   };
 
@@ -81,6 +97,11 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     const init = async () => {
       setLoading(true);
+      
+      // Check if we're in training mode
+      const trainingMode = trainingService.isTrainingMode();
+      setIsTrainingMode(trainingMode);
+      
       const storedWorker = getStorageItem<Worker | null>('current_user', null);
       if (!storedWorker) {
         navigate('/');
@@ -89,39 +110,57 @@ const Dashboard: React.FC = () => {
       setWorker(storedWorker);
 
       try {
-        // --- LOCKOUT CHECK: Verify session is still open ---
-        const isLockedOut = await sessionService.isWorkerLockedOut(storedWorker.contractorId);
-        if (isLockedOut) {
-          forceLogout();
-          return;
-        }
+        if (trainingMode) {
+          // --- TRAINING MODE: Use trainingService ---
+          const session = await trainingService.startLogsheetSession(storedWorker.contractorId);
+          setStats(session.stats);
 
-        // 1. Ensure Session Exists
-        const session = await sessionService.startLogsheetSession(storedWorker.contractorId);
-        setStats(session.stats);
+          const assignments = await trainingService.getWorkerAssignments(storedWorker.contractorId);
+          setJobs(assignments);
 
-        // 2. Fetch Assignments (Merges Pending & Completed)
-        const assignments = await sessionService.getWorkerAssignments(storedWorker.contractorId);
-        setJobs(assignments);
+          const dailySession = await trainingService.getDailySession();
+          if (dailySession) {
+            const myRoutes = dailySession.routes.filter(
+              (r: any) => r.assignedWorkerIds && r.assignedWorkerIds.includes(storedWorker.contractorId)
+            );
+            setHasAssignedRoutes(myRoutes.length > 0);
+          }
 
-        // 3. Check if worker has assigned routes (supports split routes)
-        const dailySession = await sessionService.getDailySession();
-        if (dailySession) {
-          const myRoutes = dailySession.routes.filter(
-            r => r.assignedWorkerIds && r.assignedWorkerIds.includes(storedWorker.contractorId)
-          );
-          setHasAssignedRoutes(myRoutes.length > 0);
-        }
-
-        // 4. Fetch Manager Info
-        if (storedWorker.assignedManagerId) {
-          const managerData = await sessionService.getManagerById(storedWorker.assignedManagerId);
+          // Get training manager
+          const managerData = trainingService.getManagerById(storedWorker.assignedManagerId || '');
           setManager(managerData);
-        }
 
-        // 5. Fetch fresh upsellsEnabled status
-        const upsellStatus = await sessionService.getWorkerUpsellsEnabled(storedWorker.contractorId);
-        setUpsellsEnabled(upsellStatus);
+          setUpsellsEnabled(true); // Always enabled in training
+        } else {
+          // --- PRODUCTION MODE: Use sessionService ---
+          const isLockedOut = await sessionService.isWorkerLockedOut(storedWorker.contractorId);
+          if (isLockedOut) {
+            forceLogout();
+            return;
+          }
+
+          const session = await sessionService.startLogsheetSession(storedWorker.contractorId);
+          setStats(session.stats);
+
+          const assignments = await sessionService.getWorkerAssignments(storedWorker.contractorId);
+          setJobs(assignments);
+
+          const dailySession = await sessionService.getDailySession();
+          if (dailySession) {
+            const myRoutes = dailySession.routes.filter(
+              r => r.assignedWorkerIds && r.assignedWorkerIds.includes(storedWorker.contractorId)
+            );
+            setHasAssignedRoutes(myRoutes.length > 0);
+          }
+
+          if (storedWorker.assignedManagerId) {
+            const managerData = await sessionService.getManagerById(storedWorker.assignedManagerId);
+            setManager(managerData);
+          }
+
+          const upsellStatus = await sessionService.getWorkerUpsellsEnabled(storedWorker.contractorId);
+          setUpsellsEnabled(upsellStatus);
+        }
       } catch (err) {
         console.error('Dashboard Load Error', err);
       } finally {
@@ -132,11 +171,10 @@ const Dashboard: React.FC = () => {
     init();
   }, [navigate, refreshKey]);
 
-  // --- FORCE LOGOUT LISTENER: Subscribe to session status changes ---
+  // --- FORCE LOGOUT LISTENER: Subscribe to session status changes (production only) ---
   useEffect(() => {
-    if (!worker) return;
+    if (!worker || isTrainingMode) return;
 
-    // Subscribe to logsheet_sessions table for this worker
     const channel = supabase
       .channel(`lockout-${worker.contractorId}`)
       .on(
@@ -149,7 +187,6 @@ const Dashboard: React.FC = () => {
         },
         (payload) => {
           console.log('📡 Session status change detected:', payload);
-          // Check if status changed to PAID (locked)
           if (payload.new && payload.new.status === 'PAID') {
             forceLogout();
           }
@@ -160,27 +197,28 @@ const Dashboard: React.FC = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [worker?.contractorId, navigate]);
+  }, [worker?.contractorId, navigate, isTrainingMode]);
 
-  // Realtime subscription - separate useEffect to avoid re-subscribing on every refresh
+  // Realtime subscription (production only)
   useEffect(() => {
-    if (!worker) return;
+    if (!worker || isTrainingMode) return;
 
-    // Subscribe to only THIS contractor's data (filtered & debounced)
     const unsubscribe = subscribeAsContractor(
       worker.contractorId,
       () => setRefreshKey((prev) => prev + 1)
     );
 
     return () => unsubscribe();
-  }, [worker?.contractorId]);
+  }, [worker?.contractorId, isTrainingMode]);
 
   const handleLogout = () => {
     removeStorageItem('current_user');
+    if (isTrainingMode) {
+      trainingService.disableTrainingMode();
+    }
     navigate('/');
   };
 
-  // Handle tab switch - refresh data when changing views
   const handleTabSwitch = (tab: 'pending' | 'not_done' | 'completed') => {
     setViewFilter(tab);
     setRefreshKey((prev) => prev + 1);
@@ -206,6 +244,9 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-black pb-20 flex flex-col">
+      {/* Training Mode Banner */}
+      {isTrainingMode && <TrainingBanner />}
+
       {/* Toast Notification */}
       <Toast message="Copied!" show={showToast} />
 
@@ -218,7 +259,7 @@ const Dashboard: React.FC = () => {
             </div>
             <div className="flex items-center gap-2 text-gray-400 text-xs mt-1">
               <span>{worker?.firstName} {worker?.lastName}</span>
-              <span className="bg-gray-800 px-1.5 rounded border border-gray-700">
+              <span className={`px-1.5 rounded border ${isTrainingMode ? 'bg-yellow-900/30 border-yellow-700 text-yellow-400' : 'bg-gray-800 border-gray-700'}`}>
                 #{worker?.contractorId}
               </span>
             </div>
@@ -232,7 +273,6 @@ const Dashboard: React.FC = () => {
                 <Plus size={20} />
               </button>
             )}
-            {/* Only show contracts button if upsells are enabled */}
             {upsellsEnabled && (
               <button
                 onClick={() => setShowContractModal(true)}
@@ -364,6 +404,7 @@ const Dashboard: React.FC = () => {
             setShowContractModal(false);
             setRefreshKey((k) => k + 1);
           }}
+          isTrainingMode={isTrainingMode}
         />
       )}
 

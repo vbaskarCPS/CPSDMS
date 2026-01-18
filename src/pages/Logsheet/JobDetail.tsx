@@ -3,9 +3,10 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Phone, Mail, X, CheckCircle2, Ban, Lock,
-  Loader, CheckCircle, FileText, TrendingUp, DollarSign
+  Loader, CheckCircle, FileText, TrendingUp, DollarSign, GraduationCap
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
+import { trainingService } from '../../lib/trainingService';
 import { commandCenterService, getTaxRateForRegion, Region } from '../../lib/commandCenterService';
 import { getStorageItem } from '../../lib/localStorage';
 import { Worker, MasterBooking, SessionTransaction } from '../../types';
@@ -54,6 +55,9 @@ const JobDetail: React.FC = () => {
   const [originalJob, setOriginalJob] = useState<MasterBooking | null>(null);
   const [region, setRegion] = useState<Region>('West');
   const [taxRate, setTaxRate] = useState(5);
+
+  // Training mode state
+  const [isTrainingMode, setIsTrainingMode] = useState(false);
 
   // Form Fields
   const [firstName, setFirstName] = useState('');
@@ -188,6 +192,10 @@ const JobDetail: React.FC = () => {
   // --- INITIALIZATION ---
   useEffect(() => {
     const init = async () => {
+      // Check training mode
+      const trainingMode = trainingService.isTrainingMode();
+      setIsTrainingMode(trainingMode);
+
       const w = getStorageItem<Worker | null>('current_user', null);
       if (!w || !jobId) {
         navigate('/');
@@ -195,17 +203,25 @@ const JobDetail: React.FC = () => {
       }
       setWorker(w);
 
-      // Get region and tax rate from command center
-      const cc = commandCenterService.getCurrentCommandCenter();
-      if (cc) {
-        setRegion(cc.region);
-        setTaxRate(getTaxRateForRegion(cc.region));
+      // Get region and tax rate
+      if (trainingMode) {
+        // Training is always West
+        setRegion('West');
+        setTaxRate(5);
+      } else {
+        const cc = commandCenterService.getCurrentCommandCenter();
+        if (cc) {
+          setRegion(cc.region);
+          setTaxRate(getTaxRateForRegion(cc.region));
+        }
       }
 
       const decodedId = decodeURIComponent(jobId);
 
       try {
-        const allJobs = await sessionService.getWorkerAssignments(w.contractorId);
+        // Use appropriate service
+        const service = trainingMode ? trainingService : sessionService;
+        const allJobs = await service.getWorkerAssignments(w.contractorId);
         const foundJob = allJobs.find((j) => j['Booking ID'] === decodedId);
 
         if (foundJob) {
@@ -214,7 +230,9 @@ const JobDetail: React.FC = () => {
           loadFormData(foundJob);
           
           // Fetch upsellsEnabled status
-          const upsellStatus = await sessionService.getWorkerUpsellsEnabled(w.contractorId);
+          const upsellStatus = trainingMode 
+            ? await trainingService.getWorkerUpsellsEnabled(w.contractorId)
+            : await sessionService.getWorkerUpsellsEnabled(w.contractorId);
           setUpsellsEnabled(upsellStatus);
         } else {
           console.warn("Job ID not found in assignments:", decodedId);
@@ -416,21 +434,22 @@ const JobDetail: React.FC = () => {
         serviceType: propertyType as any,
       } as any;
 
-      await sessionService.completeJob(
+      // Use appropriate service
+      const service = isTrainingMode ? trainingService : sessionService;
+      
+      await service.completeJob(
         tx,
         originalJob['Booking ID'],
         worker.contractorId
       );
 
-      const session = await sessionService.getActiveLogsheetSession(
-        worker.contractorId
-      );
+      const session = await service.getActiveLogsheetSession(worker.contractorId);
       if (session) {
-        const newStats = sessionService.recalculateStats(
+        const newStats = service.recalculateStats(
           session.financialStore,
           taxRate
         );
-        await sessionService.updateLogsheetSession(session.id, {
+        await service.updateLogsheetSession(session.id, {
           stats: newStats,
         });
       }
@@ -448,7 +467,8 @@ const JobDetail: React.FC = () => {
     
     setLoading(true);
     try {
-      await sessionService.updateBookingStatus(originalJob['Booking ID'], status);
+      const service = isTrainingMode ? trainingService : sessionService;
+      await service.updateBookingStatus(originalJob['Booking ID'], status);
       navigate('/logsheet');
     } catch (err) {
       console.error('Failed to update booking status:', err);
@@ -487,7 +507,17 @@ const JobDetail: React.FC = () => {
         <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-900/50 rounded-t-lg flex-shrink-0">
           <div className="flex items-center gap-3">
               <button onClick={() => navigate('/logsheet')} className="p-1 hover:bg-gray-700 rounded text-gray-400" disabled={saving}><ArrowLeft size={20} /></button>
-              <div><h2 className="text-xl font-bold text-white">Job Details</h2><p className="text-xs text-gray-400">{originalJob?.['Booking ID']}</p></div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-white">Job Details</h2>
+                  {isTrainingMode && (
+                    <span className="bg-yellow-900/30 text-yellow-400 text-[10px] px-1.5 py-0.5 rounded border border-yellow-700 flex items-center gap-1">
+                      <GraduationCap size={10}/> Training
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400">{originalJob?.['Booking ID']}</p>
+              </div>
               {isReadOnly && <span className="bg-blue-900/30 text-blue-300 text-xs px-2 py-0.5 rounded border border-blue-800 flex items-center gap-1"><Lock size={10}/> Completed</span>}
           </div>
           <button onClick={() => navigate('/logsheet')} className="text-gray-400 hover:text-white" disabled={saving}><X size={24}/></button>
@@ -760,6 +790,7 @@ const JobDetail: React.FC = () => {
           onClose={() => setShowUpgradeModal(false)}
           directUpgradeBooking={getUpgradeBooking()}
           onSuccess={() => navigate('/logsheet')}
+          isTrainingMode={isTrainingMode}
         />
       )}
     </div>

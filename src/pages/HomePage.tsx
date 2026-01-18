@@ -1,10 +1,12 @@
 // src/pages/HomePage.tsx
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { KeyRound, AlertCircle, ShieldCheck, Lock } from 'lucide-react';
+import { KeyRound, AlertCircle, ShieldCheck, Lock, GraduationCap } from 'lucide-react';
 import { sessionService } from '../lib/sessionService';
 import { commandCenterService, isSuperAdminCredentials } from '../lib/commandCenterService';
 import { setStorageItem } from '../lib/localStorage';
+import { isTrainingCredentials, TRAINING_WORKER } from '../lib/trainingData';
+import { trainingService } from '../lib/trainingService';
 
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
@@ -21,8 +23,17 @@ const HomePage: React.FC = () => {
     setLoading(true);
 
     try {
+      // 0. Check Training Mode (training/training)
+      if (isTrainingCredentials(username, password)) {
+        trainingService.enableTrainingMode();
+        setStorageItem('current_user', TRAINING_WORKER);
+        navigate('/logsheet');
+        return;
+      }
+
       // 1. Check Super Admin (Administrator/cps26records)
       if (isSuperAdminCredentials(username, password)) {
+        trainingService.disableTrainingMode(); // Ensure training mode is off
         commandCenterService.clearCurrentCommandCenter();
         commandCenterService.setSuperAdminMode(false);
         navigate('/super-admin');
@@ -32,6 +43,7 @@ const HomePage: React.FC = () => {
       // 2. Check Command Center login
       const cc = await commandCenterService.authenticateCommandCenter(username, password);
       if (cc) {
+        trainingService.disableTrainingMode();
         commandCenterService.setCurrentCommandCenter(cc);
         commandCenterService.setSuperAdminMode(false);
         navigate('/admin');
@@ -41,6 +53,7 @@ const HomePage: React.FC = () => {
       // 3. Check Route Manager
       const rm = await sessionService.authenticateRM(username, password);
       if (rm) {
+        trainingService.disableTrainingMode();
         setStorageItem('current_user', rm);
         navigate('/rm-logbook');
         return;
@@ -49,6 +62,7 @@ const HomePage: React.FC = () => {
       // 4. Check Worker
       const worker = await sessionService.authenticateWorker(username, password);
       if (worker) {
+        trainingService.disableTrainingMode();
         setStorageItem('current_user', worker);
         await sessionService.startLogsheetSession(worker.contractorId);
         navigate('/logsheet');
@@ -154,6 +168,14 @@ const HomePage: React.FC = () => {
               {loading ? 'Authenticating...' : 'Sign In'}
             </button>
           </form>
+
+          {/* Training Mode Hint */}
+          <div className="mt-6 pt-4 border-t border-gray-700">
+            <div className="flex items-center gap-2 text-gray-500 text-xs">
+              <GraduationCap size={14} />
+              <span>New? Try training mode: <code className="bg-gray-700 px-1.5 py-0.5 rounded text-gray-300">training / training</code></span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
