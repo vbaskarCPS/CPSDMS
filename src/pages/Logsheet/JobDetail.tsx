@@ -6,6 +6,7 @@ import {
   Loader, CheckCircle, FileText, TrendingUp, DollarSign
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
+import { commandCenterService, getTaxRateForRegion, Region } from '../../lib/commandCenterService';
 import { getStorageItem } from '../../lib/localStorage';
 import { Worker, MasterBooking, SessionTransaction } from '../../types';
 import CreditCardModal from '../../components/CreditCardModal';
@@ -51,6 +52,8 @@ const JobDetail: React.FC = () => {
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [worker, setWorker] = useState<Worker | null>(null);
   const [originalJob, setOriginalJob] = useState<MasterBooking | null>(null);
+  const [region, setRegion] = useState<Region>('West');
+  const [taxRate, setTaxRate] = useState(5);
 
   // Form Fields
   const [firstName, setFirstName] = useState('');
@@ -109,6 +112,9 @@ const JobDetail: React.FC = () => {
   // --- COMPUTED: Split CC needs processing ---
   const splitCCAmount = parseFloat(splitCreditCard) || 0;
   const splitCCNeedsProcessing = splitCCAmount > 0 && !isCreditPaid;
+
+  // --- COMPUTED: Can show upgrade button (West only) ---
+  const canShowUpgradeButton = region === 'West';
 
   // --- HANDLERS FOR NAME FIELDS ---
   const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -189,6 +195,13 @@ const JobDetail: React.FC = () => {
       }
       setWorker(w);
 
+      // Get region and tax rate from command center
+      const cc = commandCenterService.getCurrentCommandCenter();
+      if (cc) {
+        setRegion(cc.region);
+        setTaxRate(getTaxRateForRegion(cc.region));
+      }
+
       const decodedId = decodeURIComponent(jobId);
 
       try {
@@ -267,10 +280,11 @@ const JobDetail: React.FC = () => {
     return priceStr.startsWith('SP') || priceStr.startsWith('RJ') || priceStr.startsWith('GF');
   })();
 
-  // Determine if upgrade button should be enabled
+  // Determine if upgrade button should be enabled (West only, with other conditions)
   const canUpgrade = !isReadOnly && 
                      !isAlreadyUpgrade && 
                      upsellsEnabled &&
+                     canShowUpgradeButton &&
                      firstName.trim() !== '' && 
                      lastName.trim() !== '' && 
                      houseNumber.trim() !== '' && 
@@ -280,7 +294,8 @@ const JobDetail: React.FC = () => {
     if (isPrepaid || isReadOnly) return;
     const current = parseFloat(price.toString());
     if (isNaN(current)) return;
-    const total = Math.round(current * 1.05 * 100) / 100;
+    const taxMultiplier = 1 + (taxRate / 100);
+    const total = Math.round(current * taxMultiplier * 100) / 100;
     setPrice(total.toFixed(2));
   };
 
@@ -395,8 +410,8 @@ const JobDetail: React.FC = () => {
         ccCVC: ccData?.cvc,
         items: [{ name: 'Aeration', price: priceVal }],
         itemDescription: officeNotes,
-        region: 'West',
-        seasonId: 'west-aeration',
+        region: region,
+        seasonId: `${region.toLowerCase()}-aeration`,
         isWestSplit: false,
         serviceType: propertyType as any,
       } as any;
@@ -413,7 +428,7 @@ const JobDetail: React.FC = () => {
       if (session) {
         const newStats = sessionService.recalculateStats(
           session.financialStore,
-          5
+          taxRate
         );
         await sessionService.updateLogsheetSession(session.id, {
           stats: newStats,
@@ -597,8 +612,8 @@ const JobDetail: React.FC = () => {
                       </select>
                       {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
                       
-                      {/* DIRECT UPGRADE BUTTON - Only show if upsells enabled */}
-                      {!isReadOnly && upsellsEnabled && (
+                      {/* DIRECT UPGRADE BUTTON - Only show if upsells enabled AND region is West */}
+                      {!isReadOnly && upsellsEnabled && canShowUpgradeButton && (
                         <button
                           onClick={() => setShowUpgradeModal(true)}
                           disabled={!canUpgrade}

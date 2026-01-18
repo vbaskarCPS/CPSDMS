@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
+import { commandCenterService, getTaxRateForRegion, Region } from '../../lib/commandCenterService';
 import { Worker, SessionTransaction } from '../../types';
 import { sessionService } from '../../lib/sessionService'; 
 import CreditCardModal from '../../components/CreditCardModal';
@@ -40,6 +41,10 @@ function capitalizeWords(value: string): string {
 
 const NewJob: React.FC = () => {
   const navigate = useNavigate();
+
+  // --- Region and Tax Rate State ---
+  const [region, setRegion] = useState<Region>('West');
+  const [taxRate, setTaxRate] = useState(5);
 
   // --- Form State ---
   const [routeCode, setRouteCode] = useState('');
@@ -96,6 +101,9 @@ const NewJob: React.FC = () => {
 
   // Saving state to prevent double-click
   const [saving, setSaving] = useState(false);
+
+  // --- COMPUTED: Can show upgrade button (West only) ---
+  const canShowUpgradeButton = region === 'West';
 
   // --- SPLIT PAYMENT HELPERS ---
   const getSplitTotal = () => {
@@ -181,8 +189,9 @@ const NewJob: React.FC = () => {
     }
   };
 
-  // Determine if upgrade button should be enabled
+  // Determine if upgrade button should be enabled (West only, with other conditions)
   const canUpgrade = upsellsEnabled &&
+                     canShowUpgradeButton &&
                      firstName.trim() !== '' && 
                      lastName.trim() !== '' && 
                      houseNumber.trim() !== '' && 
@@ -191,6 +200,13 @@ const NewJob: React.FC = () => {
   useEffect(() => {
     const init = async () => {
       const currentWorker = getStorageItem<Worker | null>('current_user', null);
+      
+      // Get region and tax rate from command center
+      const cc = commandCenterService.getCurrentCommandCenter();
+      if (cc) {
+        setRegion(cc.region);
+        setTaxRate(getTaxRateForRegion(cc.region));
+      }
       
       if (currentWorker) {
           setWorker(currentWorker);
@@ -250,7 +266,7 @@ const NewJob: React.FC = () => {
 
   const handleTaxClick = () => { 
       const current = parseFloat(amount) || 0; 
-      const tax = current * 0.05; 
+      const tax = current * (taxRate / 100); 
       setAmount((Math.round((current + tax) * 100) / 100).toFixed(2)); 
   };
 
@@ -387,8 +403,8 @@ const NewJob: React.FC = () => {
           ccCVC: finalCcData?.cvc,
           itemDescription: 'New Sale',
           serviceType: propertyType as any, 
-          region: 'West', 
-          seasonId: 'west-aeration',
+          region: region, 
+          seasonId: `${region.toLowerCase()}-aeration`,
           isWestSplit: false
       } as any;
 
@@ -396,7 +412,7 @@ const NewJob: React.FC = () => {
 
       const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
       if (session) {
-          const newStats = sessionService.recalculateStats(session.financialStore, 5);
+          const newStats = sessionService.recalculateStats(session.financialStore, taxRate);
           await sessionService.updateLogsheetSession(session.id, { stats: newStats });
       }
 
@@ -563,8 +579,8 @@ const NewJob: React.FC = () => {
                       </select>
                       {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
                       
-                      {/* DIRECT UPGRADE BUTTON - Only show if upsells enabled */}
-                      {upsellsEnabled && (
+                      {/* DIRECT UPGRADE BUTTON - Only show if upsells enabled AND region is West */}
+                      {upsellsEnabled && canShowUpgradeButton && (
                         <button
                           type="button"
                           onClick={() => setShowUpgradeModal(true)}

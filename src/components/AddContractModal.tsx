@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader, Phone, CheckCircle } from 'lucide-react';
 import { getStorageItem } from '../lib/localStorage';
+import { commandCenterService, getTaxRateForRegion, Region } from '../lib/commandCenterService';
 import { MasterBooking, Worker, SessionTransaction } from '../types';
 import { sessionService } from '../lib/sessionService';
 import CreditCardModal from './CreditCardModal';
@@ -36,17 +37,38 @@ function capitalizeWords(value: string): string {
     .join(' ');
 }
 
-const CONTRACT_RECIPES = [
-  { id: 'star_plan_pro', name: 'Star Plan Pro', type: 'Upgrade' },
-  { id: 'lawn_rejuv', name: 'Lawn Rejuvenation', type: 'Upgrade' },
-  { id: 'golf_course', name: 'Golf Course', type: 'Upgrade' },
-  { id: 'dethatch', name: 'Dethatching', type: 'Add-On' },
-  { id: 'rejuv_after_care', name: 'Rejuvenation After Care', type: 'Add-On' },
-  { id: 'grub', name: 'Grub Control', type: 'Add-On', 
-    questions: [
-      { id: 'timing', label: 'Timing', options: ['Spring', 'Fall', 'Both'] }
-    ] 
+// --- REGION-AWARE CONTRACT RECIPES ---
+interface ContractRecipe {
+  id: string;
+  name: string;
+  type: 'Upgrade' | 'Add-On';
+  region: Region;
+  propertyTypes: string[]; // Empty array means no property type selector
+  hasIOS: boolean;
+  displayPrefix?: string; // Only for West upgrades (SP, RJ, GF)
+  badge?: string; // Badge code for display (WW, DWS, RAMP)
+  questions?: { id: string; label: string; options: string[] }[];
+}
+
+const CONTRACT_RECIPES: ContractRecipe[] = [
+  // West Upgrades
+  { id: 'star_plan_pro', name: 'Star Plan Pro', type: 'Upgrade', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, displayPrefix: 'SP' },
+  { id: 'lawn_rejuv', name: 'Lawn Rejuvenation', type: 'Upgrade', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, displayPrefix: 'RJ' },
+  { id: 'golf_course', name: 'Golf Course', type: 'Upgrade', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, displayPrefix: 'GF' },
+  
+  // West Add-Ons
+  { id: 'dethatch', name: 'Dethatching', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: true },
+  { id: 'rejuv_after_care', name: 'Rejuvenation After Care', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false },
+  { id: 'grub', name: 'Grub Control', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, 
+    questions: [{ id: 'timing', label: 'Timing', options: ['Spring', 'Fall', 'Both'] }] 
   },
+  
+  // Central Add-Ons
+  { id: 'window_washing', name: 'Window Washing', type: 'Add-On', region: 'Central', propertyTypes: [], hasIOS: true, badge: 'WW' },
+  
+  // East Add-Ons
+  { id: 'driveway_sealing', name: 'Driveway Sealing', type: 'Add-On', region: 'East', propertyTypes: ['SS', 'SSP'], hasIOS: true, badge: 'DWS' },
+  { id: 'hot_asphalt', name: 'Hot Asphalt', type: 'Add-On', region: 'East', propertyTypes: [], hasIOS: true, badge: 'RAMP' },
 ];
 
 // Direct upgrade client data (for NewJob - no existing booking)
@@ -81,10 +103,13 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const isDirectUpgrade = !!(directUpgradeBooking || directUpgradeClient);
   
   const [step, setStep] = useState<Step>('SELECT_CONTRACT');
-  const [availableRecipes] = useState(CONTRACT_RECIPES);
-  const [selectedRecipe, setSelectedRecipe] = useState<typeof CONTRACT_RECIPES[0] | null>(null);
+  const [selectedRecipe, setSelectedRecipe] = useState<ContractRecipe | null>(null);
   const [selectedBooking, setSelectedBooking] = useState<MasterBooking | null>(null);
   const [error, setError] = useState<string | null>(null);
+  
+  // Region and Tax Rate
+  const [region, setRegion] = useState<Region>('West');
+  const [taxRate, setTaxRate] = useState(5);
   
   // Data
   const [formData, setFormData] = useState({
@@ -148,6 +173,17 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   // --- COMPUTED: Split CC needs processing ---
   const splitCCAmount = parseFloat(splitCreditCard) || 0;
   const splitCCNeedsProcessing = splitCCAmount > 0 && !isCreditPaid;
+
+  // --- COMPUTED: Available recipes for current region ---
+  const availableRecipes = useMemo(() => {
+    return CONTRACT_RECIPES.filter(r => r.region === region);
+  }, [region]);
+
+  // --- COMPUTED: Does selected recipe have property types? ---
+  const hasPropertyTypes = selectedRecipe && selectedRecipe.propertyTypes.length > 0;
+
+  // --- COMPUTED: Does selected recipe support IOS? ---
+  const supportsIOS = selectedRecipe?.hasIOS || false;
 
   // --- HANDLERS FOR NAME FIELDS ---
   const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -227,7 +263,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   // --- TAX CALCULATOR ---
   const handleTaxClick = () => {
     const current = parseFloat(paymentInfo.amount) || 0;
-    const tax = current * 0.05;
+    const tax = current * (taxRate / 100);
     setPaymentInfo({...paymentInfo, amount: (Math.round((current + tax) * 100) / 100).toFixed(2)});
   };
 
@@ -236,6 +272,13 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       const w = getStorageItem<Worker | null>('current_user', null);
       if (!w) { setError("User not found."); return; }
       setWorker(w);
+
+      // Get region and tax rate from command center
+      const cc = commandCenterService.getCurrentCommandCenter();
+      if (cc) {
+        setRegion(cc.region);
+        setTaxRate(getTaxRateForRegion(cc.region));
+      }
 
       try {
         const dailySession = await sessionService.getDailySession();
@@ -279,9 +322,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     init();
   }, [isDirectUpgrade]);
 
-  // Filter recipes based on mode (direct upgrade only shows Upgrade types)
+  // Filter recipes based on mode (direct upgrade only shows Upgrade types for West)
   const displayedRecipes = useMemo(() => {
     if (isDirectUpgrade) {
+      // Direct upgrade mode - only show upgrades (West only has upgrades)
       return availableRecipes.filter(r => r.type === 'Upgrade');
     }
     return availableRecipes;
@@ -297,7 +341,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       }
   }, [availableClients, selectedRecipe]);
 
-  const handleRecipeSelect = (recipe: typeof CONTRACT_RECIPES[0]) => {
+  const handleRecipeSelect = (recipe: ContractRecipe) => {
     setSelectedRecipe(recipe);
     const initialAnswers: Record<string, string> = {};
     if (recipe.questions) recipe.questions.forEach(q => initialAnswers[q.id] = q.options[0]);
@@ -322,6 +366,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     setSplitEtransferEmailError(null);
     setPaymentMethodError(null);
 
+    // Set default property type based on recipe
+    const defaultPropertyType = recipe.propertyTypes.length > 0 ? recipe.propertyTypes[0] : '';
+
     // DIRECT UPGRADE MODE: Pre-fill data and skip client selection
     if (directUpgradeBooking) {
       // From JobDetail - has existing booking
@@ -334,7 +381,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
         email: normalizeEmail(directUpgradeBooking['Email Address'] || ''),
         routeNumber: directUpgradeBooking['Route Number'] || '',
         notes: '',
-        propertyType: directUpgradeBooking['FO/BO/FP'] || 'FP',
+        propertyType: directUpgradeBooking['FO/BO/FP'] || defaultPropertyType,
         hasLockedGate: directUpgradeBooking['Gate'] === 'x',
         hasSprinkler: false
       });
@@ -350,7 +397,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
         email: directUpgradeClient.email,
         routeNumber: directUpgradeClient.routeCode,
         notes: '',
-        propertyType: directUpgradeClient.propertyType || 'FP',
+        propertyType: directUpgradeClient.propertyType || defaultPropertyType,
         hasLockedGate: false,
         hasSprinkler: false
       });
@@ -361,7 +408,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       // Normal flow - go to client selection
       setFormData({ 
           firstName: '', lastName: '', address: '', phone: '', email: '', 
-          routeNumber: '', notes: '', propertyType: 'FP', 
+          routeNumber: '', notes: '', propertyType: defaultPropertyType, 
           hasLockedGate: false, hasSprinkler: false 
       });
       setSelectedBooking(null);
@@ -371,6 +418,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
 
   const handleClientSelect = (booking: MasterBooking) => {
     setSelectedBooking(booking);
+    const defaultPropertyType = selectedRecipe?.propertyTypes.length ? selectedRecipe.propertyTypes[0] : '';
     setFormData({
       firstName: booking['First Name'] || '',
       lastName: booking['Last Name'] || '',
@@ -379,7 +427,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       email: normalizeEmail(booking['Email Address'] || ''),
       routeNumber: booking['Route Number'] || '',
       notes: '',
-      propertyType: booking['FO/BO/FP'] || 'FP',
+      propertyType: booking['FO/BO/FP'] || defaultPropertyType,
       hasLockedGate: booking['Gate'] === 'x',
       hasSprinkler: false
     });
@@ -395,6 +443,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const handleNewClient = () => {
     if (selectedRecipe?.type === 'Upgrade') return;
     setSelectedBooking(null);
+    const defaultPropertyType = selectedRecipe?.propertyTypes.length ? selectedRecipe.propertyTypes[0] : '';
     setFormData({ 
       firstName: '', 
       lastName: '', 
@@ -403,7 +452,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       email: '', 
       routeNumber: assignedRoutes.length > 0 ? assignedRoutes[0] : '', 
       notes: '', 
-      propertyType: 'FP', 
+      propertyType: defaultPropertyType, 
       hasLockedGate: false, 
       hasSprinkler: false 
     });
@@ -559,12 +608,15 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       if (answers['timing']) finalNotes += ` [${answers['timing']}]`; 
       if (formData.hasLockedGate) finalNotes += ' [LG]';
 
-      let displayPricePrefix = '';
-      if (selectedRecipe.id === 'star_plan_pro') displayPricePrefix = 'SP';
-      if (selectedRecipe.id === 'lawn_rejuv') displayPricePrefix = 'RJ';
-      if (selectedRecipe.id === 'golf_course') displayPricePrefix = 'GF';
-      
-      const formattedDisplayPrice = `${displayPricePrefix}${finalTotal.toFixed(2)}`;
+      // Build display price - only West upgrades have prefixes
+      let formattedDisplayPrice: string;
+      if (selectedRecipe.displayPrefix) {
+        // West upgrade - use prefix
+        formattedDisplayPrice = `${selectedRecipe.displayPrefix}${finalTotal.toFixed(2)}`;
+      } else {
+        // Central/East or West add-ons - no prefix
+        formattedDisplayPrice = finalTotal.toFixed(2);
+      }
       
       // Determine final address
       let finalAddress: string;
@@ -634,16 +686,18 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
           refId: selectedRecipe.id,
           items: [{ name: selectedRecipe.name, price: finalTotal }],
           itemDescription: finalNotes.trim(),
-          serviceType: formData.propertyType as any,
+          serviceType: hasPropertyTypes ? formData.propertyType as any : undefined,
           
-          region: 'West', seasonId: 'west-aeration'
+          region: region, 
+          seasonId: `${region.toLowerCase()}-aeration`
       } as any;
 
       await sessionService.completeJob(tx, tx.jobId, worker.contractorId);
 
       const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
       if (session) {
-          await sessionService.updateLogsheetSession(session.id, { stats: session.stats });
+          const newStats = sessionService.recalculateStats(session.financialStore, taxRate);
+          await sessionService.updateLogsheetSession(session.id, { stats: newStats });
       }
 
       // Call onSuccess callback if provided, otherwise just close
@@ -683,12 +737,18 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
         <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
           {step === 'SELECT_CONTRACT' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {displayedRecipes.map(recipe => (
-                <button key={recipe.id} onClick={() => handleRecipeSelect(recipe)} className="bg-gray-800 p-4 rounded-lg border border-gray-700 hover:bg-gray-750 hover:border-cps-blue transition-all text-left group">
-                  <h3 className="font-bold text-white group-hover:text-cps-blue mb-1">{recipe.name}</h3>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${recipe.type === 'Upgrade' ? 'bg-purple-900/30 text-purple-300' : 'bg-blue-900/30 text-blue-300'}`}>{recipe.type}</span>
-                </button>
-              ))}
+              {displayedRecipes.length === 0 ? (
+                <div className="col-span-2 text-center text-gray-500 py-8">
+                  <p>No contracts available for your region.</p>
+                </div>
+              ) : (
+                displayedRecipes.map(recipe => (
+                  <button key={recipe.id} onClick={() => handleRecipeSelect(recipe)} className="bg-gray-800 p-4 rounded-lg border border-gray-700 hover:bg-gray-750 hover:border-cps-blue transition-all text-left group">
+                    <h3 className="font-bold text-white group-hover:text-cps-blue mb-1">{recipe.name}</h3>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${recipe.type === 'Upgrade' ? 'bg-purple-900/30 text-purple-300' : 'bg-blue-900/30 text-blue-300'}`}>{recipe.type}</span>
+                  </button>
+                ))
+              )}
             </div>
           )}
 
@@ -778,15 +838,18 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                 )}
                 
                 <div className="mt-4 pt-4 border-t border-gray-700 grid grid-cols-2 gap-4">
-                    <div>
-                        <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Property Type</label>
-                        <div className="flex gap-1">
-                            {['FP', 'FO', 'BO'].map(t => (
-                                <button key={t} onClick={() => setFormData({...formData, propertyType: t})} className={`flex-1 py-1.5 text-xs rounded border transition-colors ${formData.propertyType === t ? 'bg-cps-blue border-cps-blue text-white' : 'bg-gray-700 border-gray-600 text-gray-400'}`}>{t}</button>
-                            ))}
-                        </div>
-                    </div>
-                    <div className="flex flex-col gap-2 justify-center">
+                    {/* Property Type - Only show if recipe has property types */}
+                    {hasPropertyTypes && (
+                      <div>
+                          <label className="text-[10px] uppercase text-gray-500 font-bold block mb-1">Property Type</label>
+                          <div className="flex gap-1">
+                              {selectedRecipe!.propertyTypes.map(t => (
+                                  <button key={t} onClick={() => setFormData({...formData, propertyType: t})} className={`flex-1 py-1.5 text-xs rounded border transition-colors ${formData.propertyType === t ? 'bg-cps-blue border-cps-blue text-white' : 'bg-gray-700 border-gray-600 text-gray-400'}`}>{t}</button>
+                              ))}
+                          </div>
+                      </div>
+                    )}
+                    <div className={`flex flex-col gap-2 justify-center ${!hasPropertyTypes ? 'col-span-2' : ''}`}>
                         <button onClick={() => setFormData({...formData, hasLockedGate: !formData.hasLockedGate})} className={`flex items-center gap-2 text-xs px-2 py-1.5 rounded border transition-colors ${formData.hasLockedGate ? 'bg-orange-900/30 border-orange-600 text-orange-200' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
                             <Lock size={12}/> Locked Gate {formData.hasLockedGate && <Check size={10}/>}
                         </button>
@@ -847,7 +910,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                          <option value="Credit Card">Credit Card</option>
                          <option value="E-Transfer">E-Transfer</option>
                          <option value="Split Payment">Split Payment</option>
-                         {selectedRecipe?.id === 'dethatch' && <option value="IOS">Invoice On Site</option>}
+                         {supportsIOS && <option value="IOS">Invoice On Site</option>}
                       </select>
                     </div>
                  </div>
@@ -962,7 +1025,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                         </div>
                       </div>
                     </div>
-                    
+
                     {/* Conditional: Cheque Number */}
                     {(parseFloat(splitCheque) || 0) > 0 && (
                       <div>
