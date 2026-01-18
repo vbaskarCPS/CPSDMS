@@ -1,9 +1,9 @@
 // src/components/AddContractModal.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader, Phone, CheckCircle } from 'lucide-react';
+import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader, Phone, CheckCircle, Leaf } from 'lucide-react';
 import { getStorageItem } from '../lib/localStorage';
-import { commandCenterService, getTaxRateForRegion, Region } from '../lib/commandCenterService';
-import { MasterBooking, Worker, SessionTransaction } from '../types';
+import { commandCenterService, getTaxRateForRegion, Region, getAvailableAddOns } from '../lib/commandCenterService';
+import { MasterBooking, Worker, SessionTransaction, SeasonType, ServiceFlags, SERVICE_FLAG_KEYS, SERVICE_FLAG_LABELS } from '../types';
 import { sessionService } from '../lib/sessionService';
 import { trainingService } from '../lib/trainingService';
 import CreditCardModal from './CreditCardModal';
@@ -49,16 +49,20 @@ interface ContractRecipe {
   displayPrefix?: string;
   badge?: string;
   questions?: { id: string; label: string; options: string[] }[];
+  // Season restriction - if set, only available in this season
+  seasonOnly?: SeasonType;
 }
 
 const CONTRACT_RECIPES: ContractRecipe[] = [
-  // West Upgrades
-  { id: 'star_plan_pro', name: 'Star Plan Pro', type: 'Upgrade', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, displayPrefix: 'SP' },
-  { id: 'lawn_rejuv', name: 'Lawn Rejuvenation', type: 'Upgrade', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, displayPrefix: 'RJ' },
-  { id: 'golf_course', name: 'Golf Course', type: 'Upgrade', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, displayPrefix: 'GF' },
+  // West Upgrades (Aeration only)
+  { id: 'star_plan_pro', name: 'Star Plan Pro', type: 'Upgrade', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, displayPrefix: 'SP', seasonOnly: 'aeration' },
+  { id: 'lawn_rejuv', name: 'Lawn Rejuvenation', type: 'Upgrade', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, displayPrefix: 'RJ', seasonOnly: 'aeration' },
+  { id: 'golf_course', name: 'Golf Course', type: 'Upgrade', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, displayPrefix: 'GF', seasonOnly: 'aeration' },
   
-  // West Add-Ons
-  { id: 'dethatch', name: 'Dethatching', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: true },
+  // West Add-Ons (Aeration only)
+  { id: 'dethatch', name: 'Dethatching', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: true, seasonOnly: 'aeration' },
+  
+  // West Add-Ons (Both seasons)
   { id: 'rejuv_after_care', name: 'Rejuvenation After Care', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false },
   { id: 'grub', name: 'Grub Control', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, 
     questions: [{ id: 'timing', label: 'Timing', options: ['Spring', 'Fall', 'Both'] }] 
@@ -110,9 +114,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const [selectedBooking, setSelectedBooking] = useState<MasterBooking | null>(null);
   const [error, setError] = useState<string | null>(null);
   
-  // Region and Tax Rate - Training mode always uses West
+  // Region, Tax Rate, and Season Type
   const [region, setRegion] = useState<Region>(isTrainingMode ? 'West' : 'West');
   const [taxRate, setTaxRate] = useState(5);
+  const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
   
   // Data
   const [formData, setFormData] = useState({
@@ -165,6 +170,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
 
   // --- COMPUTED VALUES ---
   const isSplitPayment = paymentInfo.method === 'Split Payment';
+  const isLawnRejuvSeason = seasonType === 'lawn_rejuv';
 
   const splitTotal = 
     (parseFloat(splitCash) || 0) + 
@@ -175,9 +181,25 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const splitCCAmount = parseFloat(splitCreditCard) || 0;
   const splitCCNeedsProcessing = splitCCAmount > 0 && !isCreditPaid;
 
+  // Filter recipes based on region AND season type
   const availableRecipes = useMemo(() => {
-    return CONTRACT_RECIPES.filter(r => r.region === region);
-  }, [region]);
+    return CONTRACT_RECIPES.filter(r => {
+      // Must match region
+      if (r.region !== region) return false;
+      
+      // Check season restriction
+      if (r.seasonOnly && r.seasonOnly !== seasonType) return false;
+      
+      // For lawn_rejuv, only allow grub and rejuv_after_care
+      if (seasonType === 'lawn_rejuv') {
+        const allowedAddOns = getAvailableAddOns(seasonType);
+        if (r.type === 'Upgrade') return false; // No upgrades in lawn_rejuv
+        if (r.type === 'Add-On' && !allowedAddOns.includes(r.id)) return false;
+      }
+      
+      return true;
+    });
+  }, [region, seasonType]);
 
   const hasPropertyTypes = selectedRecipe && selectedRecipe.propertyTypes.length > 0;
   const supportsIOS = selectedRecipe?.hasIOS || false;
@@ -265,10 +287,11 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       if (!w) { setError("User not found."); return; }
       setWorker(w);
 
-      // Training mode: Always use West region with 5% tax
+      // Training mode: Always use West region with 5% tax, aeration season
       if (isTrainingMode) {
         setRegion('West');
         setTaxRate(5);
+        setSeasonType('aeration');
         
         // Get routes from training service
         const dailySession = await trainingService.getDailySession();
@@ -310,6 +333,14 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
           setTaxRate(getTaxRateForRegion(cc.region));
         }
 
+        // Get current season type
+        try {
+          const currentSeasonType = await sessionService.getSessionSeasonType();
+          setSeasonType(currentSeasonType);
+        } catch (err) {
+          console.warn("Could not get season type, defaulting to aeration");
+        }
+
         try {
           const dailySession = await sessionService.getDailySession();
           
@@ -341,7 +372,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
               'Prepaid': (tx as any).isPrepaid ? 'x' : undefined,
               'Status': 'completed',
               'FO/BO/FP': (tx as any).serviceType,
-              isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ') || tx.displayPrice.startsWith('GF'))),
+              isContract: ['Upgrade'].includes(tx.type) || (tx.displayPrice && (tx.displayPrice.startsWith('SP') || tx.displayPrice.startsWith('RJ') || tx.displayPrice.startsWith('GF') || tx.displayPrice.startsWith('FSL'))),
               'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined
             } as MasterBooking));
             setAvailableClients(clients);
@@ -352,13 +383,17 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     init();
   }, [isDirectUpgrade, isTrainingMode]);
 
-  // Filter recipes based on mode
+  // Filter recipes based on mode - for lawn_rejuv, no upgrades available
   const displayedRecipes = useMemo(() => {
     if (isDirectUpgrade) {
+      // In lawn_rejuv, no upgrades available at all
+      if (isLawnRejuvSeason) {
+        return []; // No direct upgrades in lawn_rejuv
+      }
       return availableRecipes.filter(r => r.type === 'Upgrade');
     }
     return availableRecipes;
-  }, [availableRecipes, isDirectUpgrade]);
+  }, [availableRecipes, isDirectUpgrade, isLawnRejuvSeason]);
 
   const filteredClients = useMemo(() => {
     if (!selectedRecipe) return [];
@@ -690,7 +725,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
         serviceType: hasPropertyTypes ? formData.propertyType as any : undefined,
         
         region: region, 
-        seasonId: `${region.toLowerCase()}-aeration`
+        seasonId: `${region.toLowerCase()}-${seasonType}`
       } as any;
 
       // Use appropriate service based on training mode
@@ -707,7 +742,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
 
         const session = await sessionService.getActiveLogsheetSession(worker.contractorId);
         if (session) {
-          const newStats = sessionService.recalculateStats(session.financialStore, taxRate);
+          const newStats = sessionService.recalculateStats(session.financialStore, taxRate, seasonType);
           await sessionService.updateLogsheetSession(session.id, { stats: newStats });
         }
       }
@@ -736,12 +771,17 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
             )}
             <h2 className="text-xl font-bold text-white">
               {step === 'SELECT_CONTRACT' 
-                ? (isDirectUpgrade ? 'Select Upgrade Type' : 'Select Contract') 
+                ? (isDirectUpgrade ? 'Select Upgrade Type' : 'Add Contract') 
                 : selectedRecipe?.name}
             </h2>
             {isTrainingMode && (
               <span className="ml-2 px-2 py-0.5 bg-yellow-900/50 border border-yellow-600 rounded text-yellow-400 text-[10px] font-bold">
                 TRAINING
+              </span>
+            )}
+            {isLawnRejuvSeason && !isTrainingMode && (
+              <span className="ml-2 px-2 py-0.5 bg-green-900/50 border border-green-600 rounded text-green-400 text-[10px] font-bold flex items-center gap-1">
+                <Leaf size={10} /> LAWN REJUV
               </span>
             )}
           </div>
@@ -752,19 +792,45 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
 
         <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
           {step === 'SELECT_CONTRACT' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {displayedRecipes.length === 0 ? (
-                <div className="col-span-2 text-center text-gray-500 py-8">
-                  <p>No contracts available for your region.</p>
+            <div className="space-y-4">
+              {/* Season info banner for lawn_rejuv */}
+              {isLawnRejuvSeason && (
+                <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-3 text-sm text-green-300 flex items-center gap-2">
+                  <Leaf size={16} />
+                  <span>
+                    <strong>Lawn Rejuvenation Season:</strong> Only Grub Control and After Care add-ons are available. No upgrades.
+                  </span>
                 </div>
-              ) : (
-                displayedRecipes.map(recipe => (
-                  <button key={recipe.id} onClick={() => handleRecipeSelect(recipe)} className="bg-gray-800 p-4 rounded-lg border border-gray-700 hover:bg-gray-750 hover:border-cps-blue transition-all text-left group">
-                    <h3 className="font-bold text-white group-hover:text-cps-blue mb-1">{recipe.name}</h3>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${recipe.type === 'Upgrade' ? 'bg-purple-900/30 text-purple-300' : 'bg-blue-900/30 text-blue-300'}`}>{recipe.type}</span>
-                  </button>
-                ))
               )}
+              
+              {/* Show message if direct upgrade but no upgrades available */}
+              {isDirectUpgrade && displayedRecipes.length === 0 && (
+                <div className="text-center text-gray-500 py-8">
+                  <AlertCircle size={32} className="mx-auto mb-2 opacity-50" />
+                  <p>Upgrades are not available during Lawn Rejuvenation season.</p>
+                  <button 
+                    onClick={onClose}
+                    className="mt-4 px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              )}
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {displayedRecipes.length === 0 && !isDirectUpgrade ? (
+                  <div className="col-span-2 text-center text-gray-500 py-8">
+                    <p>No contracts available for your region/season.</p>
+                  </div>
+                ) : (
+                  displayedRecipes.map(recipe => (
+                    <button key={recipe.id} onClick={() => handleRecipeSelect(recipe)} className="bg-gray-800 p-4 rounded-lg border border-gray-700 hover:bg-gray-750 hover:border-cps-blue transition-all text-left group">
+                      <h3 className="font-bold text-white group-hover:text-cps-blue mb-1">{recipe.name}</h3>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${recipe.type === 'Upgrade' ? 'bg-purple-900/30 text-purple-300' : 'bg-blue-900/30 text-blue-300'}`}>{recipe.type}</span>
+                    </button>
+                  ))
+                )}
+              </div>
             </div>
           )}
 
