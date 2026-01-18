@@ -1,12 +1,29 @@
 // src/pages/Logsheet/components/LogsheetJobCard.tsx
 import React from 'react';
 import { MapPin, ChevronRight, Check, FileText, Phone, Mail, Clock, X as XIcon } from 'lucide-react';
-import { MasterBooking } from '../../../types';
+import { MasterBooking, ServiceFlags, SERVICE_FLAG_KEYS } from '../../../types';
 
 interface LogsheetJobCardProps {
   job: MasterBooking;
   onClick: () => void;
 }
+
+// Service badge colors
+const SERVICE_BADGE_COLORS: Record<keyof ServiceFlags, { bg: string; text: string; border: string }> = {
+  aeration: { bg: 'bg-blue-900/40', text: 'text-blue-300', border: 'border-blue-600' },
+  dethatch: { bg: 'bg-orange-900/40', text: 'text-orange-300', border: 'border-orange-600' },
+  fertilizer: { bg: 'bg-green-900/40', text: 'text-green-300', border: 'border-green-600' },
+  seed: { bg: 'bg-yellow-900/40', text: 'text-yellow-300', border: 'border-yellow-600' },
+  lime: { bg: 'bg-purple-900/40', text: 'text-purple-300', border: 'border-purple-600' },
+};
+
+const SERVICE_BADGE_LABELS: Record<keyof ServiceFlags, string> = {
+  aeration: 'A',
+  dethatch: 'D',
+  fertilizer: 'F',
+  seed: 'S',
+  lime: 'L',
+};
 
 // Helper: Format price to always show 2 decimal places while preserving prefixes
 const formatPrice = (rawPrice: string | number | undefined): string => {
@@ -14,7 +31,7 @@ const formatPrice = (rawPrice: string | number | undefined): string => {
   
   const priceStr = String(rawPrice).trim();
   
-  // If price is just letters (RJ, SP), return as-is
+  // If price is just letters (RJ, SP, FSL), return as-is
   if (/^[A-Za-z]+$/.test(priceStr)) {
     return priceStr;
   }
@@ -30,7 +47,7 @@ const formatPrice = (rawPrice: string | number | undefined): string => {
   // Format with 2 decimal places
   const formatted = numValue.toFixed(2);
   
-  // If there was a prefix (like RJ, SP), return with prefix
+  // If there was a prefix (like RJ, SP, FSL), return with prefix
   if (prefix) {
     return `${prefix}${formatted}`;
   }
@@ -74,6 +91,30 @@ const formatPaymentDisplay = (job: MasterBooking): string => {
   return 'Paid';
 };
 
+// Service Badges Component
+const ServiceBadges: React.FC<{ services?: ServiceFlags }> = ({ services }) => {
+  if (!services) return null;
+  
+  const activeServices = SERVICE_FLAG_KEYS.filter(key => services[key]);
+  if (activeServices.length === 0) return null;
+  
+  return (
+    <div className="flex items-center gap-1 mt-1">
+      {activeServices.map(key => {
+        const colors = SERVICE_BADGE_COLORS[key];
+        return (
+          <span
+            key={key}
+            className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${colors.bg} ${colors.text} ${colors.border}`}
+          >
+            {SERVICE_BADGE_LABELS[key]}
+          </span>
+        );
+      })}
+    </div>
+  );
+};
+
 const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   const isCompleted = job.Completed === 'x' || job.Status === 'completed';
   const isCancelled = job.Status === 'cancelled';
@@ -85,6 +126,7 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   const propertyType = job['FO/BO/FP'] || 'FP'; 
   const phone = job['Home Phone'] || job['Cell Phone'];
   const email = job['Email Address'];
+  const services = job.services;
   
   // Upsell Info
   const isContract = (job as any).isContract;
@@ -161,7 +203,10 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
            <span className="truncate">{job['Full Address']}</span>
         </div>
 
-        <div className="flex flex-col gap-0.5 mb-1.5">
+        {/* Service Badges */}
+        <ServiceBadges services={services} />
+
+        <div className="flex flex-col gap-0.5 mb-1.5 mt-1">
             {phone && <div className="flex items-center gap-1 text-gray-500 text-[10px]"><Phone size={10} className="shrink-0"/> <span>{phone}</span></div>}
             {email && <div className="flex items-center gap-1 text-gray-500 text-[10px]"><Mail size={10} className="shrink-0"/> <span className="truncate max-w-[180px]">{email}</span></div>}
         </div>

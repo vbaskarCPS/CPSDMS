@@ -4,7 +4,14 @@ import { useNavigate } from 'react-router-dom';
 import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { commandCenterService, getTaxRateForRegion, Region } from '../../lib/commandCenterService';
-import { Worker, SessionTransaction } from '../../types';
+import { 
+  Worker, 
+  SessionTransaction, 
+  SeasonType,
+  ServiceFlags,
+  SERVICE_FLAG_KEYS,
+  SERVICE_FLAG_LABELS 
+} from '../../types';
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
 import CreditCardModal from '../../components/CreditCardModal';
@@ -40,6 +47,67 @@ function capitalizeWords(value: string): string {
     .join(' ');
 }
 
+// --- SERVICE TOGGLE COLORS (Lawn Rejuv) ---
+const SERVICE_TOGGLE_COLORS: Record<keyof ServiceFlags, { active: string; inactive: string }> = {
+  aeration: { 
+    active: 'bg-blue-600 border-blue-500 text-white', 
+    inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-blue-500' 
+  },
+  dethatch: { 
+    active: 'bg-orange-600 border-orange-500 text-white', 
+    inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-orange-500' 
+  },
+  fertilizer: { 
+    active: 'bg-green-600 border-green-500 text-white', 
+    inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-green-500' 
+  },
+  seed: { 
+    active: 'bg-yellow-600 border-yellow-500 text-white', 
+    inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-yellow-500' 
+  },
+  lime: { 
+    active: 'bg-purple-600 border-purple-500 text-white', 
+    inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-purple-500' 
+  },
+};
+
+// --- SERVICE TOGGLES COMPONENT (Lawn Rejuv only) ---
+const ServiceToggles: React.FC<{
+  services: ServiceFlags;
+  onChange: (services: ServiceFlags) => void;
+}> = ({ services, onChange }) => {
+  const toggleService = (key: keyof ServiceFlags) => {
+    onChange({
+      ...services,
+      [key]: !services[key],
+    });
+  };
+
+  return (
+    <div className="space-y-2">
+      <label className="text-[10px] font-bold text-gray-500 uppercase block">Services to Perform</label>
+      <div className="flex flex-wrap gap-2">
+        {SERVICE_FLAG_KEYS.map((key) => {
+          const isActive = services[key];
+          const colors = SERVICE_TOGGLE_COLORS[key];
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => toggleService(key)}
+              className={`px-3 py-1.5 rounded border-2 font-bold text-xs transition-all ${
+                isActive ? colors.active : colors.inactive
+              }`}
+            >
+              {SERVICE_FLAG_LABELS[key].short} - {SERVICE_FLAG_LABELS[key].full}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const NewJob: React.FC = () => {
   const navigate = useNavigate();
 
@@ -49,6 +117,9 @@ const NewJob: React.FC = () => {
   // --- Region and Tax Rate State ---
   const [region, setRegion] = useState<Region>('West');
   const [taxRate, setTaxRate] = useState(5);
+
+  // --- Season type state (for Lawn Rejuv support) ---
+  const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
 
   // --- Form State ---
   const [routeCode, setRouteCode] = useState('');
@@ -61,6 +132,15 @@ const NewJob: React.FC = () => {
   const [amount, setAmount] = useState(''); 
   const [propertyType, setPropertyType] = useState('FP'); 
   
+  // Service Flags (Lawn Rejuv only)
+  const [services, setServices] = useState<ServiceFlags>({
+    aeration: false,
+    dethatch: false,
+    fertilizer: false,
+    seed: false,
+    lime: false,
+  });
+
   // Payment State - Default to empty string to force selection
   const [paymentMethod, setPaymentMethod] = useState('');
   const [etransferEmail, setEtransferEmail] = useState('');
@@ -106,8 +186,8 @@ const NewJob: React.FC = () => {
   // Saving state to prevent double-click
   const [saving, setSaving] = useState(false);
 
-  // --- COMPUTED: Can show upgrade button (West only) ---
-  const canShowUpgradeButton = region === 'West';
+  // --- COMPUTED: Can show upgrade button (West only, Aeration season only) ---
+  const canShowUpgradeButton = region === 'West' && seasonType === 'aeration';
 
   // --- SPLIT PAYMENT HELPERS ---
   const getSplitTotal = () => {
@@ -193,7 +273,7 @@ const NewJob: React.FC = () => {
     }
   };
 
-  // Determine if upgrade button should be enabled (West only, with other conditions)
+  // Determine if upgrade button should be enabled (West only, Aeration season, with other conditions)
   const canUpgrade = upsellsEnabled &&
                      canShowUpgradeButton &&
                      firstName.trim() !== '' && 
@@ -211,14 +291,28 @@ const NewJob: React.FC = () => {
       
       // Get region and tax rate
       if (trainingMode) {
-        // Training is always West
+        // Training is always West, aeration season
         setRegion('West');
         setTaxRate(5);
+        setSeasonType('aeration');
       } else {
         const cc = commandCenterService.getCurrentCommandCenter();
         if (cc) {
           setRegion(cc.region);
           setTaxRate(getTaxRateForRegion(cc.region));
+        }
+        
+        // Get current season type
+        try {
+          const currentSeasonType = await sessionService.getSessionSeasonType();
+          setSeasonType(currentSeasonType);
+          
+          // Default price to 0 for lawn_rejuv
+          if (currentSeasonType === 'lawn_rejuv') {
+            setAmount('0');
+          }
+        } catch (err) {
+          console.warn('Could not get season type, defaulting to aeration');
         }
       }
       
@@ -344,6 +438,15 @@ const NewJob: React.FC = () => {
       setError('Please fix validation errors before saving.');
       return;
     }
+
+    // Lawn Rejuv: Validate at least one service is selected
+    if (seasonType === 'lawn_rejuv') {
+      const hasService = SERVICE_FLAG_KEYS.some(k => services[k]);
+      if (!hasService) {
+        setError('Please select at least one service');
+        return;
+      }
+    }
     
     setSaving(true);
 
@@ -410,7 +513,7 @@ const NewJob: React.FC = () => {
           price: transactionPrice,
           displayPrice: isSplitPayment ? transactionPrice.toFixed(2) : amount, 
           type: 'Sale',
-          items: [{ name: 'Aeration', price: transactionPrice }],
+          items: [{ name: seasonType === 'lawn_rejuv' ? 'Lawn Rejuvenation' : 'Aeration', price: transactionPrice }],
           paymentMethod: finalPaymentMethod,
           paymentBreakdown: paymentBreakdown,
           isPaid: finalPaymentMethod !== 'Billed',
@@ -422,8 +525,11 @@ const NewJob: React.FC = () => {
           itemDescription: 'New Sale',
           serviceType: propertyType as any, 
           region: region, 
-          seasonId: `${region.toLowerCase()}-aeration`,
-          isWestSplit: false
+          seasonId: `${region.toLowerCase()}-${seasonType === 'lawn_rejuv' ? 'lawn-rejuv' : 'aeration'}`,
+          isWestSplit: false,
+          
+          // Include services for Lawn Rejuv season
+          services: seasonType === 'lawn_rejuv' ? services : undefined,
       } as any;
 
       await service.completeJob(transactionData, placeholderJobId, worker.contractorId);
@@ -467,6 +573,11 @@ const NewJob: React.FC = () => {
             {isTrainingMode && (
               <span className="bg-yellow-900/30 text-yellow-400 text-[10px] px-1.5 py-0.5 rounded border border-yellow-700 flex items-center gap-1">
                 <GraduationCap size={10}/> Training
+              </span>
+            )}
+            {seasonType === 'lawn_rejuv' && (
+              <span className="bg-green-900/30 text-green-400 text-[10px] px-1.5 py-0.5 rounded border border-green-700">
+                LAWN REJUV
               </span>
             )}
           </div>
@@ -547,12 +658,27 @@ const NewJob: React.FC = () => {
               </div>
             </div>
 
+            {/* SERVICES (Lawn Rejuv only) */}
+            {seasonType === 'lawn_rejuv' && (
+              <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-700/50">
+                <h3 className="text-sm font-bold text-gray-300 uppercase mb-3">Services</h3>
+                <ServiceToggles services={services} onChange={setServices} />
+              </div>
+            )}
+
             <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-700/50">
-                <h3 className="text-sm font-bold text-gray-300 uppercase mb-3">Services & Pricing</h3>
+                <h3 className="text-sm font-bold text-gray-300 uppercase mb-3">
+                  {seasonType === 'lawn_rejuv' ? 'Pricing' : 'Services & Pricing'}
+                </h3>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Total Amount ($)</label>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">
+                          Total Amount ($)
+                          {seasonType === 'lawn_rejuv' && (
+                            <span className="text-gray-600 font-normal ml-1">(Default: $0 for manual)</span>
+                          )}
+                        </label>
                         <div className="flex gap-2">
                             <input 
                               type="number" 
@@ -604,7 +730,7 @@ const NewJob: React.FC = () => {
                       </select>
                       {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
                       
-                      {/* DIRECT UPGRADE BUTTON - Only show if upsells enabled AND region is West */}
+                      {/* DIRECT UPGRADE BUTTON - Only show if upsells enabled AND region is West AND season is Aeration */}
                       {upsellsEnabled && canShowUpgradeButton && (
                         <button
                           type="button"

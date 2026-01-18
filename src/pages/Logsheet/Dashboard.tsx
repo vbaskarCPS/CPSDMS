@@ -16,6 +16,9 @@ import {
   Phone,
   Check,
   GraduationCap,
+  Truck,
+  X,
+  Copy,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
@@ -23,7 +26,7 @@ import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
 import { subscribeAsContractor } from '../../lib/realtimeService';
 import { supabase } from '../../lib/supabase';
-import { Worker, SessionStats, MasterBooking, ManagementUser } from '../../types';
+import { Worker, SessionStats, MasterBooking, ManagementUser, SeasonType } from '../../types';
 import LogsheetJobCard from './components/LogsheetJobCard';
 import AddContractModal from '../../components/AddContractModal';
 
@@ -50,6 +53,69 @@ const TrainingBanner: React.FC = () => (
   </div>
 );
 
+// Team Members Modal
+const TeamMembersModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+  teammates: Worker[];
+  currentWorkerId: string;
+  onCopyPhone: (phone: string) => void;
+}> = ({ isOpen, onClose, teammates, currentWorkerId, onCopyPhone }) => {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-800 rounded-lg w-full max-w-sm border border-gray-700 shadow-xl">
+        <div className="p-4 border-b border-gray-700 flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <Truck size={20} className="text-green-400" />
+            <h3 className="text-lg font-bold text-white">Your Team</h3>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="p-4 space-y-3">
+          {teammates.map((teammate) => (
+            <div
+              key={teammate.contractorId}
+              className={`p-3 rounded-lg border ${
+                teammate.contractorId === currentWorkerId
+                  ? 'bg-green-900/20 border-green-600'
+                  : 'bg-gray-900/50 border-gray-700'
+              }`}
+            >
+              <div className="flex justify-between items-start">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-white">
+                      {teammate.firstName} {teammate.lastName}
+                    </span>
+                    {teammate.contractorId === currentWorkerId && (
+                      <span className="text-[9px] bg-green-600 text-white px-1.5 py-0.5 rounded">YOU</span>
+                    )}
+                  </div>
+                  <span className="text-xs text-gray-400 font-mono">#{teammate.contractorId}</span>
+                </div>
+                {teammate.cellPhone && (
+                  <button
+                    onClick={() => onCopyPhone(teammate.cellPhone!)}
+                    className="flex items-center gap-1.5 px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded-md transition-colors border border-gray-600"
+                  >
+                    <Phone size={12} className="text-cps-blue" />
+                    <span className="text-xs text-gray-300">{teammate.cellPhone}</span>
+                    <Copy size={10} className="text-gray-500" />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const [worker, setWorker] = useState<Worker | null>(null);
@@ -59,9 +125,17 @@ const Dashboard: React.FC = () => {
   const [showContractModal, setShowContractModal] = useState(false);
   const [hasAssignedRoutes, setHasAssignedRoutes] = useState(false);
   const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('Copied!');
   
   // Training mode state
   const [isTrainingMode, setIsTrainingMode] = useState(false);
+  
+  // Season type state
+  const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
+  
+  // Team state
+  const [teammates, setTeammates] = useState<Worker[]>([]);
+  const [showTeamModal, setShowTeamModal] = useState(false);
   
   // Upsells enabled state
   const [upsellsEnabled, setUpsellsEnabled] = useState(true);
@@ -71,11 +145,15 @@ const Dashboard: React.FC = () => {
   const [jobs, setJobs] = useState<MasterBooking[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  // Check if this is a team season with teammates
+  const hasTeammates = seasonType === 'lawn_rejuv' && teammates.length > 1;
+
   // Copy phone to clipboard
   const handleCopyPhone = async (phone: string) => {
     try {
       const digitsOnly = phone.replace(/\D/g, '');
       await navigator.clipboard.writeText(digitsOnly);
+      setToastMessage('Copied!');
       setShowToast(true);
       setTimeout(() => setShowToast(false), 2000);
     } catch (err) {
@@ -131,6 +209,7 @@ const Dashboard: React.FC = () => {
           setManager(managerData);
 
           setUpsellsEnabled(true); // Always enabled in training
+          setSeasonType('aeration'); // Training is always aeration
         } else {
           // --- PRODUCTION MODE: Use sessionService ---
           const isLockedOut = await sessionService.isWorkerLockedOut(storedWorker.contractorId);
@@ -138,6 +217,10 @@ const Dashboard: React.FC = () => {
             forceLogout();
             return;
           }
+
+          // Get season type
+          const currentSeasonType = await sessionService.getSessionSeasonType();
+          setSeasonType(currentSeasonType);
 
           const session = await sessionService.startLogsheetSession(storedWorker.contractorId);
           setStats(session.stats);
@@ -151,6 +234,16 @@ const Dashboard: React.FC = () => {
               r => r.assignedWorkerIds && r.assignedWorkerIds.includes(storedWorker.contractorId)
             );
             setHasAssignedRoutes(myRoutes.length > 0);
+
+            // Get teammates for lawn_rejuv season
+            if (currentSeasonType === 'lawn_rejuv' && dailySession.teamCarts) {
+              const myCart = dailySession.teamCarts.find(cart => 
+                cart.workerIds.includes(storedWorker.contractorId)
+              );
+              if (myCart && myCart.workers) {
+                setTeammates(myCart.workers);
+              }
+            }
           }
 
           if (storedWorker.assignedManagerId) {
@@ -203,10 +296,7 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     if (!worker || isTrainingMode) return;
 
-    const unsubscribe = subscribeAsContractor(
-      worker.contractorId,
-      () => setRefreshKey((prev) => prev + 1)
-    );
+    const unsubscribe = subscribeAsContractor(() => setRefreshKey((prev) => prev + 1));
 
     return () => unsubscribe();
   }, [worker?.contractorId, isTrainingMode]);
@@ -248,7 +338,7 @@ const Dashboard: React.FC = () => {
       {isTrainingMode && <TrainingBanner />}
 
       {/* Toast Notification */}
-      <Toast message="Copied!" show={showToast} />
+      <Toast message={toastMessage} show={showToast} />
 
       <div className="sticky top-0 z-30 bg-black/90 backdrop-blur-md border-b border-gray-800 p-4 pb-2">
         <div className="flex justify-between items-start mb-2">
@@ -256,12 +346,27 @@ const Dashboard: React.FC = () => {
             <div className="flex items-center gap-2 text-white font-bold text-lg">
               <Calendar size={18} className="text-cps-blue" />
               {format(new Date(), 'EEE, MMM d')}
+              {seasonType === 'lawn_rejuv' && (
+                <span className="text-[9px] bg-green-900/50 text-green-300 px-1.5 py-0.5 rounded border border-green-700">
+                  LAWN REJUV
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2 text-gray-400 text-xs mt-1">
               <span>{worker?.firstName} {worker?.lastName}</span>
               <span className={`px-1.5 rounded border ${isTrainingMode ? 'bg-yellow-900/30 border-yellow-700 text-yellow-400' : 'bg-gray-800 border-gray-700'}`}>
                 #{worker?.contractorId}
               </span>
+              {/* Team Indicator */}
+              {hasTeammates && (
+                <button
+                  onClick={() => setShowTeamModal(true)}
+                  className="flex items-center gap-1 px-1.5 py-0.5 bg-green-900/30 border border-green-700 rounded text-green-400 hover:bg-green-900/50 transition-colors"
+                >
+                  <Truck size={12} />
+                  <span className="text-[10px] font-bold">{teammates.length}</span>
+                </button>
+              )}
             </div>
           </div>
           <div className="flex gap-2">
@@ -404,9 +509,18 @@ const Dashboard: React.FC = () => {
             setShowContractModal(false);
             setRefreshKey((k) => k + 1);
           }}
-          isTrainingMode={isTrainingMode}
+          seasonType={seasonType}
         />
       )}
+
+      {/* Team Members Modal */}
+      <TeamMembersModal
+        isOpen={showTeamModal}
+        onClose={() => setShowTeamModal(false)}
+        teammates={teammates}
+        currentWorkerId={worker?.contractorId || ''}
+        onCopyPhone={handleCopyPhone}
+      />
 
       {/* Toast Animation Styles */}
       <style>{`
