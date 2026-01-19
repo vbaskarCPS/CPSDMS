@@ -30,7 +30,7 @@ import { googleSheetsService } from '../../lib/googleSheetsService';
 import { getDateTabError } from '../../lib/googleSheetsConfig';
 import { commandCenterService, regionHasSeasonSelection } from '../../lib/commandCenterService';
 import { removeStorageItem } from '../../lib/localStorage';
-import { DailySessionData, SortOption, LogsheetSession, SeasonType, SEASON_CONFIGS } from '../../types';
+import { DailySessionData, SortOption, LogsheetSession, SeasonType, SEASON_CONFIGS, EQ_DIVISOR } from '../../types';
 import PayoutToday from '../Management/PayoutToday';
 
 const SessionCommandCenter: React.FC = () => {
@@ -580,7 +580,7 @@ const SessionCommandCenter: React.FC = () => {
                                 <Wind size={24} className={selectedSeasonType === 'aeration' ? 'text-blue-400' : 'text-gray-500'} />
                                 <span className="font-bold">Aeration</span>
                                 <span className="text-[10px] text-gray-500">
-                                  $25/EQ • SP/RJ Flats • 50% Prepaid
+                                  $8/EQ • SP/RJ Flats • 50% Prepaid
                                 </span>
                               </button>
                               <button
@@ -607,7 +607,8 @@ const SessionCommandCenter: React.FC = () => {
                             }`}>
                               <div className="font-bold mb-1">{seasonConfig.displayName}</div>
                               <div className="text-gray-400 space-y-0.5">
-                                <div>• EQ Rate: ${seasonConfig.eqRateSolo} solo{selectedSeasonType === 'lawn_rejuv' ? `, $${seasonConfig.eqRateTeam} team` : ''}</div>
+                                <div>• EQ Calculation: prodPayable / {EQ_DIVISOR} (always)</div>
+                                <div>• Payout Rate: ${seasonConfig.payoutRateSolo}/EQ solo{selectedSeasonType === 'lawn_rejuv' ? `, $${seasonConfig.payoutRateTeam}/EQ team (2+)` : ''}</div>
                                 <div>• Prepaid Weight: {seasonConfig.prepaidWeight * 100}%</div>
                                 <div>• Office Flats: {seasonConfig.officeFlats.map(f => `${f.code} ($${f.value})`).join(', ')}</div>
                                 {selectedSeasonType === 'lawn_rejuv' && (

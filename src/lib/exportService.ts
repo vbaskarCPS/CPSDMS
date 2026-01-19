@@ -4,7 +4,7 @@ import { supabase } from './supabase';
 import { commandCenterService, seasonHasTeams, getSeasonConfig } from './commandCenterService';
 import { sessionService } from './sessionService';
 import { googleSheetsService } from './googleSheetsService';
-import { LogsheetSession, Worker, ManagementUser, SeasonType, ServiceFlags } from '../types';
+import { LogsheetSession, Worker, ManagementUser, SeasonType, ServiceFlags, EQ_DIVISOR } from '../types';
 
 // Helper to get CC ID with error handling
 const getCCId = (): string => {
@@ -458,13 +458,19 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     const teamId = worker?.metadata?.teamId || '';
     
     // Calculate commissions with season-aware rates
-    const payoutRate = worker?.metadata?.alumniRate || 0.40;
-    const eqRate = teamSize >= 2 ? config.eqRateTeam : config.eqRateSolo;
+    // alumniRate here refers to the worker's individual payout multiplier (e.g., 0.40 = 40% raise)
+    const workerAlumniRate = worker?.metadata?.alumniRate || 0;
     
-    // For team seasons, EQ commission is calculated differently
+    // payoutRatePerEQ is the $/EQ commission rate based on season and team size
+    // Aeration: $8/EQ for everyone
+    // Lawn Rejuv: $6/EQ solo, $8/EQ for teams of 2+
+    const payoutRatePerEQ = teamSize >= 2 ? config.payoutRateTeam : config.payoutRateSolo;
+    
+    // For team seasons, production commission = totalEQ * payoutRatePerEQ * (1 + alumniRate)
+    // For aeration, it's the legacy formula: prodPayable * alumniRate (percentage of payable)
     const productionComm = isTeamSeason
-      ? (stats.totalEQ || 0) * eqRate * (1 + payoutRate)
-      : (stats.prodPayable || 0) * payoutRate;
+      ? (stats.totalEQ || 0) * payoutRatePerEQ * (1 + workerAlumniRate)
+      : (stats.prodPayable || 0) * workerAlumniRate;
     
     const upsellComm = (stats.upsellPayable || 0) * 0.15;
     const iosComm = (stats.iosCount || 0) * 5;
@@ -501,7 +507,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       upsellPrepaid: stats.upsellPrepaid || 0,
       upsellGross: stats.upsellGross || 0,
       upsellPayable: stats.upsellPayable || 0,
-      payoutRate,
+      payoutRate: workerAlumniRate,
       productionComm,
       upsellComm,
       iosComm,
