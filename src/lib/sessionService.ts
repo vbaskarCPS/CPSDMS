@@ -118,6 +118,9 @@ class SessionService {
   /**
    * Recalculates a worker's stats from their transactions and saves to the DB.
    * Called after any transaction modification to keep stats in sync.
+   * 
+   * TEAM-AWARE: Automatically detects if worker is part of a team session
+   * and aggregates transactions from ALL team members.
    */
   private async recalculateAndSaveWorkerStats(workerId: string): Promise<void> {
     try {
@@ -128,26 +131,62 @@ class SessionService {
       // Get season type for this session
       const seasonType = await this.getSessionSeasonType();
 
-      // 1. Fetch all transactions for this worker in this CC
+      // 1. Find the session for this worker (handles both solo and team sessions)
+      // First check for team session where worker is a member
+      let sessionData: any = null;
+      
+      const { data: teamSession } = await supabase
+        .from('logsheet_sessions')
+        .select('*')
+        .eq('date', date)
+        .eq('command_center_id', ccId)
+        .contains('team_worker_ids', [workerId])
+        .maybeSingle();
+
+      if (teamSession) {
+        sessionData = teamSession;
+      } else {
+        // Fall back to direct worker_id match (solo session or primary worker)
+        const { data: soloSession } = await supabase
+          .from('logsheet_sessions')
+          .select('*')
+          .eq('worker_id', workerId)
+          .eq('date', date)
+          .eq('command_center_id', ccId)
+          .maybeSingle();
+        
+        sessionData = soloSession;
+      }
+
+      if (!sessionData) {
+        console.warn(`No session found for worker ${workerId} on ${date}`);
+        return;
+      }
+
+      // 2. Determine all worker IDs to query transactions for
+      const teamWorkerIds = hasItems(sessionData.team_worker_ids) 
+        ? sessionData.team_worker_ids 
+        : [sessionData.worker_id];
+
+      // 3. Fetch ALL transactions for ALL team members
       const { data: transactions } = await supabase
         .from('transactions')
         .select('*')
-        .eq('worker_id', workerId)
+        .in('worker_id', teamWorkerIds)
         .eq('command_center_id', ccId);
 
-      // 2. Map to SessionTransaction format
+      // 4. Map to SessionTransaction format
       const cleanFinancials = (transactions || []).map(tx => this.mapDbTransaction(tx));
 
-      // 3. Recalculate stats with region-appropriate tax rate and season config
+      // 5. Recalculate stats with region-appropriate tax rate and season config
       const taxRate = this.getCurrentTaxRate();
       const newStats = this.recalculateStats(cleanFinancials, taxRate, seasonType);
 
-      // 4. Save to logsheet_sessions
+      // 6. Save to logsheet_sessions by SESSION ID (not worker_id)
       const { error } = await supabase
         .from('logsheet_sessions')
         .update({ stats: newStats })
-        .eq('worker_id', workerId)
-        .eq('date', date)
+        .eq('id', sessionData.id)
         .eq('command_center_id', ccId);
 
       if (error) {
@@ -159,12 +198,15 @@ class SessionService {
   }
 
   /**
-   * For team sessions, recalculate stats for all team members
+   * For team sessions, recalculate stats for the shared session.
+   * Since recalculateAndSaveWorkerStats is now team-aware, we only need to call it once.
    */
   private async recalculateTeamStats(teamWorkerIds: string[]): Promise<void> {
-    for (const workerId of teamWorkerIds) {
-      await this.recalculateAndSaveWorkerStats(workerId);
-    }
+    if (!hasItems(teamWorkerIds)) return;
+    
+    // Just call once with any team member - the method will find the shared session
+    // and aggregate all team transactions
+    await this.recalculateAndSaveWorkerStats(teamWorkerIds[0]);
   }
 
   // --- 2. FETCHING ---
@@ -1745,12 +1787,8 @@ class SessionService {
         .eq('command_center_id', ccId);
     }
 
-    // Recalculate stats
-    if (hasItems(teamWorkerIds)) {
-      await this.recalculateTeamStats(teamWorkerIds);
-    } else {
-      await this.recalculateAndSaveWorkerStats(workerId);
-    }
+    // Recalculate stats - the method is now team-aware and will handle everything
+    await this.recalculateAndSaveWorkerStats(workerId);
 
     // Send email receipt
     if (transaction.customerEmail && transaction.customerEmail.trim() !== '') {
