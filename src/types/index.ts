@@ -29,6 +29,11 @@ export const SERVICE_FLAG_LABELS: Record<keyof ServiceFlags, { short: string; fu
   lime: { short: 'L', full: 'Lime' },
 };
 
+// --- EQ CALCULATION CONSTANT ---
+// EQ (Equivalent) is ALWAYS calculated as: prodPayable / 25
+// This divisor NEVER changes regardless of season
+export const EQ_DIVISOR = 25;
+
 export interface CommandCenter {
   id: string;
   username: string;
@@ -217,7 +222,7 @@ export interface WorkerPayoutBreakdown {
   
   // Calculated values
   assignedEQ: number;           // totalEQ * equivSplitPercent
-  baseCommission: number;       // assignedEQ * eqRate
+  baseCommission: number;       // assignedEQ * payoutRate
   alumniBonus: number;          // baseCommission * alumniRate
   silverBonus: number;          // baseCommission * silverRate
   productionCommission: number; // baseCommission + alumniBonus + silverBonus
@@ -402,9 +407,10 @@ export interface SeasonConfig {
   prepaidWeight: number;      // 0.5 for aeration, 0.7 for lawn_rejuv
   billedWeight: number;       // 0.5 for both
   
-  // EQ Calculation
-  eqRateSolo: number;         // $25 for aeration, $6 for lawn_rejuv
-  eqRateTeam: number;         // $25 for aeration, $8 for lawn_rejuv (2+ members)
+  // PAYOUT RATES ($/EQ for commission calculation)
+  // NOTE: These are NOT for EQ calculation! EQ is always prodPayable / 25
+  payoutRateSolo: number;     // $8 for aeration, $6 for lawn_rejuv solo
+  payoutRateTeam: number;     // $8 for aeration, $8 for lawn_rejuv team (2+)
   
   // Office Flats
   officeFlats: {
@@ -423,8 +429,9 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
     displayName: 'Aeration Season',
     prepaidWeight: 0.5,
     billedWeight: 0.5,
-    eqRateSolo: 25,
-    eqRateTeam: 25,
+    // Payout rates for aeration: $8/EQ for everyone
+    payoutRateSolo: 8,
+    payoutRateTeam: 8,
     officeFlats: [
       { code: 'SP', value: 52.5 },
       { code: 'RJ', value: 52.5 },
@@ -437,8 +444,9 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
     displayName: 'Lawn Rejuvenation Season',
     prepaidWeight: 0.7,
     billedWeight: 0.5,
-    eqRateSolo: 6,
-    eqRateTeam: 8,
+    // Payout rates for lawn rejuv: $6/EQ solo, $8/EQ for teams of 2+
+    payoutRateSolo: 6,
+    payoutRateTeam: 8,
     officeFlats: [
       { code: 'FSL', value: 157.5 },
     ],

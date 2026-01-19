@@ -26,6 +26,7 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
+import { getPayoutRate, EQ_DIVISOR } from '../../lib/commandCenterService';
 import { 
   LogsheetSession, 
   Worker, 
@@ -469,24 +470,19 @@ const PayoutContractor: React.FC = () => {
 
   // System/Projected EQ (based on Stats)
   const projectedProdPayable = stats.prodGross / taxDivisor;
-  const projectedEQ = projectedProdPayable / 25;
+  const projectedEQ = projectedProdPayable / EQ_DIVISOR;
 
   // Actual EQ (based on Inputs)
   const systemProdNonCash = stats.prodGross - stats.prodCash - stats.prodCheque;
   const actualProdGross = systemProdNonCash + actualProdCash + actualProdCheque;
   const actualProdPayable = actualProdGross / taxDivisor;
-  const actualTotalEQ = actualProdPayable / 25;
+  const actualTotalEQ = actualProdPayable / EQ_DIVISOR;
 
-  // 3. Season-aware Base Rate
-  const getBaseRate = (): number => {
-    if (seasonType === 'aeration') {
-      return 8.0; // Aeration: $8.00 per EQ
-    }
-    // Lawn Rejuv: $6 solo, $8 team
-    return isTeamSession ? 8.0 : 6.0;
-  };
-
-  const baseRate = getBaseRate();
+  // 3. Season-aware Payout Rate ($/EQ for commission calculation)
+  // Use getPayoutRate from commandCenterService for consistency
+  const teamSize = isTeamSession ? teamWorkers.length : 1;
+  const baseRate = getPayoutRate(seasonType, teamSize);
+  
   const alumniRate = worker?.alumniRate || 0;
   const silverRate = worker?.silverRate || 0;
   const totalRate = baseRate + alumniRate + silverRate;
@@ -871,9 +867,9 @@ const PayoutContractor: React.FC = () => {
                 <span>
                   Steps: <b className="text-white">{stats.stepCount}</b>
                 </span>
-                {/* Base Rate Display */}
+                {/* Payout Rate Display */}
                 <span className="text-xs">
-                  Base Rate: <b className="text-white">${baseRate.toFixed(2)}/EQ</b>
+                  Payout Rate: <b className="text-white">${baseRate.toFixed(2)}/EQ</b>
                   {isTeamSession && seasonType === 'lawn_rejuv' && (
                     <span className="text-green-400 ml-1">(Team)</span>
                   )}

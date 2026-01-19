@@ -5,10 +5,11 @@ import {
   getSeasonConfig, 
   getPrepaidWeight, 
   getBilledWeight,
-  getEQRate,
+  getPayoutRate,
   isOfficeFlat,
   seasonHasTeams,
-  createEqualSplit
+  createEqualSplit,
+  EQ_DIVISOR
 } from './commandCenterService';
 import {
   DailySessionData,
@@ -1606,7 +1607,7 @@ class SessionService {
    * Season-aware stats recalculation
    * - Handles FSL flat for lawn_rejuv (instead of SP/RJ)
    * - Uses season-specific prepaid/billed weights
-   * - Calculates EQ based on season rates
+   * - EQ calculation ALWAYS uses EQ_DIVISOR (25) regardless of season
    */
   public recalculateStats(
     financials: SessionTransaction[], 
@@ -1692,9 +1693,9 @@ class SessionService {
 
     stats.prodPayable = weightedProd / taxDivisor;
     
-    // EQ calculation uses $25 base regardless of season
-    // (The EQ rate for payout comes later in commission calculation)
-    stats.totalEQ = stats.prodPayable / 25;
+    // EQ calculation ALWAYS uses EQ_DIVISOR (25) regardless of season
+    // The payout rate ($/EQ) is what changes per season, not the EQ divisor
+    stats.totalEQ = stats.prodPayable / EQ_DIVISOR;
     
     stats.upsellGross = stats.upsellBilled + stats.upsellCash + stats.upsellCheque + 
                         stats.upsellETransfer + stats.upsellCreditCard + stats.upsellPrepaid;
@@ -1707,6 +1708,7 @@ class SessionService {
 
   /**
    * Calculate individual worker payouts for a team session
+   * Uses getPayoutRate() to determine $/EQ for commission calculation
    */
   public calculateTeamPayouts(
     session: LogsheetSession,
@@ -1716,9 +1718,10 @@ class SessionService {
     const stats = session.stats;
     const equivSplit = session.equivSplit || createEqualSplit(session.teamWorkerIds || [session.workerId]);
     const upsellSplit = session.upsellSplit || equivSplit;
-    const config = getSeasonConfig(seasonType);
     const teamSize = session.teamWorkerIds?.length || 1;
-    const eqRate = getEQRate(seasonType, teamSize);
+    
+    // Get the PAYOUT rate ($/EQ), not the EQ divisor
+    const payoutRate = getPayoutRate(seasonType, teamSize);
     
     const breakdowns: WorkerPayoutBreakdown[] = [];
     
@@ -1734,8 +1737,8 @@ class SessionService {
       // Calculate assigned EQ
       const assignedEQ = stats.totalEQ * equivPercent;
       
-      // Base commission (EQ * rate)
-      const baseCommission = assignedEQ * eqRate;
+      // Base commission (EQ * payout rate)
+      const baseCommission = assignedEQ * payoutRate;
       
       // Apply individual rates
       const alumniRate = worker.alumniRate || 0;

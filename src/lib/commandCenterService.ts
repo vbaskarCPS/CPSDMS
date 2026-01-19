@@ -1,7 +1,10 @@
 // src/lib/commandCenterService.ts
 import { supabase } from './supabase';
 import { getStorageItem, setStorageItem, removeStorageItem } from './localStorage';
-import { SeasonType, SeasonConfig, SEASON_CONFIGS, TeamSplitConfig } from '../types';
+import { SeasonType, SeasonConfig, SEASON_CONFIGS, TeamSplitConfig, EQ_DIVISOR } from '../types';
+
+// Re-export EQ_DIVISOR for convenience
+export { EQ_DIVISOR };
 
 // --- TYPES ---
 export type Region = 'West' | 'Central' | 'East';
@@ -93,10 +96,19 @@ export const isOfficeFlat = (displayPrice: string | undefined, seasonType: Seaso
   return config.officeFlats.some(f => displayPrice.startsWith(f.code));
 };
 
-// --- GET EQ RATE ---
-export const getEQRate = (seasonType: SeasonType, teamSize: number): number => {
+// --- GET PAYOUT RATE ($/EQ for commission calculation) ---
+// NOTE: This is for PAYOUT calculation, NOT for EQ calculation!
+// EQ is always calculated as: prodPayable / EQ_DIVISOR (25)
+export const getPayoutRate = (seasonType: SeasonType, teamSize: number): number => {
   const config = getSeasonConfig(seasonType);
-  return teamSize >= 2 ? config.eqRateTeam : config.eqRateSolo;
+  return teamSize >= 2 ? config.payoutRateTeam : config.payoutRateSolo;
+};
+
+// --- DEPRECATED: Use getPayoutRate instead ---
+// Keeping for backwards compatibility during transition
+export const getEQRate = (seasonType: SeasonType, teamSize: number): number => {
+  console.warn('getEQRate is deprecated. Use getPayoutRate instead.');
+  return getPayoutRate(seasonType, teamSize);
 };
 
 // --- GET PREPAID WEIGHT ---
