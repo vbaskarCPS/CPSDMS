@@ -24,7 +24,7 @@ import {
   Camera,
   Truck,
 } from 'lucide-react';
-import {
+import type {
   Worker,
   SortOption,
   ManagementUser,
@@ -33,7 +33,6 @@ import {
   BonusType,
   SessionTransaction,
   SeasonType,
-  TeamSplitConfig,
 } from '../../types';
 import { sessionService } from '../../lib/sessionService';
 import { seasonHasTeams, createEqualSplit } from '../../lib/commandCenterService';
