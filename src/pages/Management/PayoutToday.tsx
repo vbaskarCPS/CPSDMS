@@ -22,9 +22,13 @@ import {
   Check,
   AlertTriangle,
   Camera,
+  Truck,
+  Phone,
+  Copy,
 } from 'lucide-react';
-import { Worker, SortOption, ManagementUser, LogsheetSession, Bonus, BonusType, SessionTransaction } from '../../types';
+import { Worker, SortOption, ManagementUser, LogsheetSession, Bonus, BonusType, SessionTransaction, SeasonType, TeamCart } from '../../types';
 import { sessionService } from '../../lib/sessionService';
+import { commandCenterService, seasonHasTeams, createEqualSplit } from '../../lib/commandCenterService';
 
 // Import SVG icons for achievements
 import GreenJacketIcon from '../../assets/green-jacket.svg';
@@ -79,6 +83,19 @@ interface BonusWinner {
   eq: number;
   upsellGross: number;
   finalCommission: number;
+}
+
+// Team cart with session data
+interface TeamCartWithSession {
+  teamId: string;
+  workers: Worker[];
+  session: LogsheetSession | null;
+  combinedStats: {
+    stepCount: number;
+    upsellGross: number;
+    totalEQ: number;
+    totalCommission: number;
+  };
 }
 
 // Dynamic sizing based on total bonus count and column count
@@ -450,10 +467,16 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const [items, setItems] = useState<
     { worker: Worker; session: LogsheetSession }[]
   >([]);
+  
+  // Season type state
+  const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
+  const isTeamSeason = seasonHasTeams(seasonType);
 
   const [showBonusModal, setShowBonusModal] = useState(false);
   const [selectedSession, setSelectedSession] = useState<LogsheetSession | null>(null);
   const [selectedWorkerName, setSelectedWorkerName] = useState<string>('');
+  // For team seasons, track team members for split
+  const [selectedTeamWorkers, setSelectedTeamWorkers] = useState<Worker[]>([]);
   
   const [showScreenshotModal, setShowScreenshotModal] = useState(false);
   
@@ -462,10 +485,16 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const [bonusPlacing, setBonusPlacing] = useState<number | 'other' | ''>('');
   const [bonusCustomDesc, setBonusCustomDesc] = useState('');
   const [bonusAmount, setBonusAmount] = useState('');
+  // Bonus split percentages for team seasons
+  const [bonusSplitPercentages, setBonusSplitPercentages] = useState<Record<string, number>>({});
 
   const loadData = async () => {
     setLoading(true);
     try {
+      // Get season type
+      const currentSeasonType = await sessionService.getSessionSeasonType();
+      setSeasonType(currentSeasonType);
+      
       const allSessions = await sessionService.getLogsheetSessions();
 
       const merged = allSessions
@@ -492,6 +521,62 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     }
   }, [date, workers]);
 
+  // Build team carts for lawn_rejuv season
+  const teamCarts = useMemo<TeamCartWithSession[]>(() => {
+    if (!isTeamSeason) return [];
+    
+    const cartMap = new Map<string, TeamCartWithSession>();
+    
+    items.forEach(({ worker, session }) => {
+      const teamId = session.teamWorkerIds?.length ? 
+        (worker.teamId || session.workerId) : 
+        worker.contractorId;
+      
+      if (!cartMap.has(teamId)) {
+        cartMap.set(teamId, {
+          teamId,
+          workers: [],
+          session: null,
+          combinedStats: {
+            stepCount: 0,
+            upsellGross: 0,
+            totalEQ: 0,
+            totalCommission: 0,
+          },
+        });
+      }
+      
+      const cart = cartMap.get(teamId)!;
+      
+      // Add worker if not already present
+      if (!cart.workers.find(w => w.contractorId === worker.contractorId)) {
+        cart.workers.push(worker);
+      }
+      
+      // Use the session (all team members share same session)
+      if (!cart.session) {
+        cart.session = session;
+      }
+    });
+    
+    // Calculate combined stats for each cart
+    cartMap.forEach(cart => {
+      if (cart.session) {
+        const isValidated = cart.session.validation?.isValidated || false;
+        cart.combinedStats = {
+          stepCount: cart.session.stats.stepCount || 0,
+          upsellGross: cart.session.stats.upsellGross || 0,
+          totalEQ: isValidated ? 
+            (cart.session.validation?.actualTotalEQ || 0) : 
+            (cart.session.stats.totalEQ || 0),
+          totalCommission: cart.session.validation?.finalCommission || 0,
+        };
+      }
+    });
+    
+    return Array.from(cartMap.values());
+  }, [items, isTeamSeason]);
+
   const aggregatedStats = useMemo<AggregatedStats>(() => {
     const stats: AggregatedStats = {
       workerCount: items.length,
@@ -510,39 +595,77 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
     let totalEQ = 0;
 
-    items.forEach(({ session }) => {
-      const s = session.stats;
-      const v = session.validation;
-      const isValidated = v?.isValidated || false;
+    // For team seasons, aggregate from team carts to avoid double counting
+    if (isTeamSeason) {
+      stats.workerCount = teamCarts.reduce((sum, cart) => sum + cart.workers.length, 0);
+      
+      teamCarts.forEach((cart) => {
+        if (!cart.session) return;
+        const s = cart.session.stats;
+        const v = cart.session.validation;
+        const isValidated = v?.isValidated || false;
 
-      stats.totalSteps += s.stepCount || 0;
+        stats.totalSteps += s.stepCount || 0;
+        
+        const prodCash = isValidated ? (v?.actualProdCash || 0) : (s.prodCash || 0);
+        const prodCheque = isValidated ? (v?.actualProdCheque || 0) : (s.prodCheque || 0);
+        const prodGrossCalc = (s.prodPrepaid || 0) + (s.prodBilled || 0) + prodCash + prodCheque + 
+                             (s.prodETransfer || 0) + (s.prodCreditCard || 0) + 
+                             (s.prodFlats || 0) + (s.prodPrepaidSplit || 0);
+        stats.prodGross += prodGrossCalc;
 
-      const prodCash = isValidated ? (v?.actualProdCash || 0) : (s.prodCash || 0);
-      const prodCheque = isValidated ? (v?.actualProdCheque || 0) : (s.prodCheque || 0);
-      const prodGrossCalc = (s.prodPrepaid || 0) + (s.prodBilled || 0) + prodCash + prodCheque + 
-                           (s.prodETransfer || 0) + (s.prodCreditCard || 0) + 
-                           (s.prodFlats || 0) + (s.prodPrepaidSplit || 0);
-      stats.prodGross += prodGrossCalc;
+        const eq = isValidated ? (v?.actualTotalEQ || 0) : (s.totalEQ || 0);
+        totalEQ += eq;
 
-      const eq = isValidated ? (v?.actualTotalEQ || 0) : (s.totalEQ || 0);
-      totalEQ += eq;
+        stats.upsellCount += s.upsellCount || 0;
+        stats.upsellGross += s.upsellGross || 0;
 
-      stats.upsellCount += s.upsellCount || 0;
-      stats.upsellGross += s.upsellGross || 0;
+        stats.totalCash += prodCash + (s.upsellCash || 0);
+        stats.totalCheque += prodCheque + (s.upsellCheque || 0);
+        stats.totalETransfer += (s.prodETransfer || 0) + (s.upsellETransfer || 0);
+        stats.totalCreditCard += (s.prodCreditCard || 0) + (s.upsellCreditCard || 0);
+        stats.totalPrepaid += (s.prodFlats || 0) + (s.prodPrepaid || 0) + 
+                             (s.prodPrepaidSplit || 0) + (s.upsellPrepaid || 0);
+        stats.totalBilled += s.prodBilled || 0;
+      });
+      
+      stats.avgEQ = teamCarts.length > 0 ? totalEQ / teamCarts.length : 0;
+    } else {
+      // Aeration season - aggregate from individual workers
+      items.forEach(({ session }) => {
+        const s = session.stats;
+        const v = session.validation;
+        const isValidated = v?.isValidated || false;
 
-      stats.totalCash += prodCash + (s.upsellCash || 0);
-      stats.totalCheque += prodCheque + (s.upsellCheque || 0);
-      stats.totalETransfer += (s.prodETransfer || 0) + (s.upsellETransfer || 0);
-      stats.totalCreditCard += (s.prodCreditCard || 0) + (s.upsellCreditCard || 0);
-      stats.totalPrepaid += (s.prodFlats || 0) + (s.prodPrepaid || 0) + 
-                           (s.prodPrepaidSplit || 0) + (s.upsellPrepaid || 0);
-      stats.totalBilled += s.prodBilled || 0;
-    });
+        stats.totalSteps += s.stepCount || 0;
 
-    stats.avgEQ = items.length > 0 ? totalEQ / items.length : 0;
+        const prodCash = isValidated ? (v?.actualProdCash || 0) : (s.prodCash || 0);
+        const prodCheque = isValidated ? (v?.actualProdCheque || 0) : (s.prodCheque || 0);
+        const prodGrossCalc = (s.prodPrepaid || 0) + (s.prodBilled || 0) + prodCash + prodCheque + 
+                             (s.prodETransfer || 0) + (s.prodCreditCard || 0) + 
+                             (s.prodFlats || 0) + (s.prodPrepaidSplit || 0);
+        stats.prodGross += prodGrossCalc;
+
+        const eq = isValidated ? (v?.actualTotalEQ || 0) : (s.totalEQ || 0);
+        totalEQ += eq;
+
+        stats.upsellCount += s.upsellCount || 0;
+        stats.upsellGross += s.upsellGross || 0;
+
+        stats.totalCash += prodCash + (s.upsellCash || 0);
+        stats.totalCheque += prodCheque + (s.upsellCheque || 0);
+        stats.totalETransfer += (s.prodETransfer || 0) + (s.upsellETransfer || 0);
+        stats.totalCreditCard += (s.prodCreditCard || 0) + (s.upsellCreditCard || 0);
+        stats.totalPrepaid += (s.prodFlats || 0) + (s.prodPrepaid || 0) + 
+                             (s.prodPrepaidSplit || 0) + (s.upsellPrepaid || 0);
+        stats.totalBilled += s.prodBilled || 0;
+      });
+
+      stats.avgEQ = items.length > 0 ? totalEQ / items.length : 0;
+    }
 
     return stats;
-  }, [items]);
+  }, [items, teamCarts, isTeamSeason]);
 
   const bonusWinners = useMemo(() => {
     const winners: {
@@ -679,8 +802,43 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     });
   }, [items, searchTerm, sortOption, managers]);
 
+  // Sort team carts
+  const sortedTeamCarts = useMemo(() => {
+    if (!isTeamSeason) return [];
+    
+    let filtered = teamCarts;
+    if (searchTerm) {
+      const lower = searchTerm.toLowerCase();
+      filtered = filtered.filter(cart => 
+        cart.workers.some(w => 
+          w.firstName.toLowerCase().includes(lower) ||
+          w.lastName.toLowerCase().includes(lower) ||
+          w.contractorId.includes(lower)
+        )
+      );
+    }
+
+    return [...filtered].sort((a, b) => {
+      switch (sortOption) {
+        case 'steps':
+          return b.combinedStats.stepCount - a.combinedStats.stepCount;
+        case 'equiv':
+          return b.combinedStats.totalEQ - a.combinedStats.totalEQ;
+        case 'upGross':
+          return b.combinedStats.upsellGross - a.combinedStats.upsellGross;
+        case 'commission':
+          return b.combinedStats.totalCommission - a.combinedStats.totalCommission;
+        default:
+          // Sort by first worker's last name
+          const aName = a.workers[0]?.lastName || '';
+          const bName = b.workers[0]?.lastName || '';
+          return aName.localeCompare(bName);
+      }
+    });
+  }, [teamCarts, searchTerm, sortOption, isTeamSeason]);
+
   const groupedByManager = useMemo(() => {
-    if (sortOption !== 'standard') return null;
+    if (sortOption !== 'standard' || isTeamSeason) return null;
     
     const groups: Record<string, { 
       manager: ManagementUser | null; 
@@ -728,22 +886,33 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       const bName = b.manager?.name || 'ZZZ';
       return aName.localeCompare(bName);
     });
-  }, [sortedItems, sortOption, managers]);
+  }, [sortedItems, sortOption, managers, isTeamSeason]);
 
-  const handleOpenBonusModal = (session: LogsheetSession, workerName: string) => {
+  const handleOpenBonusModal = (session: LogsheetSession, workerName: string, teamWorkers?: Worker[]) => {
     setSelectedSession(session);
     setSelectedWorkerName(workerName);
+    setSelectedTeamWorkers(teamWorkers || []);
     setBonusStep('type');
     setSelectedBonusType(null);
     setBonusPlacing('');
     setBonusCustomDesc('');
     setBonusAmount('');
+    
+    // Initialize bonus split percentages for team
+    if (teamWorkers && teamWorkers.length > 1) {
+      const equalSplit = createEqualSplit(teamWorkers.map(w => w.contractorId));
+      setBonusSplitPercentages(equalSplit);
+    } else {
+      setBonusSplitPercentages({});
+    }
+    
     setShowBonusModal(true);
   };
 
   const handleCloseBonusModal = () => {
     setShowBonusModal(false);
     setSelectedSession(null);
+    setSelectedTeamWorkers([]);
   };
 
   const handleSelectBonusType = (type: BonusType) => {
@@ -774,7 +943,9 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       type: selectedBonusType,
       amount: amt,
       placing: selectedBonusType !== 'Other' ? bonusPlacing as number | 'other' : undefined,
-      customDescription: selectedBonusType === 'Other' || bonusPlacing === 'other' ? bonusCustomDesc : undefined
+      customDescription: selectedBonusType === 'Other' || bonusPlacing === 'other' ? bonusCustomDesc : undefined,
+      // Include split percentages for team seasons
+      splitPercentages: selectedTeamWorkers.length > 1 ? bonusSplitPercentages : undefined,
     };
 
     const updatedBonuses = [...(selectedSession.bonuses || []), newBonus];
@@ -844,6 +1015,126 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         <span className="ml-2 text-gray-400">Loading Payouts...</span>
       </div>
     );
+
+  // --- RENDER TEAM CART ROW (Lawn Rejuv) ---
+  const renderTeamCartRow = (cart: TeamCartWithSession) => {
+    const { session, workers: teamWorkers, combinedStats } = cart;
+    if (!session) return null;
+    
+    const isValidated = session.validation?.isValidated || false;
+    const payAmount = session.validation?.finalCommission ?? 0;
+    const bonusTotal = (session.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
+    
+    const qualification = checkBonusQualification(session.financialStore || []);
+    const primaryWorker = teamWorkers[0];
+
+    return (
+      <div
+        key={cart.teamId}
+        className="bg-gray-800 border border-gray-700 py-2 px-3 rounded flex items-center gap-3 hover:bg-gray-750 hover:border-gray-600 transition-colors group text-xs"
+      >
+        {/* Status indicator */}
+        <div
+          className={`w-0.5 h-8 rounded-full flex-shrink-0 ${
+            isValidated ? 'bg-green-500' : 'bg-yellow-500'
+          }`}
+        />
+
+        {/* Team indicator */}
+        <div className="flex items-center gap-1 bg-green-900/30 px-2 py-1 rounded border border-green-700/50">
+          <Truck size={12} className="text-green-400" />
+          <span className="text-green-400 font-bold text-[10px]">{teamWorkers.length}</span>
+        </div>
+
+        {/* Team members stacked */}
+        <div 
+          onClick={() => navigate(`/admin/payout/${primaryWorker.contractorId}?date=${date}`)}
+          className="min-w-[160px] cursor-pointer hover:text-white"
+        >
+          {teamWorkers.map((w, idx) => (
+            <div key={w.contractorId} className={`${idx > 0 ? 'text-gray-400 text-[10px]' : 'font-bold text-gray-200'}`}>
+              {w.firstName} {w.lastName}
+            </div>
+          ))}
+        </div>
+
+        <span
+          className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 min-w-[55px] justify-center ${
+            isValidated 
+              ? 'bg-green-900/30 text-green-400 border border-green-800' 
+              : 'bg-yellow-900/30 text-yellow-500 border border-yellow-800'
+          }`}
+        >
+          <Clock size={8} />
+          {isValidated ? 'Paid' : 'Pending'}
+        </span>
+
+        <div className="flex-1" />
+
+        <div className="flex items-center gap-3 text-gray-400">
+          <div className="text-center min-w-[40px]">
+            <span className="text-[9px] text-gray-600 uppercase block leading-none">Steps</span>
+            <span className="font-bold text-gray-300">{combinedStats.stepCount}</span>
+          </div>
+          <div className="text-center min-w-[50px]">
+            <span className="text-[9px] text-gray-600 uppercase block leading-none">Upsell</span>
+            <span className="font-bold text-white">${combinedStats.upsellGross.toFixed(2)}</span>
+          </div>
+          <div className="text-center min-w-[40px]">
+            <span className="text-[9px] text-gray-600 uppercase block leading-none">EQ</span>
+            <span className="font-mono font-bold text-blue-300">{combinedStats.totalEQ.toFixed(2)}</span>
+          </div>
+          <div className="text-center min-w-[55px]">
+            <span className="text-[9px] text-gray-600 uppercase block leading-none">Total Comm</span>
+            <span
+              className={`font-mono font-bold ${
+                isValidated ? 'text-green-400' : 'text-gray-500'
+              }`}
+            >
+              ${payAmount.toFixed(2)}
+            </span>
+          </div>
+        </div>
+
+        <div className="ml-2 min-w-[70px] flex justify-center">
+          {isValidated ? (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const teamName = teamWorkers.map(w => `${w.firstName} ${w.lastName}`).join(', ');
+                handleOpenBonusModal(session, teamName, teamWorkers);
+              }}
+              className={`px-2 py-1 rounded text-[9px] font-bold flex items-center gap-1 transition-colors ${
+                bonusTotal > 0 
+                  ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-700 hover:bg-yellow-900/50' 
+                  : qualification.qualified
+                    ? 'bg-blue-900/30 text-blue-400 border border-blue-800 hover:bg-blue-900/50'
+                    : 'bg-red-900/30 text-red-400 border border-red-800 hover:bg-red-900/50'
+              }`}
+            >
+              {bonusTotal > 0 ? (
+                <>
+                  <Trophy size={10} /> +${bonusTotal.toFixed(0)}
+                </>
+              ) : (
+                <>
+                  <Plus size={10} /> Bonus
+                </>
+              )}
+            </button>
+          ) : (
+            <div className="w-[60px]" />
+          )}
+        </div>
+
+        <ChevronRight
+          size={14}
+          onClick={() => navigate(`/admin/payout/${primaryWorker.contractorId}?date=${date}`)}
+          className="text-gray-600 group-hover:text-white transition-colors flex-shrink-0 cursor-pointer"
+        />
+      </div>
+    );
+  };
 
   const renderWorkerRow = ({ worker, session }: { worker: Worker; session: LogsheetSession }) => {
     const isValidated = session.validation?.isValidated || false;
@@ -962,13 +1253,24 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     <div className="flex flex-col h-full">
       {/* --- STATS HEADER --- */}
       <div className="border-b border-gray-700 bg-gray-900/50">
+        {/* Season indicator for lawn_rejuv */}
+        {isTeamSeason && (
+          <div className="px-3 py-1.5 bg-green-900/30 border-b border-green-700/50 flex items-center gap-2">
+            <Truck size={14} className="text-green-400" />
+            <span className="text-green-400 text-xs font-bold">LAWN REJUVENATION SEASON - Team Payouts</span>
+            <span className="text-green-300 text-xs">({teamCarts.length} carts)</span>
+          </div>
+        )}
+        
         <div className="grid grid-cols-6 gap-px bg-gray-700">
           <div className="bg-gray-800 p-2 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <Users size={10} />
-              <span className="text-[9px] uppercase font-bold">Workers</span>
+              <span className="text-[9px] uppercase font-bold">{isTeamSeason ? 'Carts' : 'Workers'}</span>
             </div>
-            <div className="text-lg font-bold text-blue-300">{aggregatedStats.workerCount}</div>
+            <div className="text-lg font-bold text-blue-300">
+              {isTeamSeason ? teamCarts.length : aggregatedStats.workerCount}
+            </div>
           </div>
           <div className="bg-gray-800 p-2 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
@@ -1063,68 +1365,89 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         </div>
       </div>
 
-      {/* --- WORKER LIST --- */}
+      {/* --- WORKER/CART LIST --- */}
       <div className="flex-1 overflow-y-auto p-3 custom-scrollbar space-y-1">
-        {sortedItems.length === 0 && (
-          <div className="text-center py-10 text-gray-500 flex flex-col items-center">
-            <AlertCircle size={32} className="mb-2 opacity-50" />
-            <p>No active sessions found for this date.</p>
-          </div>
+        {/* Team Season: Show carts */}
+        {isTeamSeason && (
+          <>
+            {sortedTeamCarts.length === 0 && (
+              <div className="text-center py-10 text-gray-500 flex flex-col items-center">
+                <AlertCircle size={32} className="mb-2 opacity-50" />
+                <p>No active team sessions found for this date.</p>
+              </div>
+            )}
+            
+            <div className="space-y-2">
+              {sortedTeamCarts.map(cart => renderTeamCartRow(cart))}
+            </div>
+          </>
         )}
 
-        {sortOption === 'standard' && groupedByManager && groupedByManager.map(([managerId, group]) => (
-          <div key={managerId} className="mb-3">
-            <div className="sticky top-0 z-10 bg-gray-700 border border-gray-600 py-1.5 px-2 rounded flex items-center gap-2 text-xs mb-1">
-              <div className="w-0.5 h-5 rounded-full flex-shrink-0 bg-blue-500" />
-
-              <div className="font-bold text-white min-w-[120px] truncate uppercase tracking-wide">
-                {group.manager?.name || 'Unassigned'}
+        {/* Aeration Season: Show individual workers */}
+        {!isTeamSeason && (
+          <>
+            {sortedItems.length === 0 && (
+              <div className="text-center py-10 text-gray-500 flex flex-col items-center">
+                <AlertCircle size={32} className="mb-2 opacity-50" />
+                <p>No active sessions found for this date.</p>
               </div>
+            )}
 
-              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 min-w-[55px] justify-center bg-blue-900/30 text-blue-400 border border-blue-800">
-                <Users size={8} />
-                {group.items.length}
-              </span>
+            {sortOption === 'standard' && groupedByManager && groupedByManager.map(([managerId, group]) => (
+              <div key={managerId} className="mb-3">
+                <div className="sticky top-0 z-10 bg-gray-700 border border-gray-600 py-1.5 px-2 rounded flex items-center gap-2 text-xs mb-1">
+                  <div className="w-0.5 h-5 rounded-full flex-shrink-0 bg-blue-500" />
 
-              <div className="flex-1" />
+                  <div className="font-bold text-white min-w-[120px] truncate uppercase tracking-wide">
+                    {group.manager?.name || 'Unassigned'}
+                  </div>
 
-              <div className="flex items-center gap-3 text-gray-400">
-                <div className="text-center min-w-[40px]">
-                  <span className="text-[9px] text-gray-500 uppercase block leading-none">Steps</span>
-                  <span className="font-bold text-white">{group.stats.totalSteps}</span>
-                </div>
-                <div className="text-center min-w-[50px]">
-                  <span className="text-[9px] text-gray-500 uppercase block leading-none">Upsell</span>
-                  <span className="font-bold text-purple-300">${group.stats.totalUpsellGross.toFixed(2)}</span>
-                </div>
-                <div className="text-center min-w-[40px]">
-                  <span className="text-[9px] text-gray-500 uppercase block leading-none">Avg EQ</span>
-                  <span className={`font-mono font-bold ${
-                    group.stats.avgEQ >= 3 ? 'text-green-400' : 
-                    group.stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
-                  }`}>
-                    {group.stats.avgEQ.toFixed(2)}
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 min-w-[55px] justify-center bg-blue-900/30 text-blue-400 border border-blue-800">
+                    <Users size={8} />
+                    {group.items.length}
                   </span>
+
+                  <div className="flex-1" />
+
+                  <div className="flex items-center gap-3 text-gray-400">
+                    <div className="text-center min-w-[40px]">
+                      <span className="text-[9px] text-gray-500 uppercase block leading-none">Steps</span>
+                      <span className="font-bold text-white">{group.stats.totalSteps}</span>
+                    </div>
+                    <div className="text-center min-w-[50px]">
+                      <span className="text-[9px] text-gray-500 uppercase block leading-none">Upsell</span>
+                      <span className="font-bold text-purple-300">${group.stats.totalUpsellGross.toFixed(2)}</span>
+                    </div>
+                    <div className="text-center min-w-[40px]">
+                      <span className="text-[9px] text-gray-500 uppercase block leading-none">Avg EQ</span>
+                      <span className={`font-mono font-bold ${
+                        group.stats.avgEQ >= 3 ? 'text-green-400' : 
+                        group.stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
+                      }`}>
+                        {group.stats.avgEQ.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="text-center min-w-[55px]">
+                      <span className="text-[9px] text-gray-500 uppercase block leading-none">Avg Comm</span>
+                      <span className="font-mono font-bold text-green-400">
+                        ${group.stats.avgCommission.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="ml-2 min-w-[70px]" />
+                  <div className="w-[14px]" />
                 </div>
-                <div className="text-center min-w-[55px]">
-                  <span className="text-[9px] text-gray-500 uppercase block leading-none">Avg Comm</span>
-                  <span className="font-mono font-bold text-green-400">
-                    ${group.stats.avgCommission.toFixed(2)}
-                  </span>
+                
+                <div className="space-y-1">
+                  {group.items.map(renderWorkerRow)}
                 </div>
               </div>
+            ))}
 
-              <div className="ml-2 min-w-[70px]" />
-              <div className="w-[14px]" />
-            </div>
-            
-            <div className="space-y-1">
-              {group.items.map(renderWorkerRow)}
-            </div>
-          </div>
-        ))}
-
-        {sortOption !== 'standard' && sortedItems.map(renderWorkerRow)}
+            {sortOption !== 'standard' && sortedItems.map(renderWorkerRow)}
+          </>
+        )}
       </div>
 
       {/* --- BONUS MODAL --- */}
@@ -1138,6 +1461,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                   <Trophy size={20} className="text-yellow-400" /> Manage Bonuses
                 </h3>
                 <p className="text-sm text-gray-400">{selectedWorkerName}</p>
+                {selectedTeamWorkers.length > 1 && (
+                  <p className="text-xs text-green-400 flex items-center gap-1 mt-1">
+                    <Truck size={12} /> Team of {selectedTeamWorkers.length}
+                  </p>
+                )}
               </div>
               <button onClick={handleCloseBonusModal} className="text-gray-400 hover:text-white">
                 <X size={24} />
@@ -1327,6 +1655,52 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                       />
                     </div>
                   </div>
+
+                  {/* Team bonus split section */}
+                  {selectedTeamWorkers.length > 1 && (
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-2 flex items-center gap-2">
+                        <Truck size={12} className="text-green-400" />
+                        Team Bonus Split (%)
+                      </label>
+                      <div className="space-y-2 bg-gray-900/50 p-3 rounded-lg border border-gray-700">
+                        {selectedTeamWorkers.map(worker => (
+                          <div key={worker.contractorId} className="flex items-center justify-between gap-3">
+                            <span className="text-sm text-white flex-1">
+                              {worker.firstName} {worker.lastName}
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                value={bonusSplitPercentages[worker.contractorId] || 0}
+                                onChange={(e) => {
+                                  const val = parseFloat(e.target.value) || 0;
+                                  setBonusSplitPercentages(prev => ({
+                                    ...prev,
+                                    [worker.contractorId]: Math.min(100, Math.max(0, val))
+                                  }));
+                                }}
+                                className="w-16 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-white text-sm text-right"
+                              />
+                              <span className="text-gray-400 text-sm">%</span>
+                            </div>
+                          </div>
+                        ))}
+                        <div className="flex items-center justify-between pt-2 border-t border-gray-700">
+                          <span className="text-xs text-gray-500">Total:</span>
+                          <span className={`text-sm font-bold ${
+                            Object.values(bonusSplitPercentages).reduce((a, b) => a + b, 0) === 100
+                              ? 'text-green-400'
+                              : 'text-red-400'
+                          }`}>
+                            {Object.values(bonusSplitPercentages).reduce((a, b) => a + b, 0).toFixed(0)}%
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1340,7 +1714,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                     parseFloat(bonusAmount) <= 0 ||
                     (selectedBonusType !== 'Other' && !bonusPlacing) ||
                     (selectedBonusType === 'Other' && !bonusCustomDesc.trim()) ||
-                    (bonusPlacing === 'other' && !bonusCustomDesc.trim())
+                    (bonusPlacing === 'other' && !bonusCustomDesc.trim()) ||
+                    (selectedTeamWorkers.length > 1 && Object.values(bonusSplitPercentages).reduce((a, b) => a + b, 0) !== 100)
                   }
                   className="w-full py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg font-bold shadow-lg transition-all flex items-center justify-center gap-2"
                 >
