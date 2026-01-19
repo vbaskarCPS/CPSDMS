@@ -221,6 +221,15 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           .filter(r => r && r !== 'x' && r.trim() !== '')
       )) as string[];
 
+      // Get last active address from financial store
+      let lastAddr = null;
+      if (sharedFinancialStore.length > 0) {
+        const sortedTx = [...sharedFinancialStore].sort((a, b) => 
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        );
+        lastAddr = sortedTx[0].address;
+      }
+
       // Build worker displays (minimal for cart view)
       const memberDisplays: WorkerDisplay[] = teamWorkers.map(w => ({
         ...w,
@@ -598,138 +607,165 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     );
   };
 
-  // --- RENDER: Lawn Rejuv Cart Card ---
+  // --- RENDER: Lawn Rejuv Cart Card (Updated to match Aeration style) ---
   const renderCartCard = (cart: CartDisplay) => {
     const isExpanded = expandedCarts.has(cart.sessionId);
     const isSoloCart = cart.members.length === 1;
     const primaryWorker = cart.members[0];
     const hasActivity = cart.aggregatedStats.steps > 0;
 
+    // Get last active address from financial store
+    let lastActiveAddress: string | null = null;
+    if (cart.sharedFinancialStore.length > 0) {
+      const sortedTx = [...cart.sharedFinancialStore].sort((a, b) => 
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+      lastActiveAddress = sortedTx[0].address;
+    }
+
     return (
       <div
         key={cart.sessionId}
-        className={`rounded-lg border overflow-hidden transition-all ${
-          isSoloCart
-            ? 'bg-gray-800 border-gray-700'
-            : 'bg-gray-800 border-green-900/50'
+        className={`relative bg-gray-800 rounded-lg border hover:border-gray-600 transition-all shadow-sm ${
+          isSoloCart ? 'border-gray-700' : 'border-green-900/50'
         }`}
       >
-        {/* Cart Header with Stats */}
-        <div
-          className="p-3 cursor-pointer hover:bg-gray-700/30 transition-colors"
-          onClick={() => toggleCart(cart.sessionId)}
-        >
-          {/* Top Row: Cart Badge + Stats + Routes */}
-          <div className="flex items-center justify-between gap-3 mb-2">
-            <div className="flex items-center gap-3">
-              {/* Cart Badge */}
+        <div className="p-2 pr-9">
+          {/* TOP ROW: Cart Badge/Name + Routes */}
+          <div 
+            className="flex items-center justify-between mb-1 cursor-pointer"
+            onClick={() => toggleCart(cart.sessionId)}
+          >
+            <div className="flex items-center gap-2 min-w-0">
               <div
-                className={`w-12 h-12 rounded-lg flex items-center justify-center ${
-                  isSoloCart
-                    ? hasActivity
-                      ? 'bg-cps-blue text-white'
-                      : 'bg-gray-700 text-gray-400'
-                    : hasActivity
-                    ? 'bg-green-600 text-white'
-                    : 'bg-green-900/30 text-green-400 border border-green-700/50'
+                className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                  cart.aggregatedStats.pending > 0 ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'
                 }`}
-              >
-                {isSoloCart ? (
-                  <span className="text-sm font-bold">
-                    {primaryWorker?.firstName[0]}
-                    {primaryWorker?.lastName[0]}
-                  </span>
-                ) : (
-                  <div className="flex flex-col items-center">
-                    <Truck size={16} />
-                    <span className="text-[9px] font-bold mt-0.5">{cart.members.length}</span>
+              />
+              
+              {/* Cart identifier */}
+              {isSoloCart ? (
+                <h3 className="font-bold text-white text-sm whitespace-nowrap">
+                  {primaryWorker?.firstName} {primaryWorker?.lastName}
+                </h3>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 px-2 py-0.5 rounded bg-green-900/30 border border-green-700/50">
+                    <Truck size={12} className="text-green-400" />
+                    <span className="text-green-300 text-xs font-bold">{cart.members.length}</span>
                   </div>
+                  <h3 className="font-bold text-white text-sm whitespace-nowrap">
+                    {cart.members.map(m => m.firstName).join(' & ')}
+                  </h3>
+                </div>
+              )}
+              
+              {/* Routes */}
+              <div className="flex flex-wrap gap-1 ml-2">
+                {cart.assignedRoutes.length > 0 ? (
+                  cart.assignedRoutes.slice(0, 3).map((route, idx) => (
+                    <span key={idx} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] bg-indigo-900/60 text-indigo-200 border border-indigo-500/30 font-mono">
+                      {route}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-[9px] text-gray-500 italic">No Rte</span>
                 )}
-              </div>
-
-              {/* Stats Pills */}
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="px-2 py-1 rounded bg-gray-700 text-white font-bold">
-                  {cart.aggregatedStats.steps} steps
-                </span>
-                <span className="px-2 py-1 rounded bg-gray-700 text-blue-300 font-bold">
-                  {cart.aggregatedStats.eq.toFixed(2)} EQ
-                </span>
-                {cart.aggregatedStats.upsellGross > 0 && (
-                  <span className="px-2 py-1 rounded bg-purple-900/30 text-purple-300 border border-purple-700/50 font-bold">
-                    ${cart.aggregatedStats.upsellGross.toFixed(0)} Up
-                  </span>
-                )}
-                {cart.aggregatedStats.pending > 0 && (
-                  <span className="px-2 py-1 rounded bg-yellow-900/30 text-yellow-300 border border-yellow-700/50 font-bold">
-                    {cart.aggregatedStats.pending} pend
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Routes + Chevron */}
-            <div className="flex items-center gap-3">
-              <div className="flex flex-wrap gap-1">
-                {cart.assignedRoutes.slice(0, 3).map((route, idx) => (
-                  <span key={idx} className="px-1.5 py-0.5 rounded text-[9px] bg-indigo-900/60 text-indigo-200 border border-indigo-500/30 font-mono">
-                    {route}
-                  </span>
-                ))}
                 {cart.assignedRoutes.length > 3 && (
                   <span className="px-1.5 py-0.5 rounded text-[9px] bg-gray-700 text-gray-400">
                     +{cart.assignedRoutes.length - 3}
                   </span>
                 )}
               </div>
-              {isExpanded ? (
-                <ChevronUp className="text-gray-400" size={18} />
-              ) : (
-                <ChevronDown className="text-gray-400" size={18} />
-              )}
             </div>
           </div>
 
-          {/* Worker Rows */}
-          <div className="space-y-1 pl-2">
-            {cart.members.map((member) => (
-              <div
-                key={member.contractorId}
-                className="flex items-center gap-3 text-sm"
-              >
-                <div
-                  className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                    cart.aggregatedStats.pending > 0 ? 'bg-yellow-500' : 'bg-green-500'
-                  }`}
-                />
-                <span className="font-medium text-white min-w-[120px]">
-                  {member.firstName} {member.lastName}
+          {/* SECOND ROW: Location + Worker IDs/Phones */}
+          <div 
+            className="flex items-center gap-3 pl-4 mb-2 cursor-pointer flex-wrap"
+            onClick={() => toggleCart(cart.sessionId)}
+          >
+            <div className="flex items-center gap-1 text-[10px] text-gray-400 truncate max-w-[40%]">
+              <MapPin size={9} className={lastActiveAddress ? "text-emerald-500" : "text-gray-600"} />
+              {lastActiveAddress ? (
+                <span className="truncate">{lastActiveAddress}</span>
+              ) : (
+                <span className="opacity-50 italic">No history</span>
+              )}
+            </div>
+
+            <span className="text-gray-700 text-[10px]">|</span>
+
+            {/* Worker IDs and Phones */}
+            <div className="flex items-center gap-3 text-[10px] text-gray-500 font-mono flex-wrap">
+              {cart.members.map((member, idx) => (
+                <span key={member.contractorId} className="flex items-center gap-1">
+                  <span>#{member.contractorId}</span>
+                  {member.cellPhone && (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        copyPhone(member.cellPhone!, member.contractorId);
+                      }}
+                      className="flex items-center gap-1 text-blue-400 cursor-pointer hover:underline"
+                    >
+                      <Phone size={9} /> {member.cellPhone}
+                      {copiedId === member.contractorId && (
+                        <Check size={9} className="text-green-400" />
+                      )}
+                    </span>
+                  )}
+                  {idx < cart.members.length - 1 && <span className="text-gray-700 mx-1">•</span>}
                 </span>
-                <span className="text-[10px] text-gray-500 font-mono">
-                  #{member.contractorId}
-                </span>
-                {member.cellPhone && (
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      copyPhone(member.cellPhone!, member.contractorId);
-                    }}
-                    className="flex items-center gap-1 text-[10px] text-blue-400 cursor-pointer hover:underline"
-                  >
-                    <Phone size={9} /> {member.cellPhone}
-                    {copiedId === member.contractorId && (
-                      <Check size={9} className="text-green-400" />
-                    )}
-                  </span>
-                )}
-              </div>
-            ))}
+              ))}
+            </div>
+          </div>
+
+          {/* THIRD ROW: Stats Grid - MATCHING AERATION STYLE */}
+          <div 
+            className="grid grid-cols-5 gap-1 text-center bg-gray-900/40 p-1 rounded text-[10px] border border-gray-700/30 cursor-pointer"
+            onClick={() => toggleCart(cart.sessionId)}
+          >
+            <div>
+              <div className="text-gray-500 text-[8px] uppercase">Steps</div>
+              <div className="text-white font-bold">{cart.aggregatedStats.steps}</div>
+            </div>
+            <div>
+              <div className="text-gray-500 text-[8px] uppercase">Pend</div>
+              <div className="text-yellow-400 font-bold">{cart.aggregatedStats.pending}</div>
+            </div>
+            <div>
+              <div className="text-gray-500 text-[8px] uppercase">Up Gross</div>
+              <div className="text-green-400 font-bold">${cart.aggregatedStats.upsellGross.toFixed(2)}</div>
+            </div>
+            <div>
+              <div className="text-gray-500 text-[8px] uppercase">Upsell</div>
+              <div className="text-purple-400 font-bold">{cart.aggregatedStats.upsellCount}</div>
+            </div>
+            <div>
+              <div className="text-gray-500 text-[8px] uppercase">EQ</div>
+              <div className="text-blue-300 font-bold">{cart.aggregatedStats.eq.toFixed(2)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Chevron Button */}
+        <div className="absolute top-2 right-1.5">
+          <div 
+            className="p-1 cursor-pointer"
+            onClick={() => toggleCart(cart.sessionId)}
+          >
+            {isExpanded ? (
+              <ChevronUp size={14} className="text-gray-600" />
+            ) : (
+              <ChevronDown size={14} className="text-gray-600" />
+            )}
           </div>
         </div>
 
         {/* Expanded Content - Shared ContractorJobs */}
         {isExpanded && (
-          <div className="border-t border-gray-700 bg-gray-900/30 p-2">
+          <div className="mt-1 pt-1 border-t border-gray-700 px-2 pb-2">
             <ContractorJobs
               bookings={cart.sharedBookings}
               financialStore={cart.sharedFinancialStore}

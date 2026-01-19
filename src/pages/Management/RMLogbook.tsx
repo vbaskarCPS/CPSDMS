@@ -172,7 +172,18 @@ const RMLogbook: React.FC = () => {
     const myTeamIdsSet = new Set(myTeam.map(w => w.contractorId));
 
     // 2. Identify "My Team's Sessions" (for Steps, EQ, Upsells)
-    const mySessions = allSessions.filter(s => myTeamIdsSet.has(s.workerId));
+    // FIX: For team sessions (Lawn Rejuv), check teamWorkerIds array, not just workerId
+    const mySessions = allSessions.filter(s => {
+      // Check if primary worker is on my team
+      if (myTeamIdsSet.has(s.workerId)) return true;
+      
+      // Check if any team member is on my team (for Lawn Rejuv team sessions)
+      if (s.teamWorkerIds && s.teamWorkerIds.length > 0) {
+        return s.teamWorkerIds.some(wid => myTeamIdsSet.has(wid));
+      }
+      
+      return false;
+    });
 
     // 3. Identify "My Routes" (for Unassigned badges)
     const myRoutes = dailyData.routes.filter(r => r.managerId === currentUser.userId);
@@ -184,7 +195,22 @@ const RMLogbook: React.FC = () => {
     const workerCount = myTeam.length;
 
     // B. Steps (Sum from sessions)
-    const totalSteps = mySessions.reduce((sum, s) => sum + (s.stats?.stepCount || 0), 0);
+    // FIX: Use Set to avoid counting same session twice if multiple team members
+    const countedSessionIds = new Set<string>();
+    let totalSteps = 0;
+    let totalTeamEQ = 0;
+    let totalUpsellCount = 0;
+    let totalUpsellGross = 0;
+
+    mySessions.forEach(s => {
+      if (!countedSessionIds.has(s.id)) {
+        countedSessionIds.add(s.id);
+        totalSteps += s.stats?.stepCount || 0;
+        totalTeamEQ += s.stats?.totalEQ || 0;
+        totalUpsellCount += s.stats?.upsellCount || 0;
+        totalUpsellGross += s.stats?.upsellGross || 0;
+      }
+    });
 
     // C. Pending (Sum of incomplete bookings assigned to my team)
     const assignedPendingCount = dailyData.pendingBookings.filter(b => 
@@ -197,15 +223,10 @@ const RMLogbook: React.FC = () => {
 
     const totalPending = assignedPendingCount + unassignedBookingsCount;
 
-    // D. Avg EQ
-    const totalTeamEQ = mySessions.reduce((sum, s) => sum + (s.stats?.totalEQ || 0), 0);
-    const avgEQ = workerCount > 0 ? (totalTeamEQ / workerCount) : 0;
-
-    // E. Upsell Count
-    const totalUpsellCount = mySessions.reduce((sum, s) => sum + (s.stats?.upsellCount || 0), 0);
-
-    // F. Up $ (Upsell Gross)
-    const totalUpsellGross = mySessions.reduce((sum, s) => sum + (s.stats?.upsellGross || 0), 0);
+    // D. Avg EQ - For team sessions, divide by number of unique sessions, not workers
+    // This gives a more accurate "avg EQ per cart/worker unit"
+    const sessionCount = countedSessionIds.size;
+    const avgEQ = sessionCount > 0 ? (totalTeamEQ / sessionCount) : 0;
 
     // G. Unassigned Routes (Badge)
     const unassignedRoutesCount = myRoutes.filter(r => !r.assignedWorkerIds || r.assignedWorkerIds.length === 0).length;
