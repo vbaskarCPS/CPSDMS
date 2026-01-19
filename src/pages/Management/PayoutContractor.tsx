@@ -21,18 +21,16 @@ import {
   Trophy,
   Trash2,
   Users,
-  Percent,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
-import { getPayoutRate, EQ_DIVISOR } from '../../lib/commandCenterService';
+import { getPayoutRate, seasonHasTeams, createEqualSplit, EQ_DIVISOR } from '../../lib/commandCenterService';
 import { 
   LogsheetSession, 
   Worker, 
   SeasonType, 
   TeamSplitConfig,
-  SEASON_CONFIGS,
   SERVICE_FLAG_KEYS,
   SERVICE_FLAG_LABELS,
 } from '../../types';
@@ -240,9 +238,11 @@ const WorkerPayoutRow: React.FC<{
   upsellCommission: number;
   iosCommission: number;
   bonusAmount: number;
+  deductions: number;
+  machineDeduction: number;
   finalPay: number;
   isCurrentWorker: boolean;
-}> = ({ worker, assignedEQ, baseRate, productionPay, upsellCommission, iosCommission, bonusAmount, finalPay, isCurrentWorker }) => {
+}> = ({ worker, assignedEQ, baseRate, productionPay, upsellCommission, iosCommission, bonusAmount, deductions, machineDeduction, finalPay, isCurrentWorker }) => {
   const totalRate = baseRate + (worker.alumniRate || 0) + (worker.silverRate || 0);
   
   return (
@@ -261,7 +261,7 @@ const WorkerPayoutRow: React.FC<{
         <span className="text-lg font-bold text-green-400 font-mono">${finalPay.toFixed(2)}</span>
       </div>
       
-      <div className="grid grid-cols-4 gap-2 text-xs">
+      <div className="grid grid-cols-5 gap-2 text-xs">
         <div className="bg-gray-900/50 rounded p-2">
           <div className="text-gray-500 mb-1">Assigned EQ</div>
           <div className="text-white font-mono">{assignedEQ.toFixed(2)}</div>
@@ -280,6 +280,15 @@ const WorkerPayoutRow: React.FC<{
         <div className="bg-gray-900/50 rounded p-2">
           <div className="text-gray-500 mb-1">Upsell + IOS</div>
           <div className="text-white font-mono">${(upsellCommission + iosCommission).toFixed(2)}</div>
+        </div>
+        <div className="bg-gray-900/50 rounded p-2">
+          <div className="text-gray-500 mb-1">Deductions</div>
+          <div className="text-red-400 font-mono">-${(deductions + machineDeduction).toFixed(2)}</div>
+          {machineDeduction > 0 && (
+            <div className="text-[10px] text-gray-600">
+              (Machine: $10)
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -337,34 +346,63 @@ const PayoutContractor: React.FC = () => {
         // Get season type
         const season = await sessionService.getSessionSeasonType();
         setSeasonType(season);
+        const isTeamSeasonType = seasonHasTeams(season);
 
         const daily = await sessionService.getDailySession();
+        
+        // Find the worker that was clicked
         const foundWorker = daily?.workers.find(
           (w) => w.contractorId === contractorId
         );
-        const foundSession = await sessionService.getActiveLogsheetSession(
-          contractorId
-        );
+        
+        // Get the session - this handles team lookups automatically
+        const foundSession = await sessionService.getActiveLogsheetSession(contractorId);
 
         if (foundWorker) setWorker(foundWorker);
+        
         if (foundSession) {
           setSession(foundSession);
           
-          // Check if team session
-          const isTeam = foundSession.teamWorkerIds && foundSession.teamWorkerIds.length > 1;
-          setIsTeamSession(!!isTeam);
+          // Check if team session (has multiple workers)
+          const teamIds = foundSession.teamWorkerIds || [];
+          const isTeam = isTeamSeasonType && teamIds.length > 1;
+          setIsTeamSession(isTeam);
           
           if (isTeam && daily) {
             // Get all team workers
-            const teamIds = foundSession.teamWorkerIds || [];
             const teamMembers = daily.workers.filter(w => teamIds.includes(w.contractorId));
             setTeamWorkers(teamMembers);
             
-            // Initialize splits
-            setEquivSplit(foundSession.equivSplit || {});
-            setUpsellSplit(foundSession.upsellSplit || {});
+            // Initialize splits - use existing or create equal split
+            const existingEquivSplit = foundSession.equivSplit || {};
+            const existingUpsellSplit = foundSession.upsellSplit || {};
+            
+            // Check if splits are valid (have all team members)
+            const hasValidEquivSplit = teamIds.every(id => existingEquivSplit[id] !== undefined);
+            const hasValidUpsellSplit = teamIds.every(id => existingUpsellSplit[id] !== undefined);
+            
+            if (hasValidEquivSplit) {
+              setEquivSplit(existingEquivSplit);
+            } else {
+              setEquivSplit(createEqualSplit(teamIds));
+            }
+            
+            if (hasValidUpsellSplit) {
+              setUpsellSplit(existingUpsellSplit);
+            } else {
+              setUpsellSplit(createEqualSplit(teamIds));
+            }
+          } else if (isTeamSeasonType && foundSession.workerId && daily) {
+            // Solo "team" in lawn rejuv - just one worker
+            const soloWorker = daily.workers.find(w => w.contractorId === foundSession.workerId);
+            if (soloWorker) {
+              setTeamWorkers([soloWorker]);
+              setEquivSplit({ [soloWorker.contractorId]: 100 });
+              setUpsellSplit({ [soloWorker.contractorId]: 100 });
+            }
           }
           
+          // Restore validation inputs if already validated
           if (foundSession.validation) {
             setCashBills(foundSession.validation.verifiedCash.toString());
             setChequeAmount(foundSession.validation.verifiedCheque.toString());
@@ -443,7 +481,7 @@ const PayoutContractor: React.FC = () => {
     prodETransfer: 0, upsellETransfer: 0,
     prodCreditCard: 0, upsellCreditCard: 0,
     prodFlats: 0, prodPrepaid: 0, prodPrepaidSplit: 0, upsellPrepaid: 0,
-    prodBilled: 0, totalEQ: 0,
+    prodBilled: 0, totalEQ: 0, upsellGross: 0,
   };
 
   // 1. Reconciliation Math
@@ -479,7 +517,6 @@ const PayoutContractor: React.FC = () => {
   const actualTotalEQ = actualProdPayable / EQ_DIVISOR;
 
   // 3. Season-aware Payout Rate ($/EQ for commission calculation)
-  // Use getPayoutRate from commandCenterService for consistency
   const teamSize = isTeamSession ? teamWorkers.length : 1;
   const baseRate = getPayoutRate(seasonType, teamSize);
   
@@ -487,85 +524,99 @@ const PayoutContractor: React.FC = () => {
   const silverRate = worker?.silverRate || 0;
   const totalRate = baseRate + alumniRate + silverRate;
 
-  // 4. Calculate per-worker payouts for teams
+  // 4. Calculate per-worker payouts
   const calculateWorkerPayouts = () => {
-    if (!isTeamSession || teamWorkers.length === 0) {
-      // Single worker - standard calculation
-      const productionPay = actualTotalEQ * totalRate;
-      const upsellCommission = (stats.upsellPayable || 0) * 0.15;
-      const iosCommission = (stats.iosCount || 0) * 5.0;
-      const bonusTotal = (session?.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
-      const machineDeduction = machineRental ? 10.0 : 0;
-      const grossPay = productionPay + upsellCommission + iosCommission + bonusTotal;
-      const finalPay = grossPay - totalDeductions - machineDeduction;
-      
-      return [{
-        worker: worker!,
-        assignedEQ: actualTotalEQ,
-        baseRate,
-        productionPay,
-        upsellCommission,
-        iosCommission,
-        bonusAmount: bonusTotal,
-        finalPay,
-      }];
-    }
-
-    // Team calculation
-    const payouts = teamWorkers.map(w => {
-      const eqPercent = (equivSplit[w.contractorId] || 0) / 100;
-      const upPercent = (upsellSplit[w.contractorId] || 0) / 100;
-      
-      const assignedEQ = actualTotalEQ * eqPercent;
-      const workerAlumni = w.alumniRate || 0;
-      const workerSilver = w.silverRate || 0;
-      const workerTotalRate = baseRate + workerAlumni + workerSilver;
-      
-      const productionPay = assignedEQ * workerTotalRate;
-      const upsellCommission = (stats.upsellPayable || 0) * upPercent * 0.15;
-      const iosCommission = (stats.iosCount || 0) * 5.0 * upPercent;
-      
-      // Bonuses with split
-      let bonusAmount = 0;
-      (session?.bonuses || []).forEach(bonus => {
-        const bonusSplit = bonus.splitPercentages?.[w.contractorId] || (eqPercent * 100);
-        bonusAmount += bonus.amount * (bonusSplit / 100);
+    // For team sessions in lawn_rejuv
+    if (isTeamSession && teamWorkers.length > 0) {
+      const payouts = teamWorkers.map(w => {
+        const eqPercent = (equivSplit[w.contractorId] || 0) / 100;
+        const upPercent = (upsellSplit[w.contractorId] || 0) / 100;
+        
+        const assignedEQ = actualTotalEQ * eqPercent;
+        const workerAlumni = w.alumniRate || 0;
+        const workerSilver = w.silverRate || 0;
+        const workerTotalRate = baseRate + workerAlumni + workerSilver;
+        
+        const productionPay = assignedEQ * workerTotalRate;
+        const upsellCommission = (stats.upsellPayable || 0) * upPercent * 0.15;
+        const iosCommission = (stats.iosCount || 0) * 5.0 * upPercent;
+        
+        // Bonuses with split
+        let bonusAmount = 0;
+        (session?.bonuses || []).forEach(bonus => {
+          const bonusSplit = bonus.splitPercentages?.[w.contractorId] || (eqPercent * 100);
+          bonusAmount += bonus.amount * (bonusSplit / 100);
+        });
+        
+        // Machine rental is $10 PER WORKER (not split)
+        const workerMachineDeduction = machineRental ? 10.0 : 0;
+        
+        // Other deductions split evenly among team
+        const workerDeductions = totalDeductions / teamWorkers.length;
+        
+        const finalPay = productionPay + upsellCommission + iosCommission + bonusAmount - workerDeductions - workerMachineDeduction;
+        
+        return {
+          worker: w,
+          assignedEQ,
+          baseRate,
+          productionPay,
+          upsellCommission,
+          iosCommission,
+          bonusAmount,
+          deductions: workerDeductions,
+          machineDeduction: workerMachineDeduction,
+          finalPay,
+        };
       });
       
-      // Deductions split evenly
-      const machineDeduction = machineRental ? (10.0 / teamWorkers.length) : 0;
-      const workerDeductions = totalDeductions / teamWorkers.length;
-      
-      const finalPay = productionPay + upsellCommission + iosCommission + bonusAmount - workerDeductions - machineDeduction;
-      
-      return {
-        worker: w,
-        assignedEQ,
-        baseRate,
-        productionPay,
-        upsellCommission,
-        iosCommission,
-        bonusAmount,
-        finalPay,
-      };
-    });
+      return payouts;
+    }
+
+    // Single worker - standard calculation (aeration or solo lawn_rejuv)
+    if (!worker) return [];
     
-    return payouts;
+    const productionPay = actualTotalEQ * totalRate;
+    const upsellCommission = (stats.upsellPayable || 0) * 0.15;
+    const iosCommission = (stats.iosCount || 0) * 5.0;
+    const bonusTotal = (session?.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
+    const machineDeduction = machineRental ? 10.0 : 0;
+    const grossPay = productionPay + upsellCommission + iosCommission + bonusTotal;
+    const finalPay = grossPay - totalDeductions - machineDeduction;
+    
+    return [{
+      worker: worker,
+      assignedEQ: actualTotalEQ,
+      baseRate,
+      productionPay,
+      upsellCommission,
+      iosCommission,
+      bonusAmount: bonusTotal,
+      deductions: totalDeductions,
+      machineDeduction,
+      finalPay,
+    }];
   };
 
   const workerPayouts = calculateWorkerPayouts();
   const currentWorkerPayout = workerPayouts.find(p => p.worker.contractorId === contractorId);
   
-  // For header display
+  // For header display - solo worker values
   const productionPay = currentWorkerPayout?.productionPay || 0;
   const upsellCommission = currentWorkerPayout?.upsellCommission || 0;
   const iosCommission = currentWorkerPayout?.iosCommission || 0;
   const bonusTotal = (session?.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
-  const machineDeduction = machineRental ? 10.0 : 0;
   
-  // Total team payout (for display)
+  // Total team payout (sum of all individual payouts)
   const totalTeamPayout = workerPayouts.reduce((sum, p) => sum + p.finalPay, 0);
+  
+  // Final pay shown in header
   const finalPay = isTeamSession ? totalTeamPayout : (currentWorkerPayout?.finalPay || 0);
+
+  // Machine rental display - for teams, show total machine cost
+  const totalMachineDeduction = isTeamSession 
+    ? (machineRental ? 10.0 * teamWorkers.length : 0)
+    : (machineRental ? 10.0 : 0);
 
   // --- HANDLERS ---
   const handleRowClick = async (tx: any) => {
@@ -662,7 +713,7 @@ const PayoutContractor: React.FC = () => {
     try {
       await sessionService.updateLogsheetSession(session.id, {
         validation: validationData,
-        status: 'PAID', // <-- LOCKOUT: This locks the worker out of their logsheet
+        status: 'PAID', // <-- LOCKOUT: This locks the worker(s) out of their logsheet
         equivSplit: isTeamSession ? equivSplit : undefined,
         upsellSplit: isTeamSession ? upsellSplit : undefined,
       });
@@ -802,7 +853,19 @@ const PayoutContractor: React.FC = () => {
     );
 
   if (!session || !worker)
-    return <div className="p-10 text-white">Session not found.</div>;
+    return (
+      <div className="h-screen flex flex-col items-center justify-center bg-gray-900 text-white">
+        <AlertCircle size={48} className="text-red-400 mb-4" />
+        <h2 className="text-xl font-bold mb-2">Session not found</h2>
+        <p className="text-gray-400 mb-4">Could not find a session for worker {contractorId}</p>
+        <button
+          onClick={() => navigate(-1)}
+          className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+        >
+          Go Back
+        </button>
+      </div>
+    );
 
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-gray-100 overflow-hidden">
@@ -871,7 +934,7 @@ const PayoutContractor: React.FC = () => {
                 <span className="text-xs">
                   Payout Rate: <b className="text-white">${baseRate.toFixed(2)}/EQ</b>
                   {isTeamSession && seasonType === 'lawn_rejuv' && (
-                    <span className="text-green-400 ml-1">(Team)</span>
+                    <span className="text-green-400 ml-1">(Team of {teamWorkers.length})</span>
                   )}
                 </span>
               </div>
@@ -960,6 +1023,8 @@ const PayoutContractor: React.FC = () => {
                     upsellCommission={payout.upsellCommission}
                     iosCommission={payout.iosCommission}
                     bonusAmount={payout.bonusAmount}
+                    deductions={payout.deductions}
+                    machineDeduction={payout.machineDeduction}
                     finalPay={payout.finalPay}
                     isCurrentWorker={payout.worker.contractorId === contractorId}
                   />
@@ -1193,10 +1258,16 @@ const PayoutContractor: React.FC = () => {
                 <div className="bg-gray-900/50 p-3 rounded border border-gray-700 flex items-center justify-between">
                   <div className="flex items-center gap-2 text-gray-300 text-sm">
                     <Truck size={16} />
-                    <span>Machine Rental Fee ($10.00)</span>
-                    {isTeamSession && (
-                      <span className="text-xs text-gray-500">(split {teamWorkers.length} ways)</span>
-                    )}
+                    <div>
+                      <span>Machine Rental Fee</span>
+                      {isTeamSession ? (
+                        <span className="text-xs text-gray-500 block">
+                          ($10.00 × {teamWorkers.length} workers = ${(10 * teamWorkers.length).toFixed(2)})
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-500 block">($10.00)</span>
+                      )}
+                    </div>
                   </div>
                   <input
                     type="checkbox"
@@ -1261,7 +1332,7 @@ const PayoutContractor: React.FC = () => {
               <div className="flex flex-col justify-between">
                 <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700 mb-4">
                   <div className="text-xs text-gray-500 uppercase font-bold mb-2">
-                    {isTeamSession ? 'Team Breakdown' : 'Breakdown'}
+                    {isTeamSession ? 'Team Summary' : 'Breakdown'}
                   </div>
                   <div className="space-y-1 text-sm">
                     {isTeamSession ? (
@@ -1287,6 +1358,12 @@ const PayoutContractor: React.FC = () => {
                             ${workerPayouts.reduce((sum, p) => sum + p.upsellCommission + p.iosCommission, 0).toFixed(2)}
                           </span>
                         </div>
+                        {totalMachineDeduction > 0 && (
+                          <div className="flex justify-between text-red-400">
+                            <span>Machine Rental ({teamWorkers.length} × $10)</span>
+                            <span className="font-mono">-${totalMachineDeduction.toFixed(2)}</span>
+                          </div>
+                        )}
                       </>
                     ) : (
                       // Individual breakdown
@@ -1303,18 +1380,18 @@ const PayoutContractor: React.FC = () => {
                           <span className="text-gray-400">IOS/PB</span>
                           <span className="font-mono text-white">${iosCommission.toFixed(2)}</span>
                         </div>
+                        {totalMachineDeduction > 0 && (
+                          <div className="flex justify-between text-red-400">
+                            <span>Machine Rental</span>
+                            <span className="font-mono">-${totalMachineDeduction.toFixed(2)}</span>
+                          </div>
+                        )}
                       </>
                     )}
                     {bonusTotal > 0 && (
                       <div className="flex justify-between text-yellow-400">
                         <span>Bonuses</span>
                         <span className="font-mono">+${bonusTotal.toFixed(2)}</span>
-                      </div>
-                    )}
-                    {machineDeduction > 0 && (
-                      <div className="flex justify-between text-red-400">
-                        <span>Machine Rental</span>
-                        <span className="font-mono">-${machineDeduction.toFixed(2)}</span>
                       </div>
                     )}
                     {totalDeductions > 0 && (
