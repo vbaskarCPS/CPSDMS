@@ -1,7 +1,7 @@
 // src/pages/Management/RMLogbook.tsx
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Map, Loader, BookOpen, Activity, DollarSign, Clock, Lock, Unlock, Truck, Leaf } from 'lucide-react';
+import { Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock, Lock, Unlock, Truck, Leaf } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { ManagementUser, DailySessionData, LogsheetSession, SeasonType, TeamCart } from '../../types';
 import { sessionService } from '../../lib/sessionService';
@@ -30,7 +30,7 @@ export interface TabStats {
 const RMLogbook: React.FC = () => {
   const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<ManagementUser | null>(null);
-  const [activeTab, setActiveTab] = useState<'team' | 'routes' | 'carts'>('team');
+  const [activeTab, setActiveTab] = useState<'team' | 'routes'>('team');
   
   // Lock State
   const [isTeamLocked, setIsTeamLocked] = useState(false);
@@ -330,27 +330,14 @@ const RMLogbook: React.FC = () => {
                     : 'text-gray-400 hover:text-white'
                 }`}
               >
-                <Users size={14} /> Team
+                {isLawnRejuv ? <Truck size={14} /> : <Users size={14} />}
+                {isLawnRejuv ? 'Carts' : 'Team'}
+                {isLawnRejuv && stats.cartCount && stats.cartCount > 0 && (
+                  <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] bg-green-500 text-white rounded-full font-bold">
+                    {stats.cartCount}
+                  </span>
+                )}
               </button>
-              
-              {/* Carts Tab - Only for Lawn Rejuv */}
-              {isLawnRejuv && (
-                <button
-                  onClick={() => setActiveTab('carts')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
-                    activeTab === 'carts'
-                      ? 'bg-green-700 text-white shadow-sm'
-                      : 'text-gray-400 hover:text-white'
-                  }`}
-                >
-                  <Truck size={14} /> Carts
-                  {stats.cartCount && stats.cartCount > 0 && (
-                    <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] bg-green-500 text-white rounded-full font-bold">
-                      {stats.cartCount}
-                    </span>
-                  )}
-                </button>
-              )}
               
               <button
                 onClick={() => setActiveTab('routes')}
@@ -360,7 +347,7 @@ const RMLogbook: React.FC = () => {
                     : 'text-gray-400 hover:text-white'
                 }`}
               >
-                <Map size={14} /> Routes
+                <MapIcon size={14} /> Routes
                 {stats.unassignedRoutes > 0 && (
                   <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] bg-red-500 text-white rounded-full font-bold">
                     {stats.unassignedRoutes}
