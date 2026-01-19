@@ -1,9 +1,9 @@
 // src/pages/Management/RMLogbook.tsx
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock, Lock, Unlock, Truck, Leaf } from 'lucide-react';
+import { Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock, Lock, Unlock, Leaf } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
-import { ManagementUser, DailySessionData, LogsheetSession, SeasonType, TeamCart } from '../../types';
+import { ManagementUser, DailySessionData, LogsheetSession, SeasonType } from '../../types';
 import { sessionService } from '../../lib/sessionService';
 import { subscribeAsRouteManager } from '../../lib/realtimeService';
 
@@ -15,16 +15,13 @@ export interface TabStats {
   totalPending: number;
   totalEQ: number;
   workerCount: number;
-  totalGross: number; // This will represent Up $ (Upsell Gross) per your request
+  totalGross: number;
   avgEQ: number;
   totalUpsellCount: number;
   
   // Badge counters
   unassignedRoutes: number;
   unassignedBookings: number;
-  
-  // Teams (Lawn Rejuv)
-  cartCount?: number;
 }
 
 const RMLogbook: React.FC = () => {
@@ -47,7 +44,6 @@ const RMLogbook: React.FC = () => {
     totalUpsellCount: 0,
     unassignedRoutes: 0,
     unassignedBookings: 0,
-    cartCount: 0
   });
 
   // Data State
@@ -144,35 +140,6 @@ const RMLogbook: React.FC = () => {
       .map(w => w.contractorId);
   }, [dailyData, currentUser]);
 
-  // --- Compute team carts (Lawn Rejuv only) ---
-  const myTeamCarts = useMemo(() => {
-    if (!dailyData || !currentUser || !isLawnRejuv) return [];
-    
-    // Get workers assigned to this manager
-    const myWorkers = dailyData.workers.filter(w => w.assignedManagerId === currentUser.userId);
-    
-    // Group by teamId
-    const cartMap = new Map<string, TeamCart>();
-    
-    myWorkers.forEach(worker => {
-      const teamId = worker.teamId || worker.contractorId; // Solo workers get their own "cart"
-      
-      if (!cartMap.has(teamId)) {
-        cartMap.set(teamId, {
-          teamId,
-          workerIds: [],
-          workers: []
-        });
-      }
-      
-      const cart = cartMap.get(teamId)!;
-      cart.workerIds.push(worker.contractorId);
-      cart.workers.push(worker);
-    });
-    
-    return Array.from(cartMap.values());
-  }, [dailyData, currentUser, isLawnRejuv]);
-
   // --- Realtime Subscription (Optimized) ---
   useEffect(() => {
     if (!dailyData?.date || !currentUser) return;
@@ -220,14 +187,10 @@ const RMLogbook: React.FC = () => {
     const totalSteps = mySessions.reduce((sum, s) => sum + (s.stats?.stepCount || 0), 0);
 
     // C. Pending (Sum of incomplete bookings assigned to my team)
-    // We assume dailyData.pendingBookings contains all incomplete jobs for the day
     const assignedPendingCount = dailyData.pendingBookings.filter(b => 
         b['Contractor Number'] && myTeamIdsSet.has(b['Contractor Number'])
     ).length;
     
-    // We also include unassigned bookings in the pending count if that is the desired behavior for "Pending"
-    // However, usually "Pending" for a manager means "Total work left to do".
-    // Let's count Unassigned Bookings relevant to this manager's routes separately.
     const unassignedBookingsCount = dailyData.pendingBookings.filter(b => 
         b['Route Number'] && myRouteCodes.has(b['Route Number']) && !b['Contractor Number']
     ).length;
@@ -235,7 +198,6 @@ const RMLogbook: React.FC = () => {
     const totalPending = assignedPendingCount + unassignedBookingsCount;
 
     // D. Avg EQ
-    // Formula: (Total EQ of all workers) / (Number of workers)
     const totalTeamEQ = mySessions.reduce((sum, s) => sum + (s.stats?.totalEQ || 0), 0);
     const avgEQ = workerCount > 0 ? (totalTeamEQ / workerCount) : 0;
 
@@ -248,23 +210,19 @@ const RMLogbook: React.FC = () => {
     // G. Unassigned Routes (Badge)
     const unassignedRoutesCount = myRoutes.filter(r => !r.assignedWorkerIds || r.assignedWorkerIds.length === 0).length;
 
-    // H. Cart Count (Lawn Rejuv)
-    const cartCount = myTeamCarts.length;
-
     setStats({
         workerCount,
         totalSteps,
         totalPending,
         avgEQ,
         totalUpsellCount,
-        totalGross: totalUpsellGross, // Mapping "Up $" to this field
+        totalGross: totalUpsellGross,
         totalEQ: totalTeamEQ,
         unassignedRoutes: unassignedRoutesCount,
         unassignedBookings: unassignedBookingsCount,
-        cartCount
     });
 
-  }, [dailyData, allSessions, currentUser, myTeamCarts]);
+  }, [dailyData, allSessions, currentUser]);
 
 
   if (loading || !currentUser || !dailyData)
@@ -330,13 +288,8 @@ const RMLogbook: React.FC = () => {
                     : 'text-gray-400 hover:text-white'
                 }`}
               >
-                {isLawnRejuv ? <Truck size={14} /> : <Users size={14} />}
-                {isLawnRejuv ? 'Carts' : 'Team'}
-                {isLawnRejuv && stats.cartCount && stats.cartCount > 0 && (
-                  <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] bg-green-500 text-white rounded-full font-bold">
-                    {stats.cartCount}
-                  </span>
-                )}
+                <Users size={14} />
+                Team
               </button>
               
               <button
@@ -359,35 +312,15 @@ const RMLogbook: React.FC = () => {
         </div>
 
         {/* Stats Grid Row */}
-        <div className={`grid gap-px bg-gray-700 border-t border-gray-700 ${isLawnRejuv ? 'grid-cols-7' : 'grid-cols-6'}`}>
+        <div className="grid grid-cols-6 gap-px bg-gray-700 border-t border-gray-700">
             
-            {/* 1. Workers / Carts */}
+            {/* 1. Workers */}
             <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">
-                  {isLawnRejuv ? 'Carts' : 'Workers'}
-                </span>
-                <div className="flex items-center gap-1 text-blue-300 font-bold text-base">
-                    {isLawnRejuv ? (
-                      <>
-                        <Truck size={12} className="opacity-70" /> {stats.cartCount}
-                      </>
-                    ) : (
-                      <>
-                        <Users size={12} className="opacity-70" /> {stats.workerCount}
-                      </>
-                    )}
-                </div>
-            </div>
-
-            {/* Workers count (Lawn Rejuv only - additional column) */}
-            {isLawnRejuv && (
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
                 <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Workers</span>
                 <div className="flex items-center gap-1 text-blue-300 font-bold text-base">
                     <Users size={12} className="opacity-70" /> {stats.workerCount}
                 </div>
-              </div>
-            )}
+            </div>
 
             {/* 2. Steps */}
             <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
@@ -454,8 +387,6 @@ const RMLogbook: React.FC = () => {
               bookings={dailyData.pendingBookings}
               workers={dailyData.workers}
               managers={dailyData.managers}
-              seasonType={seasonType}
-              teamCarts={myTeamCarts}
               onRefresh={() => {
                   refreshData();
               }} 
