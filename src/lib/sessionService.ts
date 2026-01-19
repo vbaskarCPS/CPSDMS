@@ -23,7 +23,8 @@ import {
   TeamCart,
   TeamSplitConfig,
   WorkerPayoutBreakdown,
-  ServiceFlags
+  ServiceFlags,
+  SEASON_CONFIGS
 } from '../types';
 
 // Import metadata type - re-export for other modules
@@ -72,6 +73,17 @@ class SessionService {
       .single();
 
     return (data?.season_type as SeasonType) || 'aeration';
+  }
+
+  // --- HELPER: Get product cost percent from import meta ---
+  public async getProductCostPercent(): Promise<number> {
+    const meta = await this.getSessionImportMeta();
+    if (meta?.productCostPercent !== undefined) {
+      return meta.productCostPercent;
+    }
+    // Fall back to season default
+    const seasonType = await this.getSessionSeasonType();
+    return SEASON_CONFIGS[seasonType].defaultProductCostPercent;
   }
 
   // --- 1. HELPERS ---
@@ -128,8 +140,9 @@ class SessionService {
       const date = await this.getDailySessionDate();
       if (!date) return;
 
-      // Get season type for this session
+      // Get season type and product cost percent for this session
       const seasonType = await this.getSessionSeasonType();
+      const productCostPercent = await this.getProductCostPercent();
 
       // 1. Find the session for this worker (handles both solo and team sessions)
       // First check for team session where worker is a member
@@ -178,9 +191,9 @@ class SessionService {
       // 4. Map to SessionTransaction format
       const cleanFinancials = (transactions || []).map(tx => this.mapDbTransaction(tx));
 
-      // 5. Recalculate stats with region-appropriate tax rate and season config
+      // 5. Recalculate stats with region-appropriate tax rate, season config, and product cost
       const taxRate = this.getCurrentTaxRate();
-      const newStats = this.recalculateStats(cleanFinancials, taxRate, seasonType);
+      const newStats = this.recalculateStats(cleanFinancials, taxRate, seasonType, productCostPercent);
 
       // 6. Save to logsheet_sessions by SESSION ID (not worker_id)
       const { error } = await supabase
@@ -650,11 +663,20 @@ class SessionService {
     const seasonType = data.seasonType || 'aeration';
     const isTeamSeason = seasonHasTeams(seasonType);
     
+    // Get default product cost percent if not provided in meta
+    const defaultProductCost = SEASON_CONFIGS[seasonType].defaultProductCostPercent;
+    
     const meta = importMeta || (data as any)._importMeta || { 
       source: 'file', 
       sheetsExported: false,
-      seasonType 
+      seasonType,
+      productCostPercent: defaultProductCost
     };
+    
+    // Ensure productCostPercent is set
+    if (meta.productCostPercent === undefined) {
+      meta.productCostPercent = defaultProductCost;
+    }
 
     const { error: sessError } = await supabase
       .from('daily_sessions')
@@ -1351,7 +1373,8 @@ class SessionService {
     
     const taxRate = this.getCurrentTaxRate();
     const seasonType = await this.getSessionSeasonType();
-    const liveStats = this.recalculateStats(cleanFinancials, taxRate, seasonType);
+    const productCostPercent = await this.getProductCostPercent();
+    const liveStats = this.recalculateStats(cleanFinancials, taxRate, seasonType, productCostPercent);
 
     return {
       id: sessionData.id,
@@ -1909,12 +1932,19 @@ class SessionService {
    * Season-aware stats recalculation
    * - Handles FSL flat for lawn_rejuv (instead of SP/RJ)
    * - Uses season-specific prepaid/billed weights
+   * - Applies product cost deduction (e.g., 25% for lawn_rejuv)
    * - EQ calculation ALWAYS uses EQ_DIVISOR (25) regardless of season
+   * 
+   * @param financials - Array of transactions to calculate stats from
+   * @param taxRate - Tax rate percentage (e.g., 5 for 5%)
+   * @param seasonType - 'aeration' or 'lawn_rejuv'
+   * @param productCostPercent - Product cost deduction percentage (0-100, e.g., 25 for 25%)
    */
   public recalculateStats(
     financials: SessionTransaction[], 
     taxRate: number = 5,
-    seasonType: SeasonType = 'aeration'
+    seasonType: SeasonType = 'aeration',
+    productCostPercent: number = 0
   ): SessionStats {
     const stats = this.getEmptyStats();
     const taxDivisor = 1 + taxRate / 100;
@@ -1993,7 +2023,11 @@ class SessionService {
         stats.prodFlats + 
         stats.prodPrepaidSplit;
 
-    stats.prodPayable = weightedProd / taxDivisor;
+    // Apply tax removal first, then product cost deduction
+    // Formula: prodPayable = (weightedProd / taxDivisor) * (1 - productCostPercent/100)
+    const afterTax = weightedProd / taxDivisor;
+    const productCostMultiplier = 1 - (productCostPercent / 100);
+    stats.prodPayable = afterTax * productCostMultiplier;
     
     // EQ calculation ALWAYS uses EQ_DIVISOR (25) regardless of season
     // The payout rate ($/EQ) is what changes per season, not the EQ divisor

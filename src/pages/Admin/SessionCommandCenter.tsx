@@ -22,6 +22,7 @@ import {
   Building2,
   Leaf,
   Wind,
+  Package,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
@@ -88,6 +89,16 @@ const SessionCommandCenter: React.FC = () => {
   const [selectedSeasonType, setSelectedSeasonType] = useState<SeasonType>('aeration');
   const canSelectSeason = currentCC ? regionHasSeasonSelection(currentCC.region) : false;
 
+  // --- PRODUCT COST STATE (Lawn Rejuv Only) ---
+  const [productCostPercent, setProductCostPercent] = useState<number>(
+    SEASON_CONFIGS['lawn_rejuv'].defaultProductCostPercent
+  );
+
+  // Update product cost when season type changes
+  useEffect(() => {
+    setProductCostPercent(SEASON_CONFIGS[selectedSeasonType].defaultProductCostPercent);
+  }, [selectedSeasonType]);
+
   // --- GOOGLE SHEETS STATE ---
   const [showFileUpload, setShowFileUpload] = useState(false);
   const [dateTab, setDateTab] = useState('');
@@ -134,6 +145,11 @@ const SessionCommandCenter: React.FC = () => {
           setSelectedSeasonType(meta.seasonType);
         } else if (session.seasonType) {
           setSelectedSeasonType(session.seasonType);
+        }
+        
+        // If we have a productCostPercent from the stored meta, use it
+        if (meta?.productCostPercent !== undefined) {
+          setProductCostPercent(meta.productCostPercent);
         }
         
         // Load logsheet sessions for validation check
@@ -186,11 +202,12 @@ const SessionCommandCenter: React.FC = () => {
 
     try {
       const data = await parseDailySessionXLSX(file);
-      // Add file import metadata with season type
+      // Add file import metadata with season type and product cost
       (data as any)._importMeta = { 
         source: 'file', 
         sheetsExported: false,
-        seasonType: selectedSeasonType 
+        seasonType: selectedSeasonType,
+        productCostPercent: productCostPercent,
       } as ImportMeta;
       data.seasonType = selectedSeasonType;
       setPreviewData(data);
@@ -242,6 +259,12 @@ const SessionCommandCenter: React.FC = () => {
     try {
       // Pass the selected season type to the import function
       const data = await googleSheetsService.importSessionData(dateTab, selectedSeasonType);
+      
+      // Update the import meta with the custom product cost percent
+      if ((data as any)._importMeta) {
+        (data as any)._importMeta.productCostPercent = productCostPercent;
+      }
+      
       setPreviewData(data);
     } catch (err) {
       console.error(err);
@@ -315,8 +338,12 @@ const SessionCommandCenter: React.FC = () => {
         const meta = (previewData as any)._importMeta as ImportMeta || { 
           source: 'file', 
           sheetsExported: false,
-          seasonType: selectedSeasonType 
+          seasonType: selectedSeasonType,
+          productCostPercent: productCostPercent,
         };
+        
+        // Ensure productCostPercent is set
+        meta.productCostPercent = productCostPercent;
         
         // Ensure season type is set
         previewData.seasonType = selectedSeasonType;
@@ -390,6 +417,7 @@ const SessionCommandCenter: React.FC = () => {
         setSheetsExportResult(null);
         setDateTab('');
         setSelectedSeasonType('aeration');
+        setProductCostPercent(SEASON_CONFIGS['aeration'].defaultProductCostPercent);
       } catch (err) {
         alert('Error: ' + err);
       } finally {
@@ -500,6 +528,13 @@ const SessionCommandCenter: React.FC = () => {
                 {currentSessionSeasonConfig.displayName}
               </span>
             )}
+            {/* Product Cost Badge for Active Session (Lawn Rejuv only) */}
+            {currentSession?.seasonType === 'lawn_rejuv' && importMeta?.productCostPercent !== undefined && (
+              <span className="text-xs px-2 py-0.5 rounded border bg-orange-900/30 text-orange-400 border-orange-700/50 flex items-center gap-1">
+                <Package size={12} />
+                {importMeta.productCostPercent}% Product Cost
+              </span>
+            )}
             {importMeta?.source === 'sheets' && importMeta.dateTab && (
               <span className="text-xs bg-green-900/30 text-green-400 px-2 py-0.5 rounded border border-green-700/50">
                 {importMeta.dateTab}
@@ -599,6 +634,33 @@ const SessionCommandCenter: React.FC = () => {
                               </button>
                             </div>
                             
+                            {/* PRODUCT COST INPUT (Lawn Rejuv Only) */}
+                            {selectedSeasonType === 'lawn_rejuv' && (
+                              <div className="mt-4 p-4 rounded-lg border border-orange-700/50 bg-orange-900/10">
+                                <label className="flex items-center gap-2 text-sm font-medium text-orange-300 mb-2">
+                                  <Package size={16} />
+                                  Product Cost Deduction
+                                </label>
+                                <div className="flex items-center gap-3">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    value={productCostPercent}
+                                    onChange={(e) => setProductCostPercent(Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
+                                    className="w-24 bg-gray-900 border border-orange-700/50 rounded-lg py-2 px-3 text-white text-center focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                  />
+                                  <span className="text-orange-300 font-bold">%</span>
+                                  <span className="text-xs text-gray-400 flex-1">
+                                    Deducted from production payable after tax removal
+                                  </span>
+                                </div>
+                                <p className="text-[10px] text-gray-500 mt-2">
+                                  Formula: prodPayable = (weightedProd / tax) × (1 - {productCostPercent}%)
+                                </p>
+                              </div>
+                            )}
+                            
                             {/* Season Info Banner */}
                             <div className={`mt-3 p-3 rounded-lg border text-xs ${
                               selectedSeasonType === 'lawn_rejuv'
@@ -612,7 +674,10 @@ const SessionCommandCenter: React.FC = () => {
                                 <div>• Prepaid Weight: {seasonConfig.prepaidWeight * 100}%</div>
                                 <div>• Office Flats: {seasonConfig.officeFlats.map(f => `${f.code} ($${f.value})`).join(', ')}</div>
                                 {selectedSeasonType === 'lawn_rejuv' && (
-                                  <div>• Services: A/D/F/S/L (Aeration, Dethatch, Fertilizer, Seed, Lime)</div>
+                                  <>
+                                    <div>• Product Cost: {productCostPercent}% deduction</div>
+                                    <div>• Services: A/D/F/S/L (Aeration, Dethatch, Fertilizer, Seed, Lime)</div>
+                                  </>
                                 )}
                               </div>
                             </div>

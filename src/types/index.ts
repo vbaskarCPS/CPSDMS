@@ -415,6 +415,10 @@ export interface SeasonConfig {
   payoutRateSolo: number;     // $8 for aeration, $6 for lawn_rejuv solo
   payoutRateTeam: number;     // $8 for aeration, $8 for lawn_rejuv team (2+)
   
+  // Product Cost Deduction (percentage, 0-100)
+  // Applied after tax removal: prodPayable = (weightedProd / taxDivisor) * (1 - productCost/100)
+  defaultProductCostPercent: number; // 0 for aeration, 25 for lawn_rejuv
+  
   // Office Flats
   officeFlats: {
     code: string;
@@ -435,6 +439,8 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
     // Payout rates for aeration: $8/EQ for everyone
     payoutRateSolo: 8,
     payoutRateTeam: 8,
+    // No product cost deduction for aeration
+    defaultProductCostPercent: 0,
     officeFlats: [
       { code: 'SP', value: 52.5 },
       { code: 'RJ', value: 52.5 },
@@ -450,6 +456,8 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
     // Payout rates for lawn rejuv: $6/EQ solo, $8/EQ for teams of 2+
     payoutRateSolo: 6,
     payoutRateTeam: 8,
+    // 25% product cost deduction for lawn rejuv
+    defaultProductCostPercent: 25,
     officeFlats: [
       { code: 'FSL', value: 157.5 },
     ],

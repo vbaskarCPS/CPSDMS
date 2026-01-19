@@ -20,7 +20,8 @@ import {
   MasterBooking,
   SeasonType,
   ServiceFlags,
-  TeamCart
+  TeamCart,
+  SEASON_CONFIGS
 } from '../types';
 import { formatPhoneNumber, normalizeEmail } from './validationUtils';
 
@@ -59,6 +60,7 @@ export interface ImportMeta {
   dateTab?: string;
   sheetsExported?: boolean;
   seasonType?: SeasonType;
+  productCostPercent?: number; // Percentage (0-100), e.g., 25 means 25% product cost deduction
 }
 
 class GoogleSheetsService {
@@ -328,6 +330,7 @@ class GoogleSheetsService {
     const config = this.getConfig();
     const ccId = commandCenterService.getCurrentCommandCenterId();
     const isTeamSeason = seasonHasTeams(seasonType);
+    const seasonConfig = SEASON_CONFIGS[seasonType];
     
     if (!isValidDateTab(dateTab)) {
       throw new Error(`Invalid date tab format: ${dateTab}. Use MmmDD format (e.g., Feb01)`);
@@ -531,11 +534,13 @@ class GoogleSheetsService {
     };
 
     // Add import metadata (will be stored in session)
+    // Include default product cost percent from season config
     (result as any)._importMeta = {
       source: 'sheets',
       dateTab: dateTab,
       sheetsExported: false,
       seasonType,
+      productCostPercent: seasonConfig.defaultProductCostPercent,
     } as ImportMeta;
 
     return result;
