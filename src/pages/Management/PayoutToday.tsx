@@ -472,9 +472,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
 
-  const [items, setItems] = useState
-    { worker: Worker; session: LogsheetSession }[]
-  >([]);
+  const [items, setItems] = useState<{ worker: Worker; session: LogsheetSession }[]>([]);
   
   // Season type state
   const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
