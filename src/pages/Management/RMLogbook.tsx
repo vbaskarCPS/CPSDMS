@@ -9,7 +9,6 @@ import { subscribeAsRouteManager } from '../../lib/realtimeService';
 
 import RMTeamTab from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
-import RMCartsTab from './components/RMCartsTab';
 
 export interface TabStats {
   totalSteps: number;
@@ -459,15 +458,6 @@ const RMLogbook: React.FC = () => {
               allSessions={allSessions}
               allManagers={dailyData.managers}
               seasonType={seasonType}
-            />
-          )}
-          {activeTab === 'carts' && isLawnRejuv && (
-            <RMCartsTab
-              managerId={currentUser.userId}
-              teamCarts={myTeamCarts}
-              allSessions={allSessions}
-              bookings={dailyData.pendingBookings}
-              onRefresh={refreshData}
             />
           )}
           {activeTab === 'routes' && (
