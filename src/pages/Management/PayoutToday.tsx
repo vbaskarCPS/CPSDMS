@@ -23,12 +23,10 @@ import {
   AlertTriangle,
   Camera,
   Truck,
-  Phone,
-  Copy,
 } from 'lucide-react';
 import { Worker, SortOption, ManagementUser, LogsheetSession, Bonus, BonusType, SessionTransaction, SeasonType, TeamCart } from '../../types';
 import { sessionService } from '../../lib/sessionService';
-import { commandCenterService, seasonHasTeams, createEqualSplit } from '../../lib/commandCenterService';
+import { seasonHasTeams, createEqualSplit } from '../../lib/commandCenterService';
 
 // Import SVG icons for achievements
 import GreenJacketIcon from '../../assets/green-jacket.svg';
@@ -85,17 +83,19 @@ interface BonusWinner {
   finalCommission: number;
 }
 
-// Team cart with session data
-interface TeamCartWithSession {
+// Team cart with full worker and session data for Lawn Rejuv
+interface TeamCartDisplay {
   teamId: string;
+  sessionId: string;
+  session: LogsheetSession;
   workers: Worker[];
-  session: LogsheetSession | null;
-  combinedStats: {
+  sharedStats: {
     stepCount: number;
     upsellGross: number;
     totalEQ: number;
-    totalCommission: number;
   };
+  isValidated: boolean;
+  totalCommission: number;
 }
 
 // Dynamic sizing based on total bonus count and column count
@@ -157,7 +157,6 @@ function getSizeConfig(totalBonuses: number, columnCount: number): SizeConfig {
         minWidthPayout: 'min-w-[70px]',
       };
     } else {
-      // Very compact for 4 columns with many bonuses
       return {
         headerPadding: 'p-2',
         headerTrophy: 'text-2xl',
@@ -464,7 +463,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
 
-  const [items, setItems] = useState<
+  const [items, setItems] = useState
     { worker: Worker; session: LogsheetSession }[]
   >([]);
   
@@ -521,61 +520,57 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     }
   }, [date, workers]);
 
-  // Build team carts for lawn_rejuv season
-  const teamCarts = useMemo<TeamCartWithSession[]>(() => {
+  // Build team carts for lawn_rejuv season - FIXED VERSION
+  const teamCartsDisplay = useMemo<TeamCartDisplay[]>(() => {
     if (!isTeamSeason) return [];
     
-    const cartMap = new Map<string, TeamCartWithSession>();
+    const cartMap = new Map<string, TeamCartDisplay>();
     
     items.forEach(({ worker, session }) => {
-      const teamId = session.teamWorkerIds?.length ? 
-        (worker.teamId || session.workerId) : 
-        worker.contractorId;
+      // Use session.id as the cart identifier since team members share a session
+      const cartKey = session.id;
       
-      if (!cartMap.has(teamId)) {
-        cartMap.set(teamId, {
-          teamId,
+      if (!cartMap.has(cartKey)) {
+        const isValidated = session.validation?.isValidated || false;
+        const eq = isValidated ? (session.validation?.actualTotalEQ || 0) : (session.stats?.totalEQ || 0);
+        
+        cartMap.set(cartKey, {
+          teamId: cartKey,
+          sessionId: session.id,
+          session,
           workers: [],
-          session: null,
-          combinedStats: {
-            stepCount: 0,
-            upsellGross: 0,
-            totalEQ: 0,
-            totalCommission: 0,
+          sharedStats: {
+            stepCount: session.stats?.stepCount || 0,
+            upsellGross: session.stats?.upsellGross || 0,
+            totalEQ: eq,
           },
+          isValidated,
+          totalCommission: session.validation?.finalCommission || 0,
         });
       }
       
-      const cart = cartMap.get(teamId)!;
+      const cart = cartMap.get(cartKey)!;
       
-      // Add worker if not already present
+      // Add primary worker
       if (!cart.workers.find(w => w.contractorId === worker.contractorId)) {
         cart.workers.push(worker);
       }
       
-      // Use the session (all team members share same session)
-      if (!cart.session) {
-        cart.session = session;
-      }
-    });
-    
-    // Calculate combined stats for each cart
-    cartMap.forEach(cart => {
-      if (cart.session) {
-        const isValidated = cart.session.validation?.isValidated || false;
-        cart.combinedStats = {
-          stepCount: cart.session.stats.stepCount || 0,
-          upsellGross: cart.session.stats.upsellGross || 0,
-          totalEQ: isValidated ? 
-            (cart.session.validation?.actualTotalEQ || 0) : 
-            (cart.session.stats.totalEQ || 0),
-          totalCommission: cart.session.validation?.finalCommission || 0,
-        };
+      // Also add all team workers from session.teamWorkerIds
+      if (session.teamWorkerIds && session.teamWorkerIds.length > 0) {
+        session.teamWorkerIds.forEach(wid => {
+          if (!cart.workers.find(w => w.contractorId === wid)) {
+            const teamWorker = workers.find(w => w.contractorId === wid);
+            if (teamWorker) {
+              cart.workers.push(teamWorker);
+            }
+          }
+        });
       }
     });
     
     return Array.from(cartMap.values());
-  }, [items, isTeamSeason]);
+  }, [items, isTeamSeason, workers]);
 
   const aggregatedStats = useMemo<AggregatedStats>(() => {
     const stats: AggregatedStats = {
@@ -597,12 +592,13 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
     // For team seasons, aggregate from team carts to avoid double counting
     if (isTeamSeason) {
-      stats.workerCount = teamCarts.reduce((sum, cart) => sum + cart.workers.length, 0);
+      stats.workerCount = teamCartsDisplay.reduce((sum, cart) => sum + cart.workers.length, 0);
       
-      teamCarts.forEach((cart) => {
-        if (!cart.session) return;
-        const s = cart.session.stats;
-        const v = cart.session.validation;
+      teamCartsDisplay.forEach((cart) => {
+        const session = cart.session;
+        if (!session) return;
+        const s = session.stats;
+        const v = session.validation;
         const isValidated = v?.isValidated || false;
 
         stats.totalSteps += s.stepCount || 0;
@@ -629,7 +625,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         stats.totalBilled += s.prodBilled || 0;
       });
       
-      stats.avgEQ = teamCarts.length > 0 ? totalEQ / teamCarts.length : 0;
+      stats.avgEQ = teamCartsDisplay.length > 0 ? totalEQ / teamCartsDisplay.length : 0;
     } else {
       // Aeration season - aggregate from individual workers
       items.forEach(({ session }) => {
@@ -665,7 +661,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     }
 
     return stats;
-  }, [items, teamCarts, isTeamSeason]);
+  }, [items, teamCartsDisplay, isTeamSeason]);
 
   const bonusWinners = useMemo(() => {
     const winners: {
@@ -802,11 +798,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     });
   }, [items, searchTerm, sortOption, managers]);
 
-  // Sort team carts
+  // Sort team carts for lawn_rejuv
   const sortedTeamCarts = useMemo(() => {
     if (!isTeamSeason) return [];
     
-    let filtered = teamCarts;
+    let filtered = teamCartsDisplay;
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
       filtered = filtered.filter(cart => 
@@ -821,13 +817,13 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     return [...filtered].sort((a, b) => {
       switch (sortOption) {
         case 'steps':
-          return b.combinedStats.stepCount - a.combinedStats.stepCount;
+          return b.sharedStats.stepCount - a.sharedStats.stepCount;
         case 'equiv':
-          return b.combinedStats.totalEQ - a.combinedStats.totalEQ;
+          return b.sharedStats.totalEQ - a.sharedStats.totalEQ;
         case 'upGross':
-          return b.combinedStats.upsellGross - a.combinedStats.upsellGross;
+          return b.sharedStats.upsellGross - a.sharedStats.upsellGross;
         case 'commission':
-          return b.combinedStats.totalCommission - a.combinedStats.totalCommission;
+          return b.totalCommission - a.totalCommission;
         default:
           // Sort by first worker's last name
           const aName = a.workers[0]?.lastName || '';
@@ -835,7 +831,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           return aName.localeCompare(bName);
       }
     });
-  }, [teamCarts, searchTerm, sortOption, isTeamSeason]);
+  }, [teamCartsDisplay, searchTerm, sortOption, isTeamSeason]);
 
   const groupedByManager = useMemo(() => {
     if (sortOption !== 'standard' || isTeamSeason) return null;
@@ -1016,126 +1012,152 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       </div>
     );
 
-  // --- RENDER TEAM CART ROW (Lawn Rejuv) ---
-  const renderTeamCartRow = (cart: TeamCartWithSession) => {
-    const { session, workers: teamWorkers, combinedStats } = cart;
-    if (!session) return null;
-    
-    const isValidated = session.validation?.isValidated || false;
-    const payAmount = session.validation?.finalCommission ?? 0;
+  // --- RENDER TEAM CART (Lawn Rejuv) - Shows all workers grouped ---
+  const renderTeamCart = (cart: TeamCartDisplay) => {
+    const { session, workers: cartWorkers, sharedStats, isValidated, totalCommission } = cart;
     const bonusTotal = (session.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
-    
     const qualification = checkBonusQualification(session.financialStore || []);
-    const primaryWorker = teamWorkers[0];
+    const isSoloCart = cartWorkers.length === 1;
 
     return (
       <div
         key={cart.teamId}
-        className="bg-gray-800 border border-gray-700 py-2 px-3 rounded flex items-center gap-3 hover:bg-gray-750 hover:border-gray-600 transition-colors group text-xs"
+        className={`bg-gray-800 border-2 ${isSoloCart ? 'border-gray-700' : 'border-green-700/50'} rounded-lg overflow-hidden mb-2`}
       >
-        {/* Status indicator */}
-        <div
-          className={`w-0.5 h-8 rounded-full flex-shrink-0 ${
-            isValidated ? 'bg-green-500' : 'bg-yellow-500'
-          }`}
-        />
-
-        {/* Team indicator */}
-        <div className="flex items-center gap-1 bg-green-900/30 px-2 py-1 rounded border border-green-700/50">
-          <Truck size={12} className="text-green-400" />
-          <span className="text-green-400 font-bold text-[10px]">{teamWorkers.length}</span>
-        </div>
-
-        {/* Team members stacked */}
-        <div 
-          onClick={() => navigate(`/admin/payout/${primaryWorker.contractorId}?date=${date}`)}
-          className="min-w-[160px] cursor-pointer hover:text-white"
-        >
-          {teamWorkers.map((w, idx) => (
-            <div key={w.contractorId} className={`${idx > 0 ? 'text-gray-400 text-[10px]' : 'font-bold text-gray-200'}`}>
-              {w.firstName} {w.lastName}
-            </div>
-          ))}
-        </div>
-
-        <span
-          className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 min-w-[55px] justify-center ${
-            isValidated 
-              ? 'bg-green-900/30 text-green-400 border border-green-800' 
-              : 'bg-yellow-900/30 text-yellow-500 border border-yellow-800'
-          }`}
-        >
-          <Clock size={8} />
-          {isValidated ? 'Paid' : 'Pending'}
-        </span>
-
-        <div className="flex-1" />
-
-        <div className="flex items-center gap-3 text-gray-400">
-          <div className="text-center min-w-[40px]">
-            <span className="text-[9px] text-gray-600 uppercase block leading-none">Steps</span>
-            <span className="font-bold text-gray-300">{combinedStats.stepCount}</span>
-          </div>
-          <div className="text-center min-w-[50px]">
-            <span className="text-[9px] text-gray-600 uppercase block leading-none">Upsell</span>
-            <span className="font-bold text-white">${combinedStats.upsellGross.toFixed(2)}</span>
-          </div>
-          <div className="text-center min-w-[40px]">
-            <span className="text-[9px] text-gray-600 uppercase block leading-none">EQ</span>
-            <span className="font-mono font-bold text-blue-300">{combinedStats.totalEQ.toFixed(2)}</span>
-          </div>
-          <div className="text-center min-w-[55px]">
-            <span className="text-[9px] text-gray-600 uppercase block leading-none">Total Comm</span>
+        {/* Cart Header - Shared Stats */}
+        <div className={`px-3 py-2 ${isSoloCart ? 'bg-gray-750' : 'bg-green-900/20'} border-b ${isSoloCart ? 'border-gray-700' : 'border-green-700/30'} flex items-center justify-between`}>
+          <div className="flex items-center gap-3">
+            {/* Team indicator */}
+            {!isSoloCart && (
+              <div className="flex items-center gap-1 bg-green-900/40 px-2 py-1 rounded border border-green-700/50">
+                <Truck size={12} className="text-green-400" />
+                <span className="text-green-400 font-bold text-[10px]">{cartWorkers.length}</span>
+              </div>
+            )}
+            
+            {/* Validation Status */}
             <span
-              className={`font-mono font-bold ${
-                isValidated ? 'text-green-400' : 'text-gray-500'
+              className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 ${
+                isValidated 
+                  ? 'bg-green-900/30 text-green-400 border border-green-800' 
+                  : 'bg-yellow-900/30 text-yellow-500 border border-yellow-800'
               }`}
             >
-              ${payAmount.toFixed(2)}
+              <Clock size={8} />
+              {isValidated ? 'Paid' : 'Pending'}
             </span>
           </div>
+
+          {/* Shared Stats */}
+          <div className="flex items-center gap-4 text-gray-400 text-xs">
+            <div className="text-center">
+              <span className="text-[9px] text-gray-600 uppercase block leading-none">Steps</span>
+              <span className="font-bold text-gray-300">{sharedStats.stepCount}</span>
+            </div>
+            <div className="text-center">
+              <span className="text-[9px] text-gray-600 uppercase block leading-none">Upsell</span>
+              <span className="font-bold text-white">${sharedStats.upsellGross.toFixed(2)}</span>
+            </div>
+            <div className="text-center">
+              <span className="text-[9px] text-gray-600 uppercase block leading-none">EQ</span>
+              <span className="font-mono font-bold text-blue-300">{sharedStats.totalEQ.toFixed(2)}</span>
+            </div>
+            {isValidated && (
+              <div className="text-center">
+                <span className="text-[9px] text-gray-600 uppercase block leading-none">Total</span>
+                <span className="font-mono font-bold text-green-400">${totalCommission.toFixed(2)}</span>
+              </div>
+            )}
+            
+            {/* Bonus Button - at cart level */}
+            {isValidated && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const teamName = cartWorkers.map(w => `${w.firstName} ${w.lastName}`).join(', ');
+                  handleOpenBonusModal(session, teamName, cartWorkers);
+                }}
+                className={`px-2 py-1 rounded text-[9px] font-bold flex items-center gap-1 transition-colors ${
+                  bonusTotal > 0 
+                    ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-700 hover:bg-yellow-900/50' 
+                    : qualification.qualified
+                      ? 'bg-blue-900/30 text-blue-400 border border-blue-800 hover:bg-blue-900/50'
+                      : 'bg-red-900/30 text-red-400 border border-red-800 hover:bg-red-900/50'
+                }`}
+              >
+                {bonusTotal > 0 ? (
+                  <>
+                    <Trophy size={10} /> +${bonusTotal.toFixed(0)}
+                  </>
+                ) : (
+                  <>
+                    <Plus size={10} /> Bonus
+                  </>
+                )}
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="ml-2 min-w-[70px] flex justify-center">
-          {isValidated ? (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                const teamName = teamWorkers.map(w => `${w.firstName} ${w.lastName}`).join(', ');
-                handleOpenBonusModal(session, teamName, teamWorkers);
-              }}
-              className={`px-2 py-1 rounded text-[9px] font-bold flex items-center gap-1 transition-colors ${
-                bonusTotal > 0 
-                  ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-700 hover:bg-yellow-900/50' 
-                  : qualification.qualified
-                    ? 'bg-blue-900/30 text-blue-400 border border-blue-800 hover:bg-blue-900/50'
-                    : 'bg-red-900/30 text-red-400 border border-red-800 hover:bg-red-900/50'
-              }`}
-            >
-              {bonusTotal > 0 ? (
-                <>
-                  <Trophy size={10} /> +${bonusTotal.toFixed(0)}
-                </>
-              ) : (
-                <>
-                  <Plus size={10} /> Bonus
-                </>
-              )}
-            </button>
-          ) : (
-            <div className="w-[60px]" />
-          )}
-        </div>
+        {/* Worker Rows */}
+        <div className="divide-y divide-gray-700/50">
+          {cartWorkers.map((worker, idx) => {
+            // Calculate individual commission if validated
+            // For now, show total / number of workers as placeholder
+            // Real implementation would use split percentages
+            const workerCommission = isValidated 
+              ? (session.equivSplit?.[worker.contractorId] 
+                  ? totalCommission * (session.equivSplit[worker.contractorId] / 100)
+                  : totalCommission / cartWorkers.length)
+              : 0;
 
-        <ChevronRight
-          size={14}
-          onClick={() => navigate(`/admin/payout/${primaryWorker.contractorId}?date=${date}`)}
-          className="text-gray-600 group-hover:text-white transition-colors flex-shrink-0 cursor-pointer"
-        />
+            return (
+              <div
+                key={worker.contractorId}
+                onClick={() => navigate(`/admin/payout/${worker.contractorId}?date=${date}`)}
+                className="px-3 py-2 flex items-center gap-2 hover:bg-gray-750 transition-colors cursor-pointer group text-xs"
+              >
+                {/* Status indicator */}
+                <div
+                  className={`w-0.5 h-5 rounded-full flex-shrink-0 ${
+                    isValidated ? 'bg-green-500' : 'bg-yellow-500'
+                  }`}
+                />
+
+                {/* Worker Name */}
+                <div className="font-bold text-gray-200 min-w-[140px] truncate hover:text-white">
+                  {worker.firstName} {worker.lastName}
+                </div>
+
+                <span className="text-gray-500 font-mono text-[10px] min-w-[50px]">
+                  #{worker.contractorId}
+                </span>
+
+                <div className="flex-1" />
+
+                {/* Individual Commission (when validated) */}
+                {isValidated && (
+                  <div className="text-center min-w-[70px]">
+                    <span className="text-[9px] text-gray-600 uppercase block leading-none">Comm</span>
+                    <span className="font-mono font-bold text-green-400">
+                      ${workerCommission.toFixed(2)}
+                    </span>
+                  </div>
+                )}
+
+                <ChevronRight
+                  size={14}
+                  className="text-gray-600 group-hover:text-white transition-colors flex-shrink-0"
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
     );
   };
 
+  // --- RENDER WORKER ROW (Aeration - unchanged from old version) ---
   const renderWorkerRow = ({ worker, session }: { worker: Worker; session: LogsheetSession }) => {
     const isValidated = session.validation?.isValidated || false;
     const payAmount = session.validation?.finalCommission ?? 0;
@@ -1257,8 +1279,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         {isTeamSeason && (
           <div className="px-3 py-1.5 bg-green-900/30 border-b border-green-700/50 flex items-center gap-2">
             <Truck size={14} className="text-green-400" />
-            <span className="text-green-400 text-xs font-bold">LAWN REJUVENATION SEASON - Team Payouts</span>
-            <span className="text-green-300 text-xs">({teamCarts.length} carts)</span>
+            <span className="text-green-400 text-xs font-bold">LAWN REJUVENATION SEASON</span>
+            <span className="text-green-300 text-xs">({teamCartsDisplay.length} carts, {aggregatedStats.workerCount} workers)</span>
           </div>
         )}
         
@@ -1266,10 +1288,10 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           <div className="bg-gray-800 p-2 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <Users size={10} />
-              <span className="text-[9px] uppercase font-bold">{isTeamSeason ? 'Carts' : 'Workers'}</span>
+              <span className="text-[9px] uppercase font-bold">{isTeamSeason ? 'Workers' : 'Workers'}</span>
             </div>
             <div className="text-lg font-bold text-blue-300">
-              {isTeamSeason ? teamCarts.length : aggregatedStats.workerCount}
+              {aggregatedStats.workerCount}
             </div>
           </div>
           <div className="bg-gray-800 p-2 text-center">
@@ -1367,23 +1389,23 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
       {/* --- WORKER/CART LIST --- */}
       <div className="flex-1 overflow-y-auto p-3 custom-scrollbar space-y-1">
-        {/* Team Season: Show carts */}
+        {/* Team Season (Lawn Rejuv): Show grouped carts */}
         {isTeamSeason && (
           <>
             {sortedTeamCarts.length === 0 && (
               <div className="text-center py-10 text-gray-500 flex flex-col items-center">
                 <AlertCircle size={32} className="mb-2 opacity-50" />
-                <p>No active team sessions found for this date.</p>
+                <p>No active sessions found for this date.</p>
               </div>
             )}
             
             <div className="space-y-2">
-              {sortedTeamCarts.map(cart => renderTeamCartRow(cart))}
+              {sortedTeamCarts.map(cart => renderTeamCart(cart))}
             </div>
           </>
         )}
 
-        {/* Aeration Season: Show individual workers */}
+        {/* Aeration Season: Show individual workers (unchanged from old version) */}
         {!isTeamSeason && (
           <>
             {sortedItems.length === 0 && (

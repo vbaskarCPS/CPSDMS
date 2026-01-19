@@ -15,6 +15,7 @@ const JobDetail = React.lazy(() => import('./pages/Logsheet/JobDetail'));
 const NotFound = React.lazy(() => import('./pages/Logsheet/NotFound'));
 const EmailTemplates = React.lazy(() => import('./pages/Admin/EmailTemplates'));
 const EmailTemplateEditor = React.lazy(() => import('./pages/Admin/EmailTemplateEditor'));
+const PayoutContractor = React.lazy(() => import('./pages/Management/PayoutContractor'));
 
 // Loading fallback
 const LoadingFallback = () => (
@@ -36,6 +37,8 @@ function App() {
 
         {/* Command Center Admin Routes */}
         <Route path="/admin" element={<SessionCommandCenter />} />
+        <Route path="/admin/command-center" element={<SessionCommandCenter />} />
+        <Route path="/admin/payout/:contractorId" element={<PayoutContractor />} />
         <Route path="/admin/email-templates" element={<EmailTemplates />} />
         <Route path="/admin/email-templates/:templateType" element={<EmailTemplateEditor />} />
 
