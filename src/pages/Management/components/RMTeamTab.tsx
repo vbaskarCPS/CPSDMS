@@ -314,6 +314,15 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     return !hasHistory;
   };
 
+  // Handler for when a job is clicked in ContractorJobs
+  // For Route Managers, this is view-only, so we just refresh data
+  const handleJobClick = (job: MasterBooking) => {
+    // Route Managers view is read-only for jobs
+    // Could add a modal to view job details in the future
+    console.log('Job clicked:', job['Booking ID']);
+    handleRefreshData();
+  };
+
   // --- RENDER: Worker Card (shared between Aeration and Lawn Rejuv) ---
   const renderWorkerCard = (member: TeamMemberDisplay, isInCart: boolean = false) => {
     const canModify = isModifiable(member);
@@ -532,9 +541,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         {expandedItem === member.contractorId && (
           <div className="mt-1 pt-1 border-t border-gray-700 px-2 pb-2">
             <ContractorJobs
-              bookings={member.displayBookings}
-              financialStore={member.financialStore}
-              onRefresh={handleRefreshData}
+              jobs={member.displayBookings}
+              onJobClick={handleJobClick}
+              seasonType={seasonType}
             />
           </div>
         )}
