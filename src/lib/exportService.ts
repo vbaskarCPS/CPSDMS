@@ -1,7 +1,7 @@
 // src/lib/exportService.ts
 import * as XLSX from 'xlsx';
 import { supabase } from './supabase';
-import { commandCenterService, seasonHasTeams, getSeasonConfig } from './commandCenterService';
+import { commandCenterService, seasonHasTeams, getSeasonConfig, getPayoutRate, createEqualSplit } from './commandCenterService';
 import { sessionService } from './sessionService';
 import { googleSheetsService } from './googleSheetsService';
 import { LogsheetSession, Worker, ManagementUser, SeasonType, ServiceFlags, EQ_DIVISOR } from '../types';
@@ -80,49 +80,157 @@ export async function generateSessionExport(): Promise<void> {
   });
 
   // === SHEET 1: Payout Summary ===
-  const payoutRows = sessions.map(session => {
-    const worker = workersMap.get(session.worker_id);
-    const workerName = worker?.name || session.worker_id;
-    const managerId = worker?.metadata?.assignedManagerId;
-    const manager = managerId ? managersMap.get(managerId) : null;
-    const managerName = manager?.name || 'Unassigned';
-    
-    const stats = session.stats || {};
-    const validation = session.validation || {};
-    const bonuses = session.bonuses || [];
-    
-    const totalBonuses = bonuses.reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
-    
-    // Team info
-    const teamWorkerIds = session.team_worker_ids || [];
-    const teamMembers = teamWorkerIds.map((id: string) => workersMap.get(id)?.name || id).join(', ');
-    
-    return {
-      'Contractor ID': session.worker_id,
-      'Worker Name': workerName,
-      'Team Members': isTeamSeason ? teamMembers : '',
-      'Manager': managerName,
-      'Status': session.status,
-      'Steps': stats.stepCount || 0,
-      'Upsells': stats.upsellCount || 0,
-      'IOS': stats.iosCount || 0,
-      'Prod Gross': stats.prodGross || 0,
-      'Prod Payable': stats.prodPayable || 0,
-      'Total EQ': stats.totalEQ || 0,
-      'Upsell Gross': stats.upsellGross || 0,
-      'Upsell Payable': stats.upsellPayable || 0,
-      'Verified Cash': validation.verifiedCash || 0,
-      'Verified Cheque': validation.verifiedCheque || 0,
-      'Cash Diff': validation.cashDiff || 0,
-      'Cheque Diff': validation.chequeDiff || 0,
-      'Machine Rental': validation.machineRental ? 10 : 0,
-      'Bonuses': totalBonuses,
-      'Final Commission': validation.finalCommission || 0,
-      'Validated': validation.isValidated ? 'Yes' : 'No',
-      'Validated By': validation.managerName || '',
-      'Season Type': seasonType,
-    };
-  });
+  const payoutRows: any[] = [];
+  
+  if (isTeamSeason) {
+    // Lawn Rejuv: One row per worker in each team
+    for (const session of sessions) {
+      const teamWorkerIds = session.team_worker_ids || [session.worker_id];
+      const equivSplit = session.equiv_split || createEqualSplit(teamWorkerIds);
+      const upsellSplit = session.upsell_split || equivSplit;
+      
+      const stats = session.stats || {};
+      const validation = session.validation || {};
+      const bonuses = session.bonuses || [];
+      
+      // Build session object for calculateTeamPayouts
+      const sessionObj = {
+        id: session.id,
+        workerId: session.worker_id,
+        date: session.date,
+        status: session.status,
+        stats: session.stats,
+        validation: session.validation,
+        bonuses: session.bonuses,
+        teamWorkerIds: session.team_worker_ids,
+        equivSplit: session.equiv_split,
+        upsellSplit: session.upsell_split,
+        dailyRouteStore: [],
+        financialStore: [],
+      };
+      
+      const workersArray = Array.from(workersMap.values()).map(u => ({
+        contractorId: u.user_id,
+        firstName: u.name.split(' ')[0],
+        lastName: u.name.split(' ').slice(1).join(' '),
+        alumniRate: u.metadata?.alumniRate || 0,
+        silverRate: u.metadata?.silverRate || 0,
+      }));
+      
+      const payouts = sessionService.calculateTeamPayouts(sessionObj as any, workersArray as any, seasonType);
+      const payoutMap = new Map(payouts.map(p => [p.workerId, p]));
+      
+      for (const workerId of teamWorkerIds) {
+        const worker = workersMap.get(workerId);
+        if (!worker) continue;
+        
+        const equivPercent = (equivSplit[workerId] || 0) / 100;
+        const upsellPercent = (upsellSplit[workerId] || 0) / 100;
+        const payout = payoutMap.get(workerId);
+        
+        const workerName = worker?.name || workerId;
+        const managerId = worker?.metadata?.assignedManagerId;
+        const manager = managerId ? managersMap.get(managerId) : null;
+        const managerName = manager?.name || 'Unassigned';
+        
+        const teamSize = teamWorkerIds.length;
+        const basePayoutRate = getPayoutRate(seasonType, teamSize);
+        const alumniRate = worker?.metadata?.alumniRate || 0;
+        const silverRate = worker?.metadata?.silverRate || 0;
+        const effectivePayoutRate = basePayoutRate * (1 + alumniRate + silverRate);
+        
+        // Machine rental: $10 per worker (full amount)
+        const machineRental = validation.machineRental ? 10 : 0;
+        
+        // Deductions: (cashDiff + chequeDiff) split by equivPercent + full machineRental
+        const cashChequeDiff = (Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0)) * equivPercent;
+        const deductions = cashChequeDiff + machineRental;
+        
+        // Get commission values from payout calculation
+        const productionComm = payout?.productionCommission || 0;
+        const upsellComm = payout?.upsellCommission || 0;
+        const iosComm = payout?.iosCommission || 0;
+        const bonusAmount = payout?.bonusAmount || 0;
+        
+        // Recalculate final commission with corrected deductions
+        const finalCommission = productionComm + upsellComm + iosComm + bonusAmount - deductions;
+        
+        // Get team member names for display
+        const teamMembers = teamWorkerIds.map((id: string) => workersMap.get(id)?.name || id).join(', ');
+        
+        payoutRows.push({
+          'Contractor ID': workerId,
+          'Worker Name': workerName,
+          'Team Members': teamMembers,
+          'Manager': managerName,
+          'Status': session.status,
+          'Steps': Math.round((stats.stepCount || 0) * equivPercent),
+          'Upsells': Math.round((stats.upsellCount || 0) * upsellPercent),
+          'IOS': (stats.iosCount || 0) * upsellPercent,
+          'Prod Gross': (stats.prodGross || 0) * equivPercent,
+          'Prod Payable': (stats.prodPayable || 0) * equivPercent,
+          'Total EQ': (stats.totalEQ || 0) * equivPercent,
+          'Upsell Gross': (stats.upsellGross || 0) * upsellPercent,
+          'Upsell Payable': (stats.upsellPayable || 0) * upsellPercent,
+          'Verified Cash': (validation.verifiedCash || 0) * equivPercent,
+          'Verified Cheque': (validation.verifiedCheque || 0) * equivPercent,
+          'Cash Diff': (validation.cashDiff || 0) * equivPercent,
+          'Cheque Diff': (validation.chequeDiff || 0) * equivPercent,
+          'Machine Rental': machineRental,
+          'Bonuses': bonusAmount,
+          'Final Commission': finalCommission,
+          'Validated': validation.isValidated ? 'Yes' : 'No',
+          'Validated By': validation.managerName || '',
+          'Season Type': seasonType,
+          'Equiv Split %': equivSplit[workerId] || 100,
+          'Upsell Split %': upsellSplit[workerId] || 100,
+        });
+      }
+    }
+  } else {
+    // Aeration: One row per session (existing logic)
+    for (const session of sessions) {
+      const worker = workersMap.get(session.worker_id);
+      const workerName = worker?.name || session.worker_id;
+      const managerId = worker?.metadata?.assignedManagerId;
+      const manager = managerId ? managersMap.get(managerId) : null;
+      const managerName = manager?.name || 'Unassigned';
+      
+      const stats = session.stats || {};
+      const validation = session.validation || {};
+      const bonuses = session.bonuses || [];
+      
+      const totalBonuses = bonuses.reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
+      
+      payoutRows.push({
+        'Contractor ID': session.worker_id,
+        'Worker Name': workerName,
+        'Team Members': '',
+        'Manager': managerName,
+        'Status': session.status,
+        'Steps': stats.stepCount || 0,
+        'Upsells': stats.upsellCount || 0,
+        'IOS': stats.iosCount || 0,
+        'Prod Gross': stats.prodGross || 0,
+        'Prod Payable': stats.prodPayable || 0,
+        'Total EQ': stats.totalEQ || 0,
+        'Upsell Gross': stats.upsellGross || 0,
+        'Upsell Payable': stats.upsellPayable || 0,
+        'Verified Cash': validation.verifiedCash || 0,
+        'Verified Cheque': validation.verifiedCheque || 0,
+        'Cash Diff': validation.cashDiff || 0,
+        'Cheque Diff': validation.chequeDiff || 0,
+        'Machine Rental': validation.machineRental ? 10 : 0,
+        'Bonuses': totalBonuses,
+        'Final Commission': validation.finalCommission || 0,
+        'Validated': validation.isValidated ? 'Yes' : 'No',
+        'Validated By': validation.managerName || '',
+        'Season Type': seasonType,
+        'Equiv Split %': 100,
+        'Upsell Split %': 100,
+      });
+    }
+  }
 
   // === SHEET 2: Transactions ===
   const txRows = transactions.map(tx => {
@@ -348,8 +456,11 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   );
 
   // === 2. Append Accounts (Sales/Upgrades with payment info) ===
+  // Aeration: Sale, Upgrade
+  // Lawn Rejuv: Sale only (no Upgrades)
+  const accountTypes = isTeamSeason ? ['Sale'] : ['Sale', 'Upgrade'];
   const accountTransactions = transactions.filter(tx => 
-    ['Sale', 'Upgrade'].includes(tx.type) && tx.payment_method !== 'Prepaid'
+    accountTypes.includes(tx.type) && tx.payment_method !== 'Prepaid'
   );
 
   const accountsData = accountTransactions.map(tx => {
@@ -359,7 +470,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     const streetNum = streetParts[0] || '';
     const streetName = streetParts.slice(1).join(' ') || '';
     
-    // For teams, get all worker names
+    // For teams, get all worker names (comma-separated)
     let contractorName = worker?.name || tx.worker_id;
     if (tx.completed_by_worker_ids && tx.completed_by_worker_ids.length > 1) {
       contractorName = tx.completed_by_worker_ids
@@ -392,9 +503,15 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     await googleSheetsService.appendAccounts(accountsData);
   }
 
-  // === 3. Append Logsheets (All completed jobs) ===
+  // === 3. Append Logsheets (Production, Sale, Upgrade, Add-On) ===
+  // Aeration: Production, Sale, Upgrade, Add-On
+  // Lawn Rejuv: Production, Sale, Add-On (no Upgrades)
+  const logsheetTypes = isTeamSeason 
+    ? ['Production', 'Sale', 'Add-On']
+    : ['Production', 'Sale', 'Upgrade', 'Add-On'];
+  
   const logsheetsData = transactions
-    .filter(tx => tx.type === 'Production')
+    .filter(tx => logsheetTypes.includes(tx.type))
     .map(tx => {
       const worker = workersMap.get(tx.worker_id);
       const address = tx.customer_snapshot?.address || tx.address || '';
@@ -402,7 +519,13 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       const streetNum = streetParts[0] || '';
       const streetName = streetParts.slice(1).join(' ') || '';
       
-      // For teams, get all worker names
+      // Determine client type based on transaction type
+      let clientType = 'Existing';
+      if (tx.type === 'Sale') clientType = 'New';
+      else if (tx.type === 'Upgrade') clientType = 'Upgrade';
+      else if (tx.type === 'Add-On') clientType = 'Add-On';
+      
+      // For teams, get all worker names (comma-separated)
       let contractorName = worker?.name || tx.worker_id;
       if (tx.completed_by_worker_ids && tx.completed_by_worker_ids.length > 1) {
         contractorName = tx.completed_by_worker_ids
@@ -418,7 +541,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
         streetName,
         phone: tx.customer_phone || '',
         email: tx.customer_email || '',
-        clientType: 'Existing',
+        clientType,
         propertyType: tx.customer_snapshot?.serviceType || 'FP',
         notes: tx.item_description || '',
         price: tx.price || 0,
@@ -433,93 +556,201 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   }
 
   // === 4. Append Payout Stats ===
-  const config = getSeasonConfig(seasonType);
+  const statsData: any[] = [];
   
-  const statsData = sessions.map(session => {
-    const worker = workersMap.get(session.worker_id);
-    const workerName = worker?.name || '';
-    const nameParts = workerName.split(' ');
-    const firstName = nameParts[0] || '';
-    const lastName = nameParts.slice(1).join(' ') || '';
+  if (isTeamSeason) {
+    // Lawn Rejuv: One row per worker in each team
+    for (const session of sessions) {
+      const teamWorkerIds = session.team_worker_ids || [session.worker_id];
+      const equivSplit = session.equiv_split || createEqualSplit(teamWorkerIds);
+      const upsellSplit = session.upsell_split || equivSplit;
+      
+      const stats = session.stats || {};
+      const validation = session.validation || {};
+      
+      // Build session object for calculateTeamPayouts
+      const sessionObj = {
+        id: session.id,
+        workerId: session.worker_id,
+        date: session.date,
+        status: session.status,
+        stats: session.stats,
+        validation: session.validation,
+        bonuses: session.bonuses,
+        teamWorkerIds: session.team_worker_ids,
+        equivSplit: session.equiv_split,
+        upsellSplit: session.upsell_split,
+        dailyRouteStore: [],
+        financialStore: [],
+      };
+      
+      const workersArray = Array.from(workersMap.values()).map(u => ({
+        contractorId: u.user_id,
+        firstName: u.name.split(' ')[0],
+        lastName: u.name.split(' ').slice(1).join(' '),
+        alumniRate: u.metadata?.alumniRate || 0,
+        silverRate: u.metadata?.silverRate || 0,
+      }));
+      
+      const payouts = sessionService.calculateTeamPayouts(sessionObj as any, workersArray as any, seasonType);
+      const payoutMap = new Map(payouts.map(p => [p.workerId, p]));
+      
+      for (const workerId of teamWorkerIds) {
+        const worker = workersMap.get(workerId);
+        if (!worker) continue;
+        
+        const equivPercent = (equivSplit[workerId] || 0) / 100;
+        const upsellPercent = (upsellSplit[workerId] || 0) / 100;
+        const payout = payoutMap.get(workerId);
+        
+        const workerName = worker?.name || '';
+        const nameParts = workerName.split(' ');
+        const firstName = nameParts[0] || '';
+        const lastName = nameParts.slice(1).join(' ') || '';
+        
+        const managerId = worker?.metadata?.assignedManagerId;
+        const manager = managerId ? managersMap.get(managerId) : null;
+        const managerName = manager?.name || '';
+        
+        const teamId = worker?.metadata?.teamId || '';
+        const teamSize = teamWorkerIds.length;
+        
+        // Calculate effective payout rate: baseRate * (1 + alumniRate + silverRate)
+        const basePayoutRate = getPayoutRate(seasonType, teamSize);
+        const alumniRate = worker?.metadata?.alumniRate || 0;
+        const silverRate = worker?.metadata?.silverRate || 0;
+        const effectivePayoutRate = basePayoutRate * (1 + alumniRate + silverRate);
+        
+        // Machine rental: $10 per worker (full amount, not split)
+        const machineRental = validation.machineRental ? 10 : 0;
+        
+        // Deductions: (cashDiff + chequeDiff) split by equivPercent + full machineRental
+        const cashChequeDiff = (Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0)) * equivPercent;
+        const deductions = cashChequeDiff + machineRental;
+        
+        // Get commission values from payout calculation
+        const productionComm = payout?.productionCommission || 0;
+        const upsellComm = payout?.upsellCommission || 0;
+        const iosComm = payout?.iosCommission || 0;
+        const bonusAmount = payout?.bonusAmount || 0;
+        
+        // Recalculate final pay with corrected deductions (full $10 machine rental per worker)
+        const finalPay = productionComm + upsellComm + iosComm + bonusAmount - deductions;
+        
+        statsData.push({
+          contractorId: workerId,
+          firstName,
+          lastName,
+          manager: managerName,
+          // Split by equivPercent
+          stepCount: Math.round((stats.stepCount || 0) * equivPercent),
+          prodBilled: (stats.prodBilled || 0) * equivPercent,
+          prodCash: (stats.prodCash || 0) * equivPercent,
+          prodCheque: (stats.prodCheque || 0) * equivPercent,
+          prodCreditCard: (stats.prodCreditCard || 0) * equivPercent,
+          prodETransfer: (stats.prodETransfer || 0) * equivPercent,
+          prodFlats: (stats.prodFlats || 0) * equivPercent,
+          prodPrepaid: (stats.prodPrepaid || 0) * equivPercent,
+          prodPrepaidSplit: (stats.prodPrepaidSplit || 0) * equivPercent,
+          prodGross: (stats.prodGross || 0) * equivPercent,
+          prodPayable: (stats.prodPayable || 0) * equivPercent,
+          totalEQ: (stats.totalEQ || 0) * equivPercent,
+          // Split by upsellPercent
+          iosCount: (stats.iosCount || 0) * upsellPercent,
+          upsellCount: Math.round((stats.upsellCount || 0) * upsellPercent),
+          upsellCash: (stats.upsellCash || 0) * upsellPercent,
+          upsellCheque: (stats.upsellCheque || 0) * upsellPercent,
+          upsellCreditCard: (stats.upsellCreditCard || 0) * upsellPercent,
+          upsellETransfer: (stats.upsellETransfer || 0) * upsellPercent,
+          upsellPrepaid: (stats.upsellPrepaid || 0) * upsellPercent,
+          upsellGross: (stats.upsellGross || 0) * upsellPercent,
+          upsellPayable: (stats.upsellPayable || 0) * upsellPercent,
+          // Per-worker values
+          payoutRate: effectivePayoutRate,
+          productionComm,
+          upsellComm,
+          iosComm,
+          machineRental,
+          deductions,
+          bonuses: bonusAmount,
+          finalPay,
+          // Team fields
+          teamId,
+          equivSplitPercent: equivSplit[workerId] || 100,
+          upsellSplitPercent: upsellSplit[workerId] || 100,
+        });
+      }
+    }
+  } else {
+    // Aeration: One row per session (existing logic)
+    const config = getSeasonConfig(seasonType);
     
-    const managerId = worker?.metadata?.assignedManagerId;
-    const manager = managerId ? managersMap.get(managerId) : null;
-    const managerName = manager?.name || '';
-    
-    const stats = session.stats || {};
-    const validation = session.validation || {};
-    const bonuses = session.bonuses || [];
-    
-    const totalBonuses = bonuses.reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
-    
-    // Team info
-    const teamWorkerIds = session.team_worker_ids || [];
-    const teamSize = teamWorkerIds.length || 1;
-    const teamId = worker?.metadata?.teamId || '';
-    
-    // Calculate commissions with season-aware rates
-    // alumniRate here refers to the worker's individual payout multiplier (e.g., 0.40 = 40% raise)
-    const workerAlumniRate = worker?.metadata?.alumniRate || 0;
-    
-    // payoutRatePerEQ is the $/EQ commission rate based on season and team size
-    // Aeration: $8/EQ for everyone
-    // Lawn Rejuv: $6/EQ solo, $8/EQ for teams of 2+
-    const payoutRatePerEQ = teamSize >= 2 ? config.payoutRateTeam : config.payoutRateSolo;
-    
-    // For team seasons, production commission = totalEQ * payoutRatePerEQ * (1 + alumniRate)
-    // For aeration, it's the legacy formula: prodPayable * alumniRate (percentage of payable)
-    const productionComm = isTeamSeason
-      ? (stats.totalEQ || 0) * payoutRatePerEQ * (1 + workerAlumniRate)
-      : (stats.prodPayable || 0) * workerAlumniRate;
-    
-    const upsellComm = (stats.upsellPayable || 0) * 0.15;
-    const iosComm = (stats.iosCount || 0) * 5;
-    const machineRental = validation.machineRental ? 10 : 0;
-    const deductions = (validation.cashDiff || 0) + (validation.chequeDiff || 0) + machineRental;
-    
-    // Equiv split percentage for this worker (if team)
-    const equivSplitPercent = session.equiv_split?.[session.worker_id] || 100;
-    const upsellSplitPercent = session.upsell_split?.[session.worker_id] || 100;
-    
-    return {
-      contractorId: session.worker_id,
-      firstName,
-      lastName,
-      manager: managerName,
-      stepCount: stats.stepCount || 0,
-      iosCount: stats.iosCount || 0,
-      prodBilled: stats.prodBilled || 0,
-      prodCash: stats.prodCash || 0,
-      prodCheque: stats.prodCheque || 0,
-      prodCreditCard: stats.prodCreditCard || 0,
-      prodETransfer: stats.prodETransfer || 0,
-      prodFlats: stats.prodFlats || 0,
-      prodPrepaid: stats.prodPrepaid || 0,
-      prodPrepaidSplit: stats.prodPrepaidSplit || 0,
-      prodGross: stats.prodGross || 0,
-      prodPayable: stats.prodPayable || 0,
-      totalEQ: stats.totalEQ || 0,
-      upsellCount: stats.upsellCount || 0,
-      upsellCash: stats.upsellCash || 0,
-      upsellCheque: stats.upsellCheque || 0,
-      upsellCreditCard: stats.upsellCreditCard || 0,
-      upsellETransfer: stats.upsellETransfer || 0,
-      upsellPrepaid: stats.upsellPrepaid || 0,
-      upsellGross: stats.upsellGross || 0,
-      upsellPayable: stats.upsellPayable || 0,
-      payoutRate: workerAlumniRate,
-      productionComm,
-      upsellComm,
-      iosComm,
-      machineRental,
-      deductions,
-      bonuses: totalBonuses,
-      finalPay: validation.finalCommission || 0,
-      teamId,
-      equivSplitPercent,
-      upsellSplitPercent,
-    };
-  });
+    for (const session of sessions) {
+      const worker = workersMap.get(session.worker_id);
+      const workerName = worker?.name || '';
+      const nameParts = workerName.split(' ');
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || '';
+      
+      const managerId = worker?.metadata?.assignedManagerId;
+      const manager = managerId ? managersMap.get(managerId) : null;
+      const managerName = manager?.name || '';
+      
+      const stats = session.stats || {};
+      const validation = session.validation || {};
+      const bonuses = session.bonuses || [];
+      
+      const totalBonuses = bonuses.reduce((sum: number, b: any) => sum + (b.amount || 0), 0);
+      
+      // Aeration uses legacy formula: prodPayable * alumniRate
+      const workerAlumniRate = worker?.metadata?.alumniRate || 0;
+      const productionComm = (stats.prodPayable || 0) * workerAlumniRate;
+      
+      const upsellComm = (stats.upsellPayable || 0) * 0.15;
+      const iosComm = (stats.iosCount || 0) * 5;
+      const machineRental = validation.machineRental ? 10 : 0;
+      const deductions = (validation.cashDiff || 0) + (validation.chequeDiff || 0) + machineRental;
+      
+      statsData.push({
+        contractorId: session.worker_id,
+        firstName,
+        lastName,
+        manager: managerName,
+        stepCount: stats.stepCount || 0,
+        iosCount: stats.iosCount || 0,
+        prodBilled: stats.prodBilled || 0,
+        prodCash: stats.prodCash || 0,
+        prodCheque: stats.prodCheque || 0,
+        prodCreditCard: stats.prodCreditCard || 0,
+        prodETransfer: stats.prodETransfer || 0,
+        prodFlats: stats.prodFlats || 0,
+        prodPrepaid: stats.prodPrepaid || 0,
+        prodPrepaidSplit: stats.prodPrepaidSplit || 0,
+        prodGross: stats.prodGross || 0,
+        prodPayable: stats.prodPayable || 0,
+        totalEQ: stats.totalEQ || 0,
+        upsellCount: stats.upsellCount || 0,
+        upsellCash: stats.upsellCash || 0,
+        upsellCheque: stats.upsellCheque || 0,
+        upsellCreditCard: stats.upsellCreditCard || 0,
+        upsellETransfer: stats.upsellETransfer || 0,
+        upsellPrepaid: stats.upsellPrepaid || 0,
+        upsellGross: stats.upsellGross || 0,
+        upsellPayable: stats.upsellPayable || 0,
+        payoutRate: workerAlumniRate,
+        productionComm,
+        upsellComm,
+        iosComm,
+        machineRental,
+        deductions,
+        bonuses: totalBonuses,
+        finalPay: validation.finalCommission || 0,
+        teamId: '',
+        equivSplitPercent: 100,
+        upsellSplitPercent: 100,
+      });
+    }
+  }
 
   if (statsData.length > 0) {
     await googleSheetsService.appendPayoutStats(dateTab, statsData);
