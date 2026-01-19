@@ -25,7 +25,7 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
-import { getPayoutRate, seasonHasTeams, createEqualSplit, EQ_DIVISOR } from '../../lib/commandCenterService';
+import { getPayoutRate, seasonHasTeams } from '../../lib/commandCenterService';
 import { 
   LogsheetSession, 
   Worker, 

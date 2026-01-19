@@ -26,7 +26,20 @@ import {
 } from 'lucide-react';
 import { Worker, SortOption, ManagementUser, LogsheetSession, Bonus, BonusType, SessionTransaction, SeasonType, TeamCart } from '../../types';
 import { sessionService } from '../../lib/sessionService';
-import { seasonHasTeams, createEqualSplit } from '../../lib/commandCenterService';
+import { seasonHasTeams } from '../../lib/commandCenterService';
+import { TeamSplitConfig } from '../../types';
+
+// Helper function - define locally to avoid import issues
+const createEqualSplit = (workerIds: string[]): TeamSplitConfig => {
+  if (workerIds.length === 0) return {};
+  const equalPercent = Math.floor(100 / workerIds.length);
+  const remainder = 100 - (equalPercent * workerIds.length);
+  const split: TeamSplitConfig = {};
+  workerIds.forEach((id, index) => {
+    split[id] = equalPercent + (index === 0 ? remainder : 0);
+  });
+  return split;
+};
 
 // Import SVG icons for achievements
 import GreenJacketIcon from '../../assets/green-jacket.svg';
