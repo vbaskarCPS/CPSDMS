@@ -1,4 +1,7 @@
 // src/pages/Management/PayoutToday.tsx
+// Temporary debug - remove after testing
+import * as Types from '../../types';
+console.log('Types exports:', Object.keys(Types));
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
