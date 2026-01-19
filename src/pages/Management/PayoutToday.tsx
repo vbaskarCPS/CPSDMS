@@ -1,7 +1,4 @@
 // src/pages/Management/PayoutToday.tsx
-// Temporary debug - remove after testing
-import * as Types from '../../types';
-console.log('Types exports:', Object.keys(Types));
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -27,22 +24,19 @@ import {
   Camera,
   Truck,
 } from 'lucide-react';
-import { Worker, SortOption, ManagementUser, LogsheetSession, Bonus, BonusType, SessionTransaction, SeasonType, TeamCart } from '../../types';
+import {
+  Worker,
+  SortOption,
+  ManagementUser,
+  LogsheetSession,
+  Bonus,
+  BonusType,
+  SessionTransaction,
+  SeasonType,
+  TeamSplitConfig,
+} from '../../types';
 import { sessionService } from '../../lib/sessionService';
-import { seasonHasTeams } from '../../lib/commandCenterService';
-import { TeamSplitConfig } from '../../types';
-
-// Helper function - define locally to avoid import issues
-const createEqualSplit = (workerIds: string[]): TeamSplitConfig => {
-  if (workerIds.length === 0) return {};
-  const equalPercent = Math.floor(100 / workerIds.length);
-  const remainder = 100 - (equalPercent * workerIds.length);
-  const split: TeamSplitConfig = {};
-  workerIds.forEach((id, index) => {
-    split[id] = equalPercent + (index === 0 ? remainder : 0);
-  });
-  return split;
-};
+import { seasonHasTeams, createEqualSplit } from '../../lib/commandCenterService';
 
 // Import SVG icons for achievements
 import GreenJacketIcon from '../../assets/green-jacket.svg';
