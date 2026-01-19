@@ -1255,21 +1255,30 @@ class SessionService {
     }
   }
 
+  /**
+   * Assign a single worker to a route (legacy method, wraps assignRouteToWorkers)
+   */
   public async assignRouteToWorker(routeCode: string, workerId: string | null): Promise<void> {
+    const newAssignedWorkerIds = workerId ? [workerId] : [];
+    await this.assignRouteToWorkers(routeCode, newAssignedWorkerIds);
+  }
+
+  /**
+   * Assign multiple workers to a route (used for team/cart assignments in Lawn Rejuv)
+   */
+  public async assignRouteToWorkers(routeCode: string, workerIds: string[]): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return;
     
-    const newAssignedWorkerIds = workerId ? [workerId] : [];
-    
     const { error } = await supabase
       .from('routes')
-      .update({ assigned_worker_ids: newAssignedWorkerIds })
+      .update({ assigned_worker_ids: workerIds })
       .eq('route_code', routeCode)
       .eq('session_date', date)
       .eq('command_center_id', ccId);
     
-    if (error) console.error("Error assigning route:", error);
+    if (error) console.error("Error assigning route to workers:", error);
   }
 
   // --- 6. BOOKING STATUS UPDATES ---
