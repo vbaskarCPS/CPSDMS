@@ -151,6 +151,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
                    'Payment Method': tx.paymentMethod,
                    'Email Address': tx.customerEmail,
                    'Cell Phone': tx.customerPhone,
+                   services: tx.services,
                    ...({
                        isUpgrade: tx.type === 'Upgrade',
                        isAddOn: tx.type === 'Add-On',
