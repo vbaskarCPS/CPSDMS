@@ -30,6 +30,11 @@ import {
 import { ImportMeta } from './googleSheetsService';
 export type { ImportMeta };
 
+// --- HELPER: Check if array has items ---
+function hasItems(arr: any[] | null | undefined): arr is any[] {
+  return Array.isArray(arr) && arr.length > 0;
+}
+
 class SessionService {
   private static instance: SessionService;
   private constructor() {}
@@ -1056,7 +1061,7 @@ class SessionService {
     if (isLawnRejuv) {
       // Get session to find all team workers
       const session = await this.getWorkerLogsheetSession(workerId);
-      const teamWorkerIds = session?.teamWorkerIds || [workerId];
+      const teamWorkerIds = hasItems(session?.teamWorkerIds) ? session.teamWorkerIds : [workerId];
       transactionQuery = transactionQuery.in('worker_id', teamWorkerIds);
     } else {
       transactionQuery = transactionQuery.eq('worker_id', workerId);
@@ -1138,7 +1143,10 @@ class SessionService {
       .eq('command_center_id', ccId)
       .maybeSingle();
 
-    const teamWorkerIds = sessionData?.team_worker_ids || [sessionData?.worker_id];
+    // FIX: Check if team_worker_ids has items, otherwise use worker_id
+    const teamWorkerIds = hasItems(sessionData?.team_worker_ids) 
+      ? sessionData.team_worker_ids 
+      : [sessionData?.worker_id].filter(Boolean);
 
     // Get transactions for all team members
     const { data: transactions } = await supabase
@@ -1233,8 +1241,9 @@ class SessionService {
     });
     
     return sessions.map((d) => {
-      // For team sessions, collect transactions from all team members
-      const teamWorkerIds = d.team_worker_ids || [d.worker_id];
+      // FIX: For team sessions, collect transactions from all team members
+      // Check if team_worker_ids has items, otherwise use worker_id
+      const teamWorkerIds = hasItems(d.team_worker_ids) ? d.team_worker_ids : [d.worker_id];
       const teamTransactions: SessionTransaction[] = [];
       teamWorkerIds.forEach((wid: string) => {
         if (transactionsByWorker[wid]) {
@@ -1284,8 +1293,11 @@ class SessionService {
 
     if (!sessionData) return null;
 
-    // Get all transactions for workers in this session
-    const workerIds = sessionData.team_worker_ids || [sessionData.worker_id];
+    // FIX: Get all transactions for workers in this session
+    // Check if team_worker_ids has items, otherwise use worker_id
+    const workerIds = hasItems(sessionData.team_worker_ids) 
+      ? sessionData.team_worker_ids 
+      : [sessionData.worker_id];
     
     const { data: financials } = await supabase
       .from('transactions')
@@ -1734,7 +1746,7 @@ class SessionService {
     }
 
     // Recalculate stats
-    if (teamWorkerIds && teamWorkerIds.length > 1) {
+    if (hasItems(teamWorkerIds)) {
       await this.recalculateTeamStats(teamWorkerIds);
     } else {
       await this.recalculateAndSaveWorkerStats(workerId);
