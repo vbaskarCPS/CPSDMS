@@ -8,12 +8,10 @@ import {
 import { sessionService } from '../../../lib/sessionService';
 import { 
   getPrepaidWeight, 
-  getBilledWeight, 
-  getOfficeFlatValue,
   getSeasonConfig,
   EQ_DIVISOR 
 } from '../../../lib/commandCenterService';
-import { RouteData, MasterBooking, Worker, ManagementUser, SeasonType, TeamCart } from '../../../types';
+import { RouteData, MasterBooking, Worker, ManagementUser, SeasonType, TeamCart, LogsheetSession } from '../../../types';
 
 interface RMRoutesTabProps {
   managerId: string;
@@ -103,25 +101,19 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     const priceStr = String(booking.Price || '');
     const config = getSeasonConfig(seasonType);
     
-    // Check for office flats
     for (const flat of config.officeFlats) {
       if (priceStr.startsWith(flat.code)) {
-        // Flat value is already pre-tax payable, divide by EQ_DIVISOR
         return flat.value / EQ_DIVISOR;
       }
     }
     
-    // Regular calculation for dollar amounts
     const price = parseFloat(priceStr.replace(/[^0-9.]/g, '')) || 0;
     if (price === 0) return 0;
     
-    // Determine weight based on payment type
-    // For pending bookings, we use prepaid weight if marked prepaid, otherwise full weight
     const isPrepaid = booking.Prepaid === 'x';
     const weight = isPrepaid ? getPrepaidWeight(seasonType) : 1.0;
     
-    // EQ = (price * weight) / tax / EQ_DIVISOR
-    const taxDivisor = 1.05; // 5% tax for West
+    const taxDivisor = 1.05;
     const eq = (price * weight) / taxDivisor / EQ_DIVISOR;
     
     return eq;
@@ -132,14 +124,11 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     const myTeam = workers.filter((w) => w.assignedManagerId === managerId);
     setContractors(myTeam);
 
-    // Filter Routes for this Manager
     const myRoutes = routes.filter((r) => r.managerId === managerId);
     const myRouteCodes = new Set(myRoutes.map(r => r.routeCode));
 
-    // Group Bookings by Route
     const groupedBookings: Record<string, MasterBooking[]> = {};
     
-    // Initialize groups for valid routes
     myRoutes.forEach(r => {
       groupedBookings[r.routeCode] = [];
     });
@@ -151,16 +140,13 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       }
     });
 
-    // Build Display Objects
     const enrichedRoutes = myRoutes.map((r) => {
       const routeBookings = groupedBookings[r.routeCode] || [];
 
-      // Calculate EQ using the helper function
       const totalEQ = routeBookings.reduce((sum, b) => {
         return sum + calculateBookingEQ(b);
       }, 0);
 
-      // Calculate worker breakdown from bookings
       const workerCounts: Record<string, { count: number; worker: Worker | null }> = {};
       let unassignedCount = 0;
 
@@ -185,7 +171,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
           initials: `${data.worker!.firstName[0]}${data.worker!.lastName[0]}`,
           bookingCount: data.count
         }))
-        .sort((a, b) => b.bookingCount - a.bookingCount); // Sort by most bookings first
+        .sort((a, b) => b.bookingCount - a.bookingCount);
 
       return {
         routeCode: r.routeCode,
@@ -208,17 +194,15 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   const sortedRoutes = useMemo(() => {
     const routeList = [...displayRoutes];
     
-    // Unassigned routes always come first (no workers assigned at route level)
     const unassigned = routeList.filter(r => r.assignedWorkerIds.length === 0);
     const assigned = routeList.filter(r => r.assignedWorkerIds.length > 0);
     
-    // Sort each group based on selected criteria
     const sortFn = (a: RouteDisplay, b: RouteDisplay) => {
       if (sortBy === 'alpha') {
         return a.routeCode.localeCompare(b.routeCode);
       } else if (sortBy === 'prebooks') {
         return b.totalBookings - a.totalBookings;
-      } else { // sortBy === 'eq'
+      } else {
         return b.totalEQ - a.totalEQ;
       }
     };
@@ -245,12 +229,10 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     return map;
   }, [routes]);
 
-  // For Lawn Rejuv: sort by cart, then by name within cart
   const sortedContractors = useMemo(() => {
     const sorted = [...contractors];
     
     if (isLawnRejuv) {
-      // Sort by teamId (cart), then by name
       return sorted.sort((a, b) => {
         const aTeam = a.teamId || a.contractorId;
         const bTeam = b.teamId || b.contractorId;
@@ -262,7 +244,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       });
     }
     
-    // Aeration: sort by assignment status, then name
     return sorted.sort((a, b) => {
       const aRoutes = workerRouteMap.get(a.contractorId);
       const bRoutes = workerRouteMap.get(b.contractorId);
@@ -278,7 +259,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     });
   }, [contractors, workerRouteMap, isLawnRejuv]);
 
-  // Group contractors by cart for Lawn Rejuv modal display
   const contractorsByCart = useMemo(() => {
     if (!isLawnRejuv) return null;
     
@@ -310,7 +290,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     setExpandedRoutes(next);
   };
 
-  // For Lawn Rejuv: assign entire cart (all workers in team)
   const handleAssignConfirm = async (workerId: string | null) => {
     if (!assignModalData) return;
 
@@ -320,36 +299,55 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       if (workerId === null) {
         // Unassign route
         await sessionService.assignRouteToWorkers(routeCode, []);
+        
+        // Clear session assignments from bookings (Lawn Rejuv)
+        if (isLawnRejuv) {
+          const routeItems = displayRoutes.find(r => r.routeCode === routeCode)?.items || [];
+          const pendingItems = routeItems.filter(b => b.Status !== 'completed');
+          await Promise.all(pendingItems.map(job => 
+            sessionService.assignBookingToSession(job['Booking ID'], null)
+          ));
+        }
       } else if (isLawnRejuv) {
-        // Find the worker's cart and assign ALL team members to the route
+        // LAWN REJUV: Find the worker's cart and assign to session
         const worker = contractors.find(w => w.contractorId === workerId);
         const teamId = worker?.teamId || workerId;
         const cart = teamCarts.find(c => c.teamId === teamId);
+        
+        // Get the session for this cart
+        const session = await sessionService.getWorkerLogsheetSession(workerId);
+        const sessionId = session?.id;
         
         if (cart && cart.workerIds.length > 1) {
           // Assign all cart members to the route
           await sessionService.assignRouteToWorkers(routeCode, cart.workerIds);
           
-          // Also assign all pending bookings to the first worker (cart lead)
-          const routeItems = displayRoutes.find(r => r.routeCode === routeCode)?.items || [];
-          const pendingItems = routeItems.filter(b => b.Status !== 'completed');
-          
-          await Promise.all(pendingItems.map(job => 
-            sessionService.assignBookingToWorker(job['Booking ID'], cart.workerIds[0])
-          ));
+          // Assign all pending bookings to the SESSION (not contractor)
+          if (sessionId) {
+            const routeItems = displayRoutes.find(r => r.routeCode === routeCode)?.items || [];
+            const pendingItems = routeItems.filter(b => b.Status !== 'completed');
+            const bookingIds = pendingItems.map(job => job['Booking ID']);
+            
+            if (bookingIds.length > 0) {
+              await sessionService.assignBookingsToSession(bookingIds, sessionId);
+            }
+          }
         } else {
-          // Solo worker - normal assignment
+          // Solo worker - still use session-based assignment
           await sessionService.assignRouteToWorkers(routeCode, [workerId]);
           
-          const routeItems = displayRoutes.find(r => r.routeCode === routeCode)?.items || [];
-          const pendingItems = routeItems.filter(b => b.Status !== 'completed');
-          
-          await Promise.all(pendingItems.map(job => 
-            sessionService.assignBookingToWorker(job['Booking ID'], workerId)
-          ));
+          if (sessionId) {
+            const routeItems = displayRoutes.find(r => r.routeCode === routeCode)?.items || [];
+            const pendingItems = routeItems.filter(b => b.Status !== 'completed');
+            const bookingIds = pendingItems.map(job => job['Booking ID']);
+            
+            if (bookingIds.length > 0) {
+              await sessionService.assignBookingsToSession(bookingIds, sessionId);
+            }
+          }
         }
       } else {
-        // Aeration - single worker assignment
+        // AERATION: Single worker assignment to contractor_id
         await sessionService.assignRouteToWorkers(routeCode, [workerId]);
 
         const routeItems = displayRoutes.find(r => r.routeCode === routeCode)?.items || [];
@@ -361,7 +359,16 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       }
     } else {
       // Single job assignment
-      await sessionService.assignBookingToWorker(assignModalData.targetId, workerId);
+      if (isLawnRejuv && workerId) {
+        // Lawn Rejuv: assign to session
+        const session = await sessionService.getWorkerLogsheetSession(workerId);
+        if (session?.id) {
+          await sessionService.assignBookingToSession(assignModalData.targetId, session.id);
+        }
+      } else {
+        // Aeration: assign to contractor
+        await sessionService.assignBookingToWorker(assignModalData.targetId, workerId);
+      }
     }
 
     setAssignModalData(null);
@@ -412,7 +419,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     const hasAssignments = route.assignedWorkerIds.length > 0;
     const hasUnassigned = route.unassignedCount > 0;
     
-    // Case 1: No assignments at all - show single unassigned icon
     if (!hasAssignments) {
       return (
         <button 
@@ -433,7 +439,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       );
     }
 
-    // Case 2: Single worker assigned (no split) - for Lawn Rejuv, check if it's a cart
     if (route.assignedWorkerIds.length === 1 && !hasUnassigned && !isLawnRejuv) {
       const worker = getWorkerInfo(route.assignedWorkerIds[0]);
       
@@ -458,14 +463,12 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       );
     }
 
-    // For Lawn Rejuv: check if assigned workers form a cart
     if (isLawnRejuv && route.assignedWorkerIds.length >= 1) {
       const firstWorker = getWorkerInfo(route.assignedWorkerIds[0]);
       const cart = firstWorker ? cartByWorkerId.get(firstWorker.contractorId) : null;
       const isFullCart = cart && cart.workerIds.every(wid => route.assignedWorkerIds.includes(wid));
       
       if (isFullCart && cart.workerIds.length > 1) {
-        // Show cart badge
         return (
           <button
             onClick={(e) => {
@@ -485,7 +488,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
           </button>
         );
       } else if (route.assignedWorkerIds.length === 1) {
-        // Solo worker in lawn rejuv
         return (
           <button 
             onClick={(e) => {
@@ -508,25 +510,20 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       }
     }
 
-    // Case 3: Multiple workers or split route - show overlapping bubbles
     const bubblesToShow: { type: 'worker' | 'unassigned' | 'overflow'; workerId?: string; count?: number }[] = [];
     
-    // Add worker bubbles based on assignedWorkerIds
     route.assignedWorkerIds.slice(0, 4).forEach(workerId => {
       bubblesToShow.push({ type: 'worker', workerId });
     });
 
-    // Add unassigned bubble if needed (within 4 limit)
     if (hasUnassigned && bubblesToShow.length < 4) {
       bubblesToShow.push({ type: 'unassigned', count: route.unassignedCount });
     }
 
-    // Calculate overflow
     const totalItems = route.assignedWorkerIds.length + (hasUnassigned ? 1 : 0);
     const overflow = totalItems - bubblesToShow.length;
     
     if (overflow > 0) {
-      // Replace last bubble with overflow indicator
       bubblesToShow.pop();
       bubblesToShow.push({ type: 'overflow', count: overflow + 1 });
     }
@@ -601,12 +598,10 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   const renderRouteStatus = (route: RouteDisplay) => {
     const hasAssignments = route.assignedWorkerIds.length > 0;
     
-    // No assignments at all
     if (!hasAssignments) {
       return <span className="text-red-400 italic">Unassigned Route</span>;
     }
     
-    // For Lawn Rejuv: check if it's a full cart
     if (isLawnRejuv) {
       const firstWorker = getWorkerInfo(route.assignedWorkerIds[0]);
       const cart = firstWorker ? cartByWorkerId.get(firstWorker.contractorId) : null;
@@ -622,7 +617,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       }
     }
     
-    // Single worker assignment
     if (route.assignedWorkerIds.length === 1) {
       const worker = getWorkerInfo(route.assignedWorkerIds[0]);
       if (worker) {
@@ -630,7 +624,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       }
     }
     
-    // Multiple workers (split route)
     const workerCount = route.assignedWorkerIds.length;
     const unassignedText = route.unassignedCount > 0 ? ` · ${route.unassignedCount} unassigned` : '';
     return (
@@ -687,7 +680,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
           >
             {/* --- HEADER --- */}
             <div className="p-3 flex items-center justify-between gap-3 bg-gray-800 relative">
-              {/* Route Identity & Assign Button */}
               <div className="flex items-center gap-3">
                 {renderWorkerBubbles(route)}
                  
@@ -699,7 +691,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                 </div>
               </div>
 
-              {/* Stats & Expand */}
               <div 
                 onClick={() => toggleRouteExpand(route.routeCode)}
                 className="flex items-center gap-4 cursor-pointer hover:bg-white/5 rounded px-2 py-1 transition-colors"
@@ -722,8 +713,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                         const jobWorker = getWorkerInfo(job['Contractor Number'] || null);
                         const isJobCompleted = job.Status === 'completed' || job.Completed === 'x';
                         const notes = job['Log Sheet Notes'] || '';
-                        
-                        // Service badges for Lawn Rejuv
                         const services = job.services;
                         
                         return (
@@ -736,12 +725,10 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                                 }`}
                             >
                                 <div className="flex justify-between items-start gap-3">
-                                    {/* Job Details */}
                                     <div className="min-w-0 flex-1">
                                         <div className="font-bold text-gray-200 text-sm truncate flex items-center gap-2">
                                             {job['First Name']} {job['Last Name']}
                                             
-                                            {/* Service Badges (Lawn Rejuv) */}
                                             {isLawnRejuv && services && (
                                               <div className="flex gap-0.5">
                                                 {services.aeration && <span className="text-[8px] px-1 py-0.5 rounded bg-blue-900/50 text-blue-300 font-bold">A</span>}
@@ -766,7 +753,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                                         )}
                                     </div>
 
-                                    {/* Action & Price */}
                                     <div className="flex flex-col items-end gap-2">
                                         <div className="flex items-center gap-2">
                                             {job.Prepaid === 'x' && <span className="text-[9px] bg-green-900/30 text-green-400 px-1 py-0.5 rounded border border-green-800 font-bold">PP</span>}
@@ -941,7 +927,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                           </div>
                       </div>
                       
-                      {/* Visual Badge for existing assignments */}
                       {hasRoute && (
                           <span className="text-[9px] bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded border border-gray-600 font-mono">
                               {assignedRoutes[0]}
@@ -953,7 +938,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
               )}
             </div>
 
-            {/* Transfer to Manager Button - Only if UNASSIGNED and Multiple Managers */}
+            {/* Transfer to Manager Button */}
             {!assignModalData.currentWorkerId && availableManagers.length > 0 && (
               <>
                 <div className="border-t border-gray-700 my-3"></div>

@@ -268,6 +268,9 @@ export interface MasterBooking {
   
   commandCenterId?: string; // Links to CommandCenter.id
   
+  // --- SESSION ASSIGNMENT (Lawn Rejuv) ---
+  sessionId?: string; // Links to LogsheetSession.id for team-based assignment
+  
   // --- SERVICE FLAGS (Lawn Rejuv Season) ---
   services?: ServiceFlags; // Which services are included (A/D/F/S/L)
   

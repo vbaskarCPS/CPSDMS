@@ -279,6 +279,7 @@ class SessionService {
       Prepaid: b.is_prepaid ? 'x' : undefined,
       commandCenterId: b.command_center_id,
       services: b.services,
+      sessionId: b.session_id,
       ...b.data,
     }));
 
@@ -526,6 +527,69 @@ class SessionService {
   public async getTeamMembers(workerId: string): Promise<Worker[]> {
     const cart = await this.getWorkerTeamCart(workerId);
     return cart?.workers || [];
+  }
+
+  /**
+   * Get the logsheet session for a worker (handles team sessions)
+   */
+  public async getWorkerLogsheetSession(workerId: string): Promise<LogsheetSession | null> {
+    const ccId = this.getCCId();
+    const date = await this.getDailySessionDate();
+    if (!date) return null;
+
+    // Check for team session first
+    const { data: teamSession } = await supabase
+      .from('logsheet_sessions')
+      .select('*')
+      .eq('date', date)
+      .eq('command_center_id', ccId)
+      .contains('team_worker_ids', [workerId])
+      .maybeSingle();
+
+    if (teamSession) {
+      return {
+        id: teamSession.id,
+        workerId: teamSession.worker_id,
+        date: teamSession.date,
+        status: teamSession.status,
+        stats: teamSession.stats,
+        validation: teamSession.validation,
+        bonuses: teamSession.bonuses,
+        dailyRouteStore: [],
+        financialStore: [],
+        commandCenterId: teamSession.command_center_id,
+        teamWorkerIds: teamSession.team_worker_ids,
+        equivSplit: teamSession.equiv_split,
+        upsellSplit: teamSession.upsell_split,
+      };
+    }
+
+    // Check individual session
+    const { data } = await supabase
+      .from('logsheet_sessions')
+      .select('*')
+      .eq('worker_id', workerId)
+      .eq('date', date)
+      .eq('command_center_id', ccId)
+      .maybeSingle();
+
+    if (!data) return null;
+
+    return {
+      id: data.id,
+      workerId: data.worker_id,
+      date: data.date,
+      status: data.status,
+      stats: data.stats,
+      validation: data.validation,
+      bonuses: data.bonuses,
+      dailyRouteStore: [],
+      financialStore: [],
+      commandCenterId: data.command_center_id,
+      teamWorkerIds: data.team_worker_ids,
+      equivSplit: data.equiv_split,
+      upsellSplit: data.upsell_split,
+    };
   }
 
   // --- 3. SESSION MANAGEMENT ---
@@ -920,11 +984,27 @@ class SessionService {
 
   // --- 5. LOGSHEETS & TRANSACTIONS ---
 
+  /**
+   * Get assignments for a worker - season-aware
+   * Aeration: uses contractor_id
+   * Lawn Rejuv: uses session_id for team-based assignments
+   */
   public async getWorkerAssignments(workerId: string): Promise<MasterBooking[]> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return [];
 
+    const seasonType = await this.getSessionSeasonType();
+    const isLawnRejuv = seasonType === 'lawn_rejuv';
+
+    // For Lawn Rejuv, get the worker's session first
+    let sessionId: string | null = null;
+    if (isLawnRejuv) {
+      const session = await this.getWorkerLogsheetSession(workerId);
+      sessionId = session?.id || null;
+    }
+
+    // Get routes assigned to this worker
     const { data: allRoutes } = await supabase
       .from('routes')
       .select('route_code, assigned_worker_ids')
@@ -935,6 +1015,7 @@ class SessionService {
       .filter(r => r.assigned_worker_ids && r.assigned_worker_ids.includes(workerId))
       .map(r => r.route_code);
 
+    // Get all non-completed bookings
     const { data: allBookings } = await supabase
       .from('bookings')
       .select('*')
@@ -942,18 +1023,46 @@ class SessionService {
       .eq('command_center_id', ccId)
       .neq('status', 'completed');
 
-    const myPending = (allBookings || []).filter((b) => {
-      const isMyRoute = myRouteCodes.includes(b.route_number);
-      const isAssignedToMe = b.contractor_id === workerId;
-      const isAssignedToOther = b.contractor_id && b.contractor_id !== workerId;
-      return (isMyRoute && !isAssignedToOther) || isAssignedToMe;
-    });
+    // Filter bookings based on season type
+    let myPending: any[];
+    
+    if (isLawnRejuv && sessionId) {
+      // Lawn Rejuv: match by session_id OR route assignment (for unassigned jobs)
+      myPending = (allBookings || []).filter((b) => {
+        // If booking is assigned to this session, include it
+        if (b.session_id === sessionId) return true;
+        
+        // If booking is on my route and not assigned to another session, include it
+        const isMyRoute = myRouteCodes.includes(b.route_number);
+        const isUnassigned = !b.session_id && !b.contractor_id;
+        return isMyRoute && isUnassigned;
+      });
+    } else {
+      // Aeration: match by contractor_id OR route assignment
+      myPending = (allBookings || []).filter((b) => {
+        const isMyRoute = myRouteCodes.includes(b.route_number);
+        const isAssignedToMe = b.contractor_id === workerId;
+        const isAssignedToOther = b.contractor_id && b.contractor_id !== workerId;
+        return (isMyRoute && !isAssignedToOther) || isAssignedToMe;
+      });
+    }
 
-    const { data: myTransactions } = await supabase
+    // Get transactions for this worker (or all team members in Lawn Rejuv)
+    let transactionQuery = supabase
       .from('transactions')
       .select('*')
-      .eq('worker_id', workerId)
       .eq('command_center_id', ccId);
+
+    if (isLawnRejuv) {
+      // Get session to find all team workers
+      const session = await this.getWorkerLogsheetSession(workerId);
+      const teamWorkerIds = session?.teamWorkerIds || [workerId];
+      transactionQuery = transactionQuery.in('worker_id', teamWorkerIds);
+    } else {
+      transactionQuery = transactionQuery.eq('worker_id', workerId);
+    }
+
+    const { data: myTransactions } = await transactionQuery;
 
     const pendingMapped = myPending.map((b) => ({
       ...b.data,
@@ -967,9 +1076,93 @@ class SessionService {
       Prepaid: b.is_prepaid ? 'x' : undefined,
       commandCenterId: b.command_center_id,
       services: b.services,
+      sessionId: b.session_id,
     }));
 
     const completedMapped = (myTransactions || []).map(tx => {
+        const mapped = this.mapDbTransaction(tx);
+        return {
+            'Booking ID': mapped.jobId,
+            'First Name': mapped.customerName.split(' ')[0],
+            'Last Name': mapped.customerName.split(' ').slice(1).join(' '),
+            'Full Address': mapped.address,
+            'Completed': 'x',
+            'Status': 'completed',
+            'Price': mapped.displayPrice,
+            'Route Number': mapped.routeCode,
+            'Log Sheet Notes': mapped.itemDescription,
+            'Home Phone': mapped.customerPhone,
+            'Email Address': mapped.customerEmail,
+            'Payment Method': mapped.paymentMethod,
+            'paymentBreakdown': mapped.paymentBreakdown,
+            'FO/BO/FP': mapped.serviceType,
+            'Contract Title': (mapped.items && mapped.items.length > 0) ? mapped.items[0].name : (mapped.serviceName || mapped.displayPrice),
+            'invoiceNumber': mapped.invoiceNumber,
+            'chequeNumber': mapped.chequeNumber,
+            'etransferEmail': mapped.etransferEmail,
+            isContract: ['Upgrade', 'Add-On'].includes(mapped.type),
+            isUpgrade: mapped.type === 'Upgrade',
+            isAddOn: mapped.type === 'Add-On',
+            isNewSale: mapped.type === 'Sale',
+            Prepaid: mapped.isPrepaid ? 'x' : undefined,
+            commandCenterId: mapped.commandCenterId,
+            services: mapped.services,
+        };
+    });
+
+    return [...pendingMapped, ...completedMapped];
+  }
+
+  /**
+   * Get bookings assigned to a specific session (for Lawn Rejuv team display)
+   */
+  public async getSessionAssignments(sessionId: string): Promise<MasterBooking[]> {
+    const ccId = this.getCCId();
+    const date = await this.getDailySessionDate();
+    if (!date) return [];
+
+    // Get pending bookings assigned to this session
+    const { data: pendingBookings } = await supabase
+      .from('bookings')
+      .select('*')
+      .eq('session_date', date)
+      .eq('command_center_id', ccId)
+      .eq('session_id', sessionId)
+      .neq('status', 'completed');
+
+    // Get the session to find team workers
+    const { data: sessionData } = await supabase
+      .from('logsheet_sessions')
+      .select('team_worker_ids, worker_id')
+      .eq('id', sessionId)
+      .eq('command_center_id', ccId)
+      .maybeSingle();
+
+    const teamWorkerIds = sessionData?.team_worker_ids || [sessionData?.worker_id];
+
+    // Get transactions for all team members
+    const { data: transactions } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('command_center_id', ccId)
+      .in('worker_id', teamWorkerIds);
+
+    const pendingMapped = (pendingBookings || []).map((b) => ({
+      ...b.data,
+      ...b.customer_details,
+      'Booking ID': b.booking_id,
+      'Route Number': b.route_number,
+      'Contractor Number': b.contractor_id,
+      Status: b.status,
+      Price: b.price?.toString(),
+      'Log Sheet Notes': b.log_notes,
+      Prepaid: b.is_prepaid ? 'x' : undefined,
+      commandCenterId: b.command_center_id,
+      services: b.services,
+      sessionId: b.session_id,
+    }));
+
+    const completedMapped = (transactions || []).map(tx => {
         const mapped = this.mapDbTransaction(tx);
         return {
             'Booking ID': mapped.jobId,
@@ -1039,21 +1232,32 @@ class SessionService {
       transactionsByWorker[tx.workerId].push(tx);
     });
     
-    return sessions.map((d) => ({
-      id: d.id,
-      workerId: d.worker_id,
-      date: d.date,
-      status: d.status,
-      stats: d.stats,
-      validation: d.validation,
-      bonuses: d.bonuses,
-      dailyRouteStore: [],
-      financialStore: transactionsByWorker[d.worker_id] || [],
-      commandCenterId: d.command_center_id,
-      teamWorkerIds: d.team_worker_ids,
-      equivSplit: d.equiv_split,
-      upsellSplit: d.upsell_split,
-    }));
+    return sessions.map((d) => {
+      // For team sessions, collect transactions from all team members
+      const teamWorkerIds = d.team_worker_ids || [d.worker_id];
+      const teamTransactions: SessionTransaction[] = [];
+      teamWorkerIds.forEach((wid: string) => {
+        if (transactionsByWorker[wid]) {
+          teamTransactions.push(...transactionsByWorker[wid]);
+        }
+      });
+
+      return {
+        id: d.id,
+        workerId: d.worker_id,
+        date: d.date,
+        status: d.status,
+        stats: d.stats,
+        validation: d.validation,
+        bonuses: d.bonuses,
+        dailyRouteStore: [],
+        financialStore: teamTransactions,
+        commandCenterId: d.command_center_id,
+        teamWorkerIds: d.team_worker_ids,
+        equivSplit: d.equiv_split,
+        upsellSplit: d.upsell_split,
+      };
+    });
   }
 
   public async getActiveLogsheetSession(workerId: string): Promise<LogsheetSession | null> {
@@ -1176,6 +1380,9 @@ class SessionService {
     if (error) throw error;
   }
 
+  /**
+   * Assign a booking to a worker (Aeration mode)
+   */
   public async assignBookingToWorker(bookingId: string, workerId: string | null): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
@@ -1252,6 +1459,42 @@ class SessionService {
           .eq('session_date', date)
           .eq('command_center_id', ccId);
       }
+    }
+  }
+
+  /**
+   * Assign a booking to a session (Lawn Rejuv team mode)
+   */
+  public async assignBookingToSession(bookingId: string, sessionId: string | null): Promise<void> {
+    const ccId = this.getCCId();
+
+    const { error } = await supabase
+      .from('bookings')
+      .update({ session_id: sessionId })
+      .eq('booking_id', bookingId)
+      .eq('command_center_id', ccId);
+    
+    if (error) {
+      console.error("Error assigning booking to session:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Assign multiple bookings to a session (batch operation for Lawn Rejuv)
+   */
+  public async assignBookingsToSession(bookingIds: string[], sessionId: string): Promise<void> {
+    const ccId = this.getCCId();
+
+    const { error } = await supabase
+      .from('bookings')
+      .update({ session_id: sessionId })
+      .in('booking_id', bookingIds)
+      .eq('command_center_id', ccId);
+    
+    if (error) {
+      console.error("Error batch assigning bookings to session:", error);
+      throw error;
     }
   }
 
