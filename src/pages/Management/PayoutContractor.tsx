@@ -21,8 +21,6 @@ import {
   Trophy,
   Trash2,
   Users,
-  ChevronDown,
-  ChevronUp,
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
 import { 
@@ -31,7 +29,6 @@ import {
   seasonHasTeams, 
   EQ_DIVISOR, 
   createEqualSplit,
-  getSeasonConfig,
 } from '../../lib/commandCenterService';
 import { 
   LogsheetSession, 
@@ -40,7 +37,6 @@ import {
   TeamSplitConfig,
   SERVICE_FLAG_KEYS,
   SERVICE_FLAG_LABELS,
-  SEASON_CONFIGS,
 } from '../../types';
 import EditTransactionModal from '../../components/EditTransactionModal';
 
@@ -52,9 +48,7 @@ const BADGE_MAP: Record<string, string> = {
   'Grub Control': 'GRUB',
   'Golf Course': 'GOLF',
   'Rejuvenation After Care': 'AC',
-  // Central Add-Ons
   'Window Washing': 'WW',
-  // East Add-Ons
   'Driveway Sealing': 'DWS',
   'Hot Asphalt': 'RAMP'
 };
@@ -145,177 +139,6 @@ const TeamMemberCard: React.FC<{
   );
 };
 
-// --- SPLIT EDITOR COMPONENT ---
-const SplitEditor: React.FC<{
-  title: string;
-  icon: React.ReactNode;
-  split: TeamSplitConfig;
-  workers: Worker[];
-  onChange: (newSplit: TeamSplitConfig) => void;
-  disabled?: boolean;
-}> = ({ title, icon, split, workers, onChange, disabled }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const total = Object.values(split).reduce((sum, v) => sum + v, 0);
-  const isValid = Math.abs(total - 100) < 0.01;
-
-  const handleChange = (workerId: string, value: number) => {
-    const newSplit = { ...split, [workerId]: Math.max(0, Math.min(100, value)) };
-    onChange(newSplit);
-  };
-
-  const handleEqualize = () => {
-    const count = workers.length;
-    const equalShare = Math.floor(100 / count);
-    const remainder = 100 - (equalShare * count);
-    
-    const newSplit: TeamSplitConfig = {};
-    workers.forEach((w, i) => {
-      newSplit[w.contractorId] = equalShare + (i === 0 ? remainder : 0);
-    });
-    onChange(newSplit);
-  };
-
-  return (
-    <div className="bg-gray-900/50 rounded-lg border border-gray-700 overflow-hidden">
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center justify-between p-3 hover:bg-gray-800/50 transition-colors"
-        disabled={disabled}
-      >
-        <div className="flex items-center gap-2">
-          {icon}
-          <span className="text-sm font-bold text-gray-300">{title}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={`text-xs font-mono ${isValid ? 'text-green-400' : 'text-red-400'}`}>
-            {total.toFixed(0)}%
-          </span>
-          {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-        </div>
-      </button>
-
-      {isExpanded && (
-        <div className="p-3 border-t border-gray-700 space-y-3">
-          {workers.map((worker) => (
-            <div key={worker.contractorId} className="flex items-center justify-between gap-3">
-              <span className="text-sm text-gray-300 flex-1">
-                {worker.firstName} {worker.lastName.charAt(0)}.
-              </span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  value={split[worker.contractorId] || 0}
-                  onChange={(e) => handleChange(worker.contractorId, parseFloat(e.target.value) || 0)}
-                  className="w-20 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-white text-right text-sm"
-                  min="0"
-                  max="100"
-                  step="1"
-                  disabled={disabled}
-                />
-                <span className="text-gray-500 text-sm">%</span>
-              </div>
-            </div>
-          ))}
-
-          <div className="flex items-center justify-between pt-2 border-t border-gray-700">
-            <button
-              onClick={handleEqualize}
-              className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
-              disabled={disabled}
-            >
-              Split Equally
-            </button>
-            {!isValid && (
-              <span className="text-xs text-red-400">
-                Must equal 100% (currently {total.toFixed(0)}%)
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-// --- WORKER PAYOUT BREAKDOWN ROW ---
-// FIXED: Now displays team total EQ for reference and uses correct rate calculation
-const WorkerPayoutRow: React.FC<{
-  worker: Worker;
-  teamTotalEQ: number;      // Team total EQ (for display)
-  assignedEQ: number;       // Worker's split portion (for calculation)
-  baseRate: number;
-  productionPay: number;
-  upsellCommission: number;
-  iosCommission: number;
-  bonusAmount: number;
-  deductions: number;
-  machineDeduction: number;
-  finalPay: number;
-  isCurrentWorker: boolean;
-  equivSplitPercent: number;
-}> = ({ worker, teamTotalEQ, assignedEQ, baseRate, productionPay, upsellCommission, iosCommission, bonusAmount, deductions, machineDeduction, finalPay, isCurrentWorker, equivSplitPercent }) => {
-  // FIXED: Rates are dollar amounts, not percentages
-  const alumniRate = worker.alumniRate || 0;
-  const silverRate = worker.silverRate || 0;
-  const totalRate = baseRate + alumniRate + silverRate;
-  
-  return (
-    <div className={`p-3 rounded-lg border ${
-      isCurrentWorker ? 'bg-blue-900/20 border-blue-700' : 'bg-gray-800/50 border-gray-700'
-    }`}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <span className="font-bold text-white">{worker.firstName} {worker.lastName}</span>
-          {isCurrentWorker && (
-            <span className="text-[10px] bg-blue-900/50 text-blue-400 px-1.5 py-0.5 rounded border border-blue-700">
-              CURRENT
-            </span>
-          )}
-          <span className="text-[10px] text-gray-500">({equivSplitPercent}% split)</span>
-        </div>
-        <span className="text-lg font-bold text-green-400 font-mono">${finalPay.toFixed(2)}</span>
-      </div>
-      
-      <div className="grid grid-cols-6 gap-2 text-xs">
-        {/* Team Total EQ - for display/reference */}
-        <div className="bg-gray-900/50 rounded p-2">
-          <div className="text-gray-500 mb-1">Team EQ</div>
-          <div className="text-gray-400 font-mono">{teamTotalEQ.toFixed(2)}</div>
-        </div>
-        {/* Assigned EQ - worker's split portion used for calculation */}
-        <div className="bg-gray-900/50 rounded p-2">
-          <div className="text-gray-500 mb-1">Assigned EQ</div>
-          <div className="text-white font-mono">{assignedEQ.toFixed(2)}</div>
-        </div>
-        <div className="bg-gray-900/50 rounded p-2">
-          <div className="text-gray-500 mb-1">Rate</div>
-          <div className="text-white font-mono">${totalRate.toFixed(2)}</div>
-          <div className="text-[10px] text-gray-600">
-            ${baseRate.toFixed(2)} + ${alumniRate.toFixed(2)} + ${silverRate.toFixed(2)}
-          </div>
-        </div>
-        <div className="bg-gray-900/50 rounded p-2">
-          <div className="text-gray-500 mb-1">Production</div>
-          <div className="text-white font-mono">${productionPay.toFixed(2)}</div>
-        </div>
-        <div className="bg-gray-900/50 rounded p-2">
-          <div className="text-gray-500 mb-1">Upsell + IOS</div>
-          <div className="text-white font-mono">${(upsellCommission + iosCommission).toFixed(2)}</div>
-        </div>
-        <div className="bg-gray-900/50 rounded p-2">
-          <div className="text-gray-500 mb-1">Deductions</div>
-          <div className="text-red-400 font-mono">-${(deductions + machineDeduction).toFixed(2)}</div>
-          {machineDeduction > 0 && (
-            <div className="text-[10px] text-gray-600">
-              (Machine: $10)
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
-
 const PayoutContractor: React.FC = () => {
   const { contractorId } = useParams();
   const navigate = useNavigate();
@@ -330,38 +153,48 @@ const PayoutContractor: React.FC = () => {
   const [isTeamSession, setIsTeamSession] = useState(false);
   const [showTeamModal, setShowTeamModal] = useState(false);
 
-  // Split State
+  // Split State (Lawn Rejuv)
   const [equivSplit, setEquivSplit] = useState<TeamSplitConfig>({});
   const [upsellSplit, setUpsellSplit] = useState<TeamSplitConfig>({});
-  const [splitsModified, setSplitsModified] = useState(false);
 
-  // --- NEW: Product Cost & Tax Rate State ---
+  // Per-worker deductions (Lawn Rejuv)
+  const [workerMachineRentals, setWorkerMachineRentals] = useState<Record<string, boolean>>({});
+  const [workerDeductions, setWorkerDeductions] = useState<Record<string, number>>({});
+
+  // Aeration-only state (single values)
+  const [machineRental, setMachineRental] = useState(true);
+  const [deductions, setDeductions] = useState('');
+
+  // Product Cost & Tax Rate State
   const [productCostPercent, setProductCostPercent] = useState<number>(0);
   const [taxRate, setTaxRate] = useState<number>(5);
 
-  // --- FORM STATE ---
+  // Cash/Cheque form state
   const [cashBills, setCashBills] = useState('');
   const [cashChange, setCashChange] = useState('');
   const [chequeAmount, setChequeAmount] = useState('');
 
-  const [deductions, setDeductions] = useState('');
-  const [machineRental, setMachineRental] = useState(true);
-
-  // --- MODAL STATE ---
+  // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<any | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
-  // --- COPY PHONE STATE ---
+  // Copy phone state
   const [copiedPhone, setCopiedPhone] = useState(false);
 
-  // --- REFRESH KEY (triggers data reload) ---
+  // Refresh key (triggers data reload)
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Track if anything was modified
+  const [isModified, setIsModified] = useState(false);
 
   // Parse Inputs
   const totalCashInput = (parseFloat(cashBills) || 0) + (parseFloat(cashChange) || 0);
   const totalChequeInput = parseFloat(chequeAmount) || 0;
-  const totalDeductions = parseFloat(deductions) || 0;
+  const totalDeductionsAeration = parseFloat(deductions) || 0;
+
+  // Check if this is lawn rejuv season
+  const isLawnRejuv = seasonType === 'lawn_rejuv';
 
   useEffect(() => {
     const init = async () => {
@@ -373,7 +206,7 @@ const PayoutContractor: React.FC = () => {
         setSeasonType(season);
         const isTeamSeasonType = seasonHasTeams(season);
 
-        // --- NEW: Get product cost percent and tax rate ---
+        // Get product cost percent and tax rate
         const prodCost = await sessionService.getProductCostPercent();
         setProductCostPercent(prodCost);
         
@@ -397,7 +230,7 @@ const PayoutContractor: React.FC = () => {
           
           // Check if team session (has multiple workers)
           const teamIds = foundSession.teamWorkerIds || [];
-          const isTeam = isTeamSeasonType && teamIds.length > 1;
+          const isTeam = isTeamSeasonType && teamIds.length > 0;
           setIsTeamSession(isTeam);
           
           if (isTeam && daily) {
@@ -424,6 +257,25 @@ const PayoutContractor: React.FC = () => {
             } else {
               setUpsellSplit(createEqualSplit(teamIds));
             }
+
+            // Initialize per-worker machine rentals and deductions
+            const existingMachineRentals = foundSession.validation?.workerMachineRentals || {};
+            const existingWorkerDeductions = foundSession.validation?.workerDeductions || {};
+            
+            const initialMachineRentals: Record<string, boolean> = {};
+            const initialDeductions: Record<string, number> = {};
+            
+            teamIds.forEach(id => {
+              // Default to true if not set, or use legacy machineRental flag
+              initialMachineRentals[id] = existingMachineRentals[id] !== undefined 
+                ? existingMachineRentals[id] 
+                : (foundSession.validation?.machineRental ?? true);
+              initialDeductions[id] = existingWorkerDeductions[id] || 0;
+            });
+            
+            setWorkerMachineRentals(initialMachineRentals);
+            setWorkerDeductions(initialDeductions);
+            
           } else if (isTeamSeasonType && foundSession.workerId && daily) {
             // Solo "team" in lawn rejuv - just one worker
             const soloWorker = daily.workers.find(w => w.contractorId === foundSession.workerId);
@@ -431,6 +283,19 @@ const PayoutContractor: React.FC = () => {
               setTeamWorkers([soloWorker]);
               setEquivSplit({ [soloWorker.contractorId]: 100 });
               setUpsellSplit({ [soloWorker.contractorId]: 100 });
+              
+              // Initialize per-worker values for solo
+              const existingMachineRentals = foundSession.validation?.workerMachineRentals || {};
+              const existingWorkerDeductions = foundSession.validation?.workerDeductions || {};
+              
+              setWorkerMachineRentals({
+                [soloWorker.contractorId]: existingMachineRentals[soloWorker.contractorId] !== undefined
+                  ? existingMachineRentals[soloWorker.contractorId]
+                  : (foundSession.validation?.machineRental ?? true)
+              });
+              setWorkerDeductions({
+                [soloWorker.contractorId]: existingWorkerDeductions[soloWorker.contractorId] || 0
+              });
             }
           }
           
@@ -438,7 +303,10 @@ const PayoutContractor: React.FC = () => {
           if (foundSession.validation) {
             setCashBills(foundSession.validation.verifiedCash.toString());
             setChequeAmount(foundSession.validation.verifiedCheque.toString());
-            setMachineRental(foundSession.validation.machineRental);
+            // For aeration, use legacy single value
+            if (!isTeamSeasonType) {
+              setMachineRental(foundSession.validation.machineRental);
+            }
           }
         }
       } catch (err) {
@@ -464,24 +332,11 @@ const PayoutContractor: React.FC = () => {
     setRefreshKey(prev => prev + 1);
   };
 
-  // --- HELPER: SAVE SPLITS ---
-  const handleSaveSplits = async () => {
-    if (!session) return;
-    try {
-      await sessionService.updateTeamSplits(session.id, equivSplit, upsellSplit);
-      setSplitsModified(false);
-      handleRefreshData();
-    } catch (err) {
-      alert('Error saving splits: ' + err);
-    }
-  };
-
   // --- HELPER: BADGES ---
   const getBadgeInfo = (tx: any) => {
     const itemName = tx.items?.[0]?.name || '';
     const type = tx.type || '';
 
-    // Check item name against map first
     if (BADGE_MAP[itemName]) {
       const label = BADGE_MAP[itemName];
       if (type === 'Upgrade') {
@@ -492,7 +347,6 @@ const PayoutContractor: React.FC = () => {
       }
     }
 
-    // Fallback to type-based badges
     if (type === 'Upgrade') {
       return { label: 'UPGRADE', className: 'bg-orange-900/30 text-orange-400 border-orange-800' };
     }
@@ -502,7 +356,6 @@ const PayoutContractor: React.FC = () => {
     if (type === 'Sale') {
       return { label: 'SALE', className: 'bg-yellow-900/30 text-yellow-400 border-yellow-800' };
     }
-    // Production / Default
     return { label: 'DONE', className: 'bg-green-900/30 text-green-400 border-green-800' };
   };
 
@@ -528,149 +381,122 @@ const PayoutContractor: React.FC = () => {
   const totalPrepaid = (stats.prodFlats || 0) + (stats.prodPrepaid || 0) + (stats.prodPrepaidSplit || 0) + (stats.upsellPrepaid || 0);
   const totalBilled = stats.prodBilled || 0;
 
-  // 2. EQ Calculations - FIXED VERSION
-  // Use region-appropriate tax rate instead of hardcoded 1.05
+  // 2. EQ Calculations
   const taxDivisor = 1 + (taxRate / 100);
-  
-  // Product cost multiplier (e.g., 0.75 for 25% product cost)
   const productCostMultiplier = 1 - (productCostPercent / 100);
 
-  // FIXED: Projected EQ - use stats.totalEQ directly (already correctly calculated by sessionService)
-  // This includes proper prepaid weighting, tax removal, and product cost deduction
   const projectedEQ = stats.totalEQ;
 
-  // FIXED: Actual EQ - use stats.totalEQ as base, then adjust for cash/cheque differences
-  // Cash and cheque have weight 1.0 in the formula (not weighted like prepaid)
-  // So the delta is: (diff / taxDivisor) * productCostMultiplier / EQ_DIVISOR
   const prodCashDiff = actualProdCash - stats.prodCash;
   const prodChequeDiff = actualProdCheque - stats.prodCheque;
   const deltaEQ = ((prodCashDiff + prodChequeDiff) / taxDivisor) * productCostMultiplier / EQ_DIVISOR;
   const actualTotalEQ = stats.totalEQ + deltaEQ;
 
-  // 3. Season-aware Payout Rate ($/EQ for commission calculation)
-  const teamSize = isTeamSession ? teamWorkers.length : 1;
+  // 3. Season-aware Payout Rate
+  const teamSize = isLawnRejuv ? teamWorkers.length : 1;
   const baseRate = getPayoutRate(seasonType, teamSize);
-  
-  // FIXED: alumniRate and silverRate are DOLLAR AMOUNTS per EQ (not percentages)
-  const alumniRate = worker?.alumniRate || 0;
-  const silverRate = worker?.silverRate || 0;
-  const totalRate = baseRate + alumniRate + silverRate;
 
-  // 4. Calculate per-worker payouts
-  // FIXED: Correct calculation with alumni/silver as dollar amounts, 
-  // machine rental $10 per worker, cash/cheque diff split by equiv percent
-  const calculateWorkerPayouts = () => {
-    // For team sessions in lawn_rejuv
-    if (isTeamSession && teamWorkers.length > 0) {
-      const payouts = teamWorkers.map(w => {
-        const eqPercent = (equivSplit[w.contractorId] || 0) / 100;
-        const upPercent = (upsellSplit[w.contractorId] || 0) / 100;
-        
-        // Team total EQ shown to all workers (for display)
-        const teamTotalEQ = actualTotalEQ;
-        
-        // Assigned EQ for this worker's calculation
-        const assignedEQ = actualTotalEQ * eqPercent;
-        
-        // FIXED: alumniRate and silverRate are $/EQ amounts, not percentages
-        const workerAlumni = w.alumniRate || 0;
-        const workerSilver = w.silverRate || 0;
-        const workerTotalRate = baseRate + workerAlumni + workerSilver;
-        
-        // Production commission = assignedEQ × totalRate
-        const productionPay = assignedEQ * workerTotalRate;
-        
-        // Upsell and IOS commission (split by upsell percent)
-        const upsellCommission = (stats.upsellPayable || 0) * upPercent * 0.15;
-        const iosCommission = (stats.iosCount || 0) * 5.0 * upPercent;
-        
-        // Bonuses with split
-        let bonusAmount = 0;
-        (session?.bonuses || []).forEach(bonus => {
-          const bonusSplit = bonus.splitPercentages?.[w.contractorId] ?? (eqPercent * 100);
-          bonusAmount += bonus.amount * (bonusSplit / 100);
-        });
-        
-        // FIXED: Deductions calculation
-        // Cash/cheque diff is split by equiv percent
-        const cashChequeDiff = (Math.abs(cashDiff) + Math.abs(chequeDiff)) * eqPercent;
-        
-        // Machine rental is $10 PER WORKER (NOT split)
-        const workerMachineDeduction = machineRental ? 10.0 : 0;
-        
-        // Other deductions split evenly among team
-        const workerOtherDeductions = totalDeductions / teamWorkers.length;
-        
-        const workerDeductions = cashChequeDiff + workerOtherDeductions;
-        
-        const finalPay = productionPay + upsellCommission + iosCommission + bonusAmount - workerDeductions - workerMachineDeduction;
-        
-        return {
-          worker: w,
-          teamTotalEQ,
-          assignedEQ,
-          equivSplitPercent: equivSplit[w.contractorId] || 0,
-          baseRate,
-          productionPay,
-          upsellCommission,
-          iosCommission,
-          bonusAmount,
-          deductions: workerDeductions,
-          machineDeduction: workerMachineDeduction,
-          finalPay,
-        };
+  // 4. Calculate per-worker payouts (Lawn Rejuv)
+  const calculateLawnRejuvPayouts = () => {
+    if (!isLawnRejuv || teamWorkers.length === 0) return [];
+    
+    const payouts = teamWorkers.map(w => {
+      const eqPercent = (equivSplit[w.contractorId] || 0) / 100;
+      const upPercent = (upsellSplit[w.contractorId] || 0) / 100;
+      
+      const teamTotalEQ = actualTotalEQ;
+      const assignedEQ = actualTotalEQ * eqPercent;
+      
+      const workerAlumni = w.alumniRate || 0;
+      const workerSilver = w.silverRate || 0;
+      const workerTotalRate = baseRate + workerAlumni + workerSilver;
+      
+      const productionPay = assignedEQ * workerTotalRate;
+      const upsellCommission = (stats.upsellPayable || 0) * upPercent * 0.15;
+      const iosCommission = (stats.iosCount || 0) * 5.0 * upPercent;
+      
+      // Bonuses with split
+      let bonusAmount = 0;
+      (session?.bonuses || []).forEach(bonus => {
+        const bonusSplit = bonus.splitPercentages?.[w.contractorId] ?? (eqPercent * 100);
+        bonusAmount += bonus.amount * (bonusSplit / 100);
       });
       
-      return payouts;
-    }
+      // Per-worker deductions
+      const cashChequeDiff = (Math.abs(cashDiff) + Math.abs(chequeDiff)) * eqPercent;
+      const workerMachineDeduction = workerMachineRentals[w.contractorId] ? 10.0 : 0;
+      const workerOtherDeductions = workerDeductions[w.contractorId] || 0;
+      
+      const totalWorkerDeductions = cashChequeDiff + workerOtherDeductions;
+      
+      const finalPay = productionPay + upsellCommission + iosCommission + bonusAmount - totalWorkerDeductions - workerMachineDeduction;
+      
+      return {
+        worker: w,
+        teamTotalEQ,
+        assignedEQ,
+        equivSplitPercent: equivSplit[w.contractorId] || 0,
+        upsellSplitPercent: upsellSplit[w.contractorId] || 0,
+        baseRate,
+        workerTotalRate,
+        productionPay,
+        upsellCommission,
+        iosCommission,
+        bonusAmount,
+        cashChequeDiff,
+        machineDeduction: workerMachineDeduction,
+        otherDeductions: workerOtherDeductions,
+        finalPay,
+      };
+    });
+    
+    return payouts;
+  };
 
-    // Single worker - standard calculation (aeration or solo lawn_rejuv)
-    if (!worker) return [];
+  // 5. Calculate aeration payout (single worker)
+  const calculateAerationPayout = () => {
+    if (!worker) return null;
+    
+    const alumniRate = worker.alumniRate || 0;
+    const silverRate = worker.silverRate || 0;
+    const totalRate = baseRate + alumniRate + silverRate;
     
     const productionPay = actualTotalEQ * totalRate;
     const upsellCommission = (stats.upsellPayable || 0) * 0.15;
     const iosCommission = (stats.iosCount || 0) * 5.0;
     const bonusTotal = (session?.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
     const machineDeduction = machineRental ? 10.0 : 0;
-    const cashChequeDiff = Math.abs(cashDiff) + Math.abs(chequeDiff);
+    const cashChequeDiffVal = Math.abs(cashDiff) + Math.abs(chequeDiff);
     const grossPay = productionPay + upsellCommission + iosCommission + bonusTotal;
-    const finalPay = grossPay - totalDeductions - machineDeduction - cashChequeDiff;
+    const finalPay = grossPay - totalDeductionsAeration - machineDeduction - cashChequeDiffVal;
     
-    return [{
-      worker: worker,
-      teamTotalEQ: actualTotalEQ,
-      assignedEQ: actualTotalEQ,
-      equivSplitPercent: 100,
-      baseRate,
+    return {
       productionPay,
       upsellCommission,
       iosCommission,
-      bonusAmount: bonusTotal,
-      deductions: totalDeductions + cashChequeDiff,
+      bonusTotal,
       machineDeduction,
+      totalDeductions: totalDeductionsAeration + cashChequeDiffVal,
       finalPay,
-    }];
+      totalRate,
+    };
   };
 
-  const workerPayouts = calculateWorkerPayouts();
-  const currentWorkerPayout = workerPayouts.find(p => p.worker.contractorId === contractorId);
+  const lawnRejuvPayouts = calculateLawnRejuvPayouts();
+  const aerationPayout = calculateAerationPayout();
   
-  // For header display - solo worker values
-  const productionPay = currentWorkerPayout?.productionPay || 0;
-  const upsellCommission = currentWorkerPayout?.upsellCommission || 0;
-  const iosCommission = currentWorkerPayout?.iosCommission || 0;
-  const bonusTotal = (session?.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
-  
-  // Total team payout (sum of all individual payouts)
-  const totalTeamPayout = workerPayouts.reduce((sum, p) => sum + p.finalPay, 0);
-  
-  // Final pay shown in header
-  const finalPay = isTeamSession ? totalTeamPayout : (currentWorkerPayout?.finalPay || 0);
+  // Final pay for header display
+  const finalPay = isLawnRejuv 
+    ? lawnRejuvPayouts.reduce((sum, p) => sum + p.finalPay, 0)
+    : (aerationPayout?.finalPay || 0);
 
-  // Machine rental display - for teams, show total machine cost
-  const totalMachineDeduction = isTeamSession 
-    ? (machineRental ? 10.0 * teamWorkers.length : 0)
-    : (machineRental ? 10.0 : 0);
+  // Bonus total for display
+  const bonusTotal = (session?.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
+
+  // Validate splits sum to 100
+  const equivTotal = Object.values(equivSplit).reduce((sum, v) => sum + v, 0);
+  const upsellTotal = Object.values(upsellSplit).reduce((sum, v) => sum + v, 0);
+  const splitsValid = Math.abs(equivTotal - 100) < 0.01 && Math.abs(upsellTotal - 100) < 0.01;
 
   // --- HANDLERS ---
   const handleRowClick = async (tx: any) => {
@@ -731,20 +557,10 @@ const PayoutContractor: React.FC = () => {
   const handleFinalize = async () => {
     if (!session) return;
     
-    // Validate splits for team sessions
-    if (isTeamSession) {
-      const equivTotal = Object.values(equivSplit).reduce((sum, v) => sum + v, 0);
-      const upsellTotal = Object.values(upsellSplit).reduce((sum, v) => sum + v, 0);
-      
-      if (Math.abs(equivTotal - 100) > 0.01 || Math.abs(upsellTotal - 100) > 0.01) {
-        alert('Split percentages must total 100% before finalizing');
-        return;
-      }
-      
-      // Save splits if modified
-      if (splitsModified) {
-        await handleSaveSplits();
-      }
+    // Validate splits for lawn rejuv
+    if (isLawnRejuv && !splitsValid) {
+      alert('Split percentages must total 100% before finalizing');
+      return;
     }
     
     setLoading(true);
@@ -759,17 +575,20 @@ const PayoutContractor: React.FC = () => {
       actualProdCheque,
       actualTotalEQ,
       finalCommission: finalPay,
-      machineRental: machineRental,
+      machineRental: isLawnRejuv ? false : machineRental, // Legacy field for aeration
       managerName: 'Admin',
       timestamp: new Date().toISOString(),
+      // New per-worker fields for lawn rejuv
+      workerMachineRentals: isLawnRejuv ? workerMachineRentals : undefined,
+      workerDeductions: isLawnRejuv ? workerDeductions : undefined,
     };
 
     try {
       await sessionService.updateLogsheetSession(session.id, {
         validation: validationData,
-        status: 'PAID', // <-- LOCKOUT: This locks the worker(s) out of their logsheet
-        equivSplit: isTeamSession ? equivSplit : undefined,
-        upsellSplit: isTeamSession ? upsellSplit : undefined,
+        status: 'PAID',
+        equivSplit: isLawnRejuv ? equivSplit : undefined,
+        upsellSplit: isLawnRejuv ? upsellSplit : undefined,
       });
       navigate('/admin/command-center?tab=payout');
     } catch (err) {
@@ -820,11 +639,8 @@ const PayoutContractor: React.FC = () => {
   const renderTransactionRow = (tx: any) => {
     const badge = getBadgeInfo(tx);
     const isLoading = loadingId === (tx.id || tx.jobId);
-
-    // Price display
     const displayPrice = tx.displayPrice || `$${tx.price.toFixed(2)}`;
 
-    // Payment display
     const breakdownObj = tx.paymentBreakdown;
     const simpleMethod = tx.paymentMethod;
     let paymentDisplay = '';
@@ -843,7 +659,6 @@ const PayoutContractor: React.FC = () => {
         className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 flex flex-col gap-1 relative mb-1 transition-colors hover:border-cps-blue cursor-pointer group"
       >
         <div className="flex items-center justify-between gap-2 text-xs">
-          {/* Left */}
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <span className="font-mono font-bold bg-gray-700 text-gray-300 px-1.5 rounded text-[10px] min-w-[32px] text-center">
               {tx.routeCode || '--'}
@@ -854,11 +669,9 @@ const PayoutContractor: React.FC = () => {
             <span className="text-gray-500 truncate text-[10px] hidden sm:block">
               {tx.address}
             </span>
-            {/* Service badges for Lawn Rejuv */}
             {renderServiceBadges(tx.services)}
           </div>
 
-          {/* Contact Info with Email Status */}
           <div className="flex items-center gap-3 flex-shrink-0">
             {tx.customerPhone ? (
               <span className="flex items-center gap-1 text-[10px] text-green-400">
@@ -869,7 +682,6 @@ const PayoutContractor: React.FC = () => {
               <Phone size={14} className="text-gray-600 opacity-30" strokeWidth={2.5} />
             )}
             
-            {/* Email with Bounce Detection */}
             {tx.customerEmail ? (
               <EmailStatusBadge transactionId={tx.jobId} email={tx.customerEmail} />
             ) : (
@@ -877,14 +689,12 @@ const PayoutContractor: React.FC = () => {
             )}
           </div>
 
-          {/* Payment Info */}
           {paymentDisplay && (
             <div className="flex items-center justify-end text-[10px] text-gray-400 italic truncate flex-shrink text-right px-2 min-w-0 max-w-[120px]">
               {paymentDisplay}
             </div>
           )}
 
-          {/* Right */}
           <div className="flex items-center gap-2 flex-shrink-0 text-right">
             <span className="font-mono font-bold text-gray-300 w-16 text-right">
               {displayPrice}
@@ -940,7 +750,6 @@ const PayoutContractor: React.FC = () => {
                   {worker.firstName} {worker.lastName}
                 </h1>
                 
-                {/* Team Indicator */}
                 {isTeamSession && (
                   <button
                     onClick={() => setShowTeamModal(true)}
@@ -952,7 +761,6 @@ const PayoutContractor: React.FC = () => {
                   </button>
                 )}
                 
-                {/* Click to Copy Phone */}
                 {worker.cellPhone && (
                   <button
                     onClick={() => handleCopyPhone()}
@@ -973,7 +781,6 @@ const PayoutContractor: React.FC = () => {
                 <span className="bg-gray-700 px-2 py-0.5 rounded text-xs">
                   ID: {worker.contractorId}
                 </span>
-                {/* Season Badge */}
                 <span className={`px-2 py-0.5 rounded text-xs ${
                   seasonType === 'lawn_rejuv' 
                     ? 'bg-green-900/30 text-green-400 border border-green-700' 
@@ -984,14 +791,12 @@ const PayoutContractor: React.FC = () => {
                 <span>
                   Steps: <b className="text-white">{stats.stepCount}</b>
                 </span>
-                {/* Payout Rate Display */}
                 <span className="text-xs">
                   Payout Rate: <b className="text-white">${baseRate.toFixed(2)}/EQ</b>
                   {isTeamSession && seasonType === 'lawn_rejuv' && (
                     <span className="text-green-400 ml-1">(Team of {teamWorkers.length})</span>
                   )}
                 </span>
-                {/* Product Cost Display (for lawn_rejuv) */}
                 {productCostPercent > 0 && (
                   <span className="text-xs text-yellow-400">
                     Prod Cost: {productCostPercent}%
@@ -1032,72 +837,240 @@ const PayoutContractor: React.FC = () => {
       <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
         <div className="max-w-7xl mx-auto w-full space-y-6">
 
-          {/* TEAM SPLIT SECTION (Lawn Rejuv Teams Only) */}
-          {isTeamSession && seasonType === 'lawn_rejuv' && (
+          {/* LAWN REJUV: COMBINED SPLIT + DEDUCTIONS GRID */}
+          {isLawnRejuv && teamWorkers.length > 0 && (
             <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                  <Users size={20} className="text-green-400" /> Team Split Configuration
+                  <Users size={20} className="text-green-400" /> Team Payout Configuration
                 </h3>
-                {splitsModified && (
-                  <button
-                    onClick={handleSaveSplits}
-                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded font-bold flex items-center gap-2 transition-colors"
-                  >
-                    <Check size={14} /> Save Splits
-                  </button>
+                {!splitsValid && (
+                  <span className="text-xs text-red-400 bg-red-900/30 px-2 py-1 rounded border border-red-700">
+                    Splits must total 100%
+                  </span>
                 )}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <SplitEditor
-                  title="Equiv Split"
-                  icon={<Calculator size={16} className="text-blue-400" />}
-                  split={equivSplit}
-                  workers={teamWorkers}
-                  onChange={(newSplit) => {
-                    setEquivSplit(newSplit);
-                    setSplitsModified(true);
-                  }}
-                />
-                <SplitEditor
-                  title="Upsell Split"
-                  icon={<TrendingUp size={16} className="text-green-400" />}
-                  split={upsellSplit}
-                  workers={teamWorkers}
-                  onChange={(newSplit) => {
-                    setUpsellSplit(newSplit);
-                    setSplitsModified(true);
-                  }}
-                />
+              {/* Grid Header */}
+              <div className="grid grid-cols-12 gap-2 text-[10px] text-gray-500 uppercase font-bold mb-2 px-2">
+                <div className="col-span-2">Worker</div>
+                <div className="text-center">Equiv %</div>
+                <div className="text-center">Upsell %</div>
+                <div className="text-center">Assigned EQ</div>
+                <div className="text-center">Rate</div>
+                <div className="text-center">Production</div>
+                <div className="text-center">Upsell+IOS</div>
+                <div className="text-center">Bonus</div>
+                <div className="text-center">🚜</div>
+                <div className="text-center">Deductions</div>
+                <div className="text-right">Final Pay</div>
               </div>
 
-              {/* Per-Worker Breakdown */}
-              <div className="mt-4 space-y-2">
-                <h4 className="text-sm font-bold text-gray-400 uppercase">Per-Worker Breakdown</h4>
-                {workerPayouts.map(payout => (
-                  <WorkerPayoutRow
-                    key={payout.worker.contractorId}
-                    worker={payout.worker}
-                    teamTotalEQ={payout.teamTotalEQ}
-                    assignedEQ={payout.assignedEQ}
-                    equivSplitPercent={payout.equivSplitPercent}
-                    baseRate={payout.baseRate}
-                    productionPay={payout.productionPay}
-                    upsellCommission={payout.upsellCommission}
-                    iosCommission={payout.iosCommission}
-                    bonusAmount={payout.bonusAmount}
-                    deductions={payout.deductions}
-                    machineDeduction={payout.machineDeduction}
-                    finalPay={payout.finalPay}
-                    isCurrentWorker={payout.worker.contractorId === contractorId}
-                  />
-                ))}
+              {/* Worker Rows */}
+              <div className="space-y-2">
+                {lawnRejuvPayouts.map(payout => {
+                  const isCurrentWorker = payout.worker.contractorId === contractorId;
+                  
+                  return (
+                    <div 
+                      key={payout.worker.contractorId}
+                      className={`grid grid-cols-12 gap-2 items-center p-2 rounded-lg border ${
+                        isCurrentWorker 
+                          ? 'bg-blue-900/20 border-blue-700' 
+                          : 'bg-gray-900/50 border-gray-700'
+                      }`}
+                    >
+                      {/* Worker Name */}
+                      <div className="col-span-2 flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                          isCurrentWorker ? 'bg-blue-400' : 'bg-gray-500'
+                        }`} />
+                        <div className="min-w-0">
+                          <div className="text-sm font-bold text-white truncate">
+                            {payout.worker.firstName} {payout.worker.lastName.charAt(0)}.
+                          </div>
+                          <div className="text-[10px] text-gray-500 font-mono">
+                            #{payout.worker.contractorId}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Equiv % Input */}
+                      <div className="flex justify-center">
+                        <input
+                          type="number"
+                          value={equivSplit[payout.worker.contractorId] || 0}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setEquivSplit(prev => ({
+                              ...prev,
+                              [payout.worker.contractorId]: Math.max(0, Math.min(100, val))
+                            }));
+                            setIsModified(true);
+                          }}
+                          className="w-14 bg-gray-800 border border-gray-600 rounded px-1 py-1 text-white text-center text-xs"
+                          min="0"
+                          max="100"
+                        />
+                      </div>
+
+                      {/* Upsell % Input */}
+                      <div className="flex justify-center">
+                        <input
+                          type="number"
+                          value={upsellSplit[payout.worker.contractorId] || 0}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setUpsellSplit(prev => ({
+                              ...prev,
+                              [payout.worker.contractorId]: Math.max(0, Math.min(100, val))
+                            }));
+                            setIsModified(true);
+                          }}
+                          className="w-14 bg-gray-800 border border-gray-600 rounded px-1 py-1 text-white text-center text-xs"
+                          min="0"
+                          max="100"
+                        />
+                      </div>
+
+                      {/* Assigned EQ (read-only) */}
+                      <div className="text-center text-xs font-mono text-blue-300">
+                        {payout.assignedEQ.toFixed(2)}
+                      </div>
+
+                      {/* Rate (read-only) */}
+                      <div className="text-center text-xs font-mono text-gray-300">
+                        ${payout.workerTotalRate.toFixed(2)}
+                      </div>
+
+                      {/* Production (read-only) */}
+                      <div className="text-center text-xs font-mono text-white">
+                        ${payout.productionPay.toFixed(2)}
+                      </div>
+
+                      {/* Upsell+IOS (read-only) */}
+                      <div className="text-center text-xs font-mono text-purple-300">
+                        ${(payout.upsellCommission + payout.iosCommission).toFixed(2)}
+                      </div>
+
+                      {/* Bonus (read-only) */}
+                      <div className="text-center text-xs font-mono text-yellow-400">
+                        {payout.bonusAmount > 0 ? `+$${payout.bonusAmount.toFixed(0)}` : '-'}
+                      </div>
+
+                      {/* Machine Checkbox */}
+                      <div className="flex justify-center">
+                        <input
+                          type="checkbox"
+                          checked={workerMachineRentals[payout.worker.contractorId] ?? true}
+                          onChange={(e) => {
+                            setWorkerMachineRentals(prev => ({
+                              ...prev,
+                              [payout.worker.contractorId]: e.target.checked
+                            }));
+                            setIsModified(true);
+                          }}
+                          className="w-4 h-4 accent-blue-500 rounded cursor-pointer"
+                          title="Machine rental ($10)"
+                        />
+                      </div>
+
+                      {/* Deductions Input */}
+                      <div className="flex justify-center">
+                        <input
+                          type="number"
+                          value={workerDeductions[payout.worker.contractorId] || ''}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setWorkerDeductions(prev => ({
+                              ...prev,
+                              [payout.worker.contractorId]: Math.max(0, val)
+                            }));
+                            setIsModified(true);
+                          }}
+                          className="w-16 bg-gray-800 border border-gray-600 rounded px-1 py-1 text-white text-center text-xs"
+                          placeholder="0"
+                          min="0"
+                        />
+                      </div>
+
+                      {/* Final Pay (read-only) */}
+                      <div className="text-right text-sm font-bold text-green-400 font-mono">
+                        ${payout.finalPay.toFixed(2)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Totals Row */}
+              <div className="grid grid-cols-12 gap-2 items-center mt-3 pt-3 border-t border-gray-700 px-2">
+                <div className="col-span-2 text-sm font-bold text-gray-400">TOTALS</div>
+                <div className={`text-center text-xs font-bold ${
+                  Math.abs(equivTotal - 100) < 0.01 ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  {equivTotal}%
+                </div>
+                <div className={`text-center text-xs font-bold ${
+                  Math.abs(upsellTotal - 100) < 0.01 ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  {upsellTotal}%
+                </div>
+                <div className="text-center text-xs font-mono text-blue-300">
+                  {actualTotalEQ.toFixed(2)}
+                </div>
+                <div className="col-span-3"></div>
+                <div className="text-center text-xs font-mono text-yellow-400">
+                  {bonusTotal > 0 ? `+$${bonusTotal.toFixed(0)}` : '-'}
+                </div>
+                <div className="col-span-2"></div>
+                <div className="text-right text-lg font-bold text-green-400 font-mono">
+                  ${finalPay.toFixed(2)}
+                </div>
+              </div>
+
+              {/* Quick Actions */}
+              <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-700">
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      const equalSplit = createEqualSplit(teamWorkers.map(w => w.contractorId));
+                      setEquivSplit(equalSplit);
+                      setUpsellSplit(equalSplit);
+                      setIsModified(true);
+                    }}
+                    className="text-xs text-blue-400 hover:text-blue-300 transition-colors px-2 py-1 rounded border border-blue-700 hover:bg-blue-900/30"
+                  >
+                    Split Equally
+                  </button>
+                  <button
+                    onClick={() => {
+                      const allOn: Record<string, boolean> = {};
+                      teamWorkers.forEach(w => { allOn[w.contractorId] = true; });
+                      setWorkerMachineRentals(allOn);
+                      setIsModified(true);
+                    }}
+                    className="text-xs text-gray-400 hover:text-gray-300 transition-colors px-2 py-1 rounded border border-gray-700 hover:bg-gray-800"
+                  >
+                    All Machine ✓
+                  </button>
+                  <button
+                    onClick={() => {
+                      const allOff: Record<string, boolean> = {};
+                      teamWorkers.forEach(w => { allOff[w.contractorId] = false; });
+                      setWorkerMachineRentals(allOff);
+                      setIsModified(true);
+                    }}
+                    className="text-xs text-gray-400 hover:text-gray-300 transition-colors px-2 py-1 rounded border border-gray-700 hover:bg-gray-800"
+                  >
+                    All Machine ✗
+                  </button>
+                </div>
               </div>
             </div>
           )}
 
-          {/* 1. TRANSACTION HISTORY (Card Layout) */}
+          {/* TRANSACTION HISTORY */}
           <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 overflow-hidden">
             <div className="p-4 bg-gray-800 border-b border-gray-700">
               <h2 className="text-lg font-bold flex items-center gap-2 text-white">
@@ -1117,8 +1090,8 @@ const PayoutContractor: React.FC = () => {
             </div>
           </div>
 
-          {/* 2. VISUAL BREAKDOWN (hide for team sessions - shown in split section) */}
-          {!isTeamSession && (
+          {/* AERATION: VISUAL BREAKDOWN (unchanged from original) */}
+          {!isLawnRejuv && aerationPayout && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Production */}
               <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
@@ -1126,7 +1099,7 @@ const PayoutContractor: React.FC = () => {
                   <Calculator size={14} className="text-blue-400" /> Production Comm
                 </div>
                 <div className="text-2xl font-bold text-white mb-3">
-                  ${productionPay.toFixed(2)}
+                  ${aerationPayout.productionPay.toFixed(2)}
                 </div>
                 <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
                   <div className="flex justify-between items-center">
@@ -1134,9 +1107,9 @@ const PayoutContractor: React.FC = () => {
                     <span className="font-mono text-blue-300 font-bold">{actualTotalEQ.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between items-center border-t border-gray-700 pt-2">
-                    <span title="Base + Alumni + Silver">Total Rate (${totalRate.toFixed(2)})</span>
+                    <span title="Base + Alumni + Silver">Total Rate (${aerationPayout.totalRate.toFixed(2)})</span>
                     <span className="font-mono text-gray-300">
-                      ${baseRate.toFixed(2)} + ${alumniRate.toFixed(2)} + ${silverRate.toFixed(2)}
+                      ${baseRate.toFixed(2)} + ${(worker.alumniRate || 0).toFixed(2)} + ${(worker.silverRate || 0).toFixed(2)}
                     </span>
                   </div>
                 </div>
@@ -1148,7 +1121,7 @@ const PayoutContractor: React.FC = () => {
                   <TrendingUp size={14} className="text-green-400" /> Upsell Comm
                 </div>
                 <div className="text-2xl font-bold text-white mb-3">
-                  ${upsellCommission.toFixed(2)}
+                  ${aerationPayout.upsellCommission.toFixed(2)}
                 </div>
                 <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
                   <div className="flex justify-between items-center">
@@ -1168,7 +1141,7 @@ const PayoutContractor: React.FC = () => {
                   <Award size={14} className="text-purple-400" /> IOS / PB Comm
                 </div>
                 <div className="text-2xl font-bold text-white mb-3">
-                  ${iosCommission.toFixed(2)}
+                  ${aerationPayout.iosCommission.toFixed(2)}
                 </div>
                 <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
                   <div className="flex justify-between items-center">
@@ -1184,7 +1157,7 @@ const PayoutContractor: React.FC = () => {
             </div>
           )}
 
-          {/* 3. RECONCILIATION (Full Width) */}
+          {/* RECONCILIATION (Full Width) */}
           <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5">
             <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
               <Receipt size={20} className="text-green-400" /> Reconciliation
@@ -1310,168 +1283,189 @@ const PayoutContractor: React.FC = () => {
             </div>
           </div>
 
-          {/* 4. DEDUCTIONS & FINAL PAYOUT (Full Width) */}
-          <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5 mb-10">
-            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-              <Calculator size={20} className="text-blue-400" /> Deductions & Final Payout
-            </h3>
+          {/* AERATION: DEDUCTIONS & FINAL PAYOUT (unchanged from original) */}
+          {!isLawnRejuv && aerationPayout && (
+            <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5 mb-10">
+              <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                <Calculator size={20} className="text-blue-400" /> Deductions & Final Payout
+              </h3>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Deductions Column */}
-              <div className="space-y-4">
-                <div className="bg-gray-900/50 p-3 rounded border border-gray-700 flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-gray-300 text-sm">
-                    <Truck size={16} />
-                    <div>
-                      <span>Machine Rental Fee</span>
-                      {isTeamSession ? (
-                        <span className="text-xs text-gray-500 block">
-                          ($10.00 × {teamWorkers.length} workers = ${(10 * teamWorkers.length).toFixed(2)})
-                        </span>
-                      ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Deductions Column */}
+                <div className="space-y-4">
+                  <div className="bg-gray-900/50 p-3 rounded border border-gray-700 flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-gray-300 text-sm">
+                      <Truck size={16} />
+                      <div>
+                        <span>Machine Rental Fee</span>
                         <span className="text-xs text-gray-500 block">($10.00)</span>
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={machineRental}
+                      onChange={(e) => setMachineRental(e.target.checked)}
+                      className="w-5 h-5 accent-blue-500 rounded cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-gray-400 uppercase font-bold mb-1 block">Other Deductions</label>
+                    <input
+                      type="number"
+                      value={deductions}
+                      onChange={(e) => setDeductions(e.target.value)}
+                      className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white placeholder-gray-500"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+
+                {/* Bonuses Column */}
+                <div>
+                  <label className="text-xs text-gray-400 uppercase font-bold mb-2 block flex items-center gap-2">
+                    <Trophy size={14} className="text-yellow-400" /> Bonuses
+                  </label>
+                  {session.bonuses && session.bonuses.length > 0 ? (
+                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                      {session.bonuses.map((bonus) => (
+                        <div 
+                          key={bonus.id} 
+                          className="flex items-center justify-between bg-yellow-900/20 p-2 rounded border border-yellow-700/50"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Trophy size={14} className="text-yellow-400" />
+                            <span className="text-sm text-white">{formatBonusDisplay(bonus)}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-green-400">+${bonus.amount.toFixed(2)}</span>
+                            <button
+                              onClick={() => handleRemoveBonus(bonus.id)}
+                              className="text-red-400 hover:text-red-300 p-1"
+                              title="Remove bonus"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      <div className="text-right text-sm text-yellow-400 font-bold pt-1 border-t border-gray-700">
+                        Total Bonuses: +${aerationPayout.bonusTotal.toFixed(2)}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-gray-900/50 p-4 rounded border border-gray-700 text-center text-gray-500 text-sm">
+                      No bonuses assigned
+                    </div>
+                  )}
+                </div>
+
+                {/* Final Payout Column */}
+                <div className="flex flex-col justify-between">
+                  <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700 mb-4">
+                    <div className="text-xs text-gray-500 uppercase font-bold mb-2">Breakdown</div>
+                    <div className="space-y-1 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Production</span>
+                        <span className="font-mono text-white">${aerationPayout.productionPay.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Upsell</span>
+                        <span className="font-mono text-white">${aerationPayout.upsellCommission.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">IOS/PB</span>
+                        <span className="font-mono text-white">${aerationPayout.iosCommission.toFixed(2)}</span>
+                      </div>
+                      {aerationPayout.machineDeduction > 0 && (
+                        <div className="flex justify-between text-red-400">
+                          <span>Machine Rental</span>
+                          <span className="font-mono">-${aerationPayout.machineDeduction.toFixed(2)}</span>
+                        </div>
+                      )}
+                      {aerationPayout.bonusTotal > 0 && (
+                        <div className="flex justify-between text-yellow-400">
+                          <span>Bonuses</span>
+                          <span className="font-mono">+${aerationPayout.bonusTotal.toFixed(2)}</span>
+                        </div>
+                      )}
+                      {aerationPayout.totalDeductions > 0 && (
+                        <div className="flex justify-between text-red-400">
+                          <span>Other Deductions</span>
+                          <span className="font-mono">-${aerationPayout.totalDeductions.toFixed(2)}</span>
+                        </div>
                       )}
                     </div>
                   </div>
-                  <input
-                    type="checkbox"
-                    checked={machineRental}
-                    onChange={(e) => setMachineRental(e.target.checked)}
-                    className="w-5 h-5 accent-blue-500 rounded cursor-pointer"
-                  />
-                </div>
 
-                <div>
-                  <label className="text-xs text-gray-400 uppercase font-bold mb-1 block">Other Deductions</label>
-                  <input
-                    type="number"
-                    value={deductions}
-                    onChange={(e) => setDeductions(e.target.value)}
-                    className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white placeholder-gray-500"
-                    placeholder="0.00"
-                  />
-                </div>
-              </div>
-
-              {/* Bonuses Column */}
-              <div>
-                <label className="text-xs text-gray-400 uppercase font-bold mb-2 block flex items-center gap-2">
-                  <Trophy size={14} className="text-yellow-400" /> Bonuses
-                </label>
-                {session.bonuses && session.bonuses.length > 0 ? (
-                  <div className="space-y-2 max-h-40 overflow-y-auto">
-                    {session.bonuses.map((bonus) => (
-                      <div 
-                        key={bonus.id} 
-                        className="flex items-center justify-between bg-yellow-900/20 p-2 rounded border border-yellow-700/50"
-                      >
-                        <div className="flex items-center gap-2">
-                          <Trophy size={14} className="text-yellow-400" />
-                          <span className="text-sm text-white">{formatBonusDisplay(bonus)}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-bold text-green-400">+${bonus.amount.toFixed(2)}</span>
-                          <button
-                            onClick={() => handleRemoveBonus(bonus.id)}
-                            className="text-red-400 hover:text-red-300 p-1"
-                            title="Remove bonus"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    <div className="text-right text-sm text-yellow-400 font-bold pt-1 border-t border-gray-700">
-                      Total Bonuses: +${bonusTotal.toFixed(2)}
+                  <div>
+                    <div className="flex justify-between items-end mb-4">
+                      <span className="text-lg font-bold text-white">Final Payout</span>
+                      <span className="text-3xl font-bold text-green-400 font-mono tracking-tight">
+                        ${aerationPayout.finalPay.toFixed(2)}
+                      </span>
                     </div>
-                  </div>
-                ) : (
-                  <div className="bg-gray-900/50 p-4 rounded border border-gray-700 text-center text-gray-500 text-sm">
-                    No bonuses assigned
-                  </div>
-                )}
-              </div>
 
-              {/* Final Payout Column */}
-              <div className="flex flex-col justify-between">
-                <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700 mb-4">
-                  <div className="text-xs text-gray-500 uppercase font-bold mb-2">
-                    {isTeamSession ? 'Team Summary' : 'Breakdown'}
-                  </div>
-                  <div className="space-y-1 text-sm">
-                    {isTeamSession ? (
-                      // Team breakdown summary
-                      <>
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">Team Total EQ</span>
-                          <span className="font-mono text-white">{actualTotalEQ.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">Team Members</span>
-                          <span className="font-mono text-white">{teamWorkers.length}</span>
-                        </div>
-                        <div className="flex justify-between border-t border-gray-700 pt-1">
-                          <span className="text-gray-400">Combined Production</span>
-                          <span className="font-mono text-white">
-                            ${workerPayouts.reduce((sum, p) => sum + p.productionPay, 0).toFixed(2)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">Combined Upsell + IOS</span>
-                          <span className="font-mono text-white">
-                            ${workerPayouts.reduce((sum, p) => sum + p.upsellCommission + p.iosCommission, 0).toFixed(2)}
-                          </span>
-                        </div>
-                        {totalMachineDeduction > 0 && (
-                          <div className="flex justify-between text-red-400">
-                            <span>Machine Rental ({teamWorkers.length} × $10)</span>
-                            <span className="font-mono">-${totalMachineDeduction.toFixed(2)}</span>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      // Individual breakdown
-                      <>
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">Production</span>
-                          <span className="font-mono text-white">${productionPay.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">Upsell</span>
-                          <span className="font-mono text-white">${upsellCommission.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-400">IOS/PB</span>
-                          <span className="font-mono text-white">${iosCommission.toFixed(2)}</span>
-                        </div>
-                        {totalMachineDeduction > 0 && (
-                          <div className="flex justify-between text-red-400">
-                            <span>Machine Rental</span>
-                            <span className="font-mono">-${totalMachineDeduction.toFixed(2)}</span>
-                          </div>
-                        )}
-                      </>
-                    )}
-                    {bonusTotal > 0 && (
-                      <div className="flex justify-between text-yellow-400">
-                        <span>Bonuses</span>
-                        <span className="font-mono">+${bonusTotal.toFixed(2)}</span>
-                      </div>
-                    )}
-                    {totalDeductions > 0 && (
-                      <div className="flex justify-between text-red-400">
-                        <span>Other Deductions</span>
-                        <span className="font-mono">-${totalDeductions.toFixed(2)}</span>
-                      </div>
-                    )}
+                    <button
+                      onClick={handleFinalize}
+                      className="w-full py-3 rounded-lg font-bold text-lg flex items-center justify-center gap-2 shadow-lg bg-green-600 hover:bg-green-500 text-white transition-all active:scale-[0.98]"
+                    >
+                      <CheckCircle size={20} />{' '}
+                      {session.validation?.isValidated ? 'Update Payout' : 'Finalize & Paid'}
+                    </button>
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
 
+          {/* LAWN REJUV: BONUSES & FINALIZE BUTTON */}
+          {isLawnRejuv && (
+            <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5 mb-10">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Bonuses */}
                 <div>
+                  <label className="text-xs text-gray-400 uppercase font-bold mb-2 block flex items-center gap-2">
+                    <Trophy size={14} className="text-yellow-400" /> Team Bonuses
+                  </label>
+                  {session.bonuses && session.bonuses.length > 0 ? (
+                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                      {session.bonuses.map((bonus) => (
+                        <div 
+                          key={bonus.id} 
+                          className="flex items-center justify-between bg-yellow-900/20 p-2 rounded border border-yellow-700/50"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Trophy size={14} className="text-yellow-400" />
+                            <span className="text-sm text-white">{formatBonusDisplay(bonus)}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-green-400">+${bonus.amount.toFixed(2)}</span>
+                            <button
+                              onClick={() => handleRemoveBonus(bonus.id)}
+                              className="text-red-400 hover:text-red-300 p-1"
+                              title="Remove bonus"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      <div className="text-right text-sm text-yellow-400 font-bold pt-1 border-t border-gray-700">
+                        Total Bonuses: +${bonusTotal.toFixed(2)}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-gray-900/50 p-4 rounded border border-gray-700 text-center text-gray-500 text-sm">
+                      No bonuses assigned
+                    </div>
+                  )}
+                </div>
+
+                {/* Finalize Button */}
+                <div className="flex flex-col justify-end">
                   <div className="flex justify-between items-end mb-4">
-                    <span className="text-lg font-bold text-white">
-                      {isTeamSession ? 'Total Team Payout' : 'Final Payout'}
-                    </span>
+                    <span className="text-lg font-bold text-white">Team Total Payout</span>
                     <span className="text-3xl font-bold text-green-400 font-mono tracking-tight">
                       ${finalPay.toFixed(2)}
                     </span>
@@ -1479,15 +1473,25 @@ const PayoutContractor: React.FC = () => {
 
                   <button
                     onClick={handleFinalize}
-                    className="w-full py-3 rounded-lg font-bold text-lg flex items-center justify-center gap-2 shadow-lg bg-green-600 hover:bg-green-500 text-white transition-all active:scale-[0.98]"
+                    disabled={!splitsValid}
+                    className={`w-full py-3 rounded-lg font-bold text-lg flex items-center justify-center gap-2 shadow-lg transition-all active:scale-[0.98] ${
+                      splitsValid 
+                        ? 'bg-green-600 hover:bg-green-500 text-white' 
+                        : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                    }`}
                   >
                     <CheckCircle size={20} />{' '}
                     {session.validation?.isValidated ? 'Update Payout' : 'Finalize & Paid'}
                   </button>
+                  {!splitsValid && (
+                    <p className="text-xs text-red-400 mt-2 text-center">
+                      Fix split percentages before finalizing
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
-          </div>
+          )}
 
         </div>
       </div>

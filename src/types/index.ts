@@ -146,10 +146,14 @@ export interface SessionValidation {
     actualProdCheque: number;
     actualTotalEQ: number;
 
-    machineRental: boolean; // True = Deduct $10 PER WORKER (not split)
+    machineRental: boolean; // LEGACY: True = Deduct $10 PER WORKER (used if workerMachineRentals not set)
     finalCommission: number; // Total team commission (sum of all workers)
     managerName?: string;
     timestamp?: string;
+    
+    // NEW: Per-worker overrides (lawn_rejuv teams)
+    workerMachineRentals?: Record<string, boolean>;  // workerId -> has rental ($10 each)
+    workerDeductions?: Record<string, number>;       // workerId -> custom deduction amount
 }
 
 // --- TEAM SPLIT CONFIGURATION ---
