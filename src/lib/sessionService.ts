@@ -1283,10 +1283,19 @@ class SessionService {
     return res.data?.streets || [];
   }
 
+  /**
+   * FIXED: getLogsheetSessions now recalculates stats live to match getActiveLogsheetSession
+   * This ensures PayoutToday shows the same EQ values as PayoutContractor
+   */
   public async getLogsheetSessions(): Promise<LogsheetSession[]> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return [];
+    
+    // Get season config for live recalculation
+    const seasonType = await this.getSessionSeasonType();
+    const productCostPercent = await this.getProductCostPercent();
+    const taxRate = this.getCurrentTaxRate();
     
     const [sessionsRes, transactionsRes] = await Promise.all([
       supabase.from('logsheet_sessions').select('*').eq('date', date).eq('command_center_id', ccId),
@@ -1305,7 +1314,7 @@ class SessionService {
     });
     
     return sessions.map((d) => {
-      // FIX: For team sessions, collect transactions from all team members
+      // For team sessions, collect transactions from all team members
       // Check if team_worker_ids has items, otherwise use worker_id
       const teamWorkerIds = hasItems(d.team_worker_ids) ? d.team_worker_ids : [d.worker_id];
       const teamTransactions: SessionTransaction[] = [];
@@ -1315,12 +1324,16 @@ class SessionService {
         }
       });
 
+      // FIXED: Recalculate stats live instead of using stored d.stats
+      // This ensures consistency with getActiveLogsheetSession
+      const liveStats = this.recalculateStats(teamTransactions, taxRate, seasonType, productCostPercent);
+
       return {
         id: d.id,
         workerId: d.worker_id,
         date: d.date,
         status: d.status,
-        stats: d.stats,
+        stats: liveStats,  // <-- FIXED: Use live recalculated stats
         validation: d.validation,
         bonuses: d.bonuses,
         dailyRouteStore: [],
