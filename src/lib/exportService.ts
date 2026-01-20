@@ -32,6 +32,66 @@ function serviceFlagsToString(services?: ServiceFlags): string {
 }
 
 /**
+ * Helper to get all team worker names for a transaction
+ * Falls back to session team_worker_ids if completed_by_worker_ids is not set
+ */
+function getTeamWorkerNames(
+  tx: any, 
+  workersMap: Map<string, any>,
+  sessionsMap?: Map<string, any>
+): string {
+  // First try completed_by_worker_ids from the transaction
+  if (tx.completed_by_worker_ids && tx.completed_by_worker_ids.length > 0) {
+    return tx.completed_by_worker_ids
+      .map((id: string) => workersMap.get(id)?.name || id)
+      .join(', ');
+  }
+  
+  // Fall back to looking up the session's team_worker_ids
+  if (sessionsMap) {
+    // Find session that contains this worker
+    for (const session of sessionsMap.values()) {
+      const teamWorkerIds = session.team_worker_ids || [];
+      if (teamWorkerIds.includes(tx.worker_id)) {
+        return teamWorkerIds
+          .map((id: string) => workersMap.get(id)?.name || id)
+          .join(', ');
+      }
+    }
+  }
+  
+  // Final fallback to primary worker
+  return workersMap.get(tx.worker_id)?.name || tx.worker_id;
+}
+
+/**
+ * Helper to get all team worker IDs for a transaction
+ * Falls back to session team_worker_ids if completed_by_worker_ids is not set
+ */
+function getTeamWorkerIds(
+  tx: any,
+  sessionsMap?: Map<string, any>
+): string {
+  // First try completed_by_worker_ids from the transaction
+  if (tx.completed_by_worker_ids && tx.completed_by_worker_ids.length > 0) {
+    return tx.completed_by_worker_ids.join(', ');
+  }
+  
+  // Fall back to looking up the session's team_worker_ids
+  if (sessionsMap) {
+    for (const session of sessionsMap.values()) {
+      const teamWorkerIds = session.team_worker_ids || [];
+      if (teamWorkerIds.includes(tx.worker_id)) {
+        return teamWorkerIds.join(', ');
+      }
+    }
+  }
+  
+  // Final fallback to primary worker
+  return tx.worker_id;
+}
+
+/**
  * Generates and downloads a comprehensive Excel export of all session data.
  * All data is scoped to the current command center.
  */
@@ -70,6 +130,10 @@ export async function generateSessionExport(): Promise<void> {
     }
   });
 
+  // Create sessions map for fallback team lookup
+  const sessionsMap = new Map<string, any>();
+  sessions.forEach(s => sessionsMap.set(s.id, s));
+
   // Group transactions by worker
   const txByWorker = new Map<string, any[]>();
   transactions.forEach(tx => {
@@ -91,7 +155,6 @@ export async function generateSessionExport(): Promise<void> {
       
       const stats = session.stats || {};
       const validation = session.validation || {};
-      const bonuses = session.bonuses || [];
       
       // Build session object for calculateTeamPayouts
       const sessionObj = {
@@ -139,22 +202,6 @@ export async function generateSessionExport(): Promise<void> {
         const silverRate = worker?.metadata?.silverRate || 0;
         const effectivePayoutRate = basePayoutRate * (1 + alumniRate + silverRate);
         
-        // Machine rental: $10 per worker (full amount)
-        const machineRental = validation.machineRental ? 10 : 0;
-        
-        // Deductions: (cashDiff + chequeDiff) split by equivPercent + full machineRental
-        const cashChequeDiff = (Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0)) * equivPercent;
-        const deductions = cashChequeDiff + machineRental;
-        
-        // Get commission values from payout calculation
-        const productionComm = payout?.productionCommission || 0;
-        const upsellComm = payout?.upsellCommission || 0;
-        const iosComm = payout?.iosCommission || 0;
-        const bonusAmount = payout?.bonusAmount || 0;
-        
-        // Recalculate final commission with corrected deductions
-        const finalCommission = productionComm + upsellComm + iosComm + bonusAmount - deductions;
-        
         // Get team member names for display
         const teamMembers = teamWorkerIds.map((id: string) => workersMap.get(id)?.name || id).join(', ');
         
@@ -164,21 +211,28 @@ export async function generateSessionExport(): Promise<void> {
           'Team Members': teamMembers,
           'Manager': managerName,
           'Status': session.status,
-          'Steps': Math.round((stats.stepCount || 0) * equivPercent),
-          'Upsells': Math.round((stats.upsellCount || 0) * upsellPercent),
-          'IOS': (stats.iosCount || 0) * upsellPercent,
+          // Split by equivPercent (no rounding)
+          'Steps': (stats.stepCount || 0) * equivPercent,
           'Prod Gross': (stats.prodGross || 0) * equivPercent,
           'Prod Payable': (stats.prodPayable || 0) * equivPercent,
           'Total EQ': (stats.totalEQ || 0) * equivPercent,
-          'Upsell Gross': (stats.upsellGross || 0) * upsellPercent,
-          'Upsell Payable': (stats.upsellPayable || 0) * upsellPercent,
           'Verified Cash': (validation.verifiedCash || 0) * equivPercent,
           'Verified Cheque': (validation.verifiedCheque || 0) * equivPercent,
           'Cash Diff': (validation.cashDiff || 0) * equivPercent,
           'Cheque Diff': (validation.chequeDiff || 0) * equivPercent,
-          'Machine Rental': machineRental,
-          'Bonuses': bonusAmount,
-          'Final Commission': finalCommission,
+          // Split by upsellPercent (no rounding)
+          'Upsells': (stats.upsellCount || 0) * upsellPercent,
+          'IOS': (stats.iosCount || 0) * upsellPercent,
+          'Upsell Gross': (stats.upsellGross || 0) * upsellPercent,
+          'Upsell Payable': (stats.upsellPayable || 0) * upsellPercent,
+          // Values directly from calculateTeamPayouts (already per-worker)
+          'Production Comm': payout?.productionCommission || 0,
+          'Upsell Comm': payout?.upsellCommission || 0,
+          'IOS Comm': payout?.iosCommission || 0,
+          'Machine Rental': validation.machineRental ? 10 : 0,
+          'Deductions': payout?.deductions || 0,
+          'Bonuses': payout?.bonusAmount || 0,
+          'Final Commission': payout?.finalCommission || 0,
           'Validated': validation.isValidated ? 'Yes' : 'No',
           'Validated By': validation.managerName || '',
           'Season Type': seasonType,
@@ -235,7 +289,7 @@ export async function generateSessionExport(): Promise<void> {
   // === SHEET 2: Transactions ===
   const txRows = transactions.map(tx => {
     const servicesStr = serviceFlagsToString(tx.services);
-    const completedBy = tx.completed_by_worker_ids?.join(', ') || tx.worker_id;
+    const completedBy = getTeamWorkerIds(tx, isTeamSeason ? sessionsMap : undefined);
     
     return {
       'Transaction ID': tx.id,
@@ -433,12 +487,16 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     }
   });
 
+  // Create sessions map for team lookup fallback
+  const sessionsMap = new Map<string, any>();
+  sessions.forEach(s => sessionsMap.set(s.id, s));
+
   // === 1. Update Completed Bookings in Feed Placeholder ===
   const completedBookings = transactions
     .filter(tx => tx.type === 'Production' && tx.job_id && !tx.job_id.startsWith('NEW-'))
     .map(tx => {
-      // For teams, join all worker IDs with commas
-      const contractorIds = tx.completed_by_worker_ids?.join(',') || tx.worker_id;
+      // For teams, get all worker IDs (comma-separated)
+      const contractorIds = getTeamWorkerIds(tx, isTeamSeason ? sessionsMap : undefined);
       
       return {
         routeNumber: tx.customer_snapshot?.routeCode || '',
@@ -464,19 +522,13 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   );
 
   const accountsData = accountTransactions.map(tx => {
-    const worker = workersMap.get(tx.worker_id);
     const address = tx.customer_snapshot?.address || tx.address || '';
     const streetParts = address.split(' ');
     const streetNum = streetParts[0] || '';
     const streetName = streetParts.slice(1).join(' ') || '';
     
     // For teams, get all worker names (comma-separated)
-    let contractorName = worker?.name || tx.worker_id;
-    if (tx.completed_by_worker_ids && tx.completed_by_worker_ids.length > 1) {
-      contractorName = tx.completed_by_worker_ids
-        .map((id: string) => workersMap.get(id)?.name || id)
-        .join(', ');
-    }
+    const contractorName = getTeamWorkerNames(tx, workersMap, isTeamSeason ? sessionsMap : undefined);
     
     return {
       routeNumber: tx.customer_snapshot?.routeCode || '',
@@ -513,7 +565,6 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   const logsheetsData = transactions
     .filter(tx => logsheetTypes.includes(tx.type))
     .map(tx => {
-      const worker = workersMap.get(tx.worker_id);
       const address = tx.customer_snapshot?.address || tx.address || '';
       const streetParts = address.split(' ');
       const streetNum = streetParts[0] || '';
@@ -526,12 +577,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       else if (tx.type === 'Add-On') clientType = 'Add-On';
       
       // For teams, get all worker names (comma-separated)
-      let contractorName = worker?.name || tx.worker_id;
-      if (tx.completed_by_worker_ids && tx.completed_by_worker_ids.length > 1) {
-        contractorName = tx.completed_by_worker_ids
-          .map((id: string) => workersMap.get(id)?.name || id)
-          .join(', ');
-      }
+      const contractorName = getTeamWorkerNames(tx, workersMap, isTeamSeason ? sessionsMap : undefined);
       
       return {
         routeNumber: tx.customer_snapshot?.routeCode || '',
@@ -621,29 +667,13 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
         const silverRate = worker?.metadata?.silverRate || 0;
         const effectivePayoutRate = basePayoutRate * (1 + alumniRate + silverRate);
         
-        // Machine rental: $10 per worker (full amount, not split)
-        const machineRental = validation.machineRental ? 10 : 0;
-        
-        // Deductions: (cashDiff + chequeDiff) split by equivPercent + full machineRental
-        const cashChequeDiff = (Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0)) * equivPercent;
-        const deductions = cashChequeDiff + machineRental;
-        
-        // Get commission values from payout calculation
-        const productionComm = payout?.productionCommission || 0;
-        const upsellComm = payout?.upsellCommission || 0;
-        const iosComm = payout?.iosCommission || 0;
-        const bonusAmount = payout?.bonusAmount || 0;
-        
-        // Recalculate final pay with corrected deductions (full $10 machine rental per worker)
-        const finalPay = productionComm + upsellComm + iosComm + bonusAmount - deductions;
-        
         statsData.push({
           contractorId: workerId,
           firstName,
           lastName,
           manager: managerName,
-          // Split by equivPercent
-          stepCount: Math.round((stats.stepCount || 0) * equivPercent),
+          // Split by equivPercent (no rounding for stepCount)
+          stepCount: (stats.stepCount || 0) * equivPercent,
           prodBilled: (stats.prodBilled || 0) * equivPercent,
           prodCash: (stats.prodCash || 0) * equivPercent,
           prodCheque: (stats.prodCheque || 0) * equivPercent,
@@ -655,9 +685,9 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
           prodGross: (stats.prodGross || 0) * equivPercent,
           prodPayable: (stats.prodPayable || 0) * equivPercent,
           totalEQ: (stats.totalEQ || 0) * equivPercent,
-          // Split by upsellPercent
+          // Split by upsellPercent (no rounding)
           iosCount: (stats.iosCount || 0) * upsellPercent,
-          upsellCount: Math.round((stats.upsellCount || 0) * upsellPercent),
+          upsellCount: (stats.upsellCount || 0) * upsellPercent,
           upsellCash: (stats.upsellCash || 0) * upsellPercent,
           upsellCheque: (stats.upsellCheque || 0) * upsellPercent,
           upsellCreditCard: (stats.upsellCreditCard || 0) * upsellPercent,
@@ -665,15 +695,15 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
           upsellPrepaid: (stats.upsellPrepaid || 0) * upsellPercent,
           upsellGross: (stats.upsellGross || 0) * upsellPercent,
           upsellPayable: (stats.upsellPayable || 0) * upsellPercent,
-          // Per-worker values
+          // Values directly from calculateTeamPayouts (already per-worker)
           payoutRate: effectivePayoutRate,
-          productionComm,
-          upsellComm,
-          iosComm,
-          machineRental,
-          deductions,
-          bonuses: bonusAmount,
-          finalPay,
+          productionComm: payout?.productionCommission || 0,
+          upsellComm: payout?.upsellCommission || 0,
+          iosComm: payout?.iosCommission || 0,
+          machineRental: validation.machineRental ? 10 : 0,
+          deductions: payout?.deductions || 0,
+          bonuses: payout?.bonusAmount || 0,
+          finalPay: payout?.finalCommission || 0,
           // Team fields
           teamId,
           equivSplitPercent: equivSplit[workerId] || 100,
