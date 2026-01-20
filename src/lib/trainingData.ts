@@ -134,7 +134,7 @@ export const getTrainingBookings = (): MasterBooking[] => {
       'FO/BO/FP': 'FP',
       'Log Sheet Notes': 'Office upgrade - Lawn Rejuvenation flat',
       'Status': 'pending',
-      'Prepaid': undefined,
+      'Prepaid': 'x',
       isPrebooked: true,
       sort_order: 4,
     },
