@@ -25,7 +25,14 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
-import { getPayoutRate, seasonHasTeams, EQ_DIVISOR, createEqualSplit } from '../../lib/commandCenterService';
+import { 
+  commandCenterService,
+  getPayoutRate, 
+  seasonHasTeams, 
+  EQ_DIVISOR, 
+  createEqualSplit,
+  getSeasonConfig,
+} from '../../lib/commandCenterService';
 import { 
   LogsheetSession, 
   Worker, 
@@ -33,6 +40,7 @@ import {
   TeamSplitConfig,
   SERVICE_FLAG_KEYS,
   SERVICE_FLAG_LABELS,
+  SEASON_CONFIGS,
 } from '../../types';
 import EditTransactionModal from '../../components/EditTransactionModal';
 
@@ -327,6 +335,10 @@ const PayoutContractor: React.FC = () => {
   const [upsellSplit, setUpsellSplit] = useState<TeamSplitConfig>({});
   const [splitsModified, setSplitsModified] = useState(false);
 
+  // --- NEW: Product Cost & Tax Rate State ---
+  const [productCostPercent, setProductCostPercent] = useState<number>(0);
+  const [taxRate, setTaxRate] = useState<number>(5);
+
   // --- FORM STATE ---
   const [cashBills, setCashBills] = useState('');
   const [cashChange, setCashChange] = useState('');
@@ -360,6 +372,13 @@ const PayoutContractor: React.FC = () => {
         const season = await sessionService.getSessionSeasonType();
         setSeasonType(season);
         const isTeamSeasonType = seasonHasTeams(season);
+
+        // --- NEW: Get product cost percent and tax rate ---
+        const prodCost = await sessionService.getProductCostPercent();
+        setProductCostPercent(prodCost);
+        
+        const currentTaxRate = commandCenterService.getCurrentTaxRate();
+        setTaxRate(currentTaxRate);
 
         const daily = await sessionService.getDailySession();
         
@@ -488,14 +507,7 @@ const PayoutContractor: React.FC = () => {
   };
 
   // --- CALCULATIONS ---
-  const stats = session?.stats || {
-    prodCash: 0, upsellCash: 0, prodCheque: 0, upsellCheque: 0,
-    prodGross: 0, upsellPayable: 0, iosCount: 0, stepCount: 0,
-    prodETransfer: 0, upsellETransfer: 0,
-    prodCreditCard: 0, upsellCreditCard: 0,
-    prodFlats: 0, prodPrepaid: 0, prodPrepaidSplit: 0, upsellPrepaid: 0,
-    prodBilled: 0, totalEQ: 0, upsellGross: 0,
-  };
+  const stats = session?.stats || sessionService.getEmptyStats();
 
   // 1. Reconciliation Math
   const systemTotalCash = stats.prodCash + stats.upsellCash;
@@ -516,18 +528,24 @@ const PayoutContractor: React.FC = () => {
   const totalPrepaid = (stats.prodFlats || 0) + (stats.prodPrepaid || 0) + (stats.prodPrepaidSplit || 0) + (stats.upsellPrepaid || 0);
   const totalBilled = stats.prodBilled || 0;
 
-  // 2. EQ Calculations
-  const taxDivisor = 1.05;
+  // 2. EQ Calculations - FIXED VERSION
+  // Use region-appropriate tax rate instead of hardcoded 1.05
+  const taxDivisor = 1 + (taxRate / 100);
+  
+  // Product cost multiplier (e.g., 0.75 for 25% product cost)
+  const productCostMultiplier = 1 - (productCostPercent / 100);
 
-  // System/Projected EQ (based on Stats)
-  const projectedProdPayable = stats.prodGross / taxDivisor;
-  const projectedEQ = projectedProdPayable / EQ_DIVISOR;
+  // FIXED: Projected EQ - use stats.totalEQ directly (already correctly calculated by sessionService)
+  // This includes proper prepaid weighting, tax removal, and product cost deduction
+  const projectedEQ = stats.totalEQ;
 
-  // Actual EQ (based on Inputs)
-  const systemProdNonCash = stats.prodGross - stats.prodCash - stats.prodCheque;
-  const actualProdGross = systemProdNonCash + actualProdCash + actualProdCheque;
-  const actualProdPayable = actualProdGross / taxDivisor;
-  const actualTotalEQ = actualProdPayable / EQ_DIVISOR;
+  // FIXED: Actual EQ - use stats.totalEQ as base, then adjust for cash/cheque differences
+  // Cash and cheque have weight 1.0 in the formula (not weighted like prepaid)
+  // So the delta is: (diff / taxDivisor) * productCostMultiplier / EQ_DIVISOR
+  const prodCashDiff = actualProdCash - stats.prodCash;
+  const prodChequeDiff = actualProdCheque - stats.prodCheque;
+  const deltaEQ = ((prodCashDiff + prodChequeDiff) / taxDivisor) * productCostMultiplier / EQ_DIVISOR;
+  const actualTotalEQ = stats.totalEQ + deltaEQ;
 
   // 3. Season-aware Payout Rate ($/EQ for commission calculation)
   const teamSize = isTeamSession ? teamWorkers.length : 1;
@@ -973,6 +991,12 @@ const PayoutContractor: React.FC = () => {
                     <span className="text-green-400 ml-1">(Team of {teamWorkers.length})</span>
                   )}
                 </span>
+                {/* Product Cost Display (for lawn_rejuv) */}
+                {productCostPercent > 0 && (
+                  <span className="text-xs text-yellow-400">
+                    Prod Cost: {productCostPercent}%
+                  </span>
+                )}
               </div>
             </div>
           </div>
