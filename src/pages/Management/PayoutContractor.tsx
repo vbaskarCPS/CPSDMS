@@ -837,9 +837,358 @@ const PayoutContractor: React.FC = () => {
       <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
         <div className="max-w-7xl mx-auto w-full space-y-6">
 
-          {/* LAWN REJUV: COMBINED SPLIT + DEDUCTIONS GRID */}
+          {/* TRANSACTION HISTORY - Now first for both seasons */}
+          <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 overflow-hidden">
+            <div className="p-4 bg-gray-800 border-b border-gray-700">
+              <h2 className="text-lg font-bold flex items-center gap-2 text-white">
+                <Calendar size={18} className="text-blue-400" /> Transaction History
+              </h2>
+            </div>
+            <div className="p-2">
+              {session.financialStore.length === 0 ? (
+                <div className="p-8 text-center text-gray-500">
+                  No transactions found.
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {session.financialStore.map((tx: any) => renderTransactionRow(tx))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* AERATION: VISUAL BREAKDOWN - Only for aeration, after transactions */}
+          {!isLawnRejuv && aerationPayout && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Production */}
+              <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
+                <div className="flex items-center gap-2 mb-3 text-gray-400 text-xs font-bold uppercase tracking-wider">
+                  <Calculator size={14} className="text-blue-400" /> Production Comm
+                </div>
+                <div className="text-2xl font-bold text-white mb-3">
+                  ${aerationPayout.productionPay.toFixed(2)}
+                </div>
+                <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
+                  <div className="flex justify-between items-center">
+                    <span>Actual EQ</span>
+                    <span className="font-mono text-blue-300 font-bold">{actualTotalEQ.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between items-center border-t border-gray-700 pt-2">
+                    <span title="Base + Alumni + Silver">Total Rate (${aerationPayout.totalRate.toFixed(2)})</span>
+                    <span className="font-mono text-gray-300">
+                      ${baseRate.toFixed(2)} + ${(worker.alumniRate || 0).toFixed(2)} + ${(worker.silverRate || 0).toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Upsell */}
+              <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
+                <div className="flex items-center gap-2 mb-3 text-gray-400 text-xs font-bold uppercase tracking-wider">
+                  <TrendingUp size={14} className="text-green-400" /> Upsell Comm
+                </div>
+                <div className="text-2xl font-bold text-white mb-3">
+                  ${aerationPayout.upsellCommission.toFixed(2)}
+                </div>
+                <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
+                  <div className="flex justify-between items-center">
+                    <span>Payable Upsell</span>
+                    <span className="font-mono text-white">${stats.upsellPayable?.toFixed(2) || '0.00'}</span>
+                  </div>
+                  <div className="flex justify-between items-center border-t border-gray-700 pt-2">
+                    <span>Commission</span>
+                    <span className="font-mono text-gray-300">15%</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* IOS */}
+              <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
+                <div className="flex items-center gap-2 mb-3 text-gray-400 text-xs font-bold uppercase tracking-wider">
+                  <Award size={14} className="text-purple-400" /> IOS / PB Comm
+                </div>
+                <div className="text-2xl font-bold text-white mb-3">
+                  ${aerationPayout.iosCommission.toFixed(2)}
+                </div>
+                <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
+                  <div className="flex justify-between items-center">
+                    <span>Count</span>
+                    <span className="font-mono text-white">{stats.iosCount}</span>
+                  </div>
+                  <div className="flex justify-between items-center border-t border-gray-700 pt-2">
+                    <span>Rate</span>
+                    <span className="font-mono text-gray-300">$5.00 / ea</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* RECONCILIATION (Full Width) - Now second for both seasons */}
+          <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5">
+            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              <Receipt size={20} className="text-green-400" /> Reconciliation
+            </h3>
+
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* Cash Input */}
+              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-2 mb-3">
+                  <Banknote size={18} className="text-green-400" />
+                  <span className="text-sm font-bold text-gray-300">Cash Collected</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-2">
+                  Expected: <span className="font-mono text-green-300">${systemTotalCash.toFixed(2)}</span>
+                </div>
+                <div className="flex gap-2 mb-2">
+                  <input
+                    type="number"
+                    value={cashBills}
+                    onChange={(e) => setCashBills(e.target.value)}
+                    className="flex-1 bg-gray-800 border border-gray-600 rounded p-2 text-white placeholder-gray-500 text-sm"
+                    placeholder="Bills ($)"
+                  />
+                  <input
+                    type="number"
+                    value={cashChange}
+                    onChange={(e) => setCashChange(e.target.value)}
+                    className="flex-1 bg-gray-800 border border-gray-600 rounded p-2 text-white placeholder-gray-500 text-sm"
+                    placeholder="Change ($)"
+                  />
+                </div>
+                {cashDiff !== 0 && (
+                  <div className={`text-sm flex items-center gap-2 p-3 rounded-lg font-bold ${
+                    cashDiff < 0 
+                      ? 'text-red-300 bg-red-900/40 border border-red-700' 
+                      : 'text-green-300 bg-green-900/40 border border-green-700'
+                  }`}>
+                    <AlertCircle size={18} />
+                    <span>
+                      {cashDiff < 0 ? 'SHORTAGE' : 'OVERAGE'}: {cashDiff > 0 ? '+' : ''}${cashDiff.toFixed(2)}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Cheque Input */}
+              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-2 mb-3">
+                  <Receipt size={18} className="text-blue-400" />
+                  <span className="text-sm font-bold text-gray-300">Cheques Collected</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-2">
+                  Expected: <span className="font-mono text-blue-300">${systemTotalCheque.toFixed(2)}</span>
+                </div>
+                <input
+                  type="number"
+                  value={chequeAmount}
+                  onChange={(e) => setChequeAmount(e.target.value)}
+                  className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white mb-2 placeholder-gray-500 text-sm"
+                  placeholder="0.00"
+                />
+                {chequeDiff !== 0 && (
+                  <div className={`text-sm flex items-center gap-2 p-3 rounded-lg font-bold ${
+                    chequeDiff < 0 
+                      ? 'text-red-300 bg-red-900/40 border border-red-700' 
+                      : 'text-green-300 bg-green-900/40 border border-green-700'
+                  }`}>
+                    <AlertCircle size={18} />
+                    <span>
+                      {chequeDiff < 0 ? 'SHORTAGE' : 'OVERAGE'}: {chequeDiff > 0 ? '+' : ''}${chequeDiff.toFixed(2)}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* E-Transfer (Display Only) */}
+              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-2 mb-3">
+                  <Wallet size={18} className="text-cyan-400" />
+                  <span className="text-sm font-bold text-gray-300">E-Transfer</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-2">System Total</div>
+                <div className="text-2xl font-bold font-mono text-cyan-400">
+                  ${totalETransfer.toFixed(2)}
+                </div>
+              </div>
+
+              {/* Credit Card (Display Only) */}
+              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-2 mb-3">
+                  <CreditCard size={18} className="text-orange-400" />
+                  <span className="text-sm font-bold text-gray-300">Credit Card</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-2">System Total</div>
+                <div className="text-2xl font-bold font-mono text-orange-400">
+                  ${totalCreditCard.toFixed(2)}
+                </div>
+              </div>
+
+              {/* Prepaid (Display Only) */}
+              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-2 mb-3">
+                  <Wallet size={18} className="text-indigo-400" />
+                  <span className="text-sm font-bold text-gray-300">Prepaid</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-2">System Total</div>
+                <div className="text-2xl font-bold font-mono text-indigo-400">
+                  ${totalPrepaid.toFixed(2)}
+                </div>
+              </div>
+
+              {/* Billed (Display Only) */}
+              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-2 mb-3">
+                  <Receipt size={18} className="text-gray-400" />
+                  <span className="text-sm font-bold text-gray-300">Billed</span>
+                </div>
+                <div className="text-xs text-gray-500 mb-2">System Total</div>
+                <div className="text-2xl font-bold font-mono text-gray-400">
+                  ${totalBilled.toFixed(2)}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* AERATION: DEDUCTIONS & FINAL PAYOUT */}
+          {!isLawnRejuv && aerationPayout && (
+            <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5 mb-10">
+              <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                <Calculator size={20} className="text-blue-400" /> Deductions & Final Payout
+              </h3>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Deductions Column */}
+                <div className="space-y-4">
+                  <div className="bg-gray-900/50 p-3 rounded border border-gray-700 flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-gray-300 text-sm">
+                      <Truck size={16} />
+                      <div>
+                        <span>Machine Rental Fee</span>
+                        <span className="text-xs text-gray-500 block">($10.00)</span>
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={machineRental}
+                      onChange={(e) => setMachineRental(e.target.checked)}
+                      className="w-5 h-5 accent-blue-500 rounded cursor-pointer"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-gray-400 uppercase font-bold mb-1 block">Other Deductions</label>
+                    <input
+                      type="number"
+                      value={deductions}
+                      onChange={(e) => setDeductions(e.target.value)}
+                      className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white placeholder-gray-500"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+
+                {/* Bonuses Column */}
+                <div>
+                  <label className="text-xs text-gray-400 uppercase font-bold mb-2 block flex items-center gap-2">
+                    <Trophy size={14} className="text-yellow-400" /> Bonuses
+                  </label>
+                  {session.bonuses && session.bonuses.length > 0 ? (
+                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                      {session.bonuses.map((bonus) => (
+                        <div 
+                          key={bonus.id} 
+                          className="flex items-center justify-between bg-yellow-900/20 p-2 rounded border border-yellow-700/50"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Trophy size={14} className="text-yellow-400" />
+                            <span className="text-sm text-white">{formatBonusDisplay(bonus)}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-green-400">+${bonus.amount.toFixed(2)}</span>
+                            <button
+                              onClick={() => handleRemoveBonus(bonus.id)}
+                              className="text-red-400 hover:text-red-300 p-1"
+                              title="Remove bonus"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      <div className="text-right text-sm text-yellow-400 font-bold pt-1 border-t border-gray-700">
+                        Total Bonuses: +${aerationPayout.bonusTotal.toFixed(2)}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-gray-900/50 p-4 rounded border border-gray-700 text-center text-gray-500 text-sm">
+                      No bonuses assigned
+                    </div>
+                  )}
+                </div>
+
+                {/* Final Payout Column */}
+                <div className="flex flex-col justify-between">
+                  <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700 mb-4">
+                    <div className="text-xs text-gray-500 uppercase font-bold mb-2">Breakdown</div>
+                    <div className="space-y-1 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Production</span>
+                        <span className="font-mono text-white">${aerationPayout.productionPay.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">Upsell</span>
+                        <span className="font-mono text-white">${aerationPayout.upsellCommission.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-400">IOS/PB</span>
+                        <span className="font-mono text-white">${aerationPayout.iosCommission.toFixed(2)}</span>
+                      </div>
+                      {aerationPayout.machineDeduction > 0 && (
+                        <div className="flex justify-between text-red-400">
+                          <span>Machine Rental</span>
+                          <span className="font-mono">-${aerationPayout.machineDeduction.toFixed(2)}</span>
+                        </div>
+                      )}
+                      {aerationPayout.bonusTotal > 0 && (
+                        <div className="flex justify-between text-yellow-400">
+                          <span>Bonuses</span>
+                          <span className="font-mono">+${aerationPayout.bonusTotal.toFixed(2)}</span>
+                        </div>
+                      )}
+                      {aerationPayout.totalDeductions > 0 && (
+                        <div className="flex justify-between text-red-400">
+                          <span>Other Deductions</span>
+                          <span className="font-mono">-${aerationPayout.totalDeductions.toFixed(2)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between items-end mb-4">
+                      <span className="text-lg font-bold text-white">Final Payout</span>
+                      <span className="text-3xl font-bold text-green-400 font-mono tracking-tight">
+                        ${aerationPayout.finalPay.toFixed(2)}
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={handleFinalize}
+                      className="w-full py-3 rounded-lg font-bold text-lg flex items-center justify-center gap-2 shadow-lg bg-green-600 hover:bg-green-500 text-white transition-all active:scale-[0.98]"
+                    >
+                      <CheckCircle size={20} />{' '}
+                      {session.validation?.isValidated ? 'Update Payout' : 'Finalize & Paid'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* LAWN REJUV: COMBINED TEAM PAYOUT CONFIG + BONUSES + FINALIZE */}
           {isLawnRejuv && teamWorkers.length > 0 && (
-            <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5">
+            <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5 mb-10">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-white flex items-center gap-2">
                   <Users size={20} className="text-green-400" /> Team Payout Configuration
@@ -1067,427 +1416,76 @@ const PayoutContractor: React.FC = () => {
                   </button>
                 </div>
               </div>
-            </div>
-          )}
 
-          {/* TRANSACTION HISTORY */}
-          <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 overflow-hidden">
-            <div className="p-4 bg-gray-800 border-b border-gray-700">
-              <h2 className="text-lg font-bold flex items-center gap-2 text-white">
-                <Calendar size={18} className="text-blue-400" /> Transaction History
-              </h2>
-            </div>
-            <div className="p-2">
-              {session.financialStore.length === 0 ? (
-                <div className="p-8 text-center text-gray-500">
-                  No transactions found.
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {session.financialStore.map((tx: any) => renderTransactionRow(tx))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* AERATION: VISUAL BREAKDOWN (unchanged from original) */}
-          {!isLawnRejuv && aerationPayout && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Production */}
-              <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
-                <div className="flex items-center gap-2 mb-3 text-gray-400 text-xs font-bold uppercase tracking-wider">
-                  <Calculator size={14} className="text-blue-400" /> Production Comm
-                </div>
-                <div className="text-2xl font-bold text-white mb-3">
-                  ${aerationPayout.productionPay.toFixed(2)}
-                </div>
-                <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
-                  <div className="flex justify-between items-center">
-                    <span>Actual EQ</span>
-                    <span className="font-mono text-blue-300 font-bold">{actualTotalEQ.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between items-center border-t border-gray-700 pt-2">
-                    <span title="Base + Alumni + Silver">Total Rate (${aerationPayout.totalRate.toFixed(2)})</span>
-                    <span className="font-mono text-gray-300">
-                      ${baseRate.toFixed(2)} + ${(worker.alumniRate || 0).toFixed(2)} + ${(worker.silverRate || 0).toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Upsell */}
-              <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
-                <div className="flex items-center gap-2 mb-3 text-gray-400 text-xs font-bold uppercase tracking-wider">
-                  <TrendingUp size={14} className="text-green-400" /> Upsell Comm
-                </div>
-                <div className="text-2xl font-bold text-white mb-3">
-                  ${aerationPayout.upsellCommission.toFixed(2)}
-                </div>
-                <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
-                  <div className="flex justify-between items-center">
-                    <span>Payable Upsell</span>
-                    <span className="font-mono text-white">${stats.upsellPayable?.toFixed(2) || '0.00'}</span>
-                  </div>
-                  <div className="flex justify-between items-center border-t border-gray-700 pt-2">
-                    <span>Commission</span>
-                    <span className="font-mono text-gray-300">15%</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* IOS */}
-              <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
-                <div className="flex items-center gap-2 mb-3 text-gray-400 text-xs font-bold uppercase tracking-wider">
-                  <Award size={14} className="text-purple-400" /> IOS / PB Comm
-                </div>
-                <div className="text-2xl font-bold text-white mb-3">
-                  ${aerationPayout.iosCommission.toFixed(2)}
-                </div>
-                <div className="bg-gray-900/50 rounded p-3 text-xs text-gray-400 space-y-2 border border-gray-700/50">
-                  <div className="flex justify-between items-center">
-                    <span>Count</span>
-                    <span className="font-mono text-white">{stats.iosCount}</span>
-                  </div>
-                  <div className="flex justify-between items-center border-t border-gray-700 pt-2">
-                    <span>Rate</span>
-                    <span className="font-mono text-gray-300">$5.00 / ea</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* RECONCILIATION (Full Width) */}
-          <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5">
-            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-              <Receipt size={20} className="text-green-400" /> Reconciliation
-            </h3>
-
-            <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-              {/* Cash Input */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                <div className="flex items-center gap-2 mb-3">
-                  <Banknote size={18} className="text-green-400" />
-                  <span className="text-sm font-bold text-gray-300">Cash Collected</span>
-                </div>
-                <div className="text-xs text-gray-500 mb-2">
-                  Expected: <span className="font-mono text-green-300">${systemTotalCash.toFixed(2)}</span>
-                </div>
-                <div className="flex gap-2 mb-2">
-                  <input
-                    type="number"
-                    value={cashBills}
-                    onChange={(e) => setCashBills(e.target.value)}
-                    className="flex-1 bg-gray-800 border border-gray-600 rounded p-2 text-white placeholder-gray-500 text-sm"
-                    placeholder="Bills ($)"
-                  />
-                  <input
-                    type="number"
-                    value={cashChange}
-                    onChange={(e) => setCashChange(e.target.value)}
-                    className="flex-1 bg-gray-800 border border-gray-600 rounded p-2 text-white placeholder-gray-500 text-sm"
-                    placeholder="Change ($)"
-                  />
-                </div>
-                {cashDiff !== 0 && (
-                  <div className={`text-sm flex items-center gap-2 p-3 rounded-lg font-bold ${
-                    cashDiff < 0 
-                      ? 'text-red-300 bg-red-900/40 border border-red-700' 
-                      : 'text-green-300 bg-green-900/40 border border-green-700'
-                  }`}>
-                    <AlertCircle size={18} />
-                    <span>
-                      {cashDiff < 0 ? 'SHORTAGE' : 'OVERAGE'}: {cashDiff > 0 ? '+' : ''}${cashDiff.toFixed(2)}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Cheque Input */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                <div className="flex items-center gap-2 mb-3">
-                  <Receipt size={18} className="text-blue-400" />
-                  <span className="text-sm font-bold text-gray-300">Cheques Collected</span>
-                </div>
-                <div className="text-xs text-gray-500 mb-2">
-                  Expected: <span className="font-mono text-blue-300">${systemTotalCheque.toFixed(2)}</span>
-                </div>
-                <input
-                  type="number"
-                  value={chequeAmount}
-                  onChange={(e) => setChequeAmount(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-white mb-2 placeholder-gray-500 text-sm"
-                  placeholder="0.00"
-                />
-                {chequeDiff !== 0 && (
-                  <div className={`text-sm flex items-center gap-2 p-3 rounded-lg font-bold ${
-                    chequeDiff < 0 
-                      ? 'text-red-300 bg-red-900/40 border border-red-700' 
-                      : 'text-green-300 bg-green-900/40 border border-green-700'
-                  }`}>
-                    <AlertCircle size={18} />
-                    <span>
-                      {chequeDiff < 0 ? 'SHORTAGE' : 'OVERAGE'}: {chequeDiff > 0 ? '+' : ''}${chequeDiff.toFixed(2)}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* E-Transfer (Display Only) */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                <div className="flex items-center gap-2 mb-3">
-                  <Wallet size={18} className="text-cyan-400" />
-                  <span className="text-sm font-bold text-gray-300">E-Transfer</span>
-                </div>
-                <div className="text-xs text-gray-500 mb-2">System Total</div>
-                <div className="text-2xl font-bold font-mono text-cyan-400">
-                  ${totalETransfer.toFixed(2)}
-                </div>
-              </div>
-
-              {/* Credit Card (Display Only) */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                <div className="flex items-center gap-2 mb-3">
-                  <CreditCard size={18} className="text-orange-400" />
-                  <span className="text-sm font-bold text-gray-300">Credit Card</span>
-                </div>
-                <div className="text-xs text-gray-500 mb-2">System Total</div>
-                <div className="text-2xl font-bold font-mono text-orange-400">
-                  ${totalCreditCard.toFixed(2)}
-                </div>
-              </div>
-
-              {/* Prepaid (Display Only) */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                <div className="flex items-center gap-2 mb-3">
-                  <Wallet size={18} className="text-indigo-400" />
-                  <span className="text-sm font-bold text-gray-300">Prepaid</span>
-                </div>
-                <div className="text-xs text-gray-500 mb-2">System Total</div>
-                <div className="text-2xl font-bold font-mono text-indigo-400">
-                  ${totalPrepaid.toFixed(2)}
-                </div>
-              </div>
-
-              {/* Billed (Display Only) */}
-              <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-                <div className="flex items-center gap-2 mb-3">
-                  <Receipt size={18} className="text-gray-400" />
-                  <span className="text-sm font-bold text-gray-300">Billed</span>
-                </div>
-                <div className="text-xs text-gray-500 mb-2">System Total</div>
-                <div className="text-2xl font-bold font-mono text-gray-400">
-                  ${totalBilled.toFixed(2)}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* AERATION: DEDUCTIONS & FINAL PAYOUT (unchanged from original) */}
-          {!isLawnRejuv && aerationPayout && (
-            <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5 mb-10">
-              <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                <Calculator size={20} className="text-blue-400" /> Deductions & Final Payout
-              </h3>
-
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Deductions Column */}
-                <div className="space-y-4">
-                  <div className="bg-gray-900/50 p-3 rounded border border-gray-700 flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-gray-300 text-sm">
-                      <Truck size={16} />
-                      <div>
-                        <span>Machine Rental Fee</span>
-                        <span className="text-xs text-gray-500 block">($10.00)</span>
-                      </div>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={machineRental}
-                      onChange={(e) => setMachineRental(e.target.checked)}
-                      className="w-5 h-5 accent-blue-500 rounded cursor-pointer"
-                    />
-                  </div>
-
+              {/* Bonuses Section */}
+              <div className="mt-6 pt-6 border-t border-gray-700">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Bonuses */}
                   <div>
-                    <label className="text-xs text-gray-400 uppercase font-bold mb-1 block">Other Deductions</label>
-                    <input
-                      type="number"
-                      value={deductions}
-                      onChange={(e) => setDeductions(e.target.value)}
-                      className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white placeholder-gray-500"
-                      placeholder="0.00"
-                    />
-                  </div>
-                </div>
-
-                {/* Bonuses Column */}
-                <div>
-                  <label className="text-xs text-gray-400 uppercase font-bold mb-2 block flex items-center gap-2">
-                    <Trophy size={14} className="text-yellow-400" /> Bonuses
-                  </label>
-                  {session.bonuses && session.bonuses.length > 0 ? (
-                    <div className="space-y-2 max-h-40 overflow-y-auto">
-                      {session.bonuses.map((bonus) => (
-                        <div 
-                          key={bonus.id} 
-                          className="flex items-center justify-between bg-yellow-900/20 p-2 rounded border border-yellow-700/50"
-                        >
-                          <div className="flex items-center gap-2">
-                            <Trophy size={14} className="text-yellow-400" />
-                            <span className="text-sm text-white">{formatBonusDisplay(bonus)}</span>
+                    <label className="text-xs text-gray-400 uppercase font-bold mb-2 block flex items-center gap-2">
+                      <Trophy size={14} className="text-yellow-400" /> Team Bonuses
+                    </label>
+                    {session.bonuses && session.bonuses.length > 0 ? (
+                      <div className="space-y-2 max-h-40 overflow-y-auto">
+                        {session.bonuses.map((bonus) => (
+                          <div 
+                            key={bonus.id} 
+                            className="flex items-center justify-between bg-yellow-900/20 p-2 rounded border border-yellow-700/50"
+                          >
+                            <div className="flex items-center gap-2">
+                              <Trophy size={14} className="text-yellow-400" />
+                              <span className="text-sm text-white">{formatBonusDisplay(bonus)}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-bold text-green-400">+${bonus.amount.toFixed(2)}</span>
+                              <button
+                                onClick={() => handleRemoveBonus(bonus.id)}
+                                className="text-red-400 hover:text-red-300 p-1"
+                                title="Remove bonus"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-bold text-green-400">+${bonus.amount.toFixed(2)}</span>
-                            <button
-                              onClick={() => handleRemoveBonus(bonus.id)}
-                              className="text-red-400 hover:text-red-300 p-1"
-                              title="Remove bonus"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
+                        ))}
+                        <div className="text-right text-sm text-yellow-400 font-bold pt-1 border-t border-gray-700">
+                          Total Bonuses: +${bonusTotal.toFixed(2)}
                         </div>
-                      ))}
-                      <div className="text-right text-sm text-yellow-400 font-bold pt-1 border-t border-gray-700">
-                        Total Bonuses: +${aerationPayout.bonusTotal.toFixed(2)}
                       </div>
-                    </div>
-                  ) : (
-                    <div className="bg-gray-900/50 p-4 rounded border border-gray-700 text-center text-gray-500 text-sm">
-                      No bonuses assigned
-                    </div>
-                  )}
-                </div>
-
-                {/* Final Payout Column */}
-                <div className="flex flex-col justify-between">
-                  <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700 mb-4">
-                    <div className="text-xs text-gray-500 uppercase font-bold mb-2">Breakdown</div>
-                    <div className="space-y-1 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">Production</span>
-                        <span className="font-mono text-white">${aerationPayout.productionPay.toFixed(2)}</span>
+                    ) : (
+                      <div className="bg-gray-900/50 p-4 rounded border border-gray-700 text-center text-gray-500 text-sm">
+                        No bonuses assigned
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">Upsell</span>
-                        <span className="font-mono text-white">${aerationPayout.upsellCommission.toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-400">IOS/PB</span>
-                        <span className="font-mono text-white">${aerationPayout.iosCommission.toFixed(2)}</span>
-                      </div>
-                      {aerationPayout.machineDeduction > 0 && (
-                        <div className="flex justify-between text-red-400">
-                          <span>Machine Rental</span>
-                          <span className="font-mono">-${aerationPayout.machineDeduction.toFixed(2)}</span>
-                        </div>
-                      )}
-                      {aerationPayout.bonusTotal > 0 && (
-                        <div className="flex justify-between text-yellow-400">
-                          <span>Bonuses</span>
-                          <span className="font-mono">+${aerationPayout.bonusTotal.toFixed(2)}</span>
-                        </div>
-                      )}
-                      {aerationPayout.totalDeductions > 0 && (
-                        <div className="flex justify-between text-red-400">
-                          <span>Other Deductions</span>
-                          <span className="font-mono">-${aerationPayout.totalDeductions.toFixed(2)}</span>
-                        </div>
-                      )}
-                    </div>
+                    )}
                   </div>
 
-                  <div>
+                  {/* Finalize Button */}
+                  <div className="flex flex-col justify-end">
                     <div className="flex justify-between items-end mb-4">
-                      <span className="text-lg font-bold text-white">Final Payout</span>
+                      <span className="text-lg font-bold text-white">Team Total Payout</span>
                       <span className="text-3xl font-bold text-green-400 font-mono tracking-tight">
-                        ${aerationPayout.finalPay.toFixed(2)}
+                        ${finalPay.toFixed(2)}
                       </span>
                     </div>
 
                     <button
                       onClick={handleFinalize}
-                      className="w-full py-3 rounded-lg font-bold text-lg flex items-center justify-center gap-2 shadow-lg bg-green-600 hover:bg-green-500 text-white transition-all active:scale-[0.98]"
+                      disabled={!splitsValid}
+                      className={`w-full py-3 rounded-lg font-bold text-lg flex items-center justify-center gap-2 shadow-lg transition-all active:scale-[0.98] ${
+                        splitsValid 
+                          ? 'bg-green-600 hover:bg-green-500 text-white' 
+                          : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                      }`}
                     >
                       <CheckCircle size={20} />{' '}
                       {session.validation?.isValidated ? 'Update Payout' : 'Finalize & Paid'}
                     </button>
+                    {!splitsValid && (
+                      <p className="text-xs text-red-400 mt-2 text-center">
+                        Fix split percentages before finalizing
+                      </p>
+                    )}
                   </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* LAWN REJUV: BONUSES & FINALIZE BUTTON */}
-          {isLawnRejuv && (
-            <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5 mb-10">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Bonuses */}
-                <div>
-                  <label className="text-xs text-gray-400 uppercase font-bold mb-2 block flex items-center gap-2">
-                    <Trophy size={14} className="text-yellow-400" /> Team Bonuses
-                  </label>
-                  {session.bonuses && session.bonuses.length > 0 ? (
-                    <div className="space-y-2 max-h-40 overflow-y-auto">
-                      {session.bonuses.map((bonus) => (
-                        <div 
-                          key={bonus.id} 
-                          className="flex items-center justify-between bg-yellow-900/20 p-2 rounded border border-yellow-700/50"
-                        >
-                          <div className="flex items-center gap-2">
-                            <Trophy size={14} className="text-yellow-400" />
-                            <span className="text-sm text-white">{formatBonusDisplay(bonus)}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-bold text-green-400">+${bonus.amount.toFixed(2)}</span>
-                            <button
-                              onClick={() => handleRemoveBonus(bonus.id)}
-                              className="text-red-400 hover:text-red-300 p-1"
-                              title="Remove bonus"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                      <div className="text-right text-sm text-yellow-400 font-bold pt-1 border-t border-gray-700">
-                        Total Bonuses: +${bonusTotal.toFixed(2)}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="bg-gray-900/50 p-4 rounded border border-gray-700 text-center text-gray-500 text-sm">
-                      No bonuses assigned
-                    </div>
-                  )}
-                </div>
-
-                {/* Finalize Button */}
-                <div className="flex flex-col justify-end">
-                  <div className="flex justify-between items-end mb-4">
-                    <span className="text-lg font-bold text-white">Team Total Payout</span>
-                    <span className="text-3xl font-bold text-green-400 font-mono tracking-tight">
-                      ${finalPay.toFixed(2)}
-                    </span>
-                  </div>
-
-                  <button
-                    onClick={handleFinalize}
-                    disabled={!splitsValid}
-                    className={`w-full py-3 rounded-lg font-bold text-lg flex items-center justify-center gap-2 shadow-lg transition-all active:scale-[0.98] ${
-                      splitsValid 
-                        ? 'bg-green-600 hover:bg-green-500 text-white' 
-                        : 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                    }`}
-                  >
-                    <CheckCircle size={20} />{' '}
-                    {session.validation?.isValidated ? 'Update Payout' : 'Finalize & Paid'}
-                  </button>
-                  {!splitsValid && (
-                    <p className="text-xs text-red-400 mt-2 text-center">
-                      Fix split percentages before finalizing
-                    </p>
-                  )}
                 </div>
               </div>
             </div>
