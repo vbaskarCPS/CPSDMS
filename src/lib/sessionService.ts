@@ -2043,8 +2043,29 @@ class SessionService {
   // --- 9. TEAM PAYOUT CALCULATIONS ---
 
   /**
-   * Calculate individual worker payouts for a team session
-   * Uses getPayoutRate() to determine $/EQ for commission calculation
+   * Calculate individual worker payouts for a team session.
+   * 
+   * IMPORTANT: This is the CANONICAL payout calculation function.
+   * All UI components and exports should use this function to ensure consistency.
+   * 
+   * Rate Calculation:
+   * - basePayoutRate: $8/EQ for teams (2+), $6/EQ for solo (lawn_rejuv); $8/EQ for aeration
+   * - alumniRate/silverRate: Additional $/EQ amounts (NOT percentages)
+   * - totalPayoutRate = basePayoutRate + alumniRate + silverRate
+   * 
+   * Production Commission:
+   * - teamTotalEQ: Displayed to ALL team members (for visibility)
+   * - assignedEQ: teamTotalEQ * equivSplitPercent (for calculation)
+   * - productionCommission = assignedEQ * totalPayoutRate
+   * 
+   * Upsell Commission:
+   * - upsellCommission = upsellPayable * upsellSplitPercent * 0.15
+   * - iosCommission = iosCount * $5 * upsellSplitPercent
+   * 
+   * Deductions:
+   * - cashChequeDiff: (|cashDiff| + |chequeDiff|) * equivSplitPercent
+   * - machineRentalDeduction: $10 PER WORKER (NOT split)
+   * - deductions = cashChequeDiff + machineRentalDeduction
    */
   public calculateTeamPayouts(
     session: LogsheetSession,
@@ -2052,72 +2073,89 @@ class SessionService {
     seasonType: SeasonType
   ): WorkerPayoutBreakdown[] {
     const stats = session.stats;
-    const equivSplit = session.equivSplit || createEqualSplit(session.teamWorkerIds || [session.workerId]);
-    const upsellSplit = session.upsellSplit || equivSplit;
-    const teamSize = session.teamWorkerIds?.length || 1;
+    const validation = session.validation;
+    const teamWorkerIds = session.teamWorkerIds || [session.workerId];
+    const teamSize = teamWorkerIds.length;
     
-    // Get the PAYOUT rate ($/EQ), not the EQ divisor
-    const payoutRate = getPayoutRate(seasonType, teamSize);
+    // Get splits (default to equal if not set)
+    const equivSplit = session.equivSplit || createEqualSplit(teamWorkerIds);
+    const upsellSplit = session.upsellSplit || equivSplit;
+    
+    // Get the BASE payout rate ($/EQ)
+    const basePayoutRate = getPayoutRate(seasonType, teamSize);
+    
+    // Team total EQ (displayed to all workers, but split for calculation)
+    const teamTotalEQ = stats.totalEQ;
     
     const breakdowns: WorkerPayoutBreakdown[] = [];
     
     const workerMap = new Map(workers.map(w => [w.contractorId, w]));
     
-    for (const workerId of Object.keys(equivSplit)) {
+    for (const workerId of teamWorkerIds) {
       const worker = workerMap.get(workerId);
       if (!worker) continue;
       
-      const equivPercent = equivSplit[workerId] / 100;
-      const upsellPercent = upsellSplit[workerId] / 100;
+      // Get split percentages
+      const equivPercent = (equivSplit[workerId] || 0) / 100;
+      const upsellPercent = (upsellSplit[workerId] || 0) / 100;
       
-      // Calculate assigned EQ
-      const assignedEQ = stats.totalEQ * equivPercent;
+      // Calculate assigned EQ (team total * split %)
+      const assignedEQ = teamTotalEQ * equivPercent;
       
-      // Base commission (EQ * payout rate)
-      const baseCommission = assignedEQ * payoutRate;
-      
-      // Apply individual rates
+      // Get worker's individual rates ($/EQ, NOT percentages)
       const alumniRate = worker.alumniRate || 0;
       const silverRate = worker.silverRate || 0;
-      const alumniBonus = baseCommission * alumniRate;
-      const silverBonus = baseCommission * silverRate;
+      const totalPayoutRate = basePayoutRate + alumniRate + silverRate;
+      
+      // Production commission breakdown
+      const baseCommission = assignedEQ * basePayoutRate;
+      const alumniBonus = assignedEQ * alumniRate;
+      const silverBonus = assignedEQ * silverRate;
       const productionCommission = baseCommission + alumniBonus + silverBonus;
+      // Equivalent to: assignedEQ * totalPayoutRate
       
       // Upsell commission (15% of upsell payable, split by upsell %)
-      const upsellCommission = stats.upsellPayable * upsellPercent * 0.15;
+      const upsellCommission = (stats.upsellPayable || 0) * upsellPercent * 0.15;
       
       // IOS commission ($5 per IOS, split by upsell %)
-      const iosCommission = stats.iosCount * 5 * upsellPercent;
+      const iosCommission = (stats.iosCount || 0) * 5 * upsellPercent;
       
       // Bonuses (with their own split percentages)
       let bonusAmount = 0;
       if (session.bonuses) {
         for (const bonus of session.bonuses) {
-          const bonusSplit = bonus.splitPercentages?.[workerId] || equivPercent * 100;
+          // Use bonus-specific split if defined, otherwise use equiv split
+          const bonusSplit = bonus.splitPercentages?.[workerId] ?? (equivPercent * 100);
           bonusAmount += bonus.amount * (bonusSplit / 100);
         }
       }
       
-      // Deductions (split evenly for now)
-      const validation = session.validation;
-      let deductions = 0;
-      if (validation) {
-        const totalDeductions = 
-          Math.abs(validation.cashDiff) + 
-          Math.abs(validation.chequeDiff) + 
-          (validation.machineRental ? 10 : 0);
-        deductions = totalDeductions * equivPercent;
-      }
+      // Deductions calculation
+      // Cash/cheque diff is split by equiv percent
+      const cashChequeDiff = validation 
+        ? (Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0)) * equivPercent
+        : 0;
       
+      // Machine rental is $10 PER WORKER (NOT split)
+      const machineRentalDeduction = validation?.machineRental ? 10 : 0;
+      
+      const deductions = cashChequeDiff + machineRentalDeduction;
+      
+      // Final commission
       const finalCommission = productionCommission + upsellCommission + iosCommission + 
                              bonusAmount - deductions;
       
       breakdowns.push({
         workerId,
         workerName: `${worker.firstName} ${worker.lastName}`,
-        equivSplitPercent: equivSplit[workerId],
-        upsellSplitPercent: upsellSplit[workerId],
+        equivSplitPercent: equivSplit[workerId] || 0,
+        upsellSplitPercent: upsellSplit[workerId] || 0,
+        teamTotalEQ,
         assignedEQ,
+        basePayoutRate,
+        alumniRate,
+        silverRate,
+        totalPayoutRate,
         baseCommission,
         alumniBonus,
         silverBonus,
@@ -2125,6 +2163,8 @@ class SessionService {
         upsellCommission,
         iosCommission,
         bonusAmount,
+        cashChequeDiff,
+        machineRentalDeduction,
         deductions,
         finalCommission,
       });

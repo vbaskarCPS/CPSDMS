@@ -79,8 +79,11 @@ export interface Worker {
   status: 'Rookie' | 'Return' | 'Alumni';
 
   // --- RATES & METADATA ---
-  alumniRate?: number;      // e.g., 0.50
-  silverRate?: number;      // e.g., 0.50
+  // NOTE: alumniRate and silverRate are DOLLAR AMOUNTS per EQ (not percentages)
+  // Example: alumniRate = 0.50 means +$0.50 per EQ
+  // Total payout rate = baseRate + alumniRate + silverRate
+  alumniRate?: number;      // e.g., 0.50 = +$0.50/EQ
+  silverRate?: number;      // e.g., 0.50 = +$0.50/EQ
   customBaseRate?: number;  // Optional override
   
   assignedManagerId?: string; // Links to ManagementUser.userId
@@ -130,21 +133,21 @@ export interface DailySessionData {
 export interface SessionValidation {
     isValidated: boolean;
     
-    // Inputs
+    // Inputs (TEAM TOTALS - split per worker during calculation)
     verifiedCash: number;
     verifiedCheque: number;
     
-    // Diffs
+    // Diffs (TEAM TOTALS - split per worker during calculation)
     cashDiff: number;       
     chequeDiff: number;     
     
-    // Resolved "Actual" Stats
+    // Resolved "Actual" Stats (TEAM TOTALS)
     actualProdCash: number;
     actualProdCheque: number;
     actualTotalEQ: number;
 
-    machineRental: boolean; // True = Deduct $10
-    finalCommission: number;
+    machineRental: boolean; // True = Deduct $10 PER WORKER (not split)
+    finalCommission: number; // Total team commission (sum of all workers)
     managerName?: string;
     timestamp?: string;
 }
@@ -220,20 +223,33 @@ export interface WorkerPayoutBreakdown {
   equivSplitPercent: number;
   upsellSplitPercent: number;
   
-  // Calculated values
-  assignedEQ: number;           // totalEQ * equivSplitPercent
-  baseCommission: number;       // assignedEQ * payoutRate
-  alumniBonus: number;          // baseCommission * alumniRate
-  silverBonus: number;          // baseCommission * silverRate
-  productionCommission: number; // baseCommission + alumniBonus + silverBonus
+  // EQ Values
+  teamTotalEQ: number;              // Team total EQ (for DISPLAY to all workers)
+  assignedEQ: number;               // teamTotalEQ * equivSplitPercent (for CALCULATION)
   
-  upsellCommission: number;     // upsellPayable * upsellSplitPercent * 0.15
-  iosCommission: number;        // iosCount * $5 * upsellSplitPercent
+  // Payout Rate Breakdown (all in $/EQ)
+  basePayoutRate: number;           // $8 for teams, $6 for solo
+  alumniRate: number;               // Additional $/EQ for alumni
+  silverRate: number;               // Additional $/EQ for silver
+  totalPayoutRate: number;          // basePayoutRate + alumniRate + silverRate
   
-  bonusAmount: number;          // Sum of bonuses with splits applied
-  deductions: number;           // Cash/cheque diff + machine rental (split evenly?)
+  // Commission Breakdown
+  baseCommission: number;           // assignedEQ * basePayoutRate
+  alumniBonus: number;              // assignedEQ * alumniRate
+  silverBonus: number;              // assignedEQ * silverRate
+  productionCommission: number;     // baseCommission + alumniBonus + silverBonus
   
-  finalCommission: number;      // Total payout for this worker
+  upsellCommission: number;         // upsellPayable * upsellSplitPercent * 0.15
+  iosCommission: number;            // iosCount * $5 * upsellSplitPercent
+  
+  bonusAmount: number;              // Sum of bonuses with splits applied
+  
+  // Deductions
+  cashChequeDiff: number;           // (|cashDiff| + |chequeDiff|) * equivSplitPercent
+  machineRentalDeduction: number;   // $10 per worker (NOT split)
+  deductions: number;               // cashChequeDiff + machineRentalDeduction
+  
+  finalCommission: number;          // Total payout for this worker
 }
 
 // --- BOOKINGS & TRANSACTIONS ---
@@ -411,7 +427,8 @@ export interface SeasonConfig {
   billedWeight: number;       // 0.5 for both
   
   // PAYOUT RATES ($/EQ for commission calculation)
-  // NOTE: These are NOT for EQ calculation! EQ is always prodPayable / 25
+  // NOTE: These are BASE rates. Final rate = base + alumniRate + silverRate
+  // alumniRate and silverRate are also $/EQ amounts (not percentages)
   payoutRateSolo: number;     // $8 for aeration, $6 for lawn_rejuv solo
   payoutRateTeam: number;     // $8 for aeration, $8 for lawn_rejuv team (2+)
   
@@ -436,7 +453,8 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
     displayName: 'Aeration Season',
     prepaidWeight: 0.5,
     billedWeight: 0.5,
-    // Payout rates for aeration: $8/EQ for everyone
+    // Payout rates for aeration: $8/EQ base for everyone
+    // Final rate = $8 + alumniRate + silverRate
     payoutRateSolo: 8,
     payoutRateTeam: 8,
     // No product cost deduction for aeration
@@ -454,6 +472,7 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
     prepaidWeight: 0.7,
     billedWeight: 0.5,
     // Payout rates for lawn rejuv: $6/EQ solo, $8/EQ for teams of 2+
+    // Final rate = base + alumniRate + silverRate
     payoutRateSolo: 6,
     payoutRateTeam: 8,
     // 25% product cost deduction for lawn rejuv

@@ -96,9 +96,9 @@ export const isOfficeFlat = (displayPrice: string | undefined, seasonType: Seaso
   return config.officeFlats.some(f => displayPrice.startsWith(f.code));
 };
 
-// --- GET PAYOUT RATE ($/EQ for commission calculation) ---
-// NOTE: This is for PAYOUT calculation, NOT for EQ calculation!
-// EQ is always calculated as: prodPayable / EQ_DIVISOR (25)
+// --- GET PAYOUT RATE ($/EQ BASE for commission calculation) ---
+// NOTE: This returns the BASE payout rate. Final rate = base + alumniRate + silverRate
+// alumniRate and silverRate are also $/EQ amounts (not percentages)
 export const getPayoutRate = (seasonType: SeasonType, teamSize: number): number => {
   const config = getSeasonConfig(seasonType);
   return teamSize >= 2 ? config.payoutRateTeam : config.payoutRateSolo;
