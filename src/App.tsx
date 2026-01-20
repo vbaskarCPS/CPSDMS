@@ -16,6 +16,7 @@ const NotFound = React.lazy(() => import('./pages/Logsheet/NotFound'));
 const EmailTemplates = React.lazy(() => import('./pages/Admin/EmailTemplates'));
 const EmailTemplateEditor = React.lazy(() => import('./pages/Admin/EmailTemplateEditor'));
 const PayoutContractor = React.lazy(() => import('./pages/Management/PayoutContractor'));
+const ApplicantForm = React.lazy(() => import('./pages/Public/ApplicantForm'));
 
 // Loading fallback
 const LoadingFallback = () => (
@@ -31,6 +32,9 @@ function App() {
         {/* Public Routes */}
         <Route path="/login" element={<HomePage />} />
         <Route path="/" element={<Navigate to="/login" replace />} />
+
+        {/* Public Job Fair Application Form */}
+        <Route path="/:slug" element={<ApplicantForm />} />
 
         {/* Super Admin Route */}
         <Route path="/super-admin" element={<CommandCenterCreator />} />
@@ -58,3 +62,36 @@ function App() {
 }
 
 export default App;
+```
+
+---
+
+# Summary - All Files Complete! 
+
+## Files to Create/Replace:
+
+| # | File Path | Action |
+|---|-----------|--------|
+| 1 | **SQL** | Run in Supabase SQL Editor |
+| 2 | `src/types/index.ts` | Replace |
+| 3 | `src/lib/commandCenterService.ts` | Replace |
+| 4 | `src/lib/jobFairService.ts` | **Create New** |
+| 5 | `src/lib/realtimeService.ts` | Replace |
+| 6 | `src/lib/googleSheetsService.ts` | Replace |
+| 7 | `src/components/AddressAutocomplete.tsx` | **Create New** |
+| 8 | `src/pages/Public/ApplicantForm.tsx` | **Create New** |
+| 9 | `src/pages/Admin/JobFairManager.tsx` | **Create New** |
+| 10 | `src/pages/SuperAdmin/CommandCenterCreator.tsx` | Replace |
+| 11 | `src/pages/Admin/SessionCommandCenter.tsx` | Replace |
+| 12 | `src/App.tsx` | Replace |
+
+## Implementation Order:
+
+1. **Run SQL migration first** (creates tables and columns)
+2. **Create new directories** if needed:
+   - `src/pages/Public/` (for ApplicantForm)
+   - `src/components/` (for AddressAutocomplete)
+3. **Replace/create files** in any order
+4. **Add environment variable to local dev** (if using locally):
+```
+   VITE_GOOGLE_PLACES_API_KEY=AIzaSyASRjsnjPrMn6VUegoYqxVXfy9aW38Y2Ko

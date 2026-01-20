@@ -23,6 +23,7 @@ import {
   Leaf,
   Wind,
   Package,
+  UserPlus,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
@@ -33,14 +34,17 @@ import { commandCenterService, regionHasSeasonSelection } from '../../lib/comman
 import { removeStorageItem } from '../../lib/localStorage';
 import { DailySessionData, SortOption, LogsheetSession, SeasonType, SEASON_CONFIGS, EQ_DIVISOR } from '../../types';
 import PayoutToday from '../Management/PayoutToday';
+import JobFairManager from './JobFairManager';
 
 const SessionCommandCenter: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   
-  const [activeTab, setActiveTab] = useState<'lifecycle' | 'payout'>(() => {
+  const [activeTab, setActiveTab] = useState<'lifecycle' | 'payout' | 'jobfair'>(() => {
     const tabParam = searchParams.get('tab');
-    return tabParam === 'payout' ? 'payout' : 'lifecycle';
+    if (tabParam === 'payout') return 'payout';
+    if (tabParam === 'jobfair') return 'jobfair';
+    return 'lifecycle';
   });
 
   // --- COMMAND CENTER CONTEXT (stored in state to avoid infinite loops) ---
@@ -122,6 +126,9 @@ const SessionCommandCenter: React.FC = () => {
   // Computed: Is imported from Google Sheets
   const isFromSheets = importMeta?.source === 'sheets';
 
+  // Computed: Has job fairs enabled
+  const hasJobFairs = currentCC?.jobFairsEnabled || false;
+
   // Load session function (memoized to avoid recreation)
   const loadSession = useCallback(async () => {
     if (!currentCC) return;
@@ -169,7 +176,7 @@ const SessionCommandCenter: React.FC = () => {
     }
   }, [currentCC?.id, loadSession]);
 
-  const handleTabChange = (tab: 'lifecycle' | 'payout') => {
+  const handleTabChange = (tab: 'lifecycle' | 'payout' | 'jobfair') => {
     setActiveTab(tab);
     setSearchParams({ tab });
   };
@@ -569,6 +576,17 @@ const SessionCommandCenter: React.FC = () => {
               >
                 Payout Today
               </button>
+              {hasJobFairs && (
+                <button
+                  onClick={() => handleTabChange('jobfair')}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1 ${
+                    activeTab === 'jobfair' ? 'bg-purple-600 text-white shadow' : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <UserPlus size={14} />
+                  Job Fairs
+                </button>
+              )}
             </div>
 
             {!isSuperAdminMode && (
@@ -1088,6 +1106,15 @@ const SessionCommandCenter: React.FC = () => {
                   </p>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* --- VIEW 3: JOB FAIRS --- */}
+        {activeTab === 'jobfair' && hasJobFairs && (
+          <div className="animate-fade-in">
+            <div className="bg-gray-800 rounded-xl border border-gray-700 min-h-[500px] flex flex-col overflow-hidden">
+              <JobFairManager commandCenter={currentCC} />
             </div>
           </div>
         )}

@@ -18,6 +18,9 @@ export interface CommandCenter {
   masterbookingsSheetId: string;
   replyToEmail?: string;
   createdAt?: string;
+  // Job Fairs
+  jobFairsEnabled?: boolean;
+  jobFairsSlug?: string;
 }
 
 export interface CommandCenterWithPassword extends CommandCenter {
@@ -153,6 +156,33 @@ export const validateSplitTotal = (split: TeamSplitConfig): boolean => {
   return Math.abs(total - 100) < 0.01; // Allow small floating point variance
 };
 
+// --- VALIDATE JOB FAIR SLUG ---
+export const isValidJobFairSlug = (slug: string): boolean => {
+  // Only lowercase letters, numbers, and hyphens
+  // Must start with a letter, 3-50 characters
+  const pattern = /^[a-z][a-z0-9-]{2,49}$/;
+  return pattern.test(slug);
+};
+
+export const getJobFairSlugError = (slug: string): string | null => {
+  if (!slug.trim()) {
+    return 'Slug is required when Job Fairs is enabled';
+  }
+  if (slug.length < 3) {
+    return 'Slug must be at least 3 characters';
+  }
+  if (slug.length > 50) {
+    return 'Slug must be 50 characters or less';
+  }
+  if (!/^[a-z]/.test(slug)) {
+    return 'Slug must start with a lowercase letter';
+  }
+  if (!/^[a-z0-9-]+$/.test(slug)) {
+    return 'Slug can only contain lowercase letters, numbers, and hyphens';
+  }
+  return null;
+};
+
 class CommandCenterService {
   private static instance: CommandCenterService;
   
@@ -212,6 +242,14 @@ class CommandCenterService {
   public currentRegionHasSeasonSelection(): boolean {
     const region = this.getCurrentRegion();
     return region ? regionHasSeasonSelection(region) : false;
+  }
+
+  /**
+   * Check if current command center has job fairs enabled
+   */
+  public currentHasJobFairs(): boolean {
+    const cc = this.getCurrentCommandCenter();
+    return cc?.jobFairsEnabled || false;
   }
 
   /**
@@ -276,6 +314,22 @@ class CommandCenterService {
     return this.mapDbToCommandCenter(data);
   }
 
+  /**
+   * Get a command center by job fair slug (for public form)
+   */
+  public async getCommandCenterBySlug(slug: string): Promise<CommandCenter | null> {
+    const { data, error } = await supabase
+      .from('command_centers')
+      .select('*')
+      .eq('job_fairs_slug', slug)
+      .eq('job_fairs_enabled', true)
+      .maybeSingle();
+
+    if (error || !data) return null;
+
+    return this.mapDbToCommandCenter(data);
+  }
+
   // --- CRUD OPERATIONS ---
 
   /**
@@ -303,11 +357,27 @@ class CommandCenterService {
     workerbookSheetId: string;
     masterbookingsSheetId: string;
     replyToEmail?: string;
+    jobFairsEnabled?: boolean;
+    jobFairsSlug?: string;
   }): Promise<CommandCenter> {
     // Validate username uniqueness across all login types
     const isAvailable = await this.isUsernameAvailable(cc.username);
     if (!isAvailable) {
       throw new Error(`Username "${cc.username}" is already taken.`);
+    }
+
+    // Validate job fair slug if enabled
+    if (cc.jobFairsEnabled && cc.jobFairsSlug) {
+      const slugError = getJobFairSlugError(cc.jobFairsSlug);
+      if (slugError) {
+        throw new Error(slugError);
+      }
+      
+      // Check slug uniqueness
+      const slugAvailable = await this.isJobFairSlugAvailable(cc.jobFairsSlug);
+      if (!slugAvailable) {
+        throw new Error(`Job Fair URL "${cc.jobFairsSlug}" is already taken.`);
+      }
     }
 
     const { data, error } = await supabase
@@ -320,6 +390,8 @@ class CommandCenterService {
         workerbook_sheet_id: cc.workerbookSheetId,
         masterbookings_sheet_id: cc.masterbookingsSheetId,
         reply_to_email: cc.replyToEmail,
+        job_fairs_enabled: cc.jobFairsEnabled || false,
+        job_fairs_slug: cc.jobFairsEnabled ? cc.jobFairsSlug : null,
       })
       .select()
       .single();
@@ -340,6 +412,8 @@ class CommandCenterService {
     workerbookSheetId: string;
     masterbookingsSheetId: string;
     replyToEmail: string;
+    jobFairsEnabled: boolean;
+    jobFairsSlug: string;
   }>): Promise<CommandCenter> {
     // If username is being changed, check availability
     if (updates.username) {
@@ -352,6 +426,20 @@ class CommandCenterService {
       }
     }
 
+    // Validate job fair slug if being set
+    if (updates.jobFairsEnabled && updates.jobFairsSlug) {
+      const slugError = getJobFairSlugError(updates.jobFairsSlug);
+      if (slugError) {
+        throw new Error(slugError);
+      }
+      
+      // Check slug uniqueness (excluding current CC)
+      const slugAvailable = await this.isJobFairSlugAvailable(updates.jobFairsSlug, id);
+      if (!slugAvailable) {
+        throw new Error(`Job Fair URL "${updates.jobFairsSlug}" is already taken.`);
+      }
+    }
+
     const dbUpdates: any = {};
     if (updates.username) dbUpdates.username = updates.username;
     if (updates.password) dbUpdates.password = updates.password;
@@ -360,6 +448,10 @@ class CommandCenterService {
     if (updates.workerbookSheetId) dbUpdates.workerbook_sheet_id = updates.workerbookSheetId;
     if (updates.masterbookingsSheetId) dbUpdates.masterbookings_sheet_id = updates.masterbookingsSheetId;
     if (updates.replyToEmail !== undefined) dbUpdates.reply_to_email = updates.replyToEmail;
+    if (updates.jobFairsEnabled !== undefined) dbUpdates.job_fairs_enabled = updates.jobFairsEnabled;
+    if (updates.jobFairsSlug !== undefined) {
+      dbUpdates.job_fairs_slug = updates.jobFairsEnabled ? updates.jobFairsSlug : null;
+    }
 
     const { data, error } = await supabase
       .from('command_centers')
@@ -396,76 +488,92 @@ class CommandCenterService {
    * DANGER: This is irreversible and deletes everything!
    * 
    * Deletion order respects foreign key constraints:
-   * 1. bookings (refs users, daily_sessions, command_centers)
-   * 2. logsheet_sessions (refs users, daily_sessions, command_centers)
-   * 3. routes (refs users, daily_sessions, command_centers)
-   * 4. transactions (refs users, command_centers)
-   * 5. email_logs (standalone)
-   * 6. email_templates (refs command_centers)
-   * 7. users (refs command_centers)
-   * 8. daily_sessions (refs command_centers)
-   * 9. command_centers (parent table)
+   * 1. job_fair_applicants (refs job_fair_sessions, command_centers)
+   * 2. job_fair_sessions (refs command_centers)
+   * 3. bookings (refs users, daily_sessions, command_centers)
+   * 4. logsheet_sessions (refs users, daily_sessions, command_centers)
+   * 5. routes (refs users, daily_sessions, command_centers)
+   * 6. transactions (refs users, command_centers)
+   * 7. email_logs (standalone)
+   * 8. email_templates (refs command_centers)
+   * 9. users (refs command_centers)
+   * 10. daily_sessions (refs command_centers)
+   * 11. command_centers (parent table)
    */
   public async universalWipe(): Promise<void> {
     // Delete in FK-safe order (children before parents)
     
-    // 1. bookings
+    // 1. job_fair_applicants
+    const { error: applicantsError } = await supabase
+      .from('job_fair_applicants')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000');
+    if (applicantsError) throw new Error(`Failed to delete job_fair_applicants: ${applicantsError.message}`);
+
+    // 2. job_fair_sessions
+    const { error: jfSessionsError } = await supabase
+      .from('job_fair_sessions')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000');
+    if (jfSessionsError) throw new Error(`Failed to delete job_fair_sessions: ${jfSessionsError.message}`);
+
+    // 3. bookings
     const { error: bookingsError } = await supabase
       .from('bookings')
       .delete()
       .neq('booking_id', ''); // Delete all rows
     if (bookingsError) throw new Error(`Failed to delete bookings: ${bookingsError.message}`);
 
-    // 2. logsheet_sessions
+    // 4. logsheet_sessions
     const { error: logsheetError } = await supabase
       .from('logsheet_sessions')
       .delete()
       .neq('id', '');
     if (logsheetError) throw new Error(`Failed to delete logsheet_sessions: ${logsheetError.message}`);
 
-    // 3. routes
+    // 5. routes
     const { error: routesError } = await supabase
       .from('routes')
       .delete()
       .neq('route_code', '');
     if (routesError) throw new Error(`Failed to delete routes: ${routesError.message}`);
 
-    // 4. transactions
+    // 6. transactions
     const { error: transactionsError } = await supabase
       .from('transactions')
       .delete()
       .neq('id', '');
     if (transactionsError) throw new Error(`Failed to delete transactions: ${transactionsError.message}`);
 
-    // 5. email_logs
+    // 7. email_logs
     const { error: emailLogsError } = await supabase
       .from('email_logs')
       .delete()
       .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all rows (UUID comparison)
     if (emailLogsError) throw new Error(`Failed to delete email_logs: ${emailLogsError.message}`);
 
-    // 6. email_templates
+    // 8. email_templates
     const { error: emailTemplatesError } = await supabase
       .from('email_templates')
       .delete()
       .neq('id', '00000000-0000-0000-0000-000000000000');
     if (emailTemplatesError) throw new Error(`Failed to delete email_templates: ${emailTemplatesError.message}`);
 
-    // 7. users
+    // 9. users
     const { error: usersError } = await supabase
       .from('users')
       .delete()
       .neq('user_id', '');
     if (usersError) throw new Error(`Failed to delete users: ${usersError.message}`);
 
-    // 8. daily_sessions
+    // 10. daily_sessions
     const { error: dailySessionsError } = await supabase
       .from('daily_sessions')
       .delete()
       .neq('date', '1900-01-01'); // Delete all rows
     if (dailySessionsError) throw new Error(`Failed to delete daily_sessions: ${dailySessionsError.message}`);
 
-    // 9. command_centers
+    // 11. command_centers
     const { error: commandCentersError } = await supabase
       .from('command_centers')
       .delete()
@@ -518,6 +626,23 @@ class CommandCenterService {
     return true;
   }
 
+  /**
+   * Check if a job fair slug is available
+   */
+  public async isJobFairSlugAvailable(slug: string, excludeId?: string): Promise<boolean> {
+    let query = supabase
+      .from('command_centers')
+      .select('id')
+      .eq('job_fairs_slug', slug);
+    
+    if (excludeId) {
+      query = query.neq('id', excludeId);
+    }
+    
+    const { data } = await query.maybeSingle();
+    return !data;
+  }
+
   // --- HELPERS ---
 
   private mapDbToCommandCenter(data: any): CommandCenter {
@@ -530,6 +655,8 @@ class CommandCenterService {
       masterbookingsSheetId: data.masterbookings_sheet_id,
       replyToEmail: data.reply_to_email,
       createdAt: data.created_at,
+      jobFairsEnabled: data.job_fairs_enabled || false,
+      jobFairsSlug: data.job_fairs_slug,
     };
   }
 }

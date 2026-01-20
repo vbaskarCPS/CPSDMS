@@ -43,6 +43,72 @@ export interface CommandCenter {
   masterbookingsSheetId: string;
   replyToEmail?: string;
   createdAt?: string;
+  // Job Fairs
+  jobFairsEnabled?: boolean;
+  jobFairsSlug?: string;
+}
+
+// --- JOB FAIR TYPES ---
+export type JobFairSessionStatus = 'active' | 'closed';
+export type ApplicantIdType = 'SIN' | 'DL' | 'HEALTH_CARD' | 'PASSPORT';
+
+export interface JobFairSession {
+  id: string;
+  commandCenterId: string;
+  sessionDate: string;
+  status: JobFairSessionStatus;
+  createdAt?: string;
+  closedAt?: string;
+}
+
+export interface JobFairApplicant {
+  id: string;
+  sessionId: string;
+  commandCenterId: string;
+  
+  // Personal Info
+  firstName: string;
+  lastName: string;
+  cellPhone: string;
+  alternatePhone?: string;
+  email?: string;
+  
+  // Address
+  address: string;
+  city?: string;
+  postalCode?: string;
+  
+  // Additional Info
+  age: number;
+  
+  // ID Information
+  idType: ApplicantIdType;
+  idValue: string;
+  
+  // Interview Data
+  rating?: number;
+  isBc: boolean;
+  isManagement: boolean;
+  isInterviewed: boolean;
+  
+  // Timestamps
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// For the public form submission
+export interface ApplicantFormData {
+  firstName: string;
+  lastName: string;
+  cellPhone: string;
+  alternatePhone?: string;
+  email?: string;
+  address: string;
+  city?: string;
+  postalCode?: string;
+  age: number;
+  idType: ApplicantIdType;
+  idValue: string;
 }
 
 // --- USER & AUTH ---

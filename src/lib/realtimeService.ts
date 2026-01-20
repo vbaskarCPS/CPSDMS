@@ -258,6 +258,46 @@ class RealtimeService {
   }
 
   /**
+   * Subscribe to job fair applicant changes for a specific session
+   */
+  public subscribeToJobFairApplicants(sessionId: string, callback: SubscriptionCallback): () => void {
+    const channelName = `job_fair_applicants_${sessionId}`;
+    
+    if (!this.channels.has(channelName)) {
+      const channel = supabase
+        .channel(channelName)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'job_fair_applicants',
+            filter: `session_id=eq.${sessionId}`,
+          },
+          (payload) => {
+            this.notifyCallbacks(channelName, payload);
+          }
+        )
+        .subscribe();
+
+      this.channels.set(channelName, channel);
+      this.callbacks.set(channelName, new Set());
+    }
+
+    this.callbacks.get(channelName)!.add(callback);
+
+    return () => {
+      const cbs = this.callbacks.get(channelName);
+      if (cbs) {
+        cbs.delete(callback);
+        if (cbs.size === 0) {
+          this.unsubscribeChannel(channelName);
+        }
+      }
+    };
+  }
+
+  /**
    * Notify all callbacks for a channel
    */
   private notifyCallbacks(channelName: string, payload: any): void {

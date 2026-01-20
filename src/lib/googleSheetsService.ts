@@ -837,6 +837,26 @@ class GoogleSheetsService {
       rows
     );
   }
+
+  /**
+   * Append job fair applicants to the Applicants tab in Workerbook
+   * Column structure based on the template:
+   * A: Shuttle (blank), B: CN # (blank), C: First Name, D: Last Name, E: Cell Phone,
+   * F: Next Day (blank), G: Status (blank), H: Alt. Phone, I: Email Address,
+   * J: Notes, K: City, L: Postal Code, M: JF Date, N: Age,
+   * O: SIN #, P: DL #, Q: Health Card #, R: Passport #, S: Rating
+   */
+  public async appendApplicants(applicants: any[][]): Promise<void> {
+    if (applicants.length === 0) return;
+
+    const config = this.getConfig();
+
+    await this.sheetsAppend(
+      config.spreadsheets.workerbook,
+      `'Applicants'!A:S`,
+      applicants
+    );
+  }
 }
 
 export const googleSheetsService = GoogleSheetsService.getInstance();
