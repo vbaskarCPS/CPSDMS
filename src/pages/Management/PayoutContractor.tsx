@@ -230,9 +230,11 @@ const SplitEditor: React.FC<{
 };
 
 // --- WORKER PAYOUT BREAKDOWN ROW ---
+// FIXED: Now displays team total EQ for reference and uses correct rate calculation
 const WorkerPayoutRow: React.FC<{
   worker: Worker;
-  assignedEQ: number;
+  teamTotalEQ: number;      // Team total EQ (for display)
+  assignedEQ: number;       // Worker's split portion (for calculation)
   baseRate: number;
   productionPay: number;
   upsellCommission: number;
@@ -242,8 +244,12 @@ const WorkerPayoutRow: React.FC<{
   machineDeduction: number;
   finalPay: number;
   isCurrentWorker: boolean;
-}> = ({ worker, assignedEQ, baseRate, productionPay, upsellCommission, iosCommission, bonusAmount, deductions, machineDeduction, finalPay, isCurrentWorker }) => {
-  const totalRate = baseRate + (worker.alumniRate || 0) + (worker.silverRate || 0);
+  equivSplitPercent: number;
+}> = ({ worker, teamTotalEQ, assignedEQ, baseRate, productionPay, upsellCommission, iosCommission, bonusAmount, deductions, machineDeduction, finalPay, isCurrentWorker, equivSplitPercent }) => {
+  // FIXED: Rates are dollar amounts, not percentages
+  const alumniRate = worker.alumniRate || 0;
+  const silverRate = worker.silverRate || 0;
+  const totalRate = baseRate + alumniRate + silverRate;
   
   return (
     <div className={`p-3 rounded-lg border ${
@@ -257,11 +263,18 @@ const WorkerPayoutRow: React.FC<{
               CURRENT
             </span>
           )}
+          <span className="text-[10px] text-gray-500">({equivSplitPercent}% split)</span>
         </div>
         <span className="text-lg font-bold text-green-400 font-mono">${finalPay.toFixed(2)}</span>
       </div>
       
-      <div className="grid grid-cols-5 gap-2 text-xs">
+      <div className="grid grid-cols-6 gap-2 text-xs">
+        {/* Team Total EQ - for display/reference */}
+        <div className="bg-gray-900/50 rounded p-2">
+          <div className="text-gray-500 mb-1">Team EQ</div>
+          <div className="text-gray-400 font-mono">{teamTotalEQ.toFixed(2)}</div>
+        </div>
+        {/* Assigned EQ - worker's split portion used for calculation */}
         <div className="bg-gray-900/50 rounded p-2">
           <div className="text-gray-500 mb-1">Assigned EQ</div>
           <div className="text-white font-mono">{assignedEQ.toFixed(2)}</div>
@@ -270,7 +283,7 @@ const WorkerPayoutRow: React.FC<{
           <div className="text-gray-500 mb-1">Rate</div>
           <div className="text-white font-mono">${totalRate.toFixed(2)}</div>
           <div className="text-[10px] text-gray-600">
-            ${baseRate} + ${(worker.alumniRate || 0).toFixed(2)} + ${(worker.silverRate || 0).toFixed(2)}
+            ${baseRate.toFixed(2)} + ${alumniRate.toFixed(2)} + ${silverRate.toFixed(2)}
           </div>
         </div>
         <div className="bg-gray-900/50 rounded p-2">
@@ -520,11 +533,14 @@ const PayoutContractor: React.FC = () => {
   const teamSize = isTeamSession ? teamWorkers.length : 1;
   const baseRate = getPayoutRate(seasonType, teamSize);
   
+  // FIXED: alumniRate and silverRate are DOLLAR AMOUNTS per EQ (not percentages)
   const alumniRate = worker?.alumniRate || 0;
   const silverRate = worker?.silverRate || 0;
   const totalRate = baseRate + alumniRate + silverRate;
 
   // 4. Calculate per-worker payouts
+  // FIXED: Correct calculation with alumni/silver as dollar amounts, 
+  // machine rental $10 per worker, cash/cheque diff split by equiv percent
   const calculateWorkerPayouts = () => {
     // For team sessions in lawn_rejuv
     if (isTeamSession && teamWorkers.length > 0) {
@@ -532,33 +548,50 @@ const PayoutContractor: React.FC = () => {
         const eqPercent = (equivSplit[w.contractorId] || 0) / 100;
         const upPercent = (upsellSplit[w.contractorId] || 0) / 100;
         
+        // Team total EQ shown to all workers (for display)
+        const teamTotalEQ = actualTotalEQ;
+        
+        // Assigned EQ for this worker's calculation
         const assignedEQ = actualTotalEQ * eqPercent;
+        
+        // FIXED: alumniRate and silverRate are $/EQ amounts, not percentages
         const workerAlumni = w.alumniRate || 0;
         const workerSilver = w.silverRate || 0;
         const workerTotalRate = baseRate + workerAlumni + workerSilver;
         
+        // Production commission = assignedEQ × totalRate
         const productionPay = assignedEQ * workerTotalRate;
+        
+        // Upsell and IOS commission (split by upsell percent)
         const upsellCommission = (stats.upsellPayable || 0) * upPercent * 0.15;
         const iosCommission = (stats.iosCount || 0) * 5.0 * upPercent;
         
         // Bonuses with split
         let bonusAmount = 0;
         (session?.bonuses || []).forEach(bonus => {
-          const bonusSplit = bonus.splitPercentages?.[w.contractorId] || (eqPercent * 100);
+          const bonusSplit = bonus.splitPercentages?.[w.contractorId] ?? (eqPercent * 100);
           bonusAmount += bonus.amount * (bonusSplit / 100);
         });
         
-        // Machine rental is $10 PER WORKER (not split)
+        // FIXED: Deductions calculation
+        // Cash/cheque diff is split by equiv percent
+        const cashChequeDiff = (Math.abs(cashDiff) + Math.abs(chequeDiff)) * eqPercent;
+        
+        // Machine rental is $10 PER WORKER (NOT split)
         const workerMachineDeduction = machineRental ? 10.0 : 0;
         
         // Other deductions split evenly among team
-        const workerDeductions = totalDeductions / teamWorkers.length;
+        const workerOtherDeductions = totalDeductions / teamWorkers.length;
+        
+        const workerDeductions = cashChequeDiff + workerOtherDeductions;
         
         const finalPay = productionPay + upsellCommission + iosCommission + bonusAmount - workerDeductions - workerMachineDeduction;
         
         return {
           worker: w,
+          teamTotalEQ,
           assignedEQ,
+          equivSplitPercent: equivSplit[w.contractorId] || 0,
           baseRate,
           productionPay,
           upsellCommission,
@@ -581,18 +614,21 @@ const PayoutContractor: React.FC = () => {
     const iosCommission = (stats.iosCount || 0) * 5.0;
     const bonusTotal = (session?.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
     const machineDeduction = machineRental ? 10.0 : 0;
+    const cashChequeDiff = Math.abs(cashDiff) + Math.abs(chequeDiff);
     const grossPay = productionPay + upsellCommission + iosCommission + bonusTotal;
-    const finalPay = grossPay - totalDeductions - machineDeduction;
+    const finalPay = grossPay - totalDeductions - machineDeduction - cashChequeDiff;
     
     return [{
       worker: worker,
+      teamTotalEQ: actualTotalEQ,
       assignedEQ: actualTotalEQ,
+      equivSplitPercent: 100,
       baseRate,
       productionPay,
       upsellCommission,
       iosCommission,
       bonusAmount: bonusTotal,
-      deductions: totalDeductions,
+      deductions: totalDeductions + cashChequeDiff,
       machineDeduction,
       finalPay,
     }];
@@ -950,7 +986,9 @@ const PayoutContractor: React.FC = () => {
               </div>
             </div>
             <div>
-              <div className="text-xs text-gray-500 uppercase font-bold text-blue-400">Actual EQ</div>
+              <div className="text-xs text-gray-500 uppercase font-bold text-blue-400">
+                {isTeamSession ? 'Team Total EQ' : 'Actual EQ'}
+              </div>
               <div className="text-xl font-bold text-blue-400 font-mono">
                 {actualTotalEQ.toFixed(2)}
               </div>
@@ -1017,7 +1055,9 @@ const PayoutContractor: React.FC = () => {
                   <WorkerPayoutRow
                     key={payout.worker.contractorId}
                     worker={payout.worker}
+                    teamTotalEQ={payout.teamTotalEQ}
                     assignedEQ={payout.assignedEQ}
+                    equivSplitPercent={payout.equivSplitPercent}
                     baseRate={payout.baseRate}
                     productionPay={payout.productionPay}
                     upsellCommission={payout.upsellCommission}
@@ -1070,9 +1110,9 @@ const PayoutContractor: React.FC = () => {
                     <span className="font-mono text-blue-300 font-bold">{actualTotalEQ.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between items-center border-t border-gray-700 pt-2">
-                    <span title="Base + Silver + Alumni">Total Rate (${totalRate.toFixed(2)})</span>
+                    <span title="Base + Alumni + Silver">Total Rate (${totalRate.toFixed(2)})</span>
                     <span className="font-mono text-gray-300">
-                      ${baseRate.toFixed(2)} + ${silverRate.toFixed(2)} + ${alumniRate.toFixed(2)}
+                      ${baseRate.toFixed(2)} + ${alumniRate.toFixed(2)} + ${silverRate.toFixed(2)}
                     </span>
                   </div>
                 </div>
@@ -1339,7 +1379,7 @@ const PayoutContractor: React.FC = () => {
                       // Team breakdown summary
                       <>
                         <div className="flex justify-between">
-                          <span className="text-gray-400">Total Team EQ</span>
+                          <span className="text-gray-400">Team Total EQ</span>
                           <span className="font-mono text-white">{actualTotalEQ.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between">

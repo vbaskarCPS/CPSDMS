@@ -101,7 +101,7 @@ interface TeamCartDisplay {
   sharedStats: {
     stepCount: number;
     upsellGross: number;
-    totalEQ: number;
+    totalEQ: number;  // Team total EQ - displayed to all workers
   };
   isValidated: boolean;
   totalCommission: number;
@@ -539,6 +539,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       
       if (!cartMap.has(cartKey)) {
         const isValidated = session.validation?.isValidated || false;
+        // FIXED: Use validated actualTotalEQ if available, otherwise stats.totalEQ
+        // This is the TEAM TOTAL EQ that should be displayed to all workers
         const eq = isValidated ? (session.validation?.actualTotalEQ || 0) : (session.stats?.totalEQ || 0);
         
         cartMap.set(cartKey, {
@@ -549,7 +551,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           sharedStats: {
             stepCount: session.stats?.stepCount || 0,
             upsellGross: session.stats?.upsellGross || 0,
-            totalEQ: eq,
+            totalEQ: eq,  // Team total EQ - displayed to all workers
           },
           isValidated,
           totalCommission: session.validation?.finalCommission || 0,
@@ -1020,6 +1022,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     );
 
   // --- RENDER TEAM CART (Lawn Rejuv) - Shows all workers grouped ---
+  // FIXED: Now displays team total EQ for reference
   const renderTeamCart = (cart: TeamCartDisplay) => {
     const { session, workers: cartWorkers, sharedStats, isValidated, totalCommission } = cart;
     const bonusTotal = (session.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
@@ -1055,7 +1058,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
             </span>
           </div>
 
-          {/* Shared Stats */}
+          {/* Shared Stats - FIXED: Shows team total EQ */}
           <div className="flex items-center gap-4 text-gray-400 text-xs">
             <div className="text-center">
               <span className="text-[9px] text-gray-600 uppercase block leading-none">Steps</span>
@@ -1066,12 +1069,16 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
               <span className="font-bold text-white">${sharedStats.upsellGross.toFixed(2)}</span>
             </div>
             <div className="text-center">
-              <span className="text-[9px] text-gray-600 uppercase block leading-none">EQ</span>
+              <span className="text-[9px] text-gray-600 uppercase block leading-none">
+                {isSoloCart ? 'EQ' : 'Team EQ'}
+              </span>
               <span className="font-mono font-bold text-blue-300">{sharedStats.totalEQ.toFixed(2)}</span>
             </div>
             {isValidated && (
               <div className="text-center">
-                <span className="text-[9px] text-gray-600 uppercase block leading-none">Total</span>
+                <span className="text-[9px] text-gray-600 uppercase block leading-none">
+                  {isSoloCart ? 'Total' : 'Team Total'}
+                </span>
                 <span className="font-mono font-bold text-green-400">${totalCommission.toFixed(2)}</span>
               </div>
             )}
@@ -1109,14 +1116,13 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         {/* Worker Rows */}
         <div className="divide-y divide-gray-700/50">
           {cartWorkers.map((worker, idx) => {
-            // Calculate individual commission if validated
-            // For now, show total / number of workers as placeholder
-            // Real implementation would use split percentages
-            const workerCommission = isValidated 
-              ? (session.equivSplit?.[worker.contractorId] 
-                  ? totalCommission * (session.equivSplit[worker.contractorId] / 100)
-                  : totalCommission / cartWorkers.length)
-              : 0;
+            // FIXED: Calculate individual commission using split percentages
+            // For display, we show the worker's split portion
+            let workerCommission = 0;
+            if (isValidated) {
+              const equivSplitPercent = session.equivSplit?.[worker.contractorId] || (100 / cartWorkers.length);
+              workerCommission = totalCommission * (equivSplitPercent / 100);
+            }
 
             return (
               <div
@@ -1139,6 +1145,13 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                 <span className="text-gray-500 font-mono text-[10px] min-w-[50px]">
                   #{worker.contractorId}
                 </span>
+
+                {/* Split percentage indicator for teams */}
+                {!isSoloCart && session.equivSplit && (
+                  <span className="text-gray-500 text-[10px]">
+                    ({session.equivSplit[worker.contractorId] || 0}%)
+                  </span>
+                )}
 
                 <div className="flex-1" />
 
