@@ -12,7 +12,6 @@ import {
   AlertCircle,
   Star,
   X,
-  User,
   Phone,
   Mail,
   MapPin,
@@ -24,7 +23,7 @@ import {
   Briefcase,
   Shield,
 } from 'lucide-react';
-import { commandCenterService, CommandCenter } from '../../lib/commandCenterService';
+import { CommandCenter } from '../../lib/commandCenterService';
 import { jobFairService } from '../../lib/jobFairService';
 import { googleSheetsService } from '../../lib/googleSheetsService';
 import { realtimeService } from '../../lib/realtimeService';
@@ -85,7 +84,7 @@ const JobFairManager: React.FC<JobFairManagerProps> = ({ commandCenter }) => {
 
     const unsubscribe = realtimeService.subscribeToJobFairApplicants(
       session.id,
-      (payload) => {
+      () => {
         // Reload applicants on any change
         jobFairService.getApplicantsBySession(session.id).then(setApplicants);
       }
@@ -496,7 +495,12 @@ const ApplicantCard: React.FC<ApplicantCardProps> = ({ applicant, onClick }) => 
 interface ApplicantDetailModalProps {
   applicant: JobFairApplicant;
   onClose: () => void;
-  onUpdate: (id: string, updates: any) => void;
+  onUpdate: (id: string, updates: Partial<{
+    rating: number | null;
+    isBc: boolean;
+    isManagement: boolean;
+    isInterviewed: boolean;
+  }>) => void;
 }
 
 const ApplicantDetailModal: React.FC<ApplicantDetailModalProps> = ({
