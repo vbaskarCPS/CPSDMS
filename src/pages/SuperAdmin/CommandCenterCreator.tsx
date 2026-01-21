@@ -106,7 +106,7 @@ const CommandCenterCreator: React.FC = () => {
     setFormData({
       displayName: cc.displayName,
       username: cc.username,
-      password: '', // Don't pre-fill password for security
+      password: '',
       region: cc.region,
       workerbookUrl: `https://docs.google.com/spreadsheets/d/${cc.workerbookSheetId}/edit`,
       masterbookingsUrl: `https://docs.google.com/spreadsheets/d/${cc.masterbookingsSheetId}/edit`,
@@ -135,7 +135,6 @@ const CommandCenterCreator: React.FC = () => {
       errors.username = 'Username cannot contain spaces';
     }
 
-    // Password only required for new CC
     if (!editingCC && !formData.password.trim()) {
       errors.password = 'Password is required';
     }
@@ -150,7 +149,6 @@ const CommandCenterCreator: React.FC = () => {
       errors.masterbookingsUrl = 'Invalid Google Sheets URL or ID';
     }
 
-    // Validate job fair slug if enabled
     if (formData.jobFairsEnabled) {
       const slugError = getJobFairSlugError(formData.jobFairsSlug);
       if (slugError) {
@@ -173,7 +171,6 @@ const CommandCenterCreator: React.FC = () => {
       const masterbookingsSheetId = extractSheetId(formData.masterbookingsUrl)!;
 
       if (editingCC) {
-        // Update existing
         const updates: any = {
           displayName: formData.displayName,
           username: formData.username,
@@ -184,14 +181,12 @@ const CommandCenterCreator: React.FC = () => {
           jobFairsSlug: formData.jobFairsEnabled ? formData.jobFairsSlug : '',
         };
         
-        // Only update password if provided
         if (formData.password.trim()) {
           updates.password = formData.password;
         }
 
         await commandCenterService.updateCommandCenter(editingCC.id, updates);
       } else {
-        // Create new
         await commandCenterService.createCommandCenter({
           displayName: formData.displayName,
           username: formData.username,
@@ -213,7 +208,6 @@ const CommandCenterCreator: React.FC = () => {
     }
   };
 
-  // --- ACTIONS ---
   const handleDelete = async (cc: CommandCenter) => {
     if (!window.confirm(
       `⚠️ DELETE "${cc.displayName}"?\n\n` +
@@ -235,7 +229,6 @@ const CommandCenterCreator: React.FC = () => {
   };
 
   const handleEnter = (cc: CommandCenter) => {
-    // Set super admin mode and enter this CC
     commandCenterService.setSuperAdminMode(true);
     commandCenterService.setCurrentCommandCenter(cc);
     navigate('/admin');
@@ -248,7 +241,6 @@ const CommandCenterCreator: React.FC = () => {
     navigate('/login');
   };
 
-  // --- UNIVERSAL WIPE HANDLERS ---
   const openWipeModal = () => {
     setWipeConfirmText('');
     setShowWipeModal(true);
@@ -268,12 +260,10 @@ const CommandCenterCreator: React.FC = () => {
     try {
       await commandCenterService.universalWipe();
       
-      // Clear local storage
       removeStorageItem('current_user');
       commandCenterService.clearCurrentCommandCenter();
-      commandCenterService.setSuperAdminMode(true); // Keep super admin mode
+      commandCenterService.setSuperAdminMode(true);
       
-      // Reload the empty list
       await loadCommandCenters();
       closeWipeModal();
     } catch (err) {
@@ -284,10 +274,8 @@ const CommandCenterCreator: React.FC = () => {
 
   const isWipeConfirmed = wipeConfirmText === 'DELETE ALL';
 
-  // Get base URL for job fair preview
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
-  // --- RENDER ---
   return (
     <div className="min-h-screen bg-gray-900 text-white">
       {/* HEADER */}
@@ -443,7 +431,7 @@ const CommandCenterCreator: React.FC = () => {
                         rel="noopener noreferrer"
                         className="text-purple-400 hover:text-purple-300 flex items-center gap-1"
                       >
-                        {baseUrl}/{cc.jobFairsSlug}
+                        <span>{baseUrl}/{cc.jobFairsSlug}</span>
                         <ExternalLink size={10} />
                       </a>
                     </div>
@@ -608,7 +596,7 @@ const CommandCenterCreator: React.FC = () => {
                 {formData.workerbookUrl && extractSheetId(formData.workerbookUrl) && (
                   <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
                     <Check size={12} />
-                    ID: {extractSheetId(formData.workerbookUrl)!.substring(0, 30)}...
+                    <span>ID: {extractSheetId(formData.workerbookUrl)!.substring(0, 30)}...</span>
                   </p>
                 )}
               </div>
@@ -636,7 +624,7 @@ const CommandCenterCreator: React.FC = () => {
                 {formData.masterbookingsUrl && extractSheetId(formData.masterbookingsUrl) && (
                   <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
                     <Check size={12} />
-                    ID: {extractSheetId(formData.masterbookingsUrl)!.substring(0, 30)}...
+                    <span>ID: {extractSheetId(formData.masterbookingsUrl)!.substring(0, 30)}...</span>
                   </p>
                 )}
               </div>
@@ -675,9 +663,7 @@ const CommandCenterCreator: React.FC = () => {
                         Job Fair URL Slug
                       </label>
                       <div className="flex items-center gap-2">
-                        <span className="text-gray-500 text-sm whitespace-nowrap">
-                          {baseUrl}/
-                        </span>
+                        <span className="text-gray-500 text-sm whitespace-nowrap">{baseUrl}/</span>
                         <input
                           type="text"
                           value={formData.jobFairsSlug}
@@ -697,7 +683,7 @@ const CommandCenterCreator: React.FC = () => {
                       {formData.jobFairsSlug && !formErrors.jobFairsSlug && !getJobFairSlugError(formData.jobFairsSlug) && (
                         <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
                           <Check size={12} />
-                          Valid slug
+                          <span>Valid slug</span>
                         </p>
                       )}
                     </div>
@@ -707,7 +693,7 @@ const CommandCenterCreator: React.FC = () => {
                       <div className="bg-gray-900/50 rounded-lg p-3 border border-gray-700">
                         <p className="text-xs text-gray-400 mb-1">Public application URL:</p>
                         <p className="text-sm text-purple-400 flex items-center gap-2">
-                          {baseUrl}/{formData.jobFairsSlug}
+                          <span>{baseUrl}/{formData.jobFairsSlug}</span>
                           <ExternalLink size={12} />
                         </p>
                       </div>
