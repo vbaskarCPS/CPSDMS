@@ -310,7 +310,7 @@ const JobFairManager: React.FC<JobFairManagerProps> = ({ commandCenter }) => {
 
           <div className="flex items-center gap-2">
             {publicUrl && (
-              
+              <a
                 href={publicUrl}
                 target="_blank"
                 rel="noopener noreferrer"
