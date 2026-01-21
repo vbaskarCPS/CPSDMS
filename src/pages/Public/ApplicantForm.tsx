@@ -58,6 +58,7 @@ const ApplicantForm: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [noActiveSession, setNoActiveSession] = useState(false);
   
   // Data state
   const [commandCenter, setCommandCenter] = useState<CommandCenter | null>(null);
@@ -99,7 +100,7 @@ const ApplicantForm: React.FC = () => {
         }
 
         if (!cc.jobFairsEnabled) {
-          setError('Applications are not currently being accepted.');
+          setNoActiveSession(true);
           setLoading(false);
           return;
         }
@@ -110,7 +111,7 @@ const ApplicantForm: React.FC = () => {
         const activeSession = await jobFairService.getActiveSessionByCommandCenterId(cc.id);
         
         if (!activeSession) {
-          setError('No active job fair session. Please check back later.');
+          setNoActiveSession(true);
           setLoading(false);
           return;
         }
@@ -230,7 +231,20 @@ const ApplicantForm: React.FC = () => {
     );
   }
 
-  // Error state (no session, invalid slug, etc.)
+  // No active session - just show logo
+  if (noActiveSession) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+        <img 
+          src={LOGO_URL} 
+          alt="Property Stars" 
+          className="w-full max-w-lg mx-auto"
+        />
+      </div>
+    );
+  }
+
+  // Error state (invalid slug, etc.)
   if (error && !commandCenter) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
