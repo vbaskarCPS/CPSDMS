@@ -364,7 +364,7 @@ const CommandCenterCreator: React.FC = () => {
             <div className="flex items-center gap-2 text-xs">
               <UserPlus size={14} className="text-purple-400" />
               <span className="text-gray-500">Job Fair URL:</span>
-              
+              <a
                 href={jobFairUrl}
                 target="_blank"
                 rel="noopener noreferrer"
