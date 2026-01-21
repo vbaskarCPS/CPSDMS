@@ -2,14 +2,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { MapPin, Loader } from 'lucide-react';
 
-// Extend Window interface for Google Maps
-declare global {
-  interface Window {
-    google: any;
-    initGooglePlaces?: () => void;
-  }
-}
-
 interface AddressAutocompleteProps {
   value: string;
   onChange: (value: string) => void;
@@ -48,7 +40,7 @@ const AddressAutocomplete: React.FC<AddressAutocompleteProps> = ({
     }
 
     // Check if already loaded
-    if (window.google?.maps?.places) {
+    if ((window as any).google?.maps?.places) {
       setIsLoaded(true);
       setIsLoading(false);
       return;
@@ -89,13 +81,14 @@ const AddressAutocomplete: React.FC<AddressAutocompleteProps> = ({
 
   // Initialize autocomplete when loaded
   useEffect(() => {
-    if (!isLoaded || !inputRef.current || !window.google?.maps?.places) return;
+    const google = (window as any).google;
+    if (!isLoaded || !inputRef.current || !google?.maps?.places) return;
 
     // Create session token for billing optimization
-    sessionTokenRef.current = new window.google.maps.places.AutocompleteSessionToken();
+    sessionTokenRef.current = new google.maps.places.AutocompleteSessionToken();
 
     // Initialize autocomplete
-    autocompleteRef.current = new window.google.maps.places.Autocomplete(inputRef.current, {
+    autocompleteRef.current = new google.maps.places.Autocomplete(inputRef.current, {
       types: ['address'],
       componentRestrictions: { country: 'ca' }, // Restrict to Canada
       fields: ['address_components', 'formatted_address'],
@@ -150,13 +143,13 @@ const AddressAutocomplete: React.FC<AddressAutocompleteProps> = ({
       }
 
       // Create new session token for next search
-      sessionTokenRef.current = new window.google.maps.places.AutocompleteSessionToken();
+      sessionTokenRef.current = new google.maps.places.AutocompleteSessionToken();
     });
 
     return () => {
       // Cleanup listeners
-      if (autocompleteRef.current) {
-        window.google.maps.event.clearInstanceListeners(autocompleteRef.current);
+      if (autocompleteRef.current && google?.maps?.event) {
+        google.maps.event.clearInstanceListeners(autocompleteRef.current);
       }
     };
   }, [isLoaded, onChange, onPlaceSelect]);

@@ -35,17 +35,14 @@ const REGIONS: Region[] = ['West', 'Central', 'East'];
 const CommandCenterCreator: React.FC = () => {
   const navigate = useNavigate();
   
-  // --- STATE ---
   const [commandCenters, setCommandCenters] = useState<CommandCenter[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
-  // Modal state
   const [showModal, setShowModal] = useState(false);
   const [editingCC, setEditingCC] = useState<CommandCenter | null>(null);
   const [saving, setSaving] = useState(false);
   
-  // Form state
   const [formData, setFormData] = useState({
     displayName: '',
     username: '',
@@ -58,12 +55,10 @@ const CommandCenterCreator: React.FC = () => {
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
-  // Universal Wipe Modal state
   const [showWipeModal, setShowWipeModal] = useState(false);
   const [wipeConfirmText, setWipeConfirmText] = useState('');
   const [wiping, setWiping] = useState(false);
 
-  // --- LOAD DATA ---
   useEffect(() => {
     loadCommandCenters();
   }, []);
@@ -80,7 +75,6 @@ const CommandCenterCreator: React.FC = () => {
     }
   };
 
-  // --- FORM HANDLERS ---
   const resetForm = () => {
     setFormData({
       displayName: '',
@@ -108,8 +102,8 @@ const CommandCenterCreator: React.FC = () => {
       username: cc.username,
       password: '',
       region: cc.region,
-      workerbookUrl: `https://docs.google.com/spreadsheets/d/${cc.workerbookSheetId}/edit`,
-      masterbookingsUrl: `https://docs.google.com/spreadsheets/d/${cc.masterbookingsSheetId}/edit`,
+      workerbookUrl: 'https://docs.google.com/spreadsheets/d/' + cc.workerbookSheetId + '/edit',
+      masterbookingsUrl: 'https://docs.google.com/spreadsheets/d/' + cc.masterbookingsSheetId + '/edit',
       jobFairsEnabled: cc.jobFairsEnabled || false,
       jobFairsSlug: cc.jobFairsSlug || '',
     });
@@ -210,12 +204,12 @@ const CommandCenterCreator: React.FC = () => {
 
   const handleDelete = async (cc: CommandCenter) => {
     if (!window.confirm(
-      `⚠️ DELETE "${cc.displayName}"?\n\n` +
-      `This will permanently delete:\n` +
-      `• All workers and route managers\n` +
-      `• All sessions and transactions\n` +
-      `• All bookings and routes\n\n` +
-      `This action cannot be undone!`
+      '⚠️ DELETE "' + cc.displayName + '"?\n\n' +
+      'This will permanently delete:\n' +
+      '• All workers and route managers\n' +
+      '• All sessions and transactions\n' +
+      '• All bookings and routes\n\n' +
+      'This action cannot be undone!'
     )) {
       return;
     }
@@ -278,7 +272,6 @@ const CommandCenterCreator: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
-      {/* HEADER */}
       <div className="bg-gray-800 border-b border-gray-700 px-6 py-4">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -301,9 +294,7 @@ const CommandCenterCreator: React.FC = () => {
         </div>
       </div>
 
-      {/* CONTENT */}
       <div className="max-w-6xl mx-auto p-6">
-        {/* ERROR DISPLAY */}
         {error && (
           <div className="mb-6 p-4 bg-red-900/30 border border-red-700 rounded-lg flex items-center gap-3 text-red-300">
             <AlertCircle size={20} />
@@ -314,7 +305,6 @@ const CommandCenterCreator: React.FC = () => {
           </div>
         )}
 
-        {/* CREATE BUTTON */}
         <div className="mb-6">
           <button
             onClick={openCreateModal}
@@ -325,7 +315,6 @@ const CommandCenterCreator: React.FC = () => {
           </button>
         </div>
 
-        {/* COMMAND CENTERS LIST */}
         {loading ? (
           <div className="flex items-center justify-center py-20">
             <Loader className="animate-spin text-purple-400" size={32} />
@@ -344,7 +333,6 @@ const CommandCenterCreator: React.FC = () => {
                 className="bg-gray-800 rounded-xl border border-gray-700 p-5 hover:border-gray-600 transition-colors"
               >
                 <div className="flex items-center justify-between">
-                  {/* INFO */}
                   <div className="flex items-center gap-4">
                     <div className={`w-12 h-12 rounded-lg flex items-center justify-center border ${
                       cc.region === 'West' ? 'bg-blue-900/30 border-blue-700' :
@@ -381,7 +369,6 @@ const CommandCenterCreator: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* ACTIONS */}
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handleEnter(cc)}
@@ -407,7 +394,6 @@ const CommandCenterCreator: React.FC = () => {
                   </div>
                 </div>
 
-                {/* SHEET INFO */}
                 <div className="mt-4 pt-4 border-t border-gray-700 grid grid-cols-2 gap-4 text-xs">
                   <div className="flex items-center gap-2 text-gray-500">
                     <Sheet size={14} />
@@ -419,19 +405,18 @@ const CommandCenterCreator: React.FC = () => {
                   </div>
                 </div>
 
-                {/* JOB FAIR URL (if enabled) */}
                 {cc.jobFairsEnabled && cc.jobFairsSlug && (
                   <div className="mt-3 pt-3 border-t border-gray-700">
                     <div className="flex items-center gap-2 text-xs">
                       <UserPlus size={14} className="text-purple-400" />
                       <span className="text-gray-500">Job Fair URL:</span>
                       
-                        href={`${baseUrl}/${cc.jobFairsSlug}`}
+                        href={baseUrl + '/' + cc.jobFairsSlug}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-purple-400 hover:text-purple-300 flex items-center gap-1"
                       >
-                        <span>{baseUrl}/{cc.jobFairsSlug}</span>
+                        <span>{baseUrl + '/' + cc.jobFairsSlug}</span>
                         <ExternalLink size={10} />
                       </a>
                     </div>
@@ -442,7 +427,6 @@ const CommandCenterCreator: React.FC = () => {
           </div>
         )}
 
-        {/* DANGER ZONE */}
         <div className="mt-12 pt-8 border-t border-gray-800">
           <div className="bg-red-950/30 rounded-xl border border-red-900/50 p-6">
             <div className="flex items-start gap-4">
@@ -469,11 +453,9 @@ const CommandCenterCreator: React.FC = () => {
         </div>
       </div>
 
-      {/* CREATE/EDIT MODAL */}
       {showModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
           <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            {/* Modal Header */}
             <div className="p-4 border-b border-gray-700 flex items-center justify-between">
               <h2 className="text-lg font-bold text-white">
                 {editingCC ? 'Edit Command Center' : 'Create Command Center'}
@@ -483,9 +465,7 @@ const CommandCenterCreator: React.FC = () => {
               </button>
             </div>
 
-            {/* Modal Body */}
             <div className="p-6 space-y-4">
-              {/* Display Name */}
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">
                   Display Name
@@ -504,7 +484,6 @@ const CommandCenterCreator: React.FC = () => {
                 )}
               </div>
 
-              {/* Username */}
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">
                   Username
@@ -526,7 +505,6 @@ const CommandCenterCreator: React.FC = () => {
                 )}
               </div>
 
-              {/* Password */}
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">
                   Password {editingCC && <span className="text-gray-500">(leave blank to keep current)</span>}
@@ -548,7 +526,6 @@ const CommandCenterCreator: React.FC = () => {
                 )}
               </div>
 
-              {/* Region */}
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">
                   Region
@@ -573,7 +550,6 @@ const CommandCenterCreator: React.FC = () => {
                 </div>
               </div>
 
-              {/* Workerbook URL */}
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">
                   Workerbook Google Sheet URL
@@ -596,12 +572,11 @@ const CommandCenterCreator: React.FC = () => {
                 {formData.workerbookUrl && extractSheetId(formData.workerbookUrl) && (
                   <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
                     <Check size={12} />
-                    <span>ID: {extractSheetId(formData.workerbookUrl)!.substring(0, 30)}...</span>
+                    <span>{'ID: ' + extractSheetId(formData.workerbookUrl)!.substring(0, 30) + '...'}</span>
                   </p>
                 )}
               </div>
 
-              {/* Masterbookings URL */}
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">
                   Masterbookings Google Sheet URL
@@ -624,12 +599,11 @@ const CommandCenterCreator: React.FC = () => {
                 {formData.masterbookingsUrl && extractSheetId(formData.masterbookingsUrl) && (
                   <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
                     <Check size={12} />
-                    <span>ID: {extractSheetId(formData.masterbookingsUrl)!.substring(0, 30)}...</span>
+                    <span>{'ID: ' + extractSheetId(formData.masterbookingsUrl)!.substring(0, 30) + '...'}</span>
                   </p>
                 )}
               </div>
 
-              {/* Job Fairs Section */}
               <div className="pt-4 border-t border-gray-700">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
@@ -639,7 +613,6 @@ const CommandCenterCreator: React.FC = () => {
                     </label>
                   </div>
                   
-                  {/* Toggle Switch */}
                   <button
                     type="button"
                     onClick={() => setFormData({ ...formData, jobFairsEnabled: !formData.jobFairsEnabled })}
@@ -655,7 +628,6 @@ const CommandCenterCreator: React.FC = () => {
                   </button>
                 </div>
 
-                {/* Job Fair Slug Input (shown when enabled) */}
                 {formData.jobFairsEnabled && (
                   <div className="space-y-3">
                     <div>
@@ -663,7 +635,7 @@ const CommandCenterCreator: React.FC = () => {
                         Job Fair URL Slug
                       </label>
                       <div className="flex items-center gap-2">
-                        <span className="text-gray-500 text-sm whitespace-nowrap">{baseUrl}/</span>
+                        <span className="text-gray-500 text-sm whitespace-nowrap">{baseUrl + '/'}</span>
                         <input
                           type="text"
                           value={formData.jobFairsSlug}
@@ -688,12 +660,11 @@ const CommandCenterCreator: React.FC = () => {
                       )}
                     </div>
 
-                    {/* Preview URL */}
                     {formData.jobFairsSlug && !getJobFairSlugError(formData.jobFairsSlug) && (
                       <div className="bg-gray-900/50 rounded-lg p-3 border border-gray-700">
                         <p className="text-xs text-gray-400 mb-1">Public application URL:</p>
                         <p className="text-sm text-purple-400 flex items-center gap-2">
-                          <span>{baseUrl}/{formData.jobFairsSlug}</span>
+                          <span>{baseUrl + '/' + formData.jobFairsSlug}</span>
                           <ExternalLink size={12} />
                         </p>
                       </div>
@@ -707,7 +678,6 @@ const CommandCenterCreator: React.FC = () => {
               </div>
             </div>
 
-            {/* Modal Footer */}
             <div className="p-4 border-t border-gray-700 flex justify-end gap-3">
               <button
                 onClick={closeModal}
@@ -732,11 +702,9 @@ const CommandCenterCreator: React.FC = () => {
         </div>
       )}
 
-      {/* UNIVERSAL WIPE MODAL */}
       {showWipeModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-gray-900 rounded-xl border border-red-900 w-full max-w-md">
-            {/* Modal Header */}
             <div className="p-4 border-b border-red-900/50 flex items-center gap-3">
               <div className="w-10 h-10 bg-red-900/50 rounded-lg flex items-center justify-center">
                 <Skull className="text-red-400" size={20} />
@@ -750,7 +718,6 @@ const CommandCenterCreator: React.FC = () => {
               </button>
             </div>
 
-            {/* Modal Body */}
             <div className="p-6">
               <div className="bg-red-950/50 border border-red-900/50 rounded-lg p-4 mb-6">
                 <h3 className="text-sm font-bold text-red-300 mb-2 flex items-center gap-2">
@@ -758,7 +725,7 @@ const CommandCenterCreator: React.FC = () => {
                   This will permanently delete:
                 </h3>
                 <ul className="text-sm text-gray-400 space-y-1 ml-6">
-                  <li>• All command centers ({commandCenters.length})</li>
+                  <li>{'• All command centers (' + commandCenters.length + ')'}</li>
                   <li>• All workers and route managers</li>
                   <li>• All daily sessions</li>
                   <li>• All logsheet sessions</li>
@@ -784,7 +751,6 @@ const CommandCenterCreator: React.FC = () => {
               </div>
             </div>
 
-            {/* Modal Footer */}
             <div className="p-4 border-t border-gray-800 flex justify-end gap-3">
               <button
                 onClick={closeWipeModal}
