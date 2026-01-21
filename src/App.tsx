@@ -7,14 +7,16 @@ import HomePage from './pages/HomePage';
 import SessionCommandCenter from './pages/Admin/SessionCommandCenter';
 import CommandCenterCreator from './pages/SuperAdmin/CommandCenterCreator';
 
+// Admin pages - regular imports for reliability (avoid chunk loading issues)
+import EmailTemplates from './pages/Admin/EmailTemplates';
+import EmailTemplateEditor from './pages/Admin/EmailTemplateEditor';
+
 // Lazy load less frequently used pages
 const RMLogbook = React.lazy(() => import('./pages/Management/RMLogbook'));
 const Logsheet = React.lazy(() => import('./pages/Logsheet/Dashboard'));
 const NewJob = React.lazy(() => import('./pages/Logsheet/NewJob'));
 const JobDetail = React.lazy(() => import('./pages/Logsheet/JobDetail'));
 const NotFound = React.lazy(() => import('./pages/Logsheet/NotFound'));
-const EmailTemplates = React.lazy(() => import('./pages/Admin/EmailTemplates'));
-const EmailTemplateEditor = React.lazy(() => import('./pages/Admin/EmailTemplateEditor'));
 const PayoutContractor = React.lazy(() => import('./pages/Management/PayoutContractor'));
 const ApplicantForm = React.lazy(() => import('./pages/Public/ApplicantForm'));
 
