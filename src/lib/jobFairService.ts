@@ -234,15 +234,16 @@ class JobFairService {
     // H: Alt. Phone
     // I: Email Address
     // J: Notes (BC/Management)
-    // K: City
-    // L: Postal Code
-    // M: JF Date
-    // N: Age
-    // O: SIN #
-    // P: DL #
-    // Q: Health Card #
-    // R: Passport #
-    // S: Rating
+    // K: Address
+    // L: City
+    // M: Postal Code
+    // N: JF Date
+    // O: Age
+    // P: SIN #
+    // Q: DL #
+    // R: Health Card #
+    // S: Passport #
+    // T: Rating
 
     return applicants.map(a => {
       // Build notes from BC/Management flags
@@ -261,15 +262,16 @@ class JobFairService {
         a.alternatePhone || '', // H: Alt. Phone
         a.email || '', // I: Email Address
         notes.join(', '), // J: Notes
-        a.city || '', // K: City
-        a.postalCode || '', // L: Postal Code
-        session.sessionDate, // M: JF Date
-        a.age, // N: Age
-        a.idType === 'SIN' ? a.idValue : '', // O: SIN #
-        a.idType === 'DL' ? a.idValue : '', // P: DL #
-        a.idType === 'HEALTH_CARD' ? a.idValue : '', // Q: Health Card #
-        a.idType === 'PASSPORT' ? a.idValue : '', // R: Passport #
-        a.rating || '', // S: Rating
+        a.address || '', // K: Address
+        a.city || '', // L: City
+        a.postalCode || '', // M: Postal Code
+        session.sessionDate, // N: JF Date
+        a.age, // O: Age
+        a.idType === 'SIN' ? a.idValue : '', // P: SIN #
+        a.idType === 'DL' ? a.idValue : '', // Q: DL #
+        a.idType === 'HEALTH_CARD' ? a.idValue : '', // R: Health Card #
+        a.idType === 'PASSPORT' ? a.idValue : '', // S: Passport #
+        a.rating || '', // T: Rating
       ];
     });
   }

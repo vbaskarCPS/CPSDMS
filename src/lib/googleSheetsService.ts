@@ -840,11 +840,11 @@ class GoogleSheetsService {
 
   /**
    * Append job fair applicants to the Applicants tab in Workerbook
-   * Column structure based on the template:
+   * Column structure:
    * A: Shuttle (blank), B: CN # (blank), C: First Name, D: Last Name, E: Cell Phone,
    * F: Next Day (blank), G: Status (blank), H: Alt. Phone, I: Email Address,
-   * J: Notes, K: City, L: Postal Code, M: JF Date, N: Age,
-   * O: SIN #, P: DL #, Q: Health Card #, R: Passport #, S: Rating
+   * J: Notes, K: Address, L: City, M: Postal Code, N: JF Date, O: Age,
+   * P: SIN #, Q: DL #, R: Health Card #, S: Passport #, T: Rating
    */
   public async appendApplicants(applicants: any[][]): Promise<void> {
     if (applicants.length === 0) return;
@@ -853,7 +853,7 @@ class GoogleSheetsService {
 
     await this.sheetsAppend(
       config.spreadsheets.workerbook,
-      `'Applicants'!A:S`,
+      `'Applicants'!A:T`,
       applicants
     );
   }
