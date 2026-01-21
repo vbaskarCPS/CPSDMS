@@ -11,6 +11,8 @@ import {
   AlertCircle,
   Loader,
   XCircle,
+  UserPlus,
+  LogOut,
 } from 'lucide-react';
 import { commandCenterService } from '../../lib/commandCenterService';
 import { jobFairService } from '../../lib/jobFairService';
@@ -50,6 +52,21 @@ const formatPhoneNumber = (value: string): string => {
   }
 };
 
+// Default empty form data
+const getEmptyFormData = (): ApplicantFormData => ({
+  firstName: '',
+  lastName: '',
+  cellPhone: '',
+  alternatePhone: '',
+  email: '',
+  address: '',
+  city: '',
+  postalCode: '',
+  age: 0,
+  idType: 'DL',
+  idValue: '',
+});
+
 const ApplicantForm: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
   
@@ -65,19 +82,7 @@ const ApplicantForm: React.FC = () => {
   const [session, setSession] = useState<JobFairSession | null>(null);
   
   // Form state - age defaults to empty (0 will be treated as empty)
-  const [formData, setFormData] = useState<ApplicantFormData>({
-    firstName: '',
-    lastName: '',
-    cellPhone: '',
-    alternatePhone: '',
-    email: '',
-    address: '',
-    city: '',
-    postalCode: '',
-    age: 0, // 0 means empty/not set
-    idType: 'DL',
-    idValue: '',
-  });
+  const [formData, setFormData] = useState<ApplicantFormData>(getEmptyFormData());
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   // Load command center and session
@@ -186,6 +191,21 @@ const ApplicantForm: React.FC = () => {
     }
   };
 
+  // Handle starting a new application
+  const handleNewApplication = () => {
+    setFormData(getEmptyFormData());
+    setFormErrors({});
+    setSubmitted(false);
+    setError(null);
+  };
+
+  // Handle exit
+  const handleExit = () => {
+    window.close();
+    // Fallback if window.close() doesn't work (e.g., not opened by script)
+    setNoActiveSession(true);
+  };
+
   // Handle address autocomplete selection
   const handlePlaceSelect = (place: { address: string; city: string; postalCode: string }) => {
     setFormData(prev => ({
@@ -265,13 +285,28 @@ const ApplicantForm: React.FC = () => {
           <div className="w-20 h-20 bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-6">
             <CheckCircle className="text-green-400" size={48} />
           </div>
-          <h1 className="text-2xl font-bold text-white mb-2">Application Submitted!</h1>
-          <p className="text-gray-400 mb-6">
-            Thank you for applying. A representative will be with you shortly.
+          <h1 className="text-2xl font-bold text-white mb-4">Application Submitted!</h1>
+          <p className="text-gray-300 mb-8">
+            Thank you for applying! Please proceed to your one on one interview!
           </p>
-          <p className="text-sm text-gray-500">
-            You may close this page now.
-          </p>
+          
+          <div className="space-y-3">
+            <button
+              onClick={handleNewApplication}
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors"
+            >
+              <UserPlus size={20} />
+              Start Another Application
+            </button>
+            
+            <button
+              onClick={handleExit}
+              className="w-full bg-gray-700 hover:bg-gray-600 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors"
+            >
+              <LogOut size={20} />
+              Exit
+            </button>
+          </div>
         </div>
       </div>
     );
