@@ -96,17 +96,30 @@ class JobFairService {
 
   /**
    * Close the active job fair session
+   * This DELETES all applicants and the session itself (data should be exported first)
    */
   public async closeSession(sessionId: string): Promise<void> {
-    const { error } = await supabase
-      .from('job_fair_sessions')
-      .update({
-        status: 'closed',
-        closed_at: new Date().toISOString(),
-      })
-      .eq('id', sessionId);
+    const ccId = this.getCCId();
 
-    if (error) throw new Error(error.message);
+    // First, delete all applicants for this session
+    const { error: applicantsError } = await supabase
+      .from('job_fair_applicants')
+      .delete()
+      .eq('session_id', sessionId);
+
+    if (applicantsError) {
+      throw new Error(`Failed to delete applicants: ${applicantsError.message}`);
+    }
+
+    // Then, delete all sessions for this command center (cleans up any orphaned/closed sessions too)
+    const { error: sessionsError } = await supabase
+      .from('job_fair_sessions')
+      .delete()
+      .eq('command_center_id', ccId);
+
+    if (sessionsError) {
+      throw new Error(`Failed to delete session: ${sessionsError.message}`);
+    }
   }
 
   // --- APPLICANT MANAGEMENT ---
