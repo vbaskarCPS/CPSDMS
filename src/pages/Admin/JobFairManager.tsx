@@ -95,17 +95,30 @@ const JobFairManager: React.FC<JobFairManagerProps> = ({ commandCenter }) => {
     };
   }, [session]);
 
-  // Filtered applicants
+  // Filtered and sorted applicants - non-interviewed first
   const filteredApplicants = useMemo(() => {
-    if (!searchTerm.trim()) return applicants;
+    let result = applicants;
     
-    const term = searchTerm.toLowerCase();
-    return applicants.filter(a => 
-      a.firstName.toLowerCase().includes(term) ||
-      a.lastName.toLowerCase().includes(term) ||
-      a.cellPhone.includes(term) ||
-      a.email?.toLowerCase().includes(term)
-    );
+    // Filter by search term
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      result = result.filter(a => 
+        a.firstName.toLowerCase().includes(term) ||
+        a.lastName.toLowerCase().includes(term) ||
+        a.cellPhone.includes(term) ||
+        a.email?.toLowerCase().includes(term)
+      );
+    }
+    
+    // Sort: non-interviewed first, then by last name
+    return result.sort((a, b) => {
+      // Non-interviewed (false) comes before interviewed (true)
+      if (a.isInterviewed !== b.isInterviewed) {
+        return a.isInterviewed ? 1 : -1;
+      }
+      // Then sort by last name
+      return a.lastName.localeCompare(b.lastName);
+    });
   }, [applicants, searchTerm]);
 
   // Stats
@@ -176,7 +189,7 @@ const JobFairManager: React.FC<JobFairManagerProps> = ({ commandCenter }) => {
       }
     }
 
-    if (!window.confirm('Are you sure you want to close this job fair session? This action cannot be undone.')) {
+    if (!window.confirm('Are you sure you want to close this job fair session? This will delete all applicant data.')) {
       return;
     }
 
@@ -201,7 +214,8 @@ const JobFairManager: React.FC<JobFairManagerProps> = ({ commandCenter }) => {
       isBc: boolean;
       isManagement: boolean;
       isInterviewed: boolean;
-    }>
+    }>,
+    closeModal: boolean = false
   ) => {
     try {
       const updated = await jobFairService.updateApplicant(applicantId, updates);
@@ -209,9 +223,14 @@ const JobFairManager: React.FC<JobFairManagerProps> = ({ commandCenter }) => {
       // Update local state
       setApplicants(prev => prev.map(a => a.id === applicantId ? updated : a));
       
-      // Update selected if it's the same
-      if (selectedApplicant?.id === applicantId) {
+      // Update selected if it's the same (and not closing)
+      if (selectedApplicant?.id === applicantId && !closeModal) {
         setSelectedApplicant(updated);
+      }
+      
+      // Close modal if requested
+      if (closeModal) {
+        setSelectedApplicant(null);
       }
     } catch (err) {
       console.error('Error updating applicant:', err);
@@ -291,7 +310,7 @@ const JobFairManager: React.FC<JobFairManagerProps> = ({ commandCenter }) => {
 
           <div className="flex items-center gap-2">
             {publicUrl && (
-              <a
+              
                 href={publicUrl}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -500,7 +519,7 @@ interface ApplicantDetailModalProps {
     isBc: boolean;
     isManagement: boolean;
     isInterviewed: boolean;
-  }>) => void;
+  }>, closeModal?: boolean) => void;
 }
 
 const ApplicantDetailModal: React.FC<ApplicantDetailModalProps> = ({
@@ -523,7 +542,8 @@ const ApplicantDetailModal: React.FC<ApplicantDetailModalProps> = ({
   };
 
   const toggleInterviewed = () => {
-    onUpdate(applicant.id, { isInterviewed: !applicant.isInterviewed });
+    // Close modal after marking as interviewed
+    onUpdate(applicant.id, { isInterviewed: !applicant.isInterviewed }, true);
   };
 
   return (
@@ -579,7 +599,7 @@ const ApplicantDetailModal: React.FC<ApplicantDetailModalProps> = ({
                 <Calendar size={14} />
                 <span>Age</span>
               </div>
-              <span className="text-white font-bold text-lg">{applicant.age}</span>
+              <span className="text-white font-bold text-lg">{applicant.age || '-'}</span>
             </div>
             <div className="bg-gray-900 rounded-lg p-3">
               <div className="flex items-center gap-2 text-gray-400 mb-1">
