@@ -18,12 +18,15 @@ import {
   ChevronRight,
   AlertTriangle,
   Skull,
+  UserPlus,
+  ExternalLink,
 } from 'lucide-react';
 import {
   commandCenterService,
   CommandCenter,
   Region,
   extractSheetId,
+  getJobFairSlugError,
 } from '../../lib/commandCenterService';
 import { removeStorageItem } from '../../lib/localStorage';
 
@@ -50,6 +53,8 @@ const CommandCenterCreator: React.FC = () => {
     region: 'West' as Region,
     workerbookUrl: '',
     masterbookingsUrl: '',
+    jobFairsEnabled: false,
+    jobFairsSlug: '',
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -84,6 +89,8 @@ const CommandCenterCreator: React.FC = () => {
       region: 'West',
       workerbookUrl: '',
       masterbookingsUrl: '',
+      jobFairsEnabled: false,
+      jobFairsSlug: '',
     });
     setFormErrors({});
     setEditingCC(null);
@@ -103,6 +110,8 @@ const CommandCenterCreator: React.FC = () => {
       region: cc.region,
       workerbookUrl: `https://docs.google.com/spreadsheets/d/${cc.workerbookSheetId}/edit`,
       masterbookingsUrl: `https://docs.google.com/spreadsheets/d/${cc.masterbookingsSheetId}/edit`,
+      jobFairsEnabled: cc.jobFairsEnabled || false,
+      jobFairsSlug: cc.jobFairsSlug || '',
     });
     setFormErrors({});
     setShowModal(true);
@@ -141,6 +150,14 @@ const CommandCenterCreator: React.FC = () => {
       errors.masterbookingsUrl = 'Invalid Google Sheets URL or ID';
     }
 
+    // Validate job fair slug if enabled
+    if (formData.jobFairsEnabled) {
+      const slugError = getJobFairSlugError(formData.jobFairsSlug);
+      if (slugError) {
+        errors.jobFairsSlug = slugError;
+      }
+    }
+
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -163,6 +180,8 @@ const CommandCenterCreator: React.FC = () => {
           region: formData.region,
           workerbookSheetId,
           masterbookingsSheetId,
+          jobFairsEnabled: formData.jobFairsEnabled,
+          jobFairsSlug: formData.jobFairsEnabled ? formData.jobFairsSlug : '',
         };
         
         // Only update password if provided
@@ -180,6 +199,8 @@ const CommandCenterCreator: React.FC = () => {
           region: formData.region,
           workerbookSheetId,
           masterbookingsSheetId,
+          jobFairsEnabled: formData.jobFairsEnabled,
+          jobFairsSlug: formData.jobFairsEnabled ? formData.jobFairsSlug : '',
         });
       }
 
@@ -262,6 +283,9 @@ const CommandCenterCreator: React.FC = () => {
   };
 
   const isWipeConfirmed = wipeConfirmText === 'DELETE ALL';
+
+  // Get base URL for job fair preview
+  const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
   // --- RENDER ---
   return (
@@ -359,6 +383,12 @@ const CommandCenterCreator: React.FC = () => {
                         }`}>
                           {cc.region}
                         </span>
+                        {cc.jobFairsEnabled && (
+                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-900/50 text-purple-300 flex items-center gap-1">
+                            <UserPlus size={10} />
+                            Job Fairs
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -400,6 +430,25 @@ const CommandCenterCreator: React.FC = () => {
                     <span>Masterbookings: <code className="text-gray-400">{cc.masterbookingsSheetId.substring(0, 20)}...</code></span>
                   </div>
                 </div>
+
+                {/* JOB FAIR URL (if enabled) */}
+                {cc.jobFairsEnabled && cc.jobFairsSlug && (
+                  <div className="mt-3 pt-3 border-t border-gray-700">
+                    <div className="flex items-center gap-2 text-xs">
+                      <UserPlus size={14} className="text-purple-400" />
+                      <span className="text-gray-500">Job Fair URL:</span>
+                      
+                        href={`${baseUrl}/${cc.jobFairsSlug}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-purple-400 hover:text-purple-300 flex items-center gap-1"
+                      >
+                        {baseUrl}/{cc.jobFairsSlug}
+                        <ExternalLink size={10} />
+                      </a>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -589,6 +638,85 @@ const CommandCenterCreator: React.FC = () => {
                     <Check size={12} />
                     ID: {extractSheetId(formData.masterbookingsUrl)!.substring(0, 30)}...
                   </p>
+                )}
+              </div>
+
+              {/* Job Fairs Section */}
+              <div className="pt-4 border-t border-gray-700">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <UserPlus className="text-purple-400" size={18} />
+                    <label className="text-sm font-medium text-gray-300">
+                      Enable Job Fairs
+                    </label>
+                  </div>
+                  
+                  {/* Toggle Switch */}
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, jobFairsEnabled: !formData.jobFairsEnabled })}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      formData.jobFairsEnabled ? 'bg-purple-600' : 'bg-gray-600'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                        formData.jobFairsEnabled ? 'translate-x-7' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Job Fair Slug Input (shown when enabled) */}
+                {formData.jobFairsEnabled && (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">
+                        Job Fair URL Slug
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-500 text-sm whitespace-nowrap">
+                          {baseUrl}/
+                        </span>
+                        <input
+                          type="text"
+                          value={formData.jobFairsSlug}
+                          onChange={(e) => setFormData({ 
+                            ...formData, 
+                            jobFairsSlug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') 
+                          })}
+                          placeholder="hamilton"
+                          className={`flex-1 bg-gray-900 border rounded-lg py-2 px-3 text-white focus:ring-2 focus:outline-none text-sm ${
+                            formErrors.jobFairsSlug ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-purple-500'
+                          }`}
+                        />
+                      </div>
+                      {formErrors.jobFairsSlug && (
+                        <p className="text-red-400 text-xs mt-1">{formErrors.jobFairsSlug}</p>
+                      )}
+                      {formData.jobFairsSlug && !formErrors.jobFairsSlug && !getJobFairSlugError(formData.jobFairsSlug) && (
+                        <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
+                          <Check size={12} />
+                          Valid slug
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Preview URL */}
+                    {formData.jobFairsSlug && !getJobFairSlugError(formData.jobFairsSlug) && (
+                      <div className="bg-gray-900/50 rounded-lg p-3 border border-gray-700">
+                        <p className="text-xs text-gray-400 mb-1">Public application URL:</p>
+                        <p className="text-sm text-purple-400 flex items-center gap-2">
+                          {baseUrl}/{formData.jobFairsSlug}
+                          <ExternalLink size={12} />
+                        </p>
+                      </div>
+                    )}
+
+                    <p className="text-xs text-gray-500">
+                      Applicants will use this URL to submit their applications during job fairs.
+                    </p>
+                  </div>
                 )}
               </div>
             </div>
