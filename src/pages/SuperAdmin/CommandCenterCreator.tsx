@@ -59,6 +59,8 @@ const CommandCenterCreator: React.FC = () => {
   const [wipeConfirmText, setWipeConfirmText] = useState('');
   const [wiping, setWiping] = useState(false);
 
+  const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+
   useEffect(() => {
     loadCommandCenters();
   }, []);
@@ -97,13 +99,15 @@ const CommandCenterCreator: React.FC = () => {
 
   const openEditModal = (cc: CommandCenter) => {
     setEditingCC(cc);
+    const wbUrl = 'https://docs.google.com/spreadsheets/d/' + cc.workerbookSheetId + '/edit';
+    const mbUrl = 'https://docs.google.com/spreadsheets/d/' + cc.masterbookingsSheetId + '/edit';
     setFormData({
       displayName: cc.displayName,
       username: cc.username,
       password: '',
       region: cc.region,
-      workerbookUrl: 'https://docs.google.com/spreadsheets/d/' + cc.workerbookSheetId + '/edit',
-      masterbookingsUrl: 'https://docs.google.com/spreadsheets/d/' + cc.masterbookingsSheetId + '/edit',
+      workerbookUrl: wbUrl,
+      masterbookingsUrl: mbUrl,
       jobFairsEnabled: cc.jobFairsEnabled || false,
       jobFairsSlug: cc.jobFairsSlug || '',
     });
@@ -203,14 +207,8 @@ const CommandCenterCreator: React.FC = () => {
   };
 
   const handleDelete = async (cc: CommandCenter) => {
-    if (!window.confirm(
-      '⚠️ DELETE "' + cc.displayName + '"?\n\n' +
-      'This will permanently delete:\n' +
-      '• All workers and route managers\n' +
-      '• All sessions and transactions\n' +
-      '• All bookings and routes\n\n' +
-      'This action cannot be undone!'
-    )) {
+    const confirmMsg = '⚠️ DELETE "' + cc.displayName + '"?\n\nThis will permanently delete:\n• All workers and route managers\n• All sessions and transactions\n• All bookings and routes\n\nThis action cannot be undone!';
+    if (!window.confirm(confirmMsg)) {
       return;
     }
 
@@ -268,7 +266,125 @@ const CommandCenterCreator: React.FC = () => {
 
   const isWipeConfirmed = wipeConfirmText === 'DELETE ALL';
 
-  const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+  const getJobFairUrl = (slug: string): string => {
+    return baseUrl + '/' + slug;
+  };
+
+  const getSheetIdPreview = (url: string): string => {
+    const id = extractSheetId(url);
+    if (!id) return '';
+    return 'ID: ' + id.substring(0, 30) + '...';
+  };
+
+  const renderCommandCenterCard = (cc: CommandCenter) => {
+    const jobFairUrl = cc.jobFairsSlug ? getJobFairUrl(cc.jobFairsSlug) : '';
+    const wbPreview = cc.workerbookSheetId.substring(0, 20) + '...';
+    const mbPreview = cc.masterbookingsSheetId.substring(0, 20) + '...';
+
+    return (
+      <div
+        key={cc.id}
+        className="bg-gray-800 rounded-xl border border-gray-700 p-5 hover:border-gray-600 transition-colors"
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className={`w-12 h-12 rounded-lg flex items-center justify-center border ${
+              cc.region === 'West' ? 'bg-blue-900/30 border-blue-700' :
+              cc.region === 'Central' ? 'bg-green-900/30 border-green-700' :
+              'bg-orange-900/30 border-orange-700'
+            }`}>
+              <Globe className={
+                cc.region === 'West' ? 'text-blue-400' :
+                cc.region === 'Central' ? 'text-green-400' :
+                'text-orange-400'
+              } size={24} />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-white">{cc.displayName}</h3>
+              <div className="flex items-center gap-3 text-sm text-gray-400">
+                <span className="flex items-center gap-1">
+                  <User size={12} />
+                  {cc.username}
+                </span>
+                <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                  cc.region === 'West' ? 'bg-blue-900/50 text-blue-300' :
+                  cc.region === 'Central' ? 'bg-green-900/50 text-green-300' :
+                  'bg-orange-900/50 text-orange-300'
+                }`}>
+                  {cc.region}
+                </span>
+                {cc.jobFairsEnabled && (
+                  <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-900/50 text-purple-300 flex items-center gap-1">
+                    <UserPlus size={10} />
+                    Job Fairs
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleEnter(cc)}
+              className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors"
+            >
+              Enter
+              <ChevronRight size={16} />
+            </button>
+            <button
+              onClick={() => openEditModal(cc)}
+              className="bg-gray-700 hover:bg-gray-600 text-white p-2 rounded-lg transition-colors"
+              title="Edit"
+            >
+              <Edit2 size={18} />
+            </button>
+            <button
+              onClick={() => handleDelete(cc)}
+              className="bg-red-900/30 hover:bg-red-900/50 text-red-400 p-2 rounded-lg transition-colors"
+              title="Delete"
+            >
+              <Trash2 size={18} />
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 pt-4 border-t border-gray-700 grid grid-cols-2 gap-4 text-xs">
+          <div className="flex items-center gap-2 text-gray-500">
+            <Sheet size={14} />
+            <span>Workerbook: <code className="text-gray-400">{wbPreview}</code></span>
+          </div>
+          <div className="flex items-center gap-2 text-gray-500">
+            <Sheet size={14} />
+            <span>Masterbookings: <code className="text-gray-400">{mbPreview}</code></span>
+          </div>
+        </div>
+
+        {cc.jobFairsEnabled && cc.jobFairsSlug && (
+          <div className="mt-3 pt-3 border-t border-gray-700">
+            <div className="flex items-center gap-2 text-xs">
+              <UserPlus size={14} className="text-purple-400" />
+              <span className="text-gray-500">Job Fair URL:</span>
+              
+                href={jobFairUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-purple-400 hover:text-purple-300 flex items-center gap-1"
+              >
+                <span>{jobFairUrl}</span>
+                <ExternalLink size={10} />
+              </a>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const formJobFairUrl = formData.jobFairsSlug ? getJobFairUrl(formData.jobFairsSlug) : '';
+  const formBaseUrlDisplay = baseUrl + '/';
+  const workerbookIdPreview = getSheetIdPreview(formData.workerbookUrl);
+  const masterbookingsIdPreview = getSheetIdPreview(formData.masterbookingsUrl);
+  const ccCountText = '• All command centers (' + commandCenters.length + ')';
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
@@ -327,103 +443,7 @@ const CommandCenterCreator: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-4">
-            {commandCenters.map((cc) => (
-              <div
-                key={cc.id}
-                className="bg-gray-800 rounded-xl border border-gray-700 p-5 hover:border-gray-600 transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-lg flex items-center justify-center border ${
-                      cc.region === 'West' ? 'bg-blue-900/30 border-blue-700' :
-                      cc.region === 'Central' ? 'bg-green-900/30 border-green-700' :
-                      'bg-orange-900/30 border-orange-700'
-                    }`}>
-                      <Globe className={
-                        cc.region === 'West' ? 'text-blue-400' :
-                        cc.region === 'Central' ? 'text-green-400' :
-                        'text-orange-400'
-                      } size={24} />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-bold text-white">{cc.displayName}</h3>
-                      <div className="flex items-center gap-3 text-sm text-gray-400">
-                        <span className="flex items-center gap-1">
-                          <User size={12} />
-                          {cc.username}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                          cc.region === 'West' ? 'bg-blue-900/50 text-blue-300' :
-                          cc.region === 'Central' ? 'bg-green-900/50 text-green-300' :
-                          'bg-orange-900/50 text-orange-300'
-                        }`}>
-                          {cc.region}
-                        </span>
-                        {cc.jobFairsEnabled && (
-                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-900/50 text-purple-300 flex items-center gap-1">
-                            <UserPlus size={10} />
-                            Job Fairs
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleEnter(cc)}
-                      className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors"
-                    >
-                      Enter
-                      <ChevronRight size={16} />
-                    </button>
-                    <button
-                      onClick={() => openEditModal(cc)}
-                      className="bg-gray-700 hover:bg-gray-600 text-white p-2 rounded-lg transition-colors"
-                      title="Edit"
-                    >
-                      <Edit2 size={18} />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(cc)}
-                      className="bg-red-900/30 hover:bg-red-900/50 text-red-400 p-2 rounded-lg transition-colors"
-                      title="Delete"
-                    >
-                      <Trash2 size={18} />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-4 pt-4 border-t border-gray-700 grid grid-cols-2 gap-4 text-xs">
-                  <div className="flex items-center gap-2 text-gray-500">
-                    <Sheet size={14} />
-                    <span>Workerbook: <code className="text-gray-400">{cc.workerbookSheetId.substring(0, 20)}...</code></span>
-                  </div>
-                  <div className="flex items-center gap-2 text-gray-500">
-                    <Sheet size={14} />
-                    <span>Masterbookings: <code className="text-gray-400">{cc.masterbookingsSheetId.substring(0, 20)}...</code></span>
-                  </div>
-                </div>
-
-                {cc.jobFairsEnabled && cc.jobFairsSlug && (
-                  <div className="mt-3 pt-3 border-t border-gray-700">
-                    <div className="flex items-center gap-2 text-xs">
-                      <UserPlus size={14} className="text-purple-400" />
-                      <span className="text-gray-500">Job Fair URL:</span>
-                      
-                        href={baseUrl + '/' + cc.jobFairsSlug}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-purple-400 hover:text-purple-300 flex items-center gap-1"
-                      >
-                        <span>{baseUrl + '/' + cc.jobFairsSlug}</span>
-                        <ExternalLink size={10} />
-                      </a>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
+            {commandCenters.map(renderCommandCenterCard)}
           </div>
         )}
 
@@ -569,10 +589,10 @@ const CommandCenterCreator: React.FC = () => {
                 {formErrors.workerbookUrl && (
                   <p className="text-red-400 text-xs mt-1">{formErrors.workerbookUrl}</p>
                 )}
-                {formData.workerbookUrl && extractSheetId(formData.workerbookUrl) && (
+                {workerbookIdPreview && (
                   <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
                     <Check size={12} />
-                    <span>{'ID: ' + extractSheetId(formData.workerbookUrl)!.substring(0, 30) + '...'}</span>
+                    <span>{workerbookIdPreview}</span>
                   </p>
                 )}
               </div>
@@ -596,10 +616,10 @@ const CommandCenterCreator: React.FC = () => {
                 {formErrors.masterbookingsUrl && (
                   <p className="text-red-400 text-xs mt-1">{formErrors.masterbookingsUrl}</p>
                 )}
-                {formData.masterbookingsUrl && extractSheetId(formData.masterbookingsUrl) && (
+                {masterbookingsIdPreview && (
                   <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
                     <Check size={12} />
-                    <span>{'ID: ' + extractSheetId(formData.masterbookingsUrl)!.substring(0, 30) + '...'}</span>
+                    <span>{masterbookingsIdPreview}</span>
                   </p>
                 )}
               </div>
@@ -635,7 +655,7 @@ const CommandCenterCreator: React.FC = () => {
                         Job Fair URL Slug
                       </label>
                       <div className="flex items-center gap-2">
-                        <span className="text-gray-500 text-sm whitespace-nowrap">{baseUrl + '/'}</span>
+                        <span className="text-gray-500 text-sm whitespace-nowrap">{formBaseUrlDisplay}</span>
                         <input
                           type="text"
                           value={formData.jobFairsSlug}
@@ -664,7 +684,7 @@ const CommandCenterCreator: React.FC = () => {
                       <div className="bg-gray-900/50 rounded-lg p-3 border border-gray-700">
                         <p className="text-xs text-gray-400 mb-1">Public application URL:</p>
                         <p className="text-sm text-purple-400 flex items-center gap-2">
-                          <span>{baseUrl + '/' + formData.jobFairsSlug}</span>
+                          <span>{formJobFairUrl}</span>
                           <ExternalLink size={12} />
                         </p>
                       </div>
@@ -725,7 +745,7 @@ const CommandCenterCreator: React.FC = () => {
                   This will permanently delete:
                 </h3>
                 <ul className="text-sm text-gray-400 space-y-1 ml-6">
-                  <li>{'• All command centers (' + commandCenters.length + ')'}</li>
+                  <li>{ccCountText}</li>
                   <li>• All workers and route managers</li>
                   <li>• All daily sessions</li>
                   <li>• All logsheet sessions</li>
