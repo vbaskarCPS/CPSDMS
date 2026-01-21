@@ -26,6 +26,30 @@ const ID_TYPE_OPTIONS: { value: ApplicantIdType; label: string }[] = [
   { value: 'PASSPORT', label: 'Passport' },
 ];
 
+// Helper function to capitalize first letter of each word
+const toTitleCase = (str: string): string => {
+  return str
+    .toLowerCase()
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
+// Helper function to format phone number as "000 000 0000"
+const formatPhoneNumber = (value: string): string => {
+  // Remove all non-digits
+  const digits = value.replace(/\D/g, '');
+  
+  // Format as "000 000 0000"
+  if (digits.length <= 3) {
+    return digits;
+  } else if (digits.length <= 6) {
+    return `${digits.slice(0, 3)} ${digits.slice(3)}`;
+  } else {
+    return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6, 10)}`;
+  }
+};
+
 const ApplicantForm: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
   
@@ -39,7 +63,7 @@ const ApplicantForm: React.FC = () => {
   const [commandCenter, setCommandCenter] = useState<CommandCenter | null>(null);
   const [session, setSession] = useState<JobFairSession | null>(null);
   
-  // Form state
+  // Form state - age defaults to empty (0 will be treated as empty)
   const [formData, setFormData] = useState<ApplicantFormData>({
     firstName: '',
     lastName: '',
@@ -49,7 +73,7 @@ const ApplicantForm: React.FC = () => {
     address: '',
     city: '',
     postalCode: '',
-    age: 18,
+    age: 0, // 0 means empty/not set
     idType: 'DL',
     idValue: '',
   });
@@ -117,8 +141,12 @@ const ApplicantForm: React.FC = () => {
 
     if (!formData.cellPhone.trim()) {
       errors.cellPhone = 'Cell phone is required';
-    } else if (!/^[\d\s\-\(\)]+$/.test(formData.cellPhone)) {
-      errors.cellPhone = 'Invalid phone number format';
+    } else {
+      // Check if phone has at least 10 digits
+      const digits = formData.cellPhone.replace(/\D/g, '');
+      if (digits.length < 10) {
+        errors.cellPhone = 'Please enter a valid 10-digit phone number';
+      }
     }
 
     if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
@@ -127,10 +155,6 @@ const ApplicantForm: React.FC = () => {
 
     if (!formData.address.trim()) {
       errors.address = 'Address is required';
-    }
-
-    if (!formData.age || formData.age < 16 || formData.age > 100) {
-      errors.age = 'Please enter a valid age (16-100)';
     }
 
     if (!formData.idValue.trim()) {
@@ -182,6 +206,16 @@ const ApplicantForm: React.FC = () => {
         return updated;
       });
     }
+  };
+
+  // Handle name input with title case formatting
+  const handleNameChange = (field: 'firstName' | 'lastName', value: string) => {
+    updateField(field, toTitleCase(value));
+  };
+
+  // Handle phone input with formatting
+  const handlePhoneChange = (field: 'cellPhone' | 'alternatePhone', value: string) => {
+    updateField(field, formatPhoneNumber(value));
   };
 
   // Loading state
@@ -237,7 +271,7 @@ const ApplicantForm: React.FC = () => {
           <img 
             src={LOGO_URL} 
             alt="Property Stars" 
-            className="h-16 mx-auto mb-4"
+            className="w-full max-w-lg mx-auto mb-6"
           />
           <h1 className="text-2xl font-bold text-white mb-1">Job Application</h1>
           <p className="text-gray-400 text-sm">
@@ -269,7 +303,7 @@ const ApplicantForm: React.FC = () => {
               <input
                 type="text"
                 value={formData.firstName}
-                onChange={(e) => updateField('firstName', e.target.value)}
+                onChange={(e) => handleNameChange('firstName', e.target.value)}
                 className={`w-full bg-gray-900 border rounded-lg py-3 px-4 text-white placeholder-gray-500 focus:ring-2 focus:outline-none ${
                   formErrors.firstName ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-blue-500'
                 }`}
@@ -288,7 +322,7 @@ const ApplicantForm: React.FC = () => {
               <input
                 type="text"
                 value={formData.lastName}
-                onChange={(e) => updateField('lastName', e.target.value)}
+                onChange={(e) => handleNameChange('lastName', e.target.value)}
                 className={`w-full bg-gray-900 border rounded-lg py-3 px-4 text-white placeholder-gray-500 focus:ring-2 focus:outline-none ${
                   formErrors.lastName ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-blue-500'
                 }`}
@@ -309,11 +343,12 @@ const ApplicantForm: React.FC = () => {
                 <input
                   type="tel"
                   value={formData.cellPhone}
-                  onChange={(e) => updateField('cellPhone', e.target.value)}
+                  onChange={(e) => handlePhoneChange('cellPhone', e.target.value)}
                   className={`w-full bg-gray-900 border rounded-lg py-3 pl-10 pr-4 text-white placeholder-gray-500 focus:ring-2 focus:outline-none ${
                     formErrors.cellPhone ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-blue-500'
                   }`}
-                  placeholder="(416) 555-1234"
+                  placeholder="416 555 1234"
+                  maxLength={12}
                 />
               </div>
               {formErrors.cellPhone && (
@@ -324,16 +359,17 @@ const ApplicantForm: React.FC = () => {
             {/* Alternate Phone */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1">
-                Alternate Phone # (Optional)
+                Alternate Phone #
               </label>
               <div className="relative">
                 <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
                 <input
                   type="tel"
                   value={formData.alternatePhone}
-                  onChange={(e) => updateField('alternatePhone', e.target.value)}
+                  onChange={(e) => handlePhoneChange('alternatePhone', e.target.value)}
                   className="w-full bg-gray-900 border border-gray-600 rounded-lg py-3 pl-10 pr-4 text-white placeholder-gray-500 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  placeholder="(416) 555-5678"
+                  placeholder="416 555 5678"
+                  maxLength={12}
                 />
               </div>
             </div>
@@ -341,7 +377,7 @@ const ApplicantForm: React.FC = () => {
             {/* Email */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1">
-                Email Address (Optional)
+                Email Address
               </label>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
@@ -427,7 +463,7 @@ const ApplicantForm: React.FC = () => {
             {/* Age */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1">
-                Age *
+                Age
               </label>
               <div className="relative">
                 <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
@@ -435,16 +471,12 @@ const ApplicantForm: React.FC = () => {
                   type="number"
                   min="16"
                   max="100"
-                  value={formData.age}
-                  onChange={(e) => updateField('age', parseInt(e.target.value) || 18)}
-                  className={`w-full bg-gray-900 border rounded-lg py-3 pl-10 pr-4 text-white placeholder-gray-500 focus:ring-2 focus:outline-none ${
-                    formErrors.age ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-blue-500'
-                  }`}
+                  value={formData.age || ''}
+                  onChange={(e) => updateField('age', parseInt(e.target.value) || 0)}
+                  className="w-full bg-gray-900 border border-gray-600 rounded-lg py-3 pl-10 pr-4 text-white placeholder-gray-500 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="Enter your age"
                 />
               </div>
-              {formErrors.age && (
-                <p className="text-red-400 text-xs mt-1">{formErrors.age}</p>
-              )}
             </div>
 
             {/* ID Type */}
