@@ -178,11 +178,24 @@ class JobFairService {
   }
 
   /**
-   * Update an applicant's interview data
+   * Update an applicant's data (personal info, interview data, etc.)
    */
   public async updateApplicant(
     applicantId: string,
     updates: Partial<{
+      // Personal info
+      firstName: string;
+      lastName: string;
+      cellPhone: string;
+      alternatePhone: string | null;
+      email: string | null;
+      address: string;
+      city: string | null;
+      postalCode: string | null;
+      age: number;
+      idType: ApplicantIdType;
+      idValue: string;
+      // Interview data
       rating: number | null;
       isBc: boolean;
       isManagement: boolean;
@@ -191,6 +204,20 @@ class JobFairService {
   ): Promise<JobFairApplicant> {
     const dbUpdates: any = {};
     
+    // Personal info fields
+    if (updates.firstName !== undefined) dbUpdates.first_name = updates.firstName.trim();
+    if (updates.lastName !== undefined) dbUpdates.last_name = updates.lastName.trim();
+    if (updates.cellPhone !== undefined) dbUpdates.cell_phone = updates.cellPhone.trim();
+    if (updates.alternatePhone !== undefined) dbUpdates.alternate_phone = updates.alternatePhone?.trim() || null;
+    if (updates.email !== undefined) dbUpdates.email = updates.email?.trim() || null;
+    if (updates.address !== undefined) dbUpdates.address = updates.address.trim();
+    if (updates.city !== undefined) dbUpdates.city = updates.city?.trim() || null;
+    if (updates.postalCode !== undefined) dbUpdates.postal_code = updates.postalCode?.trim() || null;
+    if (updates.age !== undefined) dbUpdates.age = updates.age;
+    if (updates.idType !== undefined) dbUpdates.id_type = updates.idType;
+    if (updates.idValue !== undefined) dbUpdates.id_value = updates.idValue.trim();
+    
+    // Interview data fields
     if (updates.rating !== undefined) dbUpdates.rating = updates.rating;
     if (updates.isBc !== undefined) dbUpdates.is_bc = updates.isBc;
     if (updates.isManagement !== undefined) dbUpdates.is_management = updates.isManagement;

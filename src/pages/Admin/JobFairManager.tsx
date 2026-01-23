@@ -22,6 +22,8 @@ import {
   UserCheck,
   Briefcase,
   Shield,
+  User,
+  Hash,
 } from 'lucide-react';
 import { CommandCenter } from '../../lib/commandCenterService';
 import { jobFairService } from '../../lib/jobFairService';
@@ -39,6 +41,27 @@ const ID_TYPE_LABELS: Record<ApplicantIdType, string> = {
   HEALTH_CARD: 'Health Card',
   PASSPORT: 'Passport',
 };
+
+const ID_TYPE_OPTIONS: ApplicantIdType[] = ['SIN', 'DL', 'HEALTH_CARD', 'PASSPORT'];
+
+// Type for all updatable applicant fields
+type ApplicantUpdateFields = Partial<{
+  firstName: string;
+  lastName: string;
+  cellPhone: string;
+  alternatePhone: string | null;
+  email: string | null;
+  address: string;
+  city: string | null;
+  postalCode: string | null;
+  age: number;
+  idType: ApplicantIdType;
+  idValue: string;
+  rating: number | null;
+  isBc: boolean;
+  isManagement: boolean;
+  isInterviewed: boolean;
+}>;
 
 const JobFairManager: React.FC<JobFairManagerProps> = ({ commandCenter }) => {
   // Session state
@@ -209,12 +232,7 @@ const JobFairManager: React.FC<JobFairManagerProps> = ({ commandCenter }) => {
   // Update applicant
   const handleUpdateApplicant = async (
     applicantId: string,
-    updates: Partial<{
-      rating: number | null;
-      isBc: boolean;
-      isManagement: boolean;
-      isInterviewed: boolean;
-    }>,
+    updates: ApplicantUpdateFields,
     closeModal: boolean = false
   ) => {
     try {
@@ -514,12 +532,7 @@ const ApplicantCard: React.FC<ApplicantCardProps> = ({ applicant, onClick }) => 
 interface ApplicantDetailModalProps {
   applicant: JobFairApplicant;
   onClose: () => void;
-  onUpdate: (id: string, updates: Partial<{
-    rating: number | null;
-    isBc: boolean;
-    isManagement: boolean;
-    isInterviewed: boolean;
-  }>, closeModal?: boolean) => void;
+  onUpdate: (id: string, updates: ApplicantUpdateFields, closeModal?: boolean) => void;
 }
 
 const ApplicantDetailModal: React.FC<ApplicantDetailModalProps> = ({
@@ -527,10 +540,53 @@ const ApplicantDetailModal: React.FC<ApplicantDetailModalProps> = ({
   onClose,
   onUpdate,
 }) => {
+  // Local state for form fields (allows instant UI updates)
+  const [firstName, setFirstName] = useState(applicant.firstName);
+  const [lastName, setLastName] = useState(applicant.lastName);
+  const [cellPhone, setCellPhone] = useState(applicant.cellPhone);
+  const [alternatePhone, setAlternatePhone] = useState(applicant.alternatePhone || '');
+  const [email, setEmail] = useState(applicant.email || '');
+  const [address, setAddress] = useState(applicant.address);
+  const [city, setCity] = useState(applicant.city || '');
+  const [postalCode, setPostalCode] = useState(applicant.postalCode || '');
+  const [age, setAge] = useState(applicant.age);
+  const [idType, setIdType] = useState<ApplicantIdType>(applicant.idType);
+  const [idValue, setIdValue] = useState(applicant.idValue);
+
+  // Sync local state when applicant prop changes
+  useEffect(() => {
+    setFirstName(applicant.firstName);
+    setLastName(applicant.lastName);
+    setCellPhone(applicant.cellPhone);
+    setAlternatePhone(applicant.alternatePhone || '');
+    setEmail(applicant.email || '');
+    setAddress(applicant.address);
+    setCity(applicant.city || '');
+    setPostalCode(applicant.postalCode || '');
+    setAge(applicant.age);
+    setIdType(applicant.idType);
+    setIdValue(applicant.idValue);
+  }, [applicant]);
+
+  // Generic field update handler (saves on blur)
+  const handleFieldBlur = (field: keyof ApplicantUpdateFields, value: any) => {
+    // Don't save if value hasn't changed
+    const currentValue = applicant[field as keyof JobFairApplicant];
+    if (value === currentValue || (value === '' && currentValue === null)) return;
+    
+    onUpdate(applicant.id, { [field]: value || null });
+  };
+
   const handleRatingChange = (rating: number) => {
     onUpdate(applicant.id, { 
       rating: applicant.rating === rating ? null : rating 
     });
+  };
+
+  const handleIdTypeChange = (newIdType: ApplicantIdType) => {
+    setIdType(newIdType);
+    setIdValue(''); // Clear ID value when type changes
+    onUpdate(applicant.id, { idType: newIdType, idValue: '' });
   };
 
   const toggleBc = () => {
@@ -550,9 +606,10 @@ const ApplicantDetailModal: React.FC<ApplicantDetailModalProps> = ({
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
       <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="p-4 border-b border-gray-700 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-white">
-            {applicant.firstName} {applicant.lastName}
+        <div className="p-4 border-b border-gray-700 flex items-center justify-between sticky top-0 bg-gray-800 z-10">
+          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+            <User size={20} className="text-purple-400" />
+            Edit Applicant
           </h2>
           <button
             onClick={onClose}
@@ -564,51 +621,171 @@ const ApplicantDetailModal: React.FC<ApplicantDetailModalProps> = ({
 
         {/* Content */}
         <div className="p-6 space-y-6">
-          {/* Contact Info */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 text-gray-300">
-              <Phone size={18} className="text-gray-500" />
-              <span>{applicant.cellPhone}</span>
+          {/* Name Fields */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">
+                First Name
+              </label>
+              <input
+                type="text"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                onBlur={() => handleFieldBlur('firstName', firstName)}
+                className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
+              />
             </div>
-            {applicant.alternatePhone && (
-              <div className="flex items-center gap-3 text-gray-300">
-                <Phone size={18} className="text-gray-500" />
-                <span>{applicant.alternatePhone} (alt)</span>
-              </div>
-            )}
-            {applicant.email && (
-              <div className="flex items-center gap-3 text-gray-300">
-                <Mail size={18} className="text-gray-500" />
-                <span>{applicant.email}</span>
-              </div>
-            )}
-            <div className="flex items-center gap-3 text-gray-300">
-              <MapPin size={18} className="text-gray-500" />
-              <span>
-                {applicant.address}
-                {applicant.city && `, ${applicant.city}`}
-                {applicant.postalCode && ` ${applicant.postalCode}`}
-              </span>
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">
+                Last Name
+              </label>
+              <input
+                type="text"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                onBlur={() => handleFieldBlur('lastName', lastName)}
+                className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
+              />
             </div>
           </div>
 
-          {/* Additional Info */}
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div className="bg-gray-900 rounded-lg p-3">
-              <div className="flex items-center gap-2 text-gray-400 mb-1">
-                <Calendar size={14} />
-                <span>Age</span>
-              </div>
-              <span className="text-white font-bold text-lg">{applicant.age || '-'}</span>
+          {/* Contact Info */}
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1 flex items-center gap-1">
+                <Phone size={12} /> Cell Phone
+              </label>
+              <input
+                type="tel"
+                value={cellPhone}
+                onChange={(e) => setCellPhone(e.target.value)}
+                onBlur={() => handleFieldBlur('cellPhone', cellPhone)}
+                className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
+              />
             </div>
-            <div className="bg-gray-900 rounded-lg p-3">
-              <div className="flex items-center gap-2 text-gray-400 mb-1">
-                <CreditCard size={14} />
-                <span>{ID_TYPE_LABELS[applicant.idType]}</span>
-              </div>
-              <span className="text-white font-mono text-sm">{applicant.idValue}</span>
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1 flex items-center gap-1">
+                <Phone size={12} /> Alternate Phone (optional)
+              </label>
+              <input
+                type="tel"
+                value={alternatePhone}
+                onChange={(e) => setAlternatePhone(e.target.value)}
+                onBlur={() => handleFieldBlur('alternatePhone', alternatePhone)}
+                placeholder="Optional"
+                className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none placeholder-gray-600"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1 flex items-center gap-1">
+                <Mail size={12} /> Email (optional)
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onBlur={() => handleFieldBlur('email', email)}
+                placeholder="Optional"
+                className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none placeholder-gray-600"
+              />
             </div>
           </div>
+
+          {/* Address */}
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1 flex items-center gap-1">
+                <MapPin size={12} /> Address
+              </label>
+              <input
+                type="text"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                onBlur={() => handleFieldBlur('address', address)}
+                className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">
+                  City
+                </label>
+                <input
+                  type="text"
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  onBlur={() => handleFieldBlur('city', city)}
+                  placeholder="Optional"
+                  className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none placeholder-gray-600"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">
+                  Postal Code
+                </label>
+                <input
+                  type="text"
+                  value={postalCode}
+                  onChange={(e) => setPostalCode(e.target.value)}
+                  onBlur={() => handleFieldBlur('postalCode', postalCode)}
+                  placeholder="Optional"
+                  className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none placeholder-gray-600"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Age & ID */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1 flex items-center gap-1">
+                <Calendar size={12} /> Age
+              </label>
+              <input
+                type="number"
+                min="16"
+                max="99"
+                value={age}
+                onChange={(e) => setAge(parseInt(e.target.value) || 0)}
+                onBlur={() => handleFieldBlur('age', age)}
+                className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1 flex items-center gap-1">
+                <CreditCard size={12} /> ID Type
+              </label>
+              <select
+                value={idType}
+                onChange={(e) => handleIdTypeChange(e.target.value as ApplicantIdType)}
+                className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none"
+              >
+                {ID_TYPE_OPTIONS.map((type) => (
+                  <option key={type} value={type}>
+                    {ID_TYPE_LABELS[type]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* ID Value */}
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1 flex items-center gap-1">
+              <Hash size={12} /> {ID_TYPE_LABELS[idType]} Number
+            </label>
+            <input
+              type="text"
+              value={idValue}
+              onChange={(e) => setIdValue(e.target.value)}
+              onBlur={() => handleFieldBlur('idValue', idValue)}
+              placeholder={`Enter ${ID_TYPE_LABELS[idType]} number`}
+              className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm font-mono focus:ring-2 focus:ring-purple-500 focus:outline-none"
+            />
+          </div>
+
+          {/* Divider */}
+          <hr className="border-gray-700" />
 
           {/* Rating */}
           <div>
