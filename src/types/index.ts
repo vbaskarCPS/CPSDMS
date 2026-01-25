@@ -450,6 +450,15 @@ export type EmailTemplateType =
   | 'addon_driveway_sealing'
   | 'addon_hot_asphalt';
 
+// --- EMAIL TEMPLATE CONTENT STRUCTURE (for editor) ---
+export interface EmailTemplateContentStructure {
+  greeting: string;
+  mainContent: string;
+  showServiceDetails: boolean;
+  showPaymentDetails: boolean;
+  footerText: string;
+}
+
 export interface EmailTemplate {
   id: string;
   commandCenterId: string;
@@ -457,6 +466,7 @@ export interface EmailTemplate {
   templateName: string;
   subject: string;
   htmlContent: string;
+  contentStructure?: EmailTemplateContentStructure;
   isActive: boolean;
   createdAt?: string;
   updatedAt?: string;

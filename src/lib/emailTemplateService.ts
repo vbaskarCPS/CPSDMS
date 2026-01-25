@@ -5,7 +5,7 @@ import {
   EmailTemplate, 
   EmailTemplateType, 
   EmailTemplateTypeInfo,
-  EmailTemplateStructure,
+  EmailTemplateContentStructure,
   Region 
 } from '../types';
 
@@ -70,35 +70,55 @@ export const TEMPLATE_VARIABLES = [
   { key: 'companyName', label: 'Company Name', example: 'Property Stars West' },
 ];
 
-// --- DEFAULT HTML TEMPLATE ---
-export const getDefaultTemplateHtml = (templateType: EmailTemplateType, companyName: string = 'Property Stars'): string => {
+// --- DEFAULT CONTENT STRUCTURE FOR TEMPLATE TYPES ---
+export const getDefaultContentStructure = (templateType: EmailTemplateType): EmailTemplateContentStructure => {
   const isUpgrade = templateType.startsWith('upgrade_');
   const isAddon = templateType.startsWith('addon_');
   const isBilled = templateType === 'billed';
   const isPrepaid = templateType === 'prepaid';
+  const isSale = templateType === 'sale';
+
+  let mainContent = '<p>Thank you for choosing Property Stars! Your service has been completed.</p>';
+
+  if (isSale) {
+    mainContent = '<p>Welcome to the Property Stars family! We\'re thrilled to have you as a new customer. Your lawn is in great hands.</p>';
+  } else if (isBilled) {
+    mainContent = '<p>Thank you for your service! Please find your invoice details below. Payment can be made at your convenience.</p>';
+  } else if (isPrepaid) {
+    mainContent = '<p>Great news! Your prepaid service has been completed. Thank you for being a valued customer - we appreciate your trust in Property Stars.</p>';
+  } else if (isUpgrade) {
+    mainContent = '<p>Congratulations on upgrading your lawn care program! You\'ve made a great choice for your lawn\'s health and appearance.</p>';
+  } else if (isAddon) {
+    mainContent = '<p>Your add-on service has been confirmed and scheduled. We appreciate your continued trust in Property Stars!</p>';
+  }
+
+  return {
+    greeting: '<h2 style="margin: 0 0 10px 0;">Hi {{firstName}},</h2>',
+    mainContent,
+    showServiceDetails: true,
+    showPaymentDetails: true,
+    footerText: '<p>Questions? Simply reply to this email and we\'ll be happy to help.</p>',
+  };
+};
+
+// --- GENERATE HTML FROM CONTENT STRUCTURE ---
+export const generateHtmlFromContentStructure = (
+  content: EmailTemplateContentStructure,
+  templateType: EmailTemplateType
+): string => {
+  const isBilled = templateType === 'billed';
+  const isPrepaid = templateType === 'prepaid';
   
-  let mainMessage = 'Thank you for choosing Property Stars! Your service has been completed.';
-  let paymentSection = `
-    <tr>
-      <td style="padding: 20px 30px;">
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f0fdf4; border-radius: 8px; padding: 20px;">
-          <tr>
-            <td style="font-size: 14px; color: #166534;">
-              <strong>Amount Paid:</strong> {{displayPrice}}<br/>
-              <strong>Payment Method:</strong> {{paymentMethod}}
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  `;
-  
-  if (isBilled) {
-    mainMessage = 'Thank you for your service! Please find your invoice details below.';
-    paymentSection = `
-    <tr>
-      <td style="padding: 20px 30px;">
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fef3c7; border-radius: 8px; padding: 20px;">
+  // Process content - replace variable tags with actual template variables
+  const processContent = (html: string): string => {
+    return html.replace(/<span[^>]*class="variable-tag"[^>]*>{{(\w+)}}<\/span>/g, '{{$1}}');
+  };
+
+  let paymentSection = '';
+  if (content.showPaymentDetails) {
+    if (isBilled) {
+      paymentSection = `
+        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fef3c7; border-radius: 8px; padding: 20px; margin: 20px 0;">
           <tr>
             <td style="font-size: 14px; color: #92400e;">
               <strong>Amount Due:</strong> {{displayPrice}}<br/>
@@ -106,15 +126,10 @@ export const getDefaultTemplateHtml = (templateType: EmailTemplateType, companyN
             </td>
           </tr>
         </table>
-      </td>
-    </tr>
-    `;
-  } else if (isPrepaid) {
-    mainMessage = 'Your prepaid service has been completed. Thank you for being a valued customer!';
-    paymentSection = `
-    <tr>
-      <td style="padding: 20px 30px;">
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #dbeafe; border-radius: 8px; padding: 20px;">
+      `;
+    } else if (isPrepaid) {
+      paymentSection = `
+        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #dbeafe; border-radius: 8px; padding: 20px; margin: 20px 0;">
           <tr>
             <td style="font-size: 14px; color: #1e40af;">
               <strong>Service Value:</strong> {{displayPrice}}<br/>
@@ -122,14 +137,33 @@ export const getDefaultTemplateHtml = (templateType: EmailTemplateType, companyN
             </td>
           </tr>
         </table>
-      </td>
-    </tr>
-    `;
-  } else if (isUpgrade) {
-    mainMessage = 'Congratulations on upgrading your lawn care! Your upgrade has been confirmed.';
-  } else if (isAddon) {
-    mainMessage = 'Your add-on service has been confirmed. We appreciate your continued trust in Property Stars!';
+      `;
+    } else {
+      paymentSection = `
+        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f0fdf4; border-radius: 8px; padding: 20px; margin: 20px 0;">
+          <tr>
+            <td style="font-size: 14px; color: #166534;">
+              <strong>Amount Paid:</strong> {{displayPrice}}<br/>
+              <strong>Payment Method:</strong> {{paymentMethod}}
+            </td>
+          </tr>
+        </table>
+      `;
+    }
   }
+
+  const serviceSection = content.showServiceDetails ? `
+    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9fafb; border-radius: 8px; padding: 20px; margin: 20px 0;">
+      <tr>
+        <td style="font-size: 14px; color: #374151;">
+          <strong>Service:</strong> {{serviceName}}<br/>
+          <strong>Address:</strong> {{address}}<br/>
+          <strong>Date:</strong> {{date}}<br/>
+          <strong>Technician:</strong> {{workerName}}
+        </td>
+      </tr>
+    </table>
+  ` : '';
 
   return `
 <!DOCTYPE html>
@@ -154,39 +188,34 @@ export const getDefaultTemplateHtml = (templateType: EmailTemplateType, companyN
           <!-- Greeting -->
           <tr>
             <td style="padding: 30px 30px 10px 30px;">
-              <h2 style="margin: 0 0 10px 0; color: #1f2937; font-size: 20px;">Hi {{firstName}},</h2>
-              <p style="margin: 0; color: #4b5563; font-size: 16px; line-height: 1.6;">
-                ${mainMessage}
-              </p>
+              <div style="font-size: 16px; color: #1f2937; line-height: 1.6;">
+                ${processContent(content.greeting)}
+              </div>
+            </td>
+          </tr>
+          
+          <!-- Main Content -->
+          <tr>
+            <td style="padding: 10px 30px;">
+              <div style="font-size: 16px; color: #4b5563; line-height: 1.6;">
+                ${processContent(content.mainContent)}
+              </div>
             </td>
           </tr>
           
           <!-- Service Details -->
-          <tr>
-            <td style="padding: 20px 30px;">
-              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9fafb; border-radius: 8px; padding: 20px;">
-                <tr>
-                  <td style="font-size: 14px; color: #374151;">
-                    <strong>Service:</strong> {{serviceName}}<br/>
-                    <strong>Address:</strong> {{address}}<br/>
-                    <strong>Date:</strong> {{date}}<br/>
-                    <strong>Technician:</strong> {{workerName}}
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
+          ${serviceSection ? `<tr><td style="padding: 0 30px;">${serviceSection}</td></tr>` : ''}
           
           <!-- Payment Details -->
-          ${paymentSection}
+          ${paymentSection ? `<tr><td style="padding: 0 30px;">${paymentSection}</td></tr>` : ''}
           
           <!-- Footer -->
           <tr>
             <td style="padding: 30px; border-top: 1px solid #e5e7eb; text-align: center;">
-              <p style="margin: 0 0 10px 0; color: #6b7280; font-size: 14px;">
-                Questions? Simply reply to this email and we'll be happy to help.
-              </p>
-              <p style="margin: 0; color: #9ca3af; font-size: 12px;">
+              <div style="color: #6b7280; font-size: 14px; line-height: 1.6;">
+                ${processContent(content.footerText)}
+              </div>
+              <p style="margin: 10px 0 0 0; color: #9ca3af; font-size: 12px;">
                 © 2026 {{companyName}}. All rights reserved.
               </p>
             </td>
@@ -199,6 +228,12 @@ export const getDefaultTemplateHtml = (templateType: EmailTemplateType, companyN
 </body>
 </html>
   `.trim();
+};
+
+// --- DEFAULT HTML TEMPLATE (for backward compatibility) ---
+export const getDefaultTemplateHtml = (templateType: EmailTemplateType, companyName: string = 'Property Stars'): string => {
+  const content = getDefaultContentStructure(templateType);
+  return generateHtmlFromContentStructure(content, templateType);
 };
 
 // --- HELPER: Get CC ID with error handling ---
@@ -280,19 +315,31 @@ class EmailTemplateService {
   }
 
   // --- CREATE OR UPDATE TEMPLATE ---
-  public async saveTemplate(template: Partial<EmailTemplate> & { templateType: EmailTemplateType }): Promise<EmailTemplate> {
+  public async saveTemplate(template: Partial<EmailTemplate> & { 
+    templateType: EmailTemplateType;
+    contentStructure?: EmailTemplateContentStructure;
+  }): Promise<EmailTemplate> {
     const ccId = getCCId();
     const cc = commandCenterService.getCurrentCommandCenter();
     
     // Check if template exists
     const existing = await this.getTemplateByType(template.templateType);
     
+    // Generate HTML from content structure if provided
+    let htmlContent = template.htmlContent;
+    if (template.contentStructure) {
+      htmlContent = generateHtmlFromContentStructure(template.contentStructure, template.templateType);
+    } else if (!htmlContent) {
+      htmlContent = getDefaultTemplateHtml(template.templateType, cc?.displayName);
+    }
+    
     const templateData = {
       command_center_id: ccId,
       template_type: template.templateType,
       template_name: template.templateName || this.getTemplateTypeInfo(template.templateType)?.name || template.templateType,
       subject: template.subject || DEFAULT_SUBJECTS[template.templateType],
-      html_content: template.htmlContent || getDefaultTemplateHtml(template.templateType, cc?.displayName),
+      html_content: htmlContent,
+      content_structure: template.contentStructure || null,
       is_active: template.isActive ?? true,
       updated_at: new Date().toISOString(),
     };
@@ -361,14 +408,18 @@ class EmailTemplateService {
     
     if (templatesToCreate.length === 0) return 0;
     
-    const inserts = templatesToCreate.map(t => ({
-      command_center_id: ccId,
-      template_type: t.type,
-      template_name: t.name,
-      subject: DEFAULT_SUBJECTS[t.type],
-      html_content: getDefaultTemplateHtml(t.type, cc.displayName),
-      is_active: true,
-    }));
+    const inserts = templatesToCreate.map(t => {
+      const contentStructure = getDefaultContentStructure(t.type);
+      return {
+        command_center_id: ccId,
+        template_type: t.type,
+        template_name: t.name,
+        subject: DEFAULT_SUBJECTS[t.type],
+        html_content: generateHtmlFromContentStructure(contentStructure, t.type),
+        content_structure: contentStructure,
+        is_active: true,
+      };
+    });
     
     const { error } = await supabase
       .from('email_templates')
@@ -476,6 +527,7 @@ class EmailTemplateService {
       templateName: data.template_name,
       subject: data.subject,
       htmlContent: data.html_content,
+      contentStructure: data.content_structure as EmailTemplateContentStructure | undefined,
       isActive: data.is_active,
       createdAt: data.created_at,
       updatedAt: data.updated_at,

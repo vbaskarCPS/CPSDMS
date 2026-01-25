@@ -23,12 +23,11 @@ import { commandCenterService } from '../../lib/commandCenterService';
 import { 
   emailTemplateService, 
   TEMPLATE_VARIABLES, 
-  DEFAULT_SUBJECTS 
+  DEFAULT_SUBJECTS,
+  getDefaultContentStructure,
+  generateHtmlFromContentStructure,
 } from '../../lib/emailTemplateService';
-import { EmailTemplate, EmailTemplateType } from '../../types';
-
-// --- LOGO URL (Hardcoded) ---
-const LOGO_URL = 'https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png';
+import { EmailTemplate, EmailTemplateType, EmailTemplateContentStructure } from '../../types';
 
 // --- RICH TEXT EDITOR COMPONENT ---
 interface RichTextEditorProps {
@@ -46,22 +45,28 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({
 }) => {
   const editorRef = useRef<HTMLDivElement>(null);
   const [isFocused, setIsFocused] = useState(false);
+  const isInternalChange = useRef(false);
 
-  // Initialize content
+  // Initialize and sync content when value prop changes
   useEffect(() => {
-    if (editorRef.current && editorRef.current.innerHTML !== value) {
-      editorRef.current.innerHTML = value;
+    if (editorRef.current && !isInternalChange.current) {
+      // Only update if the content is actually different
+      if (editorRef.current.innerHTML !== value) {
+        editorRef.current.innerHTML = value;
+      }
     }
-  }, []);
+    isInternalChange.current = false;
+  }, [value]);
 
   const handleInput = () => {
     if (editorRef.current) {
+      isInternalChange.current = true;
       onChange(editorRef.current.innerHTML);
     }
   };
 
-  const execCommand = (command: string, value?: string) => {
-    document.execCommand(command, false, value);
+  const execCommand = (command: string, commandValue?: string) => {
+    document.execCommand(command, false, commandValue);
     editorRef.current?.focus();
     handleInput();
   };
@@ -220,211 +225,6 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({
   );
 };
 
-// --- TEMPLATE STRUCTURE TYPE ---
-interface TemplateContent {
-  greeting: string;
-  mainContent: string;
-  showServiceDetails: boolean;
-  showPaymentDetails: boolean;
-  footerText: string;
-}
-
-// --- GENERATE HTML FROM CONTENT ---
-const generateHtmlFromContent = (
-  content: TemplateContent, 
-  subject: string,
-  companyName: string,
-  templateType: EmailTemplateType
-): string => {
-  const isBilled = templateType === 'billed';
-  const isPrepaid = templateType === 'prepaid';
-  
-  let paymentSection = '';
-  if (content.showPaymentDetails) {
-    if (isBilled) {
-      paymentSection = `
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fef3c7; border-radius: 8px; padding: 20px; margin: 20px 0;">
-          <tr>
-            <td style="font-size: 14px; color: #92400e;">
-              <strong>Amount Due:</strong> {{displayPrice}}<br/>
-              <strong>Payment Status:</strong> Invoice Sent
-            </td>
-          </tr>
-        </table>
-      `;
-    } else if (isPrepaid) {
-      paymentSection = `
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #dbeafe; border-radius: 8px; padding: 20px; margin: 20px 0;">
-          <tr>
-            <td style="font-size: 14px; color: #1e40af;">
-              <strong>Service Value:</strong> {{displayPrice}}<br/>
-              <strong>Status:</strong> Prepaid - No Payment Required
-            </td>
-          </tr>
-        </table>
-      `;
-    } else {
-      paymentSection = `
-        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f0fdf4; border-radius: 8px; padding: 20px; margin: 20px 0;">
-          <tr>
-            <td style="font-size: 14px; color: #166534;">
-              <strong>Amount Paid:</strong> {{displayPrice}}<br/>
-              <strong>Payment Method:</strong> {{paymentMethod}}
-            </td>
-          </tr>
-        </table>
-      `;
-    }
-  }
-
-  const serviceSection = content.showServiceDetails ? `
-    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9fafb; border-radius: 8px; padding: 20px; margin: 20px 0;">
-      <tr>
-        <td style="font-size: 14px; color: #374151;">
-          <strong>Service:</strong> {{serviceName}}<br/>
-          <strong>Address:</strong> {{address}}<br/>
-          <strong>Date:</strong> {{date}}<br/>
-          <strong>Technician:</strong> {{workerName}}
-        </td>
-      </tr>
-    </table>
-  ` : '';
-
-  // Convert rich text content - replace variable tags with actual template variables
-  const processContent = (html: string): string => {
-    return html.replace(/<span[^>]*class="variable-tag"[^>]*>{{(\w+)}}<\/span>/g, '{{$1}}');
-  };
-
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 0; background-color: #f3f4f6; font-family: Arial, sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
-    <tr>
-      <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-          
-          <!-- Header with Logo -->
-          <tr>
-            <td style="background: linear-gradient(135deg, #1f2937 0%, #374151 100%); padding: 30px; border-radius: 12px 12px 0 0; text-align: center;">
-              <img src="${LOGO_URL}" alt="{{companyName}}" style="max-width: 200px; height: auto;" />
-            </td>
-          </tr>
-          
-          <!-- Greeting -->
-          <tr>
-            <td style="padding: 30px 30px 10px 30px;">
-              <div style="font-size: 16px; color: #1f2937; line-height: 1.6;">
-                ${processContent(content.greeting)}
-              </div>
-            </td>
-          </tr>
-          
-          <!-- Main Content -->
-          <tr>
-            <td style="padding: 10px 30px;">
-              <div style="font-size: 16px; color: #4b5563; line-height: 1.6;">
-                ${processContent(content.mainContent)}
-              </div>
-            </td>
-          </tr>
-          
-          <!-- Service Details -->
-          ${serviceSection ? `<tr><td style="padding: 0 30px;">${serviceSection}</td></tr>` : ''}
-          
-          <!-- Payment Details -->
-          ${paymentSection ? `<tr><td style="padding: 0 30px;">${paymentSection}</td></tr>` : ''}
-          
-          <!-- Footer -->
-          <tr>
-            <td style="padding: 30px; border-top: 1px solid #e5e7eb; text-align: center;">
-              <div style="color: #6b7280; font-size: 14px; line-height: 1.6;">
-                ${processContent(content.footerText)}
-              </div>
-              <p style="margin: 10px 0 0 0; color: #9ca3af; font-size: 12px;">
-                © 2026 {{companyName}}. All rights reserved.
-              </p>
-            </td>
-          </tr>
-          
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-  `.trim();
-};
-
-// --- PARSE HTML TO CONTENT ---
-const parseHtmlToContent = (html: string): TemplateContent => {
-  // Default content
-  const defaultContent: TemplateContent = {
-    greeting: '<h2 style="margin: 0 0 10px 0;">Hi {{firstName}},</h2>',
-    mainContent: '<p>Thank you for choosing Property Stars! Your service has been completed.</p>',
-    showServiceDetails: true,
-    showPaymentDetails: true,
-    footerText: '<p>Questions? Simply reply to this email and we\'ll be happy to help.</p>',
-  };
-
-  // If no HTML or it's the default, return defaults
-  if (!html || html.trim() === '') {
-    return defaultContent;
-  }
-
-  // Try to extract sections from existing HTML (simplified extraction)
-  // This is a basic parser - for complex HTML it will use defaults
-  try {
-    // Check for service details section
-    const hasServiceDetails = html.includes('{{serviceName}}') && html.includes('{{address}}');
-    const hasPaymentDetails = html.includes('{{displayPrice}}') && html.includes('{{paymentMethod}}');
-    
-    return {
-      ...defaultContent,
-      showServiceDetails: hasServiceDetails,
-      showPaymentDetails: hasPaymentDetails,
-    };
-  } catch {
-    return defaultContent;
-  }
-};
-
-// --- GET DEFAULT CONTENT FOR TEMPLATE TYPE ---
-const getDefaultContent = (templateType: EmailTemplateType): TemplateContent => {
-  const isUpgrade = templateType.startsWith('upgrade_');
-  const isAddon = templateType.startsWith('addon_');
-  const isBilled = templateType === 'billed';
-  const isPrepaid = templateType === 'prepaid';
-  const isSale = templateType === 'sale';
-
-  let greeting = '<h2 style="margin: 0 0 10px 0;">Hi {{firstName}},</h2>';
-  let mainContent = '<p>Thank you for choosing Property Stars! Your service has been completed.</p>';
-
-  if (isSale) {
-    mainContent = '<p>Welcome to the Property Stars family! We\'re thrilled to have you as a new customer. Your lawn is in great hands.</p>';
-  } else if (isBilled) {
-    mainContent = '<p>Thank you for your service! Please find your invoice details below. Payment can be made at your convenience.</p>';
-  } else if (isPrepaid) {
-    mainContent = '<p>Great news! Your prepaid service has been completed. Thank you for being a valued customer - we appreciate your trust in Property Stars.</p>';
-  } else if (isUpgrade) {
-    mainContent = '<p>Congratulations on upgrading your lawn care program! You\'ve made a great choice for your lawn\'s health and appearance.</p>';
-  } else if (isAddon) {
-    mainContent = '<p>Your add-on service has been confirmed and scheduled. We appreciate your continued trust in Property Stars!</p>';
-  }
-
-  return {
-    greeting,
-    mainContent,
-    showServiceDetails: true,
-    showPaymentDetails: true,
-    footerText: '<p>Questions? Simply reply to this email and we\'ll be happy to help.</p>',
-  };
-};
-
 // --- MAIN COMPONENT ---
 const EmailTemplateEditor: React.FC = () => {
   const navigate = useNavigate();
@@ -438,7 +238,9 @@ const EmailTemplateEditor: React.FC = () => {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   
   const [subject, setSubject] = useState('');
-  const [content, setContent] = useState<TemplateContent>(getDefaultContent('production'));
+  const [content, setContent] = useState<EmailTemplateContentStructure>(
+    getDefaultContentStructure('production')
+  );
   const [showPreview, setShowPreview] = useState(false);
   
   const typeInfo = templateType 
@@ -467,11 +269,18 @@ const EmailTemplateEditor: React.FC = () => {
       if (existing) {
         setTemplate(existing);
         setSubject(existing.subject);
-        setContent(parseHtmlToContent(existing.htmlContent));
+        
+        // Use saved contentStructure if available, otherwise use defaults
+        if (existing.contentStructure) {
+          setContent(existing.contentStructure);
+        } else {
+          // Fallback to defaults for templates saved before contentStructure existed
+          setContent(getDefaultContentStructure(templateType as EmailTemplateType));
+        }
       } else {
-        // Initialize with defaults
+        // Initialize with defaults for new template
         setSubject(DEFAULT_SUBJECTS[templateType as EmailTemplateType] || 'Your Service Receipt');
-        setContent(getDefaultContent(templateType as EmailTemplateType));
+        setContent(getDefaultContentStructure(templateType as EmailTemplateType));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load template');
@@ -487,18 +296,11 @@ const EmailTemplateEditor: React.FC = () => {
       setSaving(true);
       setError(null);
       
-      const htmlContent = generateHtmlFromContent(
-        content, 
-        subject, 
-        currentCC.displayName,
-        templateType as EmailTemplateType
-      );
-      
       await emailTemplateService.saveTemplate({
         templateType: templateType as EmailTemplateType,
         templateName: typeInfo?.name || templateType,
         subject,
-        htmlContent,
+        contentStructure: content,
         isActive: template?.isActive ?? true,
       });
       
@@ -519,22 +321,16 @@ const EmailTemplateEditor: React.FC = () => {
     
     if (window.confirm('Reset template to default? This will overwrite your current changes.')) {
       setSubject(DEFAULT_SUBJECTS[templateType as EmailTemplateType] || 'Your Service Receipt');
-      setContent(getDefaultContent(templateType as EmailTemplateType));
+      setContent(getDefaultContentStructure(templateType as EmailTemplateType));
     }
   };
 
   const getPreviewHtml = useCallback(() => {
     if (!currentCC || !templateType) return '';
     
-    const html = generateHtmlFromContent(
-      content, 
-      subject, 
-      currentCC.displayName,
-      templateType as EmailTemplateType
-    );
-    
+    const html = generateHtmlFromContentStructure(content, templateType as EmailTemplateType);
     return emailTemplateService.getPreviewHtml(html, currentCC.displayName);
-  }, [content, subject, currentCC, templateType]);
+  }, [content, currentCC, templateType]);
 
   if (!currentCC || !typeInfo) return null;
 

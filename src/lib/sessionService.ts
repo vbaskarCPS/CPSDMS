@@ -124,6 +124,7 @@ class SessionService {
         commandCenterId: tx.command_center_id,
         services: tx.services,
         completedByWorkerIds: tx.completed_by_worker_ids,
+        refId: tx.ref_id,
     } as SessionTransaction;
   }
 
@@ -1696,6 +1697,7 @@ class SessionService {
       if (updates.invoiceNumber !== undefined) dbPayload.invoice_number = updates.invoiceNumber;
       if (updates.isWestSplit !== undefined) dbPayload.is_west_split = updates.isWestSplit;
       if (updates.services !== undefined) dbPayload.services = updates.services;
+      if (updates.refId !== undefined) dbPayload.ref_id = updates.refId;
       
       if (updates.customerName !== undefined || 
           updates.address !== undefined || 
@@ -1772,6 +1774,7 @@ class SessionService {
       items: transaction.items, 
       services: transaction.services,
       completed_by_worker_ids: teamWorkerIds || [workerId],
+      ref_id: transaction.refId,
       
       cc_full_number: (transaction as any).ccFullNumber,
       cc_expiry: (transaction as any).ccExpiry,
@@ -1835,9 +1838,15 @@ class SessionService {
         date: new Date(transaction.timestamp).toLocaleDateString(),
         serviceName: transaction.items?.[0]?.name || transaction.serviceName || 'Service',
         amount: transaction.displayPrice || `$${transaction.price.toFixed(2)}`,
+        price: transaction.price,
         paymentMethod: transaction.paymentMethod,
-        workerName: transaction.workerName,
-        transactionId: transaction.jobId
+        workerName: transaction.workerName || '',
+        transactionId: transaction.id,
+        // Template selection fields
+        commandCenterId: ccId,
+        type: transaction.type,
+        refId: transaction.refId,
+        isPrepaid: transaction.isPrepaid,
       }).catch(err => {
         console.error('📧 Email send failed (non-blocking):', err);
       });
@@ -1853,9 +1862,15 @@ class SessionService {
     date: string;
     serviceName: string;
     amount: string;
+    price: number;
     paymentMethod: string;
     workerName: string;
     transactionId: string;
+    // Template selection fields
+    commandCenterId: string;
+    type: string;
+    refId?: string;
+    isPrepaid?: boolean;
   }): Promise<boolean> {
     try {
       const ccId = this.getCCId();
