@@ -4,6 +4,7 @@ import { Phone, Mail, Loader, Clock, X as XIcon } from 'lucide-react';
 import { MasterBooking, SessionTransaction, SeasonType } from '../../../types';
 import EditTransactionModal from '../../../components/EditTransactionModal';
 import { sessionService } from '../../../lib/sessionService';
+import { supabase } from '../../../lib/supabase';
 
 interface ContractorJobsProps {
   bookings: MasterBooking[];
@@ -28,15 +29,44 @@ const BADGE_MAP: Record<string, string> = {
 };
 
 // --- EMAIL STATUS COMPONENT ---
-const EmailStatusIcon: React.FC<{ transactionId: string; email: string }> = ({ transactionId, email }) => {
+const EmailStatusIcon: React.FC<{ email: string }> = ({ email }) => {
   const [status, setStatus] = useState<{ sent: boolean; bounced: boolean; reason?: string } | null>(null);
   const [loading, setLoading] = useState(true);
   
   useEffect(() => {
-    sessionService.getEmailStatus(transactionId)
-      .then(setStatus)
-      .finally(() => setLoading(false));
-  }, [transactionId]);
+    const fetchStatus = async () => {
+      try {
+        const { data } = await supabase
+          .from('email_logs')
+          .select('status, bounce_reason')
+          .eq('recipient_email', email)
+          .order('sent_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        
+        if (data) {
+          setStatus({
+            sent: data.status === 'sent' || data.status === 'bounced',
+            bounced: data.status === 'bounced',
+            reason: data.bounce_reason
+          });
+        } else {
+          setStatus(null);
+        }
+      } catch (err) {
+        console.error('Error fetching email status:', err);
+        setStatus(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    if (email) {
+      fetchStatus();
+    } else {
+      setLoading(false);
+    }
+  }, [email]);
   
   if (loading) {
     return <Mail size={14} className="text-gray-500 opacity-50 animate-pulse" strokeWidth={2.5} />;
@@ -323,7 +353,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
                       
                       {/* Email Icon with Status */}
                       {isPaid && job['Email Address'] ? (
-                        <EmailStatusIcon transactionId={job['Booking ID']} email={job['Email Address']} />
+                        <EmailStatusIcon email={job['Email Address']} />
                       ) : (
                         <Mail size={14} className={job['Email Address'] ? "text-blue-500" : "text-gray-600 opacity-30"} strokeWidth={2.5} />
                       )}
