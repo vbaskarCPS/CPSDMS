@@ -8,17 +8,19 @@ import {
   Check,
   X,
   Edit2,
-  Eye,
   Loader,
   AlertCircle,
   CheckCircle,
   Package,
   Zap,
   FileText,
+  Save,
+  AtSign,
 } from 'lucide-react';
 import { commandCenterService } from '../../lib/commandCenterService';
 import { emailTemplateService, EMAIL_TEMPLATE_TYPES } from '../../lib/emailTemplateService';
 import { EmailTemplate, EmailTemplateType, EmailTemplateTypeInfo } from '../../types';
+import { supabase } from '../../lib/supabase';
 
 const EmailTemplates: React.FC = () => {
   const navigate = useNavigate();
@@ -29,6 +31,11 @@ const EmailTemplates: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [initializing, setInitializing] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  
+  // Reply-To Email State
+  const [replyToEmail, setReplyToEmail] = useState('');
+  const [originalReplyToEmail, setOriginalReplyToEmail] = useState('');
+  const [savingReplyTo, setSavingReplyTo] = useState(false);
 
   // Get template types for current region
   const templateTypes = currentCC 
@@ -48,6 +55,7 @@ const EmailTemplates: React.FC = () => {
       return;
     }
     loadTemplates();
+    loadReplyToEmail();
   }, [currentCC, navigate]);
 
   const loadTemplates = async () => {
@@ -59,6 +67,48 @@ const EmailTemplates: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Failed to load templates');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadReplyToEmail = async () => {
+    if (!currentCC) return;
+    
+    try {
+      const { data } = await supabase
+        .from('command_centers')
+        .select('reply_to_email')
+        .eq('id', currentCC.id)
+        .single();
+      
+      const email = data?.reply_to_email || '';
+      setReplyToEmail(email);
+      setOriginalReplyToEmail(email);
+    } catch (err) {
+      console.error('Failed to load reply-to email:', err);
+    }
+  };
+
+  const handleSaveReplyToEmail = async () => {
+    if (!currentCC) return;
+    
+    try {
+      setSavingReplyTo(true);
+      setError(null);
+      
+      const { error: updateError } = await supabase
+        .from('command_centers')
+        .update({ reply_to_email: replyToEmail.trim() || null })
+        .eq('id', currentCC.id);
+      
+      if (updateError) throw updateError;
+      
+      setOriginalReplyToEmail(replyToEmail.trim());
+      setSuccessMessage('Reply-to email saved successfully!');
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save reply-to email');
+    } finally {
+      setSavingReplyTo(false);
     }
   };
 
@@ -107,6 +157,8 @@ const EmailTemplates: React.FC = () => {
       default: return 'text-gray-400 bg-gray-900/30 border-gray-700';
     }
   };
+
+  const hasReplyToChanged = replyToEmail.trim() !== originalReplyToEmail;
 
   if (!currentCC) return null;
 
@@ -165,6 +217,43 @@ const EmailTemplates: React.FC = () => {
             </button>
           </div>
         )}
+
+        {/* Reply-To Email Settings */}
+        <div className="mb-6 bg-gray-800 rounded-xl border border-gray-700 p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <AtSign size={18} className="text-cps-blue" />
+            <h2 className="font-bold text-white">Reply-To Email</h2>
+          </div>
+          <p className="text-sm text-gray-400 mb-3">
+            When customers reply to receipt emails, responses will be sent to this address.
+          </p>
+          <div className="flex items-center gap-3">
+            <input
+              type="email"
+              value={replyToEmail}
+              onChange={(e) => setReplyToEmail(e.target.value)}
+              placeholder="e.g., support@yourcompany.com"
+              className="flex-1 bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none"
+            />
+            <button
+              onClick={handleSaveReplyToEmail}
+              disabled={savingReplyTo || !hasReplyToChanged}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-500 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {savingReplyTo ? (
+                <Loader className="animate-spin" size={16} />
+              ) : (
+                <Save size={16} />
+              )}
+              Save
+            </button>
+          </div>
+          {!replyToEmail && (
+            <p className="text-xs text-yellow-500 mt-2">
+              ⚠️ No reply-to email set. Replies will go to the default sender address.
+            </p>
+          )}
+        </div>
 
         {/* Loading State */}
         {loading ? (
