@@ -90,6 +90,7 @@ export interface JobFairApplicant {
   isBc: boolean;
   isManagement: boolean;
   isInterviewed: boolean;
+  notes?: string; // Manager notes (exported to Workerbook)
   
   // Timestamps
   createdAt?: string;

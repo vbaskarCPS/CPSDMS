@@ -168,6 +168,7 @@ class JobFairService {
         is_bc: false,
         is_management: false,
         is_interviewed: false,
+        notes: null,
       })
       .select()
       .single();
@@ -200,6 +201,7 @@ class JobFairService {
       isBc: boolean;
       isManagement: boolean;
       isInterviewed: boolean;
+      notes: string | null;
     }>
   ): Promise<JobFairApplicant> {
     const dbUpdates: any = {};
@@ -222,6 +224,7 @@ class JobFairService {
     if (updates.isBc !== undefined) dbUpdates.is_bc = updates.isBc;
     if (updates.isManagement !== undefined) dbUpdates.is_management = updates.isManagement;
     if (updates.isInterviewed !== undefined) dbUpdates.is_interviewed = updates.isInterviewed;
+    if (updates.notes !== undefined) dbUpdates.notes = updates.notes?.trim() || null;
 
     const { data, error } = await supabase
       .from('job_fair_applicants')
@@ -273,7 +276,7 @@ class JobFairService {
     // G: Status (blank)
     // H: Alt. Phone
     // I: Email Address
-    // J: Notes (BC/Management)
+    // J: Notes (BC/Management + manager notes)
     // K: Address
     // L: City
     // M: Postal Code
@@ -286,10 +289,11 @@ class JobFairService {
     // T: Rating
 
     return applicants.map(a => {
-      // Build notes from BC/Management flags
-      const notes: string[] = [];
-      if (a.isBc) notes.push('BC');
-      if (a.isManagement) notes.push('Management');
+      // Build notes from BC/Management flags + manager notes
+      const noteParts: string[] = [];
+      if (a.isBc) noteParts.push('BC');
+      if (a.isManagement) noteParts.push('Management');
+      if (a.notes) noteParts.push(a.notes);
 
       return [
         '', // A: Shuttle
@@ -301,7 +305,7 @@ class JobFairService {
         '', // G: Status
         a.alternatePhone || '', // H: Alt. Phone
         a.email || '', // I: Email Address
-        notes.join(', '), // J: Notes
+        noteParts.join(', '), // J: Notes
         a.address || '', // K: Address
         a.city || '', // L: City
         a.postalCode || '', // M: Postal Code
@@ -365,6 +369,7 @@ class JobFairService {
       isBc: data.is_bc || false,
       isManagement: data.is_management || false,
       isInterviewed: data.is_interviewed || false,
+      notes: data.notes || undefined,
       createdAt: data.created_at,
       updatedAt: data.updated_at,
     };

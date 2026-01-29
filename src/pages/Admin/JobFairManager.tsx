@@ -24,6 +24,7 @@ import {
   Shield,
   User,
   Hash,
+  FileText,
 } from 'lucide-react';
 import { CommandCenter } from '../../lib/commandCenterService';
 import { jobFairService } from '../../lib/jobFairService';
@@ -61,6 +62,7 @@ type ApplicantUpdateFields = Partial<{
   isBc: boolean;
   isManagement: boolean;
   isInterviewed: boolean;
+  notes: string | null;
 }>;
 
 const JobFairManager: React.FC<JobFairManagerProps> = ({ commandCenter }) => {
@@ -507,6 +509,14 @@ const ApplicantCard: React.FC<ApplicantCardProps> = ({ applicant, onClick }) => 
         )}
       </div>
 
+      {/* Notes preview */}
+      {applicant.notes && (
+        <p className="text-xs text-gray-500 mt-1 truncate">
+          <FileText size={10} className="inline mr-1" />
+          {applicant.notes}
+        </p>
+      )}
+
       <div className="flex items-center gap-2 mt-3">
         {applicant.isInterviewed && (
           <span className="text-xs bg-green-900/30 text-green-400 px-2 py-0.5 rounded">
@@ -552,6 +562,7 @@ const ApplicantDetailModal: React.FC<ApplicantDetailModalProps> = ({
   const [age, setAge] = useState(applicant.age);
   const [idType, setIdType] = useState<ApplicantIdType>(applicant.idType);
   const [idValue, setIdValue] = useState(applicant.idValue);
+  const [notes, setNotes] = useState(applicant.notes || '');
 
   // Sync local state when applicant prop changes
   useEffect(() => {
@@ -566,13 +577,14 @@ const ApplicantDetailModal: React.FC<ApplicantDetailModalProps> = ({
     setAge(applicant.age);
     setIdType(applicant.idType);
     setIdValue(applicant.idValue);
+    setNotes(applicant.notes || '');
   }, [applicant]);
 
   // Generic field update handler (saves on blur)
   const handleFieldBlur = (field: keyof ApplicantUpdateFields, value: any) => {
     // Don't save if value hasn't changed
     const currentValue = applicant[field as keyof JobFairApplicant];
-    if (value === currentValue || (value === '' && currentValue === null)) return;
+    if (value === currentValue || (value === '' && currentValue === null) || (value === '' && currentValue === undefined)) return;
     
     onUpdate(applicant.id, { [field]: value || null });
   };
@@ -786,6 +798,24 @@ const ApplicantDetailModal: React.FC<ApplicantDetailModalProps> = ({
 
           {/* Divider */}
           <hr className="border-gray-700" />
+
+          {/* Notes Field */}
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-2 flex items-center gap-1">
+              <FileText size={14} /> Notes
+            </label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              onBlur={() => handleFieldBlur('notes', notes)}
+              placeholder="Add interview notes, observations, etc..."
+              rows={3}
+              className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm focus:ring-2 focus:ring-purple-500 focus:outline-none placeholder-gray-600 resize-none"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Notes will be exported to the Workerbook along with BC/Management tags.
+            </p>
+          </div>
 
           {/* Rating */}
           <div>
