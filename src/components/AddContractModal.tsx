@@ -1,6 +1,6 @@
 // src/components/AddContractModal.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader, Phone, CheckCircle, Leaf } from 'lucide-react';
+import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader, Phone, CheckCircle, Leaf, CreditCard } from 'lucide-react';
 import { getStorageItem } from '../lib/localStorage';
 import { commandCenterService, getTaxRateForRegion, Region, getAvailableAddOns } from '../lib/commandCenterService';
 import { MasterBooking, Worker, SessionTransaction, SeasonType, ServiceFlags, SERVICE_FLAG_KEYS, SERVICE_FLAG_LABELS } from '../types';
@@ -88,6 +88,14 @@ interface DirectUpgradeClient {
   propertyType: string;
 }
 
+// Saved card info structure
+interface SavedCardInfo {
+  lastFour: string;
+  fullNumber: string;
+  expiry: string;
+  cvc: string;
+}
+
 interface AddContractModalProps {
   onClose: () => void;
   directUpgradeBooking?: MasterBooking;
@@ -145,6 +153,11 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const [ccData, setCcData] = useState<{ number: string, expiry: string, cvc: string } | null>(null);
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
+
+  // Saved Card on File
+  const [sessionTransactions, setSessionTransactions] = useState<SessionTransaction[]>([]);
+  const [savedCard, setSavedCard] = useState<SavedCardInfo | null>(null);
+  const [usingSavedCard, setUsingSavedCard] = useState(false);
 
   // Saving State
   const [saving, setSaving] = useState(false);
@@ -204,6 +217,52 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const hasPropertyTypes = selectedRecipe && selectedRecipe.propertyTypes.length > 0;
   const supportsIOS = selectedRecipe?.hasIOS || false;
   const showGateAndSprinkler = selectedRecipe?.region === 'West';
+
+  // --- HELPER: Find saved card by address from session transactions ---
+  const findSavedCardByAddress = (address: string): SavedCardInfo | null => {
+    if (!address || sessionTransactions.length === 0) return null;
+    
+    // Normalize address for comparison (lowercase, trim)
+    const normalizedAddress = address.toLowerCase().trim();
+    
+    // Find the most recent transaction with CC data matching this address
+    const matchingTx = sessionTransactions
+      .filter(tx => {
+        const txAddress = (tx.address || '').toLowerCase().trim();
+        return txAddress === normalizedAddress && tx.ccFullNumber && tx.ccExpiry && tx.ccCVC;
+      })
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+    
+    if (matchingTx && matchingTx.ccFullNumber && matchingTx.ccExpiry && matchingTx.ccCVC) {
+      const fullNumber = matchingTx.ccFullNumber;
+      return {
+        lastFour: fullNumber.slice(-4),
+        fullNumber: fullNumber,
+        expiry: matchingTx.ccExpiry,
+        cvc: matchingTx.ccCVC,
+      };
+    }
+    
+    return null;
+  };
+
+  // --- HELPER: Apply saved card ---
+  const applySavedCard = (card: SavedCardInfo) => {
+    setCcData({
+      number: card.fullNumber,
+      expiry: card.expiry,
+      cvc: card.cvc,
+    });
+    setIsCreditPaid(true);
+    setUsingSavedCard(true);
+  };
+
+  // --- HELPER: Clear saved card usage ---
+  const clearSavedCardUsage = () => {
+    setCcData(null);
+    setIsCreditPaid(false);
+    setUsingSavedCard(false);
+  };
 
   // --- HANDLERS ---
   const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -270,15 +329,29 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     if (value !== 'Credit Card' && value !== 'Split Payment') {
       setIsCreditPaid(false);
       setCcData(null);
+      setUsingSavedCard(false);
     }
     
-    if (value === 'Credit Card') setShowCreditModal(true);
+    // Auto-apply saved card when Credit Card is selected
+    if (value === 'Credit Card') {
+      if (savedCard) {
+        applySavedCard(savedCard);
+      } else {
+        setShowCreditModal(true);
+      }
+    }
   };
 
   const handleTaxClick = () => {
     const current = parseFloat(paymentInfo.amount) || 0;
     const tax = current * (taxRate / 100);
     setPaymentInfo({...paymentInfo, amount: (Math.round((current + tax) * 100) / 100).toFixed(2)});
+  };
+
+  // Handle using a different card (opens terminal)
+  const handleUseDifferentCard = () => {
+    clearSavedCardUsage();
+    setShowCreditModal(true);
   };
 
   useEffect(() => {
@@ -307,6 +380,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
         if (!isDirectUpgrade) {
           const activeSession = await trainingService.getActiveLogsheetSession(w.contractorId);
           if (activeSession) {
+            // Store session transactions for saved card lookup
+            setSessionTransactions(activeSession.financialStore || []);
+            
             const clients = activeSession.financialStore.map(tx => ({
               'Booking ID': tx.jobId,
               'First Name': tx.customerName.split(' ')[0],
@@ -323,6 +399,12 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
               'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined
             } as MasterBooking));
             setAvailableClients(clients);
+          }
+        } else if (directUpgradeBooking) {
+          // For direct upgrade, still need to load session transactions for card lookup
+          const activeSession = await trainingService.getActiveLogsheetSession(w.contractorId);
+          if (activeSession) {
+            setSessionTransactions(activeSession.financialStore || []);
           }
         }
       } else {
@@ -360,6 +442,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
         if (!isDirectUpgrade) {
           const activeSession = await sessionService.getActiveLogsheetSession(w.contractorId);
           if (activeSession) {
+            // Store session transactions for saved card lookup
+            setSessionTransactions(activeSession.financialStore || []);
+            
             const clients = activeSession.financialStore.map(tx => ({
               'Booking ID': tx.jobId,
               'First Name': tx.customerName.split(' ')[0],
@@ -376,6 +461,12 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
               'Gate': (tx.itemDescription && tx.itemDescription.includes('[LG]')) ? 'x' : undefined
             } as MasterBooking));
             setAvailableClients(clients);
+          }
+        } else if (directUpgradeBooking) {
+          // For direct upgrade, still need to load session transactions for card lookup
+          const activeSession = await sessionService.getActiveLogsheetSession(w.contractorId);
+          if (activeSession) {
+            setSessionTransactions(activeSession.financialStore || []);
           }
         }
       }
@@ -413,6 +504,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     setExtraPaymentInfo('');
     setIsCreditPaid(false);
     setCcData(null);
+    setSavedCard(null);
+    setUsingSavedCard(false);
     
     setSplitCash('');
     setSplitCheque('');
@@ -431,10 +524,11 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
 
     if (directUpgradeBooking) {
       setSelectedBooking(directUpgradeBooking);
+      const address = directUpgradeBooking['Full Address'] || '';
       setFormData({
         firstName: directUpgradeBooking['First Name'] || '',
         lastName: directUpgradeBooking['Last Name'] || '',
-        address: directUpgradeBooking['Full Address'] || '',
+        address: address,
         phone: formatPhoneNumber(directUpgradeBooking['Home Phone'] || directUpgradeBooking['Cell Phone'] || ''),
         email: normalizeEmail(directUpgradeBooking['Email Address'] || ''),
         routeNumber: directUpgradeBooking['Route Number'] || '',
@@ -443,8 +537,14 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
         hasLockedGate: directUpgradeBooking['Gate'] === 'x',
         hasSprinkler: false
       });
+      
+      // Check for saved card (for existing booking)
+      const card = findSavedCardByAddress(address);
+      setSavedCard(card);
+      
       setStep('ENTER_DETAILS');
     } else if (directUpgradeClient) {
+      // New client from NewJob - no saved card possible
       setSelectedBooking(null);
       setFormData({
         firstName: directUpgradeClient.firstName,
@@ -460,6 +560,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       });
       setHouseNumber(directUpgradeClient.houseNumber);
       setStreetName(directUpgradeClient.streetName);
+      setSavedCard(null); // No saved card for new clients
       setStep('ENTER_DETAILS');
     } else {
       setFormData({ 
@@ -468,6 +569,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
         hasLockedGate: false, hasSprinkler: false 
       });
       setSelectedBooking(null);
+      setSavedCard(null);
       setStep('SELECT_CLIENT');
     }
   };
@@ -475,10 +577,12 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const handleClientSelect = (booking: MasterBooking) => {
     setSelectedBooking(booking);
     const defaultPropertyType = selectedRecipe?.propertyTypes.length ? selectedRecipe.propertyTypes[0] : '';
+    const address = booking['Full Address'] || '';
+    
     setFormData({
       firstName: booking['First Name'] || '',
       lastName: booking['Last Name'] || '',
-      address: booking['Full Address'] || '',
+      address: address,
       phone: formatPhoneNumber(booking['Home Phone'] || booking['Cell Phone'] || ''),
       email: normalizeEmail(booking['Email Address'] || ''),
       routeNumber: booking['Route Number'] || '',
@@ -488,6 +592,15 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       hasSprinkler: false
     });
     setPaymentInfo(prev => ({ ...prev, amount: '' }));
+    
+    // Reset CC state and check for saved card
+    setIsCreditPaid(false);
+    setCcData(null);
+    setUsingSavedCard(false);
+    
+    const card = findSavedCardByAddress(address);
+    setSavedCard(card);
+    
     setPhoneError(null);
     setEmailError(null);
     setEtransferEmailError(null);
@@ -513,6 +626,13 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       hasSprinkler: false 
     });
     setPaymentInfo(prev => ({ ...prev, amount: '' }));
+    
+    // Reset CC state - no saved card for new clients
+    setIsCreditPaid(false);
+    setCcData(null);
+    setSavedCard(null);
+    setUsingSavedCard(false);
+    
     setPhoneError(null);
     setEmailError(null);
     setEtransferEmailError(null);
@@ -759,6 +879,13 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     }
   };
 
+  // Auto-apply saved card when split CC amount is entered
+  useEffect(() => {
+    if (isSplitPayment && splitCCAmount > 0 && savedCard && !isCreditPaid) {
+      applySavedCard(savedCard);
+    }
+  }, [splitCCAmount, savedCard, isSplitPayment]);
+
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
       <div className="bg-gray-900 border border-gray-700 rounded-lg w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
@@ -992,7 +1119,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                       <option value="">-- Select --</option>
                       <option value="Cash">Cash</option>
                       <option value="Cheque">Cheque</option>
-                      <option value="Credit Card">Credit Card</option>
+                      <option value="Credit Card">Credit Card{savedCard ? ` (•••• ${savedCard.lastFour})` : ''}</option>
                       <option value="E-Transfer">E-Transfer</option>
                       <option value="Split Payment">Split Payment</option>
                       {supportsIOS && <option value="IOS">Invoice On Site</option>}
@@ -1023,8 +1150,20 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
 
                 {paymentInfo.method === 'Credit Card' && !isSplitPayment && (
                   <div className={`p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
-                    <span className="text-xs font-bold">{isCreditPaid ? "SECURED" : "SECURE CARD"}</span>
-                    {!isCreditPaid && <button onClick={() => setShowCreditModal(true)} className="underline text-xs">Open Terminal</button>}
+                    {isCreditPaid ? (
+                      <>
+                        <span className="text-xs font-bold flex items-center gap-2">
+                          <CreditCard size={14} />
+                          {usingSavedCard ? `CARD ON FILE (•••• ${savedCard?.lastFour})` : 'SECURED'}
+                        </span>
+                        <button onClick={handleUseDifferentCard} className="underline text-xs hover:text-green-300">Use Different Card</button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-xs font-bold">SECURE CARD</span>
+                        <button onClick={() => setShowCreditModal(true)} className="underline text-xs">Open Terminal</button>
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -1085,7 +1224,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                       </div>
                       
                       <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Credit Card</label>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block flex items-center gap-1">
+                          Credit Card
+                          {savedCard && <span className="text-green-400">(•••• {savedCard.lastFour})</span>}
+                        </label>
                         <div className="relative">
                           <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
                           <input 
@@ -1093,7 +1235,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                             value={splitCreditCard} 
                             onChange={(e) => {
                               setSplitCreditCard(e.target.value);
-                              if (isCreditPaid) {
+                              // Only clear if manually entering and NOT using saved card
+                              if (isCreditPaid && !usingSavedCard) {
                                 setIsCreditPaid(false);
                                 setCcData(null);
                               }
@@ -1137,13 +1280,24 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                     
                     {splitCCAmount > 0 && (
                       <div className={`p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
-                        <span className="text-sm font-medium">
-                          {isCreditPaid ? `Card Secured for $${splitCCAmount.toFixed(2)}` : `Process $${splitCCAmount.toFixed(2)} on Card`}
-                        </span>
                         {isCreditPaid ? (
-                          <CheckCircle size={20}/>
+                          <>
+                            <span className="text-sm font-medium flex items-center gap-2">
+                              <CreditCard size={14} />
+                              {usingSavedCard 
+                                ? `Card on File (•••• ${savedCard?.lastFour}) for $${splitCCAmount.toFixed(2)}`
+                                : `Card Secured for $${splitCCAmount.toFixed(2)}`
+                              }
+                            </span>
+                            <button type="button" onClick={handleUseDifferentCard} className="text-xs underline hover:text-green-300">Use Different Card</button>
+                          </>
                         ) : (
-                          <button type="button" onClick={() => setShowCreditModal(true)} className="text-xs underline">Open Terminal</button>
+                          <>
+                            <span className="text-sm font-medium">
+                              Process ${splitCCAmount.toFixed(2)} on Card
+                            </span>
+                            <button type="button" onClick={() => setShowCreditModal(true)} className="text-xs underline">Open Terminal</button>
+                          </>
                         )}
                       </div>
                     )}
@@ -1187,6 +1341,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
           onProcess={(details) => {
             setIsCreditPaid(true);
             setShowCreditModal(false);
+            setUsingSavedCard(false); // Manual entry, not using saved card
             setCcData({
               number: details.number,
               expiry: details.expiry,
