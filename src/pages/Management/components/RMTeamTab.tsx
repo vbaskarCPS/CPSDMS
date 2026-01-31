@@ -32,6 +32,8 @@ interface WorkerDisplay extends Worker {
   financialStore: any[];
   assignedRoutes: string[];
   lastActiveAddress: string | null;
+  lastActiveTimestamp: string | null;
+  lastActiveTime: string | null;
   stats: {
     steps: number;
     gross: number;
@@ -50,6 +52,9 @@ interface CartDisplay {
   sharedBookings: MasterBooking[];
   sharedFinancialStore: any[];
   assignedRoutes: string[];
+  lastActiveAddress: string | null;
+  lastActiveTimestamp: string | null;
+  lastActiveTime: string | null;
   aggregatedStats: {
     steps: number;
     gross: number;
@@ -60,7 +65,22 @@ interface CartDisplay {
   };
 }
 
-type TeamSortOption = 'alpha' | 'steps' | 'equiv' | 'upGross';
+type TeamSortOption = 'recent' | 'alpha' | 'steps' | 'equiv' | 'upGross';
+
+// Helper function to format timestamp as "6:30p" or "10:02a"
+const formatTimeShort = (timestamp: string): string => {
+  const date = new Date(timestamp);
+  let hours = date.getHours();
+  const minutes = date.getMinutes();
+  const ampm = hours >= 12 ? 'p' : 'a';
+  
+  hours = hours % 12;
+  hours = hours ? hours : 12; // 0 should be 12
+  
+  const minutesStr = minutes < 10 ? `0${minutes}` : `${minutes}`;
+  
+  return `${hours}:${minutesStr}${ampm}`;
+};
 
 const RMTeamTab: React.FC<RMTeamTabProps> = ({
   managerId,
@@ -77,8 +97,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
   const isLawnRejuv = seasonType === 'lawn_rejuv';
 
-  // Sort State
-  const [sortBy, setSortBy] = useState<TeamSortOption>('alpha');
+  // Sort State - Default to 'recent'
+  const [sortBy, setSortBy] = useState<TeamSortOption>('recent');
 
   // Management State (Aeration only)
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
@@ -140,12 +160,17 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             .filter(r => r && r !== 'x' && r.trim() !== '')
         )) as string[];
 
-        let lastAddr = null;
+        let lastAddr: string | null = null;
+        let lastTimestamp: string | null = null;
+        let lastTimeFormatted: string | null = null;
+        
         if (financialStore.length > 0) {
           const sortedTx = [...financialStore].sort((a, b) => 
             new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
           );
           lastAddr = sortedTx[0].address;
+          lastTimestamp = sortedTx[0].timestamp;
+          lastTimeFormatted = formatTimeShort(sortedTx[0].timestamp);
         }
 
         const upsellsEnabled = await sessionService.getWorkerUpsellsEnabled(w.contractorId);
@@ -157,6 +182,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           financialStore: financialStore,
           assignedRoutes: uniqueRoutes,
           lastActiveAddress: lastAddr,
+          lastActiveTimestamp: lastTimestamp,
+          lastActiveTime: lastTimeFormatted,
           stats: {
             steps: stats.stepCount,
             gross: stats.upsellGross,
@@ -221,13 +248,18 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           .filter(r => r && r !== 'x' && r.trim() !== '')
       )) as string[];
 
-      // Get last active address from financial store
-      let lastAddr = null;
+      // Get last active address and timestamp from financial store
+      let lastAddr: string | null = null;
+      let lastTimestamp: string | null = null;
+      let lastTimeFormatted: string | null = null;
+      
       if (sharedFinancialStore.length > 0) {
         const sortedTx = [...sharedFinancialStore].sort((a, b) => 
           new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
         );
         lastAddr = sortedTx[0].address;
+        lastTimestamp = sortedTx[0].timestamp;
+        lastTimeFormatted = formatTimeShort(sortedTx[0].timestamp);
       }
 
       // Build worker displays (minimal for cart view)
@@ -237,6 +269,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         financialStore: [],
         assignedRoutes: uniqueRoutes,
         lastActiveAddress: null,
+        lastActiveTimestamp: null,
+        lastActiveTime: null,
         stats: {
           steps: 0,
           gross: 0,
@@ -254,6 +288,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         sharedBookings,
         sharedFinancialStore,
         assignedRoutes: uniqueRoutes,
+        lastActiveAddress: lastAddr,
+        lastActiveTimestamp: lastTimestamp,
+        lastActiveTime: lastTimeFormatted,
         aggregatedStats: {
           steps: stats.stepCount,
           gross: stats.upsellGross,
@@ -273,6 +310,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
       financialStore: [],
       assignedRoutes: [],
       lastActiveAddress: null,
+      lastActiveTimestamp: null,
+      lastActiveTime: null,
       stats: { steps: 0, gross: 0, eq: 0, pending: 0, upsellCount: 0, upsellGross: 0 },
     })));
   };
@@ -282,6 +321,15 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     const members = [...teamMembers];
     
     switch (sortBy) {
+      case 'recent':
+        return members.sort((a, b) => {
+          // Workers with no activity go to bottom
+          if (!a.lastActiveTimestamp && !b.lastActiveTimestamp) return 0;
+          if (!a.lastActiveTimestamp) return 1;
+          if (!b.lastActiveTimestamp) return -1;
+          // Most recent first
+          return new Date(b.lastActiveTimestamp).getTime() - new Date(a.lastActiveTimestamp).getTime();
+        });
       case 'alpha':
         return members.sort((a, b) => a.lastName.localeCompare(b.lastName));
       case 'steps':
@@ -299,6 +347,15 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     const cartList = [...carts];
     
     switch (sortBy) {
+      case 'recent':
+        return cartList.sort((a, b) => {
+          // Carts with no activity go to bottom
+          if (!a.lastActiveTimestamp && !b.lastActiveTimestamp) return 0;
+          if (!a.lastActiveTimestamp) return 1;
+          if (!b.lastActiveTimestamp) return -1;
+          // Most recent first
+          return new Date(b.lastActiveTimestamp).getTime() - new Date(a.lastActiveTimestamp).getTime();
+        });
       case 'alpha':
         return cartList.sort((a, b) => {
           const aName = a.members[0]?.lastName || a.teamId;
@@ -453,7 +510,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             </div>
           </div>
 
-          {/* SECOND ROW: Location + Phone + ID */}
+          {/* SECOND ROW: Location + Timestamp + Phone + ID */}
           <div 
             className="flex items-center gap-3 pl-4 mb-2 cursor-pointer"
             onClick={() => toggleItem(member.contractorId)}
@@ -461,7 +518,12 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             <div className="flex items-center gap-1 text-[10px] text-gray-400 truncate max-w-[50%]">
               <MapPin size={9} className={member.lastActiveAddress ? "text-emerald-500" : "text-gray-600"} />
               {member.lastActiveAddress ? (
-                <span className="truncate">{member.lastActiveAddress}</span>
+                <span className="truncate">
+                  {member.lastActiveAddress}
+                  {member.lastActiveTime && (
+                    <span className="text-gray-500"> • {member.lastActiveTime}</span>
+                  )}
+                </span>
               ) : (
                 <span className="opacity-50 italic">No history</span>
               )}
@@ -612,16 +674,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     const isExpanded = expandedCarts.has(cart.sessionId);
     const isSoloCart = cart.members.length === 1;
     const primaryWorker = cart.members[0];
-    const hasActivity = cart.aggregatedStats.steps > 0;
-
-    // Get last active address from financial store
-    let lastActiveAddress: string | null = null;
-    if (cart.sharedFinancialStore.length > 0) {
-      const sortedTx = [...cart.sharedFinancialStore].sort((a, b) => 
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      );
-      lastActiveAddress = sortedTx[0].address;
-    }
 
     return (
       <div
@@ -680,15 +732,20 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             </div>
           </div>
 
-          {/* SECOND ROW: Location + Worker IDs/Phones */}
+          {/* SECOND ROW: Location + Timestamp + Worker IDs/Phones */}
           <div 
             className="flex items-center gap-3 pl-4 mb-2 cursor-pointer flex-wrap"
             onClick={() => toggleCart(cart.sessionId)}
           >
             <div className="flex items-center gap-1 text-[10px] text-gray-400 truncate max-w-[40%]">
-              <MapPin size={9} className={lastActiveAddress ? "text-emerald-500" : "text-gray-600"} />
-              {lastActiveAddress ? (
-                <span className="truncate">{lastActiveAddress}</span>
+              <MapPin size={9} className={cart.lastActiveAddress ? "text-emerald-500" : "text-gray-600"} />
+              {cart.lastActiveAddress ? (
+                <span className="truncate">
+                  {cart.lastActiveAddress}
+                  {cart.lastActiveTime && (
+                    <span className="text-gray-500"> • {cart.lastActiveTime}</span>
+                  )}
+                </span>
               ) : (
                 <span className="opacity-50 italic">No history</span>
               )}
@@ -799,6 +856,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               onChange={(e) => setSortBy(e.target.value as TeamSortOption)}
               className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cps-blue cursor-pointer"
             >
+              <option value="recent">Most Recent</option>
               <option value="alpha">Last Name (A-Z)</option>
               <option value="steps">Highest Steps</option>
               <option value="equiv">Highest Equiv</option>
