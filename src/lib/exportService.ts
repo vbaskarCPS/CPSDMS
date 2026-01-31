@@ -16,6 +16,46 @@ const getCCId = (): string => {
 };
 
 /**
+ * Badge map for upgrade/add-on item names to short display codes
+ * Matches the badges shown in ContractorJobs component
+ */
+const BADGE_MAP: Record<string, string> = {
+  'Star Plan Pro': 'SP PRO',
+  'Lawn Rejuvenation': 'REJUV',
+  'Dethatching': 'DET',
+  'Grub Control': 'GRUB',
+  'Golf Course': 'GOLF',
+  'Rejuvenation After Care': 'AC',
+  // Central Add-Ons
+  'Window Washing': 'WW',
+  // East Add-Ons
+  'Driveway Sealing': 'DWS',
+  'Hot Asphalt': 'RAMP'
+};
+
+/**
+ * Get client type from transaction, using badge abbreviations for upgrades/add-ons
+ */
+function getClientType(tx: any): string {
+  if (tx.type === 'Production') return 'Existing';
+  if (tx.type === 'Sale') return 'New';
+  
+  // For Upgrade and Add-On, try to get the badge from items
+  if (tx.type === 'Upgrade' || tx.type === 'Add-On') {
+    if (tx.items && Array.isArray(tx.items) && tx.items.length > 0) {
+      const itemName = tx.items[0]?.name;
+      if (itemName && BADGE_MAP[itemName]) {
+        return BADGE_MAP[itemName];
+      }
+    }
+    // Fallback to the transaction type if no badge found
+    return tx.type;
+  }
+  
+  return 'Existing';
+}
+
+/**
  * Convert ServiceFlags to display string like "(ADFS)"
  */
 function serviceFlagsToString(services?: ServiceFlags): string {
@@ -599,6 +639,9 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     // For teams, get all worker names (comma-separated)
     const contractorName = getTeamWorkerNames(tx, workersMap, isTeamSeason ? sessionsMap : undefined);
     
+    // Use badge-based client type for upgrades/add-ons
+    const clientType = getClientType(tx);
+    
     return {
       routeNumber: tx.customer_snapshot?.routeCode || '',
       firstName: tx.customer_snapshot?.firstName || '',
@@ -607,7 +650,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       streetName,
       phone: tx.customer_phone || '',
       email: tx.customer_email || '',
-      clientType: tx.type === 'Sale' ? 'New' : 'Upgrade',
+      clientType,
       propertyType: tx.customer_snapshot?.serviceType || 'FP',
       notes: tx.item_description || '',
       price: tx.price || 0,
@@ -639,11 +682,8 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       const streetNum = streetParts[0] || '';
       const streetName = streetParts.slice(1).join(' ') || '';
       
-      // Determine client type based on transaction type
-      let clientType = 'Existing';
-      if (tx.type === 'Sale') clientType = 'New';
-      else if (tx.type === 'Upgrade') clientType = 'Upgrade';
-      else if (tx.type === 'Add-On') clientType = 'Add-On';
+      // Use badge-based client type for upgrades/add-ons
+      const clientType = getClientType(tx);
       
       // For teams, get all worker names (comma-separated)
       const contractorName = getTeamWorkerNames(tx, workersMap, isTeamSeason ? sessionsMap : undefined);
