@@ -317,7 +317,7 @@ export interface WorkerPayoutBreakdown {
   silverBonus: number;              // assignedEQ * silverRate
   productionCommission: number;     // baseCommission + alumniBonus + silverBonus
   
-  upsellCommission: number;         // upsellPayable * upsellSplitPercent * 0.15
+  upsellCommission: number;         // upsellPayable * upsellSplitPercent * 0.10
   iosCommission: number;            // iosCount * $5 * upsellSplitPercent
   
   bonusAmount: number;              // Sum of bonuses with splits applied

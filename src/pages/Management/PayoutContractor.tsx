@@ -412,7 +412,7 @@ const PayoutContractor: React.FC = () => {
       const workerTotalRate = baseRate + workerAlumni + workerSilver;
       
       const productionPay = assignedEQ * workerTotalRate;
-      const upsellCommission = (stats.upsellPayable || 0) * upPercent * 0.15;
+      const upsellCommission = (stats.upsellPayable || 0) * upPercent * 0.10;
       const iosCommission = (stats.iosCount || 0) * 5.0 * upPercent;
       
       // Bonuses with split
@@ -465,7 +465,7 @@ const PayoutContractor: React.FC = () => {
     const totalRate = baseRate + alumniRate + silverRate;
     
     const productionPay = actualTotalEQ * totalRate;
-    const upsellCommission = (stats.upsellPayable || 0) * 0.15;
+    const upsellCommission = (stats.upsellPayable || 0) * 0.10;
     const iosCommission = (stats.iosCount || 0) * 5.0;
     const bonusTotal = (session?.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
     const machineDeduction = machineRental ? 10.0 : 0;
@@ -906,7 +906,7 @@ const PayoutContractor: React.FC = () => {
                   </div>
                   <div className="flex justify-between items-center border-t border-gray-700 pt-2">
                     <span>Commission</span>
-                    <span className="font-mono text-gray-300">15%</span>
+                    <span className="font-mono text-gray-300">10%</span>
                   </div>
                 </div>
               </div>

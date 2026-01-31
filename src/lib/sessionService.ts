@@ -2087,7 +2087,7 @@ class SessionService {
    * - productionCommission = assignedEQ * totalPayoutRate
    * 
    * Upsell Commission:
-   * - upsellCommission = upsellPayable * upsellSplitPercent * 0.15
+   * - upsellCommission = upsellPayable * upsellSplitPercent * 0.10
    * - iosCommission = iosCount * $5 * upsellSplitPercent
    * 
    * Deductions:
@@ -2143,8 +2143,8 @@ class SessionService {
       const productionCommission = baseCommission + alumniBonus + silverBonus;
       // Equivalent to: assignedEQ * totalPayoutRate
       
-      // Upsell commission (15% of upsell payable, split by upsell %)
-      const upsellCommission = (stats.upsellPayable || 0) * upsellPercent * 0.15;
+      // Upsell commission (10% of upsell payable, split by upsell %)
+      const upsellCommission = (stats.upsellPayable || 0) * upsellPercent * 0.10;
       
       // IOS commission ($5 per IOS, split by upsell %)
       const iosCommission = (stats.iosCount || 0) * 5 * upsellPercent;
