@@ -609,16 +609,11 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     seasonType
   );
 
-  // === 2. Append Accounts (Sales/Upgrades with Billed, E-Transfer, Credit Card ONLY) ===
-  // FIXED: Only include Billed, E-Transfer, Credit Card (not Cash, Cheque, or Prepaid)
+  // === 2. Append Accounts (ALL transactions with Billed, E-Transfer, Credit Card) ===
+  // Includes ALL transaction types (Production, Sale, Upgrade, Add-On) with these payment methods
   const validAccountPaymentMethods = ['Billed', 'E-Transfer', 'Credit Card'];
   
-  // Aeration: Sale, Upgrade
-  // Lawn Rejuv: Sale only (no Upgrades)
-  const accountTypes = isTeamSeason ? ['Sale'] : ['Sale', 'Upgrade'];
   const accountTransactions = transactions.filter(tx => {
-    if (!accountTypes.includes(tx.type)) return false;
-    
     // Check if payment method is one we want for accounts
     // Handle both simple payment method and payment breakdown
     if (tx.payment_breakdown && typeof tx.payment_breakdown === 'object') {
