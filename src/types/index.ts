@@ -286,6 +286,13 @@ export interface SessionStats {
 }
 
 // --- PER-WORKER PAYOUT (for team seasons) ---
+/**
+ * WorkerPayoutBreakdown represents the calculated payout for a single worker.
+ * 
+ * IMPORTANT: Cash/cheque differences are handled via EQ adjustment (deltaEQ), NOT as deductions.
+ * The cashChequeDiff field is for DISPLAY PURPOSES ONLY to show managers the variance.
+ * It is NOT included in the deductions calculation.
+ */
 export interface WorkerPayoutBreakdown {
   workerId: string;
   workerName: string;
@@ -316,9 +323,11 @@ export interface WorkerPayoutBreakdown {
   bonusAmount: number;              // Sum of bonuses with splits applied
   
   // Deductions
-  cashChequeDiff: number;           // (|cashDiff| + |chequeDiff|) * equivSplitPercent
+  // NOTE: cashChequeDiff is DISPLAY ONLY - it is NOT included in deductions
+  // Cash/cheque variances are already reflected in EQ via the deltaEQ adjustment
+  cashChequeDiff: number;           // DISPLAY ONLY: (|cashDiff| + |chequeDiff|) * equivSplitPercent
   machineRentalDeduction: number;   // $10 per worker (NOT split)
-  deductions: number;               // cashChequeDiff + machineRentalDeduction
+  deductions: number;               // machineRentalDeduction + otherDeductions (EXCLUDES cashChequeDiff)
   
   finalCommission: number;          // Total payout for this worker
 }

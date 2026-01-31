@@ -276,7 +276,7 @@ export async function generateSessionExport(): Promise<void> {
           'Upsell Comm': payout.upsellCommission,
           'IOS Comm': payout.iosCommission,
           'Machine Rental': payout.machineRentalDeduction,
-          'Cash/Cheque Diff Deduction': payout.cashChequeDiff,
+          'Cash/Cheque Diff (Display)': payout.cashChequeDiff,
           'Total Deductions': payout.deductions,
           'Bonuses': payout.bonusAmount,
           'Final Commission': payout.finalCommission,
@@ -325,8 +325,12 @@ export async function generateSessionExport(): Promise<void> {
       const upsellComm = (stats.upsellPayable || 0) * 0.15;
       const iosComm = (stats.iosCount || 0) * 5;
       const machineRental = validation.machineRental ? 10 : 0;
+      
+      // FIXED: cashChequeDiff is DISPLAY ONLY - already reflected in EQ via deltaEQ
       const cashChequeDiff = Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0);
-      const deductions = cashChequeDiff + machineRental;
+      
+      // FIXED: deductions no longer includes cashChequeDiff
+      const deductions = machineRental;
       
       payoutRows.push({
         'Contractor ID': session.worker_id,
@@ -358,7 +362,7 @@ export async function generateSessionExport(): Promise<void> {
         'Upsell Comm': upsellComm,
         'IOS Comm': iosComm,
         'Machine Rental': machineRental,
-        'Cash/Cheque Diff Deduction': cashChequeDiff,
+        'Cash/Cheque Diff (Display)': cashChequeDiff,
         'Total Deductions': deductions,
         'Bonuses': totalBonuses,
         'Final Commission': validation.finalCommission || 0,
@@ -493,7 +497,7 @@ export async function generateSessionExport(): Promise<void> {
           'Upsell Commission': payout.upsellCommission.toFixed(2),
           'IOS Commission': payout.iosCommission.toFixed(2),
           'Bonus Amount': payout.bonusAmount.toFixed(2),
-          'Cash/Cheque Diff': payout.cashChequeDiff.toFixed(2),
+          'Cash/Cheque Diff (Display)': payout.cashChequeDiff.toFixed(2),
           'Machine Rental': payout.machineRentalDeduction.toFixed(2),
           'Total Deductions': payout.deductions.toFixed(2),
           'Final Commission': payout.finalCommission.toFixed(2),
@@ -864,8 +868,12 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       const upsellComm = (stats.upsellPayable || 0) * 0.15;
       const iosComm = (stats.iosCount || 0) * 5;
       const machineRental = validation.machineRental ? 10 : 0;
+      
+      // FIXED: cashChequeDiff is DISPLAY ONLY - already reflected in EQ via deltaEQ
       const cashChequeDiff = Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0);
-      const deductions = cashChequeDiff + machineRental;
+      
+      // FIXED: deductions no longer includes cashChequeDiff
+      const deductions = machineRental;
       
       statsData.push({
         contractorId: session.worker_id,

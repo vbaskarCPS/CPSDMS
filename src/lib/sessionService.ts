@@ -2091,9 +2091,10 @@ class SessionService {
    * - iosCommission = iosCount * $5 * upsellSplitPercent
    * 
    * Deductions:
-   * - cashChequeDiff: (|cashDiff| + |chequeDiff|) * equivSplitPercent
+   * - cashChequeDiff: DISPLAY ONLY - (|cashDiff| + |chequeDiff|) * equivSplitPercent
+   *   NOTE: This is NOT subtracted from pay - it already affects EQ through production bucket adjustment
    * - machineRentalDeduction: $10 PER WORKER (NOT split)
-   * - deductions = cashChequeDiff + machineRentalDeduction
+   * - deductions = machineRentalDeduction (cashChequeDiff is display-only)
    */
   public calculateTeamPayouts(
     session: LogsheetSession,
@@ -2159,7 +2160,8 @@ class SessionService {
       }
       
       // Deductions calculation
-      // Cash/cheque diff is split by equiv percent
+      // Cash/cheque diff is DISPLAY ONLY - it already affects EQ through production bucket adjustment
+      // We still calculate it for display purposes but do NOT include it in deductions
       const cashChequeDiff = validation 
         ? (Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0)) * equivPercent
         : 0;
@@ -2167,7 +2169,9 @@ class SessionService {
       // Machine rental is $10 PER WORKER (NOT split)
       const machineRentalDeduction = validation?.machineRental ? 10 : 0;
       
-      const deductions = cashChequeDiff + machineRentalDeduction;
+      // FIXED: deductions no longer includes cashChequeDiff
+      // cashChequeDiff affects EQ (via production bucket adjustment), not pay directly
+      const deductions = machineRentalDeduction;
       
       // Final commission
       const finalCommission = productionCommission + upsellCommission + iosCommission + 
@@ -2191,9 +2195,9 @@ class SessionService {
         upsellCommission,
         iosCommission,
         bonusAmount,
-        cashChequeDiff,
+        cashChequeDiff, // Still included for DISPLAY purposes
         machineRentalDeduction,
-        deductions,
+        deductions, // Now only includes machineRentalDeduction
         finalCommission,
       });
     }

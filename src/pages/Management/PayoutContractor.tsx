@@ -423,12 +423,15 @@ const PayoutContractor: React.FC = () => {
       });
       
       // Per-worker deductions
+      // FIXED: cashChequeDiff is DISPLAY ONLY - it affects EQ, not pay directly
       const cashChequeDiff = (Math.abs(cashDiff) + Math.abs(chequeDiff)) * eqPercent;
       const workerMachineDeduction = workerMachineRentals[w.contractorId] ? 10.0 : 0;
       const workerOtherDeductions = workerDeductions[w.contractorId] || 0;
       
-      const totalWorkerDeductions = cashChequeDiff + workerOtherDeductions;
+      // FIXED: totalWorkerDeductions no longer includes cashChequeDiff
+      const totalWorkerDeductions = workerOtherDeductions;
       
+      // FIXED: finalPay no longer subtracts cashChequeDiff (it already affected EQ via deltaEQ)
       const finalPay = productionPay + upsellCommission + iosCommission + bonusAmount - totalWorkerDeductions - workerMachineDeduction;
       
       return {
@@ -443,7 +446,7 @@ const PayoutContractor: React.FC = () => {
         upsellCommission,
         iosCommission,
         bonusAmount,
-        cashChequeDiff,
+        cashChequeDiff, // Still calculated for DISPLAY purposes
         machineDeduction: workerMachineDeduction,
         otherDeductions: workerOtherDeductions,
         finalPay,
@@ -466,9 +469,14 @@ const PayoutContractor: React.FC = () => {
     const iosCommission = (stats.iosCount || 0) * 5.0;
     const bonusTotal = (session?.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
     const machineDeduction = machineRental ? 10.0 : 0;
+    
+    // FIXED: cashChequeDiff is DISPLAY ONLY - it affects EQ via deltaEQ, not pay directly
     const cashChequeDiffVal = Math.abs(cashDiff) + Math.abs(chequeDiff);
+    
     const grossPay = productionPay + upsellCommission + iosCommission + bonusTotal;
-    const finalPay = grossPay - totalDeductionsAeration - machineDeduction - cashChequeDiffVal;
+    
+    // FIXED: finalPay no longer subtracts cashChequeDiffVal (it already affected EQ via deltaEQ)
+    const finalPay = grossPay - totalDeductionsAeration - machineDeduction;
     
     return {
       productionPay,
@@ -476,7 +484,8 @@ const PayoutContractor: React.FC = () => {
       iosCommission,
       bonusTotal,
       machineDeduction,
-      totalDeductions: totalDeductionsAeration + cashChequeDiffVal,
+      totalDeductions: totalDeductionsAeration,
+      cashChequeDiff: cashChequeDiffVal, // Still tracked for DISPLAY purposes
       finalPay,
       totalRate,
     };
@@ -965,6 +974,7 @@ const PayoutContractor: React.FC = () => {
                     <AlertCircle size={18} />
                     <span>
                       {cashDiff < 0 ? 'SHORTAGE' : 'OVERAGE'}: {cashDiff > 0 ? '+' : ''}${cashDiff.toFixed(2)}
+                      <span className="text-xs ml-2 opacity-75">(affects EQ)</span>
                     </span>
                   </div>
                 )}
@@ -995,6 +1005,7 @@ const PayoutContractor: React.FC = () => {
                     <AlertCircle size={18} />
                     <span>
                       {chequeDiff < 0 ? 'SHORTAGE' : 'OVERAGE'}: {chequeDiff > 0 ? '+' : ''}${chequeDiff.toFixed(2)}
+                      <span className="text-xs ml-2 opacity-75">(affects EQ)</span>
                     </span>
                   </div>
                 )}
@@ -1160,6 +1171,15 @@ const PayoutContractor: React.FC = () => {
                         <div className="flex justify-between text-red-400">
                           <span>Other Deductions</span>
                           <span className="font-mono">-${aerationPayout.totalDeductions.toFixed(2)}</span>
+                        </div>
+                      )}
+                      {/* Show cash/cheque diff as info only - it affects EQ, not pay */}
+                      {aerationPayout.cashChequeDiff !== 0 && (
+                        <div className={`flex justify-between text-xs pt-1 border-t border-gray-700 mt-1 ${
+                          aerationPayout.cashChequeDiff > 0 ? 'text-gray-500' : 'text-gray-500'
+                        }`}>
+                          <span>Cash/Cheque Diff</span>
+                          <span className="font-mono italic">${aerationPayout.cashChequeDiff.toFixed(2)} (in EQ)</span>
                         </div>
                       )}
                     </div>
@@ -1377,6 +1397,13 @@ const PayoutContractor: React.FC = () => {
                   ${finalPay.toFixed(2)}
                 </div>
               </div>
+
+              {/* Cash/Cheque Diff Info (display only) */}
+              {(cashDiff !== 0 || chequeDiff !== 0) && (
+                <div className="mt-3 pt-3 border-t border-gray-700 text-xs text-gray-500 text-center">
+                  Cash/Cheque difference of ${(Math.abs(cashDiff) + Math.abs(chequeDiff)).toFixed(2)} is reflected in EQ calculation, not deducted from pay
+                </div>
+              )}
 
               {/* Quick Actions */}
               <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-700">
