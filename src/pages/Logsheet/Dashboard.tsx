@@ -19,9 +19,11 @@ import {
   Truck,
   X,
   Copy,
+  Eye,
+  ArrowLeft,
 } from 'lucide-react';
 import { format } from 'date-fns';
-import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
+import { getStorageItem, removeStorageItem, setStorageItem } from '../../lib/localStorage';
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
 import { subscribeAsContractor } from '../../lib/realtimeService';
@@ -50,6 +52,26 @@ const TrainingBanner: React.FC = () => (
     <GraduationCap size={18} />
     <span>TRAINING MODE</span>
     <span className="text-yellow-200 font-normal">— Practice with mock data. No real records affected.</span>
+  </div>
+);
+
+// RM View Mode Banner Component (NEW)
+interface RMViewBannerProps {
+  workerName: string;
+  cartNames: string | null;
+  onReturn: () => void;
+}
+
+const RMViewBanner: React.FC<RMViewBannerProps> = ({ workerName, cartNames, onReturn }) => (
+  <div 
+    className="bg-gradient-to-r from-cyan-600 to-blue-600 text-white px-4 py-2 flex items-center justify-center gap-2 text-sm font-bold cursor-pointer hover:from-cyan-500 hover:to-blue-500 transition-all"
+    onClick={onReturn}
+  >
+    <Eye size={18} />
+    <span>VIEWING AS {cartNames ? `CART: ${cartNames}` : workerName.toUpperCase()}</span>
+    <span className="text-cyan-200 font-normal flex items-center gap-1">
+      — <ArrowLeft size={14} /> Click to return to Route Manager view
+    </span>
   </div>
 );
 
@@ -130,6 +152,11 @@ const Dashboard: React.FC = () => {
   // Training mode state
   const [isTrainingMode, setIsTrainingMode] = useState(false);
   
+  // RM View Mode state (NEW)
+  const [isRMViewMode, setIsRMViewMode] = useState(false);
+  const [rmOriginalUser, setRmOriginalUser] = useState<ManagementUser | null>(null);
+  const [rmViewCartNames, setRmViewCartNames] = useState<string | null>(null);
+  
   // Season type state
   const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
   
@@ -168,7 +195,29 @@ const Dashboard: React.FC = () => {
     if (isTrainingMode) {
       trainingService.disableTrainingMode();
     }
+    // Clean up RM view mode if active
+    if (isRMViewMode) {
+      removeStorageItem('rm_original_user');
+      removeStorageItem('rm_view_mode');
+      removeStorageItem('rm_view_cart_names');
+    }
     navigate('/');
+  };
+
+  // Return to RM view handler (NEW)
+  const handleReturnToRM = () => {
+    if (rmOriginalUser) {
+      // Restore the RM as current user
+      setStorageItem('current_user', rmOriginalUser);
+      
+      // Clean up view mode flags
+      removeStorageItem('rm_original_user');
+      removeStorageItem('rm_view_mode');
+      removeStorageItem('rm_view_cart_names');
+      
+      // Navigate back to RM logbook
+      navigate('/rm-logbook');
+    }
   };
 
   // Initial load and data fetching
@@ -179,6 +228,15 @@ const Dashboard: React.FC = () => {
       // Check if we're in training mode
       const trainingMode = trainingService.isTrainingMode();
       setIsTrainingMode(trainingMode);
+      
+      // Check if we're in RM view mode (NEW)
+      const rmViewMode = getStorageItem<boolean>('rm_view_mode', false);
+      const originalUser = getStorageItem<ManagementUser | null>('rm_original_user', null);
+      const cartNames = getStorageItem<string | null>('rm_view_cart_names', null);
+      
+      setIsRMViewMode(rmViewMode);
+      setRmOriginalUser(originalUser);
+      setRmViewCartNames(cartNames);
       
       const storedWorker = getStorageItem<Worker | null>('current_user', null);
       if (!storedWorker) {
@@ -212,10 +270,14 @@ const Dashboard: React.FC = () => {
           setSeasonType('aeration'); // Training is always aeration
         } else {
           // --- PRODUCTION MODE: Use sessionService ---
-          const isLockedOut = await sessionService.isWorkerLockedOut(storedWorker.contractorId);
-          if (isLockedOut) {
-            forceLogout();
-            return;
+          
+          // Skip lockout check if RM is viewing (they should be able to view locked sessions)
+          if (!rmViewMode) {
+            const isLockedOut = await sessionService.isWorkerLockedOut(storedWorker.contractorId);
+            if (isLockedOut) {
+              forceLogout();
+              return;
+            }
           }
 
           // Get season type
@@ -265,8 +327,9 @@ const Dashboard: React.FC = () => {
   }, [navigate, refreshKey]);
 
   // --- FORCE LOGOUT LISTENER: Subscribe to session status changes (production only) ---
+  // Skip this listener if RM is viewing - they shouldn't be kicked out
   useEffect(() => {
-    if (!worker || isTrainingMode) return;
+    if (!worker || isTrainingMode || isRMViewMode) return;
 
     const channel = supabase
       .channel(`lockout-${worker.contractorId}`)
@@ -290,7 +353,7 @@ const Dashboard: React.FC = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [worker?.contractorId, navigate, isTrainingMode]);
+  }, [worker?.contractorId, navigate, isTrainingMode, isRMViewMode]);
 
   // Realtime subscription (production only)
   useEffect(() => {
@@ -305,6 +368,12 @@ const Dashboard: React.FC = () => {
     removeStorageItem('current_user');
     if (isTrainingMode) {
       trainingService.disableTrainingMode();
+    }
+    // Clean up RM view mode if active
+    if (isRMViewMode) {
+      removeStorageItem('rm_original_user');
+      removeStorageItem('rm_view_mode');
+      removeStorageItem('rm_view_cart_names');
     }
     navigate('/');
   };
@@ -334,8 +403,17 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-black pb-20 flex flex-col">
-      {/* Training Mode Banner */}
-      {isTrainingMode && <TrainingBanner />}
+      {/* RM View Mode Banner (NEW) - Takes priority over Training Banner */}
+      {isRMViewMode && worker && (
+        <RMViewBanner
+          workerName={`${worker.firstName} ${worker.lastName}`}
+          cartNames={rmViewCartNames}
+          onReturn={handleReturnToRM}
+        />
+      )}
+
+      {/* Training Mode Banner - Only show if not in RM view mode */}
+      {isTrainingMode && !isRMViewMode && <TrainingBanner />}
 
       {/* Toast Notification */}
       <Toast message={toastMessage} show={showToast} />
@@ -354,7 +432,7 @@ const Dashboard: React.FC = () => {
             </div>
             <div className="flex items-center gap-2 text-gray-400 text-xs mt-1">
               <span>{worker?.firstName} {worker?.lastName}</span>
-              <span className={`px-1.5 rounded border ${isTrainingMode ? 'bg-yellow-900/30 border-yellow-700 text-yellow-400' : 'bg-gray-800 border-gray-700'}`}>
+              <span className={`px-1.5 rounded border ${isTrainingMode ? 'bg-yellow-900/30 border-yellow-700 text-yellow-400' : isRMViewMode ? 'bg-cyan-900/30 border-cyan-700 text-cyan-400' : 'bg-gray-800 border-gray-700'}`}>
                 #{worker?.contractorId}
               </span>
               {/* Team Indicator */}
@@ -509,7 +587,6 @@ const Dashboard: React.FC = () => {
             setShowContractModal(false);
             setRefreshKey((k) => k + 1);
           }}
-          seasonType={seasonType}
         />
       )}
 

@@ -147,11 +147,7 @@ const RMLogbook: React.FC = () => {
     console.log('📡 Connecting to Realtime Updates (Filtered)...');
 
     // Subscribe with filtering for this manager's team
-    const unsubscribe = subscribeAsRouteManager(
-      currentUser.userId,
-      myTeamIds,
-      refreshData
-    );
+    const unsubscribe = subscribeAsRouteManager(refreshData);
 
     // Fallback polling - reduced from 10s to 30s since realtime is better now
     const intervalId = setInterval(refreshData, 30000);
@@ -399,6 +395,7 @@ const RMLogbook: React.FC = () => {
               allSessions={allSessions}
               allManagers={dailyData.managers}
               seasonType={seasonType}
+              currentUser={currentUser}
             />
           )}
           {activeTab === 'routes' && (

@@ -1,5 +1,6 @@
 // src/pages/Management/components/RMTeamTab.tsx
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   ChevronDown, 
   ChevronUp, 
@@ -13,8 +14,10 @@ import {
   Truck,
   Users,
   Leaf,
+  Eye,
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
+import { setStorageItem } from '../../../lib/localStorage';
 import { Worker, MasterBooking, LogsheetSession, ManagementUser, SeasonType, SessionStats } from '../../../types';
 import ContractorJobs from './ContractorJobs';
 
@@ -24,6 +27,7 @@ interface RMTeamTabProps {
   allSessions: LogsheetSession[];
   allManagers?: ManagementUser[];
   seasonType?: SeasonType;
+  currentUser?: ManagementUser; // Add this prop to get the RM's user object
 }
 
 // Worker display data (used for both Aeration cards and Lawn Rejuv member rows)
@@ -88,7 +92,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   allSessions,
   allManagers = [],
   seasonType = 'aeration',
+  currentUser,
 }) => {
+  const navigate = useNavigate();
   const [teamMembers, setTeamMembers] = useState<WorkerDisplay[]>([]);
   const [carts, setCarts] = useState<CartDisplay[]>([]);
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
@@ -402,6 +408,32 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     setRefreshKey(prev => prev + 1);
   };
 
+  // --- VIEW LOGSHEET HANDLER (NEW) ---
+  const handleViewLogsheet = (worker: Worker, cartMembers?: Worker[]) => {
+    if (!currentUser) {
+      console.error('Cannot view logsheet: currentUser not available');
+      return;
+    }
+
+    // Store the RM's original user data for return
+    setStorageItem('rm_original_user', currentUser);
+    setStorageItem('rm_view_mode', true);
+    
+    // If viewing a cart, store the cart member names for the banner
+    if (cartMembers && cartMembers.length > 1) {
+      const cartNames = cartMembers.map(m => m.firstName).join(' & ');
+      setStorageItem('rm_view_cart_names', cartNames);
+    } else {
+      setStorageItem('rm_view_cart_names', null);
+    }
+
+    // Set the worker as the current user (this is what Dashboard reads)
+    setStorageItem('current_user', worker);
+
+    // Navigate to the logsheet
+    navigate('/logsheet');
+  };
+
   const handleTransfer = async (contractorId: string) => {
     if (!selectedTransferManager) return;
     
@@ -458,7 +490,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         className="relative bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 transition-all shadow-sm"
       >
         <div className="p-2 pr-9">
-          {/* TOP ROW: Name + Routes + Upsell Toggle */}
+          {/* TOP ROW: Name + Routes + View Button + Upsell Toggle */}
           <div 
             className="flex items-center justify-between mb-1 cursor-pointer"
             onClick={() => toggleItem(member.contractorId)}
@@ -486,7 +518,20 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center gap-1 flex-shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 flex-shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
+              {/* View Logsheet Button (NEW) */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleViewLogsheet(member);
+                }}
+                className="p-1 rounded hover:bg-gray-700 transition-colors text-cyan-400 hover:text-cyan-300"
+                title={`View ${member.firstName}'s logsheet`}
+              >
+                <Eye size={14} />
+              </button>
+
+              {/* Upsell Toggle */}
               <span className={`text-[8px] font-bold ${member.upsellsEnabled !== false ? 'text-purple-400' : 'text-gray-500'}`}>
                 UP
               </span>
@@ -806,8 +851,31 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           </div>
         </div>
 
-        {/* Chevron Button */}
-        <div className="absolute top-2 right-1.5">
+        {/* View Logsheet + Chevron Button */}
+        <div className="absolute top-2 right-1.5 flex items-center gap-1">
+          {/* View Logsheet Button (NEW) */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              // Use the primary worker but pass all cart members for the banner
+              const workersForCart = cart.members.map(m => ({
+                ...m,
+                displayBookings: [],
+                financialStore: [],
+                assignedRoutes: [],
+                lastActiveAddress: null,
+                lastActiveTimestamp: null,
+                lastActiveTime: null,
+                stats: { steps: 0, gross: 0, eq: 0, pending: 0, upsellCount: 0, upsellGross: 0 },
+              } as Worker));
+              handleViewLogsheet(primaryWorker, workersForCart);
+            }}
+            className="p-1 rounded hover:bg-gray-700 transition-colors text-cyan-400 hover:text-cyan-300"
+            title={`View ${isSoloCart ? primaryWorker?.firstName + "'s" : 'cart'} logsheet`}
+          >
+            <Eye size={14} />
+          </button>
+
           <div 
             className="p-1 cursor-pointer"
             onClick={() => toggleCart(cart.sessionId)}
