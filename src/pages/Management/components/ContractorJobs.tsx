@@ -1,8 +1,9 @@
 // src/pages/Management/components/ContractorJobs.tsx
 import React, { useState, useMemo, useEffect } from 'react';
-import { Phone, Mail, Loader, Clock, X as XIcon } from 'lucide-react';
+import { Phone, Mail, Loader, Clock, X as XIcon, FileText } from 'lucide-react';
 import { MasterBooking, SessionTransaction, SeasonType } from '../../../types';
 import EditTransactionModal from '../../../components/EditTransactionModal';
+import PendingJobModal from '../../../components/PendingJobModal';
 import { sessionService } from '../../../lib/sessionService';
 import { supabase } from '../../../lib/supabase';
 
@@ -134,6 +135,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
   seasonType = 'aeration'
 }) => {
   const [editingTransaction, setEditingTransaction] = useState<SessionTransaction | null>(null);
+  const [pendingJob, setPendingJob] = useState<MasterBooking | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
   const isLawnRejuv = seasonType === 'lawn_rejuv';
@@ -221,40 +223,55 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
   // --- Handlers ---
   const handleJobClick = async (job: MasterBooking) => {
       const isPaid = job.Completed === 'x' || job.Status === 'completed';
-      
-      if (!isPaid) return;
-
       const jobId = job['Booking ID'];
+      
       if (!jobId) {
           console.error("Critical Error: Job missing Booking ID", job);
           return;
       }
 
-      setLoadingId(jobId);
+      // For completed jobs, open EditTransactionModal
+      if (isPaid) {
+          setLoadingId(jobId);
 
-      try {
-          const tx = await sessionService.getTransactionByJobId(jobId);
-          
-          if (tx) {
-              setEditingTransaction(tx);
-          } else {
-              alert("Transaction record not found in database.");
+          try {
+              const tx = await sessionService.getTransactionByJobId(jobId);
+              
+              if (tx) {
+                  setEditingTransaction(tx);
+              } else {
+                  alert("Transaction record not found in database.");
+              }
+          } catch (err) {
+              console.error("Error fetching transaction:", err);
+              alert("Failed to load transaction details.");
+          } finally {
+              setLoadingId(null);
           }
-      } catch (err) {
-          console.error("Error fetching transaction:", err);
-          alert("Failed to load transaction details.");
-      } finally {
-          setLoadingId(null);
+          return;
+      }
+
+      // For pending, cancelled, or next_time jobs, open PendingJobModal
+      setPendingJob(job);
+  };
+
+  const handleEditModalClose = () => {
+      setEditingTransaction(null);
+  };
+
+  const handleEditModalUpdate = () => {
+      setEditingTransaction(null);
+      if (onRefresh) {
+          onRefresh();
       }
   };
 
-  const handleModalClose = () => {
-      setEditingTransaction(null);
+  const handlePendingModalClose = () => {
+      setPendingJob(null);
   };
 
-  const handleModalUpdate = () => {
-      setEditingTransaction(null);
-      // Trigger parent refresh if available
+  const handlePendingModalUpdate = () => {
+      setPendingJob(null);
       if (onRefresh) {
           onRefresh();
       }
@@ -265,6 +282,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
       const isCancelled = job.Status === 'cancelled';
       const isNextTime = job.Status === 'next_time';
       const isLoading = loadingId === job['Booking ID'];
+      const notes = job['Log Sheet Notes'] || '';
 
       // --- Badges ---
       let badge = { text: 'PENDING', color: 'bg-gray-700 text-gray-400 border-gray-600' };
@@ -321,12 +339,18 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
           ? priceStr 
           : `$${parseFloat(priceStr.replace(/[^0-9.]/g, '') || '0').toFixed(2)}`;
 
+      // Determine if row is clickable
+      const isClickable = true; // All rows are now clickable
+
       return (
           <div 
             key={job['Booking ID']} 
             onClick={() => handleJobClick(job)}
-            className={`bg-gray-800 border border-gray-700 rounded px-2 py-1.5 flex flex-col gap-1 relative mb-1 transition-colors ${isPaid ? 'hover:border-cps-blue cursor-pointer group' : ''}`}
+            className={`bg-gray-800 border border-gray-700 rounded px-2 py-1.5 flex flex-col gap-1 relative mb-1 transition-colors cursor-pointer hover:border-gray-500 group ${
+              isPaid ? 'hover:border-cps-blue' : 'hover:border-yellow-600'
+            }`}
           >
+              {/* Main Row */}
               <div className="flex items-center justify-between gap-2 text-xs">
                   {/* Left */}
                   <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -382,6 +406,14 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
                       </button>
                   </div>
               </div>
+
+              {/* Notes Row - Only visible on md+ screens, only if notes exist */}
+              {notes && (
+                <div className="hidden md:flex items-center gap-1.5 text-[10px] text-gray-500 italic pl-[42px] border-t border-gray-700/50 pt-1 mt-0.5">
+                  <FileText size={10} className="flex-shrink-0 text-gray-600" />
+                  <span className="truncate">{notes}</span>
+                </div>
+              )}
           </div>
       );
   };
@@ -421,12 +453,22 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
             )}
         </div>
 
-        {/* --- EDIT MODAL --- */}
+        {/* --- EDIT TRANSACTION MODAL (Completed Jobs) --- */}
         {editingTransaction && (
             <EditTransactionModal 
                 transaction={editingTransaction}
-                onClose={handleModalClose}
-                onUpdate={handleModalUpdate}
+                onClose={handleEditModalClose}
+                onUpdate={handleEditModalUpdate}
+            />
+        )}
+
+        {/* --- PENDING JOB MODAL (Pending/NextTime/Cancelled Jobs) --- */}
+        {pendingJob && (
+            <PendingJobModal
+                job={pendingJob}
+                onClose={handlePendingModalClose}
+                onUpdate={handlePendingModalUpdate}
+                seasonType={seasonType}
             />
         )}
     </>

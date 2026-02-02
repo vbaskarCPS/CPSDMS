@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Map as MapIcon, 
   AlertCircle, X, Check, ChevronDown, ChevronUp, 
-  MapPin, Phone, User, Users, Shuffle, Truck, Leaf
+  MapPin, Phone, User, Users, Shuffle, Truck, Leaf, FileText
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
 import { 
@@ -11,7 +11,8 @@ import {
   getSeasonConfig,
   EQ_DIVISOR 
 } from '../../../lib/commandCenterService';
-import { RouteData, MasterBooking, Worker, ManagementUser, SeasonType, TeamCart, LogsheetSession } from '../../../types';
+import { RouteData, MasterBooking, Worker, ManagementUser, SeasonType, TeamCart } from '../../../types';
+import PendingJobModal from '../../../components/PendingJobModal';
 
 interface RMRoutesTabProps {
   managerId: string;
@@ -77,6 +78,9 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     routeCode: string;
     title: string;
   } | null>(null);
+
+  // Pending Job Modal State
+  const [pendingJob, setPendingJob] = useState<MasterBooking | null>(null);
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -288,6 +292,25 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     if (next.has(routeCode)) next.delete(routeCode);
     else next.add(routeCode);
     setExpandedRoutes(next);
+  };
+
+  // Handle job row click (open PendingJobModal for non-completed jobs)
+  const handleJobClick = (job: MasterBooking) => {
+    const isCompleted = job.Status === 'completed' || job.Completed === 'x';
+    
+    // Only open modal for non-completed jobs
+    if (!isCompleted) {
+      setPendingJob(job);
+    }
+  };
+
+  const handlePendingModalClose = () => {
+    setPendingJob(null);
+  };
+
+  const handlePendingModalUpdate = () => {
+    setPendingJob(null);
+    onRefresh();
   };
 
   const handleAssignConfirm = async (workerId: string | null) => {
@@ -712,22 +735,41 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                     {route.items.map(job => {
                         const jobWorker = getWorkerInfo(job['Contractor Number'] || null);
                         const isJobCompleted = job.Status === 'completed' || job.Completed === 'x';
+                        const isNextTime = job.Status === 'next_time';
+                        const isCancelled = job.Status === 'cancelled';
                         const notes = job['Log Sheet Notes'] || '';
                         const services = job.services;
+                        
+                        // Determine status badge
+                        let statusBadge = null;
+                        if (isNextTime) {
+                          statusBadge = <span className="text-[9px] bg-orange-900/30 text-orange-400 px-1 py-0.5 rounded border border-orange-800 font-bold">NEXT TIME</span>;
+                        } else if (isCancelled) {
+                          statusBadge = <span className="text-[9px] bg-red-900/30 text-red-400 px-1 py-0.5 rounded border border-red-800 font-bold">CANCELLED</span>;
+                        }
                         
                         return (
                             <div 
                                 key={job['Booking ID']} 
-                                className={`p-2 rounded border flex flex-col gap-2 ${
+                                onClick={() => handleJobClick(job)}
+                                className={`p-2 rounded border flex flex-col gap-2 transition-colors ${
                                     isJobCompleted 
                                     ? 'bg-green-900/10 border-green-900/30 opacity-75' 
-                                    : 'bg-gray-800 border-gray-700 hover:border-gray-600'
+                                    : isCancelled
+                                    ? 'bg-red-900/10 border-red-900/30 cursor-pointer hover:border-red-700'
+                                    : isNextTime
+                                    ? 'bg-orange-900/10 border-orange-900/30 cursor-pointer hover:border-orange-700'
+                                    : 'bg-gray-800 border-gray-700 cursor-pointer hover:border-cps-blue'
                                 }`}
                             >
                                 <div className="flex justify-between items-start gap-3">
                                     <div className="min-w-0 flex-1">
                                         <div className="font-bold text-gray-200 text-sm truncate flex items-center gap-2">
-                                            {job['First Name']} {job['Last Name']}
+                                            <span className={isCancelled ? 'line-through text-gray-500' : ''}>
+                                              {job['First Name']} {job['Last Name']}
+                                            </span>
+                                            
+                                            {statusBadge}
                                             
                                             {isLawnRejuv && services && (
                                               <div className="flex gap-0.5">
@@ -744,7 +786,10 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                                         </div>
                                         {job['Home Phone'] && (
                                             <button
-                                              onClick={() => handleCopy(job['Home Phone']!, `ph-${job['Booking ID']}`)}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleCopy(job['Home Phone']!, `ph-${job['Booking ID']}`);
+                                              }}
                                               className="text-blue-400 text-xs flex items-center gap-1 hover:underline mt-1 w-fit"
                                             >
                                               <Phone size={10} /> {job['Home Phone']}
@@ -756,18 +801,21 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                                     <div className="flex flex-col items-end gap-2">
                                         <div className="flex items-center gap-2">
                                             {job.Prepaid === 'x' && <span className="text-[9px] bg-green-900/30 text-green-400 px-1 py-0.5 rounded border border-green-800 font-bold">PP</span>}
-                                            <span className="font-mono text-sm font-bold text-gray-300">{job.Price}</span>
+                                            <span className={`font-mono text-sm font-bold ${isCancelled ? 'text-gray-500 line-through' : 'text-gray-300'}`}>{job.Price}</span>
                                         </div>
 
                                         {!isJobCompleted ? (
                                             <button
-                                                onClick={() => setAssignModalData({
-                                                    type: 'JOB',
-                                                    targetId: job['Booking ID'],
-                                                    currentWorkerId: job['Contractor Number'] || null,
-                                                    routeCode: route.routeCode,
-                                                    title: 'Assign Single Job'
-                                                })}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setAssignModalData({
+                                                        type: 'JOB',
+                                                        targetId: job['Booking ID'],
+                                                        currentWorkerId: job['Contractor Number'] || null,
+                                                        routeCode: route.routeCode,
+                                                        title: 'Assign Single Job'
+                                                    });
+                                                }}
                                                 className={`flex items-center gap-1 px-2 py-1 rounded text-xs border transition-colors ${
                                                     jobWorker
                                                     ? 'bg-gray-700 border-green-900/50 text-green-400'
@@ -786,9 +834,12 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                                         )}
                                     </div>
                                 </div>
+                                
+                                {/* Inline Notes (always visible in expanded view) */}
                                 {notes && (
-                                    <div className="bg-gray-900/50 border border-gray-700/50 rounded px-2 py-1.5 text-[10px] text-gray-400 font-mono italic">
-                                        {notes}
+                                    <div className="flex items-center gap-1.5 bg-gray-900/50 border border-gray-700/50 rounded px-2 py-1.5 text-[10px] text-gray-400 font-mono italic">
+                                        <FileText size={10} className="flex-shrink-0 text-gray-600" />
+                                        <span className="truncate">{notes}</span>
                                     </div>
                                 )}
                             </div>
@@ -802,6 +853,16 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
           </div>
         );
       })}
+
+      {/* --- PENDING JOB MODAL --- */}
+      {pendingJob && (
+        <PendingJobModal
+          job={pendingJob}
+          onClose={handlePendingModalClose}
+          onUpdate={handlePendingModalUpdate}
+          seasonType={seasonType}
+        />
+      )}
 
       {/* --- UNIVERSAL ASSIGNMENT MODAL --- */}
       {assignModalData && (

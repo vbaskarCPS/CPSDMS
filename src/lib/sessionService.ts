@@ -1631,6 +1631,24 @@ class SessionService {
     }
   }
 
+  /**
+   * Update the log notes for a booking
+   * Used by PendingJobModal to allow RMs to edit notes on pending/cancelled/next_time jobs
+   */
+  public async updateBookingNotes(bookingId: string, notes: string): Promise<void> {
+    const ccId = this.getCCId();
+    const { error } = await supabase
+      .from('bookings')
+      .update({ log_notes: notes })
+      .eq('booking_id', bookingId)
+      .eq('command_center_id', ccId);
+    
+    if (error) {
+      console.error("Error updating booking notes:", error);
+      throw error;
+    }
+  }
+
   public async deleteTransactionByJobId(jobId: string): Promise<void> {
     const ccId = this.getCCId();
     await supabase.from('transactions').delete().eq('job_id', jobId).eq('command_center_id', ccId);
