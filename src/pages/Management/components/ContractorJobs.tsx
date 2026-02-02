@@ -277,6 +277,13 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
       }
   };
 
+  // ============================================================================
+  // RENDER JOB ROW
+  // ============================================================================
+  // CHANGE: Notes are now displayed INLINE on the same row after address (md+ screens only)
+  // Previously: Notes were on a separate second row below the main content
+  // Now: [Route] Name [Services] Address 📝Notes... 📞 ✉️ Payment Price [Badge]
+  // ============================================================================
   const renderJobRow = (job: MasterBooking) => {
       const isPaid = job.Completed === 'x' || job.Status === 'completed';
       const isCancelled = job.Status === 'cancelled';
@@ -339,22 +346,19 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
           ? priceStr 
           : `$${parseFloat(priceStr.replace(/[^0-9.]/g, '') || '0').toFixed(2)}`;
 
-      // Determine if row is clickable
-      const isClickable = true; // All rows are now clickable
-
       return (
           <div 
             key={job['Booking ID']} 
             onClick={() => handleJobClick(job)}
-            className={`bg-gray-800 border border-gray-700 rounded px-2 py-1.5 flex flex-col gap-1 relative mb-1 transition-colors cursor-pointer hover:border-gray-500 group ${
+            className={`bg-gray-800 border border-gray-700 rounded px-2 py-1.5 relative mb-1 transition-colors cursor-pointer hover:border-gray-500 group ${
               isPaid ? 'hover:border-cps-blue' : 'hover:border-yellow-600'
             }`}
           >
-              {/* Main Row */}
+              {/* Single Row - All content on one line */}
               <div className="flex items-center justify-between gap-2 text-xs">
-                  {/* Left */}
+                  {/* Left Section: Route, Name, Services, Address, Notes */}
                   <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <span className="font-mono font-bold bg-gray-700 text-gray-300 px-1.5 rounded text-[10px] min-w-[32px] text-center">
+                      <span className="font-mono font-bold bg-gray-700 text-gray-300 px-1.5 rounded text-[10px] min-w-[32px] text-center flex-shrink-0">
                           {job['Route Number'] || '--'}
                       </span>
                       <span className={`font-bold truncate ${isCancelled ? 'text-gray-500 line-through' : 'text-gray-200'}`} title={`${job['First Name']} ${job['Last Name']}`}>
@@ -366,9 +370,18 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
                         <ServiceBadges services={job.services} />
                       )}
                       
-                      <span className="text-gray-500 truncate text-[10px] hidden sm:block">
+                      {/* Address - hidden on mobile */}
+                      <span className="text-gray-500 truncate text-[10px] hidden sm:inline flex-shrink">
                           {job['Full Address']}
                       </span>
+
+                      {/* CHANGED: Notes now inline after address (md+ screens only) */}
+                      {notes && (
+                        <span className="hidden md:inline-flex items-center gap-1 text-[10px] text-gray-500 italic truncate max-w-[200px] flex-shrink" title={notes}>
+                          <FileText size={10} className="flex-shrink-0 text-gray-600" />
+                          <span className="truncate">{notes}</span>
+                        </span>
+                      )}
                   </div>
 
                   {/* Icons with Email Status */}
@@ -390,7 +403,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
                       </div>
                   )}
 
-                  {/* Right */}
+                  {/* Right Section: FO/BO, Price, Badge */}
                   <div className="flex items-center gap-2 flex-shrink-0 text-right">
                       {job['FO/BO/FP'] && job['FO/BO/FP'] !== 'FP' && (
                           <span className="text-[9px] font-bold text-gray-500 border border-gray-600 px-1 rounded">
@@ -407,13 +420,8 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
                   </div>
               </div>
 
-              {/* Notes Row - Only visible on md+ screens, only if notes exist */}
-              {notes && (
-                <div className="hidden md:flex items-center gap-1.5 text-[10px] text-gray-500 italic pl-[42px] border-t border-gray-700/50 pt-1 mt-0.5">
-                  <FileText size={10} className="flex-shrink-0 text-gray-600" />
-                  <span className="truncate">{notes}</span>
-                </div>
-              )}
+              {/* REMOVED: Previous separate notes row that was here */}
+              {/* Notes are now inline above in the left section */}
           </div>
       );
   };
