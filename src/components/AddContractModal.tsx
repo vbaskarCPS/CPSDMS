@@ -1,12 +1,13 @@
 // src/components/AddContractModal.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader, Phone, CheckCircle, Leaf, CreditCard } from 'lucide-react';
+import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader, Phone, CheckCircle, Leaf, CreditCard, Info } from 'lucide-react';
 import { getStorageItem } from '../lib/localStorage';
 import { commandCenterService, getTaxRateForRegion, Region, getAvailableAddOns } from '../lib/commandCenterService';
 import { MasterBooking, Worker, SessionTransaction, SeasonType, ServiceFlags, SERVICE_FLAG_KEYS, SERVICE_FLAG_LABELS } from '../types';
 import { sessionService } from '../lib/sessionService';
 import { trainingService } from '../lib/trainingService';
 import CreditCardModal from './CreditCardModal';
+import EtransferProtocolModal from './EtransferProtocolModal';
 import { 
   formatPhoneNumber, 
   normalizeEmail,
@@ -154,6 +155,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
 
+  // E-Transfer Protocol Modal
+  const [showEtransferProtocol, setShowEtransferProtocol] = useState(false);
+
   // Saved Card on File
   const [sessionTransactions, setSessionTransactions] = useState<SessionTransaction[]>([]);
   const [savedCard, setSavedCard] = useState<SavedCardInfo | null>(null);
@@ -217,6 +221,19 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const hasPropertyTypes = selectedRecipe && selectedRecipe.propertyTypes.length > 0;
   const supportsIOS = selectedRecipe?.hasIOS || false;
   const showGateAndSprinkler = selectedRecipe?.region === 'West';
+
+  // --- COMPUTED: Get customer address for E-Transfer protocol ---
+  const getCustomerAddress = (): string => {
+    if (directUpgradeBooking) {
+      return directUpgradeBooking['Full Address'] || '';
+    } else if (directUpgradeClient) {
+      return `${directUpgradeClient.houseNumber} ${directUpgradeClient.streetName}`.trim();
+    } else if (selectedBooking) {
+      return selectedBooking['Full Address'] || '';
+    } else {
+      return `${houseNumber} ${streetName}`.trim();
+    }
+  };
 
   // --- HELPER: Find saved card by address from session transactions ---
   const findSavedCardByAddress = (address: string): SavedCardInfo | null => {
@@ -312,6 +329,18 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     }
   };
 
+  // Handle split e-transfer amount blur - show protocol if amount > 0
+  const handleSplitEtransferAmountBlur = () => {
+    const amount = parseFloat(splitEtransfer) || 0;
+    if (amount > 0) {
+      // Auto-populate email if empty
+      if (!splitEtransferEmail && formData.email) {
+        setSplitEtransferEmail(formData.email);
+      }
+      setShowEtransferProtocol(true);
+    }
+  };
+
   const handlePaymentMethodChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
     setPaymentInfo({...paymentInfo, method: value});
@@ -339,6 +368,15 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       } else {
         setShowCreditModal(true);
       }
+    }
+
+    // Show E-Transfer protocol when E-Transfer is selected
+    if (value === 'E-Transfer') {
+      // Auto-populate email if empty
+      if (!extraPaymentInfo && formData.email) {
+        setExtraPaymentInfo(formData.email);
+      }
+      setShowEtransferProtocol(true);
     }
   };
 
@@ -1140,10 +1178,18 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                       value={extraPaymentInfo} 
                       onChange={handleEtransferEmailChange}
                       onBlur={handleEtransferEmailBlur}
-                      className={`w-full bg-gray-800 border rounded-lg py-2 pl-9 pr-4 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none ${
+                      className={`w-full bg-gray-800 border rounded-lg py-2 pl-9 pr-10 text-white focus:ring-2 focus:ring-cps-blue focus:outline-none ${
                         etransferEmailError ? 'border-red-500' : 'border-gray-700'
                       }`}
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowEtransferProtocol(true)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-cps-blue transition-colors"
+                      title="View E-Transfer Protocol"
+                    >
+                      <Info size={16} />
+                    </button>
                     {etransferEmailError && <p className="text-red-400 text-[10px] mt-1">{etransferEmailError}</p>}
                   </div>
                 )}
@@ -1216,6 +1262,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                             type="number" 
                             value={splitEtransfer} 
                             onChange={(e) => setSplitEtransfer(e.target.value)}
+                            onBlur={handleSplitEtransferAmountBlur}
                             className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-8 text-white"
                             placeholder="0.00"
                             step="0.01"
@@ -1263,7 +1310,17 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                     
                     {(parseFloat(splitEtransfer) || 0) > 0 && (
                       <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">E-Transfer Email *</label>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block flex items-center gap-1">
+                          E-Transfer Email *
+                          <button
+                            type="button"
+                            onClick={() => setShowEtransferProtocol(true)}
+                            className="text-gray-400 hover:text-cps-blue transition-colors"
+                            title="View E-Transfer Protocol"
+                          >
+                            <Info size={12} />
+                          </button>
+                        </label>
                         <input 
                           type="email" 
                           value={splitEtransferEmail} 
@@ -1353,6 +1410,15 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
           }}
         />
       )}
+
+      {/* E-Transfer Protocol Modal */}
+      <EtransferProtocolModal
+        isOpen={showEtransferProtocol}
+        onClose={() => setShowEtransferProtocol(false)}
+        customerAddress={getCustomerAddress()}
+        contractorFirstName={worker?.firstName || ''}
+        contractorLastName={worker?.lastName || ''}
+      />
     </div>
   );
 };

@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Phone, Mail, X, CheckCircle2, Ban, Lock,
-  Loader, CheckCircle, FileText, TrendingUp, DollarSign, GraduationCap
+  Loader, CheckCircle, FileText, TrendingUp, DollarSign, GraduationCap, Info
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
@@ -19,6 +19,7 @@ import {
   SERVICE_FLAG_LABELS 
 } from '../../types';
 import CreditCardModal from '../../components/CreditCardModal';
+import EtransferProtocolModal from '../../components/EtransferProtocolModal';
 import AddContractModal from '../../components/AddContractModal';
 import { 
   formatPhoneNumber, 
@@ -176,6 +177,7 @@ const JobDetail: React.FC = () => {
   const [isCreditPaid, setIsCreditPaid] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [showEtransferProtocol, setShowEtransferProtocol] = useState(false);
 
   // Upsells enabled state
   const [upsellsEnabled, setUpsellsEnabled] = useState(true);
@@ -203,6 +205,11 @@ const JobDetail: React.FC = () => {
 
   // --- COMPUTED: Can show upgrade button (West only, Aeration season only) ---
   const canShowUpgradeButton = region === 'West' && seasonType === 'aeration';
+
+  // --- COMPUTED: Get customer address for E-Transfer protocol ---
+  const getCustomerAddress = (): string => {
+    return `${houseNumber} ${streetName}`.trim();
+  };
 
   // --- HANDLERS FOR NAME FIELDS ---
   const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -248,6 +255,18 @@ const JobDetail: React.FC = () => {
     if (splitEtransferEmail) setSplitEtransferEmail(normalizeEmail(splitEtransferEmail));
   };
 
+  // Handle split e-transfer amount blur - show protocol if amount > 0
+  const handleSplitEtransferAmountBlur = () => {
+    const amount = parseFloat(splitEtransfer) || 0;
+    if (amount > 0) {
+      // Auto-populate email if empty
+      if (!splitEtransferEmail && email) {
+        setSplitEtransferEmail(email);
+      }
+      setShowEtransferProtocol(true);
+    }
+  };
+
   // --- HANDLER FOR PAYMENT METHOD ---
   const handlePaymentMethodChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
@@ -271,6 +290,15 @@ const JobDetail: React.FC = () => {
     }
     
     if (value === 'Credit Card') setShowCreditModal(true);
+
+    // Show E-Transfer protocol when E-Transfer is selected
+    if (value === 'E-Transfer') {
+      // Auto-populate email if empty
+      if (!etransferEmail && email) {
+        setEtransferEmail(email);
+      }
+      setShowEtransferProtocol(true);
+    }
   };
 
   // --- INITIALIZATION ---
@@ -789,7 +817,17 @@ const JobDetail: React.FC = () => {
                   )}
                   {paymentMethod === 'E-Transfer' && !isReadOnly && (
                       <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Bank Email</label>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block flex items-center gap-1">
+                          Bank Email
+                          <button
+                            type="button"
+                            onClick={() => setShowEtransferProtocol(true)}
+                            className="text-gray-400 hover:text-cps-blue transition-colors"
+                            title="View E-Transfer Protocol"
+                          >
+                            <Info size={12} />
+                          </button>
+                        </label>
                         <input 
                           type="email" 
                           value={etransferEmail} 
@@ -833,7 +871,7 @@ const JobDetail: React.FC = () => {
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">E-Transfer</label>
                       <div className="relative">
                         <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
-                        <input type="number" value={splitEtransfer} onChange={(e) => setSplitEtransfer(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-8 text-white" placeholder="0.00" step="0.01"/>
+                        <input type="number" value={splitEtransfer} onChange={(e) => setSplitEtransfer(e.target.value)} onBlur={handleSplitEtransferAmountBlur} className="w-full bg-gray-800 border border-gray-700 rounded p-2 pl-8 text-white" placeholder="0.00" step="0.01"/>
                       </div>
                     </div>
                     <div>
@@ -854,7 +892,17 @@ const JobDetail: React.FC = () => {
                   
                   {(parseFloat(splitEtransfer) || 0) > 0 && (
                     <div>
-                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">E-Transfer Email *</label>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block flex items-center gap-1">
+                        E-Transfer Email *
+                        <button
+                          type="button"
+                          onClick={() => setShowEtransferProtocol(true)}
+                          className="text-gray-400 hover:text-cps-blue transition-colors"
+                          title="View E-Transfer Protocol"
+                        >
+                          <Info size={12} />
+                        </button>
+                      </label>
                       <input type="email" value={splitEtransferEmail} onChange={handleSplitEtransferEmailChange} onBlur={handleSplitEtransferEmailBlur} className={`w-full bg-gray-800 border rounded p-2 text-white ${splitEtransferEmailError ? 'border-red-500' : 'border-gray-700'}`} placeholder="client@bank.com"/>
                       {splitEtransferEmailError && <p className="text-red-400 text-[10px] mt-1">{splitEtransferEmailError}</p>}
                     </div>
@@ -919,9 +967,17 @@ const JobDetail: React.FC = () => {
           onClose={() => setShowUpgradeModal(false)}
           directUpgradeBooking={getUpgradeBooking()}
           onSuccess={() => navigate('/logsheet')}
-          isTrainingMode={isTrainingMode}
         />
       )}
+
+      {/* E-Transfer Protocol Modal */}
+      <EtransferProtocolModal
+        isOpen={showEtransferProtocol}
+        onClose={() => setShowEtransferProtocol(false)}
+        customerAddress={getCustomerAddress()}
+        contractorFirstName={worker?.firstName || ''}
+        contractorLastName={worker?.lastName || ''}
+      />
     </div>
   );
 };

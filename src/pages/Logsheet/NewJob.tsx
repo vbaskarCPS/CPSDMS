@@ -1,7 +1,7 @@
 // src/pages/Logsheet/NewJob.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap } from 'lucide-react';
+import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap, Info } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { commandCenterService, getTaxRateForRegion, Region } from '../../lib/commandCenterService';
 import { 
@@ -15,6 +15,7 @@ import {
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
 import CreditCardModal from '../../components/CreditCardModal';
+import EtransferProtocolModal from '../../components/EtransferProtocolModal';
 import AddContractModal from '../../components/AddContractModal';
 import { 
   formatPhoneNumber, 
@@ -164,6 +165,9 @@ const NewJob: React.FC = () => {
   const [isCreditPaid, setIsCreditPaid] = useState(false);
   const [ccData, setCcData] = useState<any>(null);
 
+  // E-Transfer Protocol Modal
+  const [showEtransferProtocol, setShowEtransferProtocol] = useState(false);
+
   // Upgrade Modal
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
@@ -188,6 +192,11 @@ const NewJob: React.FC = () => {
 
   // --- COMPUTED: Can show upgrade button (West only, Aeration season only) ---
   const canShowUpgradeButton = region === 'West' && seasonType === 'aeration';
+
+  // --- COMPUTED: Get customer address for E-Transfer protocol ---
+  const getCustomerAddress = (): string => {
+    return `${houseNumber} ${streetName}`.trim();
+  };
 
   // --- SPLIT PAYMENT HELPERS ---
   const getSplitTotal = () => {
@@ -253,6 +262,18 @@ const NewJob: React.FC = () => {
     if (splitEtransferEmail) setSplitEtransferEmail(normalizeEmail(splitEtransferEmail));
   };
 
+  // Handle split e-transfer amount blur - show protocol if amount > 0
+  const handleSplitEtransferAmountBlur = () => {
+    const etransferAmount = parseFloat(splitAmounts.etransfer) || 0;
+    if (etransferAmount > 0) {
+      // Auto-populate email if empty
+      if (!splitEtransferEmail && email) {
+        setSplitEtransferEmail(email);
+      }
+      setShowEtransferProtocol(true);
+    }
+  };
+
   // --- HANDLER FOR PAYMENT METHOD ---
   const handlePaymentMethodChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
@@ -270,6 +291,15 @@ const NewJob: React.FC = () => {
     } else {
       setIsSplitPayment(false);
       if (value === 'Credit Card') setShowCreditModal(true);
+      
+      // Show E-Transfer protocol when E-Transfer is selected
+      if (value === 'E-Transfer') {
+        // Auto-populate email if empty
+        if (!etransferEmail && email) {
+          setEtransferEmail(email);
+        }
+        setShowEtransferProtocol(true);
+      }
     }
   };
 
@@ -749,7 +779,17 @@ const NewJob: React.FC = () => {
                   </div>
                   {paymentMethod === 'E-Transfer' && !isSplitPayment && (
                       <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Bank Email</label>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block flex items-center gap-1">
+                          Bank Email
+                          <button
+                            type="button"
+                            onClick={() => setShowEtransferProtocol(true)}
+                            className="text-gray-400 hover:text-cps-blue transition-colors"
+                            title="View E-Transfer Protocol"
+                          >
+                            <Info size={12} />
+                          </button>
+                        </label>
                         <input 
                           type="email" 
                           value={etransferEmail} 
@@ -808,6 +848,7 @@ const NewJob: React.FC = () => {
                         type="number" 
                         value={splitAmounts.etransfer} 
                         onChange={e => setSplitAmounts({...splitAmounts, etransfer: e.target.value})}
+                        onBlur={handleSplitEtransferAmountBlur}
                         className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white font-mono" 
                         placeholder="0.00"
                         step="0.01"
@@ -841,7 +882,17 @@ const NewJob: React.FC = () => {
 
                   {hasSplitEtransfer() && (
                     <div>
-                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">E-Transfer Email *</label>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block flex items-center gap-1">
+                        E-Transfer Email *
+                        <button
+                          type="button"
+                          onClick={() => setShowEtransferProtocol(true)}
+                          className="text-gray-400 hover:text-cps-blue transition-colors"
+                          title="View E-Transfer Protocol"
+                        >
+                          <Info size={12} />
+                        </button>
+                      </label>
                       <input 
                         type="email"
                         value={splitEtransferEmail} 
@@ -941,9 +992,17 @@ const NewJob: React.FC = () => {
           onClose={() => setShowUpgradeModal(false)}
           directUpgradeClient={getUpgradeClientData()}
           onSuccess={() => navigate('/logsheet')}
-          isTrainingMode={isTrainingMode}
         />
       )}
+
+      {/* E-Transfer Protocol Modal */}
+      <EtransferProtocolModal
+        isOpen={showEtransferProtocol}
+        onClose={() => setShowEtransferProtocol(false)}
+        customerAddress={getCustomerAddress()}
+        contractorFirstName={worker?.firstName || ''}
+        contractorLastName={worker?.lastName || ''}
+      />
     </div>
   );
 };
