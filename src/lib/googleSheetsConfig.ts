@@ -19,32 +19,10 @@ export const SHEET_TABS = {
 };
 
 // --- FEED PLACEHOLDER COLUMN MAPPINGS ---
+// UNIFIED: All seasons use the same column layout (A-R)
+// The only difference is whether service flag columns (L-P) are populated
 
-// Aeration Season: A-M (13 columns)
-export const AERATION_FEED_COLUMNS = {
-  range: 'A:M',
-  mapping: {
-    routeNumber: 0,      // A
-    firstName: 1,        // B
-    lastName: 2,         // C
-    houseNumber: 3,      // D
-    streetName: 4,       // E
-    logNotes: 5,         // F (Call 1st)
-    phone: 6,            // G
-    email: 7,            // H
-    serviceType: 8,      // I (FO/BO/FP)
-    prepaid: 9,          // J (PP)
-    price: 10,           // K (AER. AMT)
-    dateCompleted: 11,   // L
-    contractor: 12,      // M
-  },
-  // Export columns for completed bookings
-  exportDateColumn: 'L',
-  exportContractorColumn: 'M',
-};
-
-// Lawn Rejuvenation Season: A-R (18 columns)
-export const LAWN_REJUV_FEED_COLUMNS = {
+export const FEED_COLUMNS = {
   range: 'A:R',
   mapping: {
     routeNumber: 0,      // A
@@ -58,25 +36,30 @@ export const LAWN_REJUV_FEED_COLUMNS = {
     serviceType: 8,      // I (FO/BO/FP)
     prepaid: 9,          // J (PP)
     price: 10,           // K (AER. AMT)
-    // Service flags (A/D/F/S/L)
+    // Service flags (A/D/F/S/L) - only populated for lawn_rejuv
     serviceAeration: 11, // L (A)
     serviceDethatch: 12, // M (D)
     serviceFertilizer: 13, // N (F)
     serviceSeed: 14,     // O (S)
     serviceLime: 15,     // P (L)
-    // Completion
+    // Completion - ALWAYS columns Q and R regardless of season
     dateCompleted: 16,   // Q
     contractor: 17,      // R
   },
-  // Export columns for completed bookings
+  // Export columns for completed bookings - ALWAYS Q and R
+  exportDateColumn: 'Q',
+  exportContractorColumn: 'R',
+  // Service flag columns (only used for lawn_rejuv)
   exportServiceAerationColumn: 'L',
   exportServiceDethatchColumn: 'M',
   exportServiceFertilizerColumn: 'N',
   exportServiceSeedColumn: 'O',
   exportServiceLimeColumn: 'P',
-  exportDateColumn: 'Q',
-  exportContractorColumn: 'R',
 };
+
+// Legacy exports for backward compatibility
+export const AERATION_FEED_COLUMNS = FEED_COLUMNS;
+export const LAWN_REJUV_FEED_COLUMNS = FEED_COLUMNS;
 
 // --- WORKERBOOK COLUMN MAPPINGS ---
 
@@ -99,22 +82,64 @@ export const WORKERBOOK_COLUMNS = {
   },
 };
 
+// --- PAYOUT STATS COLUMN MAPPINGS ---
+// Matches the actual spreadsheet header: A-AH (34 columns)
+export const PAYOUT_STATS_COLUMNS = {
+  range: 'A:AH',
+  columnCount: 34,
+  mapping: {
+    date: 0,              // A
+    contractorId: 1,      // B
+    firstName: 2,         // C
+    lastName: 3,          // D
+    manager: 4,           // E
+    stepCount: 5,         // F
+    iosCount: 6,          // G
+    prodBilled: 7,        // H
+    prodCash: 8,          // I
+    prodCheque: 9,        // J
+    prodCreditCard: 10,   // K
+    prodETransfer: 11,    // L
+    prodFlats: 12,        // M
+    prodPrepaid: 13,      // N
+    prodPrepaidSplit: 14, // O
+    prodGross: 15,        // P
+    prodPayable: 16,      // Q
+    totalEQ: 17,          // R
+    upsellCount: 18,      // S
+    upsellCash: 19,       // T
+    upsellCheque: 20,     // U
+    upsellCreditCard: 21, // V
+    upsellETransfer: 22,  // W
+    upsellPrepaid: 23,    // X
+    upsellGross: 24,      // Y
+    upsellPayable: 25,    // Z
+    payoutRate: 26,       // AA
+    productionComm: 27,   // AB
+    upsellComm: 28,       // AC
+    iosComm: 29,          // AD
+    machineRental: 30,    // AE
+    deductions: 31,       // AF
+    bonuses: 32,          // AG
+    finalPay: 33,         // AH
+  },
+};
+
 // --- HELPER FUNCTIONS ---
 
 /**
  * Get feed placeholder column config based on season type
+ * Now returns the same unified config for all seasons
  */
 export const getFeedColumnsConfig = (seasonType: SeasonType) => {
-  return seasonType === 'lawn_rejuv' 
-    ? LAWN_REJUV_FEED_COLUMNS 
-    : AERATION_FEED_COLUMNS;
+  return FEED_COLUMNS;
 };
 
 /**
  * Get the feed placeholder range for import
  */
 export const getFeedRange = (seasonType: SeasonType): string => {
-  return getFeedColumnsConfig(seasonType).range;
+  return FEED_COLUMNS.range;
 };
 
 /**
@@ -124,6 +149,13 @@ export const isServiceIncluded = (value: any): boolean => {
   if (!value) return false;
   const str = String(value).toLowerCase().trim();
   return str === 'x' || str === 'yes' || str === 'true' || str === '1';
+};
+
+/**
+ * Check if the season type uses service flags
+ */
+export const seasonUsesServiceFlags = (seasonType: SeasonType): boolean => {
+  return seasonType === 'lawn_rejuv';
 };
 
 // Dynamic config based on current command center

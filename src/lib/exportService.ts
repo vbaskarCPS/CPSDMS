@@ -710,6 +710,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   }
 
   // === 4. Append Payout Stats ===
+  // FIXED: Property names now match what googleSheetsService expects
   const statsData: any[] = [];
   
   if (isTeamSeason) {
@@ -767,8 +768,6 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
         const manager = managerId ? managersMap.get(managerId) : null;
         const managerName = manager?.name || '';
         
-        const teamId = worker?.metadata?.teamId || '';
-        
         statsData.push({
           contractorId: workerId,
           firstName,
@@ -776,6 +775,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
           manager: managerName,
           // Split by equivPercent (no rounding for stepCount)
           stepCount: (stats.stepCount || 0) * equivPercent,
+          iosCount: (stats.iosCount || 0) * upsellPercent,
           prodBilled: (stats.prodBilled || 0) * equivPercent,
           prodCash: (stats.prodCash || 0) * equivPercent,
           prodCheque: (stats.prodCheque || 0) * equivPercent,
@@ -786,10 +786,9 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
           prodPrepaidSplit: (stats.prodPrepaidSplit || 0) * equivPercent,
           prodGross: (stats.prodGross || 0) * equivPercent,
           prodPayable: (stats.prodPayable || 0) * equivPercent,
-          teamTotalEQ: payout.teamTotalEQ,
+          // FIXED: Use assignedEQ for column R (totalEQ)
           assignedEQ: payout.assignedEQ,
           // Split by upsellPercent (no rounding)
-          iosCount: (stats.iosCount || 0) * upsellPercent,
           upsellCount: (stats.upsellCount || 0) * upsellPercent,
           upsellCash: (stats.upsellCash || 0) * upsellPercent,
           upsellCheque: (stats.upsellCheque || 0) * upsellPercent,
@@ -798,27 +797,16 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
           upsellPrepaid: (stats.upsellPrepaid || 0) * upsellPercent,
           upsellGross: (stats.upsellGross || 0) * upsellPercent,
           upsellPayable: (stats.upsellPayable || 0) * upsellPercent,
-          // Payout rate components
-          basePayoutRate: payout.basePayoutRate,
-          alumniRate: payout.alumniRate,
-          silverRate: payout.silverRate,
+          // FIXED: Use totalPayoutRate for column AA (Payout rate)
           totalPayoutRate: payout.totalPayoutRate,
           // Values directly from calculateTeamPayouts (already per-worker)
-          baseCommission: payout.baseCommission,
-          alumniBonus: payout.alumniBonus,
-          silverBonus: payout.silverBonus,
           productionComm: payout.productionCommission,
           upsellComm: payout.upsellCommission,
           iosComm: payout.iosCommission,
           machineRental: payout.machineRentalDeduction,
-          cashChequeDiff: payout.cashChequeDiff,
           deductions: payout.deductions,
           bonuses: payout.bonusAmount,
           finalPay: payout.finalCommission,
-          // Team fields
-          teamId,
-          equivSplitPercent: payout.equivSplitPercent,
-          upsellSplitPercent: payout.upsellSplitPercent,
         });
       }
     }
@@ -855,17 +843,11 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
         : (stats.totalEQ || 0);
       
       // FIXED: Production commission = EQ × totalRate
-      const baseCommission = actualEQ * basePayoutRate;
-      const alumniBonus = actualEQ * alumniRate;
-      const silverBonus = actualEQ * silverRate;
       const productionComm = actualEQ * totalPayoutRate;
       
       const upsellComm = (stats.upsellPayable || 0) * 0.15;
       const iosComm = (stats.iosCount || 0) * 5;
       const machineRental = validation.machineRental ? 10 : 0;
-      
-      // FIXED: cashChequeDiff is DISPLAY ONLY - already reflected in EQ via deltaEQ
-      const cashChequeDiff = Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0);
       
       // FIXED: deductions no longer includes cashChequeDiff
       const deductions = machineRental;
@@ -887,7 +869,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
         prodPrepaidSplit: stats.prodPrepaidSplit || 0,
         prodGross: stats.prodGross || 0,
         prodPayable: stats.prodPayable || 0,
-        teamTotalEQ: actualEQ,
+        // FIXED: Use assignedEQ for column R (totalEQ)
         assignedEQ: actualEQ,
         upsellCount: stats.upsellCount || 0,
         upsellCash: stats.upsellCash || 0,
@@ -897,24 +879,15 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
         upsellPrepaid: stats.upsellPrepaid || 0,
         upsellGross: stats.upsellGross || 0,
         upsellPayable: stats.upsellPayable || 0,
-        basePayoutRate,
-        alumniRate,
-        silverRate,
+        // FIXED: Use totalPayoutRate for column AA (Payout rate)
         totalPayoutRate,
-        baseCommission,
-        alumniBonus,
-        silverBonus,
         productionComm,
         upsellComm,
         iosComm,
         machineRental,
-        cashChequeDiff,
         deductions,
         bonuses: totalBonuses,
         finalPay: validation.finalCommission || 0,
-        teamId: '',
-        equivSplitPercent: 100,
-        upsellSplitPercent: 100,
       });
     }
   }

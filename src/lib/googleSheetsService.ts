@@ -7,9 +7,10 @@ import {
   getFeedColumnsConfig,
   getFeedRange,
   isServiceIncluded,
+  seasonUsesServiceFlags,
   WORKERBOOK_COLUMNS,
-  AERATION_FEED_COLUMNS,
-  LAWN_REJUV_FEED_COLUMNS
+  FEED_COLUMNS,
+  PAYOUT_STATS_COLUMNS
 } from './googleSheetsConfig';
 import { commandCenterService, seasonHasTeams } from './commandCenterService';
 import { 
@@ -220,7 +221,7 @@ class GoogleSheetsService {
     }
 
     const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=OVERWRITE`,
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
       {
         method: 'POST',
         headers: {
@@ -278,9 +279,9 @@ class GoogleSheetsService {
   }
 
   /**
-   * Parse service flags from row data (Lawn Rejuv only)
+   * Parse service flags from row data (for seasons that use them)
    */
-  private parseServiceFlags(row: any[], colConfig: typeof LAWN_REJUV_FEED_COLUMNS['mapping']): ServiceFlags {
+  private parseServiceFlags(row: any[], colConfig: typeof FEED_COLUMNS['mapping']): ServiceFlags {
     return {
       aeration: isServiceIncluded(row[colConfig.serviceAeration]),
       dethatch: isServiceIncluded(row[colConfig.serviceDethatch]),
@@ -331,6 +332,7 @@ class GoogleSheetsService {
     const ccId = commandCenterService.getCurrentCommandCenterId();
     const isTeamSeason = seasonHasTeams(seasonType);
     const seasonConfig = SEASON_CONFIGS[seasonType];
+    const useServiceFlags = seasonUsesServiceFlags(seasonType);
     
     if (!isValidDateTab(dateTab)) {
       throw new Error(`Invalid date tab format: ${dateTab}. Use MmmDD format (e.g., Feb01)`);
@@ -341,12 +343,12 @@ class GoogleSheetsService {
       throw new Error(`Tab "${dateTab}" not found in Workerbook. Please check the tab name.`);
     }
 
-    // Get the appropriate feed range based on season
+    // Get the feed range (unified for all seasons)
     const feedRange = getFeedRange(seasonType);
     const feedColumns = getFeedColumnsConfig(seasonType);
     
     // For team seasons, we need to read column I (Teams) from workerbook
-    const workerbookRange = isTeamSeason ? `'${dateTab}'!A:K` : `'${dateTab}'!A:K`;
+    const workerbookRange = `'${dateTab}'!A:K`;
 
     const [routesData, bookingsData, workersData, managersData] = await Promise.all([
       this.sheetsGet(config.spreadsheets.masterbookings, `'${SHEET_TABS.routes}'!A:G`),
@@ -489,10 +491,10 @@ class GoogleSheetsService {
 
       if (!routeNum) continue;
 
-      // Parse service flags for lawn_rejuv season
+      // Parse service flags only for seasons that use them
       let services: ServiceFlags | undefined;
-      if (seasonType === 'lawn_rejuv') {
-        services = this.parseServiceFlags(row, colMap as typeof LAWN_REJUV_FEED_COLUMNS['mapping']);
+      if (useServiceFlags) {
+        services = this.parseServiceFlags(row, colMap);
       }
 
       const booking: MasterBooking = {
@@ -550,7 +552,8 @@ class GoogleSheetsService {
 
   /**
    * Update completed bookings in Feed Placeholder
-   * Season-aware: writes to different columns based on season type
+   * UNIFIED: Always writes date to column Q and contractor to column R
+   * Service flags (L-P) are only written for seasons that use them
    */
   public async updateCompletedBookings(
     bookings: Array<{
@@ -565,7 +568,7 @@ class GoogleSheetsService {
   ): Promise<number> {
     const config = this.getConfig();
     const feedRange = getFeedRange(seasonType);
-    const feedColumns = getFeedColumnsConfig(seasonType);
+    const useServiceFlags = seasonUsesServiceFlags(seasonType);
     
     const currentData = await this.sheetsGet(
       config.spreadsheets.masterbookings,
@@ -589,25 +592,25 @@ class GoogleSheetsService {
         ) {
           const rowNum = i + 1;
           
-          if (seasonType === 'lawn_rejuv') {
-            // Lawn Rejuv: Update service flags (L-P) and completion (Q-R)
-            const serviceValues = [
-              booking.services?.aeration ? 'x' : '',
-              booking.services?.dethatch ? 'x' : '',
-              booking.services?.fertilizer ? 'x' : '',
-              booking.services?.seed ? 'x' : '',
-              booking.services?.lime ? 'x' : '',
+          if (useServiceFlags && booking.services) {
+            // Seasons with service flags: Update L-R (service flags + date + contractor)
+            const values = [
+              booking.services.aeration ? 'x' : '',
+              booking.services.dethatch ? 'x' : '',
+              booking.services.fertilizer ? 'x' : '',
+              booking.services.seed ? 'x' : '',
+              booking.services.lime ? 'x' : '',
               booking.dateCompleted,
               booking.contractorId,
             ];
             updates.push({
               range: `'${SHEET_TABS.feedPlaceholder}'!L${rowNum}:R${rowNum}`,
-              values: [serviceValues],
+              values: [values],
             });
           } else {
-            // Aeration: Update completion columns (L-M)
+            // Seasons without service flags: Only update Q-R (date + contractor)
             updates.push({
-              range: `'${SHEET_TABS.feedPlaceholder}'!L${rowNum}:M${rowNum}`,
+              range: `'${SHEET_TABS.feedPlaceholder}'!Q${rowNum}:R${rowNum}`,
               values: [[booking.dateCompleted, booking.contractorId]],
             });
           }
@@ -744,6 +747,11 @@ class GoogleSheetsService {
     );
   }
 
+  /**
+   * Append payout stats to Workerbook
+   * FIXED: Uses correct property names and 34-column structure (A-AH)
+   * Changed insertDataOption to INSERT_ROWS to prevent horizontal append
+   */
   public async appendPayoutStats(
     dateTab: string,
     stats: Array<{
@@ -763,7 +771,10 @@ class GoogleSheetsService {
       prodPrepaidSplit: number;
       prodGross: number;
       prodPayable: number;
-      totalEQ: number;
+      // Accept both property names for totalEQ
+      totalEQ?: number;
+      teamTotalEQ?: number;
+      assignedEQ?: number;
       upsellCount: number;
       upsellCash: number;
       upsellCheque: number;
@@ -772,7 +783,9 @@ class GoogleSheetsService {
       upsellPrepaid: number;
       upsellGross: number;
       upsellPayable: number;
-      payoutRate: number;
+      // Accept both property names for payoutRate
+      payoutRate?: number;
+      totalPayoutRate?: number;
       productionComm: number;
       upsellComm: number;
       iosComm: number;
@@ -780,7 +793,7 @@ class GoogleSheetsService {
       deductions: number;
       bonuses: number;
       finalPay: number;
-      // Team fields
+      // Team fields (optional, not written to spreadsheet)
       teamId?: string;
       equivSplitPercent?: number;
       upsellSplitPercent?: number;
@@ -790,50 +803,56 @@ class GoogleSheetsService {
 
     const config = this.getConfig();
 
-    const rows = stats.map(s => [
-      dateTab,
-      s.contractorId,
-      s.firstName,
-      s.lastName,
-      s.manager,
-      s.stepCount,
-      s.iosCount,
-      s.prodBilled,
-      s.prodCash,
-      s.prodCheque,
-      s.prodCreditCard,
-      s.prodETransfer,
-      s.prodFlats,
-      s.prodPrepaid,
-      s.prodPrepaidSplit,
-      s.prodGross,
-      s.prodPayable,
-      s.totalEQ,
-      s.upsellCount,
-      s.upsellCash,
-      s.upsellCheque,
-      s.upsellCreditCard,
-      s.upsellETransfer,
-      s.upsellPrepaid,
-      s.upsellGross,
-      s.upsellPayable,
-      s.payoutRate,
-      s.productionComm,
-      s.upsellComm,
-      s.iosComm,
-      s.machineRental,
-      s.deductions,
-      s.bonuses,
-      s.finalPay,
-      // Additional team columns
-      s.teamId || '',
-      s.equivSplitPercent !== undefined ? s.equivSplitPercent : '',
-      s.upsellSplitPercent !== undefined ? s.upsellSplitPercent : '',
-    ]);
+    // Build rows matching the 34-column header structure (A-AH)
+    const rows = stats.map(s => {
+      // Handle both property names for totalEQ: prefer assignedEQ, then teamTotalEQ, then totalEQ
+      const eqValue = s.assignedEQ ?? s.teamTotalEQ ?? s.totalEQ ?? 0;
+      
+      // Handle both property names for payoutRate
+      const rateValue = s.totalPayoutRate ?? s.payoutRate ?? 0;
+      
+      return [
+        dateTab,           // A: Date
+        s.contractorId,    // B: Contractor ID
+        s.firstName,       // C: First Name
+        s.lastName,        // D: Last Name
+        s.manager,         // E: Manager
+        s.stepCount,       // F: Step Count
+        s.iosCount,        // G: IOSCount
+        s.prodBilled,      // H: prodBilled
+        s.prodCash,        // I: prodCash
+        s.prodCheque,      // J: prodCheque
+        s.prodCreditCard,  // K: prodCreditCard
+        s.prodETransfer,   // L: prodETransfer
+        s.prodFlats,       // M: ProdFlats
+        s.prodPrepaid,     // N: prodPrepaid
+        s.prodPrepaidSplit,// O: prodPrepaidSplit
+        s.prodGross,       // P: ProdGross
+        s.prodPayable,     // Q: ProdPayable
+        eqValue,           // R: totalEQ
+        s.upsellCount,     // S: upsellCount
+        s.upsellCash,      // T: upsellCash
+        s.upsellCheque,    // U: upsellCheque
+        s.upsellCreditCard,// V: upsellCreditCard
+        s.upsellETransfer, // W: upsellETransfer
+        s.upsellPrepaid,   // X: upsellPrepaid
+        s.upsellGross,     // Y: upsellGross
+        s.upsellPayable,   // Z: upsellPayable
+        rateValue,         // AA: Payout rate
+        s.productionComm,  // AB: Production Comm.
+        s.upsellComm,      // AC: Upsell Commission
+        s.iosComm,         // AD: IOS Commission
+        s.machineRental,   // AE: Machine Rental
+        s.deductions,      // AF: Deductions
+        s.bonuses,         // AG: Bonuses
+        s.finalPay,        // AH: Final Pay
+      ];
+    });
 
+    // Use the correct range matching the header (A:AH = 34 columns)
     await this.sheetsAppend(
       config.spreadsheets.workerbook,
-      `'${SHEET_TABS.payoutStats}'!A:AK`,
+      `'${SHEET_TABS.payoutStats}'!${PAYOUT_STATS_COLUMNS.range}`,
       rows
     );
   }
