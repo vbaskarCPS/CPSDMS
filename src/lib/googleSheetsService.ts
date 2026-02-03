@@ -515,7 +515,7 @@ class GoogleSheetsService {
         'Completed': undefined,
         isPrebooked: true,
         sort_order: i - 2,
-        _sourceRow: i + 1,
+        _sourceRow: i + 1, // Store the actual spreadsheet row number (1-indexed)
         commandCenterId: ccId || undefined,
         services,
       };
@@ -552,71 +552,58 @@ class GoogleSheetsService {
 
   /**
    * Update completed bookings in Feed Placeholder
-   * UNIFIED: Always writes date to column Q and contractor to column R
+   * Uses _sourceRow for reliable row-based updates
+   * Writes "Cancelled" to date column for cancelled bookings
    * Service flags (L-P) are only written for seasons that use them
    */
   public async updateCompletedBookings(
     bookings: Array<{
-      routeNumber: string;
-      firstName: string;
-      lastName: string;
-      dateCompleted: string;
-      contractorId: string; // Can be comma-separated for teams
-      services?: ServiceFlags; // For lawn_rejuv
+      _sourceRow: number;          // Original row number from import
+      dateCompleted: string;       // Date string OR "Cancelled"
+      contractorId: string;        // Can be comma-separated for teams
+      services?: ServiceFlags;     // For lawn_rejuv
+      isCancelled?: boolean;       // If true, writes "Cancelled" to date column
     }>,
     seasonType: SeasonType = 'aeration'
   ): Promise<number> {
     const config = this.getConfig();
-    const feedRange = getFeedRange(seasonType);
     const useServiceFlags = seasonUsesServiceFlags(seasonType);
-    
-    const currentData = await this.sheetsGet(
-      config.spreadsheets.masterbookings,
-      `'${SHEET_TABS.feedPlaceholder}'!${feedRange}`
-    );
 
     const updates: { range: string; values: any[][] }[] = [];
-    let matchCount = 0;
 
     for (const booking of bookings) {
-      for (let i = 2; i < currentData.length; i++) {
-        const row = currentData[i];
-        const rowRoute = row[0]?.toString().trim();
-        const rowFirst = row[1]?.toString().trim().toLowerCase();
-        const rowLast = row[2]?.toString().trim().toLowerCase();
+      const rowNum = booking._sourceRow;
+      
+      // Skip if no valid source row
+      if (!rowNum || rowNum < 1) {
+        console.warn('Skipping booking with invalid _sourceRow:', booking);
+        continue;
+      }
 
-        if (
-          rowRoute === booking.routeNumber &&
-          rowFirst === booking.firstName.toLowerCase() &&
-          rowLast === booking.lastName.toLowerCase()
-        ) {
-          const rowNum = i + 1;
-          
-          if (useServiceFlags && booking.services) {
-            // Seasons with service flags: Update L-R (service flags + date + contractor)
-            const values = [
-              booking.services.aeration ? 'x' : '',
-              booking.services.dethatch ? 'x' : '',
-              booking.services.fertilizer ? 'x' : '',
-              booking.services.seed ? 'x' : '',
-              booking.services.lime ? 'x' : '',
-              booking.dateCompleted,
-              booking.contractorId,
-            ];
-            updates.push({
-              range: `'${SHEET_TABS.feedPlaceholder}'!L${rowNum}:R${rowNum}`,
-              values: [values],
-            });
-          } else {
-            // Seasons without service flags: Only update Q-R (date + contractor)
-            updates.push({
-              range: `'${SHEET_TABS.feedPlaceholder}'!Q${rowNum}:R${rowNum}`,
-              values: [[booking.dateCompleted, booking.contractorId]],
-            });
-          }
-          matchCount++;
-          break;
-        }
+      const dateValue = booking.isCancelled ? 'Cancelled' : booking.dateCompleted;
+      const contractorValue = booking.isCancelled ? '' : booking.contractorId;
+
+      if (useServiceFlags && booking.services && !booking.isCancelled) {
+        // Seasons with service flags: Update L-R (service flags + date + contractor)
+        const values = [
+          booking.services.aeration ? 'x' : '',
+          booking.services.dethatch ? 'x' : '',
+          booking.services.fertilizer ? 'x' : '',
+          booking.services.seed ? 'x' : '',
+          booking.services.lime ? 'x' : '',
+          dateValue,
+          contractorValue,
+        ];
+        updates.push({
+          range: `'${SHEET_TABS.feedPlaceholder}'!L${rowNum}:R${rowNum}`,
+          values: [values],
+        });
+      } else {
+        // Seasons without service flags OR cancelled: Only update Q-R (date + contractor)
+        updates.push({
+          range: `'${SHEET_TABS.feedPlaceholder}'!Q${rowNum}:R${rowNum}`,
+          values: [[dateValue, contractorValue]],
+        });
       }
     }
 
@@ -624,7 +611,7 @@ class GoogleSheetsService {
       await this.sheetsBatchUpdate(config.spreadsheets.masterbookings, updates);
     }
 
-    return matchCount;
+    return updates.length;
   }
 
   /**

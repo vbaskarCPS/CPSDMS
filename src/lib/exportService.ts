@@ -539,6 +539,8 @@ export async function generateSessionExport(): Promise<void> {
  * Updates completed bookings, appends accounts/logsheets/payout stats.
  * All data is scoped to the current command center.
  * Season-aware: handles service flags and team data.
+ * Uses _sourceRow for reliable row-based updates.
+ * Marks cancelled bookings with "Cancelled" in the date completed column.
  */
 export async function exportToGoogleSheets(dateTab: string): Promise<{
   bookingsUpdated: number;
@@ -561,15 +563,17 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   const isTeamSeason = seasonHasTeams(seasonType);
 
   // Fetch all data scoped by command center
-  const [sessionsRes, transactionsRes, usersRes] = await Promise.all([
+  const [sessionsRes, transactionsRes, usersRes, bookingsRes] = await Promise.all([
     supabase.from('logsheet_sessions').select('*').eq('date', date).eq('command_center_id', ccId),
     supabase.from('transactions').select('*').eq('command_center_id', ccId),
     supabase.from('users').select('*').eq('command_center_id', ccId),
+    supabase.from('bookings').select('*').eq('session_date', date).eq('command_center_id', ccId),
   ]);
 
   const sessions = sessionsRes.data || [];
   const transactions = transactionsRes.data || [];
   const users = usersRes.data || [];
+  const bookings = bookingsRes.data || [];
 
   // Create maps
   const workersMap = new Map<string, any>();
@@ -587,25 +591,53 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   const sessionsMap = new Map<string, any>();
   sessions.forEach(s => sessionsMap.set(s.id, s));
 
-  // === 1. Update Completed Bookings in Feed Placeholder ===
+  // Create a map of booking_id -> booking for source row lookup
+  const bookingsByJobId = new Map<string, any>();
+  bookings.forEach(b => {
+    if (b.booking_id) {
+      bookingsByJobId.set(b.booking_id, b);
+    }
+  });
+
+  // === 1. Update Completed & Cancelled Bookings in Feed Placeholder ===
+  // Using _sourceRow for reliable row-based updates
+
+  // Completed bookings (from transactions)
   const completedBookings = transactions
     .filter(tx => tx.type === 'Production' && tx.job_id && !tx.job_id.startsWith('NEW-'))
     .map(tx => {
-      // For teams, get all worker IDs (comma-separated)
+      const booking = bookingsByJobId.get(tx.job_id);
       const contractorIds = getTeamWorkerIds(tx, isTeamSeason ? sessionsMap : undefined);
       
+      // Get _sourceRow from the booking record
+      const sourceRow = booking?._sourceRow || booking?.source_row;
+      
       return {
-        routeNumber: tx.customer_snapshot?.routeCode || '',
-        firstName: tx.customer_snapshot?.firstName || '',
-        lastName: tx.customer_snapshot?.lastName || '',
+        _sourceRow: sourceRow,
         dateCompleted: new Date(tx.timestamp).toLocaleDateString(),
         contractorId: contractorIds,
         services: tx.services as ServiceFlags | undefined,
+        isCancelled: false,
       };
-    });
+    })
+    .filter(b => b._sourceRow && b._sourceRow > 0); // Only include if we have a valid source row
+
+  // Cancelled bookings
+  const cancelledBookings = bookings
+    .filter(b => b.status === 'cancelled' && (b._sourceRow || b.source_row))
+    .map(b => ({
+      _sourceRow: b._sourceRow || b.source_row,
+      dateCompleted: 'Cancelled',
+      contractorId: '',
+      services: b.services as ServiceFlags | undefined,
+      isCancelled: true,
+    }));
+
+  // Combine and update
+  const allBookingsToUpdate = [...completedBookings, ...cancelledBookings];
 
   const bookingsUpdated = await googleSheetsService.updateCompletedBookings(
-    completedBookings,
+    allBookingsToUpdate,
     seasonType
   );
 
