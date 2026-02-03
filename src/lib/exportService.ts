@@ -277,7 +277,8 @@ export async function generateSessionExport(): Promise<void> {
           'IOS Comm': payout.iosCommission,
           'Machine Rental': payout.machineRentalDeduction,
           'Cash/Cheque Diff (Display)': payout.cashChequeDiff,
-          'Total Deductions': payout.deductions,
+          // FIXED: Deductions should be 0 since Machine Rental is in its own column
+          'Total Deductions': 0,
           'Bonuses': payout.bonusAmount,
           'Final Commission': payout.finalCommission,
           'Validated': validation.isValidated ? 'Yes' : 'No',
@@ -322,15 +323,16 @@ export async function generateSessionExport(): Promise<void> {
       const silverBonus = actualEQ * silverRate;
       const productionComm = actualEQ * totalPayoutRate;
       
-      const upsellComm = (stats.upsellPayable || 0) * 0.15;
+      // FIXED: Upsell commission is 10%, not 15%
+      const upsellComm = (stats.upsellPayable || 0) * 0.10;
       const iosComm = (stats.iosCount || 0) * 5;
       const machineRental = validation.machineRental ? 10 : 0;
       
       // FIXED: cashChequeDiff is DISPLAY ONLY - already reflected in EQ via deltaEQ
       const cashChequeDiff = Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0);
       
-      // FIXED: deductions no longer includes cashChequeDiff
-      const deductions = machineRental;
+      // FIXED: deductions should be 0 since Machine Rental is in its own column
+      const deductions = 0;
       
       payoutRows.push({
         'Contractor ID': session.worker_id,
@@ -499,7 +501,8 @@ export async function generateSessionExport(): Promise<void> {
           'Bonus Amount': payout.bonusAmount.toFixed(2),
           'Cash/Cheque Diff (Display)': payout.cashChequeDiff.toFixed(2),
           'Machine Rental': payout.machineRentalDeduction.toFixed(2),
-          'Total Deductions': payout.deductions.toFixed(2),
+          // FIXED: Deductions should be 0 since Machine Rental is in its own column
+          'Total Deductions': '0.00',
           'Final Commission': payout.finalCommission.toFixed(2),
         });
       }
@@ -836,7 +839,8 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
           upsellComm: payout.upsellCommission,
           iosComm: payout.iosCommission,
           machineRental: payout.machineRentalDeduction,
-          deductions: payout.deductions,
+          // FIXED: Deductions should be 0 since Machine Rental is in its own column
+          deductions: 0,
           bonuses: payout.bonusAmount,
           finalPay: payout.finalCommission,
         });
@@ -877,12 +881,13 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       // FIXED: Production commission = EQ × totalRate
       const productionComm = actualEQ * totalPayoutRate;
       
-      const upsellComm = (stats.upsellPayable || 0) * 0.15;
+      // FIXED: Upsell commission is 10%, not 15%
+      const upsellComm = (stats.upsellPayable || 0) * 0.10;
       const iosComm = (stats.iosCount || 0) * 5;
       const machineRental = validation.machineRental ? 10 : 0;
       
-      // FIXED: deductions no longer includes cashChequeDiff
-      const deductions = machineRental;
+      // FIXED: deductions should be 0 since Machine Rental is in its own column
+      const deductions = 0;
       
       statsData.push({
         contractorId: session.worker_id,
