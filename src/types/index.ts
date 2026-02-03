@@ -466,6 +466,7 @@ export interface EmailTemplateContentStructure {
   mainContent: string;
   showServiceDetails: boolean;
   showPaymentDetails: boolean;
+  showEtransferInstructions?: boolean; // Show E-Transfer instructions when payment method includes E-Transfer
   footerText: string;
 }
 

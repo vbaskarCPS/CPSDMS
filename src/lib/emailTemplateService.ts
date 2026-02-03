@@ -97,9 +97,15 @@ export const getDefaultContentStructure = (templateType: EmailTemplateType): Ema
     mainContent,
     showServiceDetails: true,
     showPaymentDetails: true,
+    showEtransferInstructions: true, // Default to true - will only show when payment includes E-Transfer
     footerText: '<p>Questions? Simply reply to this email and we\'ll be happy to help.</p>',
   };
 };
+
+// --- E-TRANSFER INSTRUCTIONS PLACEHOLDER ---
+// This placeholder is inserted into the HTML and will be conditionally replaced
+// by the edge function based on the actual payment method
+const ETRANSFER_INSTRUCTIONS_PLACEHOLDER = '{{ETRANSFER_INSTRUCTIONS_SECTION}}';
 
 // --- GENERATE HTML FROM CONTENT STRUCTURE ---
 export const generateHtmlFromContentStructure = (
@@ -151,6 +157,11 @@ export const generateHtmlFromContentStructure = (
       `;
     }
   }
+
+  // Add E-Transfer instructions placeholder if enabled
+  const etransferSection = content.showEtransferInstructions 
+    ? ETRANSFER_INSTRUCTIONS_PLACEHOLDER 
+    : '';
 
   const serviceSection = content.showServiceDetails ? `
     <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9fafb; border-radius: 8px; padding: 20px; margin: 20px 0;">
@@ -208,6 +219,9 @@ export const generateHtmlFromContentStructure = (
           
           <!-- Payment Details -->
           ${paymentSection ? `<tr><td style="padding: 0 30px;">${paymentSection}</td></tr>` : ''}
+          
+          <!-- E-Transfer Instructions (conditionally rendered by edge function) -->
+          ${etransferSection ? `<tr><td style="padding: 0 30px;">${etransferSection}</td></tr>` : ''}
           
           <!-- Footer -->
           <tr>
@@ -515,7 +529,10 @@ class EmailTemplateService {
       companyName: companyName,
     };
     
-    return this.replaceVariables(htmlContent, sampleData);
+    // Remove the E-Transfer placeholder for preview (since it's conditional)
+    let previewHtml = htmlContent.replace(/{{ETRANSFER_INSTRUCTIONS_SECTION}}/g, '');
+    
+    return this.replaceVariables(previewHtml, sampleData);
   }
 
   // --- HELPER: Map DB row to EmailTemplate ---

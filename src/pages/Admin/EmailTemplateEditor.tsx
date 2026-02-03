@@ -18,6 +18,7 @@ import {
   List,
   RotateCcw,
   Type,
+  Mail,
 } from 'lucide-react';
 import { commandCenterService } from '../../lib/commandCenterService';
 import { 
@@ -272,7 +273,11 @@ const EmailTemplateEditor: React.FC = () => {
         
         // Use saved contentStructure if available, otherwise use defaults
         if (existing.contentStructure) {
-          setContent(existing.contentStructure);
+          // Ensure showEtransferInstructions has a default value for older templates
+          setContent({
+            ...existing.contentStructure,
+            showEtransferInstructions: existing.contentStructure.showEtransferInstructions ?? true,
+          });
         } else {
           // Fallback to defaults for templates saved before contentStructure existed
           setContent(getDefaultContentStructure(templateType as EmailTemplateType));
@@ -486,6 +491,20 @@ const EmailTemplateEditor: React.FC = () => {
                   <span className="text-gray-300">Payment Details</span>
                   <span className="text-xs text-gray-500">(Amount, payment method)</span>
                 </label>
+                
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={content.showEtransferInstructions ?? true}
+                    onChange={(e) => setContent({ ...content, showEtransferInstructions: e.target.checked })}
+                    className="w-5 h-5 accent-blue-500"
+                  />
+                  <div className="flex items-center gap-2">
+                    <Mail size={14} className="text-blue-400" />
+                    <span className="text-gray-300">E-Transfer Instructions</span>
+                  </div>
+                  <span className="text-xs text-gray-500">(Only shows when payment includes E-Transfer)</span>
+                </label>
               </div>
 
               {/* Footer Section */}
@@ -537,6 +556,16 @@ const EmailTemplateEditor: React.FC = () => {
                     {emailTemplateService.getPreviewHtml(subject, currentCC.displayName)}
                   </div>
                 </div>
+                
+                {/* E-Transfer Note */}
+                {content.showEtransferInstructions && (
+                  <div className="px-4 py-2 bg-blue-900/20 border-b border-blue-700/50">
+                    <div className="text-xs text-blue-400 flex items-center gap-2">
+                      <Mail size={12} />
+                      E-Transfer instructions will appear when payment method includes E-Transfer
+                    </div>
+                  </div>
+                )}
                 
                 {/* Email Preview */}
                 <div className="bg-white" style={{ height: '600px', overflow: 'auto' }}>
