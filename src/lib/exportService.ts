@@ -587,13 +587,14 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   const sessionsMap = new Map<string, any>();
   sessions.forEach(s => sessionsMap.set(s.id, s));
 
-  // === 1. Update Completed Bookings in Feed Placeholder ===
+  // === 1. Update Completed AND Cancelled Bookings in Feed Placeholder ===
   // Fetch bookings to get route_number, customer details, and _sourceRow from data
+  // Include both completed AND cancelled bookings
   const bookingsRes = await supabase
     .from('bookings')
     .select('*')
     .eq('command_center_id', ccId)
-    .eq('status', 'completed');
+    .in('status', ['completed', 'cancelled']);
   
   const bookings = bookingsRes.data || [];
   
@@ -601,7 +602,8 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   const bookingsMap = new Map<string, any>();
   bookings.forEach(b => bookingsMap.set(b.booking_id, b));
   
-  const completedBookings = transactions
+  // For completed bookings, we need to match with transactions
+  const completedFromTransactions = transactions
     .filter(tx => tx.type === 'Production' && tx.job_id && !tx.job_id.startsWith('NEW-'))
     .map(tx => {
       // For teams, get all worker IDs (comma-separated)
@@ -619,12 +621,31 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
         dateCompleted: new Date(tx.timestamp).toLocaleDateString(),
         contractorId: contractorIds,
         services: tx.services as ServiceFlags | undefined,
+        isCancelled: false,
       };
     })
-    .filter(b => b.routeNumber); // Only include bookings that have a route number
+    .filter(b => b._sourceRow); // Must have _sourceRow to update
+
+  // For cancelled bookings, we don't have transactions - pull directly from bookings
+  const cancelledBookings = bookings
+    .filter(b => b.status === 'cancelled')
+    .map(b => ({
+      _sourceRow: b.data?._sourceRow,
+      routeNumber: b.route_number || '',
+      firstName: b.customer_details?.['First Name'] || '',
+      lastName: b.customer_details?.['Last Name'] || '',
+      dateCompleted: 'Cancelled',
+      contractorId: '',
+      services: b.services as ServiceFlags | undefined,
+      isCancelled: true,
+    }))
+    .filter(b => b._sourceRow); // Must have _sourceRow to update
+
+  // Combine both lists
+  const allBookingsToUpdate = [...completedFromTransactions, ...cancelledBookings];
 
   const bookingsUpdated = await googleSheetsService.updateCompletedBookings(
-    completedBookings,
+    allBookingsToUpdate,
     seasonType
   );
 
