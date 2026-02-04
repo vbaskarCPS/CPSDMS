@@ -588,7 +588,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   sessions.forEach(s => sessionsMap.set(s.id, s));
 
   // === 1. Update Completed Bookings in Feed Placeholder ===
-  // Fetch bookings to get route_number and customer details
+  // Fetch bookings to get route_number, customer details, and _sourceRow from data
   const bookingsRes = await supabase
     .from('bookings')
     .select('*')
@@ -607,11 +607,12 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       // For teams, get all worker IDs (comma-separated)
       const contractorIds = getTeamWorkerIds(tx, isTeamSeason ? sessionsMap : undefined);
       
-      // Look up the booking to get route_number and customer details
+      // Look up the booking to get route_number, customer details, and _sourceRow
       const booking = bookingsMap.get(tx.job_id);
       
       return {
-        // Use booking data if available, fall back to customer_snapshot
+        // FIX: Extract _sourceRow from booking.data where it was stored during import
+        _sourceRow: booking?.data?._sourceRow,
         routeNumber: booking?.route_number || tx.customer_snapshot?.routeCode || '',
         firstName: booking?.customer_details?.['First Name'] || tx.customer_snapshot?.firstName || '',
         lastName: booking?.customer_details?.['Last Name'] || tx.customer_snapshot?.lastName || '',
@@ -806,7 +807,6 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
           prodPayable: (stats.prodPayable || 0) * equivPercent,
           // FIXED: Use assignedEQ for column R (totalEQ)
           assignedEQ: payout.assignedEQ,
-          // Split by upsellPercent (no rounding)
           upsellCount: (stats.upsellCount || 0) * upsellPercent,
           upsellCash: (stats.upsellCash || 0) * upsellPercent,
           upsellCheque: (stats.upsellCheque || 0) * upsellPercent,
