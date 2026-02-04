@@ -277,8 +277,7 @@ export async function generateSessionExport(): Promise<void> {
           'IOS Comm': payout.iosCommission,
           'Machine Rental': payout.machineRentalDeduction,
           'Cash/Cheque Diff (Display)': payout.cashChequeDiff,
-          // FIXED: Deductions should be 0 since Machine Rental is in its own column
-          'Total Deductions': 0,
+          'Total Deductions': payout.deductions,
           'Bonuses': payout.bonusAmount,
           'Final Commission': payout.finalCommission,
           'Validated': validation.isValidated ? 'Yes' : 'No',
@@ -323,16 +322,15 @@ export async function generateSessionExport(): Promise<void> {
       const silverBonus = actualEQ * silverRate;
       const productionComm = actualEQ * totalPayoutRate;
       
-      // FIXED: Upsell commission is 10%, not 15%
-      const upsellComm = (stats.upsellPayable || 0) * 0.10;
+      const upsellComm = (stats.upsellPayable || 0) * 0.15;
       const iosComm = (stats.iosCount || 0) * 5;
       const machineRental = validation.machineRental ? 10 : 0;
       
       // FIXED: cashChequeDiff is DISPLAY ONLY - already reflected in EQ via deltaEQ
       const cashChequeDiff = Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0);
       
-      // FIXED: deductions should be 0 since Machine Rental is in its own column
-      const deductions = 0;
+      // FIXED: deductions no longer includes cashChequeDiff
+      const deductions = machineRental;
       
       payoutRows.push({
         'Contractor ID': session.worker_id,
@@ -501,8 +499,7 @@ export async function generateSessionExport(): Promise<void> {
           'Bonus Amount': payout.bonusAmount.toFixed(2),
           'Cash/Cheque Diff (Display)': payout.cashChequeDiff.toFixed(2),
           'Machine Rental': payout.machineRentalDeduction.toFixed(2),
-          // FIXED: Deductions should be 0 since Machine Rental is in its own column
-          'Total Deductions': '0.00',
+          'Total Deductions': payout.deductions.toFixed(2),
           'Final Commission': payout.finalCommission.toFixed(2),
         });
       }
@@ -542,8 +539,6 @@ export async function generateSessionExport(): Promise<void> {
  * Updates completed bookings, appends accounts/logsheets/payout stats.
  * All data is scoped to the current command center.
  * Season-aware: handles service flags and team data.
- * Uses _sourceRow for reliable row-based updates.
- * Marks cancelled bookings with "Cancelled" in the date completed column.
  */
 export async function exportToGoogleSheets(dateTab: string): Promise<{
   bookingsUpdated: number;
@@ -566,17 +561,15 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   const isTeamSeason = seasonHasTeams(seasonType);
 
   // Fetch all data scoped by command center
-  const [sessionsRes, transactionsRes, usersRes, bookingsRes] = await Promise.all([
+  const [sessionsRes, transactionsRes, usersRes] = await Promise.all([
     supabase.from('logsheet_sessions').select('*').eq('date', date).eq('command_center_id', ccId),
     supabase.from('transactions').select('*').eq('command_center_id', ccId),
     supabase.from('users').select('*').eq('command_center_id', ccId),
-    supabase.from('bookings').select('*').eq('session_date', date).eq('command_center_id', ccId),
   ]);
 
   const sessions = sessionsRes.data || [];
   const transactions = transactionsRes.data || [];
   const users = usersRes.data || [];
-  const bookings = bookingsRes.data || [];
 
   // Create maps
   const workersMap = new Map<string, any>();
@@ -594,53 +587,43 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   const sessionsMap = new Map<string, any>();
   sessions.forEach(s => sessionsMap.set(s.id, s));
 
-  // Create a map of booking_id -> booking for source row lookup
-  const bookingsByJobId = new Map<string, any>();
-  bookings.forEach(b => {
-    if (b.booking_id) {
-      bookingsByJobId.set(b.booking_id, b);
-    }
-  });
-
-  // === 1. Update Completed & Cancelled Bookings in Feed Placeholder ===
-  // Using _sourceRow for reliable row-based updates
-
-  // Completed bookings (from transactions)
+  // === 1. Update Completed Bookings in Feed Placeholder ===
+  // Fetch bookings to get route_number and customer details
+  const bookingsRes = await supabase
+    .from('bookings')
+    .select('*')
+    .eq('command_center_id', ccId)
+    .eq('status', 'completed');
+  
+  const bookings = bookingsRes.data || [];
+  
+  // Create a map of booking_id -> booking for quick lookup
+  const bookingsMap = new Map<string, any>();
+  bookings.forEach(b => bookingsMap.set(b.booking_id, b));
+  
   const completedBookings = transactions
     .filter(tx => tx.type === 'Production' && tx.job_id && !tx.job_id.startsWith('NEW-'))
     .map(tx => {
-      const booking = bookingsByJobId.get(tx.job_id);
+      // For teams, get all worker IDs (comma-separated)
       const contractorIds = getTeamWorkerIds(tx, isTeamSeason ? sessionsMap : undefined);
       
-      // Get _sourceRow from the booking record
-      const sourceRow = booking?._sourceRow || booking?.source_row;
+      // Look up the booking to get route_number and customer details
+      const booking = bookingsMap.get(tx.job_id);
       
       return {
-        _sourceRow: sourceRow,
+        // Use booking data if available, fall back to customer_snapshot
+        routeNumber: booking?.route_number || tx.customer_snapshot?.routeCode || '',
+        firstName: booking?.customer_details?.['First Name'] || tx.customer_snapshot?.firstName || '',
+        lastName: booking?.customer_details?.['Last Name'] || tx.customer_snapshot?.lastName || '',
         dateCompleted: new Date(tx.timestamp).toLocaleDateString(),
         contractorId: contractorIds,
         services: tx.services as ServiceFlags | undefined,
-        isCancelled: false,
       };
     })
-    .filter(b => b._sourceRow && b._sourceRow > 0); // Only include if we have a valid source row
-
-  // Cancelled bookings
-  const cancelledBookings = bookings
-    .filter(b => b.status === 'cancelled' && (b._sourceRow || b.source_row))
-    .map(b => ({
-      _sourceRow: b._sourceRow || b.source_row,
-      dateCompleted: 'Cancelled',
-      contractorId: '',
-      services: b.services as ServiceFlags | undefined,
-      isCancelled: true,
-    }));
-
-  // Combine and update
-  const allBookingsToUpdate = [...completedBookings, ...cancelledBookings];
+    .filter(b => b.routeNumber); // Only include bookings that have a route number
 
   const bookingsUpdated = await googleSheetsService.updateCompletedBookings(
-    allBookingsToUpdate,
+    completedBookings,
     seasonType
   );
 
@@ -839,8 +822,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
           upsellComm: payout.upsellCommission,
           iosComm: payout.iosCommission,
           machineRental: payout.machineRentalDeduction,
-          // FIXED: Deductions should be 0 since Machine Rental is in its own column
-          deductions: 0,
+          deductions: payout.deductions,
           bonuses: payout.bonusAmount,
           finalPay: payout.finalCommission,
         });
@@ -881,13 +863,12 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       // FIXED: Production commission = EQ × totalRate
       const productionComm = actualEQ * totalPayoutRate;
       
-      // FIXED: Upsell commission is 10%, not 15%
-      const upsellComm = (stats.upsellPayable || 0) * 0.10;
+      const upsellComm = (stats.upsellPayable || 0) * 0.15;
       const iosComm = (stats.iosCount || 0) * 5;
       const machineRental = validation.machineRental ? 10 : 0;
       
-      // FIXED: deductions should be 0 since Machine Rental is in its own column
-      const deductions = 0;
+      // FIXED: deductions no longer includes cashChequeDiff
+      const deductions = machineRental;
       
       statsData.push({
         contractorId: session.worker_id,
