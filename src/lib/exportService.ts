@@ -72,6 +72,35 @@ function serviceFlagsToString(services?: ServiceFlags): string {
 }
 
 /**
+ * Format payment breakdown into a readable string.
+ * If a breakdown exists with multiple methods, returns "Method: $X.XX / Method: $Y.YY"
+ * Otherwise returns the simple payment method string.
+ */
+function formatPaymentType(tx: any): string {
+  const breakdown = tx.payment_breakdown;
+  
+  if (breakdown && typeof breakdown === 'object') {
+    const entries = Object.entries(breakdown).filter(([, amount]) => {
+      const val = Number(amount) || 0;
+      return val > 0;
+    });
+    
+    if (entries.length > 1) {
+      return entries
+        .map(([method, amount]) => `${method}: $${(Number(amount) || 0).toFixed(2)}`)
+        .join(' / ');
+    }
+    
+    // Single entry in breakdown — just use the method name
+    if (entries.length === 1) {
+      return entries[0][0];
+    }
+  }
+  
+  return tx.payment_method || '';
+}
+
+/**
  * Helper to get all team worker names for a transaction
  * Falls back to session team_worker_ids if completed_by_worker_ids is not set
  */
@@ -602,9 +631,10 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   const bookingsMap = new Map<string, any>();
   bookings.forEach(b => bookingsMap.set(b.booking_id, b));
   
-  // For completed bookings, we need to match with transactions
+  // FIX: Include both Production AND Upgrade transactions for Feed Placeholder updates
+  // Upgrades reuse the original booking ID, so they should mark the booking as completed
   const completedFromTransactions = transactions
-    .filter(tx => tx.type === 'Production' && tx.job_id && !tx.job_id.startsWith('NEW-'))
+    .filter(tx => (tx.type === 'Production' || tx.type === 'Upgrade') && tx.job_id && !tx.job_id.startsWith('NEW-'))
     .map(tx => {
       // For teams, get all worker IDs (comma-separated)
       const contractorIds = getTeamWorkerIds(tx, isTeamSeason ? sessionsMap : undefined);
@@ -693,7 +723,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       propertyType: tx.customer_snapshot?.serviceType || 'FP',
       notes: tx.item_description || '',
       price: tx.price || 0,
-      paymentType: tx.payment_method || '',
+      paymentType: formatPaymentType(tx),
       contractorName,
       paymentDetails: tx.cc_full_number || tx.cheque_number || tx.etransfer_email || tx.invoice_number || '',
       expiry: tx.cc_expiry || '',
@@ -739,7 +769,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
         propertyType: tx.customer_snapshot?.serviceType || 'FP',
         notes: tx.item_description || '',
         price: tx.price || 0,
-        paymentType: tx.payment_method || '',
+        paymentType: formatPaymentType(tx),
         contractorName,
         services: tx.services as ServiceFlags | undefined,
       };
