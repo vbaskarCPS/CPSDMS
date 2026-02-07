@@ -8,6 +8,9 @@ interface LogsheetJobCardProps {
   onClick: () => void;
 }
 
+// Warning keyword pattern - case insensitive
+const WARNING_PATTERN = /2nd\s*run|mbh|march/i;
+
 // Service badge colors
 const SERVICE_BADGE_COLORS: Record<keyof ServiceFlags, { bg: string; text: string; border: string }> = {
   aeration: { bg: 'bg-blue-900/40', text: 'text-blue-300', border: 'border-blue-600' },
@@ -91,6 +94,28 @@ const formatPaymentDisplay = (job: MasterBooking): string => {
   return 'Paid';
 };
 
+// Warning Watermark - absolutely positioned, no layout impact
+const WarningWatermark: React.FC = () => (
+  <div className="absolute inset-0 flex items-center justify-end pointer-events-none overflow-hidden rounded-xl">
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="80"
+      height="80"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="text-orange-500/15 mr-4"
+    >
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </svg>
+  </div>
+);
+
 // Service Badges Component
 const ServiceBadges: React.FC<{ services?: ServiceFlags }> = ({ services }) => {
   if (!services) return null;
@@ -119,10 +144,14 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   const isCompleted = job.Completed === 'x' || job.Status === 'completed';
   const isCancelled = job.Status === 'cancelled';
   const isNextTime = job.Status === 'next_time';
+  const isPending = !isCompleted && !isCancelled && !isNextTime;
   const isPrepaid = job.Prepaid === 'x';
   
-  // Data Extraction
+  // Warning detection - only for pending jobs
   const notes = job['Log Sheet Notes']; 
+  const isWarning = isPending && WARNING_PATTERN.test(notes || '');
+  
+  // Data Extraction
   const propertyType = job['FO/BO/FP'] || 'FP'; 
   const phone = job['Home Phone'] || job['Cell Phone'];
   const email = job['Email Address'];
@@ -156,6 +185,9 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   } else if (isNextTime) {
       borderColor = 'border-orange-500';
       bgColor = 'bg-orange-900/20';
+  } else if (isWarning) {
+      borderColor = 'border-orange-500';
+      bgColor = 'bg-yellow-900/25';
   }
 
   const displayNotes = isContract && contractTitle ? contractTitle : notes;
@@ -192,7 +224,10 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
       onClick={onClick}
       className={`relative p-4 rounded-xl border shadow-sm transition-all active:scale-[0.98] flex items-center justify-between cursor-pointer mb-2 ${bgColor} ${borderColor} ${isCompleted ? '' : 'hover:border-gray-600'}`}
     >
-      <div className="flex-1 min-w-0 pr-2">
+      {/* Warning watermark - no layout impact */}
+      {isWarning && <WarningWatermark />}
+
+      <div className="flex-1 min-w-0 pr-2 relative z-10">
         <div className="flex items-center gap-2 mb-1">
           <span className="bg-gray-700 text-gray-300 text-[10px] font-mono px-1.5 py-0.5 rounded border border-gray-600">{job['Route Number']}</span>
           <h3 className="font-bold text-gray-100 text-sm truncate">{job['First Name']} {job['Last Name']}</h3>
@@ -219,7 +254,7 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
         )}
       </div>
 
-      <div className="text-right shrink-0 flex flex-col items-end justify-center gap-1">
+      <div className="text-right shrink-0 flex flex-col items-end justify-center gap-1 relative z-10">
         <span className="text-[9px] font-bold bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded border border-gray-600 uppercase">{propertyType}</span>
         
         <div className="flex flex-col items-end">
