@@ -123,7 +123,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
   const [splitCcPaid, setSplitCcPaid] = useState(false);
   const [splitCcData, setSplitCcData] = useState<{ number: string; expiry: string; cvc: string } | null>(null);
 
-  // Check if transaction is currently prepaid
+  // Check if transaction is currently prepaid (uses live form state)
   const isPrepaid = useMemo(() => {
     const method = formData.paymentMethod;
     const breakdown = formData.paymentBreakdown || {};
@@ -131,16 +131,21 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
   }, [formData.paymentMethod, formData.paymentBreakdown]);
 
   // Check if this is an IMPORTED prepaid (from spreadsheet) - these are locked
+  // FIX: Use the ORIGINAL transaction data, not the live form state.
+  // This prevents the form from locking when a user changes a non-prepaid
+  // transaction's payment method to Prepaid via the dropdown.
   const isImportedPrepaid = useMemo((): boolean => {
-    const method = formData.paymentMethod;
-    const breakdown = formData.paymentBreakdown || {};
-    const transactionIsPrepaid = method === 'Prepaid' || 'Prepaid' in breakdown;
+    if (!transaction) return false;
+
+    const originalMethod = transaction.paymentMethod || transaction.payment_method || '';
+    const originalBreakdown = transaction.paymentBreakdown || {};
+    const originalIsPrepaid = originalMethod === 'Prepaid' || 'Prepaid' in originalBreakdown;
     
     // Imported bookings don't have NEW- prefix
-    const isFromImport = Boolean(transaction?.jobId && !transaction.jobId.startsWith('NEW-'));
+    const isFromImport = Boolean(transaction.jobId && !transaction.jobId.startsWith('NEW-'));
     
-    return transactionIsPrepaid && isFromImport;
-  }, [formData.paymentMethod, formData.paymentBreakdown, transaction?.jobId]);
+    return originalIsPrepaid && isFromImport;
+  }, [transaction]);
 
   // Determine if this is a split payment
   const isSplitPayment = formData.paymentMethod === 'Split';
