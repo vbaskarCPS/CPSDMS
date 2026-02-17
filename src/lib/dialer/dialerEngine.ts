@@ -177,16 +177,29 @@ export function invalidateCache(): void {
 // HIDDEN ROWS — fetch via Apps Script bridge
 // =============================================================================
 
-async function fetchHiddenRows(appsScriptUrl: string, sheetName: string): Promise<string> {
-  if (!appsScriptUrl) return '';
+async function callHighlight(
+  appsScriptUrl: string,
+  sheetName: string,
+  repCode: string,
+  currentRows: number[],
+  nextRows: number[]
+): Promise<void> {
+  if (!appsScriptUrl) return;
   try {
-    const url = `${appsScriptUrl}?action=getHiddenRows&sheet=${encodeURIComponent(sheetName)}`;
-    const resp = await fetch(url);
-    if (!resp.ok) return '';
-    const data = await resp.json();
-    return data.hiddenRows || '';
+    await fetch(appsScriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      redirect: 'follow',
+      body: JSON.stringify({
+        action: 'highlight',
+        sheet: sheetName,
+        repCode,
+        currentRows,
+        nextRows,
+      }),
+    });
   } catch {
-    return '';
+    // Silent fail — highlight is non-critical
   }
 }
 
@@ -205,7 +218,7 @@ async function callHighlight(
   try {
     await fetch(appsScriptUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'text/plain' },
       body: JSON.stringify({
         action: 'highlight',
         sheet: sheetName,
