@@ -161,6 +161,9 @@ export default function DialerPage() {
 
   // --- YES form fields ---
   const [yName, setYName] = useState('');
+  const [yLastName, setYLastName] = useState('');
+  const [yHouseNum, setYHouseNum] = useState('');
+  const [yStreetName, setYStreetName] = useState('');
   const [yPrice, setYPrice] = useState('');
   const [yEmail, setYEmail] = useState('');
   const [yGate, setYGate] = useState(false);
@@ -329,6 +332,9 @@ export default function DialerPage() {
 
   const prefillYesForm = (state: DialerState) => {
     setYName(state.client.firstName || '');
+    setYLastName(state.client.lastName || '');
+    setYHouseNum(state.client.houseNum || '');
+    setYStreetName(state.client.streetName || '');
     setYPrice(state.previousPrice || '');
     setYEmail(state.client.email || '');
     setYGate(false);
@@ -450,6 +456,9 @@ export default function DialerPage() {
 
     const extra: DispositionExtra = {
       name: yName.trim(),
+      lastName: yLastName.trim(),
+      houseNum: yHouseNum.trim(),
+      streetName: yStreetName.trim(),
       price: yPrice.trim(),
       email: yEmail.trim(),
       gate: yGate,
@@ -898,92 +907,151 @@ export default function DialerPage() {
             )}
           </div>
 
-          {/* Content area: service history + nearby AER */}
+          {/* Content area: service history + AER — OR — YES booking form */}
           <div className="flex-1 overflow-y-auto p-2.5" style={S.contentArea}>
-            <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 9 }}>Service History</div>
-            {cs.serviceHistory.map((h, i) => {
-              const foC = FO_COLORS[h.fo] || FO_COLORS.FP;
-              return (
-                <div key={i} className="flex items-center gap-1.5 px-1.5 py-1 rounded mb-1 text-xs" style={S.historyRow}>
-                  <span className="font-black text-white" style={{ minWidth: 36 }}>{h.year}</span>
-                  <span className="font-bold" style={{ color: '#2ecc71', minWidth: 50 }}>{h.price || '-'}</span>
-                  <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap" style={{ color: '#888' }}>{h.contractor}</span>
-                  <span className="font-bold rounded px-1.5 py-0.5" style={{ background: foC.bg, color: foC.color, fontSize: 9 }}>{h.fo || 'FP'}</span>
-                  {h.pmtType && <span style={{ color: '#555', fontSize: 9 }}>{h.pmtType}</span>}
-                </div>
-              );
-            })}
+            {showYesPanel ? (
+              /* ═══════════ YES BOOKING FORM ═══════════ */
+              <div>
+                <div className="text-xs uppercase tracking-widest font-bold mb-2" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 9 }}>Booking Details</div>
 
-            {/* Nearby AER */}
-            {cs.nearbyAER.length > 0 && (
-              <div className="mt-1 p-2 rounded" style={S.linkShot}>
-                <div className="text-xs uppercase tracking-widest font-bold mb-0.5" style={{ color: '#2ecc71', fontSize: 9 }}>
-                  🔗 Nearby AER ({cs.nearbyAER.length})
-                </div>
-                {cs.nearbyAER.slice(0, 10).map((a, i) => (
-                  <div key={i} className="text-xs mb-0.5" style={{ color: '#aaa' }}>
-                    <span className="font-bold" style={{ color: '#2ecc71' }}>{a.house}</span> {a.name}
+                {/* Row 1: First Name + Last Name */}
+                <div className="flex gap-2 mb-1.5">
+                  <div className="flex-1">
+                    <YesField label="First Name" value={yName} onChange={setYName} />
                   </div>
-                ))}
-                {cs.nearbyAER.length > 10 && <div className="text-xs" style={{ color: '#555' }}>+{cs.nearbyAER.length - 10} more</div>}
+                  <div className="flex-1">
+                    <YesField label="Last Name" value={yLastName} onChange={setYLastName} />
+                  </div>
+                </div>
+
+                {/* Row 2: Address — House # + Street */}
+                <div className="flex gap-2 mb-1.5">
+                  <div style={{ width: 80 }}>
+                    <YesField label="House #" value={yHouseNum} onChange={setYHouseNum} />
+                  </div>
+                  <div className="flex-1">
+                    <YesField label="Street Name" value={yStreetName} onChange={setYStreetName} />
+                  </div>
+                </div>
+
+                {/* Row 3: Price + Email */}
+                <div className="flex gap-2 mb-1.5">
+                  <div style={{ width: 100 }}>
+                    <YesField label="Price" value={yPrice} onChange={setYPrice} />
+                  </div>
+                  <div className="flex-1">
+                    <YesField label="Email" value={yEmail} onChange={setYEmail} />
+                  </div>
+                </div>
+
+                {/* Row 4: Gate / Sprinkler + FO selection */}
+                <div className="flex items-end gap-4 mb-1.5">
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: '#ccc' }}>
+                      <input type="checkbox" checked={yGate} onChange={(e) => setYGate(e.target.checked)} style={{ accentColor: '#2ecc71', width: 14, height: 14 }} /> Gate
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: '#ccc' }}>
+                      <input type="checkbox" checked={ySprink} onChange={(e) => setYSprink(e.target.checked)} style={{ accentColor: '#2ecc71', width: 14, height: 14 }} /> Sprinkler
+                    </label>
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase tracking-wider font-semibold mb-0.5" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 8, letterSpacing: '1px' }}>FO / BO / FP</div>
+                    <div className="flex gap-3">
+                      {(['FO', 'BO', 'FP'] as const).map(val => (
+                        <label key={val} className="flex items-center gap-1 cursor-pointer">
+                          <input type="radio" name="foRadio" checked={yFO === val} onChange={() => setYFO(val)} style={{ accentColor: '#2ecc71', width: 14, height: 14 }} />
+                          <span className="text-xs font-bold" style={{ color: FO_COLORS[val].color }}>{val}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Row 5: Notes (full width) */}
+                <div className="mb-2">
+                  <YesField label="Notes" value={yNotes} onChange={setYNotes} />
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowYesPanel(false)}
+                    className="px-3 py-2 rounded text-xs font-bold cursor-pointer"
+                    style={{ background: '#333', color: '#888', border: '1px solid #555' }}
+                  >
+                    ✖ Cancel
+                  </button>
+                  <button
+                    onClick={() => doYes('COMPLETE')}
+                    className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer"
+                    style={{ background: '#2ecc71', color: '#fff', border: 'none', letterSpacing: '2px' }}
+                  >
+                    ✔ Complete
+                  </button>
+                  <button
+                    onClick={() => doYes('PREPAY')}
+                    className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer"
+                    style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none', letterSpacing: '2px' }}
+                  >
+                    💳 Prepay
+                  </button>
+                </div>
               </div>
+            ) : (
+              /* ═══════════ SERVICE HISTORY + AER ═══════════ */
+              <>
+                <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 9 }}>Service History</div>
+                {cs.serviceHistory.map((h, i) => {
+                  const foC = FO_COLORS[h.fo] || FO_COLORS.FP;
+                  return (
+                    <div key={i} className="flex items-center gap-1.5 px-1.5 py-1 rounded mb-1 text-xs" style={S.historyRow}>
+                      <span className="font-black text-white" style={{ minWidth: 36 }}>{h.year}</span>
+                      <span className="font-bold" style={{ color: '#2ecc71', minWidth: 50 }}>{h.price || '-'}</span>
+                      <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap" style={{ color: '#888' }}>{h.contractor}</span>
+                      <span className="font-bold rounded px-1.5 py-0.5" style={{ background: foC.bg, color: foC.color, fontSize: 9 }}>{h.fo || 'FP'}</span>
+                      {h.pmtType && <span style={{ color: '#555', fontSize: 9 }}>{h.pmtType}</span>}
+                    </div>
+                  );
+                })}
+
+                {/* Nearby AER */}
+                {cs.nearbyAER.length > 0 && (
+                  <div className="mt-1 p-2 rounded" style={S.linkShot}>
+                    <div className="text-xs uppercase tracking-widest font-bold mb-0.5" style={{ color: '#2ecc71', fontSize: 9 }}>
+                      🔗 Nearby AER ({cs.nearbyAER.length})
+                    </div>
+                    {cs.nearbyAER.slice(0, 10).map((a, i) => (
+                      <div key={i} className="text-xs mb-0.5" style={{ color: '#aaa' }}>
+                        <span className="font-bold" style={{ color: '#2ecc71' }}>{a.house}</span> {a.name}
+                      </div>
+                    ))}
+                    {cs.nearbyAER.length > 10 && <div className="text-xs" style={{ color: '#555' }}>+{cs.nearbyAER.length - 10} more</div>}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
 
-        {/* RIGHT: Side panel */}
+        {/* RIGHT: Side panel — disposition buttons always visible */}
         <div className="flex flex-col overflow-hidden" style={{ ...S.sidePanel, width: 210, minWidth: 210 }}>
-          {/* Disposition buttons (hidden when YES panel shown) */}
-          {!showYesPanel && (
-            <div className="p-2 flex-shrink-0">
-              <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 8 }}>Disposition</div>
-              <DispButton label="📞 NA" onClick={() => doDisp('NA')} style={{ background: '#333', color: '#e67e22', border: '1px solid #555' }} />
-              <DispButton label="🚫 WN / NIS" onClick={() => doDisp('WN/NIS')} style={{ background: '#333', color: '#9b59b6', border: '1px solid #555' }} />
-              <DispButton label="✖ NO" onClick={() => doDisp('NO')} style={{ background: '#333', color: '#e74c3c', border: '1px solid #555' }} />
-              <DispButton label="🗑 REMOVE" onClick={() => doDisp('REMOVE')} style={{ background: '#333', color: '#95a5a6', border: '1px solid #555' }} />
-              <DispButton label="✔ YES" onClick={() => setShowYesPanel(true)} style={{ background: 'linear-gradient(135deg, #27ae60, #2ecc71)', color: '#fff', border: 'none' }} />
-            </div>
-          )}
-
-          {/* YES Panel */}
-          {showYesPanel && (
-            <div className="p-2 flex-1 overflow-y-auto" style={{ borderTop: '1px solid rgba(46,204,113,0.15)' }}>
-              <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 8 }}>Booking Details</div>
-
-              <YesField label="Client Name" value={yName} onChange={setYName} />
-              <YesField label="Price" value={yPrice} onChange={setYPrice} />
-              <YesField label="Email" value={yEmail} onChange={setYEmail} />
-
-              <div className="flex items-center gap-2 mb-1">
-                <label className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: '#ccc' }}>
-                  <input type="checkbox" checked={yGate} onChange={(e) => setYGate(e.target.checked)} style={{ accentColor: '#2ecc71' }} /> Gate
-                </label>
-                <label className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: '#ccc' }}>
-                  <input type="checkbox" checked={ySprink} onChange={(e) => setYSprink(e.target.checked)} style={{ accentColor: '#2ecc71' }} /> Sprinkler
-                </label>
-              </div>
-
-              <div className="mb-1">
-                <div className="text-xs uppercase tracking-wider font-semibold mb-0.5" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 8, letterSpacing: '1px' }}>FO / BO / FP</div>
-                <div className="flex gap-2">
-                  {(['FO', 'BO', 'FP'] as const).map(val => (
-                    <label key={val} className="flex items-center gap-1 cursor-pointer">
-                      <input type="radio" name="foRadio" checked={yFO === val} onChange={() => setYFO(val)} style={{ accentColor: '#2ecc71', width: 13, height: 13 }} />
-                      <span className="text-xs font-bold" style={{ color: FO_COLORS[val].color }}>{val}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              <YesField label="Notes" value={yNotes} onChange={setYNotes} />
-
-              <div className="flex gap-1 mt-1">
-                <button onClick={() => setShowYesPanel(false)} className="px-2 py-1.5 rounded text-xs font-bold cursor-pointer" style={{ background: '#333', color: '#888', border: '1px solid #555' }}>✖</button>
-                <button onClick={() => doYes('COMPLETE')} className="flex-1 py-1.5 rounded text-xs font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#2ecc71', color: '#fff', border: 'none' }}>✔ Complete</button>
-                <button onClick={() => doYes('PREPAY')} className="flex-1 py-1.5 rounded text-xs font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none' }}>💳 Prepay</button>
-              </div>
-            </div>
-          )}
+          <div className="p-2 flex-shrink-0">
+            <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 8 }}>Disposition</div>
+            <DispButton label="📞 NA" onClick={() => doDisp('NA')} style={{ background: '#333', color: '#e67e22', border: '1px solid #555' }} />
+            <DispButton label="🌱 CTS" onClick={() => doDisp('CTS')} style={{ background: '#333', color: '#27ae60', border: '1px solid #555' }} />
+            <DispButton label="🚫 WN / NIS" onClick={() => doDisp('WN/NIS')} style={{ background: '#333', color: '#9b59b6', border: '1px solid #555' }} />
+            <DispButton label="✖ NO" onClick={() => doDisp('NO')} style={{ background: '#333', color: '#e74c3c', border: '1px solid #555' }} />
+            <DispButton label="🗑 REMOVE" onClick={() => doDisp('REMOVE')} style={{ background: '#333', color: '#95a5a6', border: '1px solid #555' }} />
+            <DispButton
+              label={showYesPanel ? "✔ YES ●" : "✔ YES"}
+              onClick={() => setShowYesPanel(true)}
+              style={{
+                background: showYesPanel ? '#1a6b3a' : 'linear-gradient(135deg, #27ae60, #2ecc71)',
+                color: '#fff',
+                border: showYesPanel ? '2px solid #2ecc71' : 'none',
+              }}
+            />
+          </div>
 
           {/* Auto-fire + log */}
           <div className="mt-auto flex items-center gap-2 px-2 py-1 flex-shrink-0" style={{ borderTop: '1px solid rgba(46,204,113,0.12)' }}>

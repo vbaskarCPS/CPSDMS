@@ -12,7 +12,7 @@ import { normalizePhone, parseYear } from './dialerUtils';
 
 // --- Types ---
 
-export type DispositionType = 'NA' | 'WN/NIS' | 'NO' | 'REMOVE' | 'COMPLETE' | 'PREPAY';
+export type DispositionType = 'NA' | 'CTS' | 'WN/NIS' | 'NO' | 'REMOVE' | 'COMPLETE' | 'PREPAY';
 
 export interface CellUpdate {
   /** Sheet row (1-based) */
@@ -26,6 +26,9 @@ export interface CellUpdate {
 export interface DispositionExtra {
   price?: string;
   name?: string;
+  lastName?: string;
+  houseNum?: string;
+  streetName?: string;
   email?: string;
   gate?: boolean;
   sprinkler?: boolean;
@@ -96,6 +99,8 @@ export function buildDispositionUpdates(
   switch (disposition) {
     case 'NA':
       return buildNA(all, CI, groupDataIndices, dataStartRow, phone);
+    case 'CTS':
+      return buildCTS(all, CI, groupDataIndices, dataStartRow, phone);
     case 'WN/NIS':
       return buildWN(all, CI, groupDataIndices, dataStartRow, phone);
     case 'NO':
@@ -139,6 +144,34 @@ function buildNA(
 
     const sheetRow = r + dataStartRow;
     if (CI.NA >= 0) updates.push({ row: sheetRow, col: CI.NA, value: newNA });
+    if (CI.YES >= 0) updates.push({ row: sheetRow, col: CI.YES, value: '' });
+    if (CI.NO >= 0) updates.push({ row: sheetRow, col: CI.NO, value: '' });
+    if (CI.WN >= 0) updates.push({ row: sheetRow, col: CI.WN, value: '' });
+    if (CI.REMOVE >= 0) updates.push({ row: sheetRow, col: CI.REMOVE, value: '' });
+  }
+
+  return { updates };
+}
+
+// --- CTS: Closer To Spring — writes "CTS" in the NA column ---
+// Same logic as NA (phone-scoped, clears other dispositions) but writes the
+// string "CTS" instead of incrementing the NA counter.
+function buildCTS(
+  all: any[][],
+  CI: ColumnIndices,
+  groupDataIndices: number[],
+  dataStartRow: number,
+  phone: string
+): DispositionResult {
+  const updates: CellUpdate[] = [];
+
+  // Only update rows matching the dialed phone
+  for (const r of groupDataIndices) {
+    const rowPhone = CI.PHONE >= 0 ? normalizePhone(String(all[r][CI.PHONE] ?? '')) : '';
+    if (rowPhone !== phone) continue;
+
+    const sheetRow = r + dataStartRow;
+    if (CI.NA >= 0) updates.push({ row: sheetRow, col: CI.NA, value: 'CTS' });
     if (CI.YES >= 0) updates.push({ row: sheetRow, col: CI.YES, value: '' });
     if (CI.NO >= 0) updates.push({ row: sheetRow, col: CI.NO, value: '' });
     if (CI.WN >= 0) updates.push({ row: sheetRow, col: CI.WN, value: '' });
