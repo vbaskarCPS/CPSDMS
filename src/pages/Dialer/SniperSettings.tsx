@@ -150,9 +150,9 @@ export default function SniperSettings({
       <div
         style={{
           position: 'fixed',
-          top: '35%',
+          top: '10%',
           left: '50%',
-          transform: 'translate(-50%, -50%)',
+          transform: 'translateX(-50%)',
           zIndex: 61,
           width: '100%',
           maxWidth: 400,
