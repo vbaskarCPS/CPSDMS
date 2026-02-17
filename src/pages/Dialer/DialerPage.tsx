@@ -9,7 +9,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Wifi, WifiOff, ArrowDown, ArrowUp, Crosshair, Phone, ChevronRight } from 'lucide-react';
 import { campaignService } from '../../lib/campaignService';
-import dialerSheetsService from '../../lib/dialerSheetsService';
+import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import {
   initialize,
   applyDisposition,
