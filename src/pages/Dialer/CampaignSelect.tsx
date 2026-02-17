@@ -442,6 +442,8 @@ function CampaignCard({
   index: number;
   onSelect: () => void;
 }) {
+  // Defensive defaults for numeric fields
+  c = { ...c, totalRows: c.totalRows ?? 0, bookings: c.bookings ?? 0, reachedPct: c.reachedPct ?? 0, avgAttempts: c.avgAttempts ?? 0 };
   const accent = terrainAccent(c.terrain, c.hot);
   const bg = terrainGradient(c.terrain, c.hot);
   const grid = gridOverlay(accent);
@@ -560,10 +562,10 @@ function CampaignCard({
 
         {/* Stats row */}
         <div style={{ display: 'flex', gap: 12, marginBottom: 10 }}>
-          <MiniStat label="ROWS" value={c.totalRows.toLocaleString()} color={accent} />
-          <MiniStat label="BOOKINGS" value={c.bookings} color={c.bookings > 0 ? '#f1c40f' : '#555'} />
-          <MiniStat label="REACHED" value={`${Math.round(c.reachedPct)}%`} color={reachStatus(c.reachedPct).color} />
-          <MiniStat label="AVG ATT" value={c.avgAttempts.toFixed(1)} color={accent} />
+          <MiniStat label="ROWS" value={(c.totalRows ?? 0).toLocaleString()} color={accent} />
+          <MiniStat label="BOOKINGS" value={c.bookings ?? 0} color={(c.bookings ?? 0) > 0 ? '#f1c40f' : '#555'} />
+          <MiniStat label="REACHED" value={`${Math.round(c.reachedPct ?? 0)}%`} color={reachStatus(c.reachedPct ?? 0).color} />
+          <MiniStat label="AVG ATT" value={(c.avgAttempts ?? 0).toFixed(1)} color={accent} />
         </div>
 
         {/* Reached progress bar */}
@@ -644,6 +646,8 @@ const DetailPanel = ({ campaign: c, deploying, onDeploy, onClose, ref }: {
   onClose: () => void;
   ref?: React.Ref<HTMLDivElement>;
 }) => {
+  // Defensive defaults for numeric fields
+  c = { ...c, totalRows: c.totalRows ?? 0, bookings: c.bookings ?? 0, reachedPct: c.reachedPct ?? 0, avgAttempts: c.avgAttempts ?? 0 };
   const accent = terrainAccent(c.terrain, c.hot);
   const topo = topoPattern(c.id + '_detail', accent);
 
@@ -797,8 +801,8 @@ const DetailPanel = ({ campaign: c, deploying, onDeploy, onClose, ref }: {
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16 }}>
-          <DataBlock label="TOTAL ROWS" value={c.totalRows.toLocaleString()} accent={accent} />
-          <DataBlock label="BOOKINGS" value={c.bookings} accent={c.bookings > 0 ? '#f1c40f' : '#555'} />
+          <DataBlock label="TOTAL ROWS" value={(c.totalRows ?? 0).toLocaleString()} accent={accent} />
+          <DataBlock label="BOOKINGS" value={c.bookings ?? 0} accent={(c.bookings ?? 0) > 0 ? '#f1c40f' : '#555'} />
           <DataBlock
             label="DIFFICULTY"
             value={<ThreatBar level={deriveThreat(c.reachedPct, c.avgAttempts)} />}
@@ -885,7 +889,7 @@ const DetailPanel = ({ campaign: c, deploying, onDeploy, onClose, ref }: {
             marginTop: 6,
             fontWeight: 600,
           }}>
-            {Math.round(c.totalRows * c.reachedPct / 100)} of {c.totalRows.toLocaleString()} clients reached
+            {Math.round((c.totalRows ?? 0) * (c.reachedPct ?? 0) / 100)} of {(c.totalRows ?? 0).toLocaleString()} clients reached
           </div>
         </div>
 
@@ -893,13 +897,13 @@ const DetailPanel = ({ campaign: c, deploying, onDeploy, onClose, ref }: {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 20 }}>
           <DataBlock
             label="AVG ATTEMPTS"
-            value={c.avgAttempts.toFixed(1)}
+            value={(c.avgAttempts ?? 0).toFixed(1)}
             accent={accent}
           />
           <DataBlock
             label="UNREACHED"
-            value={Math.round(c.totalRows * (1 - c.reachedPct / 100)).toLocaleString()}
-            accent={c.reachedPct < 80 ? '#2ecc71' : '#e74c3c'}
+            value={Math.round((c.totalRows ?? 0) * (1 - (c.reachedPct ?? 0) / 100)).toLocaleString()}
+            accent={(c.reachedPct ?? 0) < 80 ? '#2ecc71' : '#e74c3c'}
           />
         </div>
 

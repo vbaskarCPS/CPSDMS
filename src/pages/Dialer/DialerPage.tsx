@@ -108,10 +108,11 @@ function tabsToCampaignCards(tabs: string[], campaignName: string): CampaignCard
       name: tabName,
       codename: CODENAMES[a % CODENAMES.length],
       description: `Callbook tab "${tabName}" from ${campaignName}. Deploy here to start dialing this section.`,
-      streetCount: 15 + (a % 50),
-      totalDoors: 400 + (a % 2400),
+      totalRows: 400 + (a % 2400),
+      bookings: 10 + (a % 80),
+      reachedPct: 15 + (a % 60),
+      avgAttempts: 1 + (a % 4),
       zone: ['North', 'South', 'East', 'West', 'Central', 'Downtown'][(a >> 4) % 6],
-      threatLevel: (1 + (a % 5)) as 1 | 2 | 3 | 4 | 5,
       terrain: TERRAINS[(a >> 2) % TERRAINS.length],
       hot: idx === 0, // First tab is "hot" / featured
     };
