@@ -26,6 +26,7 @@ import {
   formatPhoneDisplay,
   getActiveMultipliers,
   getCurrentRank,
+  createFreshSession,
 } from '../../lib/dialer';
 import type {
   EngineConfig,
@@ -39,7 +40,7 @@ import type {
 } from '../../lib/dialer';
 import type { Rank, StagedCard } from '../../lib/dialer';
 import DialerHUD from './DialerHUD';
-import type { TeamBookingEvent } from './DialerHUD';
+import type { TeamBookingEvent, HUDMenuAction } from './DialerHUD';
 import AchievementsPanel from './AchievementsPanel';
 import { useToasts, BadgeToastContainer, PointToastContainer } from './DialerToasts';
 import CampaignSelect from './CampaignSelect';
@@ -401,6 +402,36 @@ export default function DialerPage() {
   }, [queueBadgeToast, showPointToast, campaign?.id, manager?.id, manager?.name, manager?.repCode]);
 
   // =======================================================================
+  // HUD MENU ACTIONS
+  // =======================================================================
+
+  const handleMenuAction = useCallback((action: HUDMenuAction) => {
+    switch (action) {
+      case 'achievements':
+        setAchievementsOpen(true);
+        break;
+      case 'campaigns':
+        setMode('select');
+        break;
+      case 'reset': {
+        if (!confirm('Reset session? All points, badges, multipliers and streaks will be cleared.')) return;
+        const repCode = session?.repCode || manager?.repCode || '';
+        const dateStr = new Date().toLocaleDateString();
+        const fresh = createFreshSession(repCode, dateStr);
+        fresh.sessionStartTime = Date.now();
+        setSession(fresh);
+        setMultipliers([]);
+        setMultipliersAt(Date.now());
+        setRank(null);
+        setLogMessage('Session reset.');
+        break;
+      }
+      default:
+        break;
+    }
+  }, [session?.repCode, manager?.repCode]);
+
+  // =======================================================================
   // DISPOSITION HANDLERS
   // =======================================================================
 
@@ -759,7 +790,7 @@ export default function DialerPage() {
   if (!currentState) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center" style={S.body}>
-        <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} teamFeed={teamFeed} autoFire={autoFire} onAutoFireChange={setAutoFire} />
+        <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} onMenuAction={handleMenuAction} teamFeed={teamFeed} autoFire={autoFire} onAutoFireChange={setAutoFire} />
         <BadgeToastContainer toasts={badgeToasts} />
         <PointToastContainer toasts={pointToasts} />
         {session && <AchievementsPanel session={session} open={achievementsOpen} onClose={() => setAchievementsOpen(false)} />}
@@ -794,7 +825,7 @@ export default function DialerPage() {
 
   return (
     <div className="relative h-screen overflow-hidden" style={S.body}>
-      <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} teamFeed={teamFeed} autoFire={autoFire} onAutoFireChange={setAutoFire} />
+      <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} onMenuAction={handleMenuAction} teamFeed={teamFeed} autoFire={autoFire} onAutoFireChange={setAutoFire} />
       <BadgeToastContainer toasts={badgeToasts} />
       <PointToastContainer toasts={pointToasts} />
       {session && <AchievementsPanel session={session} open={achievementsOpen} onClose={() => setAchievementsOpen(false)} />}

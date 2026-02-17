@@ -25,7 +25,7 @@ export interface TeamBookingEvent {
   isPrepay?: boolean;
 }
 
-export type HUDMenuAction = 'campaigns' | 'team' | 'achievements' | 'logs' | 'multipliers';
+export type HUDMenuAction = 'campaigns' | 'team' | 'achievements' | 'logs' | 'multipliers' | 'reset';
 
 interface HUDProps {
   session: GamificationSession | null;
@@ -84,6 +84,7 @@ const MENU_ITEMS: { id: HUDMenuAction; icon: string; label: string; desc: string
   { id: 'achievements', icon: '🏆', label: 'ACHIEVEMENTS', desc: 'Badges & progress' },
   { id: 'logs', icon: '📋', label: 'LOGS', desc: 'Session history' },
   { id: 'multipliers', icon: '⚡', label: 'MULTIPLIERS', desc: 'Active & available' },
+  { id: 'reset', icon: '🔄', label: 'RESET SESSION', desc: 'Reset all counters' },
 ];
 
 // =============================================================================
