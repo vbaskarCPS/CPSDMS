@@ -20,6 +20,7 @@ import {
   Skull,
   UserPlus,
   ExternalLink,
+  Crosshair,
 } from 'lucide-react';
 import {
   commandCenterService,
@@ -28,6 +29,7 @@ import {
   extractSheetId,
   getJobFairSlugError,
 } from '../../lib/commandCenterService';
+import { supabase } from '../../lib/supabase';
 import { removeStorageItem } from '../../lib/localStorage';
 
 const REGIONS: Region[] = ['West', 'Central', 'East'];
@@ -250,11 +252,110 @@ const CommandCenterCreator: React.FC = () => {
     setError(null);
 
     try {
-      await commandCenterService.universalWipe();
-      
-      removeStorageItem('current_user');
+      // Delete in FK-safe order (children before parents)
+
+      // 1. job_fair_applicants
+      const { error: applicantsError } = await supabase
+        .from('job_fair_applicants')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+      if (applicantsError) throw new Error('Failed to delete job_fair_applicants: ' + applicantsError.message);
+
+      // 2. job_fair_sessions
+      const { error: jfSessionsError } = await supabase
+        .from('job_fair_sessions')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+      if (jfSessionsError) throw new Error('Failed to delete job_fair_sessions: ' + jfSessionsError.message);
+
+      // 3. bookings
+      const { error: bookingsError } = await supabase
+        .from('bookings')
+        .delete()
+        .neq('booking_id', '');
+      if (bookingsError) throw new Error('Failed to delete bookings: ' + bookingsError.message);
+
+      // 4. logsheet_sessions
+      const { error: logsheetError } = await supabase
+        .from('logsheet_sessions')
+        .delete()
+        .neq('id', '');
+      if (logsheetError) throw new Error('Failed to delete logsheet_sessions: ' + logsheetError.message);
+
+      // 5. routes
+      const { error: routesError } = await supabase
+        .from('routes')
+        .delete()
+        .neq('route_code', '');
+      if (routesError) throw new Error('Failed to delete routes: ' + routesError.message);
+
+      // 6. transactions
+      const { error: transactionsError } = await supabase
+        .from('transactions')
+        .delete()
+        .neq('id', '');
+      if (transactionsError) throw new Error('Failed to delete transactions: ' + transactionsError.message);
+
+      // 7. email_logs
+      const { error: emailLogsError } = await supabase
+        .from('email_logs')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+      if (emailLogsError) throw new Error('Failed to delete email_logs: ' + emailLogsError.message);
+
+      // 8. email_templates
+      const { error: emailTemplatesError } = await supabase
+        .from('email_templates')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+      if (emailTemplatesError) throw new Error('Failed to delete email_templates: ' + emailTemplatesError.message);
+
+      // 9. dialer_sessions (campaign child)
+      const { error: dialerSessionsError } = await supabase
+        .from('dialer_sessions')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+      if (dialerSessionsError) throw new Error('Failed to delete dialer_sessions: ' + dialerSessionsError.message);
+
+      // 10. campaign_managers (campaign child)
+      const { error: campaignManagersError } = await supabase
+        .from('campaign_managers')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+      if (campaignManagersError) throw new Error('Failed to delete campaign_managers: ' + campaignManagersError.message);
+
+      // 11. campaigns
+      const { error: campaignsError } = await supabase
+        .from('campaigns')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+      if (campaignsError) throw new Error('Failed to delete campaigns: ' + campaignsError.message);
+
+      // 12. users
+      const { error: usersError } = await supabase
+        .from('users')
+        .delete()
+        .neq('user_id', '');
+      if (usersError) throw new Error('Failed to delete users: ' + usersError.message);
+
+      // 13. daily_sessions
+      const { error: dailySessionsError } = await supabase
+        .from('daily_sessions')
+        .delete()
+        .neq('date', '1900-01-01');
+      if (dailySessionsError) throw new Error('Failed to delete daily_sessions: ' + dailySessionsError.message);
+
+      // 14. command_centers
+      const { error: commandCentersError } = await supabase
+        .from('command_centers')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+      if (commandCentersError) throw new Error('Failed to delete command_centers: ' + commandCentersError.message);
+
+      // Clear local storage
       commandCenterService.clearCurrentCommandCenter();
       commandCenterService.setSuperAdminMode(true);
+      removeStorageItem('current_user');
       
       await loadCommandCenters();
       closeWipeModal();
@@ -421,13 +522,21 @@ const CommandCenterCreator: React.FC = () => {
           </div>
         )}
 
-        <div className="mb-6">
+        <div className="mb-6 flex items-center gap-4">
           <button
             onClick={openCreateModal}
             className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
           >
             <Plus size={20} />
             Create Command Center
+          </button>
+
+          <button
+            onClick={() => navigate('/super-admin/campaigns')}
+            className="bg-green-700 hover:bg-green-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
+          >
+            <Crosshair size={20} />
+            Manage Campaigns
           </button>
         </div>
 
@@ -457,7 +566,7 @@ const CommandCenterCreator: React.FC = () => {
                 <h3 className="text-lg font-bold text-red-400 mb-2">Danger Zone</h3>
                 <p className="text-sm text-gray-400 mb-4">
                   Universal wipe will permanently delete <strong className="text-red-300">ALL data</strong> from the 
-                  entire application including all command centers, users, sessions, transactions, bookings, 
+                  entire application including all command centers, campaigns, users, sessions, transactions, bookings, 
                   and email logs. This action cannot be undone.
                 </p>
                 <button
@@ -746,6 +855,7 @@ const CommandCenterCreator: React.FC = () => {
                 </h3>
                 <ul className="text-sm text-gray-400 space-y-1 ml-6">
                   <li>{ccCountText}</li>
+                  <li>• All campaigns and dialer data</li>
                   <li>• All workers and route managers</li>
                   <li>• All daily sessions</li>
                   <li>• All logsheet sessions</li>

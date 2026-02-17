@@ -20,6 +20,10 @@ const NotFound = React.lazy(() => import('./pages/Logsheet/NotFound'));
 const PayoutContractor = React.lazy(() => import('./pages/Management/PayoutContractor'));
 const ApplicantForm = React.lazy(() => import('./pages/Public/ApplicantForm'));
 
+// Campaign / Dialer pages
+const CampaignCreator = React.lazy(() => import('./pages/SuperAdmin/CampaignCreator'));
+const DialerPage = React.lazy(() => import('./pages/Dialer/DialerPage'));
+
 // Loading fallback
 const LoadingFallback = () => (
   <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -40,6 +44,7 @@ function App() {
 
         {/* Super Admin Route */}
         <Route path="/super-admin" element={<CommandCenterCreator />} />
+        <Route path="/super-admin/campaigns" element={<CampaignCreator />} />
 
         {/* Command Center Admin Routes */}
         <Route path="/admin" element={<SessionCommandCenter />} />
@@ -55,6 +60,9 @@ function App() {
         <Route path="/logsheet" element={<Logsheet />} />
         <Route path="/logsheet/new" element={<NewJob />} />
         <Route path="/job-detail/:jobId" element={<JobDetail />} />
+
+        {/* Dialer Route (Campaign Managers land here after login) */}
+        <Route path="/dialer" element={<DialerPage />} />
 
         {/* 404 Not Found */}
         <Route path="*" element={<NotFound />} />

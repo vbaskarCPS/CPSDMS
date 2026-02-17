@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { KeyRound, AlertCircle, Lock, GraduationCap } from 'lucide-react';
 import { sessionService } from '../lib/sessionService';
 import { commandCenterService, isSuperAdminCredentials } from '../lib/commandCenterService';
+import { campaignService } from '../lib/campaignService';
 import { setStorageItem } from '../lib/localStorage';
 import { isTrainingCredentials, TRAINING_WORKER } from '../lib/trainingData';
 import { trainingService } from '../lib/trainingService';
@@ -36,7 +37,7 @@ const HomePage: React.FC = () => {
 
       // 1. Check Super Admin (Administrator/cps26records)
       if (isSuperAdminCredentials(username, password)) {
-        trainingService.disableTrainingMode(); // Ensure training mode is off
+        trainingService.disableTrainingMode();
         commandCenterService.clearCurrentCommandCenter();
         commandCenterService.setSuperAdminMode(false);
         navigate('/super-admin');
@@ -69,6 +70,16 @@ const HomePage: React.FC = () => {
         setStorageItem('current_user', worker);
         await sessionService.startLogsheetSession(worker.contractorId);
         navigate('/logsheet');
+        return;
+      }
+
+      // 5. Check Campaign Manager (rep_code as username)
+      const campaignAuth = await campaignService.authenticateCampaignManager(username, password);
+      if (campaignAuth) {
+        trainingService.disableTrainingMode();
+        campaignService.setCurrentManager(campaignAuth.manager);
+        campaignService.setCurrentCampaign(campaignAuth.campaign);
+        navigate('/dialer');
         return;
       }
 
