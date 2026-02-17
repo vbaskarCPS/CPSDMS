@@ -7,9 +7,20 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { GamificationSession, MultiplierSnapshot, Rank } from '../../lib/dialer/gamificationDefs';
-import { getMultiplierIcon, getMultiplierTierIcon } from './BadgeIcons';
+import { getMultiplierIcon, getMultiplierTierIcon, getBadgeIcon, getBadgeCategoryColor, getMultiplierIconUrl, getBadgeIconUrl } from './BadgeIcons';
 
 // --- Props ---
+
+/** A booking event from another manager on the team */
+export interface TeamBookingEvent {
+  id: string;                     // unique event id
+  name: string;                   // manager's first name
+  points: number;                 // points earned on this booking
+  badges?: string[];              // badge IDs earned (e.g. ['double_kill','first_blood'])
+  multipliers?: string[];         // multiplier IDs active (e.g. ['op_tempo','blitz'])
+  timestamp: number;              // Date.now() when received
+  isPrepay?: boolean;             // was it a prepay?
+}
 
 interface HUDProps {
   session: GamificationSession | null;
@@ -18,6 +29,7 @@ interface HUDProps {
   rank: Rank | null;
   onTrophyClick: () => void;
   onPointsClick?: () => void;
+  teamFeed?: TeamBookingEvent[];  // live feed of other managers' bookings
 }
 
 // --- Multiplier descriptions ---
@@ -88,6 +100,21 @@ const HUD_STYLES = `
   @keyframes hud-timer-sweep {
     from { stroke-dashoffset: 0; }
     to { stroke-dashoffset: 157; }
+  }
+  @keyframes hud-team-toast-in {
+    0% { transform: translateX(120%); opacity: 0; }
+    60% { transform: translateX(-4%); opacity: 1; }
+    100% { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes hud-team-toast-out {
+    0% { transform: translateX(0); opacity: 1; max-height: 44px; margin-bottom: 4px; }
+    50% { transform: translateX(100%); opacity: 0; max-height: 44px; margin-bottom: 4px; }
+    100% { transform: translateX(100%); opacity: 0; max-height: 0; margin-bottom: 0; }
+  }
+  @keyframes hud-team-points-pop {
+    0% { transform: scale(1); }
+    40% { transform: scale(1.25); }
+    100% { transform: scale(1); }
   }
 `;
 
@@ -468,6 +495,194 @@ function MultiplierStrip({
 }
 
 // =============================================================================
+// TEAM FEED TOASTS (above bottom bar — other managers' bookings)
+// =============================================================================
+
+const TOAST_LIFETIME = 6000;   // ms before auto-dismiss
+const MAX_VISIBLE = 4;         // max toasts shown at once
+
+function TeamFeedToasts({ events }: { events: TeamBookingEvent[] }) {
+  const [visibleToasts, setVisibleToasts] = useState<(TeamBookingEvent & { exiting?: boolean })[]>([]);
+  const seenRef = useRef<Set<string>>(new Set());
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  // Ingest new events
+  useEffect(() => {
+    const newOnes = events.filter(e => !seenRef.current.has(e.id));
+    if (newOnes.length === 0) return;
+
+    newOnes.forEach(e => seenRef.current.add(e.id));
+
+    setVisibleToasts(prev => {
+      const combined = [...prev.filter(t => !t.exiting), ...newOnes];
+      // Keep only the most recent MAX_VISIBLE+2 to allow exit animations
+      return combined.slice(-MAX_VISIBLE - 2);
+    });
+
+    // Set dismiss timers for new events
+    newOnes.forEach(e => {
+      const timer = setTimeout(() => {
+        // Mark as exiting
+        setVisibleToasts(prev =>
+          prev.map(t => t.id === e.id ? { ...t, exiting: true } : t)
+        );
+        // Remove after exit animation
+        const removeTimer = setTimeout(() => {
+          setVisibleToasts(prev => prev.filter(t => t.id !== e.id));
+          timersRef.current.delete(e.id);
+        }, 500);
+        timersRef.current.set(e.id + '_rm', removeTimer);
+      }, TOAST_LIFETIME);
+      timersRef.current.set(e.id, timer);
+    });
+  }, [events]);
+
+  // Cleanup timers
+  useEffect(() => {
+    return () => {
+      timersRef.current.forEach(t => clearTimeout(t));
+    };
+  }, []);
+
+  const visible = visibleToasts.slice(-MAX_VISIBLE);
+  if (visible.length === 0) return null;
+
+  return (
+    <div
+      className="absolute right-2 pointer-events-none"
+      style={{
+        bottom: 56,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-end',
+        gap: 0,
+        zIndex: 18,
+        maxWidth: 320,
+      }}
+    >
+      {visible.map((evt) => {
+        const hasBadges = evt.badges && evt.badges.length > 0;
+        const hasMults = evt.multipliers && evt.multipliers.length > 0;
+
+        return (
+          <div
+            key={evt.id}
+            style={{
+              animation: evt.exiting
+                ? 'hud-team-toast-out 0.5s ease-in forwards'
+                : 'hud-team-toast-in 0.4s cubic-bezier(0.34,1.56,0.64,1) both',
+              marginBottom: 4,
+              pointerEvents: 'auto',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '6px 12px 6px 10px',
+                borderRadius: 8,
+                background: 'rgba(6,12,6,0.92)',
+                border: '1px solid rgba(46,204,113,0.25)',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.6), 0 0 8px rgba(46,204,113,0.1)',
+                backdropFilter: 'blur(8px)',
+                minHeight: 36,
+              }}
+            >
+              {/* Name */}
+              <span
+                style={{
+                  fontFamily: 'monospace',
+                  fontWeight: 800,
+                  fontSize: 11,
+                  color: '#ccc',
+                  letterSpacing: '0.5px',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {evt.name}
+              </span>
+
+              {/* Points */}
+              <span
+                style={{
+                  fontFamily: 'monospace',
+                  fontWeight: 900,
+                  fontSize: 13,
+                  color: evt.isPrepay ? '#f1c40f' : '#2ecc71',
+                  textShadow: evt.isPrepay
+                    ? '0 0 6px rgba(241,196,15,0.5)'
+                    : '0 0 6px rgba(46,204,113,0.5)',
+                  animation: 'hud-team-points-pop 0.4s ease-out 0.3s both',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                +{evt.points}
+              </span>
+
+              {/* Badge + Multiplier icons */}
+              {(hasBadges || hasMults) && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+                  {/* Separator dot */}
+                  <span style={{
+                    width: 3,
+                    height: 3,
+                    borderRadius: '50%',
+                    background: 'rgba(46,204,113,0.3)',
+                    marginRight: 2,
+                  }} />
+
+                  {/* Badge icons */}
+                  {evt.badges?.map(badgeId => {
+                    const icon = getBadgeIcon(badgeId, 16);
+                    const color = getBadgeCategoryColor(badgeId);
+                    if (!icon) return null;
+                    return (
+                      <span
+                        key={badgeId}
+                        title={badgeId.replace(/_/g, ' ')}
+                        style={{
+                          display: 'inline-flex',
+                          filter: `drop-shadow(0 0 3px ${color}80)`,
+                          lineHeight: 1,
+                        }}
+                      >
+                        {icon}
+                      </span>
+                    );
+                  })}
+
+                  {/* Multiplier icons */}
+                  {evt.multipliers?.map(multId => {
+                    const icon = getMultiplierIcon(multId, 14);
+                    const theme = PILL_THEME[multId];
+                    if (!icon) return null;
+                    return (
+                      <span
+                        key={multId}
+                        title={multId.replace(/_/g, ' ')}
+                        style={{
+                          display: 'inline-flex',
+                          filter: theme ? `drop-shadow(0 0 3px ${theme.color}80)` : undefined,
+                          lineHeight: 1,
+                          opacity: 0.8,
+                        }}
+                      >
+                        {icon}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// =============================================================================
 // MAIN HUD COMPONENT
 // =============================================================================
 
@@ -478,6 +693,7 @@ export default function DialerHUD({
   rank,
   onTrophyClick,
   onPointsClick,
+  teamFeed,
 }: HUDProps) {
   const s = session;
   const [pointsFlash, setPointsFlash] = useState(false);
@@ -553,6 +769,11 @@ export default function DialerHUD({
 
         {/* === MULTIPLIER STRIP (below top bar) === */}
         <MultiplierStrip multipliers={activeMultipliers} receivedAt={multipliersReceivedAt} />
+
+        {/* === TEAM FEED TOASTS (above bottom bar) === */}
+        {teamFeed && teamFeed.length > 0 && (
+          <TeamFeedToasts events={teamFeed} />
+        )}
 
         {/* === BOTTOM BAR === */}
         <div
