@@ -8,6 +8,22 @@ export { extractSheetId };
 
 // --- TYPES ---
 
+export interface SniperConfig {
+  years: number[];        // Target years to include (default [2025])
+  ppOnly: boolean;        // Only show groups with prepaid rows
+  minEntries: number;     // Minimum rows per group (default 1)
+  linkShot: boolean;      // Only show groups on streets that have AER
+  hideCTS: boolean;       // Hide groups with CTS disposition (default true)
+}
+
+export const DEFAULT_SNIPER_CONFIG: SniperConfig = {
+  years: [2025],
+  ppOnly: false,
+  minEntries: 1,
+  linkShot: false,
+  hideCTS: true,
+};
+
 export interface Campaign {
   id: string;
   displayName: string;
@@ -16,6 +32,7 @@ export interface Campaign {
   appsScriptUrl?: string;
   createdBy?: string;
   createdAt?: string;
+  sniperConfig: SniperConfig;
 }
 
 export interface CampaignManager {
@@ -55,51 +72,30 @@ class CampaignService {
 
   // --- CONTEXT MANAGEMENT ---
 
-  /**
-   * Get the current campaign manager from localStorage
-   */
   public getCurrentManager(): CampaignManager | null {
     return getStorageItem<CampaignManager | null>(CAMPAIGN_MANAGER_KEY, null);
   }
 
-  /**
-   * Set the current campaign manager context
-   */
   public setCurrentManager(manager: CampaignManager): void {
     setStorageItem(CAMPAIGN_MANAGER_KEY, manager);
   }
 
-  /**
-   * Clear the current campaign manager context
-   */
   public clearCurrentManager(): void {
     removeStorageItem(CAMPAIGN_MANAGER_KEY);
   }
 
-  /**
-   * Get the current campaign from localStorage
-   */
   public getCurrentCampaign(): Campaign | null {
     return getStorageItem<Campaign | null>(CAMPAIGN_KEY, null);
   }
 
-  /**
-   * Set the current campaign context
-   */
   public setCurrentCampaign(campaign: Campaign): void {
     setStorageItem(CAMPAIGN_KEY, campaign);
   }
 
-  /**
-   * Clear the current campaign context
-   */
   public clearCurrentCampaign(): void {
     removeStorageItem(CAMPAIGN_KEY);
   }
 
-  /**
-   * Clear all campaign-related context
-   */
   public clearAll(): void {
     this.clearCurrentManager();
     this.clearCurrentCampaign();
@@ -107,16 +103,10 @@ class CampaignService {
 
   // --- AUTHENTICATION ---
 
-  /**
-   * Authenticate a campaign manager login.
-   * rep_code is used as username. Checks across ALL campaigns.
-   * Returns { manager, campaign } if successful, null otherwise.
-   */
   public async authenticateCampaignManager(
     repCode: string,
     password: string
   ): Promise<{ manager: CampaignManager; campaign: Campaign } | null> {
-    // Find manager by rep_code and password (case-insensitive rep_code match)
     const { data, error } = await supabase
       .from('campaign_managers')
       .select('*')
@@ -125,12 +115,9 @@ class CampaignService {
 
     if (error || !data || data.length === 0) return null;
 
-    // Use the first match (rep_code should be unique per campaign, but a rep
-    // could exist in multiple campaigns — take the first)
     const managerRow = data[0];
     const manager = this.mapDbToManager(managerRow);
 
-    // Fetch the associated campaign
     const campaign = await this.getCampaignById(manager.campaignId);
     if (!campaign) return null;
 
@@ -139,9 +126,6 @@ class CampaignService {
 
   // --- CAMPAIGN CRUD ---
 
-  /**
-   * Get all campaigns (for super admin)
-   */
   public async getAllCampaigns(): Promise<Campaign[]> {
     const { data, error } = await supabase
       .from('campaigns')
@@ -152,9 +136,6 @@ class CampaignService {
     return data.map(this.mapDbToCampaign);
   }
 
-  /**
-   * Get a campaign by ID
-   */
   public async getCampaignById(id: string): Promise<Campaign | null> {
     const { data, error } = await supabase
       .from('campaigns')
@@ -166,9 +147,6 @@ class CampaignService {
     return this.mapDbToCampaign(data);
   }
 
-  /**
-   * Create a new campaign
-   */
   public async createCampaign(campaign: {
     displayName: string;
     spreadsheetId: string;
@@ -192,9 +170,6 @@ class CampaignService {
     return this.mapDbToCampaign(data);
   }
 
-  /**
-   * Update a campaign
-   */
   public async updateCampaign(
     id: string,
     updates: Partial<{
@@ -221,9 +196,30 @@ class CampaignService {
     return this.mapDbToCampaign(data);
   }
 
-  /**
-   * Delete a campaign and ALL its data (cascade handles managers + sessions)
-   */
+  public async updateSniperConfig(
+    campaignId: string,
+    config: SniperConfig
+  ): Promise<Campaign> {
+    const { data, error } = await supabase
+      .from('campaigns')
+      .update({ sniper_config: config })
+      .eq('id', campaignId)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+
+    const updated = this.mapDbToCampaign(data);
+
+    // Also update localStorage if this is the current campaign
+    const current = this.getCurrentCampaign();
+    if (current && current.id === campaignId) {
+      this.setCurrentCampaign(updated);
+    }
+
+    return updated;
+  }
+
   public async deleteCampaign(id: string): Promise<void> {
     const { error } = await supabase
       .from('campaigns')
@@ -235,9 +231,6 @@ class CampaignService {
 
   // --- CAMPAIGN MANAGER CRUD ---
 
-  /**
-   * Get all managers for a campaign
-   */
   public async getManagersByCampaign(campaignId: string): Promise<CampaignManager[]> {
     const { data, error } = await supabase
       .from('campaign_managers')
@@ -249,9 +242,6 @@ class CampaignService {
     return data.map(this.mapDbToManager);
   }
 
-  /**
-   * Create a campaign manager
-   */
   public async createManager(manager: {
     campaignId: string;
     name: string;
@@ -273,9 +263,6 @@ class CampaignService {
     return this.mapDbToManager(data);
   }
 
-  /**
-   * Update a campaign manager
-   */
   public async updateManager(
     id: string,
     updates: Partial<{
@@ -300,9 +287,6 @@ class CampaignService {
     return this.mapDbToManager(data);
   }
 
-  /**
-   * Delete a campaign manager
-   */
   public async deleteManager(id: string): Promise<void> {
     const { error } = await supabase
       .from('campaign_managers')
@@ -312,11 +296,6 @@ class CampaignService {
     if (error) throw new Error(error.message);
   }
 
-  /**
-   * Sync managers from the Managers tab of a Google Sheet.
-   * Compares current DB managers against sheet data, adds new / removes stale.
-   * Returns { added: number, removed: number }.
-   */
   public async syncManagersFromSheet(
     campaignId: string,
     sheetManagers: { name: string; repCode: string }[]
@@ -328,7 +307,6 @@ class CampaignService {
     let added = 0;
     let removed = 0;
 
-    // Add new managers from sheet
     for (const sm of sheetManagers) {
       if (!existingByCode.has(sm.repCode.toLowerCase())) {
         await this.createManager({
@@ -340,7 +318,6 @@ class CampaignService {
       }
     }
 
-    // Remove managers no longer in sheet
     for (const em of existing) {
       if (!sheetCodes.has(em.repCode.toLowerCase())) {
         await this.deleteManager(em.id);
@@ -353,16 +330,12 @@ class CampaignService {
 
   // --- DIALER SESSION ---
 
-  /**
-   * Get or create today's dialer session for a manager
-   */
   public async getOrCreateTodaySession(
     campaignId: string,
     managerId: string
   ): Promise<DialerSession> {
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const today = new Date().toISOString().split('T')[0];
 
-    // Try to fetch existing
     const { data: existing, error: fetchError } = await supabase
       .from('dialer_sessions')
       .select('*')
@@ -379,7 +352,6 @@ class CampaignService {
       return this.mapDbToSession(existing);
     }
 
-    // Create new session
     const { data: created, error: createError } = await supabase
       .from('dialer_sessions')
       .insert({
@@ -395,9 +367,6 @@ class CampaignService {
     return this.mapDbToSession(created);
   }
 
-  /**
-   * Update gamification state for a session
-   */
   public async updateGamificationState(
     sessionId: string,
     state: Record<string, any>
@@ -415,10 +384,6 @@ class CampaignService {
 
   // --- VALIDATION ---
 
-  /**
-   * Check if a rep_code is available across all campaigns
-   * (used during manual manager creation, not sync)
-   */
   public async isRepCodeAvailable(repCode: string, excludeCampaignId?: string): Promise<boolean> {
     let query = supabase
       .from('campaign_managers')
@@ -436,6 +401,18 @@ class CampaignService {
   // --- MAPPERS ---
 
   private mapDbToCampaign(data: any): Campaign {
+    let sniperConfig: SniperConfig = { ...DEFAULT_SNIPER_CONFIG };
+    if (data.sniper_config && typeof data.sniper_config === 'object') {
+      const sc = data.sniper_config;
+      sniperConfig = {
+        years: Array.isArray(sc.years) && sc.years.length > 0 ? sc.years : [2025],
+        ppOnly: typeof sc.ppOnly === 'boolean' ? sc.ppOnly : false,
+        minEntries: typeof sc.minEntries === 'number' && sc.minEntries >= 1 ? sc.minEntries : 1,
+        linkShot: typeof sc.linkShot === 'boolean' ? sc.linkShot : false,
+        hideCTS: typeof sc.hideCTS === 'boolean' ? sc.hideCTS : true,
+      };
+    }
+
     return {
       id: data.id,
       displayName: data.display_name,
@@ -444,6 +421,7 @@ class CampaignService {
       appsScriptUrl: data.apps_script_url,
       createdBy: data.created_by,
       createdAt: data.created_at,
+      sniperConfig,
     };
   }
 

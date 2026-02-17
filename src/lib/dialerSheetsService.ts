@@ -230,6 +230,50 @@ class DialerSheetsService {
     }
   }
 
+  // --- FORMATTING (spreadsheets.batchUpdate) ---
+
+  /**
+   * Send a batch of formatting requests to a spreadsheet.
+   * Uses the spreadsheets.batchUpdate endpoint (NOT values:batchUpdate).
+   * This is used for cell background color changes (highlighting).
+   *
+   * Each request in the array should be a Sheets API request object, e.g.:
+   * {
+   *   repeatCell: {
+   *     range: { sheetId, startRowIndex, endRowIndex, startColumnIndex, endColumnIndex },
+   *     cell: { userEnteredFormat: { backgroundColor: { red, green, blue } } },
+   *     fields: 'userEnteredFormat.backgroundColor'
+   *   }
+   * }
+   *
+   * @see https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets/request
+   */
+  public async sheetsFormatBatch(
+    spreadsheetId: string,
+    requests: any[]
+  ): Promise<void> {
+    if (requests.length === 0) return;
+
+    const token = this.requireAuth();
+
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ requests }),
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'Failed to apply formatting');
+    }
+  }
+
   // --- SPREADSHEET METADATA ---
 
   /**

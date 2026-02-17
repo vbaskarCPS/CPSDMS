@@ -11,8 +11,9 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Wifi, WifiOff, ArrowDown, ArrowUp, Crosshair, Phone, ChevronRight, ChevronLeft } from 'lucide-react';
+import { Wifi, WifiOff, ArrowDown, ArrowUp, Crosshair, Phone, ChevronRight, ChevronLeft, Settings } from 'lucide-react';
 import { campaignService } from '../../lib/campaignService';
+import type { SniperConfig } from '../../lib/campaignService';
 import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import {
   initialize,
@@ -23,6 +24,7 @@ import {
   hasPendingPrepay,
   invalidateCache,
   getNextState,
+  discoverAvailableYears,
   formatPhoneDisplay,
   getActiveMultipliers,
   getCurrentRank,
@@ -45,6 +47,7 @@ import AchievementsPanel from './AchievementsPanel';
 import { useToasts, BadgeToastContainer, PointToastContainer } from './DialerToasts';
 import CampaignSelect from './CampaignSelect';
 import type { Campaign as CampaignCard } from './CampaignSelect';
+import SniperSettings from './SniperSettings';
 import { dialerRealtimeService } from '../../lib/dialerRealtimeService';
 
 // =============================================================================
@@ -85,11 +88,6 @@ const STRATEGY_COLORS: Record<string, { bg: string; border: string; color: strin
 // HELPERS — convert spreadsheet tabs into CampaignSelect-compatible cards
 // =============================================================================
 
-/**
- * Convert a list of callbook tab names into CampaignCard objects
- * for the video-game style selector. We generate codenames, terrain
- * types, and threat levels procedurally from the tab name hash.
- */
 function tabsToCampaignCards(tabs: string[], campaignName: string): CampaignCard[] {
   const CODENAMES = [
     'OP IRON GATE', 'OP THUNDER RUN', 'OP NIGHTHAWK', 'OP SILENT HILL',
@@ -103,7 +101,6 @@ function tabsToCampaignCards(tabs: string[], campaignName: string): CampaignCard
   ];
 
   return tabs.map((tabName, idx) => {
-    // Simple hash from tab name for procedural variety
     let h = 0;
     for (let i = 0; i < tabName.length; i++) h = ((h << 5) - h + tabName.charCodeAt(i)) | 0;
     const a = Math.abs(h);
@@ -119,7 +116,7 @@ function tabsToCampaignCards(tabs: string[], campaignName: string): CampaignCard
       avgAttempts: 1 + (a % 4),
       zone: ['North', 'South', 'East', 'West', 'Central', 'Downtown'][(a >> 4) % 6],
       terrain: TERRAINS[(a >> 2) % TERRAINS.length],
-      hot: idx === 0, // First tab is "hot" / featured
+      hot: idx === 0,
     };
   });
 }
@@ -152,6 +149,13 @@ export default function DialerPage() {
   const [startBookingId, setStartBookingId] = useState('');
   const [showDeployConfig, setShowDeployConfig] = useState(false);
   const [deployingTab, setDeployingTab] = useState('');
+
+  // --- Sniper Settings ---
+  const [sniperSettingsOpen, setSniperSettingsOpen] = useState(false);
+  const [sniperConfig, setSniperConfig] = useState<SniperConfig>(
+    () => campaign?.sniperConfig || { years: [2025], ppOnly: false, minEntries: 1, linkShot: false, hideCTS: true }
+  );
+  const [availableYears, setAvailableYears] = useState<number[]>([]);
 
   // --- Dialer state ---
   const [loading, setLoading] = useState(false);
@@ -215,6 +219,10 @@ export default function DialerPage() {
     }
     setManager(mgr);
     setCampaign(cmp);
+    // Initialize sniperConfig from campaign
+    if (cmp.sniperConfig) {
+      setSniperConfig(cmp.sniperConfig);
+    }
   }, [navigate]);
 
   // =======================================================================
@@ -282,12 +290,22 @@ export default function DialerPage() {
   // =======================================================================
 
   /** User clicks Deploy on a campaign card — show direction picker overlay */
-  const handleCampaignDeploy = (tabId: string) => {
+  const handleCampaignDeploy = async (tabId: string) => {
     setDeployingTab(tabId);
     setSelectedTab(tabId);
     setDirection('down');
     setStartBookingId('');
     setShowDeployConfig(true);
+
+    // Kick off year discovery in the background for SniperSettings
+    if (campaign?.spreadsheetId) {
+      try {
+        const years = await discoverAvailableYears(campaign.spreadsheetId, tabId);
+        setAvailableYears(years);
+      } catch {
+        // Non-critical — settings will still work with currently-selected years
+      }
+    }
   };
 
   /** User confirms direction and deploys */
@@ -303,7 +321,7 @@ export default function DialerPage() {
       direction,
       startRow: 2,
       repCode: manager?.repCode || '',
-      appsScriptUrl: campaign.appsScriptUrl || '',
+      sniperConfig,
       startBookingId: startBookingId.trim() || undefined,
     };
     configRef.current = config;
@@ -330,6 +348,20 @@ export default function DialerPage() {
       setLoading(false);
     }
   };
+
+  // =======================================================================
+  // SNIPER SETTINGS — config saved callback
+  // =======================================================================
+
+  const handleSniperConfigSaved = useCallback((config: SniperConfig) => {
+    setSniperConfig(config);
+    // Also update the ref config if mid-session (will apply on next cache invalidation)
+    if (configRef.current) {
+      configRef.current.sniperConfig = config;
+    }
+    // Force cache invalidation so next group load uses new filters
+    invalidateCache();
+  }, []);
 
   // =======================================================================
   // PREFILL YES FORM
@@ -386,7 +418,6 @@ export default function DialerPage() {
     if (result.pointBreakdown) {
       showPointToast(result.pointBreakdown.grandTotal, result.pointBreakdown.multiplier);
 
-      // Publish to team feed so other managers see this booking
       if (campaign?.id && manager?.id && result.pointBreakdown.grandTotal > 0) {
         dialerRealtimeService.publishBookingEvent({
           campaignId: campaign.id,
@@ -411,7 +442,7 @@ export default function DialerPage() {
         setAchievementsOpen(true);
         break;
       case 'campaigns':
-        setMode('select');
+        setMode('campaign-select' as any);
         break;
       case 'reset': {
         if (!confirm('Reset session? All points, badges, multipliers and streaks will be cleared.')) return;
@@ -683,6 +714,18 @@ export default function DialerPage() {
           onDeploy={handleCampaignDeploy}
         />
 
+        {/* Sniper Settings Modal */}
+        {campaign?.id && (
+          <SniperSettings
+            open={sniperSettingsOpen}
+            onClose={() => setSniperSettingsOpen(false)}
+            campaignId={campaign.id}
+            currentConfig={sniperConfig}
+            availableYears={availableYears}
+            onConfigSaved={handleSniperConfigSaved}
+          />
+        )}
+
         {/* Deploy Config Overlay — direction + optional booking ID */}
         {showDeployConfig && (
           <div
@@ -738,7 +781,7 @@ export default function DialerPage() {
               </div>
 
               {/* Optional booking ID */}
-              <div className="mb-5">
+              <div className="mb-4">
                 <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
                   STARTING BOOKING ID <span style={{ opacity: 0.4 }}>(OPTIONAL)</span>
                 </div>
@@ -750,6 +793,54 @@ export default function DialerPage() {
                   className="w-full px-3 py-2 rounded text-sm font-mono"
                   style={S.yesInput}
                 />
+              </div>
+
+              {/* Sniper Config Summary + Settings Button */}
+              <div className="mb-5">
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
+                  SNIPER SCOPE
+                </div>
+                <button
+                  onClick={() => setSniperSettingsOpen(true)}
+                  className="w-full flex items-center justify-between px-3 py-2.5 rounded transition-all"
+                  style={{
+                    background: 'rgba(0,229,255,0.04)',
+                    border: '1px solid rgba(0,229,255,0.15)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div className="flex flex-wrap gap-1.5">
+                    {/* Year chips */}
+                    {sniperConfig.years.map(yr => (
+                      <span key={yr} style={{
+                        fontSize: 9,
+                        fontWeight: 800,
+                        color: '#00e5ff',
+                        background: 'rgba(0,229,255,0.12)',
+                        border: '1px solid rgba(0,229,255,0.25)',
+                        borderRadius: 3,
+                        padding: '1px 6px',
+                        letterSpacing: '0.5px',
+                      }}>
+                        {yr}
+                      </span>
+                    ))}
+                    {/* Active filter badges */}
+                    {sniperConfig.ppOnly && (
+                      <span style={{ fontSize: 8, fontWeight: 800, color: '#f1c40f', background: 'rgba(241,196,15,0.12)', border: '1px solid rgba(241,196,15,0.25)', borderRadius: 3, padding: '1px 6px' }}>PP</span>
+                    )}
+                    {sniperConfig.minEntries > 1 && (
+                      <span style={{ fontSize: 8, fontWeight: 800, color: '#f5a623', background: 'rgba(245,166,35,0.12)', border: '1px solid rgba(245,166,35,0.25)', borderRadius: 3, padding: '1px 6px' }}>MIN:{sniperConfig.minEntries}</span>
+                    )}
+                    {sniperConfig.linkShot && (
+                      <span style={{ fontSize: 8, fontWeight: 800, color: '#2ecc71', background: 'rgba(46,204,113,0.12)', border: '1px solid rgba(46,204,113,0.25)', borderRadius: 3, padding: '1px 6px' }}>LINK</span>
+                    )}
+                    {sniperConfig.hideCTS && (
+                      <span style={{ fontSize: 8, fontWeight: 800, color: '#e74c3c', background: 'rgba(231,76,60,0.10)', border: '1px solid rgba(231,76,60,0.20)', borderRadius: 3, padding: '1px 6px' }}>-CTS</span>
+                    )}
+                  </div>
+                  <Settings size={14} color="#00e5ff" style={{ opacity: 0.4, flexShrink: 0, marginLeft: 8 }} />
+                </button>
               </div>
 
               {/* Action buttons */}

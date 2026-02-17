@@ -4,10 +4,11 @@
 // - Sheet data fetching (via dialerSheetsService)
 // - Header resolution
 // - Union-find group building
+// - Sniper filtering (client-side, replaces Apps Script Sniper.gs)
 // - Direction-aware navigation
 // - Disposition application (builds updates, writes to sheet)
+// - Phone highlighting via Google Sheets API (replaces Apps Script bridge)
 // - Gamification processing
-// - Apps Script bridge calls (highlight/hidden rows)
 //
 // This is the single entry point for the DialerPage UI.
 //
@@ -15,6 +16,7 @@
 import { resolveHeaders, findHeaders, ColumnIndices } from './dialerHeaders';
 import {
   buildGroups,
+  sniperFilterGroups,
   filterAvailable,
   applyOrdering,
   findNextGroup,
@@ -48,6 +50,8 @@ import {
   ProcessResult as GamificationResult,
 } from './gamificationEngine';
 import { dialerSheetsService } from '../dialerSheetsService';
+import type { SniperConfig } from '../campaignService';
+import { DEFAULT_SNIPER_CONFIG } from '../campaignService';
 
 // =============================================================================
 // TYPES
@@ -59,8 +63,8 @@ export interface EngineConfig {
   direction: Direction;
   startRow: number;         // 1-based row to start from (or afterRow for subsequent calls)
   repCode: string;
-  appsScriptUrl?: string;   // For highlight/hidden row bridge calls
-  startBookingId?: string;  // Optional: start from specific booking ID
+  sniperConfig?: SniperConfig;  // Sniper filtering config (replaces Apps Script hidden rows)
+  startBookingId?: string;      // Optional: start from specific booking ID
 }
 
 export interface EngineSnapshot {
@@ -94,14 +98,17 @@ interface CachedSheetData {
   CI: ColumnIndices;
   dataStartRow: number;     // 1-based sheet row of first data row
   all: any[][];             // All data rows (no header)
-  hiddenRows: Set<number>;
-  groups: ClientGroup[];
-  available: ClientGroup[];
+  groups: ClientGroup[];    // All groups (after sniper filter)
+  available: ClientGroup[]; // Groups that are still dialable
+  sheetTabId: number;       // Numeric tab ID for formatting API calls
   timestamp: number;
 }
 
 let cachedSheet: CachedSheetData | null = null;
 let pendingPrepay: PrepayPending | null = null;
+
+// Track highlighted rows so we can clear them on next advance
+let highlightedRows: { current: number[]; next: number[] } = { current: [], next: [] };
 
 // =============================================================================
 // DATA LOADING
@@ -114,7 +121,7 @@ let pendingPrepay: PrepayPending | null = null;
 async function loadSheetData(
   spreadsheetId: string,
   sheetName: string,
-  hiddenRowsCompressed?: string
+  sniperConfig?: SniperConfig
 ): Promise<CachedSheetData> {
   // Return cache if fresh (< 30 seconds for same sheet)
   if (
@@ -143,12 +150,26 @@ async function loadSheetData(
   const dataStartRow = headerRowIndex + 2; // 1-based sheet row (headerRowIndex is 0-based in rawData)
   const all = rawData.slice(headerRowIndex + 1); // Data rows only
 
-  // Parse hidden rows
-  const hiddenRows = parseHiddenRows(hiddenRowsCompressed);
+  // Build groups with NO hidden rows — all rows participate
+  const emptyHidden = new Set<number>();
+  const allGroups = buildGroups(all, CI, emptyHidden, dataStartRow);
 
-  // Build groups
-  const groups = buildGroups(all, CI, hiddenRows, dataStartRow);
-  const available = filterAvailable(groups, all, CI);
+  // Apply sniper filter
+  const config = sniperConfig || DEFAULT_SNIPER_CONFIG;
+  const sniperFiltered = sniperFilterGroups(allGroups, all, CI, config);
+
+  // Filter to dialable groups
+  const available = filterAvailable(sniperFiltered, all, CI);
+
+  // Get the numeric sheet tab ID for formatting API calls
+  let sheetTabId = 0;
+  try {
+    const tabs = await dialerSheetsService.getSheetTabs(spreadsheetId);
+    const tab = tabs.find((t) => t.title === sheetName);
+    if (tab) sheetTabId = tab.sheetId;
+  } catch {
+    // Non-critical — highlighting will be skipped if we can't get the tab ID
+  }
 
   cachedSheet = {
     spreadsheetId,
@@ -157,9 +178,9 @@ async function loadSheetData(
     CI,
     dataStartRow,
     all,
-    hiddenRows,
-    groups,
+    groups: sniperFiltered,
     available,
+    sheetTabId,
     timestamp: Date.now(),
   };
 
@@ -174,49 +195,101 @@ export function invalidateCache(): void {
 }
 
 // =============================================================================
-// HIDDEN ROWS — fetch via Apps Script bridge
+// PHONE HIGHLIGHTING — via Google Sheets API (replaces Apps Script bridge)
 // =============================================================================
 
-async function fetchHiddenRows(appsScriptUrl: string, sheetName: string): Promise<string> {
-  if (!appsScriptUrl) return '';
-  try {
-    const url = `${appsScriptUrl}?action=getHiddenRows&sheet=${encodeURIComponent(sheetName)}`;
-    const resp = await fetch(url, { redirect: 'follow' });
-    if (!resp.ok) return '';
-    const data = await resp.json();
-    return data.hiddenRows || '';
-  } catch {
-    return '';
-  }
-}
-
-// =============================================================================
-// HIGHLIGHT — call Apps Script bridge
-// =============================================================================
-
-async function callHighlight(
-  appsScriptUrl: string,
-  sheetName: string,
-  repCode: string,
+/**
+ * Highlight the PHONE column cells for the current and next group.
+ * Yellow (#FFD600) = current group, Blue (#00B0FF) = next group.
+ * Clears the previous highlight first.
+ */
+async function highlightPhones(
+  sheet: CachedSheetData,
   currentRows: number[],
   nextRows: number[]
 ): Promise<void> {
-  if (!appsScriptUrl) return;
-  try {
-    await fetch(appsScriptUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      redirect: 'follow',
-      body: JSON.stringify({
-        action: 'highlight',
-        sheet: sheetName,
-        repCode,
-        currentRows,
-        nextRows,
-      }),
+  if (sheet.CI.PHONE < 0) return;
+
+  const phoneCol = sheet.CI.PHONE; // 0-based column index
+
+  // Build batch update requests
+  const requests: any[] = [];
+
+  // 1. Clear previous highlights (set background to no color)
+  const allPrevRows = [...highlightedRows.current, ...highlightedRows.next];
+  for (const row of allPrevRows) {
+    const dataIdx = row - sheet.dataStartRow; // convert 1-based sheet row to 0-based
+    if (dataIdx < 0) continue;
+    requests.push({
+      repeatCell: {
+        range: {
+          sheetId: sheet.sheetTabId,
+          startRowIndex: row - 1, // 0-based for API
+          endRowIndex: row,
+          startColumnIndex: phoneCol,
+          endColumnIndex: phoneCol + 1,
+        },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: { red: 1, green: 1, blue: 1 }, // white (reset)
+          },
+        },
+        fields: 'userEnteredFormat.backgroundColor',
+      },
     });
+  }
+
+  // 2. Highlight current group rows — yellow (#FFD600)
+  for (const row of currentRows) {
+    requests.push({
+      repeatCell: {
+        range: {
+          sheetId: sheet.sheetTabId,
+          startRowIndex: row - 1,
+          endRowIndex: row,
+          startColumnIndex: phoneCol,
+          endColumnIndex: phoneCol + 1,
+        },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: { red: 1, green: 0.839, blue: 0 }, // #FFD600
+          },
+        },
+        fields: 'userEnteredFormat.backgroundColor',
+      },
+    });
+  }
+
+  // 3. Highlight next group rows — blue (#00B0FF)
+  for (const row of nextRows) {
+    requests.push({
+      repeatCell: {
+        range: {
+          sheetId: sheet.sheetTabId,
+          startRowIndex: row - 1,
+          endRowIndex: row,
+          startColumnIndex: phoneCol,
+          endColumnIndex: phoneCol + 1,
+        },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: { red: 0, green: 0.69, blue: 1 }, // #00B0FF
+          },
+        },
+        fields: 'userEnteredFormat.backgroundColor',
+      },
+    });
+  }
+
+  if (requests.length === 0) return;
+
+  // Track for next clear
+  highlightedRows = { current: [...currentRows], next: [...nextRows] };
+
+  try {
+    await dialerSheetsService.sheetsFormatBatch(sheet.spreadsheetId, requests);
   } catch {
-    // Silent fail — highlight is non-critical
+    // Silent fail — highlighting is non-critical
   }
 }
 
@@ -228,12 +301,11 @@ async function callHighlight(
  * Initialize the dialer engine: load data, find the starting group.
  */
 export async function initialize(config: EngineConfig): Promise<EngineSnapshot | null> {
-  // Fetch hidden rows from Apps Script if available
-  const hiddenCompressed = config.appsScriptUrl
-    ? await fetchHiddenRows(config.appsScriptUrl, config.sheetName)
-    : '';
-
-  const sheet = await loadSheetData(config.spreadsheetId, config.sheetName, hiddenCompressed);
+  const sheet = await loadSheetData(
+    config.spreadsheetId,
+    config.sheetName,
+    config.sniperConfig
+  );
 
   if (sheet.available.length === 0) {
     return null;
@@ -285,16 +357,12 @@ export async function initialize(config: EngineConfig): Promise<EngineSnapshot |
   // Prefetch next group
   const prefetchState = getPrefetchState(sheet, state, config.direction);
 
-  // Highlight via bridge
-  if (config.appsScriptUrl) {
-    callHighlight(
-      config.appsScriptUrl,
-      config.sheetName,
-      config.repCode,
-      state.rows,
-      prefetchState?.rows || []
-    );
-  }
+  // Highlight phones in the sheet
+  highlightPhones(
+    sheet,
+    state.rows,
+    prefetchState?.rows || []
+  );
 
   return {
     state,
@@ -316,7 +384,7 @@ export async function getNextState(
   config: EngineConfig,
   afterRow: number
 ): Promise<DialerStateResult> {
-  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName);
+  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
 
   const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
   const group = findNextGroup(ordered, afterRow, config.direction);
@@ -348,7 +416,7 @@ export async function findGroupByBookingId(
   config: EngineConfig,
   bookingId: string
 ): Promise<DialerStateResult> {
-  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName);
+  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
 
   if (sheet.CI.BOOKING_ID < 0) {
     return { found: false, message: 'No Booking ID column found.' };
@@ -372,7 +440,7 @@ export async function findGroupByPhone(
   config: EngineConfig,
   phone: string
 ): Promise<DialerStateResult> {
-  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName);
+  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
   const normalized = normalizePhone(phone);
   if (!normalized) return { found: false, message: 'Invalid phone number.' };
 
@@ -435,14 +503,6 @@ export interface DispositionResult {
 
 /**
  * Apply a disposition to the current group and advance to the next.
- *
- * @param config     Engine configuration
- * @param state      Current DialerState
- * @param disposition The disposition type
- * @param phone      The phone number being dialed
- * @param session    Current gamification session
- * @param extra      Extra data for YES/PREPAY dispositions
- * @param yesStartTime Timestamp when the YES form was opened (for no_scope badge)
  */
 export async function applyDisposition(
   config: EngineConfig,
@@ -453,7 +513,7 @@ export async function applyDisposition(
   extra: DispositionExtra = {},
   yesStartTime?: number
 ): Promise<DispositionResult> {
-  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName);
+  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
 
   // Build disposition updates
   const dispResult = buildDispositionUpdates(
@@ -483,7 +543,6 @@ export async function applyDisposition(
 
   // If WN/NIS found a redial phone, return it without advancing
   if (dispResult.redial) {
-    // Process gamification for WN
     const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
     const gamResult = processGamification(session, disposition, gamCtx);
     saveSession(config.repCode, session);
@@ -529,14 +588,12 @@ export async function applyDisposition(
   const afterRow = nextAfterRow(state.rows, config.direction);
   const nextStateResult = await getNextState(config, afterRow);
 
-  // Highlight via bridge
-  if (config.appsScriptUrl && nextStateResult.found) {
+  // Highlight phones in sheet
+  if (nextStateResult.found) {
     const ns = nextStateResult as DialerState;
     const prefetch = getPrefetchState(sheet, ns, config.direction);
-    callHighlight(
-      config.appsScriptUrl,
-      config.sheetName,
-      config.repCode,
+    highlightPhones(
+      sheet,
       ns.rows,
       prefetch?.rows || []
     );
@@ -581,7 +638,7 @@ export async function finalizePrepay(
     };
   }
 
-  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName);
+  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
   const pp = pendingPrepay;
 
   // If card amount differs from original, use submitted amount
@@ -634,7 +691,6 @@ export async function finalizePrepay(
 
   // Step 3: Write to CCD tab
   try {
-    // Get CCD headers
     const ccdRange = `'CCD'!1:1`;
     const ccdHeaderData = await dialerSheetsService.sheetsGet(config.spreadsheetId, ccdRange);
     if (ccdHeaderData && ccdHeaderData.length > 0) {
@@ -650,7 +706,6 @@ export async function finalizePrepay(
         { email: pp.extra.email, name: pp.extra.name, price: pp.extra.price }
       );
 
-      // Append to CCD
       await dialerSheetsService.sheetsAppend(
         config.spreadsheetId,
         `'CCD'!A1`,
@@ -676,13 +731,11 @@ export async function finalizePrepay(
   const nextStateResult = await getNextState(config, afterRow);
 
   // Highlight
-  if (config.appsScriptUrl && nextStateResult.found) {
+  if (nextStateResult.found) {
     const ns = nextStateResult as DialerState;
     const prefetch = getPrefetchState(sheet, ns, config.direction);
-    callHighlight(
-      config.appsScriptUrl,
-      config.sheetName,
-      config.repCode,
+    highlightPhones(
+      sheet,
       ns.rows,
       prefetch?.rows || []
     );
@@ -720,7 +773,6 @@ export function hasPendingPrepay(): boolean {
 
 /**
  * Check if all groups on a street have been dispositioned.
- * Used after YES to determine if Scorched Earth should trigger.
  */
 export function checkStreetCleared(
   state: DialerState
@@ -731,7 +783,6 @@ export function checkStreetCleared(
   const streetKey = state.streetKey;
   if (!streetKey) return { cleared: false, visibleGroupCount: 0 };
 
-  // Find all groups on this street
   const streetGroups: ClientGroup[] = [];
   for (const group of sheet.groups) {
     let inStreet = false;
@@ -746,7 +797,6 @@ export function checkStreetCleared(
 
   if (streetGroups.length === 0) return { cleared: false, visibleGroupCount: 0 };
 
-  // Check if all street groups have a disposition
   let allCleared = true;
   for (const group of streetGroups) {
     let hasDisposition = false;
@@ -760,6 +810,35 @@ export function checkStreetCleared(
   }
 
   return { cleared: allCleared, visibleGroupCount: streetGroups.length };
+}
+
+// =============================================================================
+// YEAR DISCOVERY — scan sheet for available years (for Sniper Settings UI)
+// =============================================================================
+
+/**
+ * Scan all data rows to find unique YEAR values present in the sheet.
+ * Returns sorted descending (most recent first).
+ */
+export async function discoverAvailableYears(
+  spreadsheetId: string,
+  sheetName: string
+): Promise<number[]> {
+  const sheet = cachedSheet && cachedSheet.spreadsheetId === spreadsheetId && cachedSheet.sheetName === sheetName
+    ? cachedSheet
+    : await loadSheetData(spreadsheetId, sheetName);
+
+  if (sheet.CI.YEAR < 0) return [];
+
+  const yearSet = new Set<number>();
+  for (let r = 0; r < sheet.all.length; r++) {
+    const yr = parseInt(String(sheet.all[r][sheet.CI.YEAR] ?? ''), 10);
+    if (!isNaN(yr) && yr >= 2000 && yr <= 2100) {
+      yearSet.add(yr);
+    }
+  }
+
+  return Array.from(yearSet).sort((a, b) => b - a);
 }
 
 // =============================================================================
@@ -784,14 +863,12 @@ function buildGamificationContext(
     ctx.price = parseFloat(extra.price || '0') || 0;
     ctx.yesStartTime = yesStartTime;
 
-    // Check street cleared for Scorched Earth
     if (cachedSheet) {
       const { cleared, visibleGroupCount } = checkStreetCleared(state);
       ctx.streetFullyCleared = cleared;
       ctx.streetVisibleGroupCount = visibleGroupCount;
     }
 
-    // Check if this is a first-time prepay (client has never prepaid before)
     if (disposition === 'PREPAY') {
       const hasPriorPrepay = state.serviceHistory.some(
         (h) => h.pmtType === 'Prepaid'
@@ -851,14 +928,12 @@ function migrateSession(
 ): GamificationSession {
   const fresh = createFreshSession(repCode, dateStr);
 
-  // Fill in any missing top-level fields
   for (const key of Object.keys(fresh) as (keyof GamificationSession)[]) {
     if ((loaded as any)[key] === undefined) {
       (loaded as any)[key] = (fresh as any)[key];
     }
   }
 
-  // Fill in any missing multiplier sub-fields
   if (!loaded.multipliers) loaded.multipliers = fresh.multipliers;
   for (const mKey of Object.keys(fresh.multipliers) as (keyof typeof fresh.multipliers)[]) {
     if (!(loaded.multipliers as any)[mKey]) {

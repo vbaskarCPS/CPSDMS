@@ -1,12 +1,27 @@
 // src/lib/dialer/dialerGroupBuilder.ts
 //
 // Client-side union-find group builder for the AutoSniper dialer.
-// Ported from Dialer.gs: dialerBuildGroups_, dialerFilterAvailable_,
-// dialerApplyOrdering_, dialerFindNext_.
+// Ported from Utilities.gs: buildClientGroups_, and Sniper.gs: executeSniper.
+//
+// Group building: merges rows by shared phone number and by shared address
+// (route prefix + normalized house+street), matching Sniper.gs behavior.
+//
+// Sniper filtering: post-group-building filter that removes groups based on
+// campaign config (years, prepaid-only, min entries, link shot, hide CTS).
 //
 
 import { ColumnIndices } from './dialerHeaders';
-import { normalizePhone, normalizeStreet } from './dialerUtils';
+import {
+  normalizePhone,
+  normalizeAddr,
+  getRoutePrefix,
+  buildStreetKey,
+  parseYear,
+  isPrepaid,
+  hasAER,
+  isCTS,
+} from './dialerUtils';
+import type { SniperConfig } from '../campaignService';
 
 // --- Types ---
 
@@ -46,11 +61,16 @@ function makeUF(n: number) {
 
 /**
  * Build client groups from all data rows using union-find.
- * Merges rows by shared phone number and by shared address (HOUSE# + STREET).
+ *
+ * Merge rules (matching Sniper.gs executeSniper):
+ * 1. Phone: rows with same normalized 10-digit phone merge.
+ * 2. Address: rows with same ROUTE_PREFIX|normalizeAddr(HOUSE#, STREET) merge.
+ *    This scopes address matching by route area so "123 Main St" in ACE
+ *    stays separate from "123 Main St" in BS.
  *
  * @param all        2D array of cell values (data rows only, no header). Index 0 = first data row.
  * @param CI         Resolved column indices.
- * @param hiddenRows Set of 1-based sheet row numbers that are hidden.
+ * @param hiddenRows Set of 1-based sheet row numbers that are hidden (pass empty set for no hiding).
  * @param dataStartRow 1-based sheet row number of the first data row (typically 2).
  * @returns Array of ClientGroup sorted by firstRow ascending.
  */
@@ -78,16 +98,25 @@ export function buildGroups(
     }
   }
 
-  // --- Merge by address ---
-  if (CI.STREET >= 0 && CI.PREFIX >= 0) {
+  // --- Merge by address: ROUTE_PREFIX | normalizeAddr(HOUSE#, STREET) ---
+  if (CI.PREFIX >= 0 && CI.STREET >= 0 && CI.ROUTE_CODE >= 0) {
     const addrMap: Record<string, number> = {};
     for (let r = 0; r < n; r++) {
       const sheetRow = r + dataStartRow;
       if (hiddenRows.has(sheetRow)) continue;
-      const street = String(all[r][CI.STREET] ?? '').trim().toUpperCase();
-      const prefix = String(all[r][CI.PREFIX] ?? '').trim().toUpperCase();
-      if (!street || !prefix) continue;
-      const addrKey = prefix + '|' + street;
+
+      const house = String(all[r][CI.PREFIX] ?? '').trim();
+      const street = String(all[r][CI.STREET] ?? '').trim();
+      const routeCode = String(all[r][CI.ROUTE_CODE] ?? '').trim();
+      const prefix = getRoutePrefix(routeCode);
+
+      if (!house && !street) continue;
+      if (!prefix) continue;
+
+      const addr = normalizeAddr(house, street);
+      if (!addr) continue;
+
+      const addrKey = prefix + '|' + addr;
       if (addrMap[addrKey] !== undefined) {
         uf.union(addrMap[addrKey], r);
       } else {
@@ -101,10 +130,13 @@ export function buildGroups(
   for (let r = 0; r < n; r++) {
     const sheetRow = r + dataStartRow;
     if (hiddenRows.has(sheetRow)) continue;
+
+    // Must have a valid phone to be part of a group
     if (CI.PHONE >= 0) {
       const phone = normalizePhone(String(all[r][CI.PHONE] ?? ''));
       if (!phone) continue;
     }
+
     const root = uf.find(r);
     if (!groupMap[root]) groupMap[root] = [];
     groupMap[root].push(r);
@@ -124,7 +156,116 @@ export function buildGroups(
   return groups;
 }
 
-// --- Available Group Filtering ---
+// =============================================================================
+// SNIPER FILTER — post-group-building filter based on campaign config
+// =============================================================================
+
+/**
+ * Filter groups based on Sniper configuration.
+ * Runs AFTER buildGroups() and BEFORE filterAvailable().
+ *
+ * Filters applied:
+ * 1. Years: group must have ≥1 row with YEAR matching any selected year.
+ * 2. Prepaid Only: group must have ≥1 row with PMT TYPE = prepaid.
+ * 3. Min Entries: group must have ≥ minEntries rows.
+ * 4. Link Shot: group must be on a street that has at least one AER anywhere in the sheet.
+ * 5. Hide CTS: skip groups where any row has "CTS" in the NA column.
+ *
+ * @param groups  All groups from buildGroups().
+ * @param all     Full data array (no header row).
+ * @param CI      Resolved column indices.
+ * @param config  Sniper configuration from the campaign.
+ * @returns Filtered array of ClientGroup.
+ */
+export function sniperFilterGroups(
+  groups: ClientGroup[],
+  all: any[][],
+  CI: ColumnIndices,
+  config: SniperConfig
+): ClientGroup[] {
+  // Pre-compute: which streets have AER (for linkShot filter)
+  // Keyed by ROUTE_PREFIX|NORMALIZED_STREET — same as buildStreetKey()
+  const aerStreets = new Set<string>();
+  if (config.linkShot && CI.AER >= 0 && CI.STREET >= 0 && CI.ROUTE_CODE >= 0) {
+    for (let r = 0; r < all.length; r++) {
+      if (hasAER(all[r][CI.AER])) {
+        const rc = String(all[r][CI.ROUTE_CODE] ?? '').trim();
+        const st = String(all[r][CI.STREET] ?? '').trim();
+        const key = buildStreetKey(rc, st);
+        if (key && key !== '|') aerStreets.add(key);
+      }
+    }
+  }
+
+  // Determine effective years — default to [2025] if somehow empty
+  const targetYears = config.years.length > 0 ? config.years : [2025];
+
+  return groups.filter((group) => {
+    // --- 1. Year filter ---
+    // Group must have at least one row with a YEAR matching a selected year
+    if (CI.YEAR >= 0) {
+      let hasMatchingYear = false;
+      for (const r of group.rows) {
+        const yr = parseYear(all[r][CI.YEAR]);
+        if (yr > 0 && targetYears.includes(yr)) {
+          hasMatchingYear = true;
+          break;
+        }
+      }
+      if (!hasMatchingYear) return false;
+    }
+
+    // --- 2. Prepaid Only ---
+    if (config.ppOnly && CI.PMT_TYPE >= 0) {
+      let hasPP = false;
+      for (const r of group.rows) {
+        if (isPrepaid(all[r][CI.PMT_TYPE])) {
+          hasPP = true;
+          break;
+        }
+      }
+      if (!hasPP) return false;
+    }
+
+    // --- 3. Min Entries ---
+    if (config.minEntries > 1 && group.rows.length < config.minEntries) {
+      return false;
+    }
+
+    // --- 4. Link Shot: group must be on a street that has AER ---
+    if (config.linkShot && CI.STREET >= 0 && CI.ROUTE_CODE >= 0) {
+      let onAerStreet = false;
+      for (const r of group.rows) {
+        const rc = String(all[r][CI.ROUTE_CODE] ?? '').trim();
+        const st = String(all[r][CI.STREET] ?? '').trim();
+        const key = buildStreetKey(rc, st);
+        if (key && aerStreets.has(key)) {
+          onAerStreet = true;
+          break;
+        }
+      }
+      if (!onAerStreet) return false;
+    }
+
+    // --- 5. Hide CTS ---
+    if (config.hideCTS && CI.NA >= 0) {
+      let hasCTS = false;
+      for (const r of group.rows) {
+        if (isCTS(all[r][CI.NA])) {
+          hasCTS = true;
+          break;
+        }
+      }
+      if (hasCTS) return false;
+    }
+
+    return true;
+  });
+}
+
+// =============================================================================
+// AVAILABLE GROUP FILTERING (existing — unchanged)
+// =============================================================================
 
 /**
  * Filter groups to only those that are still dialable:
@@ -160,7 +301,9 @@ export function filterAvailable(
   });
 }
 
-// --- Direction Ordering ---
+// =============================================================================
+// DIRECTION ORDERING (existing — unchanged)
+// =============================================================================
 
 /**
  * Get the max NA count for a group (used by scatter mode).
@@ -169,7 +312,9 @@ function groupMaxNA(group: ClientGroup, all: any[][], naCol: number): number {
   if (naCol < 0) return 0;
   let maxNA = 0;
   for (const r of group.rows) {
-    const val = parseInt(String(all[r][naCol] ?? '0'), 10) || 0;
+    const raw = String(all[r][naCol] ?? '0').trim();
+    // NA column may contain "CTS" or a number — only parse numbers
+    const val = parseInt(raw, 10) || 0;
     if (val > maxNA) maxNA = val;
   }
   return maxNA;
@@ -215,7 +360,7 @@ export function applyOrdering(
  *
  * - down: first group with firstRow >= afterRow
  * - up: first group (in reversed list) with firstRow < afterRow
- * - scatter: always returns ordered[0] (the lowest NA group), but removes already-dialed
+ * - scatter: always returns ordered[0] (the lowest NA group)
  */
 export function findNextGroup(
   ordered: ClientGroup[],
