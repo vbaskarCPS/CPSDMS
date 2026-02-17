@@ -6,6 +6,7 @@
 // with satellite-style imagery, tactical stats, and a deploy button.
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { Settings } from 'lucide-react';
 
 // =============================================================================
 // TYPES
@@ -31,7 +32,10 @@ export interface Campaign {
 interface CampaignSelectProps {
   campaigns: Campaign[];
   onDeploy: (campaignId: string) => void;
+  onSettingsClick?: () => void;   // Opens Sniper Settings modal
   currentUserId?: string;
+  /** Active filter summary chips to show in header */
+  filterSummary?: React.ReactNode;
 }
 
 // =============================================================================
@@ -97,7 +101,6 @@ function threatColor(level: number): string {
 
 /** Derive difficulty 1-5 from reached% and avg attempts. High reached + high attempts = harder. */
 function deriveThreat(reachedPct: number, avgAttempts: number): 1 | 2 | 3 | 4 | 5 {
-  // Score: high reached% = more worked over, high avgAttempts = harder to convert
   const score = (reachedPct / 100) * 0.4 + Math.min(avgAttempts / 6, 1) * 0.6;
   if (score < 0.2) return 1;
   if (score < 0.4) return 2;
@@ -200,7 +203,7 @@ const CAMPAIGN_STYLES = `
 // MAIN COMPONENT
 // =============================================================================
 
-export default function CampaignSelect({ campaigns, onDeploy }: CampaignSelectProps) {
+export default function CampaignSelect({ campaigns, onDeploy, onSettingsClick, filterSummary }: CampaignSelectProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
   const [filter, setFilter] = useState<'all' | 'residential' | 'commercial' | 'industrial' | 'mixed' | 'rural'>('all');
@@ -301,23 +304,73 @@ export default function CampaignSelect({ campaigns, onDeploy }: CampaignSelectPr
               marginLeft: 'auto',
               display: 'flex',
               alignItems: 'center',
-              gap: 6,
-              fontSize: 9,
-              color: '#2ecc71',
-              opacity: 0.4,
-              fontWeight: 700,
+              gap: 12,
             }}>
-              <span style={{
-                width: 6,
-                height: 6,
-                borderRadius: '50%',
-                background: '#2ecc71',
-                display: 'inline-block',
-                animation: 'cs-hot-pulse 2s ease-in-out infinite',
-              }} />
-              {campaigns.filter(c => !c.locked).length} CAMPAIGNS AVAILABLE
+              {/* Sniper Settings button */}
+              {onSettingsClick && (
+                <button
+                  onClick={onSettingsClick}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 12px',
+                    borderRadius: 6,
+                    border: '1px solid rgba(0,229,255,0.20)',
+                    background: 'rgba(0,229,255,0.06)',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = 'rgba(0,229,255,0.45)';
+                    e.currentTarget.style.background = 'rgba(0,229,255,0.12)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = 'rgba(0,229,255,0.20)';
+                    e.currentTarget.style.background = 'rgba(0,229,255,0.06)';
+                  }}
+                >
+                  <Settings size={13} color="#00e5ff" style={{ opacity: 0.7 }} />
+                  <span style={{
+                    fontSize: 9,
+                    fontWeight: 800,
+                    letterSpacing: '1.5px',
+                    color: '#00e5ff',
+                    opacity: 0.7,
+                    textTransform: 'uppercase',
+                  }}>
+                    SCOPE
+                  </span>
+                </button>
+              )}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 9,
+                color: '#2ecc71',
+                opacity: 0.4,
+                fontWeight: 700,
+              }}>
+                <span style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: '#2ecc71',
+                  display: 'inline-block',
+                  animation: 'cs-hot-pulse 2s ease-in-out infinite',
+                }} />
+                {campaigns.filter(c => !c.locked).length} CAMPAIGNS AVAILABLE
+              </div>
             </div>
           </div>
+
+          {/* Active filter summary (passed from parent) */}
+          {filterSummary && (
+            <div style={{ marginBottom: 8 }}>
+              {filterSummary}
+            </div>
+          )}
 
           {/* Divider */}
           <div style={{

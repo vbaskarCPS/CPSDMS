@@ -712,6 +712,13 @@ export default function DialerPage() {
         <CampaignSelect
           campaigns={campaignCards}
           onDeploy={handleCampaignDeploy}
+          onSettingsClick={() => {
+            // Kick off year discovery if we haven't yet
+            if (availableYears.length === 0 && campaign?.spreadsheetId && tabs.length > 0) {
+              discoverAvailableYears(campaign.spreadsheetId, tabs[0]).then(setAvailableYears).catch(() => {});
+            }
+            setSniperSettingsOpen(true);
+          }}
         />
 
         {/* Sniper Settings Modal */}
