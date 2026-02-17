@@ -2,20 +2,14 @@
 //
 // Full-screen achievements overlay — trophy button opens this.
 // Shows session stats, badge grid (earned/locked), multiplier guide, recent bookings.
+// War Room 2.0 — custom SVG badge icons with pulse glow effects.
 //
 
 import { useState } from 'react';
-import { X, Phone, Target, DollarSign, Zap, Award, Trophy, Crosshair } from 'lucide-react';
+import { X, Phone, Target, DollarSign, Zap, Award, Trophy } from 'lucide-react';
 import { BADGE_DEFS, MULTIPLIER_DEFS, type GamificationSession } from '../../lib/dialer/gamificationDefs';
 import { getCurrentRank } from '../../lib/dialer/gamificationDefs';
-
-// --- Props ---
-
-interface AchievementsPanelProps {
-  session: GamificationSession;
-  open: boolean;
-  onClose: () => void;
-}
+import { getBadgeIcon, getBadgeCategoryColor } from './BadgeIcons';
 
 // --- Section order for badge grid ---
 
@@ -65,7 +59,23 @@ const SECTION_COLORS: Record<string, string> = {
   'Workhorse': '#95a5a6',
 };
 
-// --- Multiplier descriptions for the reference guide ---
+// --- Section icons ---
+
+const SECTION_ICONS: Record<string, string> = {
+  'Streaks': '🔥',
+  'Prepay Streak': '💰',
+  'Street': '🗺️',
+  'Time': '⏰',
+  'Spree': '⚡',
+  'Special': '✦',
+  'Headhunter': '🎯',
+  'Raise the Dead': '💀',
+  'Ranks': '⭐',
+  'Milestones': '🏅',
+  'Workhorse': '⚙️',
+};
+
+// --- Multiplier descriptions ---
 
 const MULT_DESCRIPTIONS: Record<string, string> = {
   op_tempo: '2+ YES streak starts +0.2x, grows +0.1x per level. 20min timer resets on each YES.',
@@ -81,12 +91,21 @@ const MULT_DESCRIPTIONS: Record<string, string> = {
   scorched_earth: 'Clear an entire street → tiered bonus (1.1x-3.0x), 5 charges per trigger.',
 };
 
+// --- Props ---
+
+interface AchievementsPanelProps {
+  session: GamificationSession;
+  open: boolean;
+  onClose: () => void;
+}
+
 // =============================================================================
 // COMPONENT
 // =============================================================================
 
 export default function AchievementsPanel({ session, open, onClose }: AchievementsPanelProps) {
   const [activeTab, setActiveTab] = useState<'badges' | 'multipliers' | 'feed'>('badges');
+  const [hoveredBadge, setHoveredBadge] = useState<string | null>(null);
 
   if (!open) return null;
 
@@ -109,60 +128,121 @@ export default function AchievementsPanel({ session, open, onClose }: Achievemen
     badgesBySection[section].push({ id, def, earned: earnedSet.has(id), count });
   }
 
-  // PP ratio
   const ppRatio = s.totalBookings > 0 ? Math.round((s.pps / s.totalBookings) * 100) : 0;
+  const progressPct = Math.round((uniqueBadgesEarned / totalBadgesDefined) * 100);
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: 'rgba(0,0,0,0.85)' }}
+      style={{ background: 'rgba(0,0,0,0.9)', backdropFilter: 'blur(4px)' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
+      {/* Keyframe animations */}
+      <style>{`
+        @keyframes badge-pulse {
+          0%, 100% { box-shadow: 0 0 4px var(--pulse-color, rgba(46,204,113,0.2)); }
+          50% { box-shadow: 0 0 12px var(--pulse-color, rgba(46,204,113,0.5)); }
+        }
+        @keyframes badge-glow-idle {
+          0%, 100% { opacity: 0.15; }
+          50% { opacity: 0.35; }
+        }
+        @keyframes tab-underline {
+          from { transform: scaleX(0); }
+          to { transform: scaleX(1); }
+        }
+        @keyframes mult-active-pulse {
+          0%, 100% { box-shadow: 0 0 6px var(--mult-color, rgba(46,204,113,0.2)); }
+          50% { box-shadow: 0 0 16px var(--mult-color, rgba(46,204,113,0.5)); }
+        }
+      `}</style>
+
       <div
-        className="relative w-full max-w-2xl max-h-[90vh] flex flex-col rounded-lg overflow-hidden"
-        style={{ background: '#0a120a', border: '2px solid rgba(46,204,113,0.5)', boxShadow: '0 0 60px rgba(46,204,113,0.15), 0 12px 40px rgba(0,0,0,0.8)' }}
+        className="relative w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
+        style={{
+          background: 'linear-gradient(180deg, #0d1a0d 0%, #080f08 50%, #0a120a 100%)',
+          border: '1px solid rgba(46,204,113,0.3)',
+          borderRadius: 12,
+          boxShadow: '0 0 80px rgba(46,204,113,0.1), 0 20px 60px rgba(0,0,0,0.8), inset 0 1px 0 rgba(46,204,113,0.15)',
+        }}
       >
         {/* Header */}
-        <div className="flex-shrink-0 px-5 pt-4 pb-3" style={{ borderBottom: '2px solid rgba(46,204,113,0.3)', background: 'rgba(14,24,14,0.95)' }}>
+        <div className="flex-shrink-0 px-5 pt-4 pb-3" style={{ borderBottom: '1px solid rgba(46,204,113,0.15)', background: 'rgba(14,24,14,0.6)' }}>
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <Trophy size={18} color="#f1c40f" />
-              <span className="text-sm font-black tracking-widest uppercase font-mono" style={{ color: '#f1c40f' }}>
+            <div className="flex items-center gap-2.5">
+              <div style={{
+                background: 'rgba(241,196,15,0.1)',
+                border: '1px solid rgba(241,196,15,0.25)',
+                borderRadius: 8,
+                padding: '4px 6px',
+                display: 'flex',
+                alignItems: 'center',
+              }}>
+                <Trophy size={16} color="#f1c40f" />
+              </div>
+              <span className="text-sm font-black tracking-widest uppercase font-mono" style={{ color: '#f1c40f', letterSpacing: 3 }}>
                 War Room
               </span>
               {rank && (
-                <span className="ml-2 text-xs font-bold px-2 py-0.5 rounded" style={{ background: 'rgba(241,196,15,0.1)', border: '1px solid rgba(241,196,15,0.3)', color: '#f1c40f' }}>
+                <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{
+                  background: 'rgba(241,196,15,0.08)',
+                  border: '1px solid rgba(241,196,15,0.2)',
+                  color: '#f1c40f',
+                  letterSpacing: 1,
+                }}>
                   {rank.icon} {rank.label}
                 </span>
               )}
             </div>
-            <button onClick={onClose} className="p-1 rounded transition-colors hover:bg-white/10">
-              <X size={16} color="#888" />
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg transition-all duration-200 hover:bg-white/10 active:scale-90"
+              style={{ border: '1px solid rgba(255,255,255,0.08)' }}
+            >
+              <X size={14} color="#666" />
             </button>
           </div>
 
           {/* Stats bar */}
-          <div className="grid grid-cols-6 gap-2">
-            <StatCard icon={<Target size={12} color="#2ecc71" />} label="Prebooks" value={s.pbs} color="#2ecc71" />
-            <StatCard icon={<DollarSign size={12} color="#f1c40f" />} label="Prepays" value={s.pps} color="#f1c40f" />
-            <StatCard icon={<DollarSign size={12} color="#e67e22" />} label="PP$" value={`$${s.ppDollars}`} color="#e67e22" />
-            <StatCard icon={<Zap size={12} color="#fff" />} label="Points" value={s.totalSessionPoints} color="#fff" />
-            <StatCard icon={<Award size={12} color="#9b59b6" />} label="Badges" value={totalBadgesEarned} color="#9b59b6" />
-            <StatCard icon={<Phone size={12} color="#3498db" />} label="Dials" value={s.totalDials} color="#3498db" />
+          <div className="grid grid-cols-6 gap-1.5">
+            <StatCard icon={<Target size={11} />} label="PB" value={s.pbs} color="#2ecc71" />
+            <StatCard icon={<DollarSign size={11} />} label="PP" value={s.pps} color="#f1c40f" />
+            <StatCard icon={<DollarSign size={11} />} label="PP$" value={`$${s.ppDollars}`} color="#e67e22" />
+            <StatCard icon={<Zap size={11} />} label="PTS" value={s.totalSessionPoints} color="#fff" />
+            <StatCard icon={<Award size={11} />} label="BADGES" value={totalBadgesEarned} color="#9b59b6" />
+            <StatCard icon={<Phone size={11} />} label="DIALS" value={s.totalDials} color="#3498db" />
+          </div>
+
+          {/* Progress bar */}
+          <div className="mt-2.5 flex items-center gap-2">
+            <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width: `${progressPct}%`,
+                  background: 'linear-gradient(90deg, #2ecc71, #f1c40f)',
+                  boxShadow: '0 0 8px rgba(46,204,113,0.4)',
+                  transition: 'width 0.8s ease-out',
+                }}
+              />
+            </div>
+            <span className="text-xs font-mono font-bold" style={{ color: '#2ecc71', opacity: 0.6, fontSize: 9 }}>
+              {uniqueBadgesEarned}/{totalBadgesDefined}
+            </span>
           </div>
         </div>
 
         {/* Tabs */}
-        <div className="flex-shrink-0 flex px-5 pt-2" style={{ background: 'rgba(14,24,14,0.6)' }}>
+        <div className="flex-shrink-0 flex px-5 pt-1" style={{ background: 'rgba(14,24,14,0.4)' }}>
           <TabButton label="Badges" count={`${uniqueBadgesEarned}/${totalBadgesDefined}`} active={activeTab === 'badges'} onClick={() => setActiveTab('badges')} />
           <TabButton label="Multipliers" count={String(Object.keys(MULTIPLIER_DEFS).length)} active={activeTab === 'multipliers'} onClick={() => setActiveTab('multipliers')} />
           <TabButton label="Feed" count={String(s.recentBookings.length)} active={activeTab === 'feed'} onClick={() => setActiveTab('feed')} />
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto px-5 py-3" style={{ background: '#0a120a' }}>
+        <div className="flex-1 overflow-y-auto px-5 py-3" style={{ background: 'transparent' }}>
           {activeTab === 'badges' && (
-            <BadgesTab badgesBySection={badgesBySection} />
+            <BadgesTab badgesBySection={badgesBySection} hoveredBadge={hoveredBadge} setHoveredBadge={setHoveredBadge} />
           )}
           {activeTab === 'multipliers' && (
             <MultipliersTab session={s} />
@@ -173,9 +253,9 @@ export default function AchievementsPanel({ session, open, onClose }: Achievemen
         </div>
 
         {/* Footer */}
-        <div className="flex-shrink-0 px-5 py-2 text-center" style={{ borderTop: '1px solid rgba(46,204,113,0.15)', background: 'rgba(14,24,14,0.6)' }}>
-          <span className="text-xs font-mono" style={{ color: '#2ecc71', opacity: 0.3, letterSpacing: '2px' }}>
-            {s.repCode} — {s.date} — PP Ratio: {ppRatio}% — Streak: {s.consecutiveYes}
+        <div className="flex-shrink-0 px-5 py-2 text-center" style={{ borderTop: '1px solid rgba(46,204,113,0.1)', background: 'rgba(14,24,14,0.4)' }}>
+          <span className="text-xs font-mono" style={{ color: '#2ecc71', opacity: 0.2, letterSpacing: '2px', fontSize: 9 }}>
+            {s.repCode} — {s.date} — PP%: {ppRatio} — STREAK: {s.consecutiveYes}
           </span>
         </div>
       </div>
@@ -187,71 +267,141 @@ export default function AchievementsPanel({ session, open, onClose }: Achievemen
 // BADGES TAB
 // =============================================================================
 
-function BadgesTab({ badgesBySection }: { badgesBySection: Record<string, { id: string; def: any; earned: boolean; count: number }[]> }) {
+function BadgesTab({
+  badgesBySection,
+  hoveredBadge,
+  setHoveredBadge,
+}: {
+  badgesBySection: Record<string, { id: string; def: any; earned: boolean; count: number }[]>;
+  hoveredBadge: string | null;
+  setHoveredBadge: (id: string | null) => void;
+}) {
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {SECTION_ORDER.map(section => {
         const badges = badgesBySection[section];
         if (!badges || badges.length === 0) return null;
         const earnedCount = badges.filter(b => b.earned).length;
         const accent = SECTION_COLORS[section] || '#2ecc71';
+        const sectionIcon = SECTION_ICONS[section] || '•';
 
         return (
           <div key={section}>
             {/* Section header */}
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-xs font-black tracking-widest uppercase font-mono" style={{ color: accent }}>
+            <div className="flex items-center gap-2 mb-2">
+              <span style={{ fontSize: 12 }}>{sectionIcon}</span>
+              <span className="text-xs font-black tracking-widest uppercase font-mono" style={{ color: accent, letterSpacing: 2 }}>
                 {section}
               </span>
-              <span className="text-xs font-bold px-1.5 py-0.5 rounded font-mono" style={{ background: `${accent}15`, color: accent, fontSize: 9 }}>
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full font-mono" style={{
+                background: `${accent}12`,
+                color: accent,
+                fontSize: 9,
+                border: `1px solid ${accent}25`,
+              }}>
                 {earnedCount}/{badges.length}
               </span>
-              <div className="flex-1 h-px" style={{ background: `${accent}30` }} />
+              <div className="flex-1 h-px" style={{ background: `linear-gradient(to right, ${accent}30, transparent)` }} />
             </div>
-            <div className="text-xs mb-2" style={{ color: '#555', fontSize: 9 }}>{SECTION_DESC[section]}</div>
+            <div className="text-xs mb-2.5" style={{ color: '#444', fontSize: 9, letterSpacing: 0.5 }}>{SECTION_DESC[section]}</div>
 
             {/* Badge grid */}
-            <div className="grid grid-cols-3 gap-1.5">
-              {badges.map(({ id, def, earned, count }) => (
-                <div
-                  key={id}
-                  className="flex items-center gap-2 px-2.5 py-2 rounded transition-all"
-                  style={{
-                    background: earned ? `${accent}10` : 'rgba(255,255,255,0.02)',
-                    border: earned ? `1px solid ${accent}40` : '1px solid rgba(255,255,255,0.06)',
-                    opacity: earned ? 1 : 0.4,
-                  }}
-                >
-                  <span className="text-base flex-shrink-0" style={{ filter: earned ? 'none' : 'grayscale(1)' }}>
-                    {def.icon}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-bold truncate" style={{ color: earned ? '#fff' : '#666', fontSize: 10 }}>
-                      {def.name}
+            <div className="grid grid-cols-3 gap-2">
+              {badges.map(({ id, def, earned, count }) => {
+                const icon = getBadgeIcon(id, 28);
+                const catColor = getBadgeCategoryColor(id);
+                const isHovered = hoveredBadge === id;
+
+                return (
+                  <div
+                    key={id}
+                    className="relative flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition-all duration-200 cursor-default"
+                    style={{
+                      background: earned
+                        ? isHovered ? `${catColor}18` : `${catColor}0a`
+                        : 'rgba(255,255,255,0.015)',
+                      border: earned
+                        ? `1px solid ${catColor}30`
+                        : '1px solid rgba(255,255,255,0.04)',
+                      opacity: earned ? 1 : 0.35,
+                      animation: earned ? 'badge-pulse 3s ease-in-out infinite' : undefined,
+                      ['--pulse-color' as any]: earned ? `${catColor}30` : undefined,
+                      transform: isHovered && earned ? 'scale(1.02)' : 'scale(1)',
+                    }}
+                    onMouseEnter={() => setHoveredBadge(id)}
+                    onMouseLeave={() => setHoveredBadge(null)}
+                  >
+                    {/* Glow background for earned badges */}
+                    {earned && (
+                      <div
+                        className="absolute inset-0 rounded-lg pointer-events-none"
+                        style={{
+                          background: `radial-gradient(ellipse at 20% 50%, ${catColor}15 0%, transparent 70%)`,
+                          animation: 'badge-glow-idle 4s ease-in-out infinite',
+                        }}
+                      />
+                    )}
+
+                    {/* Icon */}
+                    <div className="relative flex-shrink-0 flex items-center justify-center" style={{
+                      width: 32,
+                      height: 32,
+                      filter: earned ? 'none' : 'grayscale(1) brightness(0.4)',
+                    }}>
+                      {icon || <span className="text-lg">{def.icon}</span>}
                     </div>
-                    <div className="text-xs truncate" style={{ color: earned ? '#888' : '#444', fontSize: 8 }}>
-                      {def.desc}
+
+                    {/* Text */}
+                    <div className="min-w-0 flex-1 relative">
+                      <div className="text-xs font-bold truncate" style={{
+                        color: earned ? '#e0e0e0' : '#555',
+                        fontSize: 10,
+                        letterSpacing: 0.3,
+                      }}>
+                        {def.name}
+                      </div>
+                      <div className="text-xs truncate" style={{
+                        color: earned ? '#777' : '#333',
+                        fontSize: 8,
+                        marginTop: 1,
+                      }}>
+                        {def.desc}
+                      </div>
                     </div>
-                  </div>
-                  {earned && count > 0 && (
-                    <div className="flex flex-col items-end flex-shrink-0">
-                      {count > 1 && (
-                        <span className="text-xs font-black font-mono" style={{ color: accent, fontSize: 10 }}>
-                          x{count}
+
+                    {/* Count / bonus / lock */}
+                    {earned && count > 0 && (
+                      <div className="flex flex-col items-end flex-shrink-0 relative">
+                        {count > 1 && (
+                          <span className="text-xs font-black font-mono" style={{ color: catColor, fontSize: 11 }}>
+                            x{count}
+                          </span>
+                        )}
+                        <span className="text-xs font-mono" style={{ color: '#555', fontSize: 7 }}>
+                          +{def.bonus}
                         </span>
-                      )}
-                      <span className="text-xs font-mono" style={{ color: '#555', fontSize: 7 }}>
-                        +{def.bonus}
-                      </span>
-                    </div>
-                  )}
-                  {!earned && (
-                    <span className="text-xs font-mono flex-shrink-0" style={{ color: '#333', fontSize: 8 }}>
-                      🔒
-                    </span>
-                  )}
-                </div>
-              ))}
+                      </div>
+                    )}
+                    {!earned && (
+                      <div className="flex-shrink-0 relative" style={{
+                        width: 18,
+                        height: 18,
+                        borderRadius: '50%',
+                        background: 'rgba(255,255,255,0.03)',
+                        border: '1px solid rgba(255,255,255,0.06)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}>
+                        <svg width="8" height="10" viewBox="0 0 8 10" fill="none">
+                          <rect x="1" y="4" width="6" height="5" rx="1" stroke="#333" strokeWidth="0.8" />
+                          <path d="M2.5 4V2.5C2.5 1.7 3.2 1 4 1C4.8 1 5.5 1.7 5.5 2.5V4" stroke="#333" strokeWidth="0.8" />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         );
@@ -269,11 +419,10 @@ function MultipliersTab({ session }: { session: GamificationSession }) {
 
   return (
     <div className="space-y-2">
-      <div className="text-xs mb-2" style={{ color: '#555' }}>
-        Multipliers stack on top of 1.0x base. Your final score = base points × total multiplier + badge bonuses.
+      <div className="text-xs mb-3 px-1" style={{ color: '#555', fontSize: 10, lineHeight: 1.5 }}>
+        Multipliers stack on 1.0x base. Score = base × total multiplier + badge bonuses.
       </div>
       {multEntries.map(([id, def]) => {
-        // Check if active
         const ms = (session.multipliers as any)[id];
         let isActive = false;
         let currentVal = '';
@@ -296,32 +445,56 @@ function MultipliersTab({ session }: { session: GamificationSession }) {
           const r = session.pps / session.totalBookings;
           if (r >= (def as any).minimumRatio) { isActive = true; currentVal = `+${Math.round(r * 100) / 100}x`; }
         }
-        if (id === 'ghost_town' && ms?.chargesRemaining > 0) { isActive = true; currentVal = `tier ${ms.tier} (${ms.chargesRemaining} charges)`; }
-        if (id === 'cold_streak' && ms?.chargesRemaining > 0) { isActive = true; currentVal = `${ms.chargesRemaining} charges`; }
+        if (id === 'ghost_town' && ms?.chargesRemaining > 0) { isActive = true; currentVal = `tier ${ms.tier} (${ms.chargesRemaining}ch)`; }
+        if (id === 'cold_streak' && ms?.chargesRemaining > 0) { isActive = true; currentVal = `${ms.chargesRemaining}ch`; }
         if (id === 'scorched_earth' && ms?.bonusStack?.length > 0) { isActive = true; currentVal = `${ms.bonusStack.length} stacks`; }
 
         return (
           <div
             key={id}
-            className="flex items-start gap-3 px-3 py-2.5 rounded"
+            className="flex items-start gap-3 px-3.5 py-3 rounded-lg transition-all duration-200"
             style={{
-              background: isActive ? 'rgba(46,204,113,0.06)' : 'rgba(255,255,255,0.02)',
-              border: isActive ? '1px solid rgba(46,204,113,0.25)' : '1px solid rgba(255,255,255,0.05)',
+              background: isActive ? 'rgba(46,204,113,0.04)' : 'rgba(255,255,255,0.015)',
+              border: isActive ? '1px solid rgba(46,204,113,0.2)' : '1px solid rgba(255,255,255,0.04)',
+              animation: isActive ? 'mult-active-pulse 3s ease-in-out infinite' : undefined,
+              ['--mult-color' as any]: isActive ? 'rgba(46,204,113,0.3)' : undefined,
             }}
           >
-            <span className="text-lg flex-shrink-0 mt-0.5">{(def as any).icon}</span>
+            <div className="flex-shrink-0 mt-0.5" style={{
+              width: 28,
+              height: 28,
+              borderRadius: 8,
+              background: isActive ? 'rgba(46,204,113,0.1)' : 'rgba(255,255,255,0.03)',
+              border: `1px solid ${isActive ? 'rgba(46,204,113,0.2)' : 'rgba(255,255,255,0.05)'}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 14,
+            }}>
+              {(def as any).icon}
+            </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-black tracking-wider uppercase" style={{ color: isActive ? '#2ecc71' : '#888' }}>
+                <span className="text-xs font-black tracking-wider uppercase" style={{
+                  color: isActive ? '#2ecc71' : '#555',
+                  letterSpacing: 1.5,
+                  fontSize: 10,
+                }}>
                   {(def as any).name}
                 </span>
                 {isActive && (
-                  <span className="text-xs font-bold px-1.5 py-0.5 rounded font-mono" style={{ background: 'rgba(46,204,113,0.15)', color: '#2ecc71', fontSize: 9 }}>
+                  <span className="text-xs font-bold px-2 py-0.5 rounded-full font-mono" style={{
+                    background: 'rgba(46,204,113,0.1)',
+                    color: '#2ecc71',
+                    fontSize: 8,
+                    border: '1px solid rgba(46,204,113,0.2)',
+                    letterSpacing: 1,
+                  }}>
                     ACTIVE — {currentVal}
                   </span>
                 )}
               </div>
-              <div className="text-xs mt-0.5" style={{ color: '#666', fontSize: 10, lineHeight: '1.4' }}>
+              <div className="text-xs mt-1" style={{ color: '#555', fontSize: 9, lineHeight: '1.5' }}>
                 {MULT_DESCRIPTIONS[id] || ''}
               </div>
             </div>
@@ -341,14 +514,17 @@ function FeedTab({ session }: { session: GamificationSession }) {
   const badges = [...session.badges].reverse().slice(0, 30);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Recent bookings */}
       <div>
-        <div className="text-xs font-black tracking-widest uppercase mb-1.5 font-mono" style={{ color: '#2ecc71', opacity: 0.5 }}>
-          Recent Bookings
+        <div className="flex items-center gap-2 mb-2">
+          <div style={{ width: 3, height: 12, borderRadius: 2, background: '#2ecc71' }} />
+          <span className="text-xs font-black tracking-widest uppercase font-mono" style={{ color: '#2ecc71', opacity: 0.6, letterSpacing: 2, fontSize: 9 }}>
+            Recent Bookings
+          </span>
         </div>
         {bookings.length === 0 && (
-          <div className="text-xs py-4 text-center" style={{ color: '#444' }}>No bookings yet this session.</div>
+          <div className="text-xs py-6 text-center" style={{ color: '#333' }}>No bookings yet this session.</div>
         )}
         {bookings.map((b, i) => {
           const time = new Date(b.time);
@@ -361,30 +537,27 @@ function FeedTab({ session }: { session: GamificationSession }) {
           return (
             <div
               key={i}
-              className="flex items-center gap-2 px-2.5 py-1.5 rounded mb-1"
-              style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}
+              className="flex items-center gap-2.5 px-3 py-2 rounded-lg mb-1"
+              style={{ background: 'rgba(255,255,255,0.015)', border: '1px solid rgba(255,255,255,0.04)' }}
             >
-              <span className="text-xs font-mono" style={{ color: '#555', minWidth: 42 }}>{timeStr}</span>
+              <span className="text-xs font-mono" style={{ color: '#444', minWidth: 42, fontSize: 9 }}>{timeStr}</span>
               <span
-                className="text-xs font-bold px-1.5 py-0.5 rounded"
+                className="text-xs font-bold px-2 py-0.5 rounded-full"
                 style={{
-                  background: isPP ? 'rgba(241,196,15,0.15)' : 'rgba(46,204,113,0.15)',
+                  background: isPP ? 'rgba(241,196,15,0.1)' : 'rgba(46,204,113,0.1)',
                   color: isPP ? '#f1c40f' : '#2ecc71',
-                  fontSize: 9,
+                  fontSize: 8,
+                  border: `1px solid ${isPP ? 'rgba(241,196,15,0.2)' : 'rgba(46,204,113,0.2)'}`,
+                  letterSpacing: 1,
                 }}
               >
                 {b.type}
               </span>
-              <span className="text-xs font-mono font-bold" style={{ color: '#fff' }}>+{b.grandTotal}</span>
-              <span className="text-xs font-mono" style={{ color: '#555' }}>
+              <span className="text-xs font-mono font-bold" style={{ color: '#e0e0e0' }}>+{b.grandTotal}</span>
+              <span className="text-xs font-mono" style={{ color: '#555', fontSize: 8 }}>
                 ({b.base} × {b.multiplier}x
-                {b.badgeBonusTotal > 0 && <> + {b.badgeBonusTotal} badges</>})
+                {b.badgeBonusTotal > 0 && <> + {b.badgeBonusTotal}</>})
               </span>
-              {Object.keys(b.multiplierBreakdown || {}).length > 0 && (
-                <span className="text-xs" style={{ color: '#444', fontSize: 8 }}>
-                  [{Object.entries(b.multiplierBreakdown).map(([k, v]) => `${k}:${v}`).join(', ')}]
-                </span>
-              )}
             </div>
           );
         })}
@@ -392,26 +565,34 @@ function FeedTab({ session }: { session: GamificationSession }) {
 
       {/* Badge log */}
       <div>
-        <div className="text-xs font-black tracking-widest uppercase mb-1.5 font-mono" style={{ color: '#9b59b6', opacity: 0.5 }}>
-          Badge Log
+        <div className="flex items-center gap-2 mb-2">
+          <div style={{ width: 3, height: 12, borderRadius: 2, background: '#9b59b6' }} />
+          <span className="text-xs font-black tracking-widest uppercase font-mono" style={{ color: '#9b59b6', opacity: 0.6, letterSpacing: 2, fontSize: 9 }}>
+            Badge Log
+          </span>
         </div>
         {badges.length === 0 && (
-          <div className="text-xs py-4 text-center" style={{ color: '#444' }}>No badges earned yet.</div>
+          <div className="text-xs py-6 text-center" style={{ color: '#333' }}>No badges earned yet.</div>
         )}
         {badges.map((b, i) => {
           const def = BADGE_DEFS[b.id];
           if (!def) return null;
+          const icon = getBadgeIcon(b.id, 20);
+          const catColor = getBadgeCategoryColor(b.id);
+
           return (
             <div
               key={i}
-              className="flex items-center gap-2 px-2.5 py-1 rounded mb-1"
-              style={{ background: 'rgba(155,89,182,0.04)', border: '1px solid rgba(155,89,182,0.1)' }}
+              className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg mb-1"
+              style={{ background: `${catColor}06`, border: `1px solid ${catColor}15` }}
             >
-              <span className="text-xs font-mono" style={{ color: '#555', minWidth: 42 }}>{b.time}</span>
-              <span className="text-sm">{def.icon}</span>
-              <span className="text-xs font-bold" style={{ color: '#ccc' }}>{def.name}</span>
-              {b.points > 0 && <span className="text-xs font-mono" style={{ color: '#9b59b6' }}>+{b.points}</span>}
-              {b.sheet && <span className="text-xs" style={{ color: '#444', fontSize: 8 }}>{b.sheet}</span>}
+              <span className="text-xs font-mono" style={{ color: '#444', minWidth: 42, fontSize: 9 }}>{b.time}</span>
+              <div className="flex-shrink-0" style={{ width: 20, height: 20 }}>
+                {icon || <span className="text-sm">{def.icon}</span>}
+              </div>
+              <span className="text-xs font-bold" style={{ color: '#bbb', fontSize: 10 }}>{def.name}</span>
+              {b.points > 0 && <span className="text-xs font-mono font-bold" style={{ color: catColor, fontSize: 9 }}>+{b.points}</span>}
+              {b.sheet && <span className="text-xs font-mono" style={{ color: '#333', fontSize: 7 }}>{b.sheet}</span>}
             </div>
           );
         })}
@@ -426,10 +607,21 @@ function FeedTab({ session }: { session: GamificationSession }) {
 
 function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: string | number; color: string }) {
   return (
-    <div className="flex flex-col items-center py-1.5 px-1 rounded" style={{ background: `${color}08`, border: `1px solid ${color}20` }}>
-      <div className="mb-0.5">{icon}</div>
+    <div className="flex flex-col items-center py-2 px-1 rounded-lg" style={{
+      background: `${color}06`,
+      border: `1px solid ${color}15`,
+    }}>
+      <div className="mb-0.5" style={{ color, opacity: 0.6 }}>{icon}</div>
       <span className="text-sm font-black font-mono" style={{ color, lineHeight: 1 }}>{value}</span>
-      <span style={{ fontSize: 7, color, opacity: 0.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginTop: 2 }}>{label}</span>
+      <span style={{
+        fontSize: 7,
+        color,
+        opacity: 0.4,
+        fontWeight: 800,
+        letterSpacing: '1.5px',
+        textTransform: 'uppercase' as const,
+        marginTop: 2,
+      }}>{label}</span>
     </div>
   );
 }
@@ -438,16 +630,29 @@ function TabButton({ label, count, active, onClick }: { label: string; count: st
   return (
     <button
       onClick={onClick}
-      className="px-3 py-1.5 text-xs font-bold tracking-wider uppercase transition-all mr-1 rounded-t"
+      className="relative px-4 py-2 text-xs font-bold tracking-wider uppercase transition-all duration-200 mr-1"
       style={{
-        background: active ? 'rgba(46,204,113,0.1)' : 'transparent',
-        color: active ? '#2ecc71' : '#555',
-        borderBottom: active ? '2px solid #2ecc71' : '2px solid transparent',
+        background: 'transparent',
+        color: active ? '#2ecc71' : '#444',
         letterSpacing: '1.5px',
+        borderRadius: '8px 8px 0 0',
       }}
     >
       {label}
-      <span className="ml-1 font-mono" style={{ fontSize: 9, opacity: 0.6 }}>({count})</span>
+      <span className="ml-1 font-mono" style={{ fontSize: 8, opacity: 0.5 }}>({count})</span>
+      {active && (
+        <div style={{
+          position: 'absolute',
+          bottom: 0,
+          left: '15%',
+          right: '15%',
+          height: 2,
+          borderRadius: 1,
+          background: '#2ecc71',
+          boxShadow: '0 0 8px rgba(46,204,113,0.5)',
+          animation: 'tab-underline 0.2s ease-out',
+        }} />
+      )}
     </button>
   );
 }
