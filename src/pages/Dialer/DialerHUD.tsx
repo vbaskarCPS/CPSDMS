@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { GamificationSession, MultiplierSnapshot, Rank } from '../../lib/dialer/gamificationDefs';
+import { getMultiplierIcon, getMultiplierTierIcon } from './BadgeIcons';
 
 // --- Props ---
 
@@ -92,6 +93,28 @@ function formatCountdown(ms: number): string | null {
   return `${min}:${sec < 10 ? '0' : ''}${sec}`;
 }
 
+/**
+ * Render multiplier icon: try game-icons.net icon first, fall back to emoji.
+ */
+function MultiplierIconDisplay({ multiplier, size = 14 }: { multiplier: MultiplierSnapshot; size?: number }) {
+  // For tiered multipliers, try tier-specific icon
+  const tier = (multiplier.extra as any)?.tier;
+  let icon: React.ReactNode = null;
+
+  if (tier !== undefined && tier > 0) {
+    icon = getMultiplierTierIcon(multiplier.id, tier - 1, size);
+  }
+  if (!icon) {
+    icon = getMultiplierIcon(multiplier.id, size);
+  }
+
+  if (icon) {
+    return <span style={{ display: 'inline-flex', lineHeight: 1 }}>{icon}</span>;
+  }
+  // Fallback to emoji
+  return <span style={{ fontSize: size - 2, lineHeight: 1 }}>{multiplier.icon}</span>;
+}
+
 // =============================================================================
 // MULTIPLIER STRIP (top of screen, below top bar)
 // =============================================================================
@@ -174,7 +197,7 @@ function MultiplierStrip({
                     : `hud-pill-enter 0.4s ease-out ${idx * 0.05}s both`,
               }}
             >
-              <span style={{ fontSize: 12, lineHeight: 1 }}>{m.icon}</span>
+              <MultiplierIconDisplay multiplier={m} size={14} />
               <span style={{ fontSize: 10, fontWeight: 900 }}>+{m.value}x</span>
               {countdown && (
                 <span style={{ fontSize: 8, opacity: 0.6, fontWeight: 600 }}>{countdown}</span>
@@ -239,12 +262,15 @@ function MultiplierStrip({
                     }}
                   />
 
-                  {/* Name */}
-                  <div
-                    className="font-mono font-black tracking-widest uppercase text-center"
-                    style={{ fontSize: 10, color: theme.color, marginBottom: 4 }}
-                  >
-                    {m.name}
+                  {/* Icon + Name */}
+                  <div className="flex items-center justify-center gap-2 mb-1">
+                    <MultiplierIconDisplay multiplier={m} size={20} />
+                    <span
+                      className="font-mono font-black tracking-widest uppercase"
+                      style={{ fontSize: 10, color: theme.color }}
+                    >
+                      {m.name}
+                    </span>
                   </div>
 
                   {/* Value */}

@@ -2,14 +2,14 @@
 //
 // Full-screen achievements overlay — trophy button opens this.
 // Shows session stats, badge grid (earned/locked), multiplier guide, recent bookings.
-// War Room 2.0 — custom SVG badge icons with pulse glow effects.
+// War Room 2.0 — game-icons.net SVG icons with pulse glow effects.
 //
 
 import { useState } from 'react';
 import { X, Phone, Target, DollarSign, Zap, Award, Trophy } from 'lucide-react';
 import { BADGE_DEFS, MULTIPLIER_DEFS, type GamificationSession } from '../../lib/dialer/gamificationDefs';
 import { getCurrentRank } from '../../lib/dialer/gamificationDefs';
-import { getBadgeIcon, getBadgeCategoryColor } from './BadgeIcons';
+import { getBadgeIcon, getBadgeCategoryColor, getMultiplierIcon } from './BadgeIcons';
 
 // --- Section order for badge grid ---
 
@@ -252,11 +252,14 @@ export default function AchievementsPanel({ session, open, onClose }: Achievemen
           )}
         </div>
 
-        {/* Footer */}
+        {/* Footer — attribution */}
         <div className="flex-shrink-0 px-5 py-2 text-center" style={{ borderTop: '1px solid rgba(46,204,113,0.1)', background: 'rgba(14,24,14,0.4)' }}>
           <span className="text-xs font-mono" style={{ color: '#2ecc71', opacity: 0.2, letterSpacing: '2px', fontSize: 9 }}>
             {s.repCode} — {s.date} — PP%: {ppRatio} — STREAK: {s.consecutiveYes}
           </span>
+          <div style={{ fontSize: 7, color: '#2ecc71', opacity: 0.15, marginTop: 2, letterSpacing: '0.5px' }}>
+            Icons by <a href="https://game-icons.net" target="_blank" rel="noopener noreferrer" style={{ color: '#2ecc71', textDecoration: 'none' }}>game-icons.net</a> — CC BY 3.0 — Lorc, Delapouite, Skoll, Sbed, Caro Asercion
+          </div>
         </div>
       </div>
     </div>
@@ -449,6 +452,9 @@ function MultipliersTab({ session }: { session: GamificationSession }) {
         if (id === 'cold_streak' && ms?.chargesRemaining > 0) { isActive = true; currentVal = `${ms.chargesRemaining}ch`; }
         if (id === 'scorched_earth' && ms?.bonusStack?.length > 0) { isActive = true; currentVal = `${ms.bonusStack.length} stacks`; }
 
+        // Get game-icons.net multiplier icon, fall back to emoji
+        const multIcon = getMultiplierIcon(id, 18);
+
         return (
           <div
             key={id}
@@ -471,7 +477,7 @@ function MultipliersTab({ session }: { session: GamificationSession }) {
               justifyContent: 'center',
               fontSize: 14,
             }}>
-              {(def as any).icon}
+              {multIcon || (def as any).icon}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
