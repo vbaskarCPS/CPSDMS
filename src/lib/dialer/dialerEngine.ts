@@ -177,32 +177,6 @@ export function invalidateCache(): void {
 // HIDDEN ROWS — fetch via Apps Script bridge
 // =============================================================================
 
-async function callHighlight(
-  appsScriptUrl: string,
-  sheetName: string,
-  repCode: string,
-  currentRows: number[],
-  nextRows: number[]
-): Promise<void> {
-  if (!appsScriptUrl) return;
-  try {
-    await fetch(appsScriptUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      redirect: 'follow',
-      body: JSON.stringify({
-        action: 'highlight',
-        sheet: sheetName,
-        repCode,
-        currentRows,
-        nextRows,
-      }),
-    });
-  } catch {
-    // Silent fail — highlight is non-critical
-  }
-}
-
 // =============================================================================
 // HIGHLIGHT — call Apps Script bridge
 // =============================================================================
