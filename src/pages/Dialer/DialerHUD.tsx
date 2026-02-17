@@ -1,7 +1,7 @@
 // src/pages/Dialer/DialerHUD.tsx
 //
 // Metroid Prime-inspired visor HUD for the AutoSniper dialer.
-// Top: M82 + multiplier tile strip + menu
+// Top: auto-fire toggle | multiplier tiles (centered) | total mult + menu
 // Bottom: stats + big points counter with energy bar
 // Visor arcs + vignette frame the viewport.
 //
@@ -767,14 +767,13 @@ export default function DialerHUD({
         <div
           className="absolute top-0 left-0 right-0 pointer-events-auto"
           style={{
-            background: `linear-gradient(to bottom, ${VISOR_BG}0.92) 0%, ${VISOR_BG}0.6) 85%, transparent 100%)`,
-            padding: '8px 14px 12px',
+            padding: '8px 14px',
           }}
         >
-          {/* Row 1: Auto-fire toggle + total mult + menu */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {/* Auto-fire toggle */}
+          {/* Single row: Auto-fire | Multiplier tiles (centered) | Total + menu */}
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            {/* Left: Auto-fire toggle */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
               <label
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6,
@@ -813,7 +812,14 @@ export default function DialerHUD({
                 />
               </label>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+
+            {/* Center: Multiplier tiles */}
+            <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
+              <MultiplierStrip multipliers={activeMultipliers} receivedAt={multipliersReceivedAt} />
+            </div>
+
+            {/* Right: Total mult + menu */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
               {activeMultipliers.length > 0 && (
                 <div style={{ padding: '3px 10px', borderRadius: 12, background: `${OR}10`, border: `1px solid ${OR}25` }}>
                   <span style={{ fontSize: 9, fontWeight: 800, color: OR, letterSpacing: '1px', fontFamily: 'monospace' }}>
@@ -840,9 +846,6 @@ export default function DialerHUD({
               </button>
             </div>
           </div>
-
-          {/* Row 2: Multiplier tiles */}
-          <MultiplierStrip multipliers={activeMultipliers} receivedAt={multipliersReceivedAt} />
         </div>
 
         {/* === TEAM FEED TOASTS === */}
