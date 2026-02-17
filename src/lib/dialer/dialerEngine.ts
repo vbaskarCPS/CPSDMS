@@ -47,7 +47,7 @@ import {
   DispositionContext,
   ProcessResult as GamificationResult,
 } from './gamificationEngine';
-import dialerSheetsService from '../dialerSheetsService';
+import { dialerSheetsService } from '../dialerSheetsService';
 
 // =============================================================================
 // TYPES
