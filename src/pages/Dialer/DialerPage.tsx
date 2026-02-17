@@ -44,6 +44,7 @@ import AchievementsPanel from './AchievementsPanel';
 import { useToasts, BadgeToastContainer, PointToastContainer } from './DialerToasts';
 import CampaignSelect from './CampaignSelect';
 import type { Campaign as CampaignCard } from './CampaignSelect';
+import { dialerRealtimeService } from '../../lib/dialerRealtimeService';
 
 // =============================================================================
 // STYLES (inline style objects for elements not easily done in Tailwind)
@@ -218,6 +219,26 @@ export default function DialerPage() {
   }, [campaign]);
 
   // =======================================================================
+  // TEAM FEED — Supabase Realtime subscription
+  // =======================================================================
+
+  useEffect(() => {
+    if (!campaign?.id || !manager?.id) return;
+
+    const unsubscribe = dialerRealtimeService.subscribeToTeamFeed(
+      campaign.id,
+      manager.id,
+      (event) => {
+        setTeamFeed(prev => [...prev, event]);
+      }
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, [campaign?.id, manager?.id]);
+
+  // =======================================================================
   // CONNECT TO SHEETS
   // =======================================================================
 
@@ -352,8 +373,21 @@ export default function DialerPage() {
     }
     if (result.pointBreakdown) {
       showPointToast(result.pointBreakdown.grandTotal, result.pointBreakdown.multiplier);
+
+      // Publish to team feed so other managers see this booking
+      if (campaign?.id && manager?.id && result.pointBreakdown.grandTotal > 0) {
+        dialerRealtimeService.publishBookingEvent({
+          campaignId: campaign.id,
+          managerId: manager.id,
+          managerName: manager.name || manager.repCode || 'Unknown',
+          points: result.pointBreakdown.grandTotal,
+          badges: result.newBadges || [],
+          multipliers: result.activeMultipliers?.map((m: any) => m.id) || [],
+          isPrepay: result.pointBreakdown.isPrepay || false,
+        });
+      }
     }
-  }, [queueBadgeToast, showPointToast]);
+  }, [queueBadgeToast, showPointToast, campaign?.id, manager?.id, manager?.name, manager?.repCode]);
 
   // =======================================================================
   // DISPOSITION HANDLERS
