@@ -72,6 +72,10 @@ const ICON_PATHS: Record<string, string> = {
   ironman:        'lorc/muscle-up',
   machine:        'lorc/cogsplosion',
   terminator:     'lorc/android-mask',
+  // Conversion
+  conversion_therapy: 'delapouite/convince',
+  born_again:         'lorc/enlightenment',
+  cult_leader:        'lorc/cultist',
 
   // ─── MULTIPLIER ICONS ───
   mult_op_tempo:        'lorc/lightning-frequency',
@@ -89,6 +93,7 @@ const ICON_PATHS: Record<string, string> = {
   mult_ghost_town:      'lorc/ghost',
   mult_cold_streak:     'delapouite/frozen-body',
   mult_scorched_earth:  'lorc/fire-zone',
+  mult_indoctrinate:    'lorc/psychic-waves',
 };
 
 // --- Category accent colors ---
@@ -102,6 +107,7 @@ const C = {
   special:    '#00BCD4',
   headhunter: '#9b59b6',
   dead:       '#8e44ad',
+  conversion: '#e056a0',
   rank:       '#f1c40f',
   milestone:  '#3498db',
   workhorse:  '#95a5a6',
@@ -121,6 +127,7 @@ const CATEGORY_MAP: Record<string, string> = {
   general: C.rank, field_marshal: C.rank, warlord: C.rank, supreme_cmdr: C.rank,
   first_deploy: C.milestone, sharpshooter: C.milestone, veteran: C.milestone, war_hero: C.milestone, legend: C.milestone,
   ironman: C.workhorse, machine: C.workhorse, terminator: C.workhorse,
+  conversion_therapy: C.conversion, born_again: C.conversion, cult_leader: C.conversion,
 };
 
 // --- CDN URL builder ---

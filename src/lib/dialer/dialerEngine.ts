@@ -790,6 +790,14 @@ function buildGamificationContext(
       ctx.streetFullyCleared = cleared;
       ctx.streetVisibleGroupCount = visibleGroupCount;
     }
+
+    // Check if this is a first-time prepay (client has never prepaid before)
+    if (disposition === 'PREPAY') {
+      const hasPriorPrepay = state.serviceHistory.some(
+        (h) => h.pmtType === 'Prepaid'
+      );
+      ctx.isFirstTimePrepay = !hasPriorPrepay;
+    }
   }
 
   return ctx;

@@ -62,6 +62,7 @@ const MULT_THEME: Record<string, { color: string; glow: string }> = {
   ghost_town:     { color: '#bdc3c7', glow: 'rgba(189,195,199,0.4)' },
   cold_streak:    { color: '#85c1e9', glow: 'rgba(133,193,233,0.4)' },
   scorched_earth: { color: '#ff5722', glow: 'rgba(255,87,34,0.5)' },
+  indoctrinate:   { color: '#e056a0', glow: 'rgba(224,86,160,0.5)' },
 };
 
 const MULT_DESC: Record<string, string> = {
@@ -76,6 +77,7 @@ const MULT_DESC: Record<string, string> = {
   ghost_town: '10 unreached → 0.5x (3 charges).',
   cold_streak: '20 dials without YES → +1.0x (2 charges).',
   scorched_earth: 'Clear a street → 1.1x-3.0x, 5 charges.',
+  indoctrinate: 'Convert a non-app client → badge bonuses get multiplied for 2 bookings.',
 };
 
 const MENU_ITEMS: { id: HUDMenuAction; icon: string; label: string; desc: string }[] = [
@@ -289,7 +291,7 @@ function MultiplierStrip({
               </div>
 
               {/* Value overlay */}
-              <div style={{
+              {!m.extra?.modifiesScoring && <div style={{
                 position: 'absolute',
                 bottom: 2, left: 0, right: 0,
                 textAlign: 'center',
@@ -302,7 +304,22 @@ function MultiplierStrip({
                 pointerEvents: 'none',
               }}>
                 +{m.value}x
-              </div>
+              </div>}
+              {/* Indoctrinate shows ALL× instead of +value */}
+              {m.extra?.modifiesScoring && <div style={{
+                position: 'absolute',
+                bottom: 2, left: 0, right: 0,
+                textAlign: 'center',
+                fontFamily: 'monospace',
+                fontWeight: 900,
+                fontSize: 11,
+                lineHeight: 1,
+                color: '#fff',
+                textShadow: `0 0 6px ${theme.color}, 0 1px 2px rgba(0,0,0,0.8), 0 0 14px ${theme.color}60`,
+                pointerEvents: 'none',
+              }}>
+                ALL×
+              </div>}
 
               {/* Timer ring */}
               {m.expiresIn > 0 && timerProgress > 0 && timerProgress < 1 && (
@@ -394,7 +411,7 @@ function MultiplierStrip({
                         color: '#fff', textShadow: `0 0 12px ${theme.color}80`,
                         lineHeight: 1.1, marginTop: 1,
                       }}>
-                        +{m.value}x
+                        {m.extra?.modifiesScoring ? 'ALL×' : `+${m.value}x`}
                       </div>
                     </div>
                   </div>
@@ -710,7 +727,7 @@ export default function DialerHUD({
 
   const streak = s?.consecutiveYes ?? 0;
   const points = s?.totalSessionPoints ?? 0;
-  const totalMult = activeMultipliers.reduce((sum, m) => sum + m.value, 1.0);
+  const totalMult = activeMultipliers.reduce((sum, m) => m.extra?.modifiesScoring ? sum : sum + m.value, 1.0);
 
   const handleMenuAction = useCallback((action: HUDMenuAction) => {
     if (action === 'achievements') {

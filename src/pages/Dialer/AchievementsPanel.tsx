@@ -22,6 +22,7 @@ const SECTION_ORDER = [
   'Special',
   'Headhunter',
   'Raise the Dead',
+  'Conversion',
   'Ranks',
   'Milestones',
   'Workhorse',
@@ -38,6 +39,7 @@ const SECTION_DESC: Record<string, string> = {
   'Special': 'Unique one-time achievements',
   'Headhunter': 'Booking on streets with no prior AER',
   'Raise the Dead': 'Reviving clients with last service in 2021',
+  'Conversion': 'Converting non-app clients to prepay',
   'Ranks': 'Prepay dollar milestones',
   'Milestones': 'Total booking count achievements',
   'Workhorse': 'Sustained high dial volume',
@@ -54,6 +56,7 @@ const SECTION_COLORS: Record<string, string> = {
   'Special': '#00BCD4',
   'Headhunter': '#9b59b6',
   'Raise the Dead': '#8e44ad',
+  'Conversion': '#e056a0',
   'Ranks': '#f1c40f',
   'Milestones': '#3498db',
   'Workhorse': '#95a5a6',
@@ -70,6 +73,7 @@ const SECTION_ICONS: Record<string, string> = {
   'Special': '✦',
   'Headhunter': '🎯',
   'Raise the Dead': '💀',
+  'Conversion': '🧠',
   'Ranks': '⭐',
   'Milestones': '🏅',
   'Workhorse': '⚙️',
@@ -89,6 +93,7 @@ const MULT_DESCRIPTIONS: Record<string, string> = {
   ghost_town: '10 unreached → 0.5x (3 charges). Tiers up: 1.0x → 2.0x.',
   cold_streak: '20 dials without YES → +1.0x (2 charges).',
   scorched_earth: 'Clear an entire street → tiered bonus (1.1x-3.0x), 5 charges per trigger.',
+  indoctrinate: 'Convert a non-app client to prepay → badge bonuses get multiplied by ALL active multipliers for 2 bookings.',
 };
 
 // --- Props ---

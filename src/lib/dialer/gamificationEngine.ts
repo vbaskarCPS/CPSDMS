@@ -29,6 +29,8 @@ export interface DispositionContext {
   sheetName?: string;
   price?: number;
   yesStartTime?: number;
+  /** True if this prepay is from a client who has never prepaid before (no 'Prepaid' in service history) */
+  isFirstTimePrepay?: boolean;
 }
 
 export interface MultiplierSnapshot {
@@ -234,6 +236,18 @@ function processYes(
 
   if (streetAerCount <= 1) session.newStreetBookings++;
   if (mostRecentYear === 2021) session.raisedDeadCount++;
+
+  // Conversion: track first-time prepays from non-app clients
+  if (isPrepay && context.isFirstTimePrepay) {
+    session.conversionCount = (session.conversionCount || 0) + 1;
+    // Trigger Indoctrinate: badge bonuses get multiplied for this booking + next
+    const indoc = session.multipliers.indoctrinate;
+    if (!indoc) (session.multipliers as any).indoctrinate = { chargesRemaining: 0 };
+    session.multipliers.indoctrinate.chargesRemaining = (MULTIPLIER_DEFS.indoctrinate.charges || 2);
+  }
+
+  // Consume Indoctrinate charge (AFTER triggering so the current booking benefits)
+  // Note: we consume AFTER scorePoints is called — see scorePoints for the actual consumption
 
   // Ghost Town: YES resets consecutive unreached and consumes a charge
   session.multipliers.ghost_town.consecutiveUnreached = 0;
@@ -530,8 +544,20 @@ function scorePoints(
     }
   }
 
-  const grandTotal = multipliedTotal + badgeBonusTotal;
+  // Indoctrinate: when active, badge bonuses get multiplied too
+  const indoc = session.multipliers.indoctrinate;
+  const indocActive = indoc && indoc.chargesRemaining > 0;
+  const finalBadgeBonus = indocActive
+    ? Math.round(badgeBonusTotal * mult.total)
+    : badgeBonusTotal;
+
+  const grandTotal = multipliedTotal + finalBadgeBonus;
   session.totalSessionPoints += grandTotal;
+
+  // Consume Indoctrinate charge after scoring
+  if (indocActive) {
+    indoc.chargesRemaining--;
+  }
 
   const record: BookingRecord = {
     time: now,
@@ -541,7 +567,7 @@ function scorePoints(
     multiplierBreakdown: mult.breakdown,
     multiplied: multipliedTotal,
     badgeBonuses: badgeBonusDetail,
-    badgeBonusTotal,
+    badgeBonusTotal: finalBadgeBonus,
     grandTotal,
   };
   session.recentBookings.push(record);
@@ -652,6 +678,14 @@ function evaluateAllBadges(
   ];
   for (const [threshold, id] of rtdBadges) {
     if (session.raisedDeadCount >= threshold) { if (tryAwardBadge(session, id, now, sn)) earned.push(id); break; }
+  }
+
+  // Conversion (non-app client prepay converts)
+  const convBadges: [number, string][] = [
+    [10, 'cult_leader'], [5, 'born_again'], [2, 'conversion_therapy'],
+  ];
+  for (const [threshold, id] of convBadges) {
+    if ((session.conversionCount || 0) >= threshold) { if (tryAwardBadge(session, id, now, sn)) earned.push(id); break; }
   }
 
   // Spree badges
@@ -924,6 +958,17 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
       icon: MULTIPLIER_DEFS.scorched_earth.icon,
       value: Math.round(seT * 100) / 100,
       expiresIn: -1, extra: { charges: seCh, stacks: seS.bonusStack.length },
+    });
+  }
+
+  // Indoctrinate (conversion buff — badge bonuses get multiplied)
+  const indocS = session.multipliers.indoctrinate;
+  if (indocS && indocS.chargesRemaining > 0) {
+    active.push({
+      id: 'indoctrinate', name: MULTIPLIER_DEFS.indoctrinate.name,
+      icon: MULTIPLIER_DEFS.indoctrinate.icon,
+      value: 0,  // No additive multiplier value — modifies scoring logic
+      expiresIn: -1, extra: { charges: indocS.chargesRemaining, modifiesScoring: true },
     });
   }
 
