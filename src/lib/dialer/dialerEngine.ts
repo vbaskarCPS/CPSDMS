@@ -94,6 +94,7 @@ export interface PrepayPending {
 interface CachedSheetData {
   spreadsheetId: string;
   sheetName: string;
+  sniperConfigHash: string; // Serialized config to detect changes
   headers: any[];
   CI: ColumnIndices;
   dataStartRow: number;     // 1-based sheet row of first data row
@@ -123,11 +124,15 @@ async function loadSheetData(
   sheetName: string,
   sniperConfig?: SniperConfig
 ): Promise<CachedSheetData> {
-  // Return cache if fresh (< 30 seconds for same sheet)
+  // Serialize config for cache comparison
+  const configHash = JSON.stringify(sniperConfig || DEFAULT_SNIPER_CONFIG);
+
+  // Return cache if fresh (< 30 seconds for same sheet + same config)
   if (
     cachedSheet &&
     cachedSheet.spreadsheetId === spreadsheetId &&
     cachedSheet.sheetName === sheetName &&
+    cachedSheet.sniperConfigHash === configHash &&
     Date.now() - cachedSheet.timestamp < 30000
   ) {
     return cachedSheet;
@@ -174,6 +179,7 @@ async function loadSheetData(
   cachedSheet = {
     spreadsheetId,
     sheetName,
+    sniperConfigHash: configHash,
     headers,
     CI,
     dataStartRow,
