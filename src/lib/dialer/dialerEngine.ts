@@ -219,34 +219,6 @@ async function callHighlight(
     // Silent fail — highlight is non-critical
   }
 }
-// =============================================================================
-// HIGHLIGHT — call Apps Script bridge
-// =============================================================================
-
-async function callHighlight(
-  appsScriptUrl: string,
-  sheetName: string,
-  repCode: string,
-  currentRows: number[],
-  nextRows: number[]
-): Promise<void> {
-  if (!appsScriptUrl) return;
-  try {
-    await fetch(appsScriptUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
-      body: JSON.stringify({
-        action: 'highlight',
-        sheet: sheetName,
-        repCode,
-        currentRows,
-        nextRows,
-      }),
-    });
-  } catch {
-    // Silent fail — highlight is non-critical
-  }
-}
 
 // =============================================================================
 // INITIAL LOAD — Get first group and set up engine
@@ -824,7 +796,7 @@ function buildGamificationContext(
 }
 
 // =============================================================================
-// SESSION PERSISTENCE (Supabase via campaignService)
+// SESSION PERSISTENCE (localStorage for now)
 // =============================================================================
 
 function getTodayDateStr(): string {
