@@ -1,13 +1,17 @@
 // src/pages/Dialer/DialerPage.tsx
 //
 // AutoSniper Dialer — full calling interface.
-// Two modes: Launcher (connect + pick tab/direction) → Dialer (calling UI).
+// Three modes:
+//   1. Campaign Select — video-game-style map/tab picker (replaces old launcher)
+//   2. Dialer — active calling UI
+//   3. Empty — mission complete / no groups
+//
 // Consumes the Stage 3 engine for all data operations.
 //
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Wifi, WifiOff, ArrowDown, ArrowUp, Crosshair, Phone, ChevronRight } from 'lucide-react';
+import { Wifi, WifiOff, ArrowDown, ArrowUp, Crosshair, Phone, ChevronRight, ChevronLeft } from 'lucide-react';
 import { campaignService } from '../../lib/campaignService';
 import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import {
@@ -35,8 +39,11 @@ import type {
 } from '../../lib/dialer';
 import type { Rank, StagedCard } from '../../lib/dialer';
 import DialerHUD from './DialerHUD';
+import type { TeamBookingEvent } from './DialerHUD';
 import AchievementsPanel from './AchievementsPanel';
 import { useToasts, BadgeToastContainer, PointToastContainer } from './DialerToasts';
+import CampaignSelect from './CampaignSelect';
+import type { Campaign as CampaignCard } from './CampaignSelect';
 
 // =============================================================================
 // STYLES (inline style objects for elements not easily done in Tailwind)
@@ -69,6 +76,48 @@ const STRATEGY_COLORS: Record<string, { bg: string; border: string; color: strin
 };
 
 // =============================================================================
+// HELPERS — convert spreadsheet tabs into CampaignSelect-compatible cards
+// =============================================================================
+
+/**
+ * Convert a list of callbook tab names into CampaignCard objects
+ * for the video-game style selector. We generate codenames, terrain
+ * types, and threat levels procedurally from the tab name hash.
+ */
+function tabsToCampaignCards(tabs: string[], campaignName: string): CampaignCard[] {
+  const CODENAMES = [
+    'OP IRON GATE', 'OP THUNDER RUN', 'OP NIGHTHAWK', 'OP SILENT HILL',
+    'OP STEEL RAIN', 'OP GREEN ZONE', 'OP HARVEST', 'OP BLACKOUT',
+    'OP CROSSFIRE', 'OP VANGUARD', 'OP FIRESTORM', 'OP SENTINEL',
+    'OP PHANTOM', 'OP WARPATH', 'OP OVERWATCH', 'OP ECLIPSE',
+    'OP DEADSHOT', 'OP FROSTBITE', 'OP SHOCKWAVE', 'OP MIDNIGHT',
+  ];
+  const TERRAINS: Array<'residential' | 'commercial' | 'industrial' | 'mixed' | 'rural'> = [
+    'residential', 'commercial', 'industrial', 'mixed', 'rural',
+  ];
+
+  return tabs.map((tabName, idx) => {
+    // Simple hash from tab name for procedural variety
+    let h = 0;
+    for (let i = 0; i < tabName.length; i++) h = ((h << 5) - h + tabName.charCodeAt(i)) | 0;
+    const a = Math.abs(h);
+
+    return {
+      id: tabName,
+      name: tabName,
+      codename: CODENAMES[a % CODENAMES.length],
+      description: `Callbook tab "${tabName}" from ${campaignName}. Deploy here to start dialing this section.`,
+      streetCount: 15 + (a % 50),
+      totalDoors: 400 + (a % 2400),
+      zone: ['North', 'South', 'East', 'West', 'Central', 'Downtown'][(a >> 4) % 6],
+      threatLevel: (1 + (a % 5)) as 1 | 2 | 3 | 4 | 5,
+      terrain: TERRAINS[(a >> 2) % TERRAINS.length],
+      hot: idx === 0, // First tab is "hot" / featured
+    };
+  });
+}
+
+// =============================================================================
 // COMPONENT
 // =============================================================================
 
@@ -79,16 +128,23 @@ export default function DialerPage() {
   const [manager, setManager] = useState<any>(null);
   const [campaign, setCampaign] = useState<any>(null);
 
-  // --- Launcher state ---
-  const [mode, setMode] = useState<'launcher' | 'dialer'>('launcher');
+  // --- Mode ---
+  const [mode, setMode] = useState<'campaign-select' | 'dialer'>('campaign-select');
+
+  // --- Campaign Select state ---
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [tabs, setTabs] = useState<string[]>([]);
+  const [campaignCards, setCampaignCards] = useState<CampaignCard[]>([]);
+  const [tabsLoading, setTabsLoading] = useState(false);
+  const [tabsError, setTabsError] = useState('');
+
+  // --- Launcher config (set during deploy) ---
   const [selectedTab, setSelectedTab] = useState('');
   const [direction, setDirection] = useState<Direction>('down');
   const [startBookingId, setStartBookingId] = useState('');
-  const [tabsLoading, setTabsLoading] = useState(false);
-  const [tabsError, setTabsError] = useState('');
+  const [showDeployConfig, setShowDeployConfig] = useState(false);
+  const [deployingTab, setDeployingTab] = useState('');
 
   // --- Dialer state ---
   const [loading, setLoading] = useState(false);
@@ -125,6 +181,9 @@ export default function DialerPage() {
   const [multipliersAt, setMultipliersAt] = useState(0);
   const [rank, setRank] = useState<Rank | null>(null);
 
+  // --- Team feed (other managers' bookings) ---
+  const [teamFeed, setTeamFeed] = useState<TeamBookingEvent[]>([]);
+
   // --- Engine config ---
   const configRef = useRef<EngineConfig | null>(null);
   const yesStartTimeRef = useRef(0);
@@ -149,7 +208,17 @@ export default function DialerPage() {
   }, [navigate]);
 
   // =======================================================================
-  // LAUNCHER: Connect to Sheets
+  // AUTO-CONNECT on mount (so tabs load immediately for Campaign Select)
+  // =======================================================================
+
+  useEffect(() => {
+    if (!campaign || connected || connecting) return;
+    handleConnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign]);
+
+  // =======================================================================
+  // CONNECT TO SHEETS
   // =======================================================================
 
   const handleConnect = async () => {
@@ -164,7 +233,7 @@ export default function DialerPage() {
         try {
           const callbookTabs = await dialerSheetsService.getCallbookTabs(campaign.spreadsheetId);
           setTabs(callbookTabs);
-          if (callbookTabs.length === 1) setSelectedTab(callbookTabs[0]);
+          setCampaignCards(tabsToCampaignCards(callbookTabs, campaign.displayName || 'Campaign'));
         } catch (err: any) {
           setTabsError(err.message || 'Failed to load tabs');
         } finally {
@@ -179,11 +248,22 @@ export default function DialerPage() {
   };
 
   // =======================================================================
-  // LAUNCHER: Deploy
+  // CAMPAIGN SELECT → DEPLOY CONFIG → DEPLOY
   // =======================================================================
 
-  const handleDeploy = async () => {
+  /** User clicks Deploy on a campaign card — show direction picker overlay */
+  const handleCampaignDeploy = (tabId: string) => {
+    setDeployingTab(tabId);
+    setSelectedTab(tabId);
+    setDirection('down');
+    setStartBookingId('');
+    setShowDeployConfig(true);
+  };
+
+  /** User confirms direction and deploys */
+  const handleConfirmDeploy = async () => {
     if (!selectedTab || !campaign) return;
+    setShowDeployConfig(false);
     setLoading(true);
     setLogMessage('Acquiring target...');
 
@@ -345,7 +425,6 @@ export default function DialerPage() {
 
     try {
       if (subType === 'PREPAY') {
-        // Fire disposition which stages prepay
         const result = await applyDisposition(
           configRef.current,
           currentState,
@@ -357,7 +436,6 @@ export default function DialerPage() {
         );
         handleGamResult(result.gamification);
 
-        // Open card entry modal
         setCcAmt(yPrice.trim());
         setCcNum('');
         setCcExp('');
@@ -368,7 +446,6 @@ export default function DialerPage() {
         setCardModalOpen(true);
         setPendingDial(false);
       } else {
-        // COMPLETE
         const result = await applyDisposition(
           configRef.current,
           currentState,
@@ -461,129 +538,169 @@ export default function DialerPage() {
   };
 
   // =======================================================================
-  // RENDER: LAUNCHER MODE
+  // RENDER: CAMPAIGN SELECT MODE
   // =======================================================================
 
-  if (mode === 'launcher') {
+  if (mode === 'campaign-select') {
+    // Loading / connecting state
+    if (connecting || tabsLoading) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center" style={S.body}>
+          <Crosshair className="mb-4 animate-pulse" size={40} color="#2ecc71" />
+          <div className="text-sm font-bold tracking-widest uppercase" style={{ color: '#2ecc71', opacity: 0.6, letterSpacing: '4px' }}>
+            {connecting ? 'CONNECTING TO GOOGLE SHEETS...' : 'LOADING CALLBOOKS...'}
+          </div>
+          <div className="text-xs mt-2" style={{ color: '#555' }}>
+            {campaign?.displayName || ''} — {manager?.name || manager?.repCode || ''}
+          </div>
+        </div>
+      );
+    }
+
+    // Connection failed
+    if (!connected && !connecting) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-6" style={S.body}>
+          <WifiOff className="mb-4" size={40} color="#e74c3c" />
+          <div className="text-sm font-bold tracking-widest uppercase mb-2" style={{ color: '#e74c3c' }}>
+            CONNECTION REQUIRED
+          </div>
+          {tabsError && <div className="text-xs mb-4" style={{ color: '#888' }}>{tabsError}</div>}
+          <button
+            onClick={handleConnect}
+            className="px-6 py-3 rounded font-bold text-sm tracking-wider uppercase transition-all"
+            style={{ background: '#2ecc71', color: '#000' }}
+          >
+            Connect to Google Sheets
+          </button>
+        </div>
+      );
+    }
+
+    // Error loading tabs
+    if (tabsError && tabs.length === 0) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-6" style={S.body}>
+          <div className="text-sm font-bold tracking-widest uppercase mb-2" style={{ color: '#e74c3c' }}>
+            FAILED TO LOAD TABS
+          </div>
+          <div className="text-xs mb-4" style={{ color: '#888' }}>{tabsError}</div>
+          <button
+            onClick={handleConnect}
+            className="px-6 py-3 rounded font-bold text-sm tracking-wider uppercase"
+            style={{ background: '#1a2e1a', color: '#2ecc71', border: '1px solid rgba(46,204,113,0.3)' }}
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+
+    // Campaign Select screen with deploy config overlay
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6" style={S.body}>
-        <div className="w-full max-w-md space-y-6">
-          {/* Header */}
-          <div className="text-center">
-            <Crosshair className="mx-auto mb-2" size={32} color="#2ecc71" />
-            <h1 className="text-xl font-black tracking-widest uppercase font-mono" style={{ color: '#2ecc71' }}>
-              AutoSniper
-            </h1>
-            <p className="text-xs mt-1 tracking-wider" style={{ color: '#2ecc71', opacity: 0.5 }}>
-              {campaign?.displayName || 'Dialer'} — {manager?.name || manager?.repCode}
-            </p>
-          </div>
+      <>
+        <CampaignSelect
+          campaigns={campaignCards}
+          onDeploy={handleCampaignDeploy}
+        />
 
-          {/* Step 1: Connect */}
-          <div className="p-4 rounded-lg" style={{ background: '#0f1a0f', border: '1px solid rgba(46,204,113,0.2)' }}>
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-bold tracking-widest uppercase" style={{ color: '#2ecc71', opacity: 0.5 }}>
-                1. Connect
-              </span>
-              <span className="flex items-center gap-1 text-xs font-bold" style={{ color: connected ? '#2ecc71' : '#e74c3c' }}>
-                {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
-                {connected ? 'LINKED' : 'OFFLINE'}
-              </span>
-            </div>
-            {!connected && (
-              <button
-                onClick={handleConnect}
-                disabled={connecting}
-                className="w-full py-2 rounded font-bold text-sm tracking-wider uppercase transition-all"
-                style={{ background: connecting ? '#333' : '#2ecc71', color: connecting ? '#888' : '#000' }}
-              >
-                {connecting ? 'Connecting...' : 'Connect to Google Sheets'}
-              </button>
-            )}
-          </div>
-
-          {/* Step 2: Pick Tab */}
-          {connected && (
-            <div className="p-4 rounded-lg" style={{ background: '#0f1a0f', border: '1px solid rgba(46,204,113,0.2)' }}>
-              <span className="text-xs font-bold tracking-widest uppercase block mb-3" style={{ color: '#2ecc71', opacity: 0.5 }}>
-                2. Select Tab
-              </span>
-              {tabsLoading && <p className="text-xs" style={{ color: '#888' }}>Loading tabs...</p>}
-              {tabsError && <p className="text-xs" style={{ color: '#e74c3c' }}>{tabsError}</p>}
-              <div className="grid grid-cols-2 gap-2">
-                {tabs.map(tab => (
-                  <button
-                    key={tab}
-                    onClick={() => setSelectedTab(tab)}
-                    className="py-2 px-3 rounded text-xs font-bold tracking-wider uppercase transition-all"
-                    style={{
-                      background: selectedTab === tab ? '#2ecc71' : '#1a2e1a',
-                      color: selectedTab === tab ? '#000' : '#888',
-                      border: selectedTab === tab ? '1px solid #2ecc71' : '1px solid rgba(46,204,113,0.2)',
-                    }}
-                  >
-                    {tab}
-                  </button>
-                ))}
+        {/* Deploy Config Overlay — direction + optional booking ID */}
+        {showDeployConfig && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            style={{ background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)' }}
+            onClick={() => setShowDeployConfig(false)}
+          >
+            <div
+              className="rounded-lg p-6 w-full max-w-sm"
+              style={{
+                background: '#0f1a0f',
+                border: '1.5px solid rgba(46,204,113,0.4)',
+                boxShadow: '0 8px 40px rgba(0,0,0,0.8), 0 0 30px rgba(46,204,113,0.1)',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="text-center mb-4">
+                <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: '3px', color: '#2ecc71', opacity: 0.5, textTransform: 'uppercase' }}>
+                  MISSION PARAMETERS
+                </div>
+                <div className="text-base font-black tracking-wider uppercase mt-1" style={{ color: '#fff' }}>
+                  {deployingTab}
+                </div>
               </div>
-            </div>
-          )}
 
-          {/* Step 3: Direction */}
-          {connected && selectedTab && (
-            <div className="p-4 rounded-lg" style={{ background: '#0f1a0f', border: '1px solid rgba(46,204,113,0.2)' }}>
-              <span className="text-xs font-bold tracking-widest uppercase block mb-3" style={{ color: '#2ecc71', opacity: 0.5 }}>
-                3. Direction
-              </span>
-              <div className="flex gap-2">
-                {([['down', '⬇️ Down', '#0f3460'], ['up', '⬆️ Up', '#533483'], ['scatter', '🎯 Scatter', '#e94560']] as const).map(
-                  ([dir, label, bg]) => (
+              {/* Direction */}
+              <div className="mb-4">
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#2ecc71', opacity: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>
+                  APPROACH VECTOR
+                </div>
+                <div className="flex gap-2">
+                  {([
+                    ['down', '⬇️ Down', '#0f3460'],
+                    ['up', '⬆️ Up', '#533483'],
+                    ['scatter', '🎯 Scatter', '#e94560'],
+                  ] as const).map(([dir, label, bg]) => (
                     <button
                       key={dir}
                       onClick={() => setDirection(dir as Direction)}
-                      className="flex-1 py-2 rounded text-xs font-bold tracking-wider uppercase transition-all"
+                      className="flex-1 py-2.5 rounded text-xs font-bold tracking-wider uppercase transition-all"
                       style={{
                         background: direction === dir ? bg : '#1a2e1a',
-                        color: direction === dir ? '#fff' : '#888',
-                        border: direction === dir ? `1px solid ${bg}` : '1px solid rgba(46,204,113,0.2)',
+                        color: direction === dir ? '#fff' : '#666',
+                        border: direction === dir ? `1.5px solid ${bg}` : '1.5px solid rgba(46,204,113,0.15)',
+                        fontFamily: 'inherit',
                       }}
                     >
                       {label}
                     </button>
-                  )
-                )}
+                  ))}
+                </div>
               </div>
 
               {/* Optional booking ID */}
-              <div className="mt-3">
-                <label className="text-xs block mb-1" style={{ color: '#2ecc71', opacity: 0.4, fontWeight: 600, letterSpacing: '1px', textTransform: 'uppercase' }}>
-                  Starting Booking ID (optional)
-                </label>
+              <div className="mb-5">
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#2ecc71', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
+                  STARTING BOOKING ID <span style={{ opacity: 0.4 }}>(OPTIONAL)</span>
+                </div>
                 <input
                   type="text"
                   value={startBookingId}
                   onChange={(e) => setStartBookingId(e.target.value)}
                   placeholder="e.g. ACE01-042"
-                  className="w-full px-3 py-1.5 rounded text-sm font-mono"
+                  className="w-full px-3 py-2 rounded text-sm font-mono"
                   style={S.yesInput}
                 />
               </div>
-            </div>
-          )}
 
-          {/* Deploy */}
-          {connected && selectedTab && (
-            <button
-              onClick={handleDeploy}
-              disabled={loading}
-              className="w-full py-3 rounded font-black text-sm tracking-widest uppercase transition-all"
-              style={{ background: loading ? '#333' : 'linear-gradient(135deg, #27ae60, #2ecc71)', color: loading ? '#888' : '#fff' }}
-            >
-              {loading ? 'Deploying...' : '🎯 Deploy'}
-            </button>
-          )}
-        </div>
-      </div>
+              {/* Action buttons */}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowDeployConfig(false)}
+                  className="flex-shrink-0 px-4 py-3 rounded text-xs font-bold tracking-wider uppercase"
+                  style={{ background: '#222', color: '#666', border: '1px solid #333', fontFamily: 'inherit' }}
+                >
+                  ABORT
+                </button>
+                <button
+                  onClick={handleConfirmDeploy}
+                  disabled={loading}
+                  className="flex-1 py-3 rounded font-black text-sm tracking-widest uppercase transition-all"
+                  style={{
+                    background: loading ? '#333' : 'linear-gradient(135deg, #27ae60, #2ecc71)',
+                    color: loading ? '#888' : '#fff',
+                    border: 'none',
+                    fontFamily: 'inherit',
+                    letterSpacing: '3px',
+                  }}
+                >
+                  {loading ? 'DEPLOYING...' : '🎯 CONFIRM DEPLOY'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
     );
   }
 
@@ -594,7 +711,7 @@ export default function DialerPage() {
   if (!currentState) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center" style={S.body}>
-        <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} />
+        <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} teamFeed={teamFeed} />
         <BadgeToastContainer toasts={badgeToasts} />
         <PointToastContainer toasts={pointToasts} />
         {session && <AchievementsPanel session={session} open={achievementsOpen} onClose={() => setAchievementsOpen(false)} />}
@@ -606,11 +723,11 @@ export default function DialerPage() {
             <div className="text-sm font-black tracking-widest uppercase" style={{ color: '#555' }}>Mission Complete</div>
             <div className="text-xs mt-2" style={{ color: '#444', maxWidth: 300 }}>{emptyMessage}</div>
             <button
-              onClick={() => { setMode('launcher'); invalidateCache(); }}
+              onClick={() => { setMode('campaign-select'); invalidateCache(); }}
               className="mt-4 px-4 py-2 rounded text-xs font-bold tracking-wider uppercase"
               style={{ background: '#1a2e1a', color: '#2ecc71', border: '1px solid rgba(46,204,113,0.3)' }}
             >
-              Back to Launcher
+              Back to Campaign Select
             </button>
           </div>
         )}
@@ -629,7 +746,7 @@ export default function DialerPage() {
 
   return (
     <div className="relative h-screen overflow-hidden" style={S.body}>
-      <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} />
+      <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} teamFeed={teamFeed} />
       <BadgeToastContainer toasts={badgeToasts} />
       <PointToastContainer toasts={pointToasts} />
       {session && <AchievementsPanel session={session} open={achievementsOpen} onClose={() => setAchievementsOpen(false)} />}
