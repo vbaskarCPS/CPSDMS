@@ -56,17 +56,21 @@ const PILL_THEME: Record<string, { color: string; glow: string }> = {
 
 const HUD_STYLES = `
   @keyframes hud-enraged-pulse {
-    0%, 100% { box-shadow: 0 0 4px rgba(255,0,64,0.2); }
-    50% { box-shadow: 0 0 12px rgba(255,0,64,0.6); }
+    0%, 100% { box-shadow: 0 0 6px rgba(255,0,64,0.15), inset 0 0 12px rgba(255,0,64,0.05); }
+    50% { box-shadow: 0 0 18px rgba(255,0,64,0.5), inset 0 0 16px rgba(255,0,64,0.12); }
   }
   @keyframes hud-scorched-pulse {
-    0%, 100% { box-shadow: 0 0 4px rgba(255,87,34,0.2); }
-    50% { box-shadow: 0 0 10px rgba(255,87,34,0.5); }
+    0%, 100% { box-shadow: 0 0 6px rgba(255,87,34,0.15), inset 0 0 12px rgba(255,87,34,0.05); }
+    50% { box-shadow: 0 0 16px rgba(255,87,34,0.45), inset 0 0 16px rgba(255,87,34,0.1); }
   }
-  @keyframes hud-pill-enter {
-    0% { transform: scale(0); opacity: 0; }
-    60% { transform: scale(1.2); }
-    100% { transform: scale(1); opacity: 1; }
+  @keyframes hud-tile-enter {
+    0% { transform: scale(0) rotateY(90deg); opacity: 0; }
+    50% { transform: scale(1.1) rotateY(-5deg); }
+    100% { transform: scale(1) rotateY(0deg); opacity: 1; }
+  }
+  @keyframes hud-tile-breathe {
+    0%, 100% { box-shadow: var(--tile-shadow-rest); }
+    50% { box-shadow: var(--tile-shadow-breathe); }
   }
   @keyframes hud-points-flash {
     0% { text-shadow: 0 0 12px rgba(46,204,113,0.5), 0 0 28px rgba(46,204,113,0.2); }
@@ -78,8 +82,12 @@ const HUD_STYLES = `
     50% { opacity: 1; }
   }
   @keyframes hud-tooltip-in {
-    0% { opacity: 0; transform: translateY(-4px); }
-    100% { opacity: 1; transform: translateY(0); }
+    0% { opacity: 0; transform: translateY(6px) scale(0.95); pointer-events: none; }
+    100% { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+  }
+  @keyframes hud-timer-sweep {
+    from { stroke-dashoffset: 0; }
+    to { stroke-dashoffset: 157; }
   }
 `;
 
@@ -116,7 +124,7 @@ function MultiplierIconDisplay({ multiplier, size = 14 }: { multiplier: Multipli
 }
 
 // =============================================================================
-// MULTIPLIER STRIP (top of screen, below top bar)
+// MULTIPLIER STRIP (top of screen, below top bar) — Big icon tiles
 // =============================================================================
 
 function MultiplierStrip({
@@ -127,7 +135,7 @@ function MultiplierStrip({
   receivedAt: number;
 }) {
   const [, setTick] = useState(0);
-  const [openTooltip, setOpenTooltip] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval>>();
 
   useEffect(() => {
@@ -138,23 +146,18 @@ function MultiplierStrip({
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [multipliers]);
 
-  // Close tooltip on outside click
-  useEffect(() => {
-    if (!openTooltip) return;
-    const handler = () => setOpenTooltip(null);
-    const timer = setTimeout(() => document.addEventListener('click', handler), 10);
-    return () => { clearTimeout(timer); document.removeEventListener('click', handler); };
-  }, [openTooltip]);
-
   if (multipliers.length === 0) return null;
 
   const now = Date.now();
   const elapsed = now - receivedAt;
 
+  const TILE = 52;            // tile size px
+  const ICON_SIZE = 30;       // icon inside tile
+
   return (
     <div
-      className="absolute left-0 right-0 flex items-center justify-center gap-1.5 px-3 pointer-events-auto"
-      style={{ top: 32, height: 28, zIndex: 15 }}
+      className="absolute left-0 right-0 flex items-start justify-center gap-2.5 px-4 pointer-events-auto"
+      style={{ top: 36, zIndex: 15 }}
     >
       {multipliers.map((m, idx) => {
         const remainingMs = m.expiresIn > 0 ? m.expiresIn - elapsed : m.expiresIn;
@@ -165,147 +168,293 @@ function MultiplierStrip({
         const charges = (m.extra as any)?.charges;
         const isEnraged = m.id === 'enraged';
         const isScorched = m.id === 'scorched_earth';
-        const isOpen = openTooltip === m.id;
+        const isHovered = hoveredId === m.id;
 
-        // Countdown progress (0 to 1)
-        let progress = 1;
-        if (m.expiresIn > 0 && countdown) {
-          progress = Math.max(0, remainingMs / m.expiresIn);
+        // Timer progress 0→1 (1 = full, 0 = expired)
+        let timerProgress = 1;
+        if (m.expiresIn > 0 && remainingMs > 0) {
+          timerProgress = Math.max(0, remainingMs / m.expiresIn);
         }
+        const circumference = 2 * Math.PI * 23; // ring radius=23
+
+        const shadowRest = `0 2px 8px rgba(0,0,0,0.6), 0 0 6px ${theme.color}20, inset 0 1px 0 rgba(255,255,255,0.04)`;
+        const shadowBreathe = `0 2px 12px rgba(0,0,0,0.6), 0 0 14px ${theme.color}40, inset 0 1px 0 rgba(255,255,255,0.06)`;
 
         return (
-          <div key={m.id} className="relative">
-            {/* Pill */}
+          <div
+            key={m.id}
+            className="relative"
+            onMouseEnter={() => setHoveredId(m.id)}
+            onMouseLeave={() => setHoveredId(null)}
+          >
+            {/* === TILE === */}
             <div
-              className="flex items-center gap-1 cursor-pointer transition-all duration-150"
-              onClick={(e) => { e.stopPropagation(); setOpenTooltip(isOpen ? null : m.id); }}
               style={{
-                padding: '3px 8px',
-                borderRadius: 20,
-                fontSize: 10,
-                fontFamily: 'monospace',
-                fontWeight: 800,
-                letterSpacing: '0.5px',
-                border: `1px solid ${theme.color}60`,
-                background: `${theme.color}10`,
-                color: theme.color,
-                boxShadow: `0 0 8px ${theme.glow}`,
+                width: TILE,
+                height: TILE,
+                borderRadius: 10,
+                background: `linear-gradient(145deg, ${theme.color}18 0%, rgba(10,18,10,0.95) 60%)`,
+                border: `1.5px solid ${theme.color}50`,
+                position: 'relative',
+                overflow: 'hidden',
+                cursor: 'default',
+                transition: 'transform 0.2s ease, border-color 0.2s ease',
+                transform: isHovered ? 'scale(1.12) translateY(-2px)' : 'scale(1)',
+                ['--tile-shadow-rest' as any]: shadowRest,
+                ['--tile-shadow-breathe' as any]: shadowBreathe,
                 animation: isEnraged
                   ? 'hud-enraged-pulse 1.2s ease-in-out infinite'
                   : isScorched
                     ? 'hud-scorched-pulse 2s ease-in-out infinite'
-                    : `hud-pill-enter 0.4s ease-out ${idx * 0.05}s both`,
+                    : `hud-tile-enter 0.45s cubic-bezier(0.34,1.56,0.64,1) ${idx * 0.07}s both, hud-tile-breathe 4s ease-in-out ${idx * 0.5}s infinite`,
+                boxShadow: isHovered
+                  ? `0 4px 20px rgba(0,0,0,0.7), 0 0 20px ${theme.color}50, inset 0 1px 0 rgba(255,255,255,0.08)`
+                  : shadowRest,
+                borderColor: isHovered ? `${theme.color}90` : `${theme.color}50`,
               }}
             >
-              <MultiplierIconDisplay multiplier={m} size={14} />
-              <span style={{ fontSize: 10, fontWeight: 900 }}>+{m.value}x</span>
-              {countdown && (
-                <span style={{ fontSize: 8, opacity: 0.6, fontWeight: 600 }}>{countdown}</span>
-              )}
-              {charges && (
-                <span style={{ fontSize: 8, fontWeight: 700, color: '#f1c40f' }}>×{charges}</span>
-              )}
+              {/* Colored vignette behind icon */}
+              <div style={{
+                position: 'absolute',
+                inset: 0,
+                background: `radial-gradient(circle at 50% 40%, ${theme.color}15 0%, transparent 70%)`,
+                pointerEvents: 'none',
+              }} />
 
-              {/* Countdown arc */}
-              {m.expiresIn > 0 && progress < 1 && progress > 0 && (
+              {/* Icon — centered, large */}
+              <div style={{
+                position: 'absolute',
+                top: 5,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                width: ICON_SIZE,
+                height: ICON_SIZE,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: 0.7,
+                filter: `drop-shadow(0 0 4px ${theme.color}60)`,
+              }}>
+                <MultiplierIconDisplay multiplier={m} size={ICON_SIZE} />
+              </div>
+
+              {/* Embossed multiplier value — overlaid at bottom */}
+              <div style={{
+                position: 'absolute',
+                bottom: 2,
+                left: 0,
+                right: 0,
+                textAlign: 'center',
+                fontFamily: 'monospace',
+                fontWeight: 900,
+                fontSize: 15,
+                lineHeight: 1,
+                letterSpacing: '-0.5px',
+                color: '#fff',
+                textShadow: `0 0 6px ${theme.color}, 0 1px 2px rgba(0,0,0,0.8), 0 0 16px ${theme.color}60`,
+                pointerEvents: 'none',
+              }}>
+                +{m.value}x
+              </div>
+
+              {/* Timer ring (for timed multipliers) */}
+              {m.expiresIn > 0 && timerProgress > 0 && timerProgress < 1 && (
                 <svg
-                  className="absolute inset-0 pointer-events-none"
-                  style={{ width: '100%', height: '100%', overflow: 'visible' }}
+                  style={{ position: 'absolute', inset: -1, width: TILE + 2, height: TILE + 2, pointerEvents: 'none' }}
+                  viewBox={`0 0 ${TILE + 2} ${TILE + 2}`}
                 >
                   <rect
-                    x="0" y="0"
-                    width="100%" height="100%"
-                    rx="20" ry="20"
+                    x="1" y="1" width={TILE} height={TILE} rx="10" ry="10"
                     fill="none"
                     stroke={theme.color}
-                    strokeWidth="1.5"
-                    strokeDasharray={`${progress * 100} ${(1 - progress) * 100}`}
-                    strokeDashoffset="0"
-                    opacity="0.4"
+                    strokeWidth="2"
+                    strokeDasharray={`${(TILE * 4) * timerProgress} ${(TILE * 4)}`}
+                    opacity="0.5"
                   />
                 </svg>
               )}
+
+              {/* Charges badge */}
+              {charges && charges > 0 && (
+                <div style={{
+                  position: 'absolute',
+                  top: -4,
+                  right: -4,
+                  width: 16,
+                  height: 16,
+                  borderRadius: '50%',
+                  background: theme.color,
+                  color: '#000',
+                  fontSize: 9,
+                  fontWeight: 900,
+                  fontFamily: 'monospace',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: `0 1px 4px rgba(0,0,0,0.5), 0 0 6px ${theme.color}60`,
+                  border: '1.5px solid rgba(0,0,0,0.3)',
+                  lineHeight: 1,
+                }}>
+                  {charges}
+                </div>
+              )}
+
+              {/* Countdown text (small, below value if timed) */}
+              {countdown && (
+                <div style={{
+                  position: 'absolute',
+                  top: 1,
+                  right: 3,
+                  fontSize: 7,
+                  fontFamily: 'monospace',
+                  fontWeight: 700,
+                  color: theme.color,
+                  opacity: 0.7,
+                  letterSpacing: '0.5px',
+                  lineHeight: 1,
+                }}>
+                  {countdown}
+                </div>
+              )}
             </div>
 
-            {/* Tooltip (tap to toggle) */}
-            {isOpen && (
+            {/* === HOVER TOOLTIP === */}
+            {isHovered && (
               <div
-                className="absolute left-1/2 -translate-x-1/2 z-30"
+                className="absolute z-30"
                 style={{
-                  top: 'calc(100% + 8px)',
-                  minWidth: 180,
-                  maxWidth: 220,
-                  animation: 'hud-tooltip-in 0.2s ease-out',
+                  top: TILE + 8,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  minWidth: 200,
+                  maxWidth: 240,
+                  animation: 'hud-tooltip-in 0.2s ease-out both',
                 }}
-                onClick={(e) => e.stopPropagation()}
               >
-                <div
-                  style={{
-                    background: 'rgba(8,16,8,0.96)',
-                    border: `1px solid ${theme.color}50`,
-                    borderRadius: 8,
-                    padding: '10px 12px',
-                    boxShadow: `0 8px 24px rgba(0,0,0,0.6), 0 0 12px ${theme.glow}`,
-                    backdropFilter: 'blur(8px)',
-                  }}
-                >
-                  {/* Arrow */}
-                  <div
-                    className="absolute left-1/2 -translate-x-1/2"
-                    style={{
-                      top: -5,
-                      width: 0,
-                      height: 0,
-                      borderLeft: '6px solid transparent',
-                      borderRight: '6px solid transparent',
-                      borderBottom: `6px solid ${theme.color}50`,
-                    }}
-                  />
+                {/* Arrow */}
+                <div style={{
+                  position: 'absolute',
+                  top: -5,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  width: 0,
+                  height: 0,
+                  borderLeft: '7px solid transparent',
+                  borderRight: '7px solid transparent',
+                  borderBottom: `7px solid ${theme.color}40`,
+                }} />
 
-                  {/* Icon + Name */}
-                  <div className="flex items-center justify-center gap-2 mb-1">
-                    <MultiplierIconDisplay multiplier={m} size={20} />
-                    <span
-                      className="font-mono font-black tracking-widest uppercase"
-                      style={{ fontSize: 10, color: theme.color }}
-                    >
-                      {m.name}
-                    </span>
+                <div style={{
+                  background: 'rgba(6,12,6,0.97)',
+                  border: `1px solid ${theme.color}40`,
+                  borderRadius: 10,
+                  padding: '12px 14px',
+                  boxShadow: `0 12px 36px rgba(0,0,0,0.8), 0 0 20px ${theme.glow}`,
+                  backdropFilter: 'blur(12px)',
+                }}>
+                  {/* Header: icon + name + value */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <div style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 6,
+                      background: `${theme.color}15`,
+                      border: `1px solid ${theme.color}30`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                    }}>
+                      <MultiplierIconDisplay multiplier={m} size={22} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontFamily: 'monospace',
+                        fontWeight: 900,
+                        fontSize: 11,
+                        color: theme.color,
+                        letterSpacing: '1.5px',
+                        textTransform: 'uppercase' as const,
+                        lineHeight: 1.2,
+                      }}>
+                        {m.name}
+                      </div>
+                      <div style={{
+                        fontFamily: 'monospace',
+                        fontWeight: 900,
+                        fontSize: 20,
+                        color: '#fff',
+                        textShadow: `0 0 12px ${theme.color}80`,
+                        lineHeight: 1.1,
+                        marginTop: 1,
+                      }}>
+                        +{m.value}x
+                      </div>
+                    </div>
                   </div>
 
-                  {/* Value */}
-                  <div
-                    className="font-mono font-black text-center"
-                    style={{
-                      fontSize: 18,
-                      color: '#fff',
-                      textShadow: `0 0 8px ${theme.glow}`,
-                      lineHeight: 1.2,
-                    }}
-                  >
-                    +{m.value}x
-                  </div>
-
-                  {/* Status line */}
-                  <div
-                    className="font-mono text-center"
-                    style={{ fontSize: 9, color: theme.color, opacity: 0.8, marginTop: 3 }}
-                  >
-                    {charges ? `${charges} charges remaining` : countdown ? `${countdown} remaining` : 'ALWAYS ACTIVE'}
+                  {/* Status badges */}
+                  <div style={{
+                    display: 'flex',
+                    gap: 6,
+                    marginBottom: 8,
+                    flexWrap: 'wrap' as const,
+                  }}>
+                    {charges && (
+                      <span style={{
+                        fontSize: 8,
+                        fontFamily: 'monospace',
+                        fontWeight: 800,
+                        color: theme.color,
+                        background: `${theme.color}12`,
+                        border: `1px solid ${theme.color}30`,
+                        borderRadius: 4,
+                        padding: '2px 6px',
+                        letterSpacing: '0.5px',
+                      }}>
+                        {charges} CHARGES
+                      </span>
+                    )}
+                    {countdown && (
+                      <span style={{
+                        fontSize: 8,
+                        fontFamily: 'monospace',
+                        fontWeight: 800,
+                        color: theme.color,
+                        background: `${theme.color}12`,
+                        border: `1px solid ${theme.color}30`,
+                        borderRadius: 4,
+                        padding: '2px 6px',
+                        letterSpacing: '0.5px',
+                      }}>
+                        {countdown}
+                      </span>
+                    )}
+                    {!charges && !countdown && (
+                      <span style={{
+                        fontSize: 8,
+                        fontFamily: 'monospace',
+                        fontWeight: 800,
+                        color: '#2ecc71',
+                        background: 'rgba(46,204,113,0.08)',
+                        border: '1px solid rgba(46,204,113,0.2)',
+                        borderRadius: 4,
+                        padding: '2px 6px',
+                        letterSpacing: '1px',
+                      }}>
+                        PASSIVE
+                      </span>
+                    )}
                   </div>
 
                   {/* Description */}
-                  <div
-                    className="text-center"
-                    style={{
-                      fontSize: 9,
-                      color: '#666',
-                      marginTop: 6,
-                      lineHeight: 1.4,
-                      borderTop: '1px solid rgba(255,255,255,0.06)',
-                      paddingTop: 6,
-                    }}
-                  >
+                  <div style={{
+                    fontSize: 10,
+                    color: '#888',
+                    lineHeight: 1.5,
+                    borderTop: '1px solid rgba(255,255,255,0.06)',
+                    paddingTop: 8,
+                  }}>
                     {MULT_DESC[m.id] || ''}
                   </div>
                 </div>
@@ -496,7 +645,7 @@ export default function DialerHUD({
         <div
           className="absolute left-0"
           style={{
-            top: 32,
+            top: 96,
             bottom: 50,
             width: 4,
             background: 'linear-gradient(to right, rgba(10,18,10,0.6), transparent)',
@@ -506,7 +655,7 @@ export default function DialerHUD({
         <div
           className="absolute right-0"
           style={{
-            top: 32,
+            top: 96,
             bottom: 50,
             width: 4,
             background: 'linear-gradient(to left, rgba(10,18,10,0.6), transparent)',
@@ -515,10 +664,10 @@ export default function DialerHUD({
         />
 
         {/* === CORNERS === */}
-        <svg className="absolute" style={{ top: 30, left: 0 }} width="14" height="14">
+        <svg className="absolute" style={{ top: 94, left: 0 }} width="14" height="14">
           <path d="M0,14 L0,0 L14,0" fill="none" stroke="#2ecc71" strokeWidth="2" opacity="0.5" />
         </svg>
-        <svg className="absolute" style={{ top: 30, right: 0 }} width="14" height="14">
+        <svg className="absolute" style={{ top: 94, right: 0 }} width="14" height="14">
           <path d="M14,14 L14,0 L0,0" fill="none" stroke="#2ecc71" strokeWidth="2" opacity="0.5" />
         </svg>
         <svg className="absolute" style={{ bottom: 48, left: 0 }} width="14" height="14">
