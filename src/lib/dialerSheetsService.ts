@@ -5,15 +5,28 @@
 // this operates on arbitrary spreadsheet IDs passed in by the caller.
 // It shares the same OAuth token flow via googleSheetsService.
 //
+// Token management: GIS implicit grant tokens expire after 3600s (1 hour).
+// We track token age and silently refresh when within 5 minutes of expiry.
+// Every API method calls ensureFreshToken() before making requests.
+//
 import { googleSheetsService } from './googleSheetsService';
 import { GOOGLE_OAUTH_CONFIG } from './googleSheetsConfig';
+
+/** Refresh the token 5 minutes before it expires */
+const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+
+/** Default GIS token lifetime (Google returns this in the response too) */
+const DEFAULT_TOKEN_LIFETIME_MS = 3600 * 1000;
 
 class DialerSheetsService {
   private static instance: DialerSheetsService;
   private accessToken: string | null = null;
+  private tokenIssuedAt: number = 0;
+  private tokenExpiresIn: number = DEFAULT_TOKEN_LIFETIME_MS;
   private tokenClient: any = null;
   private gapiLoaded: boolean = false;
   private gisLoaded: boolean = false;
+  private refreshPromise: Promise<boolean> | null = null; // dedup concurrent refreshes
 
   private constructor() {}
 
@@ -70,6 +83,8 @@ class DialerSheetsService {
       callback: (response: any) => {
         if (response.access_token) {
           this.accessToken = response.access_token;
+          this.tokenIssuedAt = Date.now();
+          this.tokenExpiresIn = (response.expires_in || 3600) * 1000;
         }
       },
     });
@@ -85,6 +100,63 @@ class DialerSheetsService {
   }
 
   /**
+   * Check if the current token is expired or within the refresh buffer.
+   */
+  private isTokenExpiring(): boolean {
+    if (!this.accessToken || !this.tokenIssuedAt) return true;
+    const elapsed = Date.now() - this.tokenIssuedAt;
+    return elapsed >= (this.tokenExpiresIn - REFRESH_BUFFER_MS);
+  }
+
+  /**
+   * Silently refresh the token without showing a popup.
+   * Uses prompt: '' which works because the user already granted consent.
+   * Deduplicates concurrent calls so only one refresh runs at a time.
+   */
+  private async silentRefresh(): Promise<boolean> {
+    if (this.refreshPromise) return this.refreshPromise;
+
+    this.refreshPromise = new Promise<boolean>((resolve) => {
+      this.tokenClient.callback = (response: any) => {
+        if (response.access_token) {
+          this.accessToken = response.access_token;
+          this.tokenIssuedAt = Date.now();
+          this.tokenExpiresIn = (response.expires_in || 3600) * 1000;
+          this.refreshPromise = null;
+          resolve(true);
+        } else {
+          this.refreshPromise = null;
+          resolve(false);
+        }
+      };
+
+      this.tokenClient.requestAccessToken({ prompt: '' });
+    });
+
+    return this.refreshPromise;
+  }
+
+  /**
+   * Ensure we have a fresh token before making an API call.
+   * Replaces the old synchronous requireAuth() — now async so it can
+   * silently refresh an expiring token before returning it.
+   */
+  private async ensureFreshToken(): Promise<string> {
+    if (!this.accessToken) {
+      throw new Error('Not authenticated with Google. Please connect first.');
+    }
+
+    if (this.isTokenExpiring()) {
+      const refreshed = await this.silentRefresh();
+      if (!refreshed || !this.accessToken) {
+        throw new Error('Google session expired. Please reconnect.');
+      }
+    }
+
+    return this.accessToken;
+  }
+
+  /**
    * Trigger OAuth flow. Returns true if successful.
    * If the user has already granted access, this will silently refresh.
    */
@@ -96,6 +168,8 @@ class DialerSheetsService {
       this.tokenClient.callback = (response: any) => {
         if (response.access_token) {
           this.accessToken = response.access_token;
+          this.tokenIssuedAt = Date.now();
+          this.tokenExpiresIn = (response.expires_in || 3600) * 1000;
           resolve(true);
         } else {
           resolve(false);
@@ -115,26 +189,18 @@ class DialerSheetsService {
    */
   public signOut(): void {
     this.accessToken = null;
+    this.tokenIssuedAt = 0;
+    this.refreshPromise = null;
   }
 
   // --- CORE SHEETS OPERATIONS ---
-
-  /**
-   * Ensure we have a token, throw a clear error if not.
-   */
-  private requireAuth(): string {
-    if (!this.accessToken) {
-      throw new Error('Not authenticated with Google. Please connect first.');
-    }
-    return this.accessToken;
-  }
 
   /**
    * GET values from a range in any spreadsheet.
    * Returns a 2D array of cell values (rows × cols). Empty ranges return [].
    */
   public async sheetsGet(spreadsheetId: string, range: string): Promise<any[][]> {
-    const token = this.requireAuth();
+    const token = await this.ensureFreshToken();
 
     const response = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}`,
@@ -156,7 +222,7 @@ class DialerSheetsService {
    * PUT (overwrite) values in a range in any spreadsheet.
    */
   public async sheetsUpdate(spreadsheetId: string, range: string, values: any[][]): Promise<void> {
-    const token = this.requireAuth();
+    const token = await this.ensureFreshToken();
 
     const response = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=RAW`,
@@ -183,7 +249,7 @@ class DialerSheetsService {
     spreadsheetId: string,
     data: { range: string; values: any[][] }[]
   ): Promise<void> {
-    const token = this.requireAuth();
+    const token = await this.ensureFreshToken();
 
     const response = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`,
@@ -210,7 +276,7 @@ class DialerSheetsService {
    * Append rows to a range in any spreadsheet.
    */
   public async sheetsAppend(spreadsheetId: string, range: string, values: any[][]): Promise<void> {
-    const token = this.requireAuth();
+    const token = await this.ensureFreshToken();
 
     const response = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
@@ -254,7 +320,7 @@ class DialerSheetsService {
   ): Promise<void> {
     if (requests.length === 0) return;
 
-    const token = this.requireAuth();
+    const token = await this.ensureFreshToken();
 
     const response = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
@@ -283,7 +349,7 @@ class DialerSheetsService {
   public async getSheetTabs(
     spreadsheetId: string
   ): Promise<{ sheetId: number; title: string }[]> {
-    const token = this.requireAuth();
+    const token = await this.ensureFreshToken();
 
     const response = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties(sheetId,title)`,
