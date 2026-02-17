@@ -215,8 +215,9 @@ function MultiplierStrip({
       style={{
         display: 'flex',
         gap: 6,
-        overflowX: 'auto',
-        paddingBottom: 2,
+        overflow: 'visible',
+        paddingBottom: 8,
+        paddingTop: 4,
       }}
     >
       {multipliers.map((m, idx) => {
@@ -814,7 +815,7 @@ export default function DialerHUD({
             </div>
 
             {/* Center: Multiplier tiles */}
-            <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
+            <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0, overflow: 'visible' }}>
               <MultiplierStrip multipliers={activeMultipliers} receivedAt={multipliersReceivedAt} />
             </div>
 
