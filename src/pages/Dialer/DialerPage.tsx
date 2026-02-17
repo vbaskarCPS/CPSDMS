@@ -50,28 +50,32 @@ import { dialerRealtimeService } from '../../lib/dialerRealtimeService';
 // STYLES (inline style objects for elements not easily done in Tailwind)
 // =============================================================================
 
+// Visor palette (matches DialerHUD.tsx)
+const CY = '#00e5ff';
+const OR = '#f5a623';
+
 const S = {
-  body: { background: '#0a120a', color: '#e0e0e0', fontFamily: '"Segoe UI", Arial, sans-serif' } as React.CSSProperties,
-  topBar: { background: '#0f1a0f', borderBottom: '1px solid rgba(46,204,113,0.15)' } as React.CSSProperties,
-  clientHeader: { background: '#0f1a0f', borderBottom: '1px solid rgba(46,204,113,0.12)' } as React.CSSProperties,
-  phoneBar: { background: '#0d170d', borderBottom: '1px solid rgba(46,204,113,0.12)' } as React.CSSProperties,
-  contentArea: { background: '#0d1a0d' } as React.CSSProperties,
-  sidePanel: { background: '#0f1a0f', borderLeft: '1px solid rgba(46,204,113,0.2)' } as React.CSSProperties,
-  historyRow: { background: '#0f1a0f', border: '1px solid rgba(46,204,113,0.1)' } as React.CSSProperties,
-  linkShot: { background: '#1e2d1e', border: '1px solid #2d4a2d' } as React.CSSProperties,
-  yesInput: { background: '#0d170d', color: '#fff', border: '1px solid rgba(46,204,113,0.2)' } as React.CSSProperties,
+  body: { background: '#000e16', color: '#e0e0e0', fontFamily: '"Segoe UI", Arial, sans-serif' } as React.CSSProperties,
+  topBar: { background: 'rgba(0,14,22,0.9)', borderBottom: `1px solid ${CY}15` } as React.CSSProperties,
+  clientHeader: { background: 'rgba(0,14,22,0.85)', borderBottom: `1px solid ${CY}12` } as React.CSSProperties,
+  phoneBar: { background: 'rgba(0,10,18,0.9)', borderBottom: `1px solid ${CY}12` } as React.CSSProperties,
+  contentArea: { background: 'rgba(0,12,20,0.95)' } as React.CSSProperties,
+  sidePanel: { background: 'rgba(0,14,22,0.9)', borderLeft: `1px solid ${CY}20` } as React.CSSProperties,
+  historyRow: { background: 'rgba(0,14,22,0.7)', border: `1px solid ${CY}10` } as React.CSSProperties,
+  linkShot: { background: 'rgba(0,20,30,0.8)', border: `1px solid ${CY}18` } as React.CSSProperties,
+  yesInput: { background: 'rgba(0,10,18,0.9)', color: '#fff', border: `1px solid ${CY}20` } as React.CSSProperties,
 };
 
 // FO badge colors
 const FO_COLORS: Record<string, { bg: string; color: string }> = {
   FO: { bg: 'rgba(231,76,60,0.2)', color: '#e74c3c' },
   BO: { bg: 'rgba(243,156,18,0.2)', color: '#f39c12' },
-  FP: { bg: 'rgba(46,204,113,0.2)', color: '#2ecc71' },
+  FP: { bg: `rgba(0,229,255,0.15)`, color: CY },
 };
 
 // Phone strategy badge colors
 const STRATEGY_COLORS: Record<string, { bg: string; border: string; color: string; label: string }> = {
-  single:   { bg: 'rgba(46,204,113,0.15)',  border: '#2ecc71', color: '#2ecc71', label: 'SINGLE' },
+  single:   { bg: `rgba(0,229,255,0.12)`,  border: CY, color: CY, label: 'SINGLE' },
   dominant: { bg: 'rgba(243,156,18,0.15)',   border: '#f39c12', color: '#f39c12', label: 'DOMINANT' },
   even:     { bg: 'rgba(231,76,60,0.15)',    border: '#e74c3c', color: '#e74c3c', label: 'EVEN' },
 };
@@ -590,8 +594,8 @@ export default function DialerPage() {
     if (connecting || tabsLoading) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center" style={S.body}>
-          <Crosshair className="mb-4 animate-pulse" size={40} color="#2ecc71" />
-          <div className="text-sm font-bold tracking-widest uppercase" style={{ color: '#2ecc71', opacity: 0.6, letterSpacing: '4px' }}>
+          <Crosshair className="mb-4 animate-pulse" size={40} color="#00e5ff" />
+          <div className="text-sm font-bold tracking-widest uppercase" style={{ color: '#00e5ff', opacity: 0.6, letterSpacing: '4px' }}>
             {connecting ? 'CONNECTING TO GOOGLE SHEETS...' : 'LOADING CALLBOOKS...'}
           </div>
           <div className="text-xs mt-2" style={{ color: '#555' }}>
@@ -632,7 +636,7 @@ export default function DialerPage() {
           <button
             onClick={handleConnect}
             className="px-6 py-3 rounded font-bold text-sm tracking-wider uppercase"
-            style={{ background: '#1a2e1a', color: '#2ecc71', border: '1px solid rgba(46,204,113,0.3)' }}
+            style={{ background: 'rgba(0,20,30,0.8)', color: '#00e5ff', border: '1px solid rgba(0,229,255,0.20)' }}
           >
             Retry
           </button>
@@ -658,15 +662,15 @@ export default function DialerPage() {
             <div
               className="rounded-lg p-6 w-full max-w-sm"
               style={{
-                background: '#0f1a0f',
-                border: '1.5px solid rgba(46,204,113,0.4)',
-                boxShadow: '0 8px 40px rgba(0,0,0,0.8), 0 0 30px rgba(46,204,113,0.1)',
+                background: 'rgba(0,14,22,0.96)',
+                border: `1.5px solid rgba(0,229,255,0.3)`,
+                boxShadow: '0 8px 40px rgba(0,0,0,0.8), 0 0 30px rgba(0,229,255,0.10)',
               }}
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
               <div className="text-center mb-4">
-                <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: '3px', color: '#2ecc71', opacity: 0.5, textTransform: 'uppercase' }}>
+                <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: '3px', color: '#00e5ff', opacity: 0.5, textTransform: 'uppercase' }}>
                   MISSION PARAMETERS
                 </div>
                 <div className="text-base font-black tracking-wider uppercase mt-1" style={{ color: '#fff' }}>
@@ -676,7 +680,7 @@ export default function DialerPage() {
 
               {/* Direction */}
               <div className="mb-4">
-                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#2ecc71', opacity: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>
                   APPROACH VECTOR
                 </div>
                 <div className="flex gap-2">
@@ -692,7 +696,7 @@ export default function DialerPage() {
                       style={{
                         background: direction === dir ? bg : '#1a2e1a',
                         color: direction === dir ? '#fff' : '#666',
-                        border: direction === dir ? `1.5px solid ${bg}` : '1.5px solid rgba(46,204,113,0.15)',
+                        border: direction === dir ? `1.5px solid ${bg}` : '1.5px solid rgba(0,229,255,0.15)',
                         fontFamily: 'inherit',
                       }}
                     >
@@ -704,7 +708,7 @@ export default function DialerPage() {
 
               {/* Optional booking ID */}
               <div className="mb-5">
-                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#2ecc71', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
                   STARTING BOOKING ID <span style={{ opacity: 0.4 }}>(OPTIONAL)</span>
                 </div>
                 <input
@@ -755,7 +759,7 @@ export default function DialerPage() {
   if (!currentState) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center" style={S.body}>
-        <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} teamFeed={teamFeed} />
+        <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} teamFeed={teamFeed} autoFire={autoFire} onAutoFireChange={setAutoFire} />
         <BadgeToastContainer toasts={badgeToasts} />
         <PointToastContainer toasts={pointToasts} />
         {session && <AchievementsPanel session={session} open={achievementsOpen} onClose={() => setAchievementsOpen(false)} />}
@@ -769,7 +773,7 @@ export default function DialerPage() {
             <button
               onClick={() => { setMode('campaign-select'); invalidateCache(); }}
               className="mt-4 px-4 py-2 rounded text-xs font-bold tracking-wider uppercase"
-              style={{ background: '#1a2e1a', color: '#2ecc71', border: '1px solid rgba(46,204,113,0.3)' }}
+              style={{ background: 'rgba(0,20,30,0.8)', color: '#00e5ff', border: '1px solid rgba(0,229,255,0.20)' }}
             >
               Back to Campaign Select
             </button>
@@ -790,7 +794,7 @@ export default function DialerPage() {
 
   return (
     <div className="relative h-screen overflow-hidden" style={S.body}>
-      <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} teamFeed={teamFeed} />
+      <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} teamFeed={teamFeed} autoFire={autoFire} onAutoFireChange={setAutoFire} />
       <BadgeToastContainer toasts={badgeToasts} />
       <PointToastContainer toasts={pointToasts} />
       {session && <AchievementsPanel session={session} open={achievementsOpen} onClose={() => setAchievementsOpen(false)} />}
@@ -864,18 +868,18 @@ export default function DialerPage() {
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           {/* Top bar */}
           <div className="flex items-center justify-between px-2.5 py-1 flex-shrink-0" style={S.topBar}>
-            <span className="text-xs uppercase tracking-wider" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 9 }}>{cs.sheetName}</span>
-            <span className="text-xs font-bold tracking-wider" style={{ color: '#2ecc71', fontSize: 9 }}>{cs.currentGroupIndex} / {cs.totalGroups}</span>
+            <span className="text-xs uppercase tracking-wider" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 9 }}>{cs.sheetName}</span>
+            <span className="text-xs font-bold tracking-wider" style={{ color: '#00e5ff', fontSize: 9 }}>{cs.currentGroupIndex} / {cs.totalGroups}</span>
           </div>
 
           {/* Client header */}
           <div className="flex justify-between items-baseline gap-3 px-2.5 py-1.5 flex-shrink-0" style={S.clientHeader}>
             <div>
               <div className="text-base font-black tracking-wider uppercase text-white">{cl.firstName} {cl.lastName}</div>
-              {altNames.length > 0 && <div className="text-xs mt-0.5" style={{ color: '#8fbc8f', opacity: 0.7, fontWeight: 400 }}>aka {altNames.join(', ')}</div>}
-              {cl.routeCode && <div className="text-xs font-semibold tracking-wider" style={{ color: '#2ecc71', opacity: 0.4 }}>Route: {cl.routeCode}</div>}
+              {altNames.length > 0 && <div className="text-xs mt-0.5" style={{ color: '#80d0d0', opacity: 0.7, fontWeight: 400 }}>aka {altNames.join(', ')}</div>}
+              {cl.routeCode && <div className="text-xs font-semibold tracking-wider" style={{ color: '#00e5ff', opacity: 0.4 }}>Route: {cl.routeCode}</div>}
             </div>
-            <div className="text-base font-bold tracking-wider text-right" style={{ color: '#8fbc8f' }}>
+            <div className="text-base font-bold tracking-wider text-right" style={{ color: '#80d0d0' }}>
               {cl.houseNum} {cl.streetName}
             </div>
           </div>
@@ -912,7 +916,7 @@ export default function DialerPage() {
             {showYesPanel ? (
               /* ═══════════ YES BOOKING FORM ═══════════ */
               <div>
-                <div className="text-xs uppercase tracking-widest font-bold mb-2" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 9 }}>Booking Details</div>
+                <div className="text-xs uppercase tracking-widest font-bold mb-2" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 9 }}>Booking Details</div>
 
                 {/* Row 1: First Name + Last Name */}
                 <div className="flex gap-2 mb-1.5">
@@ -948,18 +952,18 @@ export default function DialerPage() {
                 <div className="flex items-end gap-4 mb-1.5">
                   <div className="flex items-center gap-3">
                     <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: '#ccc' }}>
-                      <input type="checkbox" checked={yGate} onChange={(e) => setYGate(e.target.checked)} style={{ accentColor: '#2ecc71', width: 14, height: 14 }} /> Gate
+                      <input type="checkbox" checked={yGate} onChange={(e) => setYGate(e.target.checked)} style={{ accentColor: '#00e5ff', width: 14, height: 14 }} /> Gate
                     </label>
                     <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: '#ccc' }}>
-                      <input type="checkbox" checked={ySprink} onChange={(e) => setYSprink(e.target.checked)} style={{ accentColor: '#2ecc71', width: 14, height: 14 }} /> Sprinkler
+                      <input type="checkbox" checked={ySprink} onChange={(e) => setYSprink(e.target.checked)} style={{ accentColor: '#00e5ff', width: 14, height: 14 }} /> Sprinkler
                     </label>
                   </div>
                   <div>
-                    <div className="text-xs uppercase tracking-wider font-semibold mb-0.5" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 8, letterSpacing: '1px' }}>FO / BO / FP</div>
+                    <div className="text-xs uppercase tracking-wider font-semibold mb-0.5" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 8, letterSpacing: '1px' }}>FO / BO / FP</div>
                     <div className="flex gap-3">
                       {(['FO', 'BO', 'FP'] as const).map(val => (
                         <label key={val} className="flex items-center gap-1 cursor-pointer">
-                          <input type="radio" name="foRadio" checked={yFO === val} onChange={() => setYFO(val)} style={{ accentColor: '#2ecc71', width: 14, height: 14 }} />
+                          <input type="radio" name="foRadio" checked={yFO === val} onChange={() => setYFO(val)} style={{ accentColor: '#00e5ff', width: 14, height: 14 }} />
                           <span className="text-xs font-bold" style={{ color: FO_COLORS[val].color }}>{val}</span>
                         </label>
                       ))}
@@ -1000,13 +1004,13 @@ export default function DialerPage() {
             ) : (
               /* ═══════════ SERVICE HISTORY + AER ═══════════ */
               <>
-                <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 9 }}>Service History</div>
+                <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 9 }}>Service History</div>
                 {cs.serviceHistory.map((h, i) => {
                   const foC = FO_COLORS[h.fo] || FO_COLORS.FP;
                   return (
                     <div key={i} className="flex items-center gap-1.5 px-1.5 py-1 rounded mb-1 text-xs" style={S.historyRow}>
                       <span className="font-black text-white" style={{ minWidth: 36 }}>{h.year}</span>
-                      <span className="font-bold" style={{ color: '#2ecc71', minWidth: 50 }}>{h.price || '-'}</span>
+                      <span className="font-bold" style={{ color: '#00e5ff', minWidth: 50 }}>{h.price || '-'}</span>
                       <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap" style={{ color: '#888' }}>{h.contractor}</span>
                       <span className="font-bold rounded px-1.5 py-0.5" style={{ background: foC.bg, color: foC.color, fontSize: 9 }}>{h.fo || 'FP'}</span>
                       {h.pmtType && <span style={{ color: '#555', fontSize: 9 }}>{h.pmtType}</span>}
@@ -1017,12 +1021,12 @@ export default function DialerPage() {
                 {/* Nearby AER */}
                 {cs.nearbyAER.length > 0 && (
                   <div className="mt-1 p-2 rounded" style={S.linkShot}>
-                    <div className="text-xs uppercase tracking-widest font-bold mb-0.5" style={{ color: '#2ecc71', fontSize: 9 }}>
+                    <div className="text-xs uppercase tracking-widest font-bold mb-0.5" style={{ color: '#00e5ff', fontSize: 9 }}>
                       🔗 Nearby AER ({cs.nearbyAER.length})
                     </div>
                     {cs.nearbyAER.slice(0, 10).map((a, i) => (
                       <div key={i} className="text-xs mb-0.5" style={{ color: '#aaa' }}>
-                        <span className="font-bold" style={{ color: '#2ecc71' }}>{a.house}</span> {a.name}
+                        <span className="font-bold" style={{ color: '#00e5ff' }}>{a.house}</span> {a.name}
                       </div>
                     ))}
                     {cs.nearbyAER.length > 10 && <div className="text-xs" style={{ color: '#555' }}>+{cs.nearbyAER.length - 10} more</div>}
@@ -1036,7 +1040,7 @@ export default function DialerPage() {
         {/* RIGHT: Side panel — disposition buttons always visible */}
         <div className="flex flex-col overflow-hidden" style={{ ...S.sidePanel, width: 210, minWidth: 210 }}>
           <div className="p-2 flex-shrink-0">
-            <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 8 }}>Disposition</div>
+            <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 8 }}>Disposition</div>
             <DispButton label="📞 NA" onClick={() => doDisp('NA')} style={{ background: '#333', color: '#e67e22', border: '1px solid #555' }} />
             <DispButton label="🌱 CTS" onClick={() => doDisp('CTS')} style={{ background: '#333', color: '#27ae60', border: '1px solid #555' }} />
             <DispButton label="🚫 WN / NIS" onClick={() => doDisp('WN/NIS')} style={{ background: '#333', color: '#9b59b6', border: '1px solid #555' }} />
@@ -1046,24 +1050,15 @@ export default function DialerPage() {
               label={showYesPanel ? "✔ YES ●" : "✔ YES"}
               onClick={() => setShowYesPanel(true)}
               style={{
-                background: showYesPanel ? '#1a6b3a' : 'linear-gradient(135deg, #27ae60, #2ecc71)',
+                background: showYesPanel ? 'rgba(0,60,80,0.5)' : 'linear-gradient(135deg, #27ae60, #2ecc71)',
                 color: '#fff',
-                border: showYesPanel ? '2px solid #2ecc71' : 'none',
+                border: showYesPanel ? '2px solid #00e5ff' : 'none',
               }}
             />
           </div>
 
-          {/* Auto-fire + log */}
-          <div className="mt-auto flex items-center gap-2 px-2 py-1 flex-shrink-0" style={{ borderTop: '1px solid rgba(46,204,113,0.12)' }}>
-            <span className="text-xs uppercase tracking-wider font-semibold whitespace-nowrap" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 8 }}>Auto-Fire</span>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input type="checkbox" checked={autoFire} onChange={(e) => setAutoFire(e.target.checked)} className="sr-only" />
-              <div className={`w-9 h-5 rounded-full transition-colors ${autoFire ? 'bg-red-700' : 'bg-gray-600'}`}>
-                <div className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full transition-transform ${autoFire ? 'translate-x-4 bg-white' : 'bg-gray-300'}`} />
-              </div>
-            </label>
-          </div>
-          <div className="text-center px-2 py-0.5 flex-shrink-0 text-xs" style={{ color: '#2ecc71', opacity: 0.5, letterSpacing: '1px', fontSize: 8, borderTop: '1px solid rgba(46,204,113,0.1)', minHeight: 14 }}>
+          {/* Log message */}
+          <div className="mt-auto text-center px-2 py-1 flex-shrink-0 text-xs" style={{ color: '#00e5ff', opacity: 0.4, letterSpacing: '1px', fontSize: 8, borderTop: '1px solid rgba(0,229,255,0.10)', minHeight: 14 }}>
             {logMessage}
           </div>
         </div>
@@ -1091,13 +1086,13 @@ function DispButton({ label, onClick, style }: { label: string; onClick: () => v
 function YesField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
     <div className="mb-1">
-      <div className="text-xs uppercase tracking-wider font-semibold mb-0.5" style={{ color: '#2ecc71', opacity: 0.5, fontSize: 8, letterSpacing: '1px' }}>{label}</div>
+      <div className="text-xs uppercase tracking-wider font-semibold mb-0.5" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 8, letterSpacing: '1px' }}>{label}</div>
       <input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="w-full px-1.5 py-1 rounded text-xs"
-        style={{ background: '#0d170d', color: '#fff', border: '1px solid rgba(46,204,113,0.2)', fontSize: 10 }}
+        style={{ background: 'rgba(0,10,18,0.9)', color: '#fff', border: '1px solid rgba(0,229,255,0.15)', fontSize: 10 }}
       />
     </div>
   );

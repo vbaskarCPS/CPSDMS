@@ -33,9 +33,11 @@ interface HUDProps {
   multipliersReceivedAt: number;
   rank: Rank | null;
   onMenuAction?: (action: HUDMenuAction) => void;
-  onTrophyClick: () => void;  // kept for backwards compat — wired to achievements
+  onTrophyClick: () => void;
   onPointsClick?: () => void;
   teamFeed?: TeamBookingEvent[];
+  autoFire?: boolean;
+  onAutoFireChange?: (v: boolean) => void;
 }
 
 // =============================================================================
@@ -685,6 +687,8 @@ export default function DialerHUD({
   onTrophyClick,
   onPointsClick,
   teamFeed,
+  autoFire,
+  onAutoFireChange,
 }: HUDProps) {
   const s = session;
   const [pointsFlash, setPointsFlash] = useState(false);
@@ -749,13 +753,47 @@ export default function DialerHUD({
             padding: '8px 14px 12px',
           }}
         >
-          {/* Row 1: M82 + total mult + menu */}
+          {/* Row 1: Auto-fire toggle + total mult + menu */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ padding: '2px 10px', borderRadius: 16, border: `1px solid ${CY}40`, background: `${CY}08` }}>
-                <span style={{ fontSize: 11, fontWeight: 900, color: CY, letterSpacing: '3px', fontFamily: 'monospace' }}>M82</span>
-              </div>
-              <span style={{ fontSize: 8, color: CY, opacity: 0.25, fontWeight: 600, letterSpacing: '2px' }}>AUTOSNIPER</span>
+              {/* Auto-fire toggle */}
+              <label
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '2px 10px', borderRadius: 16,
+                  border: `1px solid ${autoFire ? '#ff4444' : CY}40`,
+                  background: autoFire ? 'rgba(255,40,40,0.12)' : `${CY}08`,
+                  cursor: 'pointer',
+                  transition: 'all 0.25s ease',
+                }}
+              >
+                <span style={{
+                  fontSize: 8, fontWeight: 800, letterSpacing: '2px', fontFamily: 'monospace',
+                  color: autoFire ? '#ff6666' : CY,
+                  opacity: autoFire ? 1 : 0.5,
+                }}>
+                  AUTO-FIRE
+                </span>
+                <div style={{
+                  position: 'relative', width: 28, height: 14, borderRadius: 7,
+                  background: autoFire ? '#cc2222' : 'rgba(255,255,255,0.1)',
+                  transition: 'background 0.25s ease',
+                }}>
+                  <div style={{
+                    position: 'absolute', top: 2, width: 10, height: 10, borderRadius: '50%',
+                    background: autoFire ? '#fff' : '#666',
+                    left: autoFire ? 16 : 2,
+                    transition: 'left 0.2s ease, background 0.2s ease',
+                    boxShadow: autoFire ? '0 0 6px rgba(255,40,40,0.6)' : 'none',
+                  }} />
+                </div>
+                <input
+                  type="checkbox"
+                  checked={autoFire ?? false}
+                  onChange={(e) => onAutoFireChange?.(e.target.checked)}
+                  style={{ display: 'none' }}
+                />
+              </label>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {activeMultipliers.length > 0 && (
