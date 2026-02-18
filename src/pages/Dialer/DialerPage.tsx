@@ -89,6 +89,21 @@ const STRATEGY_COLORS: Record<string, { bg: string; border: string; color: strin
 };
 
 // =============================================================================
+// HOTKEY CONFIG
+// =============================================================================
+
+type HotkeyTarget = 'NA' | 'CTS' | 'WN/NIS' | 'NO' | 'REMOVE' | 'YES';
+
+const HOTKEY_MAP: Record<string, HotkeyTarget> = {
+  z: 'NA',
+  x: 'CTS',
+  c: 'WN/NIS',
+  v: 'NO',
+  b: 'REMOVE',
+  a: 'YES',
+};
+
+// =============================================================================
 // HELPERS — convert spreadsheet tabs into CampaignSelect-compatible cards
 // =============================================================================
 
@@ -176,6 +191,10 @@ export default function DialerPage() {
   const [cardModalOpen, setCardModalOpen] = useState(false);
   const [achievementsOpen, setAchievementsOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
+
+  // --- Hotkey flash state ---
+  const [flashingKey, setFlashingKey] = useState<HotkeyTarget | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // --- YES form fields ---
   const [yName, setYName] = useState('');
@@ -356,6 +375,77 @@ export default function DialerPage() {
     }
     prevOwnMultipliersRef.current = multipliers;
   }, [multipliers, manager?.name, manager?.repCode]);
+
+  // =======================================================================
+  // HOTKEYS
+  // =======================================================================
+
+  const triggerFlash = useCallback((target: HotkeyTarget) => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setFlashingKey(target);
+    flashTimerRef.current = setTimeout(() => {
+      setFlashingKey(null);
+      flashTimerRef.current = null;
+    }, 300);
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only fire in active dialer mode with a current state
+      if (mode !== 'dialer' || !currentState) return;
+
+      // Suppress if any modal/panel is open
+      if (
+        showYesPanel ||
+        cardModalOpen ||
+        achievementsOpen ||
+        statsOpen ||
+        sniperSettingsOpen ||
+        showDeployConfig
+      ) return;
+
+      // Suppress if focus is inside an input/textarea/select
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+      // Suppress modifier combos (ctrl+z undo etc.)
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const key = e.key.toLowerCase();
+      const target = HOTKEY_MAP[key];
+      if (!target) return;
+
+      e.preventDefault();
+      triggerFlash(target);
+
+      if (target === 'YES') {
+        setShowYesPanel(true);
+      } else {
+        doDisp(target as DispositionType);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    mode,
+    currentState,
+    showYesPanel,
+    cardModalOpen,
+    achievementsOpen,
+    statsOpen,
+    sniperSettingsOpen,
+    showDeployConfig,
+    triggerFlash,
+    // doDisp is defined below — we include it via the ref pattern
+  ]);
+
+  // Cleanup flash timer on unmount
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    };
+  }, []);
 
   // =======================================================================
   // CONNECT TO SHEETS
@@ -1354,14 +1444,16 @@ export default function DialerPage() {
           {/* Disposition buttons */}
           <div className="p-2 flex-shrink-0">
             <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 8 }}>Disposition</div>
-            <DispButton label="📞 NA" onClick={() => doDisp('NA')} style={{ background: '#333', color: '#e67e22', border: '1px solid #555' }} />
-            <DispButton label="🌱 CTS" onClick={() => doDisp('CTS')} style={{ background: '#333', color: '#27ae60', border: '1px solid #555' }} />
-            <DispButton label="🚫 WN / NIS" onClick={() => doDisp('WN/NIS')} style={{ background: '#333', color: '#9b59b6', border: '1px solid #555' }} />
-            <DispButton label="✖ NO" onClick={() => doDisp('NO')} style={{ background: '#333', color: '#e74c3c', border: '1px solid #555' }} />
-            <DispButton label="🗑 REMOVE" onClick={() => doDisp('REMOVE')} style={{ background: '#333', color: '#95a5a6', border: '1px solid #555' }} />
+            <DispButton label="📞 NA [Z]"     onClick={() => doDisp('NA')}     flashing={flashingKey === 'NA'}     flashColor="#e67e22" style={{ background: '#333', color: '#e67e22', border: '1px solid #555' }} />
+            <DispButton label="🌱 CTS [X]"    onClick={() => doDisp('CTS')}    flashing={flashingKey === 'CTS'}    flashColor="#27ae60" style={{ background: '#333', color: '#27ae60', border: '1px solid #555' }} />
+            <DispButton label="🚫 WN/NIS [C]" onClick={() => doDisp('WN/NIS')} flashing={flashingKey === 'WN/NIS'} flashColor="#9b59b6" style={{ background: '#333', color: '#9b59b6', border: '1px solid #555' }} />
+            <DispButton label="✖ NO [V]"      onClick={() => doDisp('NO')}     flashing={flashingKey === 'NO'}     flashColor="#e74c3c" style={{ background: '#333', color: '#e74c3c', border: '1px solid #555' }} />
+            <DispButton label="🗑 REMOVE [B]"  onClick={() => doDisp('REMOVE')} flashing={flashingKey === 'REMOVE'} flashColor="#95a5a6" style={{ background: '#333', color: '#95a5a6', border: '1px solid #555' }} />
             <DispButton
-              label={showYesPanel ? "✔ YES ●" : "✔ YES"}
+              label={showYesPanel ? "✔ YES [A] ●" : "✔ YES [A]"}
               onClick={() => setShowYesPanel(true)}
+              flashing={flashingKey === 'YES'}
+              flashColor="#2ecc71"
               style={{
                 background: showYesPanel ? 'rgba(0,60,80,0.5)' : 'linear-gradient(135deg, #27ae60, #2ecc71)',
                 color: '#fff',
@@ -1397,12 +1489,57 @@ export default function DialerPage() {
 // SUB-COMPONENTS
 // =============================================================================
 
-function DispButton({ label, onClick, style }: { label: string; onClick: () => void; style: React.CSSProperties }) {
+// Keyframe for the border glow pulse — injected once
+const DISP_FLASH_STYLES = `
+  @keyframes disp-flash-glow {
+    0%   { box-shadow: 0 0 0px var(--flash-color-transparent); border-color: var(--flash-color-mid); }
+    40%  { box-shadow: 0 0 10px var(--flash-color-full), 0 0 20px var(--flash-color-mid); border-color: var(--flash-color-full); }
+    100% { box-shadow: 0 0 0px var(--flash-color-transparent); border-color: var(--flash-color-mid); }
+  }
+`;
+
+let dispStylesInjected = false;
+
+function DispButton({
+  label,
+  onClick,
+  style,
+  flashing = false,
+  flashColor = '#00e5ff',
+}: {
+  label: string;
+  onClick: () => void;
+  style: React.CSSProperties;
+  flashing?: boolean;
+  flashColor?: string;
+}) {
+  // Inject keyframes once
+  if (!dispStylesInjected && typeof document !== 'undefined') {
+    const tag = document.createElement('style');
+    tag.textContent = DISP_FLASH_STYLES;
+    document.head.appendChild(tag);
+    dispStylesInjected = true;
+  }
+
+  // Derive semi-transparent variants from the flash color
+  const flashFull = flashColor + 'cc';  // ~80% opacity
+  const flashMid  = flashColor + '80';  // ~50% opacity
+  const flashNone = flashColor + '00';  // 0% opacity
+
   return (
     <button
       onClick={onClick}
       className="w-full py-1.5 text-xs font-bold tracking-widest uppercase rounded mb-1 cursor-pointer transition-all"
-      style={{ ...style, letterSpacing: '2px', fontSize: 10 }}
+      style={{
+        ...style,
+        letterSpacing: '2px',
+        fontSize: 10,
+        // CSS custom properties for the animation
+        ['--flash-color-full' as any]: flashFull,
+        ['--flash-color-mid' as any]: flashMid,
+        ['--flash-color-transparent' as any]: flashNone,
+        animation: flashing ? 'disp-flash-glow 0.3s ease-out forwards' : undefined,
+      }}
     >
       {label}
     </button>
