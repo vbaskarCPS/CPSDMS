@@ -386,7 +386,7 @@ export default function DialerPage() {
                 card.id === tabName
                   ? {
                       ...card,
-                      totalRows:    stats.groups,    // "ROWS" on the card = number of groups
+                      totalRows:    stats.totalRows,
                       bookings:     stats.bookings,
                       reachedPct:   stats.reachedPct,
                       avgAttempts:  stats.avgAttempts,

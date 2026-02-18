@@ -484,21 +484,20 @@ class DialerSheetsService {
       }
     }
 
-    // ── Aggregate stats ──
+    // Aggregate stats
     const totalGroups = routeGroups.size;
     let bookingGroups = 0;
-    let reachedGroups = 0;
+    let reachedRows = 0;  // individual rows with a disposition
     const unreachedNAs: number[] = [];
 
     for (const rows of routeGroups.values()) {
-      // Bookings: any row in the group has a value in AER
       if (rows.some(r => CI.AER >= 0 && hasAER(r[CI.AER]))) bookingGroups++;
 
-      // Reached: any row has a final disposition
-      if (rows.some(r => isDisposed(r))) {
-        reachedGroups++;
-      } else {
-        // Avg attempts = max NA across the group (all rows share the same NA counter)
+      const groupReached = rows.filter(r => isDisposed(r)).length;
+      reachedRows += groupReached;
+
+      // Avg attempts: only for groups where no row has been disposed yet
+      if (groupReached === 0) {
         unreachedNAs.push(rows.reduce((mx, r) => Math.max(mx, getNA(r)), 0));
       }
     }
@@ -507,7 +506,7 @@ class DialerSheetsService {
       totalRows,
       groups: totalGroups,
       bookings: bookingGroups,
-      reachedPct: totalGroups > 0 ? Math.round((reachedGroups / totalGroups) * 100) : 0,
+      reachedPct: totalRows > 0 ? Math.round((reachedRows / totalRows) * 100) : 0,
       avgAttempts: unreachedNAs.length > 0
         ? Math.round((unreachedNAs.reduce((s, n) => s + n, 0) / unreachedNAs.length) * 10) / 10
         : 0,
