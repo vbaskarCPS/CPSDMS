@@ -260,7 +260,7 @@ export default function DialerPage() {
     const unsubscribe = dialerRealtimeService.subscribeToTeamFeed(
       campaign.id,
       manager.id,
-      (event) => {
+      async (event) => {
         // Feed HUD corner toasts
         setTeamFeed(prev => [...prev, event]);
 
