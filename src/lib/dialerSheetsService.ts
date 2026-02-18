@@ -9,7 +9,6 @@
 // We track token age and silently refresh when within 5 minutes of expiry.
 // Every API method calls ensureFreshToken() before making requests.
 //
-import { googleSheetsService } from './googleSheetsService';
 import { GOOGLE_OAUTH_CONFIG } from './googleSheetsConfig';
 
 /** Refresh the token 5 minutes before it expires */
@@ -110,8 +109,6 @@ class DialerSheetsService {
 
   /**
    * Silently refresh the token without showing a popup.
-   * Uses prompt: '' which works because the user already granted consent.
-   * Deduplicates concurrent calls so only one refresh runs at a time.
    */
   private async silentRefresh(): Promise<boolean> {
     if (this.refreshPromise) return this.refreshPromise;
@@ -138,8 +135,6 @@ class DialerSheetsService {
 
   /**
    * Ensure we have a fresh token before making an API call.
-   * Replaces the old synchronous requireAuth() — now async so it can
-   * silently refresh an expiring token before returning it.
    */
   private async ensureFreshToken(): Promise<string> {
     if (!this.accessToken) {
@@ -158,7 +153,6 @@ class DialerSheetsService {
 
   /**
    * Trigger OAuth flow. Returns true if successful.
-   * If the user has already granted access, this will silently refresh.
    */
   public async authenticate(): Promise<boolean> {
     await this.initGapi();
@@ -197,7 +191,6 @@ class DialerSheetsService {
 
   /**
    * GET values from a range in any spreadsheet.
-   * Returns a 2D array of cell values (rows × cols). Empty ranges return [].
    */
   public async sheetsGet(spreadsheetId: string, range: string): Promise<any[][]> {
     const token = await this.ensureFreshToken();
@@ -296,23 +289,9 @@ class DialerSheetsService {
     }
   }
 
-  // --- FORMATTING (spreadsheets.batchUpdate) ---
-
   /**
    * Send a batch of formatting requests to a spreadsheet.
    * Uses the spreadsheets.batchUpdate endpoint (NOT values:batchUpdate).
-   * This is used for cell background color changes (highlighting).
-   *
-   * Each request in the array should be a Sheets API request object, e.g.:
-   * {
-   *   repeatCell: {
-   *     range: { sheetId, startRowIndex, endRowIndex, startColumnIndex, endColumnIndex },
-   *     cell: { userEnteredFormat: { backgroundColor: { red, green, blue } } },
-   *     fields: 'userEnteredFormat.backgroundColor'
-   *   }
-   * }
-   *
-   * @see https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets/request
    */
   public async sheetsFormatBatch(
     spreadsheetId: string,
@@ -344,7 +323,6 @@ class DialerSheetsService {
 
   /**
    * Fetch all sheet/tab names from a spreadsheet.
-   * Returns an array of { sheetId, title } objects.
    */
   public async getSheetTabs(
     spreadsheetId: string
@@ -373,8 +351,7 @@ class DialerSheetsService {
   }
 
   /**
-   * Fetch tab names filtered for the dialer — excludes CCD and Managers tabs.
-   * Returns just the title strings for callbook tabs.
+   * Fetch callbook tab names — excludes CCD and Managers tabs.
    */
   public async getCallbookTabs(spreadsheetId: string): Promise<string[]> {
     const allTabs = await this.getSheetTabs(spreadsheetId);
@@ -382,6 +359,160 @@ class DialerSheetsService {
     return allTabs
       .map((t) => t.title)
       .filter((name) => !excludeNames.has(name.toLowerCase()));
+  }
+
+  // --- CAMPAIGN STATS ---
+
+  /**
+   * Compute real stats for a single callbook tab for the campaign select screen.
+   *
+   * totalRows    — data rows that have both a valid 10-digit phone AND a route code
+   * groups       — unique route-code clusters (the engine's natural grouping unit)
+   * bookings     — groups where ≥1 row has a value in the AER column
+   * reachedPct   — % of groups where ≥1 row has YES / NO / WN/NIS / REMOVE
+   * avgAttempts  — unreached groups only: average of (max NA value across group rows)
+   * lastUsed     — most recent DATE.1 value found in the tab, as ISO string, or null
+   *
+   * All column positions are resolved by header name (same variants as dialerHeaders.ts)
+   * so this works regardless of column order.
+   */
+  public async computeTabStats(
+    spreadsheetId: string,
+    tabName: string
+  ): Promise<{
+    totalRows: number;
+    groups: number;
+    bookings: number;
+    reachedPct: number;
+    avgAttempts: number;
+    lastUsed: string | null;
+  }> {
+    const EMPTY = { totalRows: 0, groups: 0, bookings: 0, reachedPct: 0, avgAttempts: 0, lastUsed: null };
+
+    let raw: any[][];
+    try {
+      raw = await this.sheetsGet(spreadsheetId, `'${tabName}'`);
+    } catch {
+      return EMPTY;
+    }
+    if (!raw || raw.length < 2) return EMPTY;
+
+    // Find header row: scan first 5 rows, stop when PHONE column is found
+    let headerIdx = 0;
+    for (let r = 0; r < Math.min(5, raw.length); r++) {
+      if (raw[r].some((h: any) => String(h ?? '').trim().toUpperCase() === 'PHONE')) {
+        headerIdx = r;
+        break;
+      }
+    }
+    const hdr = raw[headerIdx];
+
+    // Resolve column index by trying multiple name variants
+    const colIdx = (names: string[]): number => {
+      for (const n of names) {
+        const i = hdr.findIndex((h: any) => String(h ?? '').trim().toUpperCase() === n.toUpperCase());
+        if (i >= 0) return i;
+      }
+      return -1;
+    };
+
+    const CI = {
+      PHONE:      colIdx(['PHONE']),
+      ROUTE_CODE: colIdx(['ROUTE CODE', 'ROUTE_CODE', 'ROUTECODE']),
+      NA:         colIdx(['NA', '#NA', 'NA COUNT']),
+      WN:         colIdx(['WN/NIS', 'WN', 'VN/N', 'VN']),
+      NO:         colIdx(['NO']),
+      REMOVE:     colIdx(['REMOVE', 'EMOV']),
+      YES:        colIdx(['YES']),
+      AER:        colIdx(['AER']),
+      DATE1:      colIdx(['DATE.1', 'DATE1', 'DATE 1']),
+    };
+
+    // ── Helpers ──
+
+    const normalizePhone = (v: any): string => {
+      let s = String(v ?? '').trim();
+      if (s.endsWith('.0')) s = s.slice(0, -2);
+      const d = s.replace(/\D/g, '');
+      const t = d.length > 10 ? d.slice(-10) : d;
+      return t.length === 10 ? t : '';
+    };
+
+    const hasValue = (v: any): boolean =>
+      v !== null && v !== undefined && String(v).trim() !== '';
+
+    const hasAER = (v: any): boolean => {
+      const s = String(v ?? '').trim().toUpperCase();
+      return s === 'X' || s === 'AER' || s === 'YES' || s === 'Y';
+    };
+
+    // A group is "reached" if any of its rows has YES / NO / WN / REMOVE
+    const isDisposed = (row: any[]): boolean =>
+      [CI.YES, CI.NO, CI.WN, CI.REMOVE].some(c => c >= 0 && hasValue(row[c]));
+
+    // NA column may contain numbers or "CTS" — only parse numbers
+    const getNA = (row: any[]): number => {
+      if (CI.NA < 0) return 0;
+      const v = parseInt(String(row[CI.NA] ?? '0'), 10);
+      return isNaN(v) ? 0 : Math.max(0, v);
+    };
+
+    // ── Build route-code groups from data rows ──
+    const routeGroups = new Map<string, any[][]>();
+    let totalRows = 0;
+    let latestDate: Date | null = null;
+
+    for (const row of raw.slice(headerIdx + 1)) {
+      // Skip rows without a Booking ID (col 0) — these are truly empty rows
+      if (!row[0]) continue;
+      // Skip rows without a valid 10-digit phone (engine ignores these too)
+      if (CI.PHONE >= 0 && !normalizePhone(row[CI.PHONE])) continue;
+      // Skip rows without a route code (can't assign to a group)
+      const route = CI.ROUTE_CODE >= 0 ? String(row[CI.ROUTE_CODE] ?? '').trim() : '';
+      if (!route) continue;
+
+      totalRows++;
+      if (!routeGroups.has(route)) routeGroups.set(route, []);
+      routeGroups.get(route)!.push(row);
+
+      // Track most recent DATE.1 for the "last used" indicator
+      if (CI.DATE1 >= 0 && hasValue(row[CI.DATE1])) {
+        try {
+          const d = new Date(row[CI.DATE1]);
+          if (!isNaN(d.getTime()) && (!latestDate || d > latestDate)) latestDate = d;
+        } catch { /* skip unparseable dates */ }
+      }
+    }
+
+    // ── Aggregate stats ──
+    const totalGroups = routeGroups.size;
+    let bookingGroups = 0;
+    let reachedGroups = 0;
+    const unreachedNAs: number[] = [];
+
+    for (const rows of routeGroups.values()) {
+      // Bookings: any row in the group has a value in AER
+      if (rows.some(r => CI.AER >= 0 && hasAER(r[CI.AER]))) bookingGroups++;
+
+      // Reached: any row has a final disposition
+      if (rows.some(r => isDisposed(r))) {
+        reachedGroups++;
+      } else {
+        // Avg attempts = max NA across the group (all rows share the same NA counter)
+        unreachedNAs.push(rows.reduce((mx, r) => Math.max(mx, getNA(r)), 0));
+      }
+    }
+
+    return {
+      totalRows,
+      groups: totalGroups,
+      bookings: bookingGroups,
+      reachedPct: totalGroups > 0 ? Math.round((reachedGroups / totalGroups) * 100) : 0,
+      avgAttempts: unreachedNAs.length > 0
+        ? Math.round((unreachedNAs.reduce((s, n) => s + n, 0) / unreachedNAs.length) * 10) / 10
+        : 0,
+      lastUsed: latestDate ? latestDate.toISOString() : null,
+    };
   }
 }
 

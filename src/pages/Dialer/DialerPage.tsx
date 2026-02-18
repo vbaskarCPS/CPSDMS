@@ -91,32 +91,38 @@ const STRATEGY_COLORS: Record<string, { bg: string; border: string; color: strin
 // HELPERS — convert spreadsheet tabs into CampaignSelect-compatible cards
 // =============================================================================
 
-function tabsToCampaignCards(tabs: string[], campaignName: string): CampaignCard[] {
-  const CODENAMES = [
-    'OP IRON GATE', 'OP THUNDER RUN', 'OP NIGHTHAWK', 'OP SILENT HILL',
-    'OP STEEL RAIN', 'OP GREEN ZONE', 'OP HARVEST', 'OP BLACKOUT',
-    'OP CROSSFIRE', 'OP VANGUARD', 'OP FIRESTORM', 'OP SENTINEL',
-    'OP PHANTOM', 'OP WARPATH', 'OP OVERWATCH', 'OP ECLIPSE',
-    'OP DEADSHOT', 'OP FROSTBITE', 'OP SHOCKWAVE', 'OP MIDNIGHT',
-  ];
-  const TERRAINS: Array<'residential' | 'commercial' | 'industrial' | 'mixed' | 'rural'> = [
-    'residential', 'commercial', 'industrial', 'mixed', 'rural',
-  ];
+// Codenames and terrains assigned deterministically from tab name hash —
+// purely cosmetic, not stats-related.
+const CODENAMES = [
+  'OP IRON GATE', 'OP THUNDER RUN', 'OP NIGHTHAWK', 'OP SILENT HILL',
+  'OP STEEL RAIN', 'OP GREEN ZONE', 'OP HARVEST', 'OP BLACKOUT',
+  'OP CROSSFIRE', 'OP VANGUARD', 'OP FIRESTORM', 'OP SENTINEL',
+  'OP PHANTOM', 'OP WARPATH', 'OP OVERWATCH', 'OP ECLIPSE',
+  'OP DEADSHOT', 'OP FROSTBITE', 'OP SHOCKWAVE', 'OP MIDNIGHT',
+];
+const TERRAINS: Array<'residential' | 'commercial' | 'industrial' | 'mixed' | 'rural'> = [
+  'residential', 'commercial', 'industrial', 'mixed', 'rural',
+];
 
+function tabNameHash(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+/** Build placeholder cards instantly — stats shown as 0 until real data loads */
+function tabsToPlaceholderCards(tabs: string[], campaignName: string): CampaignCard[] {
   return tabs.map((tabName, idx) => {
-    let h = 0;
-    for (let i = 0; i < tabName.length; i++) h = ((h << 5) - h + tabName.charCodeAt(i)) | 0;
-    const a = Math.abs(h);
-
+    const a = tabNameHash(tabName);
     return {
       id: tabName,
       name: tabName,
       codename: CODENAMES[a % CODENAMES.length],
       description: `Callbook tab "${tabName}" from ${campaignName}. Deploy here to start dialing this section.`,
-      totalRows: 400 + (a % 2400),
-      bookings: 10 + (a % 80),
-      reachedPct: 15 + (a % 60),
-      avgAttempts: 1 + (a % 4),
+      totalRows: 0,
+      bookings: 0,
+      reachedPct: 0,
+      avgAttempts: 0,
       zone: ['North', 'South', 'East', 'West', 'Central', 'Downtown'][(a >> 4) % 6],
       terrain: TERRAINS[(a >> 2) % TERRAINS.length],
       hot: idx === 0,
@@ -366,10 +372,35 @@ export default function DialerPage() {
         try {
           const callbookTabs = await dialerSheetsService.getCallbookTabs(campaign.spreadsheetId);
           setTabs(callbookTabs);
-          setCampaignCards(tabsToCampaignCards(callbookTabs, campaign.displayName || 'Campaign'));
+
+          // Show placeholder cards immediately so the UI isn't empty
+          const placeholders = tabsToPlaceholderCards(callbookTabs, campaign.displayName || 'Campaign');
+          setCampaignCards(placeholders);
+          setTabsLoading(false);
+
+          // Fetch real stats for all tabs in parallel, patch cards as each resolves
+          callbookTabs.forEach(async (tabName) => {
+            try {
+              const stats = await dialerSheetsService.computeTabStats(campaign.spreadsheetId, tabName);
+              setCampaignCards(prev => prev.map(card =>
+                card.id === tabName
+                  ? {
+                      ...card,
+                      totalRows:    stats.groups,    // "ROWS" on the card = number of groups
+                      bookings:     stats.bookings,
+                      reachedPct:   stats.reachedPct,
+                      avgAttempts:  stats.avgAttempts,
+                      lastDeployed: stats.lastUsed ?? undefined,
+                    }
+                  : card
+              ));
+            } catch {
+              // Non-critical: if one tab fails, leave its placeholder values
+            }
+          });
+
         } catch (err: any) {
           setTabsError(err.message || 'Failed to load tabs');
-        } finally {
           setTabsLoading(false);
         }
       }
