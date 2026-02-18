@@ -44,6 +44,7 @@ import type { Rank, StagedCard } from '../../lib/dialer';
 import DialerHUD from './DialerHUD';
 import type { TeamBookingEvent, HUDMenuAction, MultiplierActivationEvent } from './DialerHUD';
 import AchievementsPanel from './AchievementsPanel';
+import StatsPanel from './StatsPanel';
 import { useToasts, BadgeToastContainer, PointToastContainer } from './DialerToasts';
 import CampaignSelect from './CampaignSelect';
 import type { Campaign as CampaignCard } from './CampaignSelect';
@@ -91,8 +92,6 @@ const STRATEGY_COLORS: Record<string, { bg: string; border: string; color: strin
 // HELPERS — convert spreadsheet tabs into CampaignSelect-compatible cards
 // =============================================================================
 
-// Codenames and terrains assigned deterministically from tab name hash —
-// purely cosmetic, not stats-related.
 const CODENAMES = [
   'OP IRON GATE', 'OP THUNDER RUN', 'OP NIGHTHAWK', 'OP SILENT HILL',
   'OP STEEL RAIN', 'OP GREEN ZONE', 'OP HARVEST', 'OP BLACKOUT',
@@ -176,6 +175,7 @@ export default function DialerPage() {
   const [pendingDial, setPendingDial] = useState(false);
   const [cardModalOpen, setCardModalOpen] = useState(false);
   const [achievementsOpen, setAchievementsOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
 
   // --- YES form fields ---
   const [yName, setYName] = useState('');
@@ -522,6 +522,19 @@ export default function DialerPage() {
   }, []);
 
   // =======================================================================
+  // PUBLISH DIAL TICK HELPER
+  // =======================================================================
+
+  const publishDialTick = useCallback(() => {
+    if (!campaign?.id || !manager?.id) return;
+    dialerRealtimeService.publishDialEvent({
+      campaignId:  campaign.id,
+      managerId:   manager.id,
+      managerName: manager.name || manager.repCode || 'Unknown',
+    });
+  }, [campaign?.id, manager?.id, manager?.name, manager?.repCode]);
+
+  // =======================================================================
   // HANDLE GAMIFICATION RESULT
   // =======================================================================
 
@@ -544,18 +557,20 @@ export default function DialerPage() {
     if (result.pointBreakdown) {
       showPointToast(result.pointBreakdown.grandTotal, result.pointBreakdown.multiplier);
     } else if (!isBooking && result.badgeBonusTotal > 0) {
-      // Non-booking badge bonus (Machine, Terminator etc.)
       showPointToast(result.badgeBonusTotal, 1);
     }
 
     // Publish booking to team feed
     if (isBooking && result.pointBreakdown?.grandTotal > 0 && campaign?.id && manager?.id) {
+      const ppDollars = isPrepay && bookingPrice ? parseFloat(bookingPrice) || 0 : 0;
+
       dialerRealtimeService.publishBookingEvent({
-        campaignId: campaign.id,
-        managerId: manager.id,
+        campaignId:  campaign.id,
+        managerId:   manager.id,
         managerName: manager.name || manager.repCode || 'Unknown',
-        points: result.pointBreakdown.grandTotal,
-        badges: result.newBadges || [],
+        points:      result.pointBreakdown.grandTotal,
+        ppDollars,
+        badges:      result.newBadges || [],
         multipliers: result.activeMultipliers?.map((m: any) => m.id) || [],
         isPrepay,
       });
@@ -588,6 +603,9 @@ export default function DialerPage() {
     switch (action) {
       case 'achievements':
         setAchievementsOpen(true);
+        break;
+      case 'team':
+        setStatsOpen(true);
         break;
       case 'campaigns':
         setMode('campaign-select' as any);
@@ -624,6 +642,9 @@ export default function DialerPage() {
     dispositionedKeysRef.current.add(key);
     setPendingDial(true);
     setLogMessage(`Sending ${disp}...`);
+
+    // Publish dial tick for every disposition
+    publishDialTick();
 
     try {
       const result = await applyDisposition(
@@ -671,6 +692,9 @@ export default function DialerPage() {
     dispositionedKeysRef.current.add(key);
     setPendingDial(true);
     setLogMessage(`Booking ${subType}...`);
+
+    // Publish dial tick for booking dispositions too
+    publishDialTick();
 
     const extra: DispositionExtra = {
       name: yName.trim(),
@@ -1036,6 +1060,16 @@ export default function DialerPage() {
         <BadgeToastContainer toasts={badgeToasts} />
         <PointToastContainer toasts={pointToasts} />
         {session && <AchievementsPanel session={session} open={achievementsOpen} onClose={() => setAchievementsOpen(false)} />}
+        {campaign?.id && (
+          <StatsPanel
+            open={statsOpen}
+            onClose={() => setStatsOpen(false)}
+            campaignId={campaign.id}
+            currentUserId={manager?.id || ''}
+            currentUserName={manager?.name || manager?.repCode || 'You'}
+            session={session}
+          />
+        )}
         {loading ? (
           <div className="text-center" style={{ color: '#888', letterSpacing: '2px', fontSize: 12 }}>ACQUIRING TARGET...</div>
         ) : (
@@ -1082,6 +1116,16 @@ export default function DialerPage() {
       <BadgeToastContainer toasts={badgeToasts} />
       <PointToastContainer toasts={pointToasts} />
       {session && <AchievementsPanel session={session} open={achievementsOpen} onClose={() => setAchievementsOpen(false)} />}
+      {campaign?.id && (
+        <StatsPanel
+          open={statsOpen}
+          onClose={() => setStatsOpen(false)}
+          campaignId={campaign.id}
+          currentUserId={manager?.id || ''}
+          currentUserName={manager?.name || manager?.repCode || 'You'}
+          session={session}
+        />
+      )}
 
       {/* Card entry modal */}
       {cardModalOpen && (
