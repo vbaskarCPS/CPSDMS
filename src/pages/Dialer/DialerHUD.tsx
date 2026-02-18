@@ -4,6 +4,7 @@
 // Top: auto-fire toggle | multiplier tiles (centered) | total mult + menu
 // Bottom: stats + big points counter with energy bar
 // Visor arcs + vignette frame the viewport.
+// Includes multiplier activation toast notifications.
 //
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -25,6 +26,17 @@ export interface TeamBookingEvent {
   isPrepay?: boolean;
 }
 
+/** A multiplier activation event to toast */
+export interface MultiplierActivationEvent {
+  id: string;
+  multiplierId: string;
+  name: string;           // Rep name for display
+  text: string;           // e.g. "Vijay B has High Ground"
+  icon: string;           // emoji fallback
+  color: string;
+  timestamp: number;
+}
+
 export type HUDMenuAction = 'campaigns' | 'team' | 'achievements' | 'logs' | 'multipliers' | 'reset';
 
 interface HUDProps {
@@ -36,6 +48,7 @@ interface HUDProps {
   onTrophyClick: () => void;
   onPointsClick?: () => void;
   teamFeed?: TeamBookingEvent[];
+  multiplierActivations?: MultiplierActivationEvent[];
   autoFire?: boolean;
   onAutoFireChange?: (v: boolean) => void;
 }
@@ -44,12 +57,11 @@ interface HUDProps {
 // THEME
 // =============================================================================
 
-const CY = '#00e5ff';      // cyan primary
-const CY2 = '#00b8d4';     // darker cyan
-const OR = '#f5a623';      // orange accent
+const CY = '#00e5ff';
+const CY2 = '#00b8d4';
+const OR = '#f5a623';
 const VISOR_BG = 'rgba(0,14,22,';
 
-// Multiplier colors
 const MULT_THEME: Record<string, { color: string; glow: string }> = {
   op_tempo:       { color: '#f5a623', glow: 'rgba(245,166,35,0.4)' },
   tracer_rounds:  { color: '#e74c3c', glow: 'rgba(231,76,60,0.4)' },
@@ -143,6 +155,20 @@ const HUD_STYLES = `
     40% { transform: scale(1.25); }
     100% { transform: scale(1); }
   }
+  @keyframes hud-mult-toast-in {
+    0% { transform: translateX(110%); opacity: 0; }
+    65% { transform: translateX(-3%); opacity: 1; }
+    100% { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes hud-mult-toast-out {
+    0% { transform: translateX(0); opacity: 1; max-height: 40px; margin-bottom: 4px; }
+    100% { transform: translateX(110%); opacity: 0; max-height: 0; margin-bottom: 0; }
+  }
+  @keyframes hud-mult-icon-pop {
+    0% { transform: scale(0.5); opacity: 0; }
+    60% { transform: scale(1.2); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
 `;
 
 // =============================================================================
@@ -181,7 +207,7 @@ function MultiplierIconDisplay({ multiplier, size = 14 }: { multiplier: Multipli
 }
 
 // =============================================================================
-// MULTIPLIER STRIP (below top bar row)
+// MULTIPLIER STRIP
 // =============================================================================
 
 function MultiplierStrip({
@@ -211,15 +237,7 @@ function MultiplierStrip({
   const ICON_SIZE = 26;
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 6,
-        overflow: 'visible',
-        paddingBottom: 8,
-        paddingTop: 4,
-      }}
-    >
+    <div style={{ display: 'flex', gap: 6, overflow: 'visible', paddingBottom: 8, paddingTop: 4 }}>
       {multipliers.map((m, idx) => {
         const remainingMs = m.expiresIn > 0 ? m.expiresIn - elapsed : m.expiresIn;
         if (m.expiresIn > 0 && remainingMs <= 0) return null;
@@ -249,14 +267,10 @@ function MultiplierStrip({
           >
             <div
               style={{
-                width: TILE,
-                height: TILE,
-                borderRadius: 8,
+                width: TILE, height: TILE, borderRadius: 8,
                 background: `radial-gradient(ellipse at 30% 30%, ${theme.color}15, rgba(0,14,22,0.95) 70%)`,
                 border: `1.5px solid ${theme.color}${isHovered ? '90' : '40'}`,
-                position: 'relative',
-                overflow: 'hidden',
-                cursor: 'default',
+                position: 'relative', overflow: 'hidden', cursor: 'default',
                 transition: 'transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
                 transform: isHovered ? 'scale(1.12) translateY(-2px)' : 'scale(1)',
                 ['--tile-shadow-rest' as any]: shadowRest,
@@ -271,18 +285,13 @@ function MultiplierStrip({
                   : shadowRest,
               }}
             >
-              {/* Glow bar at bottom */}
               <div style={{
-                position: 'absolute',
-                bottom: 0, left: '10%', right: '10%', height: 2,
+                position: 'absolute', bottom: 0, left: '10%', right: '10%', height: 2,
                 background: `linear-gradient(to right, transparent, ${theme.color}60, transparent)`,
                 borderRadius: 1,
               }} />
-
-              {/* Icon */}
               <div style={{
-                position: 'absolute',
-                top: 4, left: '50%', transform: 'translateX(-50%)',
+                position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)',
                 width: ICON_SIZE, height: ICON_SIZE,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 opacity: 0.75,
@@ -290,39 +299,28 @@ function MultiplierStrip({
               }}>
                 <MultiplierIconDisplay multiplier={m} size={ICON_SIZE} />
               </div>
-
-              {/* Value overlay */}
-              {!m.extra?.modifiesScoring && <div style={{
-                position: 'absolute',
-                bottom: 2, left: 0, right: 0,
-                textAlign: 'center',
-                fontFamily: 'monospace',
-                fontWeight: 900,
-                fontSize: 13,
-                lineHeight: 1,
-                color: '#fff',
-                textShadow: `0 0 6px ${theme.color}, 0 1px 2px rgba(0,0,0,0.8), 0 0 14px ${theme.color}60`,
-                pointerEvents: 'none',
-              }}>
-                +{m.value}x
-              </div>}
-              {/* Indoctrinate shows ALL× instead of +value */}
-              {m.extra?.modifiesScoring && <div style={{
-                position: 'absolute',
-                bottom: 2, left: 0, right: 0,
-                textAlign: 'center',
-                fontFamily: 'monospace',
-                fontWeight: 900,
-                fontSize: 11,
-                lineHeight: 1,
-                color: '#fff',
-                textShadow: `0 0 6px ${theme.color}, 0 1px 2px rgba(0,0,0,0.8), 0 0 14px ${theme.color}60`,
-                pointerEvents: 'none',
-              }}>
-                ALL×
-              </div>}
-
-              {/* Timer ring */}
+              {!m.extra?.modifiesScoring && (
+                <div style={{
+                  position: 'absolute', bottom: 2, left: 0, right: 0,
+                  textAlign: 'center', fontFamily: 'monospace', fontWeight: 900, fontSize: 13, lineHeight: 1,
+                  color: '#fff',
+                  textShadow: `0 0 6px ${theme.color}, 0 1px 2px rgba(0,0,0,0.8), 0 0 14px ${theme.color}60`,
+                  pointerEvents: 'none',
+                }}>
+                  +{m.value}x
+                </div>
+              )}
+              {m.extra?.modifiesScoring && (
+                <div style={{
+                  position: 'absolute', bottom: 2, left: 0, right: 0,
+                  textAlign: 'center', fontFamily: 'monospace', fontWeight: 900, fontSize: 11, lineHeight: 1,
+                  color: '#fff',
+                  textShadow: `0 0 6px ${theme.color}, 0 1px 2px rgba(0,0,0,0.8), 0 0 14px ${theme.color}60`,
+                  pointerEvents: 'none',
+                }}>
+                  ALL×
+                </div>
+              )}
               {m.expiresIn > 0 && timerProgress > 0 && timerProgress < 1 && (
                 <svg
                   style={{ position: 'absolute', inset: -1, width: TILE + 2, height: TILE + 2, pointerEvents: 'none' }}
@@ -336,8 +334,6 @@ function MultiplierStrip({
                   />
                 </svg>
               )}
-
-              {/* Charges badge */}
               {charges && charges > 0 && (
                 <div style={{
                   position: 'absolute', top: -4, right: -4,
@@ -351,8 +347,6 @@ function MultiplierStrip({
                   {charges}
                 </div>
               )}
-
-              {/* Countdown */}
               {countdown && (
                 <div style={{
                   position: 'absolute', top: 1, right: 3,
@@ -369,9 +363,7 @@ function MultiplierStrip({
               <div
                 className="absolute z-30"
                 style={{
-                  top: TILE + 8,
-                  left: '50%',
-                  transform: 'translateX(-50%)',
+                  top: TILE + 8, left: '50%', transform: 'translateX(-50%)',
                   minWidth: 200, maxWidth: 240,
                   animation: 'hud-tooltip-in 0.2s ease-out both',
                 }}
@@ -385,8 +377,7 @@ function MultiplierStrip({
                 <div style={{
                   background: `${VISOR_BG}0.97)`,
                   border: `1px solid ${theme.color}40`,
-                  borderRadius: 10,
-                  padding: '12px 14px',
+                  borderRadius: 10, padding: '12px 14px',
                   boxShadow: `0 12px 36px rgba(0,0,0,0.8), 0 0 20px ${theme.glow}`,
                   backdropFilter: 'blur(12px)',
                 }}>
@@ -442,10 +433,7 @@ function MultiplierStrip({
                       }}>PASSIVE</span>
                     )}
                   </div>
-                  <div style={{
-                    fontSize: 10, color: '#888', lineHeight: 1.5,
-                    borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 8,
-                  }}>
+                  <div style={{ fontSize: 10, color: '#888', lineHeight: 1.5, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 8 }}>
                     {MULT_DESC[m.id] || ''}
                   </div>
                 </div>
@@ -459,7 +447,140 @@ function MultiplierStrip({
 }
 
 // =============================================================================
-// TEAM FEED TOASTS
+// MULTIPLIER ACTIVATION TOASTS
+// =============================================================================
+
+const MULT_TOAST_LIFETIME = 4000;
+const MAX_MULT_TOASTS = 4;
+
+function MultiplierActivationToasts({ events }: { events: MultiplierActivationEvent[] }) {
+  const [visible, setVisible] = useState<(MultiplierActivationEvent & { exiting?: boolean })[]>([]);
+  const seenRef = useRef<Set<string>>(new Set());
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  useEffect(() => {
+    const newOnes = events.filter(e => !seenRef.current.has(e.id));
+    if (newOnes.length === 0) return;
+    newOnes.forEach(e => seenRef.current.add(e.id));
+
+    setVisible(prev => {
+      const combined = [...prev.filter(t => !t.exiting), ...newOnes];
+      return combined.slice(-MAX_MULT_TOASTS - 2);
+    });
+
+    newOnes.forEach(e => {
+      const timer = setTimeout(() => {
+        setVisible(prev => prev.map(t => t.id === e.id ? { ...t, exiting: true } : t));
+        const rmTimer = setTimeout(() => {
+          setVisible(prev => prev.filter(t => t.id !== e.id));
+          timersRef.current.delete(e.id);
+        }, 400);
+        timersRef.current.set(e.id + '_rm', rmTimer);
+      }, MULT_TOAST_LIFETIME);
+      timersRef.current.set(e.id, timer);
+    });
+  }, [events]);
+
+  useEffect(() => {
+    return () => { timersRef.current.forEach(t => clearTimeout(t)); };
+  }, []);
+
+  const toShow = visible.slice(-MAX_MULT_TOASTS);
+  if (toShow.length === 0) return null;
+
+  return (
+    <div
+      className="absolute pointer-events-none"
+      style={{
+        // Position above team feed toasts, below disposition panel level
+        right: 2,
+        bottom: 110,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-end',
+        gap: 0,
+        zIndex: 18,
+        maxWidth: 300,
+      }}
+    >
+      {toShow.map(evt => {
+        const theme = MULT_THEME[evt.multiplierId] || { color: CY, glow: `${CY}40` };
+        const multIcon = getMultiplierIcon(evt.multiplierId, 18);
+
+        return (
+          <div
+            key={evt.id}
+            style={{
+              animation: evt.exiting
+                ? 'hud-mult-toast-out 0.4s ease-in forwards'
+                : 'hud-mult-toast-in 0.45s cubic-bezier(0.34,1.56,0.64,1) both',
+              marginBottom: 4,
+            }}
+          >
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '7px 12px 7px 8px',
+              borderRadius: 8,
+              background: `rgba(0,14,22,0.94)`,
+              border: `1px solid ${theme.color}35`,
+              boxShadow: `0 4px 20px rgba(0,0,0,0.7), 0 0 12px ${theme.color}15`,
+              backdropFilter: 'blur(8px)',
+              minHeight: 38,
+            }}>
+              {/* Colored left accent bar */}
+              <div style={{
+                width: 2, height: 22, borderRadius: 1,
+                background: theme.color,
+                flexShrink: 0,
+                boxShadow: `0 0 6px ${theme.color}80`,
+              }} />
+
+              {/* Icon */}
+              <div style={{
+                width: 22, height: 22,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                animation: 'hud-mult-icon-pop 0.4s cubic-bezier(0.34,1.56,0.64,1) 0.1s both',
+                filter: `drop-shadow(0 0 4px ${theme.color}60)`,
+                flexShrink: 0,
+              }}>
+                {multIcon || (
+                  <span style={{ fontSize: 14, lineHeight: 1 }}>{evt.icon}</span>
+                )}
+              </div>
+
+              {/* Text */}
+              <span style={{
+                fontFamily: 'monospace',
+                fontWeight: 700,
+                fontSize: 11,
+                color: '#d0e8f0',
+                letterSpacing: '0.3px',
+                whiteSpace: 'nowrap',
+              }}>
+                <span style={{
+                  color: theme.color,
+                  fontWeight: 900,
+                  textShadow: `0 0 8px ${theme.color}50`,
+                }}>
+                  {evt.name}
+                </span>
+                {' '}
+                <span style={{ color: '#888' }}>
+                  {evt.text.replace(evt.name, '').trim()}
+                </span>
+              </span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// =============================================================================
+// TEAM FEED TOASTS (booking events from other managers)
 // =============================================================================
 
 const TOAST_LIFETIME = 6000;
@@ -516,8 +637,7 @@ function TeamFeedToasts({ events }: { events: TeamBookingEvent[] }) {
               animation: evt.exiting
                 ? 'hud-team-toast-out 0.5s ease-in forwards'
                 : 'hud-team-toast-in 0.4s cubic-bezier(0.34,1.56,0.64,1) both',
-              marginBottom: 4,
-              pointerEvents: 'auto',
+              marginBottom: 4, pointerEvents: 'auto',
             }}
           >
             <div style={{
@@ -526,8 +646,7 @@ function TeamFeedToasts({ events }: { events: TeamBookingEvent[] }) {
               background: `${VISOR_BG}0.92)`,
               border: `1px solid ${CY}25`,
               boxShadow: `0 4px 16px rgba(0,0,0,0.6), 0 0 8px ${CY}10`,
-              backdropFilter: 'blur(8px)',
-              minHeight: 36,
+              backdropFilter: 'blur(8px)', minHeight: 36,
             }}>
               <span style={{ fontFamily: 'monospace', fontWeight: 800, fontSize: 11, color: '#ccc', letterSpacing: '0.5px', whiteSpace: 'nowrap' }}>
                 {evt.name}
@@ -598,11 +717,7 @@ function MenuPanel({
       )}
       <div
         className="fixed top-0 right-0 bottom-0 z-50"
-        style={{
-          width: open ? 230 : 0,
-          overflow: 'hidden',
-          transition: 'width 0.3s cubic-bezier(0.4,0,0.2,1)',
-        }}
+        style={{ width: open ? 230 : 0, overflow: 'hidden', transition: 'width 0.3s cubic-bezier(0.4,0,0.2,1)' }}
       >
         <div style={{
           width: 230, height: '100%',
@@ -626,9 +741,7 @@ function MenuPanel({
                 color: CY, fontSize: 12, cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
-            >
-              ×
-            </button>
+            >×</button>
           </div>
           <div style={{ flex: 1, padding: '10px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
             {MENU_ITEMS.map((item, i) => (
@@ -641,8 +754,7 @@ function MenuPanel({
                   padding: '11px 14px', borderRadius: 8,
                   border: '1px solid transparent',
                   background: 'transparent',
-                  cursor: 'pointer', textAlign: 'left',
-                  fontFamily: 'inherit',
+                  cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
                   animation: open ? `hud-menu-slide 0.3s ease-out ${i * 0.05}s both` : 'none',
                 }}
                 onMouseEnter={(e) => {
@@ -706,6 +818,7 @@ export default function DialerHUD({
   onTrophyClick,
   onPointsClick,
   teamFeed,
+  multiplierActivations,
   autoFire,
   onAutoFireChange,
 }: HUDProps) {
@@ -714,7 +827,6 @@ export default function DialerHUD({
   const [menuOpen, setMenuOpen] = useState(false);
   const prevPoints = useRef(s?.totalSessionPoints ?? 0);
 
-  // Flash points when they change
   useEffect(() => {
     const curr = s?.totalSessionPoints ?? 0;
     if (curr > prevPoints.current) {
@@ -731,9 +843,7 @@ export default function DialerHUD({
   const totalMult = activeMultipliers.reduce((sum, m) => m.extra?.modifiesScoring ? sum : sum + m.value, 1.0);
 
   const handleMenuAction = useCallback((action: HUDMenuAction) => {
-    if (action === 'achievements') {
-      onTrophyClick();
-    }
+    if (action === 'achievements') onTrophyClick();
     onMenuAction?.(action);
   }, [onMenuAction, onTrophyClick]);
 
@@ -744,10 +854,7 @@ export default function DialerHUD({
       <div className="fixed inset-0 pointer-events-none z-10">
 
         {/* === VISOR ARCS === */}
-        <svg
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
-          viewBox="0 0 1000 600" preserveAspectRatio="none"
-        >
+        <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} viewBox="0 0 1000 600" preserveAspectRatio="none">
           <path d="M 80,0 Q 500,-12 920,0" fill="none" stroke={CY} strokeWidth="0.8" opacity="0.15" />
           <path d="M 80,600 Q 500,612 920,600" fill="none" stroke={CY} strokeWidth="0.8" opacity="0.15" />
           <path d="M 0,50 Q -8,300 0,550" fill="none" stroke={CY} strokeWidth="0.6" opacity="0.08" />
@@ -765,26 +872,17 @@ export default function DialerHUD({
         }} />
 
         {/* === TOP BAR === */}
-        <div
-          className="absolute top-0 left-0 right-0 pointer-events-auto"
-          style={{
-            padding: '8px 14px',
-          }}
-        >
-          {/* Single row: Auto-fire | Multiplier tiles (centered) | Total + menu */}
+        <div className="absolute top-0 left-0 right-0 pointer-events-auto" style={{ padding: '8px 14px' }}>
           <div style={{ display: 'flex', alignItems: 'center' }}>
             {/* Left: Auto-fire toggle */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-              <label
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  padding: '2px 10px', borderRadius: 16,
-                  border: `1px solid ${autoFire ? '#ff4444' : CY}40`,
-                  background: autoFire ? 'rgba(255,40,40,0.12)' : `${CY}08`,
-                  cursor: 'pointer',
-                  transition: 'all 0.25s ease',
-                }}
-              >
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '2px 10px', borderRadius: 16,
+                border: `1px solid ${autoFire ? '#ff4444' : CY}40`,
+                background: autoFire ? 'rgba(255,40,40,0.12)' : `${CY}08`,
+                cursor: 'pointer', transition: 'all 0.25s ease',
+              }}>
                 <span style={{
                   fontSize: 8, fontWeight: 800, letterSpacing: '2px', fontFamily: 'monospace',
                   color: autoFire ? '#ff6666' : CY,
@@ -805,12 +903,7 @@ export default function DialerHUD({
                     boxShadow: autoFire ? '0 0 6px rgba(255,40,40,0.6)' : 'none',
                   }} />
                 </div>
-                <input
-                  type="checkbox"
-                  checked={autoFire ?? false}
-                  onChange={(e) => onAutoFireChange?.(e.target.checked)}
-                  style={{ display: 'none' }}
-                />
+                <input type="checkbox" checked={autoFire ?? false} onChange={(e) => onAutoFireChange?.(e.target.checked)} style={{ display: 'none' }} />
               </label>
             </div>
 
@@ -837,8 +930,7 @@ export default function DialerHUD({
                   display: 'flex', flexDirection: 'column',
                   alignItems: 'center', justifyContent: 'center',
                   gap: 3, padding: 0,
-                  transition: 'all 0.2s ease',
-                  flexShrink: 0,
+                  transition: 'all 0.2s ease', flexShrink: 0,
                 }}
               >
                 <div style={{ width: 11, height: 1.5, background: CY, borderRadius: 1, opacity: 0.8 }} />
@@ -848,6 +940,11 @@ export default function DialerHUD({
             </div>
           </div>
         </div>
+
+        {/* === MULTIPLIER ACTIVATION TOASTS === */}
+        {multiplierActivations && multiplierActivations.length > 0 && (
+          <MultiplierActivationToasts events={multiplierActivations} />
+        )}
 
         {/* === TEAM FEED TOASTS === */}
         {teamFeed && teamFeed.length > 0 && (
@@ -859,12 +956,10 @@ export default function DialerHUD({
           className="absolute bottom-0 left-0 right-0 pointer-events-auto"
           style={{
             background: `linear-gradient(to top, ${VISOR_BG}0.94) 0%, ${VISOR_BG}0.65) 85%, transparent 100%)`,
-            display: 'flex',
-            alignItems: 'flex-end',
+            display: 'flex', alignItems: 'flex-end',
             padding: '16px 16px 10px',
           }}
         >
-          {/* Stats */}
           <div style={{ display: 'flex', gap: 18, alignItems: 'flex-end' }}>
             <StatBox label="PB" value={s?.pbs ?? 0} color={CY} />
             <StatBox label="PP" value={s?.pps ?? 0} color={OR} />
@@ -875,15 +970,10 @@ export default function DialerHUD({
 
           <div style={{ flex: 1 }} />
 
-          {/* Points */}
-          <div
-            style={{ textAlign: 'right', cursor: onPointsClick ? 'pointer' : 'default' }}
-            onClick={onPointsClick}
-          >
+          <div style={{ textAlign: 'right', cursor: onPointsClick ? 'pointer' : 'default' }} onClick={onPointsClick}>
             <div style={{
               fontSize: 38, fontWeight: 900, color: CY, lineHeight: 1,
-              fontFamily: 'monospace',
-              letterSpacing: '2px',
+              fontFamily: 'monospace', letterSpacing: '2px',
               textShadow: pointsFlash
                 ? `0 0 20px ${CY}, 0 0 50px ${CY}80, 0 0 80px ${CY}40`
                 : `0 0 8px ${CY}50`,
@@ -892,7 +982,6 @@ export default function DialerHUD({
             }}>
               {points.toLocaleString()}
             </div>
-            {/* Energy bar */}
             <div style={{
               width: 140, height: 4, borderRadius: 2, marginTop: 5, marginLeft: 'auto',
               background: `${CY}12`, border: `1px solid ${CY}15`, overflow: 'hidden',

@@ -42,13 +42,16 @@ import type {
 } from '../../lib/dialer';
 import type { Rank, StagedCard } from '../../lib/dialer';
 import DialerHUD from './DialerHUD';
-import type { TeamBookingEvent, HUDMenuAction } from './DialerHUD';
+import type { TeamBookingEvent, HUDMenuAction, MultiplierActivationEvent } from './DialerHUD';
 import AchievementsPanel from './AchievementsPanel';
 import { useToasts, BadgeToastContainer, PointToastContainer } from './DialerToasts';
 import CampaignSelect from './CampaignSelect';
 import type { Campaign as CampaignCard } from './CampaignSelect';
 import SniperSettings from './SniperSettings';
 import { dialerRealtimeService } from '../../lib/dialerRealtimeService';
+import FireteamPanel from './FireteamPanel';
+import type { FireteamEvent } from './FireteamPanel';
+import { detectNewlyActivated } from './multiplierActivations';
 
 // =============================================================================
 // STYLES (inline style objects for elements not easily done in Tailwind)
@@ -195,8 +198,15 @@ export default function DialerPage() {
   const [multipliersAt, setMultipliersAt] = useState(0);
   const [rank, setRank] = useState<Rank | null>(null);
 
-  // --- Team feed (other managers' bookings) ---
+  // --- Team feed (other managers' bookings — for HUD toasts) ---
   const [teamFeed, setTeamFeed] = useState<TeamBookingEvent[]>([]);
+
+  // --- Fireteam history panel (bookings from all reps including self) ---
+  const [fireteamEvents, setFireteamEvents] = useState<FireteamEvent[]>([]);
+
+  // --- Multiplier activation toasts ---
+  const [multActivations, setMultActivations] = useState<MultiplierActivationEvent[]>([]);
+  const prevOwnMultipliersRef = useRef<MultiplierSnapshot[]>([]);
 
   // --- Engine config ---
   const configRef = useRef<EngineConfig | null>(null);
@@ -219,14 +229,13 @@ export default function DialerPage() {
     }
     setManager(mgr);
     setCampaign(cmp);
-    // Initialize sniperConfig from campaign
     if (cmp.sniperConfig) {
       setSniperConfig(cmp.sniperConfig);
     }
   }, [navigate]);
 
   // =======================================================================
-  // AUTO-CONNECT on mount (so tabs load immediately for Campaign Select)
+  // AUTO-CONNECT on mount
   // =======================================================================
 
   useEffect(() => {
@@ -246,14 +255,49 @@ export default function DialerPage() {
       campaign.id,
       manager.id,
       (event) => {
+        // Feed HUD corner toasts
         setTeamFeed(prev => [...prev, event]);
+
+        // Feed Fireteam history panel
+        const ftEvent: FireteamEvent = {
+          id: `team_${event.id}`,
+          timestamp: event.timestamp ?? Date.now(),
+          name: event.name,
+          isOwn: false,
+          isPrepay: event.isPrepay ?? false,
+          points: event.points,
+          base: (event as any).basePoints ?? event.points,
+          multiplier: (event as any).multiplier ?? 1,
+          multiplierBreakdown: (event as any).multiplierBreakdown ?? {},
+          badgeBonuses: (event as any).badgeBonuses ?? {},
+          badgeBonusTotal: (event as any).badgeBonusTotal ?? 0,
+          newBadges: event.badges ?? [],
+          price: (event as any).price,
+        };
+        setFireteamEvents(prev => [...prev, ftEvent].slice(-25));
       }
     );
 
-    return () => {
-      unsubscribe();
-    };
+    return () => { unsubscribe(); };
   }, [campaign?.id, manager?.id]);
+
+  // =======================================================================
+  // OWN MULTIPLIER ACTIVATION DETECTION
+  // =======================================================================
+
+  useEffect(() => {
+    const prev = prevOwnMultipliersRef.current;
+    const activations = detectNewlyActivated(
+      prev,
+      multipliers,
+      manager?.name || manager?.repCode || 'You',
+      true,
+    );
+    if (activations.length > 0) {
+      setMultActivations(p => [...p, ...activations]);
+    }
+    prevOwnMultipliersRef.current = multipliers;
+  }, [multipliers, manager?.name, manager?.repCode]);
 
   // =======================================================================
   // CONNECT TO SHEETS
@@ -264,7 +308,6 @@ export default function DialerPage() {
     try {
       await dialerSheetsService.authenticate();
       setConnected(true);
-      // Auto-load tabs
       if (campaign?.spreadsheetId) {
         setTabsLoading(true);
         setTabsError('');
@@ -289,7 +332,6 @@ export default function DialerPage() {
   // CAMPAIGN SELECT → DEPLOY CONFIG → DEPLOY
   // =======================================================================
 
-  /** User clicks Deploy on a campaign card — show direction picker overlay */
   const handleCampaignDeploy = async (tabId: string) => {
     setDeployingTab(tabId);
     setSelectedTab(tabId);
@@ -297,18 +339,16 @@ export default function DialerPage() {
     setStartBookingId('');
     setShowDeployConfig(true);
 
-    // Kick off year discovery in the background for SniperSettings
     if (campaign?.spreadsheetId) {
       try {
         const years = await discoverAvailableYears(campaign.spreadsheetId, tabId);
         setAvailableYears(years);
       } catch {
-        // Non-critical — settings will still work with currently-selected years
+        // Non-critical
       }
     }
   };
 
-  /** User confirms direction and deploys */
   const handleConfirmDeploy = async () => {
     if (!selectedTab || !campaign) return;
     setShowDeployConfig(false);
@@ -336,9 +376,11 @@ export default function DialerPage() {
       }
       setCurrentState(snapshot.state);
       setSession(snapshot.session);
-      setMultipliers(getActiveMultipliers(snapshot.session));
+      const newMults = getActiveMultipliers(snapshot.session);
+      setMultipliers(newMults);
       setMultipliersAt(Date.now());
       setRank(getCurrentRank(snapshot.session));
+      prevOwnMultipliersRef.current = newMults; // seed so first load doesn't toast everything
       prefillYesForm(snapshot.state);
       setMode('dialer');
     } catch (err: any) {
@@ -350,16 +392,14 @@ export default function DialerPage() {
   };
 
   // =======================================================================
-  // SNIPER SETTINGS — config saved callback
+  // SNIPER SETTINGS
   // =======================================================================
 
   const handleSniperConfigSaved = useCallback((config: SniperConfig) => {
     setSniperConfig(config);
-    // Also update the ref config if mid-session (will apply on next cache invalidation)
     if (configRef.current) {
       configRef.current.sniperConfig = config;
     }
-    // Force cache invalidation so next group load uses new filters
     invalidateCache();
   }, []);
 
@@ -402,33 +442,58 @@ export default function DialerPage() {
   // HANDLE GAMIFICATION RESULT
   // =======================================================================
 
-  const handleGamResult = useCallback((result: any) => {
+  const handleGamResult = useCallback((result: any, isBooking = false, isPrepay = false, bookingPrice?: string) => {
     if (!result) return;
-    if (result.session) {
-      setSession(result.session);
-    }
+    if (result.session) setSession(result.session);
     if (result.rank) setRank(result.rank);
+
     if (result.activeMultipliers) {
       setMultipliers(result.activeMultipliers);
       setMultipliersAt(Date.now());
     }
+
+    // Badge toasts — always fire (including non-booking badge awards)
     if (result.newBadges?.length > 0) {
       for (const id of result.newBadges) queueBadgeToast(id);
     }
+
+    // Point toasts — always show if there are points
     if (result.pointBreakdown) {
       showPointToast(result.pointBreakdown.grandTotal, result.pointBreakdown.multiplier);
+    } else if (!isBooking && result.badgeBonusTotal > 0) {
+      // Non-booking badge bonus (Machine, Terminator etc.)
+      showPointToast(result.badgeBonusTotal, 1);
+    }
 
-      if (campaign?.id && manager?.id && result.pointBreakdown.grandTotal > 0) {
-        dialerRealtimeService.publishBookingEvent({
-          campaignId: campaign.id,
-          managerId: manager.id,
-          managerName: manager.name || manager.repCode || 'Unknown',
-          points: result.pointBreakdown.grandTotal,
-          badges: result.newBadges || [],
-          multipliers: result.activeMultipliers?.map((m: any) => m.id) || [],
-          isPrepay: result.pointBreakdown.isPrepay || false,
-        });
-      }
+    // Publish booking to team feed
+    if (isBooking && result.pointBreakdown?.grandTotal > 0 && campaign?.id && manager?.id) {
+      dialerRealtimeService.publishBookingEvent({
+        campaignId: campaign.id,
+        managerId: manager.id,
+        managerName: manager.name || manager.repCode || 'Unknown',
+        points: result.pointBreakdown.grandTotal,
+        badges: result.newBadges || [],
+        multipliers: result.activeMultipliers?.map((m: any) => m.id) || [],
+        isPrepay,
+      });
+
+      // Add own booking to fireteam history panel
+      const ftEvent: FireteamEvent = {
+        id: `own_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+        timestamp: Date.now(),
+        name: manager.name || manager.repCode || 'You',
+        isOwn: true,
+        isPrepay,
+        points: result.pointBreakdown.grandTotal,
+        base: result.pointBreakdown.base ?? result.pointBreakdown.grandTotal,
+        multiplier: result.pointBreakdown.multiplier ?? 1,
+        multiplierBreakdown: result.pointBreakdown.multiplierBreakdown ?? {},
+        badgeBonuses: result.badgeBonuses ?? {},
+        badgeBonusTotal: result.badgeBonusTotal ?? 0,
+        newBadges: result.newBadges ?? [],
+        price: isPrepay && bookingPrice ? parseFloat(bookingPrice) : undefined,
+      };
+      setFireteamEvents(prev => [...prev, ftEvent].slice(-25));
     }
   }, [queueBadgeToast, showPointToast, campaign?.id, manager?.id, manager?.name, manager?.repCode]);
 
@@ -452,8 +517,11 @@ export default function DialerPage() {
         fresh.sessionStartTime = Date.now();
         setSession(fresh);
         setMultipliers([]);
+        prevOwnMultipliersRef.current = [];
         setMultipliersAt(Date.now());
         setRank(null);
+        setFireteamEvents([]);
+        setMultActivations([]);
         setLogMessage('Session reset.');
         break;
       }
@@ -485,7 +553,8 @@ export default function DialerPage() {
         yesStartTimeRef.current
       );
 
-      handleGamResult(result.gamification);
+      // Non-booking dispositions can still earn badges (Machine, Terminator etc.)
+      handleGamResult(result.gamification, false);
 
       // WN/NIS redial
       if (result.redialPhone) {
@@ -544,7 +613,7 @@ export default function DialerPage() {
           extra,
           yesStartTimeRef.current
         );
-        handleGamResult(result.gamification);
+        handleGamResult(result.gamification, true, true, yPrice.trim());
 
         setCcAmt(yPrice.trim());
         setCcNum('');
@@ -565,7 +634,7 @@ export default function DialerPage() {
           extra,
           yesStartTimeRef.current
         );
-        handleGamResult(result.gamification);
+        handleGamResult(result.gamification, true, false);
 
         if (result.nextState.found) {
           renderNewState(result.nextState as DialerState);
@@ -611,7 +680,7 @@ export default function DialerPage() {
       const cardData = stageCardData(num, ccExp.trim(), ccCvv.trim(), ccAmt.trim());
       const result = await finalizePrepay(configRef.current!, cardData, session!);
 
-      handleGamResult(result.gamification);
+      handleGamResult(result.gamification, true, true, ccAmt.trim());
       setCardStatus('✓ Card staged');
       setTimeout(() => {
         setCardModalOpen(false);
@@ -652,7 +721,6 @@ export default function DialerPage() {
   // =======================================================================
 
   if (mode === 'campaign-select') {
-    // Loading / connecting state
     if (connecting || tabsLoading) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center" style={S.body}>
@@ -667,7 +735,6 @@ export default function DialerPage() {
       );
     }
 
-    // Connection failed
     if (!connected && !connecting) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center p-6" style={S.body}>
@@ -687,7 +754,6 @@ export default function DialerPage() {
       );
     }
 
-    // Error loading tabs
     if (tabsError && tabs.length === 0) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center p-6" style={S.body}>
@@ -706,14 +772,12 @@ export default function DialerPage() {
       );
     }
 
-    // Campaign Select screen with deploy config overlay
     return (
       <>
         <CampaignSelect
           campaigns={campaignCards}
           onDeploy={handleCampaignDeploy}
           onSettingsClick={() => {
-            // Kick off year discovery if we haven't yet
             if (availableYears.length === 0 && campaign?.spreadsheetId && tabs.length > 0) {
               discoverAvailableYears(campaign.spreadsheetId, tabs[0]).then(setAvailableYears).catch(() => {});
             }
@@ -721,7 +785,6 @@ export default function DialerPage() {
           }}
         />
 
-        {/* Sniper Settings Modal */}
         {campaign?.id && (
           <SniperSettings
             open={sniperSettingsOpen}
@@ -733,7 +796,6 @@ export default function DialerPage() {
           />
         )}
 
-        {/* Deploy Config Overlay — direction + optional booking ID */}
         {showDeployConfig && (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center"
@@ -749,7 +811,6 @@ export default function DialerPage() {
               }}
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Header */}
               <div className="text-center mb-4">
                 <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: '3px', color: '#00e5ff', opacity: 0.5, textTransform: 'uppercase' }}>
                   MISSION PARAMETERS
@@ -759,7 +820,6 @@ export default function DialerPage() {
                 </div>
               </div>
 
-              {/* Direction */}
               <div className="mb-4">
                 <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>
                   APPROACH VECTOR
@@ -787,7 +847,6 @@ export default function DialerPage() {
                 </div>
               </div>
 
-              {/* Optional booking ID */}
               <div className="mb-4">
                 <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
                   STARTING BOOKING ID <span style={{ opacity: 0.4 }}>(OPTIONAL)</span>
@@ -802,7 +861,6 @@ export default function DialerPage() {
                 />
               </div>
 
-              {/* Sniper Config Summary + Settings Button */}
               <div className="mb-5">
                 <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
                   SNIPER SCOPE
@@ -817,22 +875,15 @@ export default function DialerPage() {
                   }}
                 >
                   <div className="flex flex-wrap gap-1.5">
-                    {/* Year chips */}
                     {sniperConfig.years.map(yr => (
                       <span key={yr} style={{
-                        fontSize: 9,
-                        fontWeight: 800,
-                        color: '#00e5ff',
-                        background: 'rgba(0,229,255,0.12)',
-                        border: '1px solid rgba(0,229,255,0.25)',
-                        borderRadius: 3,
-                        padding: '1px 6px',
-                        letterSpacing: '0.5px',
+                        fontSize: 9, fontWeight: 800, color: '#00e5ff',
+                        background: 'rgba(0,229,255,0.12)', border: '1px solid rgba(0,229,255,0.25)',
+                        borderRadius: 3, padding: '1px 6px', letterSpacing: '0.5px',
                       }}>
                         {yr}
                       </span>
                     ))}
-                    {/* Active filter badges */}
                     {sniperConfig.ppOnly && (
                       <span style={{ fontSize: 8, fontWeight: 800, color: '#f1c40f', background: 'rgba(241,196,15,0.12)', border: '1px solid rgba(241,196,15,0.25)', borderRadius: 3, padding: '1px 6px' }}>PP</span>
                     )}
@@ -850,7 +901,6 @@ export default function DialerPage() {
                 </button>
               </div>
 
-              {/* Action buttons */}
               <div className="flex gap-3">
                 <button
                   onClick={() => setShowDeployConfig(false)}
@@ -888,7 +938,18 @@ export default function DialerPage() {
   if (!currentState) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center" style={S.body}>
-        <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} onMenuAction={handleMenuAction} teamFeed={teamFeed} autoFire={autoFire} onAutoFireChange={setAutoFire} />
+        <DialerHUD
+          session={session}
+          activeMultipliers={multipliers}
+          multipliersReceivedAt={multipliersAt}
+          rank={rank}
+          onTrophyClick={() => setAchievementsOpen(true)}
+          onMenuAction={handleMenuAction}
+          teamFeed={teamFeed}
+          multiplierActivations={multActivations}
+          autoFire={autoFire}
+          onAutoFireChange={setAutoFire}
+        />
         <BadgeToastContainer toasts={badgeToasts} />
         <PointToastContainer toasts={pointToasts} />
         {session && <AchievementsPanel session={session} open={achievementsOpen} onClose={() => setAchievementsOpen(false)} />}
@@ -923,7 +984,18 @@ export default function DialerPage() {
 
   return (
     <div className="relative h-screen overflow-hidden" style={S.body}>
-      <DialerHUD session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt} rank={rank} onTrophyClick={() => setAchievementsOpen(true)} onMenuAction={handleMenuAction} teamFeed={teamFeed} autoFire={autoFire} onAutoFireChange={setAutoFire} />
+      <DialerHUD
+        session={session}
+        activeMultipliers={multipliers}
+        multipliersReceivedAt={multipliersAt}
+        rank={rank}
+        onTrophyClick={() => setAchievementsOpen(true)}
+        onMenuAction={handleMenuAction}
+        teamFeed={teamFeed}
+        multiplierActivations={multActivations}
+        autoFire={autoFire}
+        onAutoFireChange={setAutoFire}
+      />
       <BadgeToastContainer toasts={badgeToasts} />
       <PointToastContainer toasts={pointToasts} />
       {session && <AchievementsPanel session={session} open={achievementsOpen} onClose={() => setAchievementsOpen(false)} />}
@@ -993,6 +1065,7 @@ export default function DialerPage() {
 
       {/* Main dialer layout */}
       <div className="relative z-1 flex h-full" style={{ padding: '32px 8px 50px 8px' }}>
+
         {/* LEFT: Main column */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           {/* Top bar */}
@@ -1040,44 +1113,27 @@ export default function DialerPage() {
             )}
           </div>
 
-          {/* Content area: service history + AER — OR — YES booking form */}
+          {/* Content area */}
           <div className="flex-1 overflow-y-auto p-2.5" style={S.contentArea}>
             {showYesPanel ? (
-              /* ═══════════ YES BOOKING FORM ═══════════ */
               <div>
                 <div className="text-xs uppercase tracking-widest font-bold mb-2" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 9 }}>Booking Details</div>
 
-                {/* Row 1: First Name + Last Name */}
                 <div className="flex gap-2 mb-1.5">
-                  <div className="flex-1">
-                    <YesField label="First Name" value={yName} onChange={setYName} />
-                  </div>
-                  <div className="flex-1">
-                    <YesField label="Last Name" value={yLastName} onChange={setYLastName} />
-                  </div>
+                  <div className="flex-1"><YesField label="First Name" value={yName} onChange={setYName} /></div>
+                  <div className="flex-1"><YesField label="Last Name" value={yLastName} onChange={setYLastName} /></div>
                 </div>
 
-                {/* Row 2: Address — House # + Street */}
                 <div className="flex gap-2 mb-1.5">
-                  <div style={{ width: 80 }}>
-                    <YesField label="House #" value={yHouseNum} onChange={setYHouseNum} />
-                  </div>
-                  <div className="flex-1">
-                    <YesField label="Street Name" value={yStreetName} onChange={setYStreetName} />
-                  </div>
+                  <div style={{ width: 80 }}><YesField label="House #" value={yHouseNum} onChange={setYHouseNum} /></div>
+                  <div className="flex-1"><YesField label="Street Name" value={yStreetName} onChange={setYStreetName} /></div>
                 </div>
 
-                {/* Row 3: Price + Email */}
                 <div className="flex gap-2 mb-1.5">
-                  <div style={{ width: 100 }}>
-                    <YesField label="Price" value={yPrice} onChange={setYPrice} />
-                  </div>
-                  <div className="flex-1">
-                    <YesField label="Email" value={yEmail} onChange={setYEmail} />
-                  </div>
+                  <div style={{ width: 100 }}><YesField label="Price" value={yPrice} onChange={setYPrice} /></div>
+                  <div className="flex-1"><YesField label="Email" value={yEmail} onChange={setYEmail} /></div>
                 </div>
 
-                {/* Row 4: Gate / Sprinkler + FO selection */}
                 <div className="flex items-end gap-4 mb-1.5">
                   <div className="flex items-center gap-3">
                     <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: '#ccc' }}>
@@ -1100,12 +1156,8 @@ export default function DialerPage() {
                   </div>
                 </div>
 
-                {/* Row 5: Notes (full width) */}
-                <div className="mb-2">
-                  <YesField label="Notes" value={yNotes} onChange={setYNotes} />
-                </div>
+                <div className="mb-2"><YesField label="Notes" value={yNotes} onChange={setYNotes} /></div>
 
-                {/* Action buttons */}
                 <div className="flex gap-2">
                   <button
                     onClick={() => setShowYesPanel(false)}
@@ -1131,7 +1183,6 @@ export default function DialerPage() {
                 </div>
               </div>
             ) : (
-              /* ═══════════ SERVICE HISTORY + AER ═══════════ */
               <>
                 <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 9 }}>Service History</div>
                 {cs.serviceHistory.map((h, i) => {
@@ -1147,7 +1198,6 @@ export default function DialerPage() {
                   );
                 })}
 
-                {/* Nearby AER */}
                 {cs.nearbyAER.length > 0 && (
                   <div className="mt-1 p-2 rounded" style={S.linkShot}>
                     <div className="text-xs uppercase tracking-widest font-bold mb-0.5" style={{ color: '#00e5ff', fontSize: 9 }}>
@@ -1166,8 +1216,12 @@ export default function DialerPage() {
           </div>
         </div>
 
-        {/* RIGHT: Side panel — disposition buttons always visible */}
-        <div className="flex flex-col overflow-hidden" style={{ ...S.sidePanel, width: 210, minWidth: 210 }}>
+        {/* RIGHT: Side panel — 240px, disposition buttons + fireteam history */}
+        <div
+          className="flex flex-col overflow-hidden"
+          style={{ ...S.sidePanel, width: 240, minWidth: 240, maxWidth: 240 }}
+        >
+          {/* Disposition buttons */}
           <div className="p-2 flex-shrink-0">
             <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 8 }}>Disposition</div>
             <DispButton label="📞 NA" onClick={() => doDisp('NA')} style={{ background: '#333', color: '#e67e22', border: '1px solid #555' }} />
@@ -1186,8 +1240,21 @@ export default function DialerPage() {
             />
           </div>
 
-          {/* Log message */}
-          <div className="mt-auto text-center px-2 py-1 flex-shrink-0 text-xs" style={{ color: '#00e5ff', opacity: 0.4, letterSpacing: '1px', fontSize: 8, borderTop: '1px solid rgba(0,229,255,0.10)', minHeight: 14 }}>
+          {/* Fireteam History Panel — fills remaining space */}
+          <FireteamPanel events={fireteamEvents} />
+
+          {/* Log message — pinned at bottom */}
+          <div
+            className="text-center px-2 py-1 flex-shrink-0 text-xs"
+            style={{
+              color: '#00e5ff',
+              opacity: 0.4,
+              letterSpacing: '1px',
+              fontSize: 8,
+              borderTop: '1px solid rgba(0,229,255,0.10)',
+              minHeight: 14,
+            }}
+          >
             {logMessage}
           </div>
         </div>
