@@ -82,17 +82,17 @@ const SECTION_ICONS: Record<string, string> = {
 // --- Multiplier descriptions ---
 
 const MULT_DESCRIPTIONS: Record<string, string> = {
-  op_tempo: '2+ YES streak starts +0.2x, grows +0.1x per level. 20min timer resets on each YES.',
+  op_tempo: '5+ bookings in rolling 1hr window → +0.5x base, +0.1x per additional booking. Drops when window falls below 5.',
   tracer_rounds: '2+ prepay streak starts +0.2x, grows +0.2x per level. 20min timer.',
   high_ground: '+1.0x flat while dialing on the same street as your last YES.',
   night_vision: '+0.2x per booking after 8pm. Stacks infinitely.',
   blitz: '5 bookings within 20/40/60min of session start → 2.0x/1.5x/1.0x, decays over 3hrs.',
   enraged: '3 rejections → tiered bonus (1.0x → 2.0x → 2.0x). Consumed on YES.',
   ratio_focus: 'PP ratio ≥ 20% → your ratio becomes a multiplier.',
-  war_machine: '+0.1x per consecutive hour at 50+ dials/hr.',
+  war_machine: 'Dial 50 times → +0.5x flat. Drops if no disposition for 10 minutes. Reset to 0 and re-earn at next 50.',
   ghost_town: '10 unreached → 0.5x (3 charges). Tiers up: 1.0x → 2.0x.',
   cold_streak: '20 dials without YES → +1.0x (2 charges).',
-  scorched_earth: 'Clear an entire street → tiered bonus (1.1x-3.0x), 5 charges per trigger.',
+  scorched_earth: 'Clear an entire street → tiered bonus (0.1x–2.0x), 2 charges per trigger.',
   indoctrinate: 'Convert a non-app client to prepay → badge bonuses get multiplied by ALL active multipliers for 2 bookings.',
 };
 
@@ -435,11 +435,16 @@ function MultipliersTab({ session }: { session: GamificationSession }) {
         let isActive = false;
         let currentVal = '';
 
-        if (id === 'op_tempo' && ms?.expiresAt > Date.now() && ms?.streakCount >= (def as any).activationThreshold) {
-          isActive = true;
-          const v = (def as any).baseMultiplier + (ms.streakCount - (def as any).activationThreshold) * (def as any).perLevelBonus;
-          currentVal = `+${Math.round(v * 100) / 100}x`;
+        // Op Tempo — rolling 60-min window
+        if (id === 'op_tempo') {
+          const cutoff = Date.now() - 3600000;
+          const wc = (session.bookingTimestamps || []).filter((t: number) => t >= cutoff).length;
+          if (wc >= ((def as any).activationThreshold || 5)) {
+            isActive = true;
+            currentVal = `+${Math.round(wc * ((def as any).perLevelBonus || 0.1) * 100) / 100}x (${wc} in window)`;
+          }
         }
+
         if (id === 'tracer_rounds' && ms?.expiresAt > Date.now() && ms?.prepayCount >= (def as any).activationThreshold) {
           isActive = true;
           const v = (def as any).baseMultiplier + (ms.prepayCount - (def as any).activationThreshold) * (def as any).perLevelBonus;
@@ -453,6 +458,19 @@ function MultipliersTab({ session }: { session: GamificationSession }) {
           const r = session.pps / session.totalBookings;
           if (r >= (def as any).minimumRatio) { isActive = true; currentVal = `+${Math.round(r * 100) / 100}x`; }
         }
+
+        // War Machine — inactivity countdown
+        if (id === 'war_machine') {
+          if (ms?.active) {
+            isActive = true;
+            const elapsed = ms.lastDialAt > 0 ? Date.now() - ms.lastDialAt : 0;
+            const remaining = Math.max(0, 600000 - elapsed);
+            const mins = Math.floor(remaining / 60000);
+            const secs = Math.floor((remaining % 60000) / 1000);
+            currentVal = `+0.5x (drops in ${mins}:${secs < 10 ? '0' + secs : secs})`;
+          }
+        }
+
         if (id === 'ghost_town' && ms?.chargesRemaining > 0) { isActive = true; currentVal = `tier ${ms.tier} (${ms.chargesRemaining}ch)`; }
         if (id === 'cold_streak' && ms?.chargesRemaining > 0) { isActive = true; currentVal = `${ms.chargesRemaining}ch`; }
         if (id === 'scorched_earth' && ms?.bonusStack?.length > 0) { isActive = true; currentVal = `${ms.bonusStack.length} stacks`; }

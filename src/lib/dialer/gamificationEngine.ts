@@ -77,6 +77,9 @@ export function processDisposition(
 
   recordDial(session, now);
 
+  // --- Op Tempo: recount rolling window on every disposition ---
+  updateOpTempo(session, now);
+
   // --- War Machine: record last dial time and check inactivity ---
   updateWarMachine(session, now);
 
@@ -173,7 +176,7 @@ function checkColdStreakTrigger(session: GamificationSession): void {
 
 function processRejection(session: GamificationSession, now: number): void {
   session.consecutiveYes = 0;
-  session.multipliers.op_tempo.expiresAt = 0;
+  // Op Tempo drops automatically — window recount happens at top of processDisposition
 
   // Enraged tiered logic
   const en = session.multipliers.enraged;
@@ -265,7 +268,6 @@ function processYes(
   }
 
   consumeScorchedEarthCharge(session);
-  updateOpTempo(session, now);
   updateTracerRounds(session, isPrepay, now);
 
   // High Ground: set activeStreet AFTER the check at the top of processDisposition
@@ -295,9 +297,10 @@ function processYes(
 // =============================================================================
 
 function updateOpTempo(session: GamificationSession, now: number): void {
-  const s = session.multipliers.op_tempo;
-  s.streakCount = session.consecutiveYes;
-  s.expiresAt = now + (MULTIPLIER_DEFS.op_tempo.timerDuration || 1200000);
+  // Re-count bookings in rolling 60-min window on every disposition
+  const cutoff = now - 3600000;
+  const windowCount = (session.bookingTimestamps || []).filter(t => t >= cutoff).length;
+  session.multipliers.op_tempo.windowCount = windowCount;
 }
 
 function updateTracerRounds(session: GamificationSession, isPrepay: boolean, now: number): void {
@@ -439,14 +442,18 @@ function calculateMultiplier(session: GamificationSession, now: number): {
   const breakdown: Record<string, number> = {};
   let total = 1.0;
 
-  // Op Tempo
+  // Op Tempo — rolling 60-min window
   const opS = session.multipliers.op_tempo;
   const opD = MULTIPLIER_DEFS.op_tempo;
-  if (opS.expiresAt > 0 && now > opS.expiresAt) { opS.streakCount = 0; opS.expiresAt = 0; }
-  if (opS.expiresAt > 0 && opS.streakCount >= (opD.activationThreshold || 2)) {
-    const v = (opD.baseMultiplier || 0.2) + (opS.streakCount - (opD.activationThreshold || 2)) * (opD.perLevelBonus || 0.1);
-    breakdown.op_tempo = Math.round(v * 100) / 100;
-    total += v;
+  {
+    const cutoff = now - 3600000;
+    const wc = (session.bookingTimestamps || []).filter(t => t >= cutoff).length;
+    opS.windowCount = wc;
+    if (wc >= (opD.activationThreshold || 5)) {
+      const v = Math.round(wc * (opD.perLevelBonus || 0.1) * 100) / 100;
+      breakdown.op_tempo = v;
+      total += v;
+    }
   }
 
   // Tracer Rounds
@@ -854,15 +861,20 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
   const now = Date.now();
   const active: MultiplierSnapshot[] = [];
 
-  // Op Tempo
+  // Op Tempo — rolling 60-min window
   const opS = session.multipliers.op_tempo;
   const opD = MULTIPLIER_DEFS.op_tempo;
-  if (opS.expiresAt > 0 && now < opS.expiresAt && opS.streakCount >= (opD.activationThreshold || 2)) {
-    active.push({
-      id: 'op_tempo', name: opD.name, icon: opD.icon,
-      value: Math.round(((opD.baseMultiplier || 0.2) + (opS.streakCount - (opD.activationThreshold || 2)) * (opD.perLevelBonus || 0.1)) * 100) / 100,
-      expiresIn: opS.expiresAt - now,
-    });
+  {
+    const cutoff = now - 3600000;
+    const wc = (session.bookingTimestamps || []).filter(t => t >= cutoff).length;
+    if (wc >= (opD.activationThreshold || 5)) {
+      active.push({
+        id: 'op_tempo', name: opD.name, icon: opD.icon,
+        value: Math.round(wc * (opD.perLevelBonus || 0.1) * 100) / 100,
+        expiresIn: -1,
+        extra: { windowCount: wc },
+      });
+    }
   }
 
   // Tracer Rounds

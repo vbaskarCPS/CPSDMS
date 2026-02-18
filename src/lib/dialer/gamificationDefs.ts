@@ -142,8 +142,12 @@ export interface MultiplierDef {
 export const MULTIPLIER_DEFS: Record<string, MultiplierDef> = {
   op_tempo: {
     name: 'Op Tempo', icon: '⚡',
-    activationThreshold: 2, baseMultiplier: 0.2, perLevelBonus: 0.1,
-    timerDuration: 1200000, decays: false,
+    // Activates when rolling 60-min booking window reaches 5+.
+    // Value = windowCount * perLevelBonus (5→0.5x, 6→0.6x, no cap).
+    // Re-evaluated on each disposition. Drops when window falls below activationThreshold.
+    activationThreshold: 5,
+    perLevelBonus: 0.1,
+    timerDuration: 0, decays: false,
   },
   tracer_rounds: {
     name: 'Tracer Rounds', icon: '🔴',
@@ -291,7 +295,7 @@ export interface GamificationSession {
   _prepayStreakBadgeEpoch?: number;
 
   multipliers: {
-    op_tempo: { streakCount: number; expiresAt: number };
+    op_tempo: { windowCount: number };  // bookings in rolling 60-min window
     tracer_rounds: { prepayCount: number; expiresAt: number };
     high_ground: { activeStreet: string; active: boolean };
     night_vision: { bookingsAfter8: number };
@@ -322,7 +326,7 @@ export function createFreshSession(repCode: string, dateStr: string): Gamificati
     badges: [], badgeOnceClaimed: {},
     streetSales: {},
     multipliers: {
-      op_tempo: { streakCount: 0, expiresAt: 0 },
+      op_tempo: { windowCount: 0 },
       tracer_rounds: { prepayCount: 0, expiresAt: 0 },
       high_ground: { activeStreet: '', active: false },
       night_vision: { bookingsAfter8: 0 },
