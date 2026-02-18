@@ -5,6 +5,7 @@
 // Historical data loaded on mount and on tab switch.
 // Live events appended via Supabase Realtime.
 // Multiplier activation rows are client-side only (passed as liveMultiplierEvents).
+// Login events ("X on the field") show in GLOBAL tab only.
 // Tooltips open to the LEFT so they're not clipped by the panel edge.
 //
 
@@ -23,7 +24,7 @@ export interface FireteamEvent {
   timestamp: number;
   name: string;
   isOwn: boolean;
-  eventType?: 'booking' | 'multiplier';
+  eventType?: 'booking' | 'multiplier' | 'login';
   // Booking fields
   isPrepay: boolean;
   points: number;
@@ -74,10 +75,6 @@ const PANEL_STYLES = `
     0%   { opacity: 0; transform: translateY(-50%) translateX(4px) scale(0.97); }
     100% { opacity: 1; transform: translateY(-50%) translateX(0)   scale(1); }
   }
-  @keyframes ft-tab-underline {
-    0%   { transform: scaleX(0); }
-    100% { transform: scaleX(1); }
-  }
 `;
 
 // =============================================================================
@@ -92,9 +89,30 @@ function formatTime(ts: number): string {
   return `${h}:${m < 10 ? '0' + m : m}${ampm}`;
 }
 
-/** Convert a TeamBookingEvent from Supabase into a FireteamEvent */
-function teamEventToFireteam(evt: TeamBookingEvent & { managerId?: string }, currentManagerId: string): FireteamEvent {
+function teamEventToFireteam(
+  evt: TeamBookingEvent & { managerId?: string; isLogin?: boolean },
+  currentManagerId: string
+): FireteamEvent {
   const isOwn = evt.managerId === currentManagerId;
+
+  if (evt.isLogin) {
+    return {
+      id: evt.id,
+      timestamp: evt.timestamp,
+      name: isOwn ? 'You' : evt.name,
+      isOwn,
+      eventType: 'login',
+      isPrepay: false,
+      points: 0,
+      base: 0,
+      multiplier: 1,
+      multiplierBreakdown: {},
+      badgeBonuses: {},
+      badgeBonusTotal: 0,
+      newBadges: [],
+    };
+  }
+
   return {
     id: evt.id,
     timestamp: evt.timestamp,
@@ -103,7 +121,7 @@ function teamEventToFireteam(evt: TeamBookingEvent & { managerId?: string }, cur
     eventType: 'booking',
     isPrepay: evt.isPrepay ?? false,
     points: evt.points,
-    base: evt.points,        // historical rows don't store breakdown
+    base: evt.points,
     multiplier: 1,
     multiplierBreakdown: {},
     badgeBonuses: {},
@@ -112,7 +130,6 @@ function teamEventToFireteam(evt: TeamBookingEvent & { managerId?: string }, cur
   };
 }
 
-/** Convert a MultiplierActivationEvent into a FireteamEvent */
 function multActivationToFireteam(evt: MultiplierActivationEvent): FireteamEvent {
   return {
     id: evt.id,
@@ -136,7 +153,7 @@ function multActivationToFireteam(evt: MultiplierActivationEvent): FireteamEvent
 }
 
 // =============================================================================
-// BOOKING TOOLTIP  (opens LEFT)
+// BOOKING TOOLTIP (opens LEFT)
 // =============================================================================
 
 function BookingTooltip({ event }: { event: FireteamEvent }) {
@@ -156,21 +173,18 @@ function BookingTooltip({ event }: { event: FireteamEvent }) {
       animation: 'ft-tooltip-in 0.15s ease-out both',
       pointerEvents: 'none',
     }}>
-      {/* Arrow → points right */}
       <div style={{
         position: 'absolute', top: '50%', right: -6, transform: 'translateY(-50%)',
         width: 0, height: 0,
         borderTop: '6px solid transparent', borderBottom: '6px solid transparent',
         borderLeft: `6px solid ${ac}35`,
       }} />
-
       <div style={{
         background: 'rgba(0,8,14,0.97)', border: `1px solid ${ac}30`,
         borderRadius: 8, padding: '10px 12px',
         boxShadow: `0 8px 32px rgba(0,0,0,0.85), 0 0 16px ${ac}10`,
         backdropFilter: 'blur(12px)', fontSize: 10, lineHeight: 1.5,
       }}>
-        {/* Header */}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid rgba(255,255,255,0.06)',
@@ -184,7 +198,6 @@ function BookingTooltip({ event }: { event: FireteamEvent }) {
           </span>
         </div>
 
-        {/* Score */}
         <div style={{ marginBottom: multEntries.length > 0 || badgeEntries.length > 0 ? 6 : 0 }}>
           <div style={{ color: '#555', fontSize: 9, marginBottom: 3, letterSpacing: '1px', fontWeight: 700 }}>SCORE</div>
           <div style={{ color: '#aaa', fontFamily: 'monospace', fontSize: 10 }}>
@@ -205,7 +218,6 @@ function BookingTooltip({ event }: { event: FireteamEvent }) {
           </div>
         </div>
 
-        {/* Multiplier breakdown */}
         {multEntries.length > 0 && (
           <div style={{ marginBottom: badgeEntries.length > 0 ? 6 : 0 }}>
             <div style={{ color: '#555', fontSize: 9, marginBottom: 3, letterSpacing: '1px', fontWeight: 700 }}>MULTIPLIERS</div>
@@ -220,7 +232,6 @@ function BookingTooltip({ event }: { event: FireteamEvent }) {
           </div>
         )}
 
-        {/* Badges */}
         {(event.newBadges || []).length > 0 && (
           <div>
             <div style={{ color: '#555', fontSize: 9, marginBottom: 4, letterSpacing: '1px', fontWeight: 700 }}>BADGES EARNED</div>
@@ -250,7 +261,7 @@ function BookingTooltip({ event }: { event: FireteamEvent }) {
 }
 
 // =============================================================================
-// MULTIPLIER TOOLTIP  (opens LEFT)
+// MULTIPLIER TOOLTIP (opens LEFT)
 // =============================================================================
 
 function MultiplierTooltip({ event }: { event: FireteamEvent }) {
@@ -411,6 +422,39 @@ function MultiplierRow({ event, index }: { event: FireteamEvent; index: number }
 }
 
 // =============================================================================
+// LOGIN ROW — "Vijay on the field" — Global tab only
+// =============================================================================
+
+function LoginRow({ event, index }: { event: FireteamEvent; index: number }) {
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5,
+        padding: '2px 8px', borderRadius: 5,
+        background: 'transparent',
+        border: '1px solid transparent',
+        animation: `ft-row-in 0.25s ease-out ${Math.min(index * 0.03, 0.3)}s both`,
+        minWidth: 0, opacity: 0.45,
+      }}
+    >
+      <span style={{ fontSize: 7, flexShrink: 0 }}>🟢</span>
+
+      <span style={{ fontFamily: 'monospace', fontSize: 9, color: '#333', flexShrink: 0, minWidth: 34 }}>
+        {formatTime(event.timestamp)}
+      </span>
+
+      <span style={{
+        fontSize: 10, fontStyle: 'italic', fontWeight: 500,
+        color: '#3a6a4a',
+        flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {event.name} on the field
+      </span>
+    </div>
+  );
+}
+
+// =============================================================================
 // MAIN PANEL
 // =============================================================================
 
@@ -418,7 +462,6 @@ interface FireteamPanelProps {
   campaignId: string;
   managerId: string;
   managerName: string;
-  /** Client-side-only multiplier activation events — merged with booking events at render */
   liveMultiplierEvents?: MultiplierActivationEvent[];
 }
 
@@ -438,66 +481,53 @@ export default function FireteamPanel({
   const globalUnsubRef = useRef<(() => void) | null>(null);
   const fireteamUnsubRef = useRef<(() => void) | null>(null);
 
-  // =========================================================================
-  // HELPERS — upsert into a Map by id (deduplication)
-  // =========================================================================
-
   const upsertEvents = useCallback((
     setter: React.Dispatch<React.SetStateAction<Map<string, FireteamEvent>>>,
     incoming: FireteamEvent[]
   ) => {
     setter(prev => {
       const next = new Map(prev);
-      for (const evt of incoming) {
-        next.set(evt.id, evt);
-      }
+      for (const evt of incoming) next.set(evt.id, evt);
       return next;
     });
   }, []);
 
-  // =========================================================================
-  // INITIAL FETCH + SUBSCRIPTIONS — run once on mount
-  // =========================================================================
-
   useEffect(() => {
     if (!campaignId || !managerId) return;
-
     let cancelled = false;
 
     const setup = async () => {
       setLoading(true);
 
-      // --- Fetch historical data for both tabs in parallel ---
       const [globalRaw, fireteamRaw] = await Promise.all([
-        dialerRealtimeService.fetchTodayEvents(),           // all campaigns
-        dialerRealtimeService.fetchTodayEvents(campaignId), // current campaign only
+        dialerRealtimeService.fetchTodayEvents(),
+        dialerRealtimeService.fetchTodayEvents(campaignId),
       ]);
 
       if (cancelled) return;
 
-      const toFireteamEvt = (evt: TeamBookingEvent & { managerId?: string }) =>
+      const toFE = (evt: TeamBookingEvent & { managerId?: string; isLogin?: boolean }) =>
         teamEventToFireteam(evt, managerId);
 
-      upsertEvents(setGlobalEvents, globalRaw.map(toFireteamEvt));
-      upsertEvents(setFireteamEvents, fireteamRaw.map(toFireteamEvt));
-
+      upsertEvents(setGlobalEvents, globalRaw.map(toFE));
+      upsertEvents(setFireteamEvents, fireteamRaw.map(toFE));
       setLoading(false);
 
-      // --- Subscribe: Global (all campaigns, own events included) ---
+      // Global: all campaigns, own events included, logins included
       globalUnsubRef.current = dialerRealtimeService.subscribeToGlobalFeed(
         managerId,
         (evt) => {
-          const fe = teamEventToFireteam(evt as TeamBookingEvent & { managerId?: string }, managerId);
+          const fe = teamEventToFireteam(evt as any, managerId);
           upsertEvents(setGlobalEvents, [fe]);
         }
       );
 
-      // --- Subscribe: Fireteam (current campaign, skip own) ---
+      // Fireteam: current campaign only, skip own, no logins
       fireteamUnsubRef.current = dialerRealtimeService.subscribeToTeamFeed(
         campaignId,
         managerId,
         (evt) => {
-          const fe = teamEventToFireteam(evt as TeamBookingEvent & { managerId?: string }, managerId);
+          const fe = teamEventToFireteam(evt as any, managerId);
           upsertEvents(setFireteamEvents, [fe]);
         }
       );
@@ -514,10 +544,6 @@ export default function FireteamPanel({
     };
   }, [campaignId, managerId, upsertEvents]);
 
-  // =========================================================================
-  // AUTO-SCROLL — keep at bottom when new events arrive
-  // =========================================================================
-
   const handleScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -532,26 +558,20 @@ export default function FireteamPanel({
     }
   }, [activeCount, liveMultiplierEvents.length]);
 
-  // =========================================================================
-  // BUILD MERGED + SORTED EVENT LIST FOR CURRENT TAB
-  // =========================================================================
-
   const buildDisplayEvents = (): FireteamEvent[] => {
     const bookingMap = activeTab === 'global' ? globalEvents : fireteamEvents;
     const bookings = Array.from(bookingMap.values());
 
-    // Multiplier events are always shown regardless of tab (client-side only)
-    const multEvents = liveMultiplierEvents.map(multActivationToFireteam);
+    // On fireteam tab: strip login events (global-only)
+    const filtered = activeTab === 'fireteam'
+      ? bookings.filter(e => e.eventType !== 'login')
+      : bookings;
 
-    // Merge and sort by timestamp ascending
-    return [...bookings, ...multEvents].sort((a, b) => a.timestamp - b.timestamp);
+    const multEvents = liveMultiplierEvents.map(multActivationToFireteam);
+    return [...filtered, ...multEvents].sort((a, b) => a.timestamp - b.timestamp);
   };
 
   const displayEvents = buildDisplayEvents();
-
-  // =========================================================================
-  // RENDER
-  // =========================================================================
 
   return (
     <>
@@ -565,97 +585,62 @@ export default function FireteamPanel({
           borderTop: `1px solid ${CY}08`,
           gap: 0,
         }}>
-          {/* Global tab */}
           <button
             onClick={() => setActiveTab('global')}
             style={{
-              flex: 1,
-              background: 'transparent',
-              border: 'none',
+              flex: 1, background: 'transparent', border: 'none',
               borderBottom: activeTab === 'global' ? `1.5px solid ${CY}` : '1.5px solid transparent',
-              padding: '3px 4px 4px',
-              cursor: 'pointer',
-              transition: 'border-color 0.2s ease',
+              padding: '3px 4px 4px', cursor: 'pointer', transition: 'border-color 0.2s ease',
             }}
           >
             <span style={{
-              fontSize: 8,
-              fontWeight: 800,
-              letterSpacing: '2px',
-              color: CY,
+              fontSize: 8, fontWeight: 800, letterSpacing: '2px', color: CY,
               opacity: activeTab === 'global' ? 0.8 : 0.25,
-              textTransform: 'uppercase' as const,
-              fontFamily: 'monospace',
+              textTransform: 'uppercase' as const, fontFamily: 'monospace',
               transition: 'opacity 0.2s ease',
             }}>
               GLOBAL
             </span>
           </button>
 
-          {/* Fireteam tab */}
           <button
             onClick={() => setActiveTab('fireteam')}
             style={{
-              flex: 1,
-              background: 'transparent',
-              border: 'none',
+              flex: 1, background: 'transparent', border: 'none',
               borderBottom: activeTab === 'fireteam' ? `1.5px solid ${CY}` : '1.5px solid transparent',
-              padding: '3px 4px 4px',
-              cursor: 'pointer',
-              transition: 'border-color 0.2s ease',
+              padding: '3px 4px 4px', cursor: 'pointer', transition: 'border-color 0.2s ease',
             }}
           >
             <span style={{
-              fontSize: 8,
-              fontWeight: 800,
-              letterSpacing: '2px',
-              color: CY,
+              fontSize: 8, fontWeight: 800, letterSpacing: '2px', color: CY,
               opacity: activeTab === 'fireteam' ? 0.8 : 0.25,
-              textTransform: 'uppercase' as const,
-              fontFamily: 'monospace',
+              textTransform: 'uppercase' as const, fontFamily: 'monospace',
               transition: 'opacity 0.2s ease',
             }}>
               FIRETEAM
             </span>
           </button>
 
-          {/* Event count — far right */}
           {displayEvents.length > 0 && (
-            <span style={{
-              fontSize: 8,
-              color: '#2a3a3a',
-              fontFamily: 'monospace',
-              paddingLeft: 6,
-              flexShrink: 0,
-            }}>
+            <span style={{ fontSize: 8, color: '#2a3a3a', fontFamily: 'monospace', paddingLeft: 6, flexShrink: 0 }}>
               {displayEvents.length}
             </span>
           )}
         </div>
 
-        {/* Loading state */}
         {loading && (
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: '8px 0', flexShrink: 0,
-          }}>
-            <span style={{ fontSize: 8, color: `${CY}30`, letterSpacing: '2px', fontWeight: 700 }}>
-              LOADING...
-            </span>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 0', flexShrink: 0 }}>
+            <span style={{ fontSize: 8, color: `${CY}30`, letterSpacing: '2px', fontWeight: 700 }}>LOADING...</span>
           </div>
         )}
 
-        {/* List */}
         <div
           ref={scrollRef}
           onScroll={handleScroll}
           style={{
-            flex: 1,
-            overflowY: 'auto',
-            overflowX: 'visible',
+            flex: 1, overflowY: 'auto', overflowX: 'visible',
             padding: '2px 0 4px',
-            scrollbarWidth: 'thin',
-            scrollbarColor: `${CY}12 transparent`,
+            scrollbarWidth: 'thin', scrollbarColor: `${CY}12 transparent`,
           }}
         >
           {!loading && displayEvents.length === 0 ? (
@@ -668,11 +653,11 @@ export default function FireteamPanel({
               NO ACTIVITY YET
             </div>
           ) : (
-            displayEvents.map((evt, i) =>
-              evt.eventType === 'multiplier'
-                ? <MultiplierRow key={evt.id} event={evt} index={i} />
-                : <BookingRow key={evt.id} event={evt} index={i} />
-            )
+            displayEvents.map((evt, i) => {
+              if (evt.eventType === 'login')      return <LoginRow      key={evt.id} event={evt} index={i} />;
+              if (evt.eventType === 'multiplier') return <MultiplierRow key={evt.id} event={evt} index={i} />;
+              return <BookingRow key={evt.id} event={evt} index={i} />;
+            })
           )}
         </div>
       </div>

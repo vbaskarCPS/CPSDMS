@@ -2,11 +2,13 @@
 //
 // AutoSniper Dialer — full calling interface.
 // Three modes:
-//   1. Campaign Select — video-game-style map/tab picker (replaces old launcher)
+//   1. Campaign Select — video-game-style map/tab picker
 //   2. Dialer — active calling UI
 //   3. Empty — mission complete / no groups
 //
-// Consumes the Stage 3 engine for all data operations.
+// Presence heartbeat: publishes every 30s while in dialer mode.
+// Tab switches update the heartbeat campaign_id in real time.
+// clearPresence fires on unmount and when returning to campaign select.
 //
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -225,6 +227,12 @@ export default function DialerPage() {
   const [multActivations, setMultActivations] = useState<MultiplierActivationEvent[]>([]);
   const prevOwnMultipliersRef = useRef<MultiplierSnapshot[]>([]);
 
+  // --- Active tab being dialed (for presence heartbeat) ---
+  const [activeDialTab, setActiveDialTab] = useState('');
+
+  // --- Presence heartbeat ref ---
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // --- Engine config ---
   const configRef = useRef<EngineConfig | null>(null);
   const yesStartTimeRef = useRef(0);
@@ -262,7 +270,60 @@ export default function DialerPage() {
   }, [campaign]);
 
   // =======================================================================
-  // TEAM FEED — HUD toasts only (FireteamPanel now handles its own data)
+  // PRESENCE HEARTBEAT — publishes every 30s while in dialer mode
+  // Clears on unmount, or when returning to campaign-select
+  // =======================================================================
+
+  const startHeartbeat = useCallback((managerId: string, managerName: string, tabCampaignId: string) => {
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+
+    // Fire immediately
+    dialerRealtimeService.publishPresence({ managerId, managerName, campaignId: tabCampaignId }).catch(() => {});
+
+    heartbeatRef.current = setInterval(() => {
+      dialerRealtimeService.publishPresence({ managerId, managerName, campaignId: tabCampaignId }).catch(() => {});
+    }, 30_000);
+  }, []);
+
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatRef.current) {
+      clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+    }
+  }, []);
+
+  // Clear presence and stop heartbeat on unmount
+  useEffect(() => {
+    return () => {
+      stopHeartbeat();
+      if (manager?.id) {
+        dialerRealtimeService.clearPresence(manager.id).catch(() => {});
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manager?.id]);
+
+  // When tab being dialed changes, restart heartbeat with new campaign ID
+  useEffect(() => {
+    if (mode !== 'dialer' || !manager?.id || !activeDialTab) return;
+    startHeartbeat(
+      manager.id,
+      manager.name || manager.repCode || 'Unknown',
+      activeDialTab,
+    );
+    return () => stopHeartbeat();
+  }, [mode, activeDialTab, manager?.id, manager?.name, manager?.repCode, startHeartbeat, stopHeartbeat]);
+
+  // When returning to campaign select, clear presence
+  useEffect(() => {
+    if (mode === 'campaign-select' && manager?.id) {
+      stopHeartbeat();
+      dialerRealtimeService.clearPresence(manager.id).catch(() => {});
+    }
+  }, [mode, manager?.id, stopHeartbeat]);
+
+  // =======================================================================
+  // TEAM FEED — HUD toasts only (FireteamPanel handles its own data)
   // =======================================================================
 
   useEffect(() => {
@@ -272,7 +333,6 @@ export default function DialerPage() {
       campaign.id,
       manager.id,
       (event) => {
-        // Only feed the HUD corner toasts — FireteamPanel subscribes independently
         setTeamFeed(prev => [...prev, event]);
       }
     );
@@ -314,14 +374,7 @@ export default function DialerPage() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (mode !== 'dialer' || !currentState) return;
-      if (
-        showYesPanel ||
-        cardModalOpen ||
-        achievementsOpen ||
-        statsOpen ||
-        sniperSettingsOpen ||
-        showDeployConfig
-      ) return;
+      if (showYesPanel || cardModalOpen || achievementsOpen || statsOpen || sniperSettingsOpen || showDeployConfig) return;
 
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
@@ -343,22 +396,10 @@ export default function DialerPage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    mode,
-    currentState,
-    showYesPanel,
-    cardModalOpen,
-    achievementsOpen,
-    statsOpen,
-    sniperSettingsOpen,
-    showDeployConfig,
-    triggerFlash,
-  ]);
+  }, [mode, currentState, showYesPanel, cardModalOpen, achievementsOpen, statsOpen, sniperSettingsOpen, showDeployConfig, triggerFlash]);
 
   useEffect(() => {
-    return () => {
-      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    };
+    return () => { if (flashTimerRef.current) clearTimeout(flashTimerRef.current); };
   }, []);
 
   // =======================================================================
@@ -466,6 +507,10 @@ export default function DialerPage() {
       setRank(getCurrentRank(snapshot.session));
       prevOwnMultipliersRef.current = newMults;
       prefillYesForm(snapshot.state);
+
+      // Start presence heartbeat — use tab name as campaignId for presence
+      // (presence tracks which tab/campaign the manager is working in)
+      setActiveDialTab(selectedTab);
       setMode('dialer');
     } catch (err: any) {
       setEmptyMessage(err.message || 'Failed to initialize dialer.');
@@ -481,9 +526,7 @@ export default function DialerPage() {
 
   const handleSniperConfigSaved = useCallback((config: SniperConfig) => {
     setSniperConfig(config);
-    if (configRef.current) {
-      configRef.current.sniperConfig = config;
-    }
+    if (configRef.current) configRef.current.sniperConfig = config;
     invalidateCache();
   }, []);
 
@@ -543,26 +586,13 @@ export default function DialerPage() {
     if (!result) return;
     if (result.session) setSession(result.session);
     if (result.rank) setRank(result.rank);
+    if (result.activeMultipliers) { setMultipliers(result.activeMultipliers); setMultipliersAt(Date.now()); }
+    if (result.newBadges?.length > 0) { for (const id of result.newBadges) queueBadgeToast(id); }
+    if (result.pointBreakdown) { showPointToast(result.pointBreakdown.grandTotal, result.pointBreakdown.multiplier); }
+    else if (!isBooking && result.badgeBonusTotal > 0) { showPointToast(result.badgeBonusTotal, 1); }
 
-    if (result.activeMultipliers) {
-      setMultipliers(result.activeMultipliers);
-      setMultipliersAt(Date.now());
-    }
-
-    if (result.newBadges?.length > 0) {
-      for (const id of result.newBadges) queueBadgeToast(id);
-    }
-
-    if (result.pointBreakdown) {
-      showPointToast(result.pointBreakdown.grandTotal, result.pointBreakdown.multiplier);
-    } else if (!isBooking && result.badgeBonusTotal > 0) {
-      showPointToast(result.badgeBonusTotal, 1);
-    }
-
-    // Publish booking to Supabase (FireteamPanel picks it up via its own subscription)
     if (isBooking && result.pointBreakdown?.grandTotal > 0 && campaign?.id && manager?.id) {
       const ppDollars = isPrepay && bookingPrice ? parseFloat(bookingPrice) || 0 : 0;
-
       dialerRealtimeService.publishBookingEvent({
         campaignId:  campaign.id,
         managerId:   manager.id,
@@ -582,15 +612,9 @@ export default function DialerPage() {
 
   const handleMenuAction = useCallback((action: HUDMenuAction) => {
     switch (action) {
-      case 'achievements':
-        setAchievementsOpen(true);
-        break;
-      case 'team':
-        setStatsOpen(true);
-        break;
-      case 'scope':
-        setSniperSettingsOpen(true);
-        break;
+      case 'achievements': setAchievementsOpen(true); break;
+      case 'team': setStatsOpen(true); break;
+      case 'scope': setSniperSettingsOpen(true); break;
       case 'campaigns':
         setMode('campaign-select' as any);
         break;
@@ -609,8 +633,7 @@ export default function DialerPage() {
         setLogMessage('Session reset.');
         break;
       }
-      default:
-        break;
+      default: break;
     }
   }, [session?.repCode, manager?.repCode]);
 
@@ -630,13 +653,7 @@ export default function DialerPage() {
 
     try {
       const result = await applyDisposition(
-        configRef.current,
-        currentState,
-        disp,
-        currentState.phone,
-        session!,
-        {},
-        yesStartTimeRef.current
+        configRef.current, currentState, disp, currentState.phone, session!, {}, yesStartTimeRef.current
       );
 
       handleGamResult(result.gamification, false);
@@ -675,58 +692,27 @@ export default function DialerPage() {
     publishDialTick();
 
     const extra: DispositionExtra = {
-      name: yName.trim(),
-      lastName: yLastName.trim(),
-      houseNum: yHouseNum.trim(),
-      streetName: yStreetName.trim(),
-      price: yPrice.trim(),
-      email: yEmail.trim(),
-      gate: yGate,
-      sprinkler: ySprink,
-      foValue: yFO,
-      notes: yNotes.trim(),
+      name: yName.trim(), lastName: yLastName.trim(), houseNum: yHouseNum.trim(),
+      streetName: yStreetName.trim(), price: yPrice.trim(), email: yEmail.trim(),
+      gate: yGate, sprinkler: ySprink, foValue: yFO, notes: yNotes.trim(),
     };
 
     try {
       if (subType === 'PREPAY') {
         const result = await applyDisposition(
-          configRef.current,
-          currentState,
-          'PREPAY',
-          currentState.phone,
-          session!,
-          extra,
-          yesStartTimeRef.current
+          configRef.current, currentState, 'PREPAY', currentState.phone, session!, extra, yesStartTimeRef.current
         );
         handleGamResult(result.gamification, true, true, yPrice.trim());
-
-        setCcAmt(yPrice.trim());
-        setCcNum('');
-        setCcExp('');
-        setCcCvv('');
-        setCcType('');
-        setCardStatus('');
-        setCardStaging(false);
+        setCcAmt(yPrice.trim()); setCcNum(''); setCcExp(''); setCcCvv(''); setCcType(''); setCardStatus(''); setCardStaging(false);
         setCardModalOpen(true);
         setPendingDial(false);
       } else {
         const result = await applyDisposition(
-          configRef.current,
-          currentState,
-          'COMPLETE',
-          currentState.phone,
-          session!,
-          extra,
-          yesStartTimeRef.current
+          configRef.current, currentState, 'COMPLETE', currentState.phone, session!, extra, yesStartTimeRef.current
         );
         handleGamResult(result.gamification, true, false);
-
-        if (result.nextState.found) {
-          renderNewState(result.nextState as DialerState);
-          if (autoFire) dialPhone((result.nextState as DialerState).phone);
-        } else {
-          renderNewState(null, (result.nextState as any).message);
-        }
+        if (result.nextState.found) { renderNewState(result.nextState as DialerState); if (autoFire) dialPhone((result.nextState as DialerState).phone); }
+        else { renderNewState(null, (result.nextState as any).message); }
         setPendingDial(false);
       }
     } catch (err: any) {
@@ -757,24 +743,16 @@ export default function DialerPage() {
     if (!num || num.length < 13) { setCardStatus('Enter a valid card number.'); return; }
     if (!ccExp.trim()) { setCardStatus('Enter expiry date.'); return; }
     if (!ccCvv.trim()) { setCardStatus('Enter CVV.'); return; }
-
-    setCardStaging(true);
-    setCardStatus('Staging card...');
-
+    setCardStaging(true); setCardStatus('Staging card...');
     try {
       const cardData = stageCardData(num, ccExp.trim(), ccCvv.trim(), ccAmt.trim());
       const result = await finalizePrepay(configRef.current!, cardData, session!);
-
       handleGamResult(result.gamification, true, true, ccAmt.trim());
       setCardStatus('✓ Card staged');
       setTimeout(() => {
         setCardModalOpen(false);
-        if (result.nextState.found) {
-          renderNewState(result.nextState as DialerState);
-          if (autoFire) dialPhone((result.nextState as DialerState).phone);
-        } else {
-          renderNewState(null, (result.nextState as any).message);
-        }
+        if (result.nextState.found) { renderNewState(result.nextState as DialerState); if (autoFire) dialPhone((result.nextState as DialerState).phone); }
+        else { renderNewState(null, (result.nextState as any).message); }
       }, 800);
     } catch (err: any) {
       setCardStatus(`Error: ${err.message}`);
@@ -783,11 +761,8 @@ export default function DialerPage() {
   };
 
   const handleEject = () => {
-    cancelPrepay();
-    setCardModalOpen(false);
-    if (currentState) {
-      dispositionedKeysRef.current.delete(currentState.groupKey);
-    }
+    cancelPrepay(); setCardModalOpen(false);
+    if (currentState) dispositionedKeysRef.current.delete(currentState.groupKey);
     setPendingDial(false);
     setLogMessage('Prepay cancelled — re-disposition available.');
   };
@@ -842,15 +817,10 @@ export default function DialerPage() {
     if (tabsError && tabs.length === 0) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center p-6" style={S.body}>
-          <div className="text-sm font-bold tracking-widest uppercase mb-2" style={{ color: '#e74c3c' }}>
-            FAILED TO LOAD TABS
-          </div>
+          <div className="text-sm font-bold tracking-widest uppercase mb-2" style={{ color: '#e74c3c' }}>FAILED TO LOAD TABS</div>
           <div className="text-xs mb-4" style={{ color: '#888' }}>{tabsError}</div>
-          <button
-            onClick={handleConnect}
-            className="px-6 py-3 rounded font-bold text-sm tracking-wider uppercase"
-            style={{ background: 'rgba(0,20,30,0.8)', color: '#00e5ff', border: '1px solid rgba(0,229,255,0.20)' }}
-          >
+          <button onClick={handleConnect} className="px-6 py-3 rounded font-bold text-sm tracking-wider uppercase"
+            style={{ background: 'rgba(0,20,30,0.8)', color: '#00e5ff', border: '1px solid rgba(0,229,255,0.20)' }}>
             Retry
           </button>
         </div>
@@ -868,6 +838,9 @@ export default function DialerPage() {
             }
             setSniperSettingsOpen(true);
           }}
+          campaignId={campaign?.id}
+          managerId={manager?.id}
+          managerName={manager?.name || manager?.repCode || ''}
         />
 
         {campaign?.id && (
@@ -961,22 +934,12 @@ export default function DialerPage() {
                         fontSize: 9, fontWeight: 800, color: '#00e5ff',
                         background: 'rgba(0,229,255,0.12)', border: '1px solid rgba(0,229,255,0.25)',
                         borderRadius: 3, padding: '1px 6px', letterSpacing: '0.5px',
-                      }}>
-                        {yr}
-                      </span>
+                      }}>{yr}</span>
                     ))}
-                    {sniperConfig.ppOnly && (
-                      <span style={{ fontSize: 8, fontWeight: 800, color: '#f1c40f', background: 'rgba(241,196,15,0.12)', border: '1px solid rgba(241,196,15,0.25)', borderRadius: 3, padding: '1px 6px' }}>PP</span>
-                    )}
-                    {sniperConfig.minEntries > 1 && (
-                      <span style={{ fontSize: 8, fontWeight: 800, color: '#f5a623', background: 'rgba(245,166,35,0.12)', border: '1px solid rgba(245,166,35,0.25)', borderRadius: 3, padding: '1px 6px' }}>MIN:{sniperConfig.minEntries}</span>
-                    )}
-                    {sniperConfig.linkShot && (
-                      <span style={{ fontSize: 8, fontWeight: 800, color: '#2ecc71', background: 'rgba(46,204,113,0.12)', border: '1px solid rgba(46,204,113,0.25)', borderRadius: 3, padding: '1px 6px' }}>LINK</span>
-                    )}
-                    {sniperConfig.hideCTS && (
-                      <span style={{ fontSize: 8, fontWeight: 800, color: '#e74c3c', background: 'rgba(231,76,60,0.10)', border: '1px solid rgba(231,76,60,0.20)', borderRadius: 3, padding: '1px 6px' }}>-CTS</span>
-                    )}
+                    {sniperConfig.ppOnly && <span style={{ fontSize: 8, fontWeight: 800, color: '#f1c40f', background: 'rgba(241,196,15,0.12)', border: '1px solid rgba(241,196,15,0.25)', borderRadius: 3, padding: '1px 6px' }}>PP</span>}
+                    {sniperConfig.minEntries > 1 && <span style={{ fontSize: 8, fontWeight: 800, color: '#f5a623', background: 'rgba(245,166,35,0.12)', border: '1px solid rgba(245,166,35,0.25)', borderRadius: 3, padding: '1px 6px' }}>MIN:{sniperConfig.minEntries}</span>}
+                    {sniperConfig.linkShot && <span style={{ fontSize: 8, fontWeight: 800, color: '#2ecc71', background: 'rgba(46,204,113,0.12)', border: '1px solid rgba(46,204,113,0.25)', borderRadius: 3, padding: '1px 6px' }}>LINK</span>}
+                    {sniperConfig.hideCTS && <span style={{ fontSize: 8, fontWeight: 800, color: '#e74c3c', background: 'rgba(231,76,60,0.10)', border: '1px solid rgba(231,76,60,0.20)', borderRadius: 3, padding: '1px 6px' }}>-CTS</span>}
                   </div>
                   <Settings size={14} color="#00e5ff" style={{ opacity: 0.4, flexShrink: 0, marginLeft: 8 }} />
                 </button>
@@ -997,9 +960,7 @@ export default function DialerPage() {
                   style={{
                     background: loading ? '#333' : 'linear-gradient(135deg, #27ae60, #2ecc71)',
                     color: loading ? '#888' : '#fff',
-                    border: 'none',
-                    fontFamily: 'inherit',
-                    letterSpacing: '3px',
+                    border: 'none', fontFamily: 'inherit', letterSpacing: '3px',
                   }}
                 >
                   {loading ? 'DEPLOYING...' : '🎯 CONFIRM DEPLOY'}
@@ -1020,29 +981,16 @@ export default function DialerPage() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center" style={S.body}>
         <DialerHUD
-          session={session}
-          activeMultipliers={multipliers}
-          multipliersReceivedAt={multipliersAt}
-          rank={rank}
-          onTrophyClick={() => setAchievementsOpen(true)}
-          onMenuAction={handleMenuAction}
-          teamFeed={teamFeed}
-          multiplierActivations={multActivations}
-          autoFire={autoFire}
-          onAutoFireChange={setAutoFire}
+          session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt}
+          rank={rank} onTrophyClick={() => setAchievementsOpen(true)} onMenuAction={handleMenuAction}
+          teamFeed={teamFeed} multiplierActivations={multActivations} autoFire={autoFire} onAutoFireChange={setAutoFire}
         />
         <BadgeToastContainer toasts={badgeToasts} />
         <PointToastContainer toasts={pointToasts} />
         {session && <AchievementsPanel session={session} open={achievementsOpen} onClose={() => setAchievementsOpen(false)} />}
         {campaign?.id && (
-          <StatsPanel
-            open={statsOpen}
-            onClose={() => setStatsOpen(false)}
-            campaignId={campaign.id}
-            currentUserId={manager?.id || ''}
-            currentUserName={manager?.name || manager?.repCode || 'You'}
-            session={session}
-          />
+          <StatsPanel open={statsOpen} onClose={() => setStatsOpen(false)} campaignId={campaign.id}
+            currentUserId={manager?.id || ''} currentUserName={manager?.name || manager?.repCode || 'You'} session={session} />
         )}
         {loading ? (
           <div className="text-center" style={{ color: '#888', letterSpacing: '2px', fontSize: 12 }}>ACQUIRING TARGET...</div>
@@ -1076,29 +1024,16 @@ export default function DialerPage() {
   return (
     <div className="relative h-screen overflow-hidden" style={S.body}>
       <DialerHUD
-        session={session}
-        activeMultipliers={multipliers}
-        multipliersReceivedAt={multipliersAt}
-        rank={rank}
-        onTrophyClick={() => setAchievementsOpen(true)}
-        onMenuAction={handleMenuAction}
-        teamFeed={teamFeed}
-        multiplierActivations={multActivations}
-        autoFire={autoFire}
-        onAutoFireChange={setAutoFire}
+        session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt}
+        rank={rank} onTrophyClick={() => setAchievementsOpen(true)} onMenuAction={handleMenuAction}
+        teamFeed={teamFeed} multiplierActivations={multActivations} autoFire={autoFire} onAutoFireChange={setAutoFire}
       />
       <BadgeToastContainer toasts={badgeToasts} />
       <PointToastContainer toasts={pointToasts} />
       {session && <AchievementsPanel session={session} open={achievementsOpen} onClose={() => setAchievementsOpen(false)} />}
       {campaign?.id && (
-        <StatsPanel
-          open={statsOpen}
-          onClose={() => setStatsOpen(false)}
-          campaignId={campaign.id}
-          currentUserId={manager?.id || ''}
-          currentUserName={manager?.name || manager?.repCode || 'You'}
-          session={session}
-        />
+        <StatsPanel open={statsOpen} onClose={() => setStatsOpen(false)} campaignId={campaign.id}
+          currentUserId={manager?.id || ''} currentUserName={manager?.name || manager?.repCode || 'You'} session={session} />
       )}
 
       {/* Card entry modal */}
@@ -1106,31 +1041,19 @@ export default function DialerPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }}>
           <div className="rounded-lg p-5 w-80" style={{ background: '#2a2a2a', border: '1.5px solid rgba(241,196,15,0.5)', boxShadow: '0 8px 32px rgba(0,0,0,0.8)' }}>
             <div className="text-center mb-1 text-sm font-black tracking-widest uppercase" style={{ color: '#f1c40f' }}>💳 Load Magazine</div>
-            <div className="text-center text-xs mb-3" style={{ color: '#888', letterSpacing: '1px' }}>
-              {cl.firstName} {cl.lastName}
-            </div>
+            <div className="text-center text-xs mb-3" style={{ color: '#888', letterSpacing: '1px' }}>{cl.firstName} {cl.lastName}</div>
 
             <div className="mb-2.5">
               <label className="block text-xs uppercase tracking-wider mb-1" style={{ color: '#888', fontWeight: 600, fontSize: 9 }}>Card Number</label>
-              <input
-                type="text"
-                value={ccNum}
-                onChange={(e) => { setCcNum(e.target.value); detectCardType(e.target.value); }}
-                placeholder="0000 0000 0000 0000"
-                maxLength={19}
+              <input type="text" value={ccNum} onChange={(e) => { setCcNum(e.target.value); detectCardType(e.target.value); }}
+                placeholder="0000 0000 0000 0000" maxLength={19}
                 className="w-full px-2.5 py-2 rounded font-mono text-base font-semibold tracking-widest"
-                style={{ background: '#383838', color: '#fff', border: '1px solid #555', letterSpacing: '3px' }}
-              />
-              <div
-                className="inline-block mt-1 px-2.5 py-0.5 rounded text-xs font-black tracking-wider"
-                style={{
-                  background: ccType === 'VISA' ? 'rgba(26,35,126,0.3)' : ccType === 'MC' ? 'rgba(192,57,43,0.2)' : ccType === 'AMEX' ? 'rgba(39,174,96,0.2)' : 'rgba(255,255,255,0.05)',
-                  border: `1px solid ${ccType === 'VISA' ? '#1a237e' : ccType === 'MC' ? '#c0392b' : ccType === 'AMEX' ? '#27ae60' : '#555'}`,
-                  color: ccType === 'VISA' ? '#5c6bc0' : ccType === 'MC' ? '#e74c3c' : ccType === 'AMEX' ? '#2ecc71' : '#888',
-                }}
-              >
-                {ccType || 'Enter card #'}
-              </div>
+                style={{ background: '#383838', color: '#fff', border: '1px solid #555', letterSpacing: '3px' }} />
+              <div className="inline-block mt-1 px-2.5 py-0.5 rounded text-xs font-black tracking-wider" style={{
+                background: ccType === 'VISA' ? 'rgba(26,35,126,0.3)' : ccType === 'MC' ? 'rgba(192,57,43,0.2)' : ccType === 'AMEX' ? 'rgba(39,174,96,0.2)' : 'rgba(255,255,255,0.05)',
+                border: `1px solid ${ccType === 'VISA' ? '#1a237e' : ccType === 'MC' ? '#c0392b' : ccType === 'AMEX' ? '#27ae60' : '#555'}`,
+                color: ccType === 'VISA' ? '#5c6bc0' : ccType === 'MC' ? '#e74c3c' : ccType === 'AMEX' ? '#2ecc71' : '#888',
+              }}>{ccType || 'Enter card #'}</div>
             </div>
 
             <div className="flex gap-2.5 mb-2.5">
@@ -1190,26 +1113,18 @@ export default function DialerPage() {
           </div>
 
           <div className="flex items-center gap-2 px-2.5 py-1.5 flex-shrink-0" style={S.phoneBar}>
-            <a
-              href={`tel:${cs.phone}`}
-              onClick={(e) => { e.preventDefault(); dialPhone(); }}
-              className="font-mono text-lg font-black tracking-wider text-white hover:text-cyan-400 cursor-pointer no-underline"
-            >
+            <a href={`tel:${cs.phone}`} onClick={(e) => { e.preventDefault(); dialPhone(); }}
+              className="font-mono text-lg font-black tracking-wider text-white hover:text-cyan-400 cursor-pointer no-underline">
               {formatPhoneDisplay(cs.phone)}
             </a>
-            <span
-              className="text-xs px-1.5 py-0.5 rounded font-bold tracking-wider uppercase"
-              style={{ background: strat.bg, border: `1px solid ${strat.border}`, color: strat.color, fontSize: 8 }}
-            >
+            <span className="text-xs px-1.5 py-0.5 rounded font-bold tracking-wider uppercase"
+              style={{ background: strat.bg, border: `1px solid ${strat.border}`, color: strat.color, fontSize: 8 }}>
               {strat.label}
             </span>
             {cs.currentNA > 0 && <span className="text-xs font-bold" style={{ color: '#e67e22', fontSize: 10 }}>NA: {cs.currentNA}</span>}
             {cs.alternatePhone && (
-              <span
-                className="text-xs font-mono cursor-pointer hover:text-cyan-400"
-                style={{ color: '#666', fontSize: 9 }}
-                onClick={() => dialPhone(cs.alternatePhone)}
-              >
+              <span className="text-xs font-mono cursor-pointer hover:text-cyan-400" style={{ color: '#666', fontSize: 9 }}
+                onClick={() => dialPhone(cs.alternatePhone)}>
                 alt: {formatPhoneDisplay(cs.alternatePhone)}
               </span>
             )}
@@ -1219,7 +1134,6 @@ export default function DialerPage() {
             {showYesPanel ? (
               <div>
                 <div className="text-xs uppercase tracking-widest font-bold mb-2" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 9 }}>Booking Details</div>
-
                 <div className="flex gap-2 mb-1.5">
                   <div className="flex-1"><YesField label="First Name" value={yName} onChange={setYName} /></div>
                   <div className="flex-1"><YesField label="Last Name" value={yLastName} onChange={setYLastName} /></div>
@@ -1232,7 +1146,6 @@ export default function DialerPage() {
                   <div style={{ width: 100 }}><YesField label="Price" value={yPrice} onChange={setYPrice} /></div>
                   <div className="flex-1"><YesField label="Email" value={yEmail} onChange={setYEmail} /></div>
                 </div>
-
                 <div className="flex items-end gap-4 mb-1.5">
                   <div className="flex items-center gap-3">
                     <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: '#ccc' }}>
@@ -1254,19 +1167,11 @@ export default function DialerPage() {
                     </div>
                   </div>
                 </div>
-
                 <div className="mb-2"><YesField label="Notes" value={yNotes} onChange={setYNotes} /></div>
-
                 <div className="flex gap-2">
-                  <button onClick={() => setShowYesPanel(false)} className="px-3 py-2 rounded text-xs font-bold cursor-pointer" style={{ background: '#333', color: '#888', border: '1px solid #555' }}>
-                    ✖ Cancel
-                  </button>
-                  <button onClick={() => doYes('COMPLETE')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#2ecc71', color: '#fff', border: 'none', letterSpacing: '2px' }}>
-                    ✔ Complete
-                  </button>
-                  <button onClick={() => doYes('PREPAY')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none', letterSpacing: '2px' }}>
-                    💳 Prepay
-                  </button>
+                  <button onClick={() => setShowYesPanel(false)} className="px-3 py-2 rounded text-xs font-bold cursor-pointer" style={{ background: '#333', color: '#888', border: '1px solid #555' }}>✖ Cancel</button>
+                  <button onClick={() => doYes('COMPLETE')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#2ecc71', color: '#fff', border: 'none', letterSpacing: '2px' }}>✔ Complete</button>
+                  <button onClick={() => doYes('PREPAY')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none', letterSpacing: '2px' }}>💳 Prepay</button>
                 </div>
               </div>
             ) : (
@@ -1284,12 +1189,9 @@ export default function DialerPage() {
                     </div>
                   );
                 })}
-
                 {cs.nearbyAER.length > 0 && (
                   <div className="mt-1 p-2 rounded" style={S.linkShot}>
-                    <div className="text-xs uppercase tracking-widest font-bold mb-0.5" style={{ color: '#00e5ff', fontSize: 9 }}>
-                      🔗 Nearby AER ({cs.nearbyAER.length})
-                    </div>
+                    <div className="text-xs uppercase tracking-widest font-bold mb-0.5" style={{ color: '#00e5ff', fontSize: 9 }}>🔗 Nearby AER ({cs.nearbyAER.length})</div>
                     {cs.nearbyAER.slice(0, 10).map((a, i) => (
                       <div key={i} className="text-xs mb-0.5" style={{ color: '#aaa' }}>
                         <span className="font-bold" style={{ color: '#00e5ff' }}>{a.house}</span> {a.name}
@@ -1304,11 +1206,7 @@ export default function DialerPage() {
         </div>
 
         {/* RIGHT: Side panel */}
-        <div
-          className="flex flex-col overflow-hidden"
-          style={{ ...S.sidePanel, width: 240, minWidth: 240, maxWidth: 240 }}
-        >
-          {/* Disposition buttons */}
+        <div className="flex flex-col overflow-hidden" style={{ ...S.sidePanel, width: 240, minWidth: 240, maxWidth: 240 }}>
           <div className="p-2 flex-shrink-0">
             <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 8 }}>Disposition</div>
             <DispButton label="📞 NA [Z]"     onClick={() => doDisp('NA')}     flashing={flashingKey === 'NA'}     flashColor="#e67e22" style={{ background: '#333', color: '#e67e22', border: '1px solid #555' }} />
@@ -1329,7 +1227,6 @@ export default function DialerPage() {
             />
           </div>
 
-          {/* Fireteam Panel — self-managing data */}
           {campaign?.id && manager?.id && (
             <FireteamPanel
               campaignId={campaign.id}
@@ -1339,18 +1236,10 @@ export default function DialerPage() {
             />
           )}
 
-          {/* Log message */}
-          <div
-            className="text-center px-2 py-1 flex-shrink-0 text-xs"
-            style={{
-              color: '#00e5ff',
-              opacity: 0.4,
-              letterSpacing: '1px',
-              fontSize: 8,
-              borderTop: '1px solid rgba(0,229,255,0.10)',
-              minHeight: 14,
-            }}
-          >
+          <div className="text-center px-2 py-1 flex-shrink-0 text-xs" style={{
+            color: '#00e5ff', opacity: 0.4, letterSpacing: '1px', fontSize: 8,
+            borderTop: '1px solid rgba(0,229,255,0.10)', minHeight: 14,
+          }}>
             {logMessage}
           </div>
         </div>
@@ -1374,17 +1263,9 @@ const DISP_FLASH_STYLES = `
 let dispStylesInjected = false;
 
 function DispButton({
-  label,
-  onClick,
-  style,
-  flashing = false,
-  flashColor = '#00e5ff',
+  label, onClick, style, flashing = false, flashColor = '#00e5ff',
 }: {
-  label: string;
-  onClick: () => void;
-  style: React.CSSProperties;
-  flashing?: boolean;
-  flashColor?: string;
+  label: string; onClick: () => void; style: React.CSSProperties; flashing?: boolean; flashColor?: string;
 }) {
   if (!dispStylesInjected && typeof document !== 'undefined') {
     const tag = document.createElement('style');
@@ -1402,9 +1283,7 @@ function DispButton({
       onClick={onClick}
       className="w-full py-1.5 text-xs font-bold tracking-widest uppercase rounded mb-1 cursor-pointer transition-all"
       style={{
-        ...style,
-        letterSpacing: '2px',
-        fontSize: 10,
+        ...style, letterSpacing: '2px', fontSize: 10,
         ['--flash-color-full' as any]: flashFull,
         ['--flash-color-mid' as any]: flashMid,
         ['--flash-color-transparent' as any]: flashNone,
@@ -1420,13 +1299,9 @@ function YesField({ label, value, onChange }: { label: string; value: string; on
   return (
     <div className="mb-1">
       <div className="text-xs uppercase tracking-wider font-semibold mb-0.5" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 8, letterSpacing: '1px' }}>{label}</div>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+      <input type="text" value={value} onChange={(e) => onChange(e.target.value)}
         className="w-full px-1.5 py-1 rounded text-xs"
-        style={{ background: 'rgba(0,10,18,0.9)', color: '#fff', border: '1px solid rgba(0,229,255,0.15)', fontSize: 10 }}
-      />
+        style={{ background: 'rgba(0,10,18,0.9)', color: '#fff', border: '1px solid rgba(0,229,255,0.15)', fontSize: 10 }} />
     </div>
   );
 }
