@@ -773,7 +773,7 @@ export default function DialerPage() {
 
   const dialPhone = (phone?: string) => {
     const ph = phone || currentState?.phone;
-    if (ph) window.open(`tel:${ph}`, '_self');
+    if (ph) window.open(`tel:${ph}`);
   };
 
   // =======================================================================
