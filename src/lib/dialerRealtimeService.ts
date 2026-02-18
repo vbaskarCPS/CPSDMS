@@ -3,7 +3,9 @@
 // Handles Supabase Realtime for the dialer team feed.
 // - publishBookingEvent(): INSERTs a booking row (YES/PREPAY)
 // - publishDialEvent():    INSERTs a dial-tick row (every disposition)
-// - subscribeToTeamFeed(): listens for INSERTs from other managers in the same campaign
+// - subscribeToTeamFeed(): listens for INSERTs from the current campaign only
+// - subscribeToGlobalFeed(): listens for INSERTs across ALL campaigns
+// - fetchTodayEvents():    fetches today's booking events (campaignId optional)
 // - fetchFireteamStats():  aggregates per-member stats for one campaign, today
 // - fetchGlobalStats():    aggregates per-member stats across all campaigns, today
 //
@@ -48,7 +50,7 @@ export interface MemberStats {
   pps: number;
   ppDollars: number;
   totalDials: number;
-  badges: string[]; // all badge ids earned today (may contain duplicates)
+  badges: string[];
 }
 
 // =============================================================================
@@ -57,7 +59,12 @@ export interface MemberStats {
 
 class DialerRealtimeService {
   private static instance: DialerRealtimeService;
-  private channel: RealtimeChannel | null = null;
+
+  // Campaign-scoped channel (Fireteam)
+  private fireteamChannel: RealtimeChannel | null = null;
+  // Global channel (all campaigns)
+  private globalChannel: RealtimeChannel | null = null;
+
   private currentCampaignId: string | null = null;
   private currentManagerId: string | null = null;
 
@@ -100,7 +107,7 @@ class DialerRealtimeService {
   }
 
   // =========================================================================
-  // PUBLISH DIAL TICK — call on every disposition (NA, CTS, WN, NO, REMOVE, etc.)
+  // PUBLISH DIAL TICK — call on every disposition
   // =========================================================================
 
   public async publishDialEvent(payload: PublishDialPayload): Promise<void> {
@@ -126,6 +133,161 @@ class DialerRealtimeService {
     } catch (err) {
       console.error('Dial event publish error:', err);
     }
+  }
+
+  // =========================================================================
+  // FETCH TODAY'S BOOKING EVENTS
+  // campaignId = undefined → global (all campaigns)
+  // campaignId = string    → fireteam (single campaign)
+  // =========================================================================
+
+  public async fetchTodayEvents(campaignId?: string): Promise<TeamBookingEvent[]> {
+    const today = new Date().toISOString().split('T')[0];
+
+    let query = supabase
+      .from('dialer_team_events')
+      .select('id, manager_id, manager_name, points, pp_dollars, badges, multipliers, is_prepay, created_at')
+      .eq('is_booking', true)
+      .gte('created_at', `${today}T00:00:00.000Z`)
+      .lte('created_at', `${today}T23:59:59.999Z`)
+      .order('created_at', { ascending: true });
+
+    if (campaignId) {
+      query = query.eq('campaign_id', campaignId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Failed to fetch today events:', error.message);
+      return [];
+    }
+
+    return (data || []).map((row) => ({
+      id:          row.id,
+      name:        row.manager_name,
+      points:      row.points,
+      badges:      row.badges || [],
+      multipliers: row.multipliers || [],
+      isPrepay:    row.is_prepay || false,
+      timestamp:   new Date(row.created_at).getTime(),
+      managerId:   row.manager_id,
+    }));
+  }
+
+  // =========================================================================
+  // SUBSCRIBE — Fireteam (current campaign only, skip own)
+  // =========================================================================
+
+  public subscribeToTeamFeed(
+    campaignId: string,
+    managerId: string,
+    callback: TeamFeedCallback
+  ): () => void {
+    // Tear down existing fireteam channel if campaign changed
+    if (this.fireteamChannel) {
+      supabase.removeChannel(this.fireteamChannel);
+      this.fireteamChannel = null;
+    }
+
+    this.currentCampaignId = campaignId;
+    this.currentManagerId = managerId;
+
+    this.fireteamChannel = supabase
+      .channel(`team_feed_${campaignId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'dialer_team_events',
+          filter: `campaign_id=eq.${campaignId}`,
+        },
+        (payload) => {
+          const row = payload.new as any;
+          if (row.manager_id === managerId) return; // skip own
+          if (!row.is_booking) return;
+
+          callback({
+            id:          row.id,
+            name:        row.manager_name,
+            points:      row.points,
+            badges:      row.badges || [],
+            multipliers: row.multipliers || [],
+            isPrepay:    row.is_prepay || false,
+            timestamp:   new Date(row.created_at).getTime(),
+          });
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log(`[TeamFeed] Subscribed to campaign ${campaignId}`);
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error(`[TeamFeed] Channel error for campaign ${campaignId}`);
+        }
+      });
+
+    return () => {
+      if (this.fireteamChannel) {
+        supabase.removeChannel(this.fireteamChannel);
+        this.fireteamChannel = null;
+      }
+    };
+  }
+
+  // =========================================================================
+  // SUBSCRIBE — Global (all campaigns, include own labeled as managerId)
+  // =========================================================================
+
+  public subscribeToGlobalFeed(
+    managerId: string,
+    callback: TeamFeedCallback
+  ): () => void {
+    if (this.globalChannel) {
+      supabase.removeChannel(this.globalChannel);
+      this.globalChannel = null;
+    }
+
+    this.globalChannel = supabase
+      .channel('global_feed_all_campaigns')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'dialer_team_events',
+        },
+        (payload) => {
+          const row = payload.new as any;
+          if (!row.is_booking) return;
+
+          // Own events come through as-is — caller will rename to "You"
+          callback({
+            id:          row.id,
+            name:        row.manager_name,
+            points:      row.points,
+            badges:      row.badges || [],
+            multipliers: row.multipliers || [],
+            isPrepay:    row.is_prepay || false,
+            timestamp:   new Date(row.created_at).getTime(),
+            managerId:   row.manager_id,
+          });
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[GlobalFeed] Subscribed to all campaigns');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('[GlobalFeed] Channel error');
+        }
+      });
+
+    return () => {
+      if (this.globalChannel) {
+        supabase.removeChannel(this.globalChannel);
+        this.globalChannel = null;
+      }
+    };
   }
 
   // =========================================================================
@@ -172,73 +334,25 @@ class DialerRealtimeService {
   }
 
   // =========================================================================
-  // SUBSCRIBE — listen for INSERT events from other managers
+  // CLEANUP ALL
   // =========================================================================
 
-  public subscribeToTeamFeed(
-    campaignId: string,
-    managerId: string,
-    callback: TeamFeedCallback
-  ): () => void {
-    this.unsubscribe();
-
-    this.currentCampaignId = campaignId;
-    this.currentManagerId = managerId;
-
-    const channelName = `team_feed_${campaignId}`;
-
-    this.channel = supabase
-      .channel(channelName)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'dialer_team_events',
-          filter: `campaign_id=eq.${campaignId}`,
-        },
-        (payload) => {
-          const row = payload.new as any;
-
-          // Skip own events and non-booking dial ticks (HUD only shows bookings)
-          if (row.manager_id === managerId) return;
-          if (!row.is_booking) return;
-
-          const event: TeamBookingEvent = {
-            id:          row.id,
-            name:        row.manager_name,
-            points:      row.points,
-            badges:      row.badges || [],
-            multipliers: row.multipliers || [],
-            isPrepay:    row.is_prepay || false,
-            timestamp:   new Date(row.created_at).getTime(),
-          };
-
-          callback(event);
-        }
-      )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log(`[TeamFeed] Subscribed to campaign ${campaignId}`);
-        } else if (status === 'CHANNEL_ERROR') {
-          console.error(`[TeamFeed] Channel error for campaign ${campaignId}`);
-        }
-      });
-
-    return () => this.unsubscribe();
+  public unsubscribeAll(): void {
+    if (this.fireteamChannel) {
+      supabase.removeChannel(this.fireteamChannel);
+      this.fireteamChannel = null;
+    }
+    if (this.globalChannel) {
+      supabase.removeChannel(this.globalChannel);
+      this.globalChannel = null;
+    }
+    this.currentCampaignId = null;
+    this.currentManagerId = null;
   }
 
-  // =========================================================================
-  // CLEANUP
-  // =========================================================================
-
+  /** @deprecated use unsubscribeAll */
   public unsubscribe(): void {
-    if (this.channel) {
-      supabase.removeChannel(this.channel);
-      this.channel = null;
-      this.currentCampaignId = null;
-      this.currentManagerId = null;
-    }
+    this.unsubscribeAll();
   }
 }
 

@@ -51,14 +51,12 @@ import type { Campaign as CampaignCard } from './CampaignSelect';
 import SniperSettings from './SniperSettings';
 import { dialerRealtimeService } from '../../lib/dialerRealtimeService';
 import FireteamPanel from './FireteamPanel';
-import type { FireteamEvent } from './FireteamPanel';
 import { detectNewlyActivated } from './multiplierActivations';
 
 // =============================================================================
-// STYLES (inline style objects for elements not easily done in Tailwind)
+// STYLES
 // =============================================================================
 
-// Visor palette (matches DialerHUD.tsx)
 const CY = '#00e5ff';
 const OR = '#f5a623';
 
@@ -74,14 +72,12 @@ const S = {
   yesInput: { background: 'rgba(0,10,18,0.9)', color: '#fff', border: `1px solid ${CY}20` } as React.CSSProperties,
 };
 
-// FO badge colors
 const FO_COLORS: Record<string, { bg: string; color: string }> = {
   FO: { bg: 'rgba(231,76,60,0.2)', color: '#e74c3c' },
   BO: { bg: 'rgba(243,156,18,0.2)', color: '#f39c12' },
   FP: { bg: `rgba(0,229,255,0.15)`, color: CY },
 };
 
-// Phone strategy badge colors
 const STRATEGY_COLORS: Record<string, { bg: string; border: string; color: string; label: string }> = {
   single:   { bg: `rgba(0,229,255,0.12)`,  border: CY, color: CY, label: 'SINGLE' },
   dominant: { bg: 'rgba(243,156,18,0.15)',   border: '#f39c12', color: '#f39c12', label: 'DOMINANT' },
@@ -104,7 +100,7 @@ const HOTKEY_MAP: Record<string, HotkeyTarget> = {
 };
 
 // =============================================================================
-// HELPERS — convert spreadsheet tabs into CampaignSelect-compatible cards
+// HELPERS — tabs → CampaignSelect cards
 // =============================================================================
 
 const CODENAMES = [
@@ -124,7 +120,6 @@ function tabNameHash(name: string): number {
   return Math.abs(h);
 }
 
-/** Build placeholder cards instantly — stats shown as 0 until real data loads */
 function tabsToPlaceholderCards(tabs: string[], campaignName: string): CampaignCard[] {
   return tabs.map((tabName, idx) => {
     const a = tabNameHash(tabName);
@@ -166,7 +161,7 @@ export default function DialerPage() {
   const [tabsLoading, setTabsLoading] = useState(false);
   const [tabsError, setTabsError] = useState('');
 
-  // --- Launcher config (set during deploy) ---
+  // --- Launcher config ---
   const [selectedTab, setSelectedTab] = useState('');
   const [direction, setDirection] = useState<Direction>('down');
   const [startBookingId, setStartBookingId] = useState('');
@@ -192,7 +187,7 @@ export default function DialerPage() {
   const [achievementsOpen, setAchievementsOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
 
-  // --- Hotkey flash state ---
+  // --- Hotkey flash ---
   const [flashingKey, setFlashingKey] = useState<HotkeyTarget | null>(null);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -208,7 +203,7 @@ export default function DialerPage() {
   const [yFO, setYFO] = useState('FP');
   const [yNotes, setYNotes] = useState('');
 
-  // --- Card entry fields ---
+  // --- Card entry ---
   const [ccNum, setCcNum] = useState('');
   const [ccExp, setCcExp] = useState('');
   const [ccCvv, setCcCvv] = useState('');
@@ -223,13 +218,10 @@ export default function DialerPage() {
   const [multipliersAt, setMultipliersAt] = useState(0);
   const [rank, setRank] = useState<Rank | null>(null);
 
-  // --- Team feed (other managers' bookings — for HUD toasts) ---
+  // --- HUD team feed toasts (other managers' bookings) ---
   const [teamFeed, setTeamFeed] = useState<TeamBookingEvent[]>([]);
 
-  // --- Fireteam history panel (bookings from all reps including self) ---
-  const [fireteamEvents, setFireteamEvents] = useState<FireteamEvent[]>([]);
-
-  // --- Multiplier activation toasts ---
+  // --- Multiplier activation toasts + live panel events ---
   const [multActivations, setMultActivations] = useState<MultiplierActivationEvent[]>([]);
   const prevOwnMultipliersRef = useRef<MultiplierSnapshot[]>([]);
 
@@ -260,7 +252,7 @@ export default function DialerPage() {
   }, [navigate]);
 
   // =======================================================================
-  // AUTO-CONNECT on mount
+  // AUTO-CONNECT
   // =======================================================================
 
   useEffect(() => {
@@ -270,7 +262,7 @@ export default function DialerPage() {
   }, [campaign]);
 
   // =======================================================================
-  // TEAM FEED — Supabase Realtime subscription
+  // TEAM FEED — HUD toasts only (FireteamPanel now handles its own data)
   // =======================================================================
 
   useEffect(() => {
@@ -279,57 +271,9 @@ export default function DialerPage() {
     const unsubscribe = dialerRealtimeService.subscribeToTeamFeed(
       campaign.id,
       manager.id,
-      async (event) => {
-        // Feed HUD corner toasts
+      (event) => {
+        // Only feed the HUD corner toasts — FireteamPanel subscribes independently
         setTeamFeed(prev => [...prev, event]);
-
-        // Feed Fireteam history panel
-        const ftEvent: FireteamEvent = {
-          id: `team_${event.id}`,
-          timestamp: event.timestamp ?? Date.now(),
-          name: event.name,
-          isOwn: false,
-          eventType: 'booking',
-          isPrepay: event.isPrepay ?? false,
-          points: event.points,
-          base: (event as any).basePoints ?? event.points,
-          multiplier: (event as any).multiplier ?? 1,
-          multiplierBreakdown: (event as any).multiplierBreakdown ?? {},
-          badgeBonuses: (event as any).badgeBonuses ?? {},
-          badgeBonusTotal: (event as any).badgeBonusTotal ?? 0,
-          newBadges: event.badges ?? [],
-          price: (event as any).price,
-        };
-        setFireteamEvents(prev => [...prev, ftEvent].slice(-25));
-
-        // If the event carries multiplier activation data, also log those
-        if ((event as any).newMultipliers?.length > 0) {
-          const { detectNewlyActivated: detect } = await import('./multiplierActivations');
-          const activations = detect(
-            (event as any).prevMultipliers ?? [],
-            (event as any).newMultipliers,
-            event.name,
-            false,
-          );
-          if (activations.length > 0) {
-            setMultActivations(p => [...p, ...activations]);
-            const ftMults: FireteamEvent[] = activations.map(a => ({
-              id: `mult_team_${a.id}`,
-              timestamp: a.timestamp,
-              name: event.name,
-              isOwn: false,
-              eventType: 'multiplier' as const,
-              isPrepay: false,
-              points: 0, base: 0, multiplier: 1,
-              multiplierBreakdown: {}, badgeBonuses: {}, badgeBonusTotal: 0, newBadges: [],
-              multiplierId: a.multiplierId,
-              multiplierText: a.text.replace(new RegExp(`^${event.name} `), ''),
-              multiplierColor: a.color,
-              multiplierIcon: a.icon,
-            }));
-            setFireteamEvents(prev => [...prev, ...ftMults].slice(-25));
-          }
-        }
       }
     );
 
@@ -350,28 +294,6 @@ export default function DialerPage() {
     );
     if (activations.length > 0) {
       setMultActivations(p => [...p, ...activations]);
-
-      // Also log into fireteam history panel
-      const ftMults: FireteamEvent[] = activations.map(a => ({
-        id: `mult_${a.id}`,
-        timestamp: a.timestamp,
-        name: 'You',
-        isOwn: true,
-        eventType: 'multiplier' as const,
-        isPrepay: false,
-        points: 0,
-        base: 0,
-        multiplier: 1,
-        multiplierBreakdown: {},
-        badgeBonuses: {},
-        badgeBonusTotal: 0,
-        newBadges: [],
-        multiplierId: a.multiplierId,
-        multiplierText: a.text.replace(/^You /, ''),
-        multiplierColor: a.color,
-        multiplierIcon: a.icon,
-      }));
-      setFireteamEvents(prev => [...prev, ...ftMults].slice(-25));
     }
     prevOwnMultipliersRef.current = multipliers;
   }, [multipliers, manager?.name, manager?.repCode]);
@@ -391,10 +313,7 @@ export default function DialerPage() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Only fire in active dialer mode with a current state
       if (mode !== 'dialer' || !currentState) return;
-
-      // Suppress if any modal/panel is open
       if (
         showYesPanel ||
         cardModalOpen ||
@@ -404,11 +323,8 @@ export default function DialerPage() {
         showDeployConfig
       ) return;
 
-      // Suppress if focus is inside an input/textarea/select
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
-
-      // Suppress modifier combos (ctrl+z undo etc.)
       if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       const key = e.key.toLowerCase();
@@ -437,10 +353,8 @@ export default function DialerPage() {
     sniperSettingsOpen,
     showDeployConfig,
     triggerFlash,
-    // doDisp is defined below — we include it via the ref pattern
   ]);
 
-  // Cleanup flash timer on unmount
   useEffect(() => {
     return () => {
       if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
@@ -463,12 +377,10 @@ export default function DialerPage() {
           const callbookTabs = await dialerSheetsService.getCallbookTabs(campaign.spreadsheetId);
           setTabs(callbookTabs);
 
-          // Show placeholder cards immediately so the UI isn't empty
           const placeholders = tabsToPlaceholderCards(callbookTabs, campaign.displayName || 'Campaign');
           setCampaignCards(placeholders);
           setTabsLoading(false);
 
-          // Fetch real stats for all tabs in parallel, patch cards as each resolves
           callbookTabs.forEach(async (tabName) => {
             try {
               const stats = await dialerSheetsService.computeTabStats(campaign.spreadsheetId, tabName);
@@ -485,10 +397,9 @@ export default function DialerPage() {
                   : card
               ));
             } catch {
-              // Non-critical: if one tab fails, leave its placeholder values
+              // Non-critical
             }
           });
-
         } catch (err: any) {
           setTabsError(err.message || 'Failed to load tabs');
           setTabsLoading(false);
@@ -553,7 +464,7 @@ export default function DialerPage() {
       setMultipliers(newMults);
       setMultipliersAt(Date.now());
       setRank(getCurrentRank(snapshot.session));
-      prevOwnMultipliersRef.current = newMults; // seed so first load doesn't toast everything
+      prevOwnMultipliersRef.current = newMults;
       prefillYesForm(snapshot.state);
       setMode('dialer');
     } catch (err: any) {
@@ -612,7 +523,7 @@ export default function DialerPage() {
   }, []);
 
   // =======================================================================
-  // PUBLISH DIAL TICK HELPER
+  // PUBLISH DIAL TICK
   // =======================================================================
 
   const publishDialTick = useCallback(() => {
@@ -638,19 +549,17 @@ export default function DialerPage() {
       setMultipliersAt(Date.now());
     }
 
-    // Badge toasts — always fire (including non-booking badge awards)
     if (result.newBadges?.length > 0) {
       for (const id of result.newBadges) queueBadgeToast(id);
     }
 
-    // Point toasts — always show if there are points
     if (result.pointBreakdown) {
       showPointToast(result.pointBreakdown.grandTotal, result.pointBreakdown.multiplier);
     } else if (!isBooking && result.badgeBonusTotal > 0) {
       showPointToast(result.badgeBonusTotal, 1);
     }
 
-    // Publish booking to team feed
+    // Publish booking to Supabase (FireteamPanel picks it up via its own subscription)
     if (isBooking && result.pointBreakdown?.grandTotal > 0 && campaign?.id && manager?.id) {
       const ppDollars = isPrepay && bookingPrice ? parseFloat(bookingPrice) || 0 : 0;
 
@@ -664,24 +573,6 @@ export default function DialerPage() {
         multipliers: result.activeMultipliers?.map((m: any) => m.id) || [],
         isPrepay,
       });
-
-      // Add own booking to fireteam history panel
-      const ftEvent: FireteamEvent = {
-        id: `own_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-        timestamp: Date.now(),
-        name: manager.name || manager.repCode || 'You',
-        isOwn: true,
-        isPrepay,
-        points: result.pointBreakdown.grandTotal,
-        base: result.pointBreakdown.base ?? result.pointBreakdown.grandTotal,
-        multiplier: result.pointBreakdown.multiplier ?? 1,
-        multiplierBreakdown: result.pointBreakdown.multiplierBreakdown ?? {},
-        badgeBonuses: result.badgeBonuses ?? {},
-        badgeBonusTotal: result.badgeBonusTotal ?? 0,
-        newBadges: result.newBadges ?? [],
-        price: isPrepay && bookingPrice ? parseFloat(bookingPrice) : undefined,
-      };
-      setFireteamEvents(prev => [...prev, ftEvent].slice(-25));
     }
   }, [queueBadgeToast, showPointToast, campaign?.id, manager?.id, manager?.name, manager?.repCode]);
 
@@ -714,7 +605,6 @@ export default function DialerPage() {
         prevOwnMultipliersRef.current = [];
         setMultipliersAt(Date.now());
         setRank(null);
-        setFireteamEvents([]);
         setMultActivations([]);
         setLogMessage('Session reset.');
         break;
@@ -736,7 +626,6 @@ export default function DialerPage() {
     setPendingDial(true);
     setLogMessage(`Sending ${disp}...`);
 
-    // Publish dial tick for every disposition
     publishDialTick();
 
     try {
@@ -750,10 +639,8 @@ export default function DialerPage() {
         yesStartTimeRef.current
       );
 
-      // Non-booking dispositions can still earn badges (Machine, Terminator etc.)
       handleGamResult(result.gamification, false);
 
-      // WN/NIS redial
       if (result.redialPhone) {
         dispositionedKeysRef.current.delete(key);
         setCurrentState(prev => prev ? { ...prev, phone: result.redialPhone!, alternatePhone: '' } : null);
@@ -763,7 +650,6 @@ export default function DialerPage() {
         return;
       }
 
-      // Advance
       if (result.nextState.found) {
         renderNewState(result.nextState as DialerState);
         if (autoFire) dialPhone((result.nextState as DialerState).phone);
@@ -786,7 +672,6 @@ export default function DialerPage() {
     setPendingDial(true);
     setLogMessage(`Booking ${subType}...`);
 
-    // Publish dial tick for booking dispositions too
     publishDialTick();
 
     const extra: DispositionExtra = {
@@ -1068,11 +953,7 @@ export default function DialerPage() {
                 <button
                   onClick={() => setSniperSettingsOpen(true)}
                   className="w-full flex items-center justify-between px-3 py-2.5 rounded transition-all"
-                  style={{
-                    background: 'rgba(0,229,255,0.04)',
-                    border: '1px solid rgba(0,229,255,0.15)',
-                    cursor: 'pointer',
-                  }}
+                  style={{ background: 'rgba(0,229,255,0.04)', border: '1px solid rgba(0,229,255,0.15)', cursor: 'pointer' }}
                 >
                   <div className="flex flex-wrap gap-1.5">
                     {sniperConfig.years.map(yr => (
@@ -1278,7 +1159,11 @@ export default function DialerPage() {
                 {cardStaging ? 'Staging...' : '⚡ Chamber'}
               </button>
             </div>
-            {cardStatus && <div className="text-center text-xs mt-2" style={{ color: cardStatus.startsWith('✓') ? '#2ecc71' : cardStatus.startsWith('Error') ? '#e74c3c' : '#888' }}>{cardStatus}</div>}
+            {cardStatus && (
+              <div className="text-center text-xs mt-2" style={{ color: cardStatus.startsWith('✓') ? '#2ecc71' : cardStatus.startsWith('Error') ? '#e74c3c' : '#888' }}>
+                {cardStatus}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1288,13 +1173,11 @@ export default function DialerPage() {
 
         {/* LEFT: Main column */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-          {/* Top bar */}
           <div className="flex items-center justify-between px-2.5 py-1 flex-shrink-0" style={S.topBar}>
             <span className="text-xs uppercase tracking-wider" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 9 }}>{cs.sheetName}</span>
             <span className="text-xs font-bold tracking-wider" style={{ color: '#00e5ff', fontSize: 9 }}>{cs.currentGroupIndex} / {cs.totalGroups}</span>
           </div>
 
-          {/* Client header */}
           <div className="flex justify-between items-baseline gap-3 px-2.5 py-1.5 flex-shrink-0" style={S.clientHeader}>
             <div>
               <div className="text-base font-black tracking-wider uppercase text-white">{cl.firstName} {cl.lastName}</div>
@@ -1306,7 +1189,6 @@ export default function DialerPage() {
             </div>
           </div>
 
-          {/* Phone bar */}
           <div className="flex items-center gap-2 px-2.5 py-1.5 flex-shrink-0" style={S.phoneBar}>
             <a
               href={`tel:${cs.phone}`}
@@ -1333,7 +1215,6 @@ export default function DialerPage() {
             )}
           </div>
 
-          {/* Content area */}
           <div className="flex-1 overflow-y-auto p-2.5" style={S.contentArea}>
             {showYesPanel ? (
               <div>
@@ -1343,12 +1224,10 @@ export default function DialerPage() {
                   <div className="flex-1"><YesField label="First Name" value={yName} onChange={setYName} /></div>
                   <div className="flex-1"><YesField label="Last Name" value={yLastName} onChange={setYLastName} /></div>
                 </div>
-
                 <div className="flex gap-2 mb-1.5">
                   <div style={{ width: 80 }}><YesField label="House #" value={yHouseNum} onChange={setYHouseNum} /></div>
                   <div className="flex-1"><YesField label="Street Name" value={yStreetName} onChange={setYStreetName} /></div>
                 </div>
-
                 <div className="flex gap-2 mb-1.5">
                   <div style={{ width: 100 }}><YesField label="Price" value={yPrice} onChange={setYPrice} /></div>
                   <div className="flex-1"><YesField label="Email" value={yEmail} onChange={setYEmail} /></div>
@@ -1379,25 +1258,13 @@ export default function DialerPage() {
                 <div className="mb-2"><YesField label="Notes" value={yNotes} onChange={setYNotes} /></div>
 
                 <div className="flex gap-2">
-                  <button
-                    onClick={() => setShowYesPanel(false)}
-                    className="px-3 py-2 rounded text-xs font-bold cursor-pointer"
-                    style={{ background: '#333', color: '#888', border: '1px solid #555' }}
-                  >
+                  <button onClick={() => setShowYesPanel(false)} className="px-3 py-2 rounded text-xs font-bold cursor-pointer" style={{ background: '#333', color: '#888', border: '1px solid #555' }}>
                     ✖ Cancel
                   </button>
-                  <button
-                    onClick={() => doYes('COMPLETE')}
-                    className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer"
-                    style={{ background: '#2ecc71', color: '#fff', border: 'none', letterSpacing: '2px' }}
-                  >
+                  <button onClick={() => doYes('COMPLETE')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#2ecc71', color: '#fff', border: 'none', letterSpacing: '2px' }}>
                     ✔ Complete
                   </button>
-                  <button
-                    onClick={() => doYes('PREPAY')}
-                    className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer"
-                    style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none', letterSpacing: '2px' }}
-                  >
+                  <button onClick={() => doYes('PREPAY')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none', letterSpacing: '2px' }}>
                     💳 Prepay
                   </button>
                 </div>
@@ -1436,7 +1303,7 @@ export default function DialerPage() {
           </div>
         </div>
 
-        {/* RIGHT: Side panel — 240px, disposition buttons + fireteam history */}
+        {/* RIGHT: Side panel */}
         <div
           className="flex flex-col overflow-hidden"
           style={{ ...S.sidePanel, width: 240, minWidth: 240, maxWidth: 240 }}
@@ -1462,10 +1329,17 @@ export default function DialerPage() {
             />
           </div>
 
-          {/* Fireteam History Panel — fills remaining space */}
-          <FireteamPanel events={fireteamEvents} />
+          {/* Fireteam Panel — self-managing data */}
+          {campaign?.id && manager?.id && (
+            <FireteamPanel
+              campaignId={campaign.id}
+              managerId={manager.id}
+              managerName={manager.name || manager.repCode || 'You'}
+              liveMultiplierEvents={multActivations}
+            />
+          )}
 
-          {/* Log message — pinned at bottom */}
+          {/* Log message */}
           <div
             className="text-center px-2 py-1 flex-shrink-0 text-xs"
             style={{
@@ -1489,7 +1363,6 @@ export default function DialerPage() {
 // SUB-COMPONENTS
 // =============================================================================
 
-// Keyframe for the border glow pulse — injected once
 const DISP_FLASH_STYLES = `
   @keyframes disp-flash-glow {
     0%   { box-shadow: 0 0 0px var(--flash-color-transparent); border-color: var(--flash-color-mid); }
@@ -1513,7 +1386,6 @@ function DispButton({
   flashing?: boolean;
   flashColor?: string;
 }) {
-  // Inject keyframes once
   if (!dispStylesInjected && typeof document !== 'undefined') {
     const tag = document.createElement('style');
     tag.textContent = DISP_FLASH_STYLES;
@@ -1521,10 +1393,9 @@ function DispButton({
     dispStylesInjected = true;
   }
 
-  // Derive semi-transparent variants from the flash color
-  const flashFull = flashColor + 'cc';  // ~80% opacity
-  const flashMid  = flashColor + '80';  // ~50% opacity
-  const flashNone = flashColor + '00';  // 0% opacity
+  const flashFull = flashColor + 'cc';
+  const flashMid  = flashColor + '80';
+  const flashNone = flashColor + '00';
 
   return (
     <button
@@ -1534,7 +1405,6 @@ function DispButton({
         ...style,
         letterSpacing: '2px',
         fontSize: 10,
-        // CSS custom properties for the animation
         ['--flash-color-full' as any]: flashFull,
         ['--flash-color-mid' as any]: flashMid,
         ['--flash-color-transparent' as any]: flashNone,
