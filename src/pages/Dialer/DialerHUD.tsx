@@ -37,7 +37,7 @@ export interface MultiplierActivationEvent {
   timestamp: number;
 }
 
-export type HUDMenuAction = 'campaigns' | 'team' | 'achievements' | 'logs' | 'multipliers' | 'reset';
+export type HUDMenuAction = 'campaigns' | 'team' | 'achievements' | 'scope' | 'reset';
 
 interface HUDProps {
   session: GamificationSession | null;
@@ -93,12 +93,11 @@ const MULT_DESC: Record<string, string> = {
 };
 
 const MENU_ITEMS: { id: HUDMenuAction; icon: string; label: string; desc: string }[] = [
-  { id: 'campaigns', icon: '🗺️', label: 'CAMPAIGNS', desc: 'Back to map select' },
-  { id: 'team', icon: '👥', label: 'TEAM STATS', desc: 'Live team feed' },
-  { id: 'achievements', icon: '🏆', label: 'ACHIEVEMENTS', desc: 'Badges & progress' },
-  { id: 'logs', icon: '📋', label: 'LOGS', desc: 'Session history' },
-  { id: 'multipliers', icon: '⚡', label: 'MULTIPLIERS', desc: 'Active & available' },
-  { id: 'reset', icon: '🔄', label: 'RESET SESSION', desc: 'Reset all counters' },
+  { id: 'campaigns',    icon: '🗺️', label: 'CAMPAIGNS',    desc: 'Back to map select' },
+  { id: 'team',         icon: '👥', label: 'TEAM STATS',    desc: 'Live team feed' },
+  { id: 'achievements', icon: '🏆', label: 'ACHIEVEMENTS',  desc: 'Badges & progress' },
+  { id: 'scope',        icon: '🎯', label: 'ADJUST SCOPE',  desc: 'Sniper filter config' },
+  { id: 'reset',        icon: '🔄', label: 'RESET SESSION', desc: 'Reset all counters' },
 ];
 
 // =============================================================================
@@ -492,7 +491,6 @@ function MultiplierActivationToasts({ events }: { events: MultiplierActivationEv
     <div
       className="absolute pointer-events-none"
       style={{
-        // Position above team feed toasts, below disposition panel level
         right: 2,
         bottom: 110,
         display: 'flex',
@@ -529,15 +527,12 @@ function MultiplierActivationToasts({ events }: { events: MultiplierActivationEv
               backdropFilter: 'blur(8px)',
               minHeight: 38,
             }}>
-              {/* Colored left accent bar */}
               <div style={{
                 width: 2, height: 22, borderRadius: 1,
                 background: theme.color,
                 flexShrink: 0,
                 boxShadow: `0 0 6px ${theme.color}80`,
               }} />
-
-              {/* Icon */}
               <div style={{
                 width: 22, height: 22,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -549,8 +544,6 @@ function MultiplierActivationToasts({ events }: { events: MultiplierActivationEv
                   <span style={{ fontSize: 14, lineHeight: 1 }}>{evt.icon}</span>
                 )}
               </div>
-
-              {/* Text */}
               <span style={{
                 fontFamily: 'monospace',
                 fontWeight: 700,

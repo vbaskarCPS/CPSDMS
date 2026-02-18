@@ -607,6 +607,9 @@ export default function DialerPage() {
       case 'team':
         setStatsOpen(true);
         break;
+      case 'scope':
+        setSniperSettingsOpen(true);
+        break;
       case 'campaigns':
         setMode('campaign-select' as any);
         break;
