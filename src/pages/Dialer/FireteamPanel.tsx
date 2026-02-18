@@ -8,6 +8,14 @@
 // Login events ("X on the field") show in GLOBAL tab only.
 // Tooltips open to the LEFT so they're not clipped by the panel edge.
 //
+// SUBSCRIPTION STRATEGY:
+// Uses createIsolatedChannel() for both global and fireteam feeds.
+// This creates private Supabase channels that do NOT touch the shared
+// fireteamChannel / globalChannel slots in dialerRealtimeService — which
+// are reserved for DialerPage's HUD toast subscriptions. This prevents
+// the two components from clobbering each other's channels and causing
+// missed events / dropped stats.
+//
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { getBadgeIcon, getMultiplierIcon } from './BadgeIcons';
@@ -513,22 +521,58 @@ export default function FireteamPanel({
       upsertEvents(setFireteamEvents, fireteamRaw.map(toFE));
       setLoading(false);
 
+      // ── ISOLATED SUBSCRIPTIONS ────────────────────────────────────────────
+      // These use createIsolatedChannel() so they do NOT touch the shared
+      // fireteamChannel / globalChannel slots in dialerRealtimeService.
+      // DialerPage's HUD toast subscriptions own those slots. Using isolated
+      // channels here prevents the two components from clobbering each other.
+      // Channel names include campaignId + a component prefix to ensure
+      // uniqueness across any future additional callers.
+
       // Global: all campaigns, own events included, logins included
-      globalUnsubRef.current = dialerRealtimeService.subscribeToGlobalFeed(
-        managerId,
-        (evt) => {
-          const fe = teamEventToFireteam(evt as any, managerId);
-          upsertEvents(setGlobalEvents, [fe]);
+      globalUnsubRef.current = dialerRealtimeService.createIsolatedChannel(
+        `ft_panel_global_${campaignId}`,
+        { event: 'INSERT', schema: 'public', table: 'dialer_team_events' },
+        (row) => {
+          if (!row.is_booking && !row.is_login) return;
+          const evt: TeamBookingEvent & { managerId?: string; isLogin?: boolean } = {
+            id:          row.id,
+            name:        row.manager_name,
+            points:      row.points,
+            badges:      row.badges || [],
+            multipliers: row.multipliers || [],
+            isPrepay:    row.is_prepay || false,
+            isLogin:     row.is_login || false,
+            timestamp:   new Date(row.created_at).getTime(),
+            managerId:   row.manager_id,
+          };
+          upsertEvents(setGlobalEvents, [teamEventToFireteam(evt, managerId)]);
         }
       );
 
       // Fireteam: current campaign only, skip own, no logins
-      fireteamUnsubRef.current = dialerRealtimeService.subscribeToTeamFeed(
-        campaignId,
-        managerId,
-        (evt) => {
-          const fe = teamEventToFireteam(evt as any, managerId);
-          upsertEvents(setFireteamEvents, [fe]);
+      fireteamUnsubRef.current = dialerRealtimeService.createIsolatedChannel(
+        `ft_panel_fireteam_${campaignId}`,
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'dialer_team_events',
+          filter: `campaign_id=eq.${campaignId}`,
+        },
+        (row) => {
+          if (row.manager_id === managerId) return; // skip own
+          if (!row.is_booking) return;
+          const evt: TeamBookingEvent & { managerId?: string } = {
+            id:          row.id,
+            name:        row.manager_name,
+            points:      row.points,
+            badges:      row.badges || [],
+            multipliers: row.multipliers || [],
+            isPrepay:    row.is_prepay || false,
+            timestamp:   new Date(row.created_at).getTime(),
+            managerId:   row.manager_id,
+          };
+          upsertEvents(setFireteamEvents, [teamEventToFireteam(evt, managerId)]);
         }
       );
     };

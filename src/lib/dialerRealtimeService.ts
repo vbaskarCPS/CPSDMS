@@ -13,6 +13,9 @@
 // - fetchTodayEvents():    fetches today's booking + login events
 // - fetchFireteamStats():  aggregates per-member stats for one campaign, today
 // - fetchGlobalStats():    aggregates per-member stats across all campaigns, today
+// - createIsolatedChannel(): creates a private realtime subscription that does NOT
+//                            touch shared channel slots — safe for components that
+//                            need their own subscription alongside DialerPage's.
 //
 
 import { supabase } from './supabase';
@@ -73,9 +76,9 @@ export interface MemberStats {
 class DialerRealtimeService {
   private static instance: DialerRealtimeService;
 
-  // Campaign-scoped channel (Fireteam)
+  // Campaign-scoped channel (Fireteam) — used by DialerPage HUD toasts only
   private fireteamChannel: RealtimeChannel | null = null;
-  // Global channel (all campaigns)
+  // Global channel (all campaigns) — used by DialerPage HUD toasts only
   private globalChannel: RealtimeChannel | null = null;
   // Presence channel
   private presenceChannel: RealtimeChannel | null = null;
@@ -90,6 +93,54 @@ class DialerRealtimeService {
       DialerRealtimeService.instance = new DialerRealtimeService();
     }
     return DialerRealtimeService.instance;
+  }
+
+  // =========================================================================
+  // ISOLATED CHANNEL
+  //
+  // Creates a Supabase realtime subscription that is completely independent —
+  // it does NOT touch fireteamChannel, globalChannel, or any shared slot.
+  // Use this in components that need their own subscription without interfering
+  // with DialerPage's HUD toast subscriptions.
+  //
+  // Returns an unsubscribe function — call it on component unmount.
+  //
+  // @param channelName  Must be globally unique. Include a component identifier
+  //                     or campaignId to avoid Supabase channel name collisions.
+  // @param filter       Supabase postgres_changes filter object
+  // @param callback     Called with payload.new for each matching INSERT row
+  // =========================================================================
+
+  public createIsolatedChannel(
+    channelName: string,
+    filter: {
+      event: string;
+      schema: string;
+      table: string;
+      filter?: string;
+    },
+    callback: (row: any) => void
+  ): () => void {
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        filter as any,
+        (payload) => {
+          callback(payload.new);
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log(`[IsolatedChannel] Subscribed: ${channelName}`);
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error(`[IsolatedChannel] Error: ${channelName}`);
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }
 
   // =========================================================================
@@ -347,6 +398,9 @@ class DialerRealtimeService {
 
   // =========================================================================
   // SUBSCRIBE — Fireteam (current campaign only, skip own)
+  // NOTE: Uses shared fireteamChannel slot — for DialerPage HUD toasts only.
+  //       Components that need their own subscription must use
+  //       createIsolatedChannel() to avoid clobbering this slot.
   // =========================================================================
 
   public subscribeToTeamFeed(
@@ -406,6 +460,9 @@ class DialerRealtimeService {
 
   // =========================================================================
   // SUBSCRIBE — Global (all campaigns, include own, include login events)
+  // NOTE: Uses shared globalChannel slot — for DialerPage HUD toasts only.
+  //       Components that need their own subscription must use
+  //       createIsolatedChannel() to avoid clobbering this slot.
   // =========================================================================
 
   public subscribeToGlobalFeed(

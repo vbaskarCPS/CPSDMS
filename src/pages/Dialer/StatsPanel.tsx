@@ -5,6 +5,11 @@
 // Per-member cards: collapsed summary row, expandable detail with 6 stat cards + badge log.
 // Styled to match AchievementsPanel (dark military aesthetic).
 //
+// AUTO-REFRESH:
+// While the panel is open, fetchAll() runs on a 30-second interval so the
+// leaderboard stays current without requiring a manual refresh click.
+// The interval is cleared when the panel closes.
+//
 
 import { useState, useEffect, useCallback } from 'react';
 import { X, RefreshCw, Users } from 'lucide-react';
@@ -107,6 +112,13 @@ export default function StatsPanel({
   // Fetch on open
   useEffect(() => {
     if (open) fetchAll();
+  }, [open, fetchAll]);
+
+  // Auto-refresh every 30 seconds while panel is open
+  useEffect(() => {
+    if (!open) return;
+    const interval = setInterval(fetchAll, 30_000);
+    return () => clearInterval(interval);
   }, [open, fetchAll]);
 
   if (!open) return null;
