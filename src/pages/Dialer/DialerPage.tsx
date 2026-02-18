@@ -264,6 +264,7 @@ export default function DialerPage() {
           timestamp: event.timestamp ?? Date.now(),
           name: event.name,
           isOwn: false,
+          eventType: 'booking',
           isPrepay: event.isPrepay ?? false,
           points: event.points,
           base: (event as any).basePoints ?? event.points,
@@ -275,6 +276,35 @@ export default function DialerPage() {
           price: (event as any).price,
         };
         setFireteamEvents(prev => [...prev, ftEvent].slice(-25));
+
+        // If the event carries multiplier activation data, also log those
+        if ((event as any).newMultipliers?.length > 0) {
+          const { detectNewlyActivated: detect } = await import('./multiplierActivations');
+          const activations = detect(
+            (event as any).prevMultipliers ?? [],
+            (event as any).newMultipliers,
+            event.name,
+            false,
+          );
+          if (activations.length > 0) {
+            setMultActivations(p => [...p, ...activations]);
+            const ftMults: FireteamEvent[] = activations.map(a => ({
+              id: `mult_team_${a.id}`,
+              timestamp: a.timestamp,
+              name: event.name,
+              isOwn: false,
+              eventType: 'multiplier' as const,
+              isPrepay: false,
+              points: 0, base: 0, multiplier: 1,
+              multiplierBreakdown: {}, badgeBonuses: {}, badgeBonusTotal: 0, newBadges: [],
+              multiplierId: a.multiplierId,
+              multiplierText: a.text.replace(new RegExp(`^${event.name} `), ''),
+              multiplierColor: a.color,
+              multiplierIcon: a.icon,
+            }));
+            setFireteamEvents(prev => [...prev, ...ftMults].slice(-25));
+          }
+        }
       }
     );
 
@@ -295,6 +325,28 @@ export default function DialerPage() {
     );
     if (activations.length > 0) {
       setMultActivations(p => [...p, ...activations]);
+
+      // Also log into fireteam history panel
+      const ftMults: FireteamEvent[] = activations.map(a => ({
+        id: `mult_${a.id}`,
+        timestamp: a.timestamp,
+        name: 'You',
+        isOwn: true,
+        eventType: 'multiplier' as const,
+        isPrepay: false,
+        points: 0,
+        base: 0,
+        multiplier: 1,
+        multiplierBreakdown: {},
+        badgeBonuses: {},
+        badgeBonusTotal: 0,
+        newBadges: [],
+        multiplierId: a.multiplierId,
+        multiplierText: a.text.replace(/^You /, ''),
+        multiplierColor: a.color,
+        multiplierIcon: a.icon,
+      }));
+      setFireteamEvents(prev => [...prev, ...ftMults].slice(-25));
     }
     prevOwnMultipliersRef.current = multipliers;
   }, [multipliers, manager?.name, manager?.repCode]);
