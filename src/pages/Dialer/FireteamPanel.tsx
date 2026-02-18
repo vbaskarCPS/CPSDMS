@@ -531,7 +531,7 @@ export default function FireteamPanel({
 
       // Global: all campaigns, own events included, logins included
       globalUnsubRef.current = dialerRealtimeService.createIsolatedChannel(
-        `ft_panel_global_${campaignId}`,
+        `ft_panel_global_${campaignId}_${managerId}`,
         { event: 'INSERT', schema: 'public', table: 'dialer_team_events' },
         (row) => {
           if (!row.is_booking && !row.is_login) return;
@@ -552,7 +552,7 @@ export default function FireteamPanel({
 
       // Fireteam: current campaign only, skip own, no logins
       fireteamUnsubRef.current = dialerRealtimeService.createIsolatedChannel(
-        `ft_panel_fireteam_${campaignId}`,
+        `ft_panel_fireteam_${campaignId}_${managerId}`,
         {
           event: 'INSERT',
           schema: 'public',
