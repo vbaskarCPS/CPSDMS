@@ -42,7 +42,7 @@ export const BADGE_DEFS: Record<string, BadgeDef> = {
 
   // ─── TIME (2) — Repeatable ───
   early_bird:     { icon: '🌅',      name: 'Early Bird',      desc: 'Booking before 10am',  section: 'Time',    color: 'toast-earlybird',     type: 'repeatable', bonus: 50 },
-  buzzer_beater:  { icon: '🌙',      name: 'Buzzer Beater',   desc: 'Booking after 8pm',    section: 'Time',    color: 'toast-buzzerbeater',  type: 'repeatable', bonus: 100 },
+  buzzer_beater:  { icon: '🌙',      name: 'Buzzer Beater',   desc: 'Booking after 8pm',    section: 'Time',    color: 'toast-buzzerbeater',  type: 'repeatable', bonus: 50 },
 
   // ─── SPREE (5) — Repeatable ───
   killing_spree:  { icon: '🔪',      name: 'Killing Spree',   desc: '5 bookings in 1 hr',   section: 'Spree',   color: 'toast-killingspree',  type: 'repeatable', bonus: 100 },
@@ -133,6 +133,10 @@ export interface MultiplierDef {
   chargesPerTrigger?: number;
   /** If true, this multiplier modifies scoring logic rather than adding a value */
   modifiesScoring?: boolean;
+  /** For war_machine: inactivity window in ms before multiplier drops */
+  inactivityWindowMs?: number;
+  /** For war_machine: number of dials required to activate */
+  dialThreshold?: number;
 }
 
 export const MULTIPLIER_DEFS: Record<string, MultiplierDef> = {
@@ -181,7 +185,11 @@ export const MULTIPLIER_DEFS: Record<string, MultiplierDef> = {
   },
   war_machine: {
     name: 'War Machine', icon: '⚙️',
-    perHourBonus: 0.1, minDialsPerHour: 50,
+    // New logic: activate at dialThreshold dials → +0.5x flat
+    // drops after inactivityWindowMs without any disposition
+    flatMultiplier: 0.5,
+    dialThreshold: 50,
+    inactivityWindowMs: 600000, // 10 minutes
     timerDuration: 0, decays: false,
   },
   ghost_town: {
@@ -196,13 +204,13 @@ export const MULTIPLIER_DEFS: Record<string, MultiplierDef> = {
   },
   scorched_earth: {
     name: 'Scorched Earth', icon: '🔥',
-    chargesPerTrigger: 5,
+    chargesPerTrigger: 2,  // reduced from 5
     tiers: [
-      { minGroups: 21, bonus: 3.0, multiplier: 3.0, name: 'Scorched Earth', icon: '🔥' },
-      { minGroups: 16, bonus: 2.0, multiplier: 2.0, name: 'Scorched Earth', icon: '🔥' },
-      { minGroups: 11, bonus: 1.5, multiplier: 1.5, name: 'Scorched Earth', icon: '🔥' },
-      { minGroups: 6,  bonus: 1.3, multiplier: 1.3, name: 'Scorched Earth', icon: '🔥' },
-      { minGroups: 3,  bonus: 1.1, multiplier: 1.1, name: 'Scorched Earth', icon: '🔥' },
+      { minGroups: 21, bonus: 2.0, multiplier: 2.0, name: 'Scorched Earth', icon: '🔥' },
+      { minGroups: 16, bonus: 1.0, multiplier: 1.0, name: 'Scorched Earth', icon: '🔥' },
+      { minGroups: 11, bonus: 0.5, multiplier: 0.5, name: 'Scorched Earth', icon: '🔥' },
+      { minGroups: 6,  bonus: 0.3, multiplier: 0.3, name: 'Scorched Earth', icon: '🔥' },
+      { minGroups: 3,  bonus: 0.1, multiplier: 0.1, name: 'Scorched Earth', icon: '🔥' },
     ],
     timerDuration: 0, decays: false,
   },
@@ -210,7 +218,7 @@ export const MULTIPLIER_DEFS: Record<string, MultiplierDef> = {
     name: 'Indoctrinate', icon: '🧠',
     charges: 2,
     timerDuration: 0, decays: false,
-    modifiesScoring: true,  // badge bonuses get multiplied too
+    modifiesScoring: true,
   },
 };
 
@@ -290,7 +298,8 @@ export interface GamificationSession {
     blitz: { earlyYesCount: number; triggered: boolean; triggerTime: number; tier: number };
     enraged: { consecutiveRejections: number; tier: number; chargesRemaining: number; frozen: boolean };
     ratio_focus: Record<string, never>;
-    war_machine: Record<string, never>;
+    // War Machine: new fields — totalDials counter + last disposition timestamp
+    war_machine: { totalDials: number; active: boolean; lastDialAt: number };
     ghost_town: { consecutiveUnreached: number; chargesRemaining: number; tier: number };
     cold_streak: { dialsSinceLastYes: number; chargesRemaining: number };
     scorched_earth: { bonusStack: ScorchedEarthStack[]; clearedStreets: Record<string, boolean> };
@@ -320,7 +329,7 @@ export function createFreshSession(repCode: string, dateStr: string): Gamificati
       blitz: { earlyYesCount: 0, triggered: false, triggerTime: 0, tier: 0 },
       enraged: { consecutiveRejections: 0, tier: 0, chargesRemaining: 0, frozen: false },
       ratio_focus: {},
-      war_machine: {},
+      war_machine: { totalDials: 0, active: false, lastDialAt: 0 },
       ghost_town: { consecutiveUnreached: 0, chargesRemaining: 0, tier: 0 },
       cold_streak: { dialsSinceLastYes: 0, chargesRemaining: 0 },
       scorched_earth: { bonusStack: [], clearedStreets: {} },

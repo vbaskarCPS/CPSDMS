@@ -63,7 +63,7 @@ export interface ProcessResult {
 }
 
 // =============================================================================
-// MAIN ENTRY: processDispositionAndSave equivalent (minus persistence)
+// MAIN ENTRY
 // =============================================================================
 
 export function processDisposition(
@@ -77,7 +77,11 @@ export function processDisposition(
 
   recordDial(session, now);
 
-  // High Ground: activate if still on the street where a YES happened
+  // --- War Machine: record last dial time and check inactivity ---
+  updateWarMachine(session, now);
+
+  // --- High Ground: check BEFORE updating activeStreet ---
+  // active = true only if we are currently on the same street as the last YES
   const currentStreet = context.street || '';
   const hg = session.multipliers.high_ground;
   if (hg.activeStreet && currentStreet === hg.activeStreet) {
@@ -96,7 +100,7 @@ export function processDisposition(
 
   switch (dispType) {
     case 'NA':
-    case 'CTS':       // Closer To Spring — treated identically to NA for scoring
+    case 'CTS':
     case 'WN/NIS':
       processUnreached(session);
       if (session.multipliers.cold_streak.chargesRemaining <= 0) {
@@ -240,14 +244,10 @@ function processYes(
   // Conversion: track first-time prepays from non-app clients
   if (isPrepay && context.isFirstTimePrepay) {
     session.conversionCount = (session.conversionCount || 0) + 1;
-    // Trigger Indoctrinate: badge bonuses get multiplied for this booking + next
     const indoc = session.multipliers.indoctrinate;
     if (!indoc) (session.multipliers as any).indoctrinate = { chargesRemaining: 0 };
     session.multipliers.indoctrinate.chargesRemaining = (MULTIPLIER_DEFS.indoctrinate.charges || 2);
   }
-
-  // Consume Indoctrinate charge (AFTER triggering so the current booking benefits)
-  // Note: we consume AFTER scorePoints is called — see scorePoints for the actual consumption
 
   // Ghost Town: YES resets consecutive unreached and consumes a charge
   session.multipliers.ghost_town.consecutiveUnreached = 0;
@@ -267,7 +267,11 @@ function processYes(
   consumeScorchedEarthCharge(session);
   updateOpTempo(session, now);
   updateTracerRounds(session, isPrepay, now);
+
+  // High Ground: set activeStreet AFTER the check at the top of processDisposition
+  // so the multiplier applies starting from the NEXT disposition on this street
   updateHighGround(session, street);
+
   updateNightVision(session, now);
   updateBlitz(session, now);
   consumeEnraged(session);
@@ -303,6 +307,11 @@ function updateTracerRounds(session: GamificationSession, isPrepay: boolean, now
   s.expiresAt = now + (MULTIPLIER_DEFS.tracer_rounds.timerDuration || 1200000);
 }
 
+/**
+ * High Ground: set activeStreet on YES/PREPAY only.
+ * The active/inactive check happens at the top of processDisposition BEFORE this runs,
+ * so the multiplier kicks in on the next disposition on this street.
+ */
 function updateHighGround(session: GamificationSession, street: string): void {
   if (!street) return;
   session.multipliers.high_ground.activeStreet = street;
@@ -351,6 +360,42 @@ function consumeEnraged(session: GamificationSession): void {
 }
 
 // =============================================================================
+// WAR MACHINE — new logic
+// Activates when totalDials hits dialThreshold (50).
+// Stays active as long as lastDialAt is within inactivityWindowMs (10 min).
+// Resets totalDials to 0 when it drops so you need a fresh 50 to re-earn it.
+// Called on every disposition (not just YES).
+// =============================================================================
+
+function updateWarMachine(session: GamificationSession, now: number): void {
+  const wm = session.multipliers.war_machine;
+  const def = MULTIPLIER_DEFS.war_machine;
+  const inactivityWindow = def.inactivityWindowMs || 600000;
+  const threshold = def.dialThreshold || 50;
+
+  // Increment dial counter
+  wm.totalDials = (wm.totalDials || 0) + 1;
+
+  if (wm.active) {
+    // Check inactivity — if last dial was too long ago, drop the multiplier
+    const timeSinceLast = wm.lastDialAt > 0 ? now - wm.lastDialAt : 0;
+    if (timeSinceLast > inactivityWindow) {
+      // Lost it — reset counter so they need a fresh 50
+      wm.active = false;
+      wm.totalDials = 1; // count current dial as first of new streak
+    }
+  } else {
+    // Not active — check if we've hit the threshold
+    if (wm.totalDials >= threshold) {
+      wm.active = true;
+    }
+  }
+
+  // Always update lastDialAt
+  wm.lastDialAt = now;
+}
+
+// =============================================================================
 // SCORCHED EARTH
 // =============================================================================
 
@@ -373,7 +418,7 @@ function triggerScorchedEarth(
 
   se.clearedStreets[street] = true;
   if (!se.bonusStack) se.bonusStack = [];
-  se.bonusStack.push({ bonus, charges: def.chargesPerTrigger || 5 });
+  se.bonusStack.push({ bonus, charges: def.chargesPerTrigger || 2 });
 }
 
 function consumeScorchedEarthCharge(session: GamificationSession): void {
@@ -381,22 +426,6 @@ function consumeScorchedEarthCharge(session: GamificationSession): void {
   if (!se.bonusStack || se.bonusStack.length === 0) return;
   se.bonusStack[0].charges--;
   if (se.bonusStack[0].charges <= 0) se.bonusStack.shift();
-}
-
-// =============================================================================
-// WAR MACHINE HELPER
-// =============================================================================
-
-function getConsecutiveDialHours(session: GamificationSession): number {
-  if (!session.hourlyDials) return 0;
-  const min = MULTIPLIER_DEFS.war_machine.minDialsPerHour || 50;
-  const cur = Math.floor(Date.now() / 3600000);
-  let consecutive = 0;
-  for (let h = cur; ; h--) {
-    if ((session.hourlyDials[String(h)] || 0) >= min) consecutive++;
-    else break;
-  }
-  return consecutive;
 }
 
 // =============================================================================
@@ -480,12 +509,12 @@ function calculateMultiplier(session: GamificationSession, now: number): {
     }
   }
 
-  // War Machine
-  const wmH = getConsecutiveDialHours(session);
-  if (wmH > 0) {
-    const v = wmH * (MULTIPLIER_DEFS.war_machine.perHourBonus || 0.1);
-    breakdown.war_machine = Math.round(v * 100) / 100;
-    total += v;
+  // War Machine — flat +0.5x when active (inactivity-based drop)
+  const wmS = session.multipliers.war_machine;
+  if (wmS.active) {
+    const wmVal = MULTIPLIER_DEFS.war_machine.flatMultiplier || 0.5;
+    breakdown.war_machine = wmVal;
+    total += wmVal;
   }
 
   // Ghost Town (tiered: 0.5 → 1.0 → 2.0)
@@ -680,7 +709,7 @@ function evaluateAllBadges(
     if (session.raisedDeadCount >= threshold) { if (tryAwardBadge(session, id, now, sn)) earned.push(id); break; }
   }
 
-  // Conversion (non-app client prepay converts)
+  // Conversion
   const convBadges: [number, string][] = [
     [10, 'cult_leader'], [5, 'born_again'], [2, 'conversion_therapy'],
   ];
@@ -912,14 +941,19 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     }
   }
 
-  // War Machine
-  const wmH = getConsecutiveDialHours(session);
-  if (wmH > 0) {
+  // War Machine — show with inactivity countdown
+  const wmS = session.multipliers.war_machine;
+  const wmDef = MULTIPLIER_DEFS.war_machine;
+  if (wmS.active) {
+    const inactivityWindow = wmDef.inactivityWindowMs || 600000;
+    const elapsed = wmS.lastDialAt > 0 ? now - wmS.lastDialAt : 0;
+    const remaining = Math.max(0, inactivityWindow - elapsed);
     active.push({
-      id: 'war_machine', name: MULTIPLIER_DEFS.war_machine.name,
-      icon: MULTIPLIER_DEFS.war_machine.icon,
-      value: Math.round(wmH * (MULTIPLIER_DEFS.war_machine.perHourBonus || 0.1) * 100) / 100,
-      expiresIn: -1,
+      id: 'war_machine', name: wmDef.name,
+      icon: wmDef.icon,
+      value: wmDef.flatMultiplier || 0.5,
+      // Show countdown of inactivity window so rep knows how long before it drops
+      expiresIn: remaining,
     });
   }
 
@@ -928,7 +962,7 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
   if (gtS.chargesRemaining > 0) {
     const gtTier = gtS.tier || 1;
     const gtName = gtTier === 3 ? 'Haunted Town' : gtTier === 2 ? 'Super Ghost Town' : 'Ghost Town';
-    const gtIcon = gtTier === 3 ? '☠️' : gtTier === 2 ? '👹' : '👻';
+    const gtIcon = gtTier === 3 ? '👻' : gtTier === 2 ? '👻' : '👻';
     const gtVal = gtTier === 3 ? 2.0 : gtTier === 2 ? 1.0 : 0.5;
     active.push({
       id: 'ghost_town', name: gtName, icon: gtIcon, value: gtVal,
@@ -961,13 +995,13 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     });
   }
 
-  // Indoctrinate (conversion buff — badge bonuses get multiplied)
+  // Indoctrinate
   const indocS = session.multipliers.indoctrinate;
   if (indocS && indocS.chargesRemaining > 0) {
     active.push({
       id: 'indoctrinate', name: MULTIPLIER_DEFS.indoctrinate.name,
       icon: MULTIPLIER_DEFS.indoctrinate.icon,
-      value: 0,  // No additive multiplier value — modifies scoring logic
+      value: 0,
       expiresIn: -1, extra: { charges: indocS.chargesRemaining, modifiesScoring: true },
     });
   }

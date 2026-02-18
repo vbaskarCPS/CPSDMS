@@ -90,7 +90,9 @@ const ICON_PATHS: Record<string, string> = {
   mult_enraged_fku:     'delapouite/uprising',
   mult_ratio_focus:     'lorc/on-target',
   mult_war_machine:     'lorc/gears',
-  mult_ghost_town:      'lorc/ghost',
+  mult_ghost_town:      'lorc/ghost',       // T1 Ghost Town    (+0.5x)
+  mult_ghost_town_t2:   'lorc/spectre',     // T2 Super Ghost Town (+1.0x)
+  mult_ghost_town_t3:   'lorc/haunting',    // T3 Haunted Town  (+2.0x)
   mult_cold_streak:     'delapouite/frozen-body',
   mult_scorched_earth:  'lorc/fire-zone',
   mult_indoctrinate:    'lorc/psychic-waves',
@@ -136,11 +138,6 @@ function getIconUrl(iconPath: string): string {
   return `https://game-icons.net/icons/ffffff/transparent/1x1/${iconPath}.svg`;
 }
 
-// --- CSS filter to colorize white SVG → target color ---
-// game-icons.net serves white-on-transparent SVGs.
-// We use CSS brightness(0) to make it black, then invert+sepia+hue-rotate to target color.
-// For simplicity, we just use the white SVG as-is (white icons on dark bg look great).
-
 function GameIcon({
   iconPath,
   size,
@@ -154,7 +151,6 @@ function GameIcon({
   const url = getIconUrl(iconPath);
 
   if (failed) {
-    // Fallback: show a colored placeholder
     return (
       <div
         style={{
@@ -182,26 +178,16 @@ function GameIcon({
       width={size}
       height={size}
       onError={() => setFailed(true)}
-      style={{
-        display: 'block',
-        // No filter needed — white SVGs on dark background look great as-is.
-        // The icon is white (#fff) on transparent, which is exactly what we want
-        // for the dark War Room UI.
-      }}
+      style={{ display: 'block' }}
       loading="lazy"
     />
   );
 }
 
 // =============================================================================
-// PUBLIC API — drop-in replacement for existing BadgeIcons.tsx
+// PUBLIC API
 // =============================================================================
 
-/**
- * Get a badge icon by badge ID.
- * Returns a React element (img tag loading from game-icons.net CDN).
- * Falls back to null if the badge ID has no mapped icon.
- */
 export function getBadgeIcon(badgeId: string, size: number = 24): React.ReactNode | null {
   const path = ICON_PATHS[badgeId];
   if (!path) return null;
@@ -209,12 +195,7 @@ export function getBadgeIcon(badgeId: string, size: number = 24): React.ReactNod
   return <GameIcon iconPath={path} size={size} color={color} />;
 }
 
-/**
- * Get a multiplier icon by multiplier ID.
- * Accepts either "op_tempo" or "mult_op_tempo" format.
- */
 export function getMultiplierIcon(multiplierId: string, size: number = 24): React.ReactNode | null {
-  // Try with mult_ prefix first, then without
   const key = ICON_PATHS[`mult_${multiplierId}`] ? `mult_${multiplierId}` : multiplierId;
   const path = ICON_PATHS[key];
   if (!path) return null;
@@ -230,10 +211,10 @@ export function getMultiplierTierIcon(
   tierIndex: number,
   size: number = 24
 ): React.ReactNode | null {
-  // Tiered multiplier keys
   const tierKeys: Record<string, string[]> = {
-    blitz: ['mult_blitz_shock_awe', 'mult_blitz_blitzkrieg', 'mult_blitz'],
-    enraged: ['mult_enraged', 'mult_enraged_furious', 'mult_enraged_fku'],
+    blitz:      ['mult_blitz_shock_awe', 'mult_blitz_blitzkrieg', 'mult_blitz'],
+    enraged:    ['mult_enraged', 'mult_enraged_furious', 'mult_enraged_fku'],
+    ghost_town: ['mult_ghost_town', 'mult_ghost_town_t2', 'mult_ghost_town_t3'],
   };
 
   const tiers = tierKeys[multiplierId];
@@ -242,28 +223,18 @@ export function getMultiplierTierIcon(
     if (path) return <GameIcon iconPath={path} size={size} />;
   }
 
-  // Fallback to base icon
   return getMultiplierIcon(multiplierId, size);
 }
 
-/**
- * Get badge category color by badge ID.
- */
 export function getBadgeCategoryColor(badgeId: string): string {
   return CATEGORY_MAP[badgeId] || '#2ecc71';
 }
 
-/**
- * Get the raw CDN URL for a badge icon (useful for preloading or external use).
- */
 export function getBadgeIconUrl(badgeId: string): string | null {
   const path = ICON_PATHS[badgeId];
   return path ? getIconUrl(path) : null;
 }
 
-/**
- * Get the raw CDN URL for a multiplier icon.
- */
 export function getMultiplierIconUrl(multiplierId: string): string | null {
   const key = ICON_PATHS[`mult_${multiplierId}`] ? `mult_${multiplierId}` : multiplierId;
   const path = ICON_PATHS[key];
