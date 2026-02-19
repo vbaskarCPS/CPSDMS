@@ -5,6 +5,11 @@
 // Per-member cards: collapsed summary row, expandable detail with 6 stat cards + badge log.
 // Styled to match AchievementsPanel (dark military aesthetic).
 //
+// DATA SOURCE: dialer_sessions table (via fetchFireteamStatsFromSessions /
+// fetchGlobalStatsFromSessions). The engine writes gamification_state to
+// Supabase after every disposition, so all reps' data is always current —
+// no localStorage hack, no mergeCurrentUser() needed.
+//
 // AUTO-REFRESH:
 // While the panel is open, fetchAll() runs on a 30-second interval so the
 // leaderboard stays current without requiring a manual refresh click.
@@ -29,7 +34,7 @@ interface StatsPanelProps {
   campaignId: string;
   currentUserId: string;
   currentUserName: string;
-  session: GamificationSession | null;
+  session: GamificationSession | null; // kept for API compatibility, no longer used for data
 }
 
 // =============================================================================
@@ -42,39 +47,6 @@ function getRankIcon(index: number): string {
   return RANK_ICONS[index] ?? `${index + 1}.`;
 }
 
-/** Build a MemberStats from the current user's local GamificationSession */
-function sessionToMemberStats(
-  userId: string,
-  userName: string,
-  session: GamificationSession
-): MemberStats {
-  return {
-    managerId:     userId,
-    managerName:   userName,
-    points:        session.totalSessionPoints,
-    totalBookings: session.totalBookings,
-    pbs:           session.pbs,
-    pps:           session.pps,
-    ppDollars:     session.ppDollars,
-    totalDials:    session.totalDials,
-    badges:        session.badges.map(b => b.id),
-  };
-}
-
-/** Merge the current user's local stats into a Supabase-sourced list */
-function mergeCurrentUser(
-  rows: MemberStats[],
-  userId: string,
-  userName: string,
-  session: GamificationSession | null
-): MemberStats[] {
-  if (!session) return rows;
-  const self = sessionToMemberStats(userId, userName, session);
-  // Remove any Supabase row for this user (local is always fresher)
-  const others = rows.filter(r => r.managerId !== userId);
-  return [...others, self].sort((a, b) => b.points - a.points);
-}
-
 // =============================================================================
 // COMPONENT
 // =============================================================================
@@ -85,7 +57,7 @@ export default function StatsPanel({
   campaignId,
   currentUserId,
   currentUserName,
-  session,
+  session, // accepted but not used — data comes from Supabase now
 }: StatsPanelProps) {
   const [tab, setTab] = useState<'fireteam' | 'global'>('fireteam');
   const [fireteamRows, setFireteamRows] = useState<MemberStats[]>([]);
@@ -98,8 +70,8 @@ export default function StatsPanel({
     setLoading(true);
     try {
       const [ft, gl] = await Promise.all([
-        dialerRealtimeService.fetchFireteamStats(campaignId),
-        dialerRealtimeService.fetchGlobalStats(),
+        dialerRealtimeService.fetchFireteamStatsFromSessions(campaignId),
+        dialerRealtimeService.fetchGlobalStatsFromSessions(),
       ]);
       setFireteamRows(ft);
       setGlobalRows(gl);
@@ -123,9 +95,7 @@ export default function StatsPanel({
 
   if (!open) return null;
 
-  const rows = tab === 'fireteam'
-    ? mergeCurrentUser(fireteamRows, currentUserId, currentUserName, session)
-    : mergeCurrentUser(globalRows, currentUserId, currentUserName, session);
+  const rows = tab === 'fireteam' ? fireteamRows : globalRows;
 
   const refreshAgo = lastRefresh
     ? Math.round((Date.now() - lastRefresh) / 1000)
@@ -224,7 +194,7 @@ export default function StatsPanel({
         {/* ── Tabs ── */}
         <div className="flex-shrink-0 flex px-5 pt-1" style={{ background: 'rgba(14,24,14,0.4)' }}>
           <SPTabButton label="Fireteam" active={tab === 'fireteam'} onClick={() => setTab('fireteam')} />
-          <SPTabButton label="Global" active={tab === 'global'} onClick={() => setTab('global')} />
+          <SPTabButton label="Global"   active={tab === 'global'}   onClick={() => setTab('global')} />
         </div>
 
         {/* ── Content ── */}
@@ -259,7 +229,7 @@ export default function StatsPanel({
                     isOwn={isOwn}
                     isExpanded={isExpanded}
                     onToggle={() => setExpandedId(isExpanded ? null : member.managerId)}
-                    showDials={isOwn}
+                    showDials={true}
                   />
                 );
               })}
@@ -336,11 +306,11 @@ function MemberCard({ member, rank, isOwn, isExpanded, onToggle, showDials }: Me
 
         {/* Summary stats */}
         <div className="flex items-center gap-3 flex-shrink-0">
-          <CollapsedStat label="PTS" value={member.points} color="#fff" />
-          <CollapsedStat label="PB" value={member.pbs} color="#2ecc71" />
-          <CollapsedStat label="PP" value={member.pps} color="#f1c40f" />
-          <CollapsedStat label="PP$" value={`$${member.ppDollars}`} color="#e67e22" />
-          <CollapsedStat label="🏅" value={badgeCount} color="#9b59b6" />
+          <CollapsedStat label="PTS" value={member.points}            color="#fff" />
+          <CollapsedStat label="PB"  value={member.pbs}              color="#2ecc71" />
+          <CollapsedStat label="PP"  value={member.pps}              color="#f1c40f" />
+          <CollapsedStat label="PP$" value={`$${member.ppDollars}`}  color="#e67e22" />
+          <CollapsedStat label="🏅"  value={badgeCount}              color="#9b59b6" />
         </div>
 
         {/* Expand chevron */}
@@ -360,15 +330,12 @@ function MemberCard({ member, rank, isOwn, isExpanded, onToggle, showDials }: Me
         >
           {/* 6 stat cards */}
           <div className="grid grid-cols-6 gap-1.5 mb-3">
-            <ExpandedStatCard label="PB"    value={member.pbs}            color="#2ecc71" />
-            <ExpandedStatCard label="PP"    value={member.pps}            color="#f1c40f" />
-            <ExpandedStatCard label="PP$"   value={`$${member.ppDollars}`} color="#e67e22" />
-            <ExpandedStatCard label="PTS"   value={member.points}         color="#ffffff" />
-            <ExpandedStatCard label="BADGES" value={badgeCount}           color="#9b59b6" />
-            {showDials
-              ? <ExpandedStatCard label="DIALS" value={member.totalDials} color="#3498db" />
-              : <ExpandedStatCard label="DIALS" value="—"                 color="#444"    />
-            }
+            <ExpandedStatCard label="PB"     value={member.pbs}             color="#2ecc71" />
+            <ExpandedStatCard label="PP"     value={member.pps}             color="#f1c40f" />
+            <ExpandedStatCard label="PP$"    value={`$${member.ppDollars}`} color="#e67e22" />
+            <ExpandedStatCard label="PTS"    value={member.points}          color="#ffffff" />
+            <ExpandedStatCard label="BADGES" value={badgeCount}             color="#9b59b6" />
+            <ExpandedStatCard label="DIALS"  value={showDials ? member.totalDials : '—'} color={showDials ? '#3498db' : '#444'} />
           </div>
 
           {/* Badge log */}
@@ -392,7 +359,6 @@ function BadgeLog({ badges }: { badges: string[] }) {
     );
   }
 
-  // Count occurrences and dedupe for display
   const countMap = new Map<string, number>();
   for (const id of badges) countMap.set(id, (countMap.get(id) ?? 0) + 1);
   const uniqueIds = Array.from(countMap.keys());

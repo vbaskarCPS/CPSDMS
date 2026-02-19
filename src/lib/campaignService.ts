@@ -58,6 +58,26 @@ export interface DialerSession {
 const CAMPAIGN_MANAGER_KEY = 'current_campaign_manager';
 const CAMPAIGN_KEY = 'current_campaign';
 
+// =============================================================================
+// EST DATE HELPER
+// Returns "today" as a YYYY-MM-DD string in Eastern Standard Time.
+// Used so all reps — regardless of their local timezone — share the same
+// session date. Resets at 3am EST which is safely the middle of the night
+// for all Canadian timezones (1am Mountain, midnight Pacific).
+// =============================================================================
+
+export function getTodayEST(): string {
+  const now = new Date();
+  // EST is UTC-5. We don't use EDT (UTC-4) — we stay on fixed UTC-5 year-round
+  // so the reset time is consistent and predictable for the team.
+  const estOffsetMs = -5 * 60 * 60 * 1000;
+  const estNow = new Date(now.getTime() + estOffsetMs);
+  const y = estNow.getUTCFullYear();
+  const m = String(estNow.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(estNow.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 class CampaignService {
   private static instance: CampaignService;
 
@@ -330,16 +350,22 @@ class CampaignService {
 
   // --- DIALER SESSION ---
 
+  /**
+   * Get or create today's session row for this manager.
+   * "Today" is always in EST so the whole team shares the same date.
+   * One row per manager per day — if they switch campaign tabs,
+   * we update campaign_id on the existing row (Option A).
+   */
   public async getOrCreateTodaySession(
     campaignId: string,
     managerId: string
   ): Promise<DialerSession> {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayEST();
 
+    // Try to find an existing row for this manager today
     const { data: existing, error: fetchError } = await supabase
       .from('dialer_sessions')
       .select('*')
-      .eq('campaign_id', campaignId)
       .eq('manager_id', managerId)
       .eq('session_date', today)
       .maybeSingle();
@@ -349,9 +375,23 @@ class CampaignService {
     }
 
     if (existing) {
+      // If they've switched to a different campaign tab, update campaign_id
+      if (existing.campaign_id !== campaignId) {
+        const { data: updated, error: updateError } = await supabase
+          .from('dialer_sessions')
+          .update({ campaign_id: campaignId, updated_at: new Date().toISOString() })
+          .eq('id', existing.id)
+          .select()
+          .single();
+
+        if (updateError) throw new Error(updateError.message);
+        return this.mapDbToSession(updated);
+      }
+
       return this.mapDbToSession(existing);
     }
 
+    // No row yet — create a fresh one
     const { data: created, error: createError } = await supabase
       .from('dialer_sessions')
       .insert({
@@ -367,7 +407,12 @@ class CampaignService {
     return this.mapDbToSession(created);
   }
 
-  public async updateGamificationState(
+  /**
+   * Write the full GamificationSession object into the session row.
+   * Called after every disposition so the state is always current in Supabase.
+   * Uses the row ID we got from getOrCreateTodaySession — no extra lookups.
+   */
+  public async upsertGamificationState(
     sessionId: string,
     state: Record<string, any>
   ): Promise<void> {
@@ -380,6 +425,17 @@ class CampaignService {
       .eq('id', sessionId);
 
     if (error) throw new Error(error.message);
+  }
+
+  /**
+   * @deprecated Use upsertGamificationState instead.
+   * Kept for any legacy callers — delegates to the new method.
+   */
+  public async updateGamificationState(
+    sessionId: string,
+    state: Record<string, any>
+  ): Promise<void> {
+    return this.upsertGamificationState(sessionId, state);
   }
 
   // --- VALIDATION ---

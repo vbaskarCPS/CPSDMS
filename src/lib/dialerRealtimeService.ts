@@ -12,13 +12,20 @@
 // - subscribeToGlobalFeed(): listens for INSERTs across ALL campaigns (incl. logins)
 // - fetchTodayEvents():    fetches today's booking + login events
 // - fetchFireteamStats():  aggregates per-member stats for one campaign, today
+//                          (from dialer_team_events — used by FireteamPanel)
 // - fetchGlobalStats():    aggregates per-member stats across all campaigns, today
+//                          (from dialer_team_events — used by FireteamPanel)
+// - fetchFireteamStatsFromSessions(): reads per-member stats from dialer_sessions
+//                          for one campaign, today — used by StatsPanel leaderboard
+// - fetchGlobalStatsFromSessions():   reads per-member stats from dialer_sessions
+//                          across all campaigns, today — used by StatsPanel leaderboard
 // - createIsolatedChannel(): creates a private realtime subscription that does NOT
 //                            touch shared channel slots — safe for components that
 //                            need their own subscription alongside DialerPage's.
 //
 
 import { supabase } from './supabase';
+import { getTodayEST } from './campaignService';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import type { TeamBookingEvent } from '../pages/Dialer/DialerHUD';
 
@@ -54,7 +61,7 @@ type TeamFeedCallback = (event: TeamBookingEvent & { isLogin?: boolean }) => voi
 type PresenceCallback = (records: PresenceRecord[]) => void;
 
 // =============================================================================
-// MEMBER STATS (aggregated from dialer_team_events)
+// MEMBER STATS
 // =============================================================================
 
 export interface MemberStats {
@@ -344,7 +351,7 @@ class DialerRealtimeService {
   }
 
   // =========================================================================
-  // FETCH TODAY'S EVENTS (bookings + logins)
+  // FETCH TODAY'S EVENTS (bookings + logins) — used by FireteamPanel
   // campaignId = undefined → global (all bookings + all logins)
   // campaignId = string    → fireteam bookings + all logins
   // =========================================================================
@@ -359,7 +366,6 @@ class DialerRealtimeService {
     let error: any = null;
 
     if (campaignId) {
-      // Campaign-scoped: bookings for this campaign + all logins for context
       ({ data, error } = await supabase
         .from('dialer_team_events')
         .select(cols)
@@ -368,7 +374,6 @@ class DialerRealtimeService {
         .lte('created_at', lte)
         .order('created_at', { ascending: true }));
     } else {
-      // Global: all bookings + all logins
       ({ data, error } = await supabase
         .from('dialer_team_events')
         .select(cols)
@@ -517,7 +522,8 @@ class DialerRealtimeService {
   }
 
   // =========================================================================
-  // FETCH FIRETEAM STATS
+  // FETCH FIRETEAM STATS (from dialer_team_events)
+  // Used by FireteamPanel for the live activity log counts.
   // =========================================================================
 
   public async fetchFireteamStats(campaignId: string): Promise<MemberStats[]> {
@@ -538,7 +544,8 @@ class DialerRealtimeService {
   }
 
   // =========================================================================
-  // FETCH GLOBAL STATS
+  // FETCH GLOBAL STATS (from dialer_team_events)
+  // Used by FireteamPanel for the live activity log counts.
   // =========================================================================
 
   public async fetchGlobalStats(): Promise<MemberStats[]> {
@@ -555,6 +562,95 @@ class DialerRealtimeService {
     }
 
     return aggregateStats(data || []);
+  }
+
+  // =========================================================================
+  // FETCH FIRETEAM STATS FROM SESSIONS
+  //
+  // Reads from dialer_sessions for today (EST date). Each session row's
+  // gamification_state jsonb contains the full GamificationSession object,
+  // which has all the stats we need. Filtered to a single campaign_id.
+  //
+  // Used by StatsPanel leaderboard — replaces the old dialer_team_events
+  // aggregation + mergeCurrentUser() hack. The current user's data is already
+  // in Supabase (written after every disposition), so no hack needed.
+  // =========================================================================
+
+  public async fetchFireteamStatsFromSessions(campaignId: string): Promise<MemberStats[]> {
+    const today = getTodayEST();
+
+    const { data, error } = await supabase
+      .from('dialer_sessions')
+      .select(`
+        manager_id,
+        gamification_state,
+        campaign_managers (
+          name,
+          rep_code
+        )
+      `)
+      .eq('campaign_id', campaignId)
+      .eq('session_date', today);
+
+    if (error) {
+      console.error('Failed to fetch fireteam session stats:', error.message);
+      return [];
+    }
+
+    return (data || [])
+      .map(row => sessionRowToMemberStats(row))
+      .filter(Boolean)
+      .sort((a, b) => b!.points - a!.points) as MemberStats[];
+  }
+
+  // =========================================================================
+  // FETCH GLOBAL STATS FROM SESSIONS
+  //
+  // Same as above but across ALL campaigns. A manager who dialed in two
+  // different campaign tabs today will have two rows — we sum them.
+  // =========================================================================
+
+  public async fetchGlobalStatsFromSessions(): Promise<MemberStats[]> {
+    const today = getTodayEST();
+
+    const { data, error } = await supabase
+      .from('dialer_sessions')
+      .select(`
+        manager_id,
+        gamification_state,
+        campaign_managers (
+          name,
+          rep_code
+        )
+      `)
+      .eq('session_date', today);
+
+    if (error) {
+      console.error('Failed to fetch global session stats:', error.message);
+      return [];
+    }
+
+    // Sum across multiple rows per manager (campaign switching)
+    const map = new Map<string, MemberStats>();
+    for (const row of (data || [])) {
+      const parsed = sessionRowToMemberStats(row);
+      if (!parsed) continue;
+
+      if (!map.has(parsed.managerId)) {
+        map.set(parsed.managerId, { ...parsed });
+      } else {
+        const existing = map.get(parsed.managerId)!;
+        existing.points        += parsed.points;
+        existing.totalBookings += parsed.totalBookings;
+        existing.pbs           += parsed.pbs;
+        existing.pps           += parsed.pps;
+        existing.ppDollars     += parsed.ppDollars;
+        existing.totalDials    += parsed.totalDials;
+        existing.badges        = [...existing.badges, ...parsed.badges];
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.points - a.points);
   }
 
   // =========================================================================
@@ -585,7 +681,7 @@ class DialerRealtimeService {
 }
 
 // =============================================================================
-// AGGREGATION HELPER
+// AGGREGATION HELPER (dialer_team_events — used by FireteamPanel)
 // =============================================================================
 
 function aggregateStats(rows: any[]): MemberStats[] {
@@ -620,6 +716,59 @@ function aggregateStats(rows: any[]): MemberStats[] {
   }
 
   return Array.from(map.values()).sort((a, b) => b.points - a.points);
+}
+
+// =============================================================================
+// SESSION ROW → MemberStats (dialer_sessions — used by StatsPanel)
+//
+// gamification_state is the full GamificationSession object saved by
+// dialerEngine after every disposition. We pull the fields we need out of it.
+// If the state is empty (rep logged in but hasn't dialed yet), we return a
+// zeroed-out row so they still appear in the leaderboard.
+// =============================================================================
+
+function sessionRowToMemberStats(row: any): MemberStats | null {
+  const id = row.manager_id as string;
+  if (!id) return null;
+
+  // Resolve display name: prefer campaign_managers.name, fall back to rep_code
+  const cm = row.campaign_managers;
+  const managerName: string =
+    cm?.name || cm?.rep_code || 'Unknown';
+
+  const state = row.gamification_state as Record<string, any> | null;
+
+  // Empty state — rep exists but hasn't dialed yet today
+  if (!state || Object.keys(state).length === 0) {
+    return {
+      managerId:     id,
+      managerName,
+      points:        0,
+      totalBookings: 0,
+      pbs:           0,
+      pps:           0,
+      ppDollars:     0,
+      totalDials:    0,
+      badges:        [],
+    };
+  }
+
+  // Pull fields from GamificationSession structure
+  const badges: string[] = Array.isArray(state.badges)
+    ? state.badges.map((b: any) => (typeof b === 'string' ? b : b?.id)).filter(Boolean)
+    : [];
+
+  return {
+    managerId:     id,
+    managerName,
+    points:        typeof state.totalSessionPoints === 'number' ? state.totalSessionPoints : 0,
+    totalBookings: typeof state.totalBookings      === 'number' ? state.totalBookings      : 0,
+    pbs:           typeof state.pbs                === 'number' ? state.pbs                : 0,
+    pps:           typeof state.pps                === 'number' ? state.pps                : 0,
+    ppDollars:     typeof state.ppDollars          === 'number' ? state.ppDollars          : 0,
+    totalDials:    typeof state.totalDials         === 'number' ? state.totalDials         : 0,
+    badges,
+  };
 }
 
 export const dialerRealtimeService = DialerRealtimeService.getInstance();

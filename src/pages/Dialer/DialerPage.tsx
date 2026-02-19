@@ -486,6 +486,8 @@ export default function DialerPage() {
       direction,
       startRow: 2,
       repCode: manager?.repCode || '',
+      managerId: manager?.id || '',
+      campaignId: campaign?.id || '',
       sniperConfig,
       startBookingId: startBookingId.trim() || undefined,
     };

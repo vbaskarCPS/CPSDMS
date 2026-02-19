@@ -10,7 +10,9 @@
 // - Phone highlighting via Google Sheets API (replaces Apps Script bridge)
 // - Gamification processing
 //
-// This is the single entry point for the DialerPage UI.
+// Session persistence: Supabase dialer_sessions table.
+// One row per manager per day (EST date). State is written after every
+// disposition so stats survive browser clears, tab switches, and device changes.
 //
 
 import { resolveHeaders, findHeaders, ColumnIndices } from './dialerHeaders';
@@ -50,6 +52,7 @@ import {
   ProcessResult as GamificationResult,
 } from './gamificationEngine';
 import { dialerSheetsService } from '../dialerSheetsService';
+import { campaignService, getTodayEST } from '../campaignService';
 import type { SniperConfig } from '../campaignService';
 import { DEFAULT_SNIPER_CONFIG } from '../campaignService';
 
@@ -63,8 +66,10 @@ export interface EngineConfig {
   direction: Direction;
   startRow: number;         // 1-based row to start from (or afterRow for subsequent calls)
   repCode: string;
-  sniperConfig?: SniperConfig;  // Sniper filtering config (replaces Apps Script hidden rows)
-  startBookingId?: string;      // Optional: start from specific booking ID
+  managerId: string;        // UUID from campaign_managers — required for Supabase session
+  campaignId: string;       // UUID from campaigns — required for Supabase session
+  sniperConfig?: SniperConfig;
+  startBookingId?: string;
 }
 
 export interface EngineSnapshot {
@@ -94,14 +99,14 @@ export interface PrepayPending {
 interface CachedSheetData {
   spreadsheetId: string;
   sheetName: string;
-  sniperConfigHash: string; // Serialized config to detect changes
+  sniperConfigHash: string;
   headers: any[];
   CI: ColumnIndices;
-  dataStartRow: number;     // 1-based sheet row of first data row
-  all: any[][];             // All data rows (no header)
-  groups: ClientGroup[];    // All groups (after sniper filter)
-  available: ClientGroup[]; // Groups that are still dialable
-  sheetTabId: number;       // Numeric tab ID for formatting API calls
+  dataStartRow: number;
+  all: any[][];
+  groups: ClientGroup[];
+  available: ClientGroup[];
+  sheetTabId: number;
   timestamp: number;
 }
 
@@ -112,22 +117,23 @@ let pendingPrepay: PrepayPending | null = null;
 let highlightedRows: { current: number[]; next: number[] } = { current: [], next: [] };
 
 // =============================================================================
+// SESSION ROW — in-memory reference to the Supabase dialer_sessions row
+// Set once on initialize(), used for all subsequent saves.
+// =============================================================================
+
+let activeSessionRowId: string | null = null;
+
+// =============================================================================
 // DATA LOADING
 // =============================================================================
 
-/**
- * Fetch all rows from the sheet and build groups.
- * Caches the result so subsequent calls (disposition, navigation) don't re-fetch.
- */
 async function loadSheetData(
   spreadsheetId: string,
   sheetName: string,
   sniperConfig?: SniperConfig
 ): Promise<CachedSheetData> {
-  // Serialize config for cache comparison
   const configHash = JSON.stringify(sniperConfig || DEFAULT_SNIPER_CONFIG);
 
-  // Return cache if fresh (< 30 seconds for same sheet + same config)
   if (
     cachedSheet &&
     cachedSheet.spreadsheetId === spreadsheetId &&
@@ -138,42 +144,35 @@ async function loadSheetData(
     return cachedSheet;
   }
 
-  // Fetch all data from the sheet
   const range = `'${sheetName}'`;
   const rawData = await dialerSheetsService.sheetsGet(spreadsheetId, range);
   if (!rawData || rawData.length < 2) {
     throw new Error(`Sheet "${sheetName}" has no data rows.`);
   }
 
-  // Find headers (may not be row 1)
   const { headerRowIndex, CI } = findHeaders(rawData);
   if (CI.PHONE < 0) {
     throw new Error('No PHONE column found in headers.');
   }
 
   const headers = rawData[headerRowIndex];
-  const dataStartRow = headerRowIndex + 2; // 1-based sheet row (headerRowIndex is 0-based in rawData)
-  const all = rawData.slice(headerRowIndex + 1); // Data rows only
+  const dataStartRow = headerRowIndex + 2;
+  const all = rawData.slice(headerRowIndex + 1);
 
-  // Build groups with NO hidden rows — all rows participate
   const emptyHidden = new Set<number>();
   const allGroups = buildGroups(all, CI, emptyHidden, dataStartRow);
 
-  // Apply sniper filter
   const config = sniperConfig || DEFAULT_SNIPER_CONFIG;
   const sniperFiltered = sniperFilterGroups(allGroups, all, CI, config);
-
-  // Filter to dialable groups
   const available = filterAvailable(sniperFiltered, all, CI);
 
-  // Get the numeric sheet tab ID for formatting API calls
   let sheetTabId = 0;
   try {
     const tabs = await dialerSheetsService.getSheetTabs(spreadsheetId);
     const tab = tabs.find((t) => t.title === sheetName);
     if (tab) sheetTabId = tab.sheetId;
   } catch {
-    // Non-critical — highlighting will be skipped if we can't get the tab ID
+    // Non-critical
   }
 
   cachedSheet = {
@@ -193,22 +192,14 @@ async function loadSheetData(
   return cachedSheet;
 }
 
-/**
- * Force a full refresh of cached sheet data on next call.
- */
 export function invalidateCache(): void {
   cachedSheet = null;
 }
 
 // =============================================================================
-// PHONE HIGHLIGHTING — via Google Sheets API (replaces Apps Script bridge)
+// PHONE HIGHLIGHTING
 // =============================================================================
 
-/**
- * Highlight the PHONE column cells for the current and next group.
- * Yellow (#FFD600) = current group, Blue (#00B0FF) = next group.
- * Clears the previous highlight first.
- */
 async function highlightPhones(
   sheet: CachedSheetData,
   currentRows: number[],
@@ -216,28 +207,25 @@ async function highlightPhones(
 ): Promise<void> {
   if (sheet.CI.PHONE < 0) return;
 
-  const phoneCol = sheet.CI.PHONE; // 0-based column index
-
-  // Build batch update requests
+  const phoneCol = sheet.CI.PHONE;
   const requests: any[] = [];
 
-  // 1. Clear previous highlights (set background to no color)
   const allPrevRows = [...highlightedRows.current, ...highlightedRows.next];
   for (const row of allPrevRows) {
-    const dataIdx = row - sheet.dataStartRow; // convert 1-based sheet row to 0-based
+    const dataIdx = row - sheet.dataStartRow;
     if (dataIdx < 0) continue;
     requests.push({
       repeatCell: {
         range: {
           sheetId: sheet.sheetTabId,
-          startRowIndex: row - 1, // 0-based for API
+          startRowIndex: row - 1,
           endRowIndex: row,
           startColumnIndex: phoneCol,
           endColumnIndex: phoneCol + 1,
         },
         cell: {
           userEnteredFormat: {
-            backgroundColor: { red: 1, green: 1, blue: 1 }, // white (reset)
+            backgroundColor: { red: 1, green: 1, blue: 1 },
           },
         },
         fields: 'userEnteredFormat.backgroundColor',
@@ -245,7 +233,6 @@ async function highlightPhones(
     });
   }
 
-  // 2. Highlight current group rows — yellow (#FFD600)
   for (const row of currentRows) {
     requests.push({
       repeatCell: {
@@ -258,7 +245,7 @@ async function highlightPhones(
         },
         cell: {
           userEnteredFormat: {
-            backgroundColor: { red: 1, green: 0.839, blue: 0 }, // #FFD600
+            backgroundColor: { red: 1, green: 0.839, blue: 0 },
           },
         },
         fields: 'userEnteredFormat.backgroundColor',
@@ -266,7 +253,6 @@ async function highlightPhones(
     });
   }
 
-  // 3. Highlight next group rows — blue (#00B0FF)
   for (const row of nextRows) {
     requests.push({
       repeatCell: {
@@ -279,7 +265,7 @@ async function highlightPhones(
         },
         cell: {
           userEnteredFormat: {
-            backgroundColor: { red: 0, green: 0.69, blue: 1 }, // #00B0FF
+            backgroundColor: { red: 0, green: 0.69, blue: 1 },
           },
         },
         fields: 'userEnteredFormat.backgroundColor',
@@ -289,23 +275,19 @@ async function highlightPhones(
 
   if (requests.length === 0) return;
 
-  // Track for next clear
   highlightedRows = { current: [...currentRows], next: [...nextRows] };
 
   try {
     await dialerSheetsService.sheetsFormatBatch(sheet.spreadsheetId, requests);
   } catch {
-    // Silent fail — highlighting is non-critical
+    // Silent fail
   }
 }
 
 // =============================================================================
-// INITIAL LOAD — Get first group and set up engine
+// INITIALIZE
 // =============================================================================
 
-/**
- * Initialize the dialer engine: load data, find the starting group.
- */
 export async function initialize(config: EngineConfig): Promise<EngineSnapshot | null> {
   const sheet = await loadSheetData(
     config.spreadsheetId,
@@ -317,10 +299,8 @@ export async function initialize(config: EngineConfig): Promise<EngineSnapshot |
     return null;
   }
 
-  // Determine starting afterRow
   let afterRow = config.startRow;
 
-  // If startBookingId is provided, find that group instead
   if (config.startBookingId && sheet.CI.BOOKING_ID >= 0) {
     const bid = config.startBookingId.trim();
     for (let r = 0; r < sheet.all.length; r++) {
@@ -332,13 +312,11 @@ export async function initialize(config: EngineConfig): Promise<EngineSnapshot |
     }
   }
 
-  // Apply ordering and find first group
   const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
   const group = findNextGroup(ordered, afterRow, config.direction);
 
   if (!group) return null;
 
-  // Find group index in full list
   let currentGroupIndex = 0;
   for (let i = 0; i < sheet.groups.length; i++) {
     if (sheet.groups[i].firstRow === group.firstRow) { currentGroupIndex = i + 1; break; }
@@ -354,21 +332,14 @@ export async function initialize(config: EngineConfig): Promise<EngineSnapshot |
     sheet.dataStartRow
   );
 
-  // Load or create gamification session
-  const session = loadOrCreateSession(config.repCode);
-  if (session.sessionStartTime === 0) {
-    session.sessionStartTime = Date.now();
-  }
+  // Load session from Supabase — this is the single source of truth
+  const session = await loadOrCreateSession(config);
 
   // Prefetch next group
   const prefetchState = getPrefetchState(sheet, state, config.direction);
 
   // Highlight phones in the sheet
-  highlightPhones(
-    sheet,
-    state.rows,
-    prefetchState?.rows || []
-  );
+  highlightPhones(sheet, state.rows, prefetchState?.rows || []);
 
   return {
     state,
@@ -380,12 +351,9 @@ export async function initialize(config: EngineConfig): Promise<EngineSnapshot |
 }
 
 // =============================================================================
-// NAVIGATION — Get specific group
+// NAVIGATION
 // =============================================================================
 
-/**
- * Navigate to the next group after the given afterRow.
- */
 export async function getNextState(
   config: EngineConfig,
   afterRow: number
@@ -415,9 +383,6 @@ export async function getNextState(
   );
 }
 
-/**
- * Find a group by booking ID.
- */
 export async function findGroupByBookingId(
   config: EngineConfig,
   bookingId: string
@@ -439,9 +404,6 @@ export async function findGroupByBookingId(
   return { found: false, message: `Booking ID "${bookingId}" not found.` };
 }
 
-/**
- * Find a group by phone number.
- */
 export async function findGroupByPhone(
   config: EngineConfig,
   phone: string
@@ -464,7 +426,7 @@ export async function findGroupByPhone(
 }
 
 // =============================================================================
-// PREFETCH — Get next group state without highlight
+// PREFETCH
 // =============================================================================
 
 function getPrefetchState(
@@ -495,21 +457,15 @@ function getPrefetchState(
 }
 
 // =============================================================================
-// DISPOSITION — Apply and advance
+// DISPOSITION
 // =============================================================================
 
 export interface DispositionResult {
-  /** Next group state (or redial state) */
   nextState: DialerStateResult;
-  /** Updated gamification result */
   gamification: GamificationResult | null;
-  /** If WN/NIS found alternate phone, the new phone to redial */
   redialPhone?: string;
 }
 
-/**
- * Apply a disposition to the current group and advance to the next.
- */
 export async function applyDisposition(
   config: EngineConfig,
   state: DialerState,
@@ -521,7 +477,6 @@ export async function applyDisposition(
 ): Promise<DispositionResult> {
   const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
 
-  // Build disposition updates
   const dispResult = buildDispositionUpdates(
     disposition,
     sheet.all,
@@ -533,12 +488,10 @@ export async function applyDisposition(
     extra
   );
 
-  // Write updates to sheet
   if (dispResult.updates.length > 0) {
     const sheetsData = cellUpdatesToSheetsData(config.sheetName, dispResult.updates);
     await dialerSheetsService.sheetsBatchUpdate(config.spreadsheetId, sheetsData);
 
-    // Update local cache with the written values
     for (const u of dispResult.updates) {
       const dataIdx = u.row - sheet.dataStartRow;
       if (dataIdx >= 0 && dataIdx < sheet.all.length) {
@@ -547,11 +500,10 @@ export async function applyDisposition(
     }
   }
 
-  // If WN/NIS found a redial phone, return it without advancing
   if (dispResult.redial) {
     const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
     const gamResult = processGamification(session, disposition, gamCtx);
-    saveSession(config.repCode, session);
+    await saveSession(session);
 
     return {
       nextState: { found: true, ...state, phone: dispResult.redial.newPhone } as DialerState,
@@ -560,18 +512,10 @@ export async function applyDisposition(
     };
   }
 
-  // Process gamification
   const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
-  let gamResult: GamificationResult | null = null;
+  const gamResult = processGamification(session, disposition, gamCtx);
+  await saveSession(session);
 
-  if (disposition === 'COMPLETE' || disposition === 'PREPAY') {
-    gamResult = processGamification(session, disposition, gamCtx);
-  } else {
-    gamResult = processGamification(session, disposition, gamCtx);
-  }
-  saveSession(config.repCode, session);
-
-  // For PREPAY disposition, we don't advance yet — stage the card entry
   if (disposition === 'PREPAY') {
     pendingPrepay = {
       sheetName: config.sheetName,
@@ -586,23 +530,16 @@ export async function applyDisposition(
     };
   }
 
-  // Rebuild available groups (dispositions change availability)
   sheet.available = filterAvailable(sheet.groups, sheet.all, sheet.CI);
   sheet.timestamp = Date.now();
 
-  // Advance to next group
   const afterRow = nextAfterRow(state.rows, config.direction);
   const nextStateResult = await getNextState(config, afterRow);
 
-  // Highlight phones in sheet
   if (nextStateResult.found) {
     const ns = nextStateResult as DialerState;
     const prefetch = getPrefetchState(sheet, ns, config.direction);
-    highlightPhones(
-      sheet,
-      ns.rows,
-      prefetch?.rows || []
-    );
+    highlightPhones(sheet, ns.rows, prefetch?.rows || []);
   }
 
   return {
@@ -615,9 +552,6 @@ export async function applyDisposition(
 // PREPAY FLOW
 // =============================================================================
 
-/**
- * Stage card data for a pending prepay.
- */
 export function stageCardData(cardNum: string, expiry: string, cvv: string, amount: string): StagedCard {
   const cleanCard = cardNum.replace(/[\s-]/g, '');
   return {
@@ -629,9 +563,6 @@ export function stageCardData(cardNum: string, expiry: string, cvv: string, amou
   };
 }
 
-/**
- * Finalize a prepay: write YES disposition + CCD row.
- */
 export async function finalizePrepay(
   config: EngineConfig,
   cardData: StagedCard,
@@ -647,12 +578,10 @@ export async function finalizePrepay(
   const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
   const pp = pendingPrepay;
 
-  // If card amount differs from original, use submitted amount
   if (cardData.amount) {
     pp.extra.price = cardData.amount;
   }
 
-  // Step 1: Write YES disposition to callbook
   const dispResult = buildDispositionUpdates(
     'PREPAY',
     sheet.all,
@@ -668,7 +597,6 @@ export async function finalizePrepay(
     const sheetsData = cellUpdatesToSheetsData(config.sheetName, dispResult.updates);
     await dialerSheetsService.sheetsBatchUpdate(config.spreadsheetId, sheetsData);
 
-    // Update local cache
     for (const u of dispResult.updates) {
       const dataIdx = u.row - sheet.dataStartRow;
       if (dataIdx >= 0 && dataIdx < sheet.all.length) {
@@ -677,7 +605,6 @@ export async function finalizePrepay(
     }
   }
 
-  // Step 2: Find the detail row (most-recent-year matching phone) for CCD copy
   let detailIdx = pp.groupDataIndices[0];
   let bestYear = 0;
   let globalBestIdx = pp.groupDataIndices[0];
@@ -695,7 +622,6 @@ export async function finalizePrepay(
   }
   if (bestYear === 0) detailIdx = globalBestIdx;
 
-  // Step 3: Write to CCD tab
   try {
     const ccdRange = `'CCD'!1:1`;
     const ccdHeaderData = await dialerSheetsService.sheetsGet(config.spreadsheetId, ccdRange);
@@ -722,29 +648,21 @@ export async function finalizePrepay(
     console.warn('CCD write failed (CCD tab may not exist):', err);
   }
 
-  // Clear pending prepay
   pendingPrepay = null;
 
-  // Rebuild available groups
   sheet.available = filterAvailable(sheet.groups, sheet.all, sheet.CI);
   sheet.timestamp = Date.now();
 
-  // Advance to next group
   const afterRow = nextAfterRow(
     pp.groupDataIndices.map((r) => r + pp.dataStartRow),
     config.direction
   );
   const nextStateResult = await getNextState(config, afterRow);
 
-  // Highlight
   if (nextStateResult.found) {
     const ns = nextStateResult as DialerState;
     const prefetch = getPrefetchState(sheet, ns, config.direction);
-    highlightPhones(
-      sheet,
-      ns.rows,
-      prefetch?.rows || []
-    );
+    highlightPhones(sheet, ns.rows, prefetch?.rows || []);
   }
 
   return {
@@ -759,27 +677,18 @@ export async function finalizePrepay(
   };
 }
 
-/**
- * Cancel a pending prepay.
- */
 export function cancelPrepay(): void {
   pendingPrepay = null;
 }
 
-/**
- * Check if there's a pending prepay.
- */
 export function hasPendingPrepay(): boolean {
   return pendingPrepay !== null;
 }
 
 // =============================================================================
-// STREET CLEARED CHECK (for Scorched Earth)
+// STREET CLEARED CHECK
 // =============================================================================
 
-/**
- * Check if all groups on a street have been dispositioned.
- */
 export function checkStreetCleared(
   state: DialerState
 ): { cleared: boolean; visibleGroupCount: number } {
@@ -819,13 +728,9 @@ export function checkStreetCleared(
 }
 
 // =============================================================================
-// YEAR DISCOVERY — scan sheet for available years (for Sniper Settings UI)
+// YEAR DISCOVERY
 // =============================================================================
 
-/**
- * Scan all data rows to find unique YEAR values present in the sheet.
- * Returns sorted descending (most recent first).
- */
 export async function discoverAvailableYears(
   spreadsheetId: string,
   sheetName: string
@@ -887,43 +792,70 @@ function buildGamificationContext(
 }
 
 // =============================================================================
-// SESSION PERSISTENCE (localStorage for now)
+// SESSION PERSISTENCE — Supabase dialer_sessions
+//
+// loadOrCreateSession: called once on initialize(). Fetches today's row from
+//   Supabase (or creates one). Stores the row ID in activeSessionRowId so all
+//   subsequent saves know exactly which row to update — no extra lookups.
+//
+// saveSession: called after every disposition. Writes the full GamificationSession
+//   object to gamification_state. Fire-and-forget with silent error logging so
+//   a Supabase hiccup never blocks the rep from dialing.
+//
+// migrateSession: fills in any missing fields when loading an older session
+//   format. Keeps old sessions compatible as we add new gamification features.
 // =============================================================================
 
-function getTodayDateStr(): string {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth() + 1;
-  const d = now.getDate();
-  return `${y}-${m < 10 ? '0' + m : m}-${d < 10 ? '0' + d : d}`;
-}
-
-function loadOrCreateSession(repCode: string): GamificationSession {
-  const dateStr = getTodayDateStr();
-  const key = `DIALER_SESSION_${repCode}_${dateStr}`;
+async function loadOrCreateSession(config: EngineConfig): Promise<GamificationSession> {
+  const today = getTodayEST();
 
   try {
-    const stored = localStorage.getItem(key);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (parsed.date === dateStr) {
-        return migrateSession(parsed, repCode, dateStr);
+    const dbSession = await campaignService.getOrCreateTodaySession(
+      config.campaignId,
+      config.managerId
+    );
+
+    // Store the row ID for all future saves this session
+    activeSessionRowId = dbSession.id;
+
+    const stored = dbSession.gamificationState;
+
+    // If we have a non-empty state saved, restore it
+    if (stored && typeof stored === 'object' && Object.keys(stored).length > 0) {
+      const restored = stored as GamificationSession;
+      // Verify it's actually today's session (sanity check)
+      if (restored.date === today) {
+        return migrateSession(restored, config.repCode, today);
       }
     }
-  } catch {}
 
-  const fresh = createFreshSession(repCode, dateStr);
-  fresh.sessionStartTime = Date.now();
-  return fresh;
+    // No valid state — start fresh
+    const fresh = createFreshSession(config.repCode, today);
+    fresh.sessionStartTime = Date.now();
+    return fresh;
+
+  } catch (err) {
+    // Supabase unavailable — fall back to a fresh in-memory session
+    // The rep can still dial; we just won't persist this session
+    console.warn('Failed to load session from Supabase, starting fresh in-memory:', err);
+    activeSessionRowId = null;
+    const fresh = createFreshSession(config.repCode, today);
+    fresh.sessionStartTime = Date.now();
+    return fresh;
+  }
 }
 
-function saveSession(repCode: string, session: GamificationSession): void {
-  const dateStr = getTodayDateStr();
-  const key = `DIALER_SESSION_${repCode}_${dateStr}`;
+async function saveSession(session: GamificationSession): Promise<void> {
+  if (!activeSessionRowId) {
+    // No row ID means Supabase was unavailable at load time — skip silently
+    return;
+  }
+
   try {
-    localStorage.setItem(key, JSON.stringify(session));
-  } catch {
-    console.warn('Session save to localStorage failed');
+    await campaignService.upsertGamificationState(activeSessionRowId, session as any);
+  } catch (err) {
+    // Never block the rep — log and move on
+    console.warn('Session save to Supabase failed (non-critical):', err);
   }
 }
 
@@ -959,7 +891,7 @@ function migrateSession(
 }
 
 // =============================================================================
-// EXPORTS — Re-export key types for consumers
+// EXPORTS
 // =============================================================================
 
 export type { DialerState, DialerStateResult } from './dialerStateBuilder';
