@@ -368,7 +368,8 @@ class DialerSheetsService {
    *
    * totalRows    — data rows that have both a valid 10-digit phone AND a route code
    * groups       — unique route-code clusters (the engine's natural grouping unit)
-   * bookings     — groups where ≥1 row has a value in the AER column
+   * bookings     — individual rows where AER column has an "x" (one per booked group,
+   *                since the dialer only writes one AER x per group on the detail row)
    * reachedPct   — % of groups where ≥1 row has YES / NO / WN/NIS / REMOVE
    * avgAttempts  — unreached groups only: average of (max NA value across group rows)
    * lastUsed     — most recent DATE.1 value found in the tab, as ISO string, or null
@@ -446,7 +447,7 @@ class DialerSheetsService {
       return s === 'X' || s === 'AER' || s === 'YES' || s === 'Y';
     };
 
-    // A group is "reached" if any of its rows has YES / NO / WN / REMOVE
+    // A row is "disposed" if it has YES / NO / WN / REMOVE
     const isDisposed = (row: any[]): boolean =>
       [CI.YES, CI.NO, CI.WN, CI.REMOVE].some(c => c >= 0 && hasValue(row[c]));
 
@@ -458,8 +459,10 @@ class DialerSheetsService {
     };
 
     // ── Build route-code groups from data rows ──
+    // Still used for reachedPct and avgAttempts calculations
     const routeGroups = new Map<string, any[][]>();
     let totalRows = 0;
+    let bookings = 0;
     let latestDate: Date | null = null;
 
     for (const row of raw.slice(headerIdx + 1)) {
@@ -475,6 +478,13 @@ class DialerSheetsService {
       if (!routeGroups.has(route)) routeGroups.set(route, []);
       routeGroups.get(route)!.push(row);
 
+      // Count bookings: each individual row with an AER x is one booking.
+      // Since the dialer writes exactly one AER x per group (on the detail row),
+      // this gives the true count of booked groups across the whole tab.
+      if (CI.AER >= 0 && hasAER(row[CI.AER])) {
+        bookings++;
+      }
+
       // Track most recent DATE.1 for the "last used" indicator
       if (CI.DATE1 >= 0 && hasValue(row[CI.DATE1])) {
         try {
@@ -484,15 +494,12 @@ class DialerSheetsService {
       }
     }
 
-    // Aggregate stats
+    // Aggregate reachedPct and avgAttempts stats from route groups
     const totalGroups = routeGroups.size;
-    let bookingGroups = 0;
-    let reachedRows = 0;  // individual rows with a disposition
+    let reachedRows = 0;
     const unreachedNAs: number[] = [];
 
     for (const rows of routeGroups.values()) {
-      if (rows.some(r => CI.AER >= 0 && hasAER(r[CI.AER]))) bookingGroups++;
-
       const groupReached = rows.filter(r => isDisposed(r)).length;
       reachedRows += groupReached;
 
@@ -505,7 +512,7 @@ class DialerSheetsService {
     return {
       totalRows,
       groups: totalGroups,
-      bookings: bookingGroups,
+      bookings,
       reachedPct: totalRows > 0 ? Math.round((reachedRows / totalRows) * 100) : 0,
       avgAttempts: unreachedNAs.length > 0
         ? Math.round((unreachedNAs.reduce((s, n) => s + n, 0) / unreachedNAs.length) * 10) / 10
