@@ -18,7 +18,7 @@
 // slots reserved for DialerPage HUD toast subscriptions.
 //
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import ReactDOM from 'react-dom';
 import { getBadgeIcon, getMultiplierIcon } from './BadgeIcons';
 import { dialerRealtimeService } from '../../lib/dialerRealtimeService';
@@ -231,7 +231,7 @@ function PortalTooltip({ anchorRef, children, visible }: {
 }) {
   const [pos, setPos] = useState<{ top: number; left: number; transformY: string } | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!visible || !anchorRef.current) {
       setPos(null);
       return;
