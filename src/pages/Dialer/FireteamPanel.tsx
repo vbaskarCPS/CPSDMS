@@ -216,19 +216,38 @@ function multActivationToFireteam(evt: MultiplierActivationEvent): FireteamEvent
 // Positions tooltip at a fixed screen position to avoid scroll container clipping.
 // =============================================================================
 
+const TOOLTIP_ESTIMATED_HEIGHT = 160;
+
 function PortalTooltip({ anchorRef, children }: {
   anchorRef: React.RefObject<HTMLDivElement | null>;
   children: React.ReactNode;
 }) {
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; transformY: string } | null>(null);
 
   useEffect(() => {
     if (!anchorRef.current) return;
     const rect = anchorRef.current.getBoundingClientRect();
-    setPos({
-      top:  rect.top + rect.height / 2,
-      left: rect.left - 8, // tooltip opens to the LEFT of the row
-    });
+    const midY = rect.top + rect.height / 2;
+    const vh = window.innerHeight;
+
+    const wouldOverflowBottom = midY + TOOLTIP_ESTIMATED_HEIGHT / 2 > vh - 12;
+    const wouldOverflowTop = midY - TOOLTIP_ESTIMATED_HEIGHT / 2 < 12;
+
+    let top: number;
+    let transformY: string;
+
+    if (wouldOverflowBottom) {
+      top = rect.bottom;
+      transformY = '-100%';
+    } else if (wouldOverflowTop) {
+      top = rect.top;
+      transformY = '0%';
+    } else {
+      top = midY;
+      transformY = '-50%';
+    }
+
+    setPos({ top, left: rect.left - 8, transformY });
   }, [anchorRef]);
 
   if (!pos) return null;
@@ -239,7 +258,7 @@ function PortalTooltip({ anchorRef, children }: {
         position: 'fixed',
         top: pos.top,
         left: pos.left,
-        transform: 'translate(-100%, -50%)',
+        transform: `translate(-100%, ${pos.transformY})`,
         zIndex: 9999,
         pointerEvents: 'none',
         animation: 'ft-tooltip-in 0.15s ease-out both',
