@@ -408,7 +408,8 @@ export default function CampaignSelect({
       }} />
 
       <div style={{
-        minHeight: '100vh',
+        height: '100vh',
+        overflow: 'hidden',
         background: '#060a06',
         color: '#ddd',
         fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', monospace",
