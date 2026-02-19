@@ -14,6 +14,7 @@ export interface SniperConfig {
   minEntries: number;     // Minimum rows per group (default 1)
   linkShot: boolean;      // Only show groups on streets that have AER
   hideCTS: boolean;       // Hide groups with CTS disposition (default true)
+  maxNA: number;          // BLACKLIST: skip groups where max NA >= this value (0 = OFF)
 }
 
 export const DEFAULT_SNIPER_CONFIG: SniperConfig = {
@@ -22,6 +23,7 @@ export const DEFAULT_SNIPER_CONFIG: SniperConfig = {
   minEntries: 1,
   linkShot: false,
   hideCTS: true,
+  maxNA: 0,
 };
 
 export interface Campaign {
@@ -541,6 +543,7 @@ class CampaignService {
         minEntries: typeof sc.minEntries === 'number' && sc.minEntries >= 1 ? sc.minEntries : 1,
         linkShot: typeof sc.linkShot === 'boolean' ? sc.linkShot : false,
         hideCTS: typeof sc.hideCTS === 'boolean' ? sc.hideCTS : true,
+        maxNA: typeof sc.maxNA === 'number' ? sc.maxNA : 0,
       };
     }
 

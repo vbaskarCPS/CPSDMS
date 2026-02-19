@@ -170,6 +170,7 @@ export function buildGroups(
  * 3. Min Entries: group must have ≥ minEntries rows.
  * 4. Link Shot: group must be on a street that has at least one AER anywhere in the sheet.
  * 5. Hide CTS: skip groups where any row has "CTS" in the NA column.
+ * 6. BLACKLIST (maxNA): skip groups where max NA value across rows >= maxNA threshold.
  *
  * @param groups  All groups from buildGroups().
  * @param all     Full data array (no header row).
@@ -257,6 +258,17 @@ export function sniperFilterGroups(
         }
       }
       if (hasCTS) return false;
+    }
+
+    // --- 6. BLACKLIST: skip groups where max NA >= threshold ---
+    if ((config.maxNA ?? 0) > 0 && CI.NA >= 0) {
+      let maxNAVal = 0;
+      for (const r of group.rows) {
+        const raw = String(all[r][CI.NA] ?? '').trim();
+        const val = parseInt(raw, 10);
+        if (!isNaN(val) && val > maxNAVal) maxNAVal = val;
+      }
+      if (maxNAVal >= config.maxNA) return false;
     }
 
     return true;

@@ -205,7 +205,7 @@ export default function DialerPage() {
   // --- Sniper Settings ---
   const [sniperSettingsOpen, setSniperSettingsOpen] = useState(false);
   const [sniperConfig, setSniperConfig] = useState<SniperConfig>(
-    () => campaign?.sniperConfig || { years: [2025], ppOnly: false, minEntries: 1, linkShot: false, hideCTS: true }
+    () => campaign?.sniperConfig || { years: [2025], ppOnly: false, minEntries: 1, linkShot: false, hideCTS: true, maxNA: 0 }
   );
   const [availableYears, setAvailableYears] = useState<number[]>([]);
 
@@ -1105,6 +1105,7 @@ export default function DialerPage() {
                     {sniperConfig.minEntries > 1 && <span style={{ fontSize: 8, fontWeight: 800, color: '#f5a623', background: 'rgba(245,166,35,0.12)', border: '1px solid rgba(245,166,35,0.25)', borderRadius: 3, padding: '1px 6px' }}>MIN:{sniperConfig.minEntries}</span>}
                     {sniperConfig.linkShot && <span style={{ fontSize: 8, fontWeight: 800, color: '#2ecc71', background: 'rgba(46,204,113,0.12)', border: '1px solid rgba(46,204,113,0.25)', borderRadius: 3, padding: '1px 6px' }}>LINK</span>}
                     {sniperConfig.hideCTS && <span style={{ fontSize: 8, fontWeight: 800, color: '#e74c3c', background: 'rgba(231,76,60,0.10)', border: '1px solid rgba(231,76,60,0.20)', borderRadius: 3, padding: '1px 6px' }}>-CTS</span>}
+                    {(sniperConfig.maxNA ?? 0) > 0 && <span style={{ fontSize: 8, fontWeight: 800, color: '#ff4444', background: 'rgba(255,68,68,0.10)', border: '1px solid rgba(255,68,68,0.25)', borderRadius: 3, padding: '1px 6px' }}>☠ NA{sniperConfig.maxNA >= 10 ? '10+' : sniperConfig.maxNA}+</span>}
                   </div>
                   <Settings size={14} color="#00e5ff" style={{ opacity: 0.4, flexShrink: 0, marginLeft: 8 }} />
                 </button>

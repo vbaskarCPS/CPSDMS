@@ -2,7 +2,7 @@
 //
 // Sniper filter configuration modal for AutoSniper.
 // Tactical HUD aesthetic matching the rest of the dialer UI.
-// Configures: years, ppOnly, minEntries, linkShot, hideCTS.
+// Configures: years, ppOnly, minEntries, linkShot, hideCTS, maxNA (BLACKLIST).
 //
 
 import { useState, useEffect, useCallback } from 'react';
@@ -47,6 +47,7 @@ const CY = '#00e5ff';
 const GR = '#2ecc71';
 const YL = '#f1c40f';
 const RD = '#e74c3c';
+const BL = '#ff4444'; // BLACKLIST red
 
 // =============================================================================
 // COMPONENT
@@ -66,6 +67,7 @@ export default function SniperSettings({
   const [minEntries, setMinEntries] = useState(currentConfig.minEntries);
   const [linkShot, setLinkShot] = useState(currentConfig.linkShot);
   const [hideCTS, setHideCTS] = useState(currentConfig.hideCTS);
+  const [maxNA, setMaxNA] = useState(currentConfig.maxNA ?? 0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -77,6 +79,7 @@ export default function SniperSettings({
       setMinEntries(currentConfig.minEntries);
       setLinkShot(currentConfig.linkShot);
       setHideCTS(currentConfig.hideCTS);
+      setMaxNA(currentConfig.maxNA ?? 0);
       setError('');
       setSaving(false);
     }
@@ -103,6 +106,7 @@ export default function SniperSettings({
       minEntries: Math.max(1, minEntries),
       linkShot,
       hideCTS,
+      maxNA,
     };
 
     try {
@@ -122,12 +126,19 @@ export default function SniperSettings({
     setMinEntries(DEFAULT_SNIPER_CONFIG.minEntries);
     setLinkShot(DEFAULT_SNIPER_CONFIG.linkShot);
     setHideCTS(DEFAULT_SNIPER_CONFIG.hideCTS);
+    setMaxNA(DEFAULT_SNIPER_CONFIG.maxNA ?? 0);
   };
 
   if (!open) return null;
 
   // Determine which years to show — union of available + currently selected
   const yearOptions = Array.from(new Set([...availableYears, ...years])).sort((a, b) => b - a);
+
+  // BLACKLIST display label
+  const maxNALabel = maxNA === 0 ? 'OFF' : maxNA >= 10 ? 'NA 10+' : `NA ${maxNA}+`;
+  const maxNAHint = maxNA === 0
+    ? 'No NA filter — all groups pass through'
+    : `Groups where any row has NA ≥ ${maxNA} will be eliminated`;
 
   return (
     <>
@@ -309,6 +320,51 @@ export default function SniperSettings({
           {/* ── HIDE CTS ── */}
           <Section label="HIDE CTS" hint="Skip groups where any row has a CTS disposition">
             <Toggle active={hideCTS} onToggle={() => setHideCTS(!hideCTS)} labelOn="HIDING" labelOff="SHOWING" color={RD} />
+          </Section>
+
+          {/* ── BLACKLIST (maxNA) ── */}
+          <Section label="☠ BLACKLIST" hint={maxNAHint}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button
+                onClick={() => setMaxNA(prev => Math.max(0, prev - 1))}
+                style={{ ...stepBtnStyle, borderColor: `${BL}25`, background: `${BL}08`, color: BL }}
+              >
+                −
+              </button>
+              <span style={{
+                fontSize: 16,
+                fontWeight: 900,
+                minWidth: 52,
+                textAlign: 'center',
+                letterSpacing: '1px',
+                color: maxNA === 0 ? '#444' : BL,
+              }}>
+                {maxNALabel}
+              </span>
+              <button
+                onClick={() => setMaxNA(prev => Math.min(10, prev + 1))}
+                style={{ ...stepBtnStyle, borderColor: `${BL}25`, background: `${BL}08`, color: BL }}
+              >
+                +
+              </button>
+            </div>
+            {/* Progress bar — 10 segments */}
+            {maxNA > 0 && (
+              <div style={{ display: 'flex', gap: 3, marginTop: 8 }}>
+                {Array.from({ length: 10 }, (_, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      flex: 1,
+                      height: 4,
+                      borderRadius: 2,
+                      background: i < maxNA ? BL : 'rgba(255,68,68,0.12)',
+                      transition: 'background 0.15s ease',
+                    }}
+                  />
+                ))}
+              </div>
+            )}
           </Section>
 
           {/* Divider */}
