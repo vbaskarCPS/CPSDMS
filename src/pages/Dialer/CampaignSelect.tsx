@@ -554,7 +554,6 @@ export default function CampaignSelect({
             background: 'rgba(4,8,4,0.98)',
             display: 'flex',
             flexDirection: 'column',
-            overflowY: 'auto',
           }}>
             {/* Live Ops header */}
             <div style={{

@@ -1371,7 +1371,7 @@ export default function DialerPage() {
         </div>
 
         {/* RIGHT: Side panel */}
-        <div className="flex flex-col overflow-hidden" style={{ ...S.sidePanel, width: 360, minWidth: 360, maxWidth: 360 }}>
+        <div className="flex flex-col" style={{ ...S.sidePanel, width: 360, minWidth: 360, maxWidth: 360 }}>
           <div className="p-2 flex-shrink-0">
             <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 8 }}>Disposition</div>
             <DispButton label="📞 NA [Z]"     onClick={() => doDisp('NA')}     flashing={flashingKey === 'NA'}     flashColor="#e67e22" style={{ background: '#333', color: '#e67e22', border: '1px solid #555' }} />
