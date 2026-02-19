@@ -8,6 +8,8 @@
 //   Received via Supabase realtime (is_multiplier=true rows) and historical fetch.
 // - Booking row format: Name +PTS | badges in WHITE | multiplier icons in GREEN
 // - Tooltip rendered via ReactDOM.createPortal to avoid scroll container clipping
+// - PortalTooltip now accepts `visible` prop so position is recalculated each time
+//   hover starts (fixes tooltip clipping at bottom of screen)
 // - liveMultiplierEvents prop still accepted for own activations (instant feedback
 //   before the DB round-trip completes)
 //
@@ -214,24 +216,32 @@ function multActivationToFireteam(evt: MultiplierActivationEvent): FireteamEvent
 // =============================================================================
 // PORTAL TOOLTIP WRAPPER
 // Positions tooltip at a fixed screen position to avoid scroll container clipping.
+//
+// KEY FIX: accepts `visible` prop. The position useEffect re-runs whenever
+// `visible` flips true, so getBoundingClientRect() is fresh for every hover —
+// bottom-of-screen rows correctly pin the tooltip upward instead of clipping.
 // =============================================================================
 
 const TOOLTIP_ESTIMATED_HEIGHT = 160;
 
-function PortalTooltip({ anchorRef, children }: {
+function PortalTooltip({ anchorRef, children, visible }: {
   anchorRef: React.RefObject<HTMLDivElement | null>;
   children: React.ReactNode;
+  visible: boolean;
 }) {
   const [pos, setPos] = useState<{ top: number; left: number; transformY: string } | null>(null);
 
   useEffect(() => {
-    if (!anchorRef.current) return;
+    if (!visible || !anchorRef.current) {
+      setPos(null);
+      return;
+    }
     const rect = anchorRef.current.getBoundingClientRect();
     const midY = rect.top + rect.height / 2;
     const vh = window.innerHeight;
 
     const wouldOverflowBottom = midY + TOOLTIP_ESTIMATED_HEIGHT / 2 > vh - 12;
-    const wouldOverflowTop = midY - TOOLTIP_ESTIMATED_HEIGHT / 2 < 12;
+    const wouldOverflowTop    = midY - TOOLTIP_ESTIMATED_HEIGHT / 2 < 12;
 
     let top: number;
     let transformY: string;
@@ -248,9 +258,9 @@ function PortalTooltip({ anchorRef, children }: {
     }
 
     setPos({ top, left: rect.left - 8, transformY });
-  }, [anchorRef]);
+  }, [visible, anchorRef]);
 
-  if (!pos) return null;
+  if (!pos || !visible) return null;
 
   return ReactDOM.createPortal(
     <div
@@ -434,11 +444,9 @@ function BookingRow({ event, index }: { event: FireteamEvent; index: number }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {hovered && (
-        <PortalTooltip anchorRef={rowRef}>
-          <BookingTooltipContent event={event} />
-        </PortalTooltip>
-      )}
+      <PortalTooltip anchorRef={rowRef} visible={hovered}>
+        <BookingTooltipContent event={event} />
+      </PortalTooltip>
 
       {event.isOwn && (
         <div style={{ width: 2, height: 14, borderRadius: 1, background: color, flexShrink: 0, opacity: 0.6 }} />
@@ -541,11 +549,9 @@ function MultiplierRow({ event, index }: { event: FireteamEvent; index: number }
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {hovered && (
-        <PortalTooltip anchorRef={rowRef}>
-          <MultiplierTooltipContent event={event} />
-        </PortalTooltip>
-      )}
+      <PortalTooltip anchorRef={rowRef} visible={hovered}>
+        <MultiplierTooltipContent event={event} />
+      </PortalTooltip>
 
       <div style={{ width: 2, height: 12, borderRadius: 1, background: color, flexShrink: 0, opacity: 0.4 }} />
 
@@ -762,7 +768,6 @@ export default function FireteamPanel({
       : bookings;
 
     // liveMultiplierEvents = own activations shown instantly (before DB round-trip)
-    // We track their IDs so the DB echo (from the channel above) is skipped.
     const liveMultFEs = liveMultiplierEvents.map(multActivationToFireteam);
 
     // Merge: live events go in keyed by their id; DB channel skips own multipliers
