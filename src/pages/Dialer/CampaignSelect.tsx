@@ -548,7 +548,7 @@ export default function CampaignSelect({
 
           {/* --- Permanent Fireteam Panel --- */}
           <div style={{
-            width: 300,
+            width: 450,
             flexShrink: 0,
             borderLeft: '1px solid rgba(0,229,255,0.10)',
             background: 'rgba(4,8,4,0.98)',

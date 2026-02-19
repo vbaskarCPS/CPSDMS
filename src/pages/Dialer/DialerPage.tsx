@@ -58,6 +58,7 @@ import CampaignSelect from './CampaignSelect';
 import type { Campaign as CampaignCard } from './CampaignSelect';
 import SniperSettings from './SniperSettings';
 import { dialerRealtimeService } from '../../lib/dialerRealtimeService';
+import type { PublishMultiplierPayload } from '../../lib/dialerRealtimeService';
 import FireteamPanel from './FireteamPanel';
 import { detectNewlyActivated } from './multiplierActivations';
 
@@ -389,7 +390,7 @@ export default function DialerPage() {
   }, [campaign?.id, manager?.id]);
 
   // =======================================================================
-  // OWN MULTIPLIER ACTIVATION DETECTION
+  // OWN MULTIPLIER ACTIVATION DETECTION + PUBLISH TO SUPABASE
   // =======================================================================
 
   useEffect(() => {
@@ -402,9 +403,23 @@ export default function DialerPage() {
     );
     if (activations.length > 0) {
       setMultActivations(p => [...p, ...activations]);
+
+      // Publish each activation to Supabase so teammates see it in FireteamPanel
+      if (campaign?.id && manager?.id) {
+        for (const activation of activations) {
+          const payload: PublishMultiplierPayload = {
+            campaignId:     campaign.id,
+            managerId:      manager.id,
+            managerName:    manager.name || manager.repCode || 'Unknown',
+            multiplierId:   activation.multiplierId,
+            multiplierText: activation.text,
+          };
+          dialerRealtimeService.publishMultiplierEvent(payload).catch(() => {});
+        }
+      }
     }
     prevOwnMultipliersRef.current = multipliers;
-  }, [multipliers, manager?.name, manager?.repCode]);
+  }, [multipliers, manager?.name, manager?.repCode, manager?.id, campaign?.id]);
 
   // =======================================================================
   // HOTKEYS
@@ -1356,7 +1371,7 @@ export default function DialerPage() {
         </div>
 
         {/* RIGHT: Side panel */}
-        <div className="flex flex-col overflow-hidden" style={{ ...S.sidePanel, width: 240, minWidth: 240, maxWidth: 240 }}>
+        <div className="flex flex-col overflow-hidden" style={{ ...S.sidePanel, width: 360, minWidth: 360, maxWidth: 360 }}>
           <div className="p-2 flex-shrink-0">
             <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 8 }}>Disposition</div>
             <DispButton label="📞 NA [Z]"     onClick={() => doDisp('NA')}     flashing={flashingKey === 'NA'}     flashColor="#e67e22" style={{ background: '#333', color: '#e67e22', border: '1px solid #555' }} />

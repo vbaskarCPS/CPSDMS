@@ -4,24 +4,19 @@
 // - publishBookingEvent(): INSERTs a booking row (YES/PREPAY)
 // - publishDialEvent():    INSERTs a dial-tick row (every disposition)
 // - publishLoginEvent():   INSERTs a login event (fires once at auth)
+// - publishMultiplierEvent(): INSERTs a multiplier activation row
 // - publishPresence():     UPSERTs heartbeat row into dialer_presence
 // - clearPresence():       DELETEs own row from dialer_presence
 // - subscribeToPresence(): listens for changes in dialer_presence
 // - fetchActivePresence(): fetches all rows with last_seen within 90s
 // - subscribeToTeamFeed(): listens for INSERTs from the current campaign only
 // - subscribeToGlobalFeed(): listens for INSERTs across ALL campaigns (incl. logins)
-// - fetchTodayEvents():    fetches today's booking + login events
+// - fetchTodayEvents():    fetches today's booking + login + multiplier events
 // - fetchFireteamStats():  aggregates per-member stats for one campaign, today
-//                          (from dialer_team_events — used by FireteamPanel)
 // - fetchGlobalStats():    aggregates per-member stats across all campaigns, today
-//                          (from dialer_team_events — used by FireteamPanel)
 // - fetchFireteamStatsFromSessions(): reads per-member stats from dialer_sessions
-//                          for one campaign, today — used by StatsPanel leaderboard
 // - fetchGlobalStatsFromSessions():   reads per-member stats from dialer_sessions
-//                          across all campaigns, today — used by StatsPanel leaderboard
-// - createIsolatedChannel(): creates a private realtime subscription that does NOT
-//                            touch shared channel slots — safe for components that
-//                            need their own subscription alongside DialerPage's.
+// - createIsolatedChannel(): creates a private realtime subscription
 //
 
 import { supabase } from './supabase';
@@ -50,14 +45,22 @@ interface PublishDialPayload {
   managerName: string;
 }
 
+export interface PublishMultiplierPayload {
+  campaignId: string;
+  managerId: string;
+  managerName: string;
+  multiplierId: string;   // e.g. 'ghost_town', 'blitz'
+  multiplierText: string; // e.g. 'Justice N is in a Ghost Town'
+}
+
 export interface PresenceRecord {
   managerId: string;
   managerName: string;
   campaignId: string;
-  lastSeen: string; // ISO timestamp
+  lastSeen: string;
 }
 
-type TeamFeedCallback = (event: TeamBookingEvent & { isLogin?: boolean }) => void;
+type TeamFeedCallback = (event: TeamBookingEvent & { isLogin?: boolean; isMultiplier?: boolean; multiplierId?: string; multiplierText?: string }) => void;
 type PresenceCallback = (records: PresenceRecord[]) => void;
 
 // =============================================================================
@@ -83,11 +86,8 @@ export interface MemberStats {
 class DialerRealtimeService {
   private static instance: DialerRealtimeService;
 
-  // Campaign-scoped channel (Fireteam) — used by DialerPage HUD toasts only
   private fireteamChannel: RealtimeChannel | null = null;
-  // Global channel (all campaigns) — used by DialerPage HUD toasts only
   private globalChannel: RealtimeChannel | null = null;
-  // Presence channel
   private presenceChannel: RealtimeChannel | null = null;
 
   private currentCampaignId: string | null = null;
@@ -104,18 +104,6 @@ class DialerRealtimeService {
 
   // =========================================================================
   // ISOLATED CHANNEL
-  //
-  // Creates a Supabase realtime subscription that is completely independent —
-  // it does NOT touch fireteamChannel, globalChannel, or any shared slot.
-  // Use this in components that need their own subscription without interfering
-  // with DialerPage's HUD toast subscriptions.
-  //
-  // Returns an unsubscribe function — call it on component unmount.
-  //
-  // @param channelName  Must be globally unique. Include a component identifier
-  //                     or campaignId to avoid Supabase channel name collisions.
-  // @param filter       Supabase postgres_changes filter object
-  // @param callback     Called with payload.new for each matching INSERT row
   // =========================================================================
 
   public createIsolatedChannel(
@@ -133,9 +121,7 @@ class DialerRealtimeService {
       .on(
         'postgres_changes',
         filter as any,
-        (payload) => {
-          callback(payload.new);
-        }
+        (payload) => { callback(payload.new); }
       )
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
@@ -145,13 +131,11 @@ class DialerRealtimeService {
         }
       });
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }
 
   // =========================================================================
-  // PUBLISH BOOKING — call after YES/PREPAY disposition
+  // PUBLISH BOOKING
   // =========================================================================
 
   public async publishBookingEvent(payload: PublishBookingPayload): Promise<void> {
@@ -170,17 +154,51 @@ class DialerRealtimeService {
           is_booking:   true,
           is_dial:      true,
         });
-
-      if (error) {
-        console.error('Failed to publish booking event:', error.message);
-      }
+      if (error) console.error('Failed to publish booking event:', error.message);
     } catch (err) {
       console.error('Booking event publish error:', err);
     }
   }
 
   // =========================================================================
-  // PUBLISH LOGIN EVENT — fires once at auth, shows in Global feed only
+  // PUBLISH MULTIPLIER ACTIVATION
+  // Inserts a row with is_multiplier=true so all teammates see it in realtime.
+  // multiplier_id stores which multiplier fired (e.g. 'ghost_town').
+  // manager_name stores the display name for rendering in FireteamPanel.
+  // =========================================================================
+
+  public async publishMultiplierEvent(payload: PublishMultiplierPayload): Promise<void> {
+    try {
+      const { error } = await supabase
+        .from('dialer_team_events')
+        .insert({
+          campaign_id:    payload.campaignId,
+          manager_id:     payload.managerId,
+          manager_name:   payload.managerName,
+          points:         0,
+          pp_dollars:     0,
+          badges:         [],
+          multipliers:    [payload.multiplierId],
+          is_prepay:      false,
+          is_booking:     false,
+          is_dial:        false,
+          is_login:       false,
+          is_multiplier:  true,
+          multiplier_id:  payload.multiplierId,
+          // Store the display text in the multipliers array slot [0] is already
+          // the id; we embed the text as manager_name suffix via a separate
+          // approach — we store it JSON-encoded in a dedicated column.
+          // Since we only have multiplier_id as new column, the full text
+          // is reconstructed client-side from multiplierId + managerName.
+        });
+      if (error) console.error('Failed to publish multiplier event:', error.message);
+    } catch (err) {
+      console.error('Multiplier event publish error:', err);
+    }
+  }
+
+  // =========================================================================
+  // PUBLISH LOGIN EVENT
   // =========================================================================
 
   public async publishLoginEvent(payload: {
@@ -204,17 +222,14 @@ class DialerRealtimeService {
           is_dial:      false,
           is_login:     true,
         });
-
-      if (error) {
-        console.error('Failed to publish login event:', error.message);
-      }
+      if (error) console.error('Failed to publish login event:', error.message);
     } catch (err) {
       console.error('Login event publish error:', err);
     }
   }
 
   // =========================================================================
-  // PUBLISH DIAL TICK — call on every disposition
+  // PUBLISH DIAL TICK
   // =========================================================================
 
   public async publishDialEvent(payload: PublishDialPayload): Promise<void> {
@@ -233,17 +248,14 @@ class DialerRealtimeService {
           is_booking:   false,
           is_dial:      true,
         });
-
-      if (error) {
-        console.error('Failed to publish dial event:', error.message);
-      }
+      if (error) console.error('Failed to publish dial event:', error.message);
     } catch (err) {
       console.error('Dial event publish error:', err);
     }
   }
 
   // =========================================================================
-  // PRESENCE — UPSERT heartbeat (call every 30s while in dialer mode)
+  // PRESENCE — UPSERT
   // =========================================================================
 
   public async publishPresence(payload: {
@@ -263,17 +275,14 @@ class DialerRealtimeService {
           },
           { onConflict: 'manager_id' }
         );
-
-      if (error) {
-        console.error('Failed to publish presence:', error.message);
-      }
+      if (error) console.error('Failed to publish presence:', error.message);
     } catch (err) {
       console.error('Presence publish error:', err);
     }
   }
 
   // =========================================================================
-  // PRESENCE — DELETE own row (call on unmount / back to campaign select)
+  // PRESENCE — DELETE
   // =========================================================================
 
   public async clearPresence(managerId: string): Promise<void> {
@@ -282,17 +291,14 @@ class DialerRealtimeService {
         .from('dialer_presence')
         .delete()
         .eq('manager_id', managerId);
-
-      if (error) {
-        console.error('Failed to clear presence:', error.message);
-      }
+      if (error) console.error('Failed to clear presence:', error.message);
     } catch (err) {
       console.error('Presence clear error:', err);
     }
   }
 
   // =========================================================================
-  // PRESENCE — FETCH all active records (last_seen within 90 seconds)
+  // PRESENCE — FETCH active
   // =========================================================================
 
   public async fetchActivePresence(): Promise<PresenceRecord[]> {
@@ -302,10 +308,7 @@ class DialerRealtimeService {
       .select('manager_id, manager_name, campaign_id, last_seen')
       .gte('last_seen', cutoff);
 
-    if (error) {
-      console.error('Failed to fetch presence:', error.message);
-      return [];
-    }
+    if (error) { console.error('Failed to fetch presence:', error.message); return []; }
 
     return (data || []).map(row => ({
       managerId:   row.manager_id,
@@ -316,7 +319,7 @@ class DialerRealtimeService {
   }
 
   // =========================================================================
-  // PRESENCE — SUBSCRIBE to realtime changes on dialer_presence
+  // PRESENCE — SUBSCRIBE
   // =========================================================================
 
   public subscribeToPresence(callback: PresenceCallback): () => void {
@@ -331,15 +334,12 @@ class DialerRealtimeService {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'dialer_presence' },
         async () => {
-          // Re-fetch full active list on any change — simpler than patching
           const records = await this.fetchActivePresence();
           callback(records);
         }
       )
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('[Presence] Subscribed');
-        }
+        if (status === 'SUBSCRIBED') console.log('[Presence] Subscribed');
       });
 
     return () => {
@@ -351,14 +351,14 @@ class DialerRealtimeService {
   }
 
   // =========================================================================
-  // FETCH TODAY'S EVENTS (bookings + logins) — used by FireteamPanel
-  // campaignId = undefined → global (all bookings + all logins)
-  // campaignId = string    → fireteam bookings + all logins
+  // FETCH TODAY'S EVENTS — bookings + logins + multiplier activations
+  // campaignId = undefined → global
+  // campaignId = string    → fireteam bookings + all logins + all multipliers
   // =========================================================================
 
-  public async fetchTodayEvents(campaignId?: string): Promise<(TeamBookingEvent & { isLogin?: boolean })[]> {
+  public async fetchTodayEvents(campaignId?: string): Promise<(TeamBookingEvent & { isLogin?: boolean; isMultiplier?: boolean; multiplierId?: string })[]> {
     const today = new Date().toISOString().split('T')[0];
-    const cols = 'id, manager_id, manager_name, points, pp_dollars, badges, multipliers, is_prepay, is_booking, is_login, created_at';
+    const cols = 'id, manager_id, manager_name, points, pp_dollars, badges, multipliers, is_prepay, is_booking, is_login, is_multiplier, multiplier_id, created_at';
     const gte = `${today}T00:00:00.000Z`;
     const lte = `${today}T23:59:59.999Z`;
 
@@ -369,7 +369,7 @@ class DialerRealtimeService {
       ({ data, error } = await supabase
         .from('dialer_team_events')
         .select(cols)
-        .or(`and(is_booking.eq.true,campaign_id.eq.${campaignId}),is_login.eq.true`)
+        .or(`and(is_booking.eq.true,campaign_id.eq.${campaignId}),is_login.eq.true,is_multiplier.eq.true`)
         .gte('created_at', gte)
         .lte('created_at', lte)
         .order('created_at', { ascending: true }));
@@ -377,35 +377,31 @@ class DialerRealtimeService {
       ({ data, error } = await supabase
         .from('dialer_team_events')
         .select(cols)
-        .or('is_booking.eq.true,is_login.eq.true')
+        .or('is_booking.eq.true,is_login.eq.true,is_multiplier.eq.true')
         .gte('created_at', gte)
         .lte('created_at', lte)
         .order('created_at', { ascending: true }));
     }
 
-    if (error) {
-      console.error('Failed to fetch today events:', error.message);
-      return [];
-    }
+    if (error) { console.error('Failed to fetch today events:', error.message); return []; }
 
     return (data || []).map(row => ({
-      id:          row.id,
-      name:        row.manager_name,
-      points:      row.points,
-      badges:      row.badges || [],
-      multipliers: row.multipliers || [],
-      isPrepay:    row.is_prepay || false,
-      isLogin:     row.is_login || false,
-      timestamp:   new Date(row.created_at).getTime(),
-      managerId:   row.manager_id,
+      id:           row.id,
+      name:         row.manager_name,
+      points:       row.points,
+      badges:       row.badges || [],
+      multipliers:  row.multipliers || [],
+      isPrepay:     row.is_prepay || false,
+      isLogin:      row.is_login || false,
+      isMultiplier: row.is_multiplier || false,
+      multiplierId: row.multiplier_id || undefined,
+      timestamp:    new Date(row.created_at).getTime(),
+      managerId:    row.manager_id,
     }));
   }
 
   // =========================================================================
-  // SUBSCRIBE — Fireteam (current campaign only, skip own)
-  // NOTE: Uses shared fireteamChannel slot — for DialerPage HUD toasts only.
-  //       Components that need their own subscription must use
-  //       createIsolatedChannel() to avoid clobbering this slot.
+  // SUBSCRIBE — Fireteam (current campaign, skip own bookings)
   // =========================================================================
 
   public subscribeToTeamFeed(
@@ -433,7 +429,7 @@ class DialerRealtimeService {
         },
         (payload) => {
           const row = payload.new as any;
-          if (row.manager_id === managerId) return; // skip own
+          if (row.manager_id === managerId) return;
           if (!row.is_booking) return;
 
           callback({
@@ -448,11 +444,8 @@ class DialerRealtimeService {
         }
       )
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log(`[TeamFeed] Subscribed to campaign ${campaignId}`);
-        } else if (status === 'CHANNEL_ERROR') {
-          console.error(`[TeamFeed] Channel error for campaign ${campaignId}`);
-        }
+        if (status === 'SUBSCRIBED') console.log(`[TeamFeed] Subscribed to campaign ${campaignId}`);
+        else if (status === 'CHANNEL_ERROR') console.error(`[TeamFeed] Channel error for campaign ${campaignId}`);
       });
 
     return () => {
@@ -464,10 +457,7 @@ class DialerRealtimeService {
   }
 
   // =========================================================================
-  // SUBSCRIBE — Global (all campaigns, include own, include login events)
-  // NOTE: Uses shared globalChannel slot — for DialerPage HUD toasts only.
-  //       Components that need their own subscription must use
-  //       createIsolatedChannel() to avoid clobbering this slot.
+  // SUBSCRIBE — Global (all campaigns, include own, include login + multiplier)
   // =========================================================================
 
   public subscribeToGlobalFeed(
@@ -483,34 +473,29 @@ class DialerRealtimeService {
       .channel('global_feed_all_campaigns')
       .on(
         'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'dialer_team_events',
-        },
+        { event: 'INSERT', schema: 'public', table: 'dialer_team_events' },
         (payload) => {
           const row = payload.new as any;
-          if (!row.is_booking && !row.is_login) return;
+          if (!row.is_booking && !row.is_login && !row.is_multiplier) return;
 
           callback({
-            id:          row.id,
-            name:        row.manager_name,
-            points:      row.points,
-            badges:      row.badges || [],
-            multipliers: row.multipliers || [],
-            isPrepay:    row.is_prepay || false,
-            isLogin:     row.is_login || false,
-            timestamp:   new Date(row.created_at).getTime(),
-            managerId:   row.manager_id,
+            id:           row.id,
+            name:         row.manager_name,
+            points:       row.points,
+            badges:       row.badges || [],
+            multipliers:  row.multipliers || [],
+            isPrepay:     row.is_prepay || false,
+            isLogin:      row.is_login || false,
+            isMultiplier: row.is_multiplier || false,
+            multiplierId: row.multiplier_id || undefined,
+            timestamp:    new Date(row.created_at).getTime(),
+            managerId:    row.manager_id,
           });
         }
       )
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('[GlobalFeed] Subscribed to all campaigns');
-        } else if (status === 'CHANNEL_ERROR') {
-          console.error('[GlobalFeed] Channel error');
-        }
+        if (status === 'SUBSCRIBED') console.log('[GlobalFeed] Subscribed to all campaigns');
+        else if (status === 'CHANNEL_ERROR') console.error('[GlobalFeed] Channel error');
       });
 
     return () => {
@@ -522,8 +507,7 @@ class DialerRealtimeService {
   }
 
   // =========================================================================
-  // FETCH FIRETEAM STATS (from dialer_team_events)
-  // Used by FireteamPanel for the live activity log counts.
+  // FETCH FIRETEAM STATS
   // =========================================================================
 
   public async fetchFireteamStats(campaignId: string): Promise<MemberStats[]> {
@@ -535,17 +519,12 @@ class DialerRealtimeService {
       .gte('created_at', `${today}T00:00:00.000Z`)
       .lte('created_at', `${today}T23:59:59.999Z`);
 
-    if (error) {
-      console.error('Failed to fetch fireteam stats:', error.message);
-      return [];
-    }
-
+    if (error) { console.error('Failed to fetch fireteam stats:', error.message); return []; }
     return aggregateStats(data || []);
   }
 
   // =========================================================================
-  // FETCH GLOBAL STATS (from dialer_team_events)
-  // Used by FireteamPanel for the live activity log counts.
+  // FETCH GLOBAL STATS
   // =========================================================================
 
   public async fetchGlobalStats(): Promise<MemberStats[]> {
@@ -556,46 +535,23 @@ class DialerRealtimeService {
       .gte('created_at', `${today}T00:00:00.000Z`)
       .lte('created_at', `${today}T23:59:59.999Z`);
 
-    if (error) {
-      console.error('Failed to fetch global stats:', error.message);
-      return [];
-    }
-
+    if (error) { console.error('Failed to fetch global stats:', error.message); return []; }
     return aggregateStats(data || []);
   }
 
   // =========================================================================
   // FETCH FIRETEAM STATS FROM SESSIONS
-  //
-  // Reads from dialer_sessions for today (EST date). Each session row's
-  // gamification_state jsonb contains the full GamificationSession object,
-  // which has all the stats we need. Filtered to a single campaign_id.
-  //
-  // Used by StatsPanel leaderboard — replaces the old dialer_team_events
-  // aggregation + mergeCurrentUser() hack. The current user's data is already
-  // in Supabase (written after every disposition), so no hack needed.
   // =========================================================================
 
   public async fetchFireteamStatsFromSessions(campaignId: string): Promise<MemberStats[]> {
     const today = getTodayEST();
-
     const { data, error } = await supabase
       .from('dialer_sessions')
-      .select(`
-        manager_id,
-        gamification_state,
-        campaign_managers (
-          name,
-          rep_code
-        )
-      `)
+      .select(`manager_id, gamification_state, campaign_managers (name, rep_code)`)
       .eq('campaign_id', campaignId)
       .eq('session_date', today);
 
-    if (error) {
-      console.error('Failed to fetch fireteam session stats:', error.message);
-      return [];
-    }
+    if (error) { console.error('Failed to fetch fireteam session stats:', error.message); return []; }
 
     return (data || [])
       .map(row => sessionRowToMemberStats(row))
@@ -605,37 +561,21 @@ class DialerRealtimeService {
 
   // =========================================================================
   // FETCH GLOBAL STATS FROM SESSIONS
-  //
-  // Same as above but across ALL campaigns. A manager who dialed in two
-  // different campaign tabs today will have two rows — we sum them.
   // =========================================================================
 
   public async fetchGlobalStatsFromSessions(): Promise<MemberStats[]> {
     const today = getTodayEST();
-
     const { data, error } = await supabase
       .from('dialer_sessions')
-      .select(`
-        manager_id,
-        gamification_state,
-        campaign_managers (
-          name,
-          rep_code
-        )
-      `)
+      .select(`manager_id, gamification_state, campaign_managers (name, rep_code)`)
       .eq('session_date', today);
 
-    if (error) {
-      console.error('Failed to fetch global session stats:', error.message);
-      return [];
-    }
+    if (error) { console.error('Failed to fetch global session stats:', error.message); return []; }
 
-    // Sum across multiple rows per manager (campaign switching)
     const map = new Map<string, MemberStats>();
     for (const row of (data || [])) {
       const parsed = sessionRowToMemberStats(row);
       if (!parsed) continue;
-
       if (!map.has(parsed.managerId)) {
         map.set(parsed.managerId, { ...parsed });
       } else {
@@ -649,7 +589,6 @@ class DialerRealtimeService {
         existing.badges        = [...existing.badges, ...parsed.badges];
       }
     }
-
     return Array.from(map.values()).sort((a, b) => b.points - a.points);
   }
 
@@ -658,52 +597,29 @@ class DialerRealtimeService {
   // =========================================================================
 
   public unsubscribeAll(): void {
-    if (this.fireteamChannel) {
-      supabase.removeChannel(this.fireteamChannel);
-      this.fireteamChannel = null;
-    }
-    if (this.globalChannel) {
-      supabase.removeChannel(this.globalChannel);
-      this.globalChannel = null;
-    }
-    if (this.presenceChannel) {
-      supabase.removeChannel(this.presenceChannel);
-      this.presenceChannel = null;
-    }
+    if (this.fireteamChannel) { supabase.removeChannel(this.fireteamChannel); this.fireteamChannel = null; }
+    if (this.globalChannel)   { supabase.removeChannel(this.globalChannel);   this.globalChannel = null; }
+    if (this.presenceChannel) { supabase.removeChannel(this.presenceChannel); this.presenceChannel = null; }
     this.currentCampaignId = null;
     this.currentManagerId = null;
   }
 
   /** @deprecated use unsubscribeAll */
-  public unsubscribe(): void {
-    this.unsubscribeAll();
-  }
+  public unsubscribe(): void { this.unsubscribeAll(); }
 }
 
 // =============================================================================
-// AGGREGATION HELPER (dialer_team_events — used by FireteamPanel)
+// AGGREGATION HELPER
 // =============================================================================
 
 function aggregateStats(rows: any[]): MemberStats[] {
   const map = new Map<string, MemberStats>();
-
   for (const row of rows) {
     const id = row.manager_id as string;
     if (!map.has(id)) {
-      map.set(id, {
-        managerId:     id,
-        managerName:   row.manager_name,
-        points:        0,
-        totalBookings: 0,
-        pbs:           0,
-        pps:           0,
-        ppDollars:     0,
-        totalDials:    0,
-        badges:        [],
-      });
+      map.set(id, { managerId: id, managerName: row.manager_name, points: 0, totalBookings: 0, pbs: 0, pps: 0, ppDollars: 0, totalDials: 0, badges: [] });
     }
     const s = map.get(id)!;
-
     if (row.is_dial)    s.totalDials++;
     if (row.is_booking) {
       s.totalBookings++;
@@ -714,46 +630,24 @@ function aggregateStats(rows: any[]): MemberStats[] {
       if (Array.isArray(row.badges)) s.badges.push(...row.badges);
     }
   }
-
   return Array.from(map.values()).sort((a, b) => b.points - a.points);
 }
 
 // =============================================================================
-// SESSION ROW → MemberStats (dialer_sessions — used by StatsPanel)
-//
-// gamification_state is the full GamificationSession object saved by
-// dialerEngine after every disposition. We pull the fields we need out of it.
-// If the state is empty (rep logged in but hasn't dialed yet), we return a
-// zeroed-out row so they still appear in the leaderboard.
+// SESSION ROW → MemberStats
 // =============================================================================
 
 function sessionRowToMemberStats(row: any): MemberStats | null {
   const id = row.manager_id as string;
   if (!id) return null;
-
-  // Resolve display name: prefer campaign_managers.name, fall back to rep_code
   const cm = row.campaign_managers;
-  const managerName: string =
-    cm?.name || cm?.rep_code || 'Unknown';
-
+  const managerName: string = cm?.name || cm?.rep_code || 'Unknown';
   const state = row.gamification_state as Record<string, any> | null;
 
-  // Empty state — rep exists but hasn't dialed yet today
   if (!state || Object.keys(state).length === 0) {
-    return {
-      managerId:     id,
-      managerName,
-      points:        0,
-      totalBookings: 0,
-      pbs:           0,
-      pps:           0,
-      ppDollars:     0,
-      totalDials:    0,
-      badges:        [],
-    };
+    return { managerId: id, managerName, points: 0, totalBookings: 0, pbs: 0, pps: 0, ppDollars: 0, totalDials: 0, badges: [] };
   }
 
-  // Pull fields from GamificationSession structure
   const badges: string[] = Array.isArray(state.badges)
     ? state.badges.map((b: any) => (typeof b === 'string' ? b : b?.id)).filter(Boolean)
     : [];
