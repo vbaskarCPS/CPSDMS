@@ -222,7 +222,7 @@ function multActivationToFireteam(evt: MultiplierActivationEvent): FireteamEvent
 // bottom-of-screen rows correctly pin the tooltip upward instead of clipping.
 // =============================================================================
 
-const TOOLTIP_ESTIMATED_HEIGHT = 160;
+const TOOLTIP_ESTIMATED_HEIGHT = 240;
 
 function PortalTooltip({ anchorRef, children, visible }: {
   anchorRef: React.RefObject<HTMLDivElement | null>;
@@ -240,7 +240,7 @@ function PortalTooltip({ anchorRef, children, visible }: {
     const midY = rect.top + rect.height / 2;
     const vh = window.innerHeight;
 
-    const wouldOverflowBottom = midY + TOOLTIP_ESTIMATED_HEIGHT / 2 > vh - 12;
+    const wouldOverflowBottom = midY + TOOLTIP_ESTIMATED_HEIGHT / 2 > vh - 60;
     const wouldOverflowTop    = midY - TOOLTIP_ESTIMATED_HEIGHT / 2 < 12;
 
     let top: number;
