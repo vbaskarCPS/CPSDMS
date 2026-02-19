@@ -224,10 +224,11 @@ function multActivationToFireteam(evt: MultiplierActivationEvent): FireteamEvent
 
 const TOOLTIP_ESTIMATED_HEIGHT = 240;
 
-function PortalTooltip({ anchorRef, children, visible }: {
+function PortalTooltip({ anchorRef, children, visible, forceUp = false }: {
   anchorRef: React.RefObject<HTMLDivElement | null>;
   children: React.ReactNode;
   visible: boolean;
+  forceUp?: boolean;
 }) {
   const [pos, setPos] = useState<{ top: number; left: number; transformY: string } | null>(null);
 
@@ -237,28 +238,12 @@ function PortalTooltip({ anchorRef, children, visible }: {
       return;
     }
     const rect = anchorRef.current.getBoundingClientRect();
-    const midY = rect.top + rect.height / 2;
-    const vh = window.innerHeight;
 
-    const wouldOverflowBottom = midY + TOOLTIP_ESTIMATED_HEIGHT / 2 > vh - 60;
-    const wouldOverflowTop    = midY - TOOLTIP_ESTIMATED_HEIGHT / 2 < 12;
-
-    let top: number;
-    let transformY: string;
-
-    if (wouldOverflowBottom) {
-      top = rect.bottom;
-      transformY = '-100%';
-    } else if (wouldOverflowTop) {
-      top = rect.top;
-      transformY = '0%';
-    } else {
-      top = midY;
-      transformY = '-50%';
-    }
+    const top        = forceUp ? rect.top        : rect.top + rect.height / 2;
+    const transformY = forceUp ? '-100%'         : '-50%';
 
     setPos({ top, left: rect.left - 8, transformY });
-  }, [visible, anchorRef]);
+  }, [visible, forceUp, anchorRef]);
 
   if (!pos || !visible) return null;
 
@@ -419,7 +404,7 @@ function MultiplierTooltipContent({ event }: { event: FireteamEvent }) {
 // Format: [bar] [time] [Name] [+PTS] [badge icons WHITE] [mult icons GREEN]
 // =============================================================================
 
-function BookingRow({ event, index }: { event: FireteamEvent; index: number }) {
+function BookingRow({ event, index, totalCount }: { event: FireteamEvent; index: number; totalCount: number }) {
   const [hovered, setHovered] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
   const color = event.isPrepay ? OR : CY;
@@ -444,7 +429,7 @@ function BookingRow({ event, index }: { event: FireteamEvent; index: number }) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <PortalTooltip anchorRef={rowRef} visible={hovered}>
+      <PortalTooltip anchorRef={rowRef} visible={hovered} forceUp={totalCount - index <= 5}>
         <BookingTooltipContent event={event} />
       </PortalTooltip>
 
@@ -527,7 +512,7 @@ function BookingRow({ event, index }: { event: FireteamEvent; index: number }) {
 // Full text: "Justice N is in a Ghost Town"
 // =============================================================================
 
-function MultiplierRow({ event, index }: { event: FireteamEvent; index: number }) {
+function MultiplierRow({ event, index, totalCount }: { event: FireteamEvent; index: number; totalCount: number }) {
   const [hovered, setHovered] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
   const color = event.multiplierColor || CY;
@@ -549,7 +534,7 @@ function MultiplierRow({ event, index }: { event: FireteamEvent; index: number }
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <PortalTooltip anchorRef={rowRef} visible={hovered}>
+      <PortalTooltip anchorRef={rowRef} visible={hovered} forceUp={totalCount - index <= 5}>
         <MultiplierTooltipContent event={event} />
       </PortalTooltip>
 
@@ -846,8 +831,8 @@ export default function FireteamPanel({
           ) : (
             displayEvents.map((evt, i) => {
               if (evt.eventType === 'login')      return <LoginRow      key={evt.id} event={evt} index={i} />;
-              if (evt.eventType === 'multiplier') return <MultiplierRow key={evt.id} event={evt} index={i} />;
-              return <BookingRow key={evt.id} event={evt} index={i} />;
+              if (evt.eventType === 'multiplier') return <MultiplierRow key={evt.id} event={evt} index={i} totalCount={displayEvents.length} />;
+              return <BookingRow key={evt.id} event={evt} index={i} totalCount={displayEvents.length} />;
             })
           )}
         </div>
