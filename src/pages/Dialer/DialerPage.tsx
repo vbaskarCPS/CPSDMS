@@ -560,7 +560,7 @@ export default function DialerPage() {
 
       // Track resume position immediately
       const bookingId = snapshot.state.bookingId || '';
-      setResumePosition(selectedTab, bookingId);
+      setResumePosition(selectedTab, bookingId, snapshot.state.firstRow);
 
       // Start presence heartbeat
       setActiveDialTab(selectedTab);
@@ -580,9 +580,19 @@ export default function DialerPage() {
   const handleResumeDeploy = async () => {
     if (!resumeData || !campaign) return;
 
-    const tab      = resumeData.tab;
-    const bookingId = resumeData.bookingId;
-    const isToday  = resumeData.sessionDate === getTodayEST();
+    const tab       = resumeData.tab;
+    const position  = resumeData.position;
+    const isToday   = resumeData.sessionDate === getTodayEST();
+
+    // Parse position: either a booking ID or "ROW:N"
+    let startBookingIdResume: string | undefined;
+    let startRowResume = 2;
+    if (position.startsWith('ROW:')) {
+      const rowNum = parseInt(position.slice(4), 10);
+      if (!isNaN(rowNum)) startRowResume = rowNum;
+    } else {
+      startBookingIdResume = position;
+    }
 
     setLoading(true);
     setLogMessage('Resuming last operation...');
@@ -590,13 +600,13 @@ export default function DialerPage() {
     const config: EngineConfig = {
       spreadsheetId: campaign.spreadsheetId,
       sheetName: tab,
-      direction: 'down',       // default direction on resume
-      startRow: 2,
+      direction: 'down',
+      startRow: startRowResume,
       repCode: manager?.repCode || '',
       managerId: manager?.id || '',
       campaignId: campaign?.id || '',
       sniperConfig,
-      startBookingId: bookingId,
+      startBookingId: startBookingIdResume,
     };
     configRef.current = config;
     setSelectedTab(tab);
@@ -633,7 +643,7 @@ export default function DialerPage() {
 
       // Update resume position to where we landed
       const newBookingId = snapshot.state.bookingId || '';
-      setResumePosition(tab, newBookingId);
+      setResumePosition(tab, newBookingId, snapshot.state.firstRow);
 
       setActiveDialTab(tab);
       setMode('dialer');
@@ -692,8 +702,8 @@ export default function DialerPage() {
 
     // Update resume position every time we advance to a new group
     const bookingId = state.bookingId || '';
-    if (configRef.current?.sheetName && bookingId) {
-      setResumePosition(configRef.current.sheetName, bookingId);
+    if (configRef.current?.sheetName) {
+      setResumePosition(configRef.current.sheetName, bookingId, state.firstRow);
     }
   }, []);
 

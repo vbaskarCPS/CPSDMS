@@ -297,7 +297,7 @@ function ResumeBanner({
             )}
           </div>
           <div style={{ fontSize: 9, color: '#555', marginTop: 2, fontFamily: 'monospace' }}>
-            Position: {resumeData.bookingId}
+            Position: {resumeData.position.startsWith('ROW:') ? `Row ${resumeData.position.slice(4)}` : resumeData.position}
             {!isToday && (
               <span style={{ color: '#444', marginLeft: 8 }}>
                 · Gamification resets (new day)

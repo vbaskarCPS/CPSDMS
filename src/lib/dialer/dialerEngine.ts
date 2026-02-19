@@ -130,19 +130,28 @@ let activeSessionRowId: string | null = null;
 // =============================================================================
 // RESUME POSITION — in-memory, updated by setResumePosition()
 // Embedded into every gamification_state save so it survives browser clears.
+//
+// _resumePosition stores either:
+//   - The booking ID string (e.g. "ACE01-042") when the sheet has one, OR
+//   - "ROW:1234" as a fallback when no BOOKING_ID column exists
+// Both are handled by handleResumeDeploy in DialerPage.
 // =============================================================================
 
 let resumeTab: string = '';
-let resumeBookingId: string = '';
+let resumePosition: string = '';   // booking ID or "ROW:N" fallback
 
 /**
  * Call this whenever the current group changes (after initialize and after
- * every disposition). Stores the tab + booking ID so the next saveSession
+ * every disposition). Stores the tab + position so the next saveSession
  * call embeds them into gamification_state for later resume.
+ *
+ * @param tab       - The sheet tab name
+ * @param bookingId - The booking ID string, or empty string if the sheet has none
+ * @param firstRow  - The 1-based row number of the group (used as fallback when no booking ID)
  */
-export function setResumePosition(tab: string, bookingId: string): void {
+export function setResumePosition(tab: string, bookingId: string, firstRow?: number): void {
   resumeTab = tab;
-  resumeBookingId = bookingId;
+  resumePosition = bookingId || (firstRow ? `ROW:${firstRow}` : '');
 }
 
 // =============================================================================
@@ -881,7 +890,7 @@ async function saveSession(session: GamificationSession): Promise<void> {
     const stateWithResume: any = {
       ...session,
       _resumeTab: resumeTab || undefined,
-      _resumeBookingId: resumeBookingId || undefined,
+      _resumePosition: resumePosition || undefined,
     };
 
     await campaignService.upsertGamificationState(activeSessionRowId, stateWithResume);

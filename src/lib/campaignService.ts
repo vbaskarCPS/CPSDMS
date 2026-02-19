@@ -64,8 +64,11 @@ export interface DialerSession {
 export interface ResumeData {
   /** The callbook tab name they were last dialing */
   tab: string;
-  /** The booking ID of the exact group they were on */
-  bookingId: string;
+  /**
+   * Position within the tab. Either a booking ID string (e.g. "ACE01-042")
+   * or "ROW:N" when the sheet has no Booking ID column.
+   */
+  position: string;
   /** The EST date of the session this position belongs to */
   sessionDate: string;
   /** The session row ID — passed back to DialerPage for session restoration */
@@ -490,14 +493,14 @@ class CampaignService {
       if (!state) return null;
 
       const tab = state._resumeTab as string | undefined;
-      const bookingId = state._resumeBookingId as string | undefined;
+      const position = (state._resumePosition || state._resumeBookingId) as string | undefined;
 
       // Both fields must be present and non-empty to offer a resume
-      if (!tab || !bookingId) return null;
+      if (!tab || !position) return null;
 
       return {
         tab,
-        bookingId,
+        position,
         sessionDate: data.session_date,
         sessionId: data.id,
         gamificationState: state,
