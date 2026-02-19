@@ -14,6 +14,10 @@
 // One row per manager per day (EST date). State is written after every
 // disposition so stats survive browser clears, tab switches, and device changes.
 //
+// Resume support: _resumeTab and _resumeBookingId are embedded into the
+// gamification_state jsonb on every save. DialerPage reads these on mount
+// to offer a "Resume Last Operation" shortcut on the Campaign Select screen.
+//
 
 import { resolveHeaders, findHeaders, ColumnIndices } from './dialerHeaders';
 import {
@@ -122,6 +126,24 @@ let highlightedRows: { current: number[]; next: number[] } = { current: [], next
 // =============================================================================
 
 let activeSessionRowId: string | null = null;
+
+// =============================================================================
+// RESUME POSITION — in-memory, updated by setResumePosition()
+// Embedded into every gamification_state save so it survives browser clears.
+// =============================================================================
+
+let resumeTab: string = '';
+let resumeBookingId: string = '';
+
+/**
+ * Call this whenever the current group changes (after initialize and after
+ * every disposition). Stores the tab + booking ID so the next saveSession
+ * call embeds them into gamification_state for later resume.
+ */
+export function setResumePosition(tab: string, bookingId: string): void {
+  resumeTab = tab;
+  resumeBookingId = bookingId;
+}
 
 // =============================================================================
 // DATA LOADING
@@ -799,8 +821,8 @@ function buildGamificationContext(
 //   subsequent saves know exactly which row to update — no extra lookups.
 //
 // saveSession: called after every disposition. Writes the full GamificationSession
-//   object to gamification_state. Fire-and-forget with silent error logging so
-//   a Supabase hiccup never blocks the rep from dialing.
+//   object to gamification_state, and also embeds _resumeTab + _resumeBookingId
+//   so position can be restored on the Campaign Select screen.
 //
 // migrateSession: fills in any missing fields when loading an older session
 //   format. Keeps old sessions compatible as we add new gamification features.
@@ -852,7 +874,17 @@ async function saveSession(session: GamificationSession): Promise<void> {
   }
 
   try {
-    await campaignService.upsertGamificationState(activeSessionRowId, session as any);
+    // Embed resume position into the state object before saving.
+    // We cast to any to avoid polluting the GamificationSession type with
+    // internal fields. These _ prefixed keys are ignored by the gamification
+    // engine and only read by campaignService.getResumeData().
+    const stateWithResume: any = {
+      ...session,
+      _resumeTab: resumeTab || undefined,
+      _resumeBookingId: resumeBookingId || undefined,
+    };
+
+    await campaignService.upsertGamificationState(activeSessionRowId, stateWithResume);
   } catch (err) {
     // Never block the rep — log and move on
     console.warn('Session save to Supabase failed (non-critical):', err);

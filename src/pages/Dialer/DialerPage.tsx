@@ -10,12 +10,17 @@
 // Tab switches update the heartbeat campaign_id in real time.
 // clearPresence fires on unmount and when returning to campaign select.
 //
+// Resume Game: on mount, reads the manager's most recent dialer_sessions row
+// from Supabase and offers a "LAST OPERATION DETECTED — RESUME" banner on
+// the Campaign Select screen. Clicking Resume skips the deploy config modal
+// and jumps straight back in with position + gamification restored.
+//
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Wifi, WifiOff, ArrowDown, ArrowUp, Crosshair, Phone, ChevronRight, ChevronLeft, Settings } from 'lucide-react';
-import { campaignService } from '../../lib/campaignService';
-import type { SniperConfig } from '../../lib/campaignService';
+import { campaignService, getTodayEST } from '../../lib/campaignService';
+import type { SniperConfig, ResumeData } from '../../lib/campaignService';
 import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import {
   initialize,
@@ -31,6 +36,7 @@ import {
   getActiveMultipliers,
   getCurrentRank,
   createFreshSession,
+  setResumePosition,
 } from '../../lib/dialer';
 import type {
   EngineConfig,
@@ -142,6 +148,27 @@ function tabsToPlaceholderCards(tabs: string[], campaignName: string): CampaignC
 }
 
 // =============================================================================
+// RESUME HELPERS
+// =============================================================================
+
+/**
+ * Formats a "last seen" string for the resume banner.
+ * e.g. "2h ago", "Yesterday", "3d ago"
+ */
+function formatLastSeen(isoTimestamp: string | null): string {
+  if (!isoTimestamp) return '';
+  const diff = Date.now() - new Date(isoTimestamp).getTime();
+  const mins  = Math.floor(diff / 60_000);
+  const hours = Math.floor(diff / 3_600_000);
+  const days  = Math.floor(diff / 86_400_000);
+  if (mins < 2)   return 'just now';
+  if (mins < 60)  return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days === 1) return 'yesterday';
+  return `${days}d ago`;
+}
+
+// =============================================================================
 // COMPONENT
 // =============================================================================
 
@@ -154,6 +181,10 @@ export default function DialerPage() {
 
   // --- Mode ---
   const [mode, setMode] = useState<'campaign-select' | 'dialer'>('campaign-select');
+
+  // --- Resume ---
+  const [resumeData, setResumeData] = useState<ResumeData | null>(null);
+  const [resumeLoading, setResumeLoading] = useState(false);
 
   // --- Campaign Select state ---
   const [connected, setConnected] = useState(false);
@@ -258,6 +289,23 @@ export default function DialerPage() {
       setSniperConfig(cmp.sniperConfig);
     }
   }, [navigate]);
+
+  // =======================================================================
+  // RESUME DATA — load on mount once manager is known
+  // =======================================================================
+
+  useEffect(() => {
+    if (!manager?.id) return;
+    setResumeLoading(true);
+    campaignService.getResumeData(manager.id)
+      .then(data => {
+        setResumeData(data);
+      })
+      .catch(() => {
+        // Non-critical — just don't show the banner
+      })
+      .finally(() => setResumeLoading(false));
+  }, [manager?.id]);
 
   // =======================================================================
   // AUTO-CONNECT
@@ -510,12 +558,88 @@ export default function DialerPage() {
       prevOwnMultipliersRef.current = newMults;
       prefillYesForm(snapshot.state);
 
-      // Start presence heartbeat — use tab name as campaignId for presence
-      // (presence tracks which tab/campaign the manager is working in)
+      // Track resume position immediately
+      const bookingId = snapshot.state.bookingId || '';
+      setResumePosition(selectedTab, bookingId);
+
+      // Start presence heartbeat
       setActiveDialTab(selectedTab);
       setMode('dialer');
     } catch (err: any) {
       setEmptyMessage(err.message || 'Failed to initialize dialer.');
+      setMode('dialer');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // =======================================================================
+  // RESUME DEPLOY — skips deploy config, jumps straight into last position
+  // =======================================================================
+
+  const handleResumeDeploy = async () => {
+    if (!resumeData || !campaign) return;
+
+    const tab      = resumeData.tab;
+    const bookingId = resumeData.bookingId;
+    const isToday  = resumeData.sessionDate === getTodayEST();
+
+    setLoading(true);
+    setLogMessage('Resuming last operation...');
+
+    const config: EngineConfig = {
+      spreadsheetId: campaign.spreadsheetId,
+      sheetName: tab,
+      direction: 'down',       // default direction on resume
+      startRow: 2,
+      repCode: manager?.repCode || '',
+      managerId: manager?.id || '',
+      campaignId: campaign?.id || '',
+      sniperConfig,
+      startBookingId: bookingId,
+    };
+    configRef.current = config;
+    setSelectedTab(tab);
+
+    try {
+      const snapshot = await initialize(config);
+      if (!snapshot) {
+        setEmptyMessage('No available groups found — the last position may have been worked.');
+        setMode('dialer');
+        setLoading(false);
+        return;
+      }
+
+      setCurrentState(snapshot.state);
+
+      // Restore gamification only if same day
+      if (isToday) {
+        setSession(snapshot.session);
+        const newMults = getActiveMultipliers(snapshot.session);
+        setMultipliers(newMults);
+        setMultipliersAt(Date.now());
+        setRank(getCurrentRank(snapshot.session));
+        prevOwnMultipliersRef.current = newMults;
+      } else {
+        // New day — fresh gamification, keep position
+        setSession(snapshot.session);
+        setMultipliers([]);
+        setMultipliersAt(Date.now());
+        setRank(null);
+        prevOwnMultipliersRef.current = [];
+      }
+
+      prefillYesForm(snapshot.state);
+
+      // Update resume position to where we landed
+      const newBookingId = snapshot.state.bookingId || '';
+      setResumePosition(tab, newBookingId);
+
+      setActiveDialTab(tab);
+      setMode('dialer');
+      setLogMessage('Operation resumed.');
+    } catch (err: any) {
+      setEmptyMessage(err.message || 'Failed to resume.');
       setMode('dialer');
     } finally {
       setLoading(false);
@@ -565,6 +689,12 @@ export default function DialerPage() {
     setEmptyMessage('');
     prefillYesForm(state);
     setLogMessage(`Group loaded: row ${state.firstRow}`);
+
+    // Update resume position every time we advance to a new group
+    const bookingId = state.bookingId || '';
+    if (configRef.current?.sheetName && bookingId) {
+      setResumePosition(configRef.current.sheetName, bookingId);
+    }
   }, []);
 
   // =======================================================================
@@ -618,6 +748,11 @@ export default function DialerPage() {
       case 'team': setStatsOpen(true); break;
       case 'scope': setSniperSettingsOpen(true); break;
       case 'campaigns':
+        // Refresh resume data when returning to campaign select,
+        // so the banner reflects the most recent position
+        if (manager?.id) {
+          campaignService.getResumeData(manager.id).then(setResumeData).catch(() => {});
+        }
         setMode('campaign-select' as any);
         break;
       case 'reset': {
@@ -637,7 +772,7 @@ export default function DialerPage() {
       }
       default: break;
     }
-  }, [session?.repCode, manager?.repCode]);
+  }, [session?.repCode, manager?.repCode, manager?.id]);
 
   // =======================================================================
   // DISPOSITION HANDLERS
@@ -843,6 +978,9 @@ export default function DialerPage() {
           campaignId={campaign?.id}
           managerId={manager?.id}
           managerName={manager?.name || manager?.repCode || ''}
+          resumeData={resumeData}
+          resumeLoading={resumeLoading}
+          onResume={handleResumeDeploy}
         />
 
         {campaign?.id && (

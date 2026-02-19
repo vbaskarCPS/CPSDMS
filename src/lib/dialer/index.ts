@@ -22,6 +22,7 @@ export {
   formatPhoneDisplay,
   getCurrentRank,
   getActiveMultipliers,
+  setResumePosition,
 } from './dialerEngine';
 
 export type {

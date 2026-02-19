@@ -17,12 +17,17 @@
 // Layout: card grid (left, flex-1) | FireteamPanel (right, 300px fixed)
 // Deploy flow: click card → arms it (scan line, accent glow) → DEPLOY
 //              button appears on card → click DEPLOY → modal opens
+//
+// Resume banner: shown at top of card area when resumeData is present.
+//   Clicking RESUME OPERATION calls onResume() which bypasses deploy config.
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Settings } from 'lucide-react';
 import FireteamPanel from './FireteamPanel';
 import { dialerRealtimeService } from '../../lib/dialerRealtimeService';
 import type { PresenceRecord } from '../../lib/dialerRealtimeService';
+import type { ResumeData } from '../../lib/campaignService';
+import { getTodayEST } from '../../lib/campaignService';
 
 // =============================================================================
 // TYPES
@@ -54,6 +59,10 @@ interface CampaignSelectProps {
   campaignId?: string;
   managerId?: string;
   managerName?: string;
+  // Resume Game
+  resumeData?: ResumeData | null;
+  resumeLoading?: boolean;
+  onResume?: () => void;
 }
 
 // =============================================================================
@@ -109,6 +118,19 @@ function formatDate(iso?: string): string {
   if (diffDays === 1) return 'YESTERDAY';
   if (diffDays < 7) return `${diffDays}d AGO`;
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
+}
+
+function formatLastSeen(isoTimestamp: string | null): string {
+  if (!isoTimestamp) return '';
+  const diff = Date.now() - new Date(isoTimestamp).getTime();
+  const mins  = Math.floor(diff / 60_000);
+  const hours = Math.floor(diff / 3_600_000);
+  const days  = Math.floor(diff / 86_400_000);
+  if (mins < 2)   return 'just now';
+  if (mins < 60)  return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days === 1) return 'yesterday';
+  return `${days}d ago`;
 }
 
 // Procedural topo-map pattern SVG (unique per campaign based on id hash)
@@ -186,7 +208,134 @@ const CAMPAIGN_STYLES = `
     0%, 100% { opacity: 0.6; }
     50%       { opacity: 1; }
   }
+  @keyframes cs-resume-pulse {
+    0%, 100% { box-shadow: 0 0 0 1px rgba(245,166,35,0.3), 0 0 20px rgba(245,166,35,0.08); }
+    50%       { box-shadow: 0 0 0 1px rgba(245,166,35,0.6), 0 0 30px rgba(245,166,35,0.18); }
+  }
+  @keyframes cs-resume-enter {
+    0%   { transform: translateY(-10px); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes cs-resume-sweep {
+    0%   { left: -100%; }
+    100% { left: 200%; }
+  }
 `;
+
+// =============================================================================
+// RESUME BANNER
+// =============================================================================
+
+function ResumeBanner({
+  resumeData,
+  onResume,
+}: {
+  resumeData: ResumeData;
+  onResume: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const isToday = resumeData.sessionDate === getTodayEST();
+  const lastSeen = formatLastSeen(resumeData.lastUpdatedAt);
+
+  return (
+    <div
+      style={{
+        marginBottom: 12,
+        borderRadius: 8,
+        border: `1px solid rgba(245,166,35,0.35)`,
+        background: 'rgba(245,166,35,0.04)',
+        padding: '10px 14px',
+        animation: 'cs-resume-enter 0.4s ease-out both, cs-resume-pulse 3s ease-in-out 0.5s infinite',
+        position: 'relative',
+        overflow: 'hidden',
+      }}
+    >
+      {/* Subtle animated shimmer */}
+      <div style={{
+        position: 'absolute',
+        top: 0, bottom: 0, width: '40%',
+        background: 'linear-gradient(90deg, transparent, rgba(245,166,35,0.05), transparent)',
+        animation: 'cs-resume-sweep 4s ease-in-out infinite',
+        pointerEvents: 'none',
+      }} />
+
+      <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 12 }}>
+        {/* Left: signal icon + label */}
+        <div style={{ flexShrink: 0 }}>
+          <div style={{ fontSize: 18, lineHeight: 1, marginBottom: 2 }}>📡</div>
+        </div>
+
+        {/* Center: text */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: 8, fontWeight: 800, letterSpacing: '3px',
+            color: '#f5a623', opacity: 0.7, textTransform: 'uppercase',
+            marginBottom: 3,
+          }}>
+            LAST OPERATION DETECTED
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{
+              fontSize: 12, fontWeight: 900, color: '#fff',
+              letterSpacing: '0.5px',
+            }}>
+              {resumeData.tab}
+            </span>
+            <span style={{
+              fontSize: 8, fontWeight: 700, color: '#f5a623',
+              background: 'rgba(245,166,35,0.12)',
+              border: '1px solid rgba(245,166,35,0.25)',
+              borderRadius: 3, padding: '1px 6px', letterSpacing: '1px',
+              textTransform: 'uppercase',
+            }}>
+              {isToday ? '🟢 TODAY' : '🟡 PREV SESSION'}
+            </span>
+            {lastSeen && (
+              <span style={{ fontSize: 9, color: '#666', fontWeight: 600 }}>
+                {lastSeen}
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 9, color: '#555', marginTop: 2, fontFamily: 'monospace' }}>
+            Position: {resumeData.bookingId}
+            {!isToday && (
+              <span style={{ color: '#444', marginLeft: 8 }}>
+                · Gamification resets (new day)
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Right: Resume button */}
+        <button
+          onClick={onResume}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            flexShrink: 0,
+            padding: '10px 20px',
+            borderRadius: 6,
+            border: `1.5px solid ${hovered ? '#f5a623' : 'rgba(245,166,35,0.5)'}`,
+            background: hovered
+              ? 'rgba(245,166,35,0.18)'
+              : 'rgba(245,166,35,0.08)',
+            color: '#f5a623',
+            fontSize: 11,
+            fontWeight: 900,
+            fontFamily: 'monospace',
+            letterSpacing: '2.5px',
+            textTransform: 'uppercase',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          ⚡ RESUME
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // =============================================================================
 // MAIN COMPONENT
@@ -200,6 +349,9 @@ export default function CampaignSelect({
   campaignId,
   managerId,
   managerName,
+  resumeData,
+  resumeLoading,
+  onResume,
 }: CampaignSelectProps) {
   const [armedId, setArmedId] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
@@ -354,32 +506,43 @@ export default function CampaignSelect({
             flex: 1,
             padding: '0 16px 24px 24px',
             overflowY: 'auto',
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-            gap: 12,
-            alignContent: 'start',
+            display: 'flex',
+            flexDirection: 'column',
           }}>
-            {sorted.map((c, idx) => (
-              <CampaignCard
-                key={c.id}
-                campaign={c}
-                isHot={hotCampaignIds.has(c.id) || !!c.hot || isAutoHot(c.avgAttempts)}
-                isArmed={c.id === armedId}
-                isDeploying={c.id === armedId && deploying}
-                index={idx}
-                onArm={() => handleArm(c.id)}
-                onDeploy={() => handleDeploy(c.id)}
-              />
-            ))}
-
-            {sorted.length === 0 && (
-              <div style={{
-                gridColumn: '1 / -1', textAlign: 'center', padding: '60px 20px',
-                color: '#444', fontSize: 12, fontWeight: 700, letterSpacing: '2px',
-              }}>
-                NO CAMPAIGNS AVAILABLE
-              </div>
+            {/* Resume Banner — shown above cards when a last position exists */}
+            {!resumeLoading && resumeData && onResume && (
+              <ResumeBanner resumeData={resumeData} onResume={onResume} />
             )}
+
+            {/* Cards grid */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+              gap: 12,
+              alignContent: 'start',
+            }}>
+              {sorted.map((c, idx) => (
+                <CampaignCard
+                  key={c.id}
+                  campaign={c}
+                  isHot={hotCampaignIds.has(c.id) || !!c.hot || isAutoHot(c.avgAttempts)}
+                  isArmed={c.id === armedId}
+                  isDeploying={c.id === armedId && deploying}
+                  index={idx}
+                  onArm={() => handleArm(c.id)}
+                  onDeploy={() => handleDeploy(c.id)}
+                />
+              ))}
+
+              {sorted.length === 0 && (
+                <div style={{
+                  gridColumn: '1 / -1', textAlign: 'center', padding: '60px 20px',
+                  color: '#444', fontSize: 12, fontWeight: 700, letterSpacing: '2px',
+                }}>
+                  NO CAMPAIGNS AVAILABLE
+                </div>
+              )}
+            </div>
           </div>
 
           {/* --- Permanent Fireteam Panel --- */}

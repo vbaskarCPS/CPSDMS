@@ -54,6 +54,28 @@ export interface DialerSession {
   updatedAt?: string;
 }
 
+// =============================================================================
+// RESUME DATA TYPE
+//
+// Returned by getResumeData() — contains everything CampaignSelect needs to
+// show the "Last Operation Detected" banner and wire the Resume button.
+// =============================================================================
+
+export interface ResumeData {
+  /** The callbook tab name they were last dialing */
+  tab: string;
+  /** The booking ID of the exact group they were on */
+  bookingId: string;
+  /** The EST date of the session this position belongs to */
+  sessionDate: string;
+  /** The session row ID — passed back to DialerPage for session restoration */
+  sessionId: string;
+  /** The full gamification state, so DialerPage can restore it if same day */
+  gamificationState: Record<string, any>;
+  /** ISO timestamp of last update, for display ("last played 2h ago") */
+  lastUpdatedAt: string | null;
+}
+
 // Storage keys
 const CAMPAIGN_MANAGER_KEY = 'current_campaign_manager';
 const CAMPAIGN_KEY = 'current_campaign';
@@ -436,6 +458,56 @@ class CampaignService {
     state: Record<string, any>
   ): Promise<void> {
     return this.upsertGamificationState(sessionId, state);
+  }
+
+  // =============================================================================
+  // RESUME DATA
+  //
+  // Reads the most recent dialer_sessions row for this manager (any date) and
+  // extracts the _resumeTab and _resumeBookingId fields that dialerEngine embeds
+  // on every save. Returns null if no resume position exists.
+  //
+  // Why "most recent" instead of "today only"?
+  // Per the design: if it's a new day, we still restore the POSITION (same tab
+  // + booking ID) but let DialerPage handle gamification freshness by checking
+  // sessionDate against getTodayEST().
+  // =============================================================================
+
+  public async getResumeData(managerId: string): Promise<ResumeData | null> {
+    try {
+      // Fetch the single most recent session row for this manager
+      const { data, error } = await supabase
+        .from('dialer_sessions')
+        .select('id, session_date, gamification_state, updated_at')
+        .eq('manager_id', managerId)
+        .order('session_date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error || !data) return null;
+
+      const state = data.gamification_state as Record<string, any> | null;
+      if (!state) return null;
+
+      const tab = state._resumeTab as string | undefined;
+      const bookingId = state._resumeBookingId as string | undefined;
+
+      // Both fields must be present and non-empty to offer a resume
+      if (!tab || !bookingId) return null;
+
+      return {
+        tab,
+        bookingId,
+        sessionDate: data.session_date,
+        sessionId: data.id,
+        gamificationState: state,
+        lastUpdatedAt: data.updated_at ?? null,
+      };
+    } catch (err) {
+      // Non-critical — if this fails the rep just doesn't see the resume banner
+      console.warn('getResumeData failed:', err);
+      return null;
+    }
   }
 
   // --- VALIDATION ---
