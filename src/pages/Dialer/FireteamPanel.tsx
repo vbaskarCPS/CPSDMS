@@ -768,7 +768,7 @@ export default function FireteamPanel({
   return (
     <>
       <style>{PANEL_STYLES}</style>
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'visible' }}>
 
         {/* Tab header */}
         <div style={{
