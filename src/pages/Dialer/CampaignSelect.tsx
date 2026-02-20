@@ -6,25 +6,16 @@ import { dialerRealtimeService } from '../../lib/dialerRealtimeService';
 import type { PresenceRecord, MemberStats } from '../../lib/dialerRealtimeService';
 import type { ResumeData } from '../../lib/campaignService';
 import { getTodayEST, campaignService } from '../../lib/campaignService';
-import { BADGE_DEFS, SECTION_ORDER_FOR_GRID } from '../../lib/dialer/gamificationDefs';
+import { BADGE_DEFS } from '../../lib/dialer/gamificationDefs';
 import { getBadgeIcon, getBadgeCategoryColor } from './BadgeIcons';
 import type { GamificationSession } from '../../lib/dialer/gamificationDefs';
 
-// ---------------------------------------------------------------------------
-// NOTE: SECTION_ORDER_FOR_GRID is re-exported from gamificationDefs so both
-// AchievementsPanel and this file share the same ordering. If your defs file
-// doesn't export it yet, replace the import with the inline array below and
-// add the export to gamificationDefs.ts.
-// ---------------------------------------------------------------------------
-
-// Fallback section order in case the import doesn't exist yet — matches AchievementsPanel
-const SECTION_ORDER: string[] = (typeof SECTION_ORDER_FOR_GRID !== 'undefined' && SECTION_ORDER_FOR_GRID)
-  ? SECTION_ORDER_FOR_GRID
-  : [
-      'Streaks', 'Prepay Streak', 'Street', 'Time', 'Spree',
-      'Special', 'Headhunter', 'Raise the Dead', 'Conversion',
-      'Ranks', 'Milestones', 'Workhorse',
-    ];
+// Section display order — must match AchievementsPanel
+const SECTION_ORDER: string[] = [
+  'Streaks', 'Prepay Streak', 'Street', 'Time', 'Spree',
+  'Special', 'Headhunter', 'Raise the Dead', 'Conversion',
+  'Ranks', 'Milestones', 'Workhorse',
+];
 
 const SECTION_DESC: Record<string, string> = {
   Streaks: 'Consecutive YES dispositions without a break',
