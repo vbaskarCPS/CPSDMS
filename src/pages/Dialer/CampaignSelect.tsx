@@ -313,7 +313,7 @@ function ResumeBanner({
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ flexShrink: 0, width: 28, height: 28, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <img
-              src={`${GAME_ICON_BASE}/lorc/return-arrow.svg`}
+              src={`${GAME_ICON_BASE}/lorc/radar-sweep.svg`}
               width={24}
               height={24}
               draggable={false}
@@ -359,8 +359,8 @@ function ResumeBanner({
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           style={{
-            width: '100%',
-            padding: '10px 16px',
+            alignSelf: 'flex-start',
+            padding: '10px 28px',
             borderRadius: 6,
             border: `1.5px solid ${hovered ? '#f5a623' : 'rgba(245,166,35,0.5)'}`,
             background: hovered ? 'rgba(245,166,35,0.18)' : 'rgba(245,166,35,0.08)',
@@ -373,9 +373,28 @@ function ResumeBanner({
             cursor: 'pointer',
             transition: 'all 0.15s ease',
             textAlign: 'center',
+            position: 'relative',
+            overflow: 'hidden',
           }}
         >
-          ⚡ RESUME OPERATION
+          {/* Ghost splash icon */}
+          <img
+            src={`${GAME_ICON_BASE}/lorc/return-arrow.svg`}
+            width={52}
+            height={52}
+            draggable={false}
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: '50%',
+              transform: 'translate(-50%, -50%)',
+              opacity: hovered ? 0.13 : 0.07,
+              transition: 'opacity 0.15s ease',
+              pointerEvents: 'none',
+              filter: 'sepia(1) saturate(3) hue-rotate(5deg)',
+            }}
+          />
+          <span style={{ position: 'relative', zIndex: 1 }}>⚡ RESUME OPERATION</span>
         </button>
       </div>
     </div>
