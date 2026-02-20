@@ -94,6 +94,9 @@ export interface PrepayPending {
   phone: string;
   extra: DispositionExtra;
   dataStartRow: number;
+  // Store the gamification context so finalizePrepay can fire it correctly
+  gamContext: DispositionContext;
+  yesStartTime: number;
 }
 
 // =============================================================================
@@ -508,6 +511,27 @@ export async function applyDisposition(
 ): Promise<DispositionResult> {
   const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
 
+  // PREPAY: do not write to the sheet or fire gamification yet.
+  // Just store everything in pendingPrepay so finalizePrepay can handle it
+  // after the rep successfully enters card details.
+  if (disposition === 'PREPAY') {
+    const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
+    pendingPrepay = {
+      sheetName: config.sheetName,
+      groupDataIndices: state.dataIndices,
+      phone,
+      extra,
+      dataStartRow: sheet.dataStartRow,
+      gamContext: gamCtx,
+      yesStartTime: yesStartTime || 0,
+    };
+    // Return the current state unchanged — UI stays open for card entry
+    return {
+      nextState: state,
+      gamification: null,
+    };
+  }
+
   const dispResult = buildDispositionUpdates(
     disposition,
     sheet.all,
@@ -546,20 +570,6 @@ export async function applyDisposition(
   const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
   const gamResult = processGamification(session, disposition, gamCtx);
   await saveSession(session);
-
-  if (disposition === 'PREPAY') {
-    pendingPrepay = {
-      sheetName: config.sheetName,
-      groupDataIndices: state.dataIndices,
-      phone,
-      extra,
-      dataStartRow: sheet.dataStartRow,
-    };
-    return {
-      nextState: state,
-      gamification: gamResult,
-    };
-  }
 
   sheet.available = filterAvailable(sheet.groups, sheet.all, sheet.CI);
   sheet.timestamp = Date.now();
@@ -613,6 +623,8 @@ export async function finalizePrepay(
     pp.extra.price = cardData.amount;
   }
 
+  // Now write the disposition to the sheet (this is where it was previously
+  // happening in applyDisposition — moved here so it only fires on successful card entry)
   const dispResult = buildDispositionUpdates(
     'PREPAY',
     sheet.all,
@@ -635,6 +647,12 @@ export async function finalizePrepay(
       }
     }
   }
+
+  // Now fire gamification — using the context that was stored at prepay click time
+  // Update the price in context in case it changed during card entry
+  const gamCtx = { ...pp.gamContext, price: parseFloat(pp.extra.price || '0') || 0 };
+  const gamResult = processGamification(session, 'PREPAY', gamCtx);
+  await saveSession(session);
 
   let detailIdx = pp.groupDataIndices[0];
   let bestYear = 0;
@@ -698,13 +716,7 @@ export async function finalizePrepay(
 
   return {
     nextState: nextStateResult,
-    gamification: {
-      session,
-      newBadges: [],
-      pointBreakdown: null,
-      activeMultipliers: getActiveMultipliers(session),
-      rank: getCurrentRank(session),
-    },
+    gamification: gamResult,
   };
 }
 

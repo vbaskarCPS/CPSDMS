@@ -861,11 +861,14 @@ export default function DialerPage() {
 
     try {
       if (subType === 'PREPAY') {
-        const result = await applyDisposition(
+        // Just store everything in the engine — no sheet writes, no gamification yet.
+        // All of that fires in handleChamber after the rep enters card details.
+        await applyDisposition(
           configRef.current, currentState, 'PREPAY', currentState.phone, session!, extra, yesStartTimeRef.current
         );
-        handleGamResult(result.gamification, true, true, yPrice.trim());
-        setCcAmt(yPrice.trim()); setCcNum(''); setCcExp(''); setCcCvv(''); setCcType(''); setCardStatus(''); setCardStaging(false);
+        // Pre-fill the amount field in the card modal from what was entered in the YES form
+        setCcAmt(yPrice.trim());
+        setCcNum(''); setCcExp(''); setCcCvv(''); setCcType(''); setCardStatus(''); setCardStaging(false);
         setCardModalOpen(true);
         setPendingDial(false);
       } else {
@@ -908,7 +911,9 @@ export default function DialerPage() {
     setCardStaging(true); setCardStatus('Staging card...');
     try {
       const cardData = stageCardData(num, ccExp.trim(), ccCvv.trim(), ccAmt.trim());
+      // finalizePrepay now handles sheet writes + gamification + CCD
       const result = await finalizePrepay(configRef.current!, cardData, session!);
+      // Fire gamification result now that everything has been written
       handleGamResult(result.gamification, true, true, ccAmt.trim());
       setCardStatus('✓ Card staged');
       setTimeout(() => {
@@ -923,10 +928,16 @@ export default function DialerPage() {
   };
 
   const handleEject = () => {
-    cancelPrepay(); setCardModalOpen(false);
+    // Cancel the pending prepay — no sheet writes have happened yet, so the
+    // group is completely clean. Remove the group key lock so the rep can
+    // re-disposition (e.g. book as COMPLETE instead).
+    cancelPrepay();
+    setCardModalOpen(false);
     if (currentState) dispositionedKeysRef.current.delete(currentState.groupKey);
     setPendingDial(false);
-    setLogMessage('Prepay cancelled — re-disposition available.');
+    // Return to YES form so rep can choose COMPLETE or try prepay again
+    setShowYesPanel(true);
+    setLogMessage('Prepay cancelled — select a disposition.');
   };
 
   // =======================================================================
