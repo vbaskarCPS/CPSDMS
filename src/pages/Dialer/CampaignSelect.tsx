@@ -278,13 +278,28 @@ const CAMPAIGN_STYLES = `
 function ResumeBanner({
   resumeData,
   onResume,
+  managerId,
+  session,
 }: {
   resumeData: ResumeData;
   onResume: () => void;
+  managerId?: string;
+  session?: GamificationSession | null;
 }) {
   const [hovered, setHovered] = useState(false);
+  const [myStats, setMyStats] = useState<MemberStats | null>(null);
+
+  useEffect(() => {
+    if (!managerId) return;
+    dialerRealtimeService.fetchGlobalStatsFromSessions().then(rows => {
+      const mine = rows.find(r => r.managerId === managerId) ?? null;
+      setMyStats(mine);
+    }).catch(() => {});
+  }, [managerId]);
+
   const isToday = resumeData.sessionDate === getTodayEST();
   const lastSeen = formatLastSeen(resumeData.lastUpdatedAt);
+  const badgeCount = session?.badges?.length ?? myStats?.badges?.length ?? 0;
 
   return (
     <div
@@ -309,93 +324,126 @@ function ResumeBanner({
         }} />
       </div>
 
-      <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ flexShrink: 0, width: 28, height: 28, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <img
-              src={`${GAME_ICON_BASE}/lorc/radar-sweep.svg`}
-              width={24}
-              height={24}
-              draggable={false}
-              style={{ opacity: 0.65, filter: 'sepia(1) saturate(3) hue-rotate(5deg)' }}
-            />
+      <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 16 }}>
+
+        {/* Radar icon */}
+        <div style={{ flexShrink: 0, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <img
+            src={`${GAME_ICON_BASE}/lorc/radar-sweep.svg`}
+            width={24}
+            height={24}
+            draggable={false}
+            style={{ opacity: 0.65, filter: 'sepia(1) saturate(3) hue-rotate(5deg)' }}
+          />
+        </div>
+
+        {/* Left: operation info */}
+        <div style={{ minWidth: 0, flexShrink: 0 }}>
+          <div style={{
+            fontSize: 8, fontWeight: 800, letterSpacing: '3px',
+            color: '#f5a623', opacity: 0.7, textTransform: 'uppercase', marginBottom: 3,
+          }}>
+            LAST OPERATION DETECTED
           </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{
-              fontSize: 8, fontWeight: 800, letterSpacing: '3px',
-              color: '#f5a623', opacity: 0.7, textTransform: 'uppercase',
-              marginBottom: 3,
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 900, color: '#fff', letterSpacing: '0.5px' }}>
+              {resumeData.tab}
+            </span>
+            <span style={{
+              fontSize: 8, fontWeight: 700, color: '#f5a623',
+              background: 'rgba(245,166,35,0.12)',
+              border: '1px solid rgba(245,166,35,0.25)',
+              borderRadius: 3, padding: '1px 6px', letterSpacing: '1px',
+              textTransform: 'uppercase',
             }}>
-              LAST OPERATION DETECTED
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 12, fontWeight: 900, color: '#fff', letterSpacing: '0.5px' }}>
-                {resumeData.tab}
-              </span>
-              <span style={{
-                fontSize: 8, fontWeight: 700, color: '#f5a623',
-                background: 'rgba(245,166,35,0.12)',
-                border: '1px solid rgba(245,166,35,0.25)',
-                borderRadius: 3, padding: '1px 6px', letterSpacing: '1px',
-                textTransform: 'uppercase',
-              }}>
-                {isToday ? '🟢 TODAY' : '🟡 PREV SESSION'}
-              </span>
-              {lastSeen && (
-                <span style={{ fontSize: 9, color: '#666', fontWeight: 600 }}>{lastSeen}</span>
-              )}
-            </div>
-            <div style={{ fontSize: 9, color: '#555', marginTop: 2, fontFamily: 'monospace' }}>
-              Position: {resumeData.position.startsWith('ROW:') ? `Row ${resumeData.position.slice(4)}` : resumeData.position}
-              {!isToday && (
-                <span style={{ color: '#444', marginLeft: 8 }}>· Gamification resets (new day)</span>
-              )}
-            </div>
+              {isToday ? '🟢 TODAY' : '🟡 PREV SESSION'}
+            </span>
+            {lastSeen && (
+              <span style={{ fontSize: 9, color: '#666', fontWeight: 600 }}>{lastSeen}</span>
+            )}
+          </div>
+          <div style={{ fontSize: 9, color: '#555', marginTop: 2, fontFamily: 'monospace' }}>
+            Position: {resumeData.position.startsWith('ROW:') ? `Row ${resumeData.position.slice(4)}` : resumeData.position}
+            {!isToday && <span style={{ color: '#444', marginLeft: 8 }}>· Gamification resets (new day)</span>}
           </div>
         </div>
 
-        <button
-          onClick={onResume}
-          onMouseEnter={() => setHovered(true)}
-          onMouseLeave={() => setHovered(false)}
-          style={{
-            alignSelf: 'flex-start',
-            padding: '10px 28px',
-            borderRadius: 6,
-            border: `1.5px solid ${hovered ? '#f5a623' : 'rgba(245,166,35,0.5)'}`,
-            background: hovered ? 'rgba(245,166,35,0.18)' : 'rgba(245,166,35,0.08)',
-            color: '#f5a623',
-            fontSize: 11,
-            fontWeight: 900,
-            fontFamily: 'monospace',
-            letterSpacing: '2.5px',
-            textTransform: 'uppercase',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease',
-            textAlign: 'center',
-            position: 'relative',
-            overflow: 'hidden',
-          }}
-        >
-          {/* Ghost splash icon */}
-          <img
-            src={`${GAME_ICON_BASE}/lorc/return-arrow.svg`}
-            width={52}
-            height={52}
-            draggable={false}
+        {/* Divider */}
+        <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(245,166,35,0.12)', flexShrink: 0, margin: '0 4px' }} />
+
+        {/* Center: today's stat strip */}
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+          {[
+            { label: 'PTS',   value: myStats?.points    ?? '—',                    color: '#ffffff' },
+            { label: 'PB',    value: myStats?.pbs        ?? '—',                    color: '#2ecc71' },
+            { label: 'PP',    value: myStats?.pps        ?? '—',                    color: '#f1c40f' },
+            { label: 'PP$',   value: myStats ? `$${myStats.ppDollars}` : '—',       color: '#e67e22' },
+            { label: 'DIALS', value: myStats?.totalDials ?? '—',                    color: '#3498db' },
+            { label: 'BDGS',  value: badgeCount || '—',                             color: '#9b59b6' },
+          ].map(({ label, value, color }) => (
+            <div key={label} style={{
+              flex: 1,
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              padding: '6px 4px', borderRadius: 6,
+              background: `${color}07`,
+              border: `1px solid ${color}18`,
+            }}>
+              <span style={{ fontSize: 13, fontWeight: 900, color, lineHeight: 1, fontFamily: 'monospace' }}>
+                {value}
+              </span>
+              <span style={{ fontSize: 7, color, opacity: 0.45, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', marginTop: 2 }}>
+                {label}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* Divider */}
+        <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(245,166,35,0.12)', flexShrink: 0, margin: '0 4px' }} />
+
+        {/* Right: resume button */}
+        <div style={{ flexShrink: 0 }}>
+          <button
+            onClick={onResume}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
             style={{
-              position: 'absolute',
-              left: '50%',
-              top: '50%',
-              transform: 'translate(-50%, -50%)',
-              opacity: hovered ? 0.13 : 0.07,
-              transition: 'opacity 0.15s ease',
-              pointerEvents: 'none',
-              filter: 'sepia(1) saturate(3) hue-rotate(5deg)',
+              padding: '10px 24px',
+              borderRadius: 6,
+              border: `1.5px solid ${hovered ? '#f5a623' : 'rgba(245,166,35,0.5)'}`,
+              background: hovered ? 'rgba(245,166,35,0.18)' : 'rgba(245,166,35,0.08)',
+              color: '#f5a623',
+              fontSize: 11,
+              fontWeight: 900,
+              fontFamily: 'monospace',
+              letterSpacing: '2.5px',
+              textTransform: 'uppercase',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              textAlign: 'center',
+              position: 'relative',
+              overflow: 'hidden',
+              whiteSpace: 'nowrap',
             }}
-          />
-          <span style={{ position: 'relative', zIndex: 1 }}>⚡ RESUME OPERATION</span>
-        </button>
+          >
+            <img
+              src={`${GAME_ICON_BASE}/lorc/return-arrow.svg`}
+              width={52}
+              height={52}
+              draggable={false}
+              style={{
+                position: 'absolute', left: '50%', top: '50%',
+                transform: 'translate(-50%, -50%)',
+                opacity: hovered ? 0.13 : 0.07,
+                transition: 'opacity 0.15s ease',
+                pointerEvents: 'none',
+                filter: 'sepia(1) saturate(3) hue-rotate(5deg)',
+              }}
+            />
+            <span style={{ position: 'relative', zIndex: 1 }}>⚡ RESUME</span>
+          </button>
+        </div>
+
       </div>
     </div>
   );
@@ -1236,7 +1284,7 @@ export default function CampaignSelect({
                 display: 'flex', flexDirection: 'column',
               }}>
                 {!resumeLoading && resumeData && onResume && (
-                  <ResumeBanner resumeData={resumeData} onResume={onResume} />
+                  <ResumeBanner resumeData={resumeData} onResume={onResume} managerId={managerId} session={session} />
                 )}
                 <div style={{
                   display: 'grid',
