@@ -493,7 +493,6 @@ export default function DialerPage() {
   const handleConfirmDeploy = async () => {
     if (!selectedTab || !campaign) return;
 
-    // Ambush requires a Booking ID — catch this before even calling initialize
     if (direction === 'ambush' && !startBookingId.trim()) {
       setDeployError('AMBUSH requires a Booking ID. Please enter one above.');
       return;
@@ -540,7 +539,6 @@ export default function DialerPage() {
       setActiveDialTab(selectedTab);
       setMode('dialer');
     } catch (err: any) {
-      // Show the error back in the deploy modal (e.g. Booking ID not found for Ambush)
       setShowDeployConfig(true);
       setDeployError(err.message || 'Failed to initialize dialer.');
     } finally {
@@ -699,7 +697,17 @@ export default function DialerPage() {
     if (result.session) setSession(result.session);
     if (result.rank) setRank(result.rank);
     if (result.activeMultipliers) { setMultipliers(result.activeMultipliers); setMultipliersAt(Date.now()); }
-    if (result.newBadges?.length > 0) { for (const id of result.newBadges) queueBadgeToast(id); }
+
+    // ── PATCH: award lifetime badges whenever new badges are earned ──
+    if (result.newBadges?.length > 0) {
+      for (const id of result.newBadges) queueBadgeToast(id);
+      if (manager?.id) {
+        // Fire-and-forget — never blocks the UI
+        campaignService.updateLifetimeBadges(manager.id, result.newBadges).catch(() => {});
+      }
+    }
+    // ── END PATCH ──
+
     if (result.pointBreakdown) { showPointToast(result.pointBreakdown.grandTotal, result.pointBreakdown.multiplier); }
     else if (!isBooking && result.badgeBonusTotal > 0) { showPointToast(result.badgeBonusTotal, 1); }
 
@@ -946,6 +954,7 @@ export default function DialerPage() {
 
     return (
       <>
+        {/* ── PATCH: session prop added so Achievements tab can show Today's badges ── */}
         <CampaignSelect
           campaigns={campaignCards}
           onDeploy={handleCampaignDeploy}
@@ -961,6 +970,7 @@ export default function DialerPage() {
           resumeData={resumeData}
           resumeLoading={resumeLoading}
           onResume={handleResumeDeploy}
+          session={session}
         />
 
         {campaign?.id && (
@@ -998,7 +1008,7 @@ export default function DialerPage() {
                 </div>
               </div>
 
-              {/* APPROACH VECTOR — Ambush / Infiltrate / Siege */}
+              {/* APPROACH VECTOR */}
               <div className="mb-4">
                 <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>
                   APPROACH VECTOR
@@ -1086,7 +1096,6 @@ export default function DialerPage() {
                         >
                           <div style={{ color: '#00e5ff', fontWeight: 800, fontSize: 9, letterSpacing: '1.5px', marginBottom: 4, textTransform: 'uppercase' }}>{label}</div>
                           {tip}
-                          {/* Arrow pointing down */}
                           <div style={{
                             position: 'absolute',
                             bottom: -5,
@@ -1106,7 +1115,7 @@ export default function DialerPage() {
                 </div>
               </div>
 
-              {/* BOOKING ID — only shown when Ambush is selected */}
+              {/* BOOKING ID */}
               {direction === 'ambush' && (
                 <div className="mb-4">
                   <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>

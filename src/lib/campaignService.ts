@@ -58,26 +58,14 @@ export interface DialerSession {
 
 // =============================================================================
 // RESUME DATA TYPE
-//
-// Returned by getResumeData() — contains everything CampaignSelect needs to
-// show the "Last Operation Detected" banner and wire the Resume button.
 // =============================================================================
 
 export interface ResumeData {
-  /** The callbook tab name they were last dialing */
   tab: string;
-  /**
-   * Position within the tab. Either a booking ID string (e.g. "ACE01-042")
-   * or "ROW:N" when the sheet has no Booking ID column.
-   */
   position: string;
-  /** The EST date of the session this position belongs to */
   sessionDate: string;
-  /** The session row ID — passed back to DialerPage for session restoration */
   sessionId: string;
-  /** The full gamification state, so DialerPage can restore it if same day */
   gamificationState: Record<string, any>;
-  /** ISO timestamp of last update, for display ("last played 2h ago") */
   lastUpdatedAt: string | null;
 }
 
@@ -87,16 +75,10 @@ const CAMPAIGN_KEY = 'current_campaign';
 
 // =============================================================================
 // EST DATE HELPER
-// Returns "today" as a YYYY-MM-DD string in Eastern Standard Time.
-// Used so all reps — regardless of their local timezone — share the same
-// session date. Resets at 3am EST which is safely the middle of the night
-// for all Canadian timezones (1am Mountain, midnight Pacific).
 // =============================================================================
 
 export function getTodayEST(): string {
   const now = new Date();
-  // EST is UTC-5. We don't use EDT (UTC-4) — we stay on fixed UTC-5 year-round
-  // so the reset time is consistent and predictable for the team.
   const estOffsetMs = -5 * 60 * 60 * 1000;
   const estNow = new Date(now.getTime() + estOffsetMs);
   const y = estNow.getUTCFullYear();
@@ -258,7 +240,6 @@ class CampaignService {
 
     const updated = this.mapDbToCampaign(data);
 
-    // Also update localStorage if this is the current campaign
     const current = this.getCurrentCampaign();
     if (current && current.id === campaignId) {
       this.setCurrentCampaign(updated);
@@ -377,19 +358,12 @@ class CampaignService {
 
   // --- DIALER SESSION ---
 
-  /**
-   * Get or create today's session row for this manager.
-   * "Today" is always in EST so the whole team shares the same date.
-   * One row per manager per day — if they switch campaign tabs,
-   * we update campaign_id on the existing row.
-   */
   public async getOrCreateTodaySession(
     campaignId: string,
     managerId: string
   ): Promise<DialerSession> {
     const today = getTodayEST();
 
-    // Try to find an existing row for this manager today
     const { data: existing, error: fetchError } = await supabase
       .from('dialer_sessions')
       .select('*')
@@ -402,7 +376,6 @@ class CampaignService {
     }
 
     if (existing) {
-      // If they've switched to a different campaign tab, update campaign_id
       if (existing.campaign_id !== campaignId) {
         const { data: updated, error: updateError } = await supabase
           .from('dialer_sessions')
@@ -418,7 +391,6 @@ class CampaignService {
       return this.mapDbToSession(existing);
     }
 
-    // No row yet — create a fresh one
     const { data: created, error: createError } = await supabase
       .from('dialer_sessions')
       .insert({
@@ -434,11 +406,6 @@ class CampaignService {
     return this.mapDbToSession(created);
   }
 
-  /**
-   * Write the full GamificationSession object into the session row.
-   * Called after every disposition so the state is always current in Supabase.
-   * Uses the row ID we got from getOrCreateTodaySession — no extra lookups.
-   */
   public async upsertGamificationState(
     sessionId: string,
     state: Record<string, any>
@@ -454,10 +421,7 @@ class CampaignService {
     if (error) throw new Error(error.message);
   }
 
-  /**
-   * @deprecated Use upsertGamificationState instead.
-   * Kept for any legacy callers — delegates to the new method.
-   */
+  /** @deprecated Use upsertGamificationState instead. */
   public async updateGamificationState(
     sessionId: string,
     state: Record<string, any>
@@ -465,18 +429,7 @@ class CampaignService {
     return this.upsertGamificationState(sessionId, state);
   }
 
-  // =============================================================================
-  // RESUME DATA
-  //
-  // Reads the most recent dialer_sessions row for this manager (any date) and
-  // extracts the _resumeTab and _resumePosition fields that dialerEngine embeds
-  // on every save. Returns null if no resume position exists.
-  //
-  // Why "most recent" instead of "today only"?
-  // Per the design: if it's a new day, we still restore the POSITION (same tab
-  // + booking ID) but let DialerPage handle gamification freshness by checking
-  // sessionDate against getTodayEST().
-  // =============================================================================
+  // --- RESUME DATA ---
 
   public async getResumeData(managerId: string): Promise<ResumeData | null> {
     try {
@@ -490,7 +443,6 @@ class CampaignService {
 
       if (error || !data) return null;
 
-      // Parse state if stored as a string
       let state = data.gamification_state as Record<string, any> | string | null;
       if (typeof state === 'string') {
         try { state = JSON.parse(state); } catch { return null; }
@@ -513,6 +465,70 @@ class CampaignService {
     } catch (err) {
       console.warn('getResumeData failed:', err);
       return null;
+    }
+  }
+
+  // --- LIFETIME BADGES ---
+
+  /**
+   * Merges newly earned badge IDs into campaign_managers.lifetime_badges.
+   * Stored as { "badge_id": count } — increments each count.
+   * Fire-and-forget safe: errors are swallowed so a Supabase hiccup never breaks dialing.
+   */
+  public async updateLifetimeBadges(
+    managerId: string,
+    badgeIds: string[]
+  ): Promise<void> {
+    if (!badgeIds || badgeIds.length === 0) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('campaign_managers')
+        .select('lifetime_badges')
+        .eq('id', managerId)
+        .maybeSingle();
+
+      if (error || !data) return;
+
+      const current: Record<string, number> =
+        (data.lifetime_badges && typeof data.lifetime_badges === 'object' && !Array.isArray(data.lifetime_badges))
+          ? (data.lifetime_badges as Record<string, number>)
+          : {};
+
+      for (const id of badgeIds) {
+        current[id] = (current[id] || 0) + 1;
+      }
+
+      await supabase
+        .from('campaign_managers')
+        .update({ lifetime_badges: current })
+        .eq('id', managerId);
+    } catch {
+      // Silent fail — non-critical
+    }
+  }
+
+  /**
+   * Fetches the lifetime_badges map for a manager.
+   * Returns { "badge_id": count } or empty object if none yet.
+   */
+  public async getLifetimeBadges(managerId: string): Promise<Record<string, number>> {
+    try {
+      const { data, error } = await supabase
+        .from('campaign_managers')
+        .select('lifetime_badges')
+        .eq('id', managerId)
+        .maybeSingle();
+
+      if (error || !data) return {};
+
+      const raw = data.lifetime_badges;
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        return raw as Record<string, number>;
+      }
+      return {};
+    } catch {
+      return {};
     }
   }
 
@@ -572,9 +588,6 @@ class CampaignService {
   }
 
   private mapDbToSession(data: any): DialerSession {
-    // gamification_state may come back from Supabase as a JSON string
-    // rather than a parsed object — parse it here so the engine always
-    // receives a plain object and the date check doesn't silently fail.
     let gamificationState = data.gamification_state || {};
     if (typeof gamificationState === 'string') {
       try {
