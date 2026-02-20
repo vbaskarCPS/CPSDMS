@@ -1,21 +1,10 @@
 // src/pages/Dialer/FireteamPanel.tsx
 //
-// Fireteam History Panel — scrollable log of team events.
-// Toggle between GLOBAL (all campaigns) and FIRETEAM (current campaign).
-//
-// CHANGES:
-// - Multiplier events now shown for ALL teammates (not just own)
-//   Received via Supabase realtime (is_multiplier=true rows) and historical fetch.
-// - Booking row format: Name +PTS | badges in WHITE | multiplier icons in GREEN
-// - Tooltip rendered via ReactDOM.createPortal to avoid scroll container clipping
-// - PortalTooltip now accepts `visible` prop so position is recalculated each time
-//   hover starts (fixes tooltip clipping at bottom of screen)
-// - liveMultiplierEvents prop still accepted for own activations (instant feedback
-//   before the DB round-trip completes)
-//
-// SUBSCRIPTION STRATEGY:
-// Uses createIsolatedChannel() — does NOT touch shared fireteamChannel/globalChannel
-// slots reserved for DialerPage HUD toast subscriptions.
+// CHANGES (this version):
+// - row.multipliers array now mapped into multiplierBreakdown so booking rows
+//   show active multiplier icons inline (GREEN) and tooltip shows ACTIVE MULTIPLIERS section
+// - Both fetchTodayEvents results and realtime channel INSERTs filtered to
+//   today's EST midnight so the panel resets daily
 //
 
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
@@ -35,7 +24,6 @@ export interface FireteamEvent {
   name: string;
   isOwn: boolean;
   eventType?: 'booking' | 'multiplier' | 'login';
-  // Booking fields
   isPrepay: boolean;
   points: number;
   base: number;
@@ -45,7 +33,6 @@ export interface FireteamEvent {
   badgeBonusTotal: number;
   newBadges: string[];
   price?: number;
-  // Multiplier activation fields
   multiplierId?: string;
   multiplierText?: string;
   multiplierColor?: string;
@@ -107,7 +94,6 @@ const MULT_ICONS_EMOJI: Record<string, string> = {
   indoctrinate: '🧠',
 };
 
-// Verb phrases for reconstructing multiplier text from just multiplierId + name
 const MULT_VERBS: Record<string, string> = {
   op_tempo:       'is On Fire',
   tracer_rounds:  'has Tracer Rounds',
@@ -126,7 +112,6 @@ const MULT_VERBS: Record<string, string> = {
 function buildMultiplierText(name: string, multiplierId: string, isOwn: boolean): string {
   const verb = MULT_VERBS[multiplierId] || `activated ${multiplierId.replace(/_/g, ' ')}`;
   if (!isOwn) return `${name} ${verb}`;
-  // Own: convert to second person
   const ownVerb = verb
     .replace(/^is a /, 'are a ')
     .replace(/^is /, 'are ')
@@ -160,8 +145,48 @@ function formatTime(ts: number): string {
   return `${h}:${m < 10 ? '0' + m : m}${ampm}`;
 }
 
+/**
+ * Midnight EST today as an ISO string.
+ * EST = UTC-5 (we use fixed -5 conservatively; EDT would be -4 but -5 is safe).
+ * 00:00 EST = 05:00 UTC.
+ */
+function getTodayMidnightISO(): string {
+  const now = new Date();
+  const estOffsetMs = 5 * 60 * 60 * 1000; // 5 hours in ms
+  const estNow = new Date(now.getTime() - estOffsetMs);
+  // Midnight EST = start of today in EST, then convert back to UTC
+  const midnight = new Date(Date.UTC(
+    estNow.getUTCFullYear(),
+    estNow.getUTCMonth(),
+    estNow.getUTCDate(),
+    5, 0, 0, 0  // 00:00 EST = 05:00 UTC
+  ));
+  return midnight.toISOString();
+}
+
+/**
+ * Build multiplierBreakdown from the raw DB `multipliers` column (string[]).
+ * Each ID maps to a count (usually 1, but handles duplicates).
+ * This populates the inline green icons on BookingRow and the ACTIVE MULTIPLIERS
+ * section in the tooltip.
+ */
+function buildMultiplierBreakdown(multipliers: string[] | null | undefined): Record<string, number> {
+  if (!multipliers || multipliers.length === 0) return {};
+  const breakdown: Record<string, number> = {};
+  for (const id of multipliers) {
+    breakdown[id] = (breakdown[id] ?? 0) + 1;
+  }
+  return breakdown;
+}
+
 function teamEventToFireteam(
-  evt: TeamBookingEvent & { managerId?: string; isLogin?: boolean; isMultiplier?: boolean; multiplierId?: string },
+  evt: TeamBookingEvent & {
+    managerId?: string;
+    isLogin?: boolean;
+    isMultiplier?: boolean;
+    multiplierId?: string;
+    multipliers?: string[];
+  },
   currentManagerId: string
 ): FireteamEvent {
   const isOwn = evt.managerId === currentManagerId;
@@ -190,12 +215,21 @@ function teamEventToFireteam(
     };
   }
 
+  // ── Booking event ──────────────────────────────────────────────────────────
+  // Map the multipliers array from the DB row into a breakdown record so
+  // BookingRow inline icons and tooltip both show which mults were active.
+  const multiplierBreakdown = buildMultiplierBreakdown(evt.multipliers);
+
   return {
     id: evt.id, timestamp: evt.timestamp, name: displayName, isOwn,
     eventType: 'booking',
     isPrepay: evt.isPrepay ?? false,
-    points: evt.points, base: evt.points, multiplier: 1,
-    multiplierBreakdown: {}, badgeBonuses: {}, badgeBonusTotal: 0,
+    points: evt.points,
+    base: evt.points,
+    multiplier: 1, // exact multiplier value not stored per-booking in DB row
+    multiplierBreakdown,
+    badgeBonuses: {},
+    badgeBonusTotal: 0,
     newBadges: evt.badges ?? [],
   };
 }
@@ -214,15 +248,8 @@ function multActivationToFireteam(evt: MultiplierActivationEvent): FireteamEvent
 }
 
 // =============================================================================
-// PORTAL TOOLTIP WRAPPER
-// Positions tooltip at a fixed screen position to avoid scroll container clipping.
-//
-// KEY FIX: accepts `visible` prop. The position useEffect re-runs whenever
-// `visible` flips true, so getBoundingClientRect() is fresh for every hover —
-// bottom-of-screen rows correctly pin the tooltip upward instead of clipping.
+// PORTAL TOOLTIP
 // =============================================================================
-
-const TOOLTIP_ESTIMATED_HEIGHT = 240;
 
 function PortalTooltip({ anchorRef, children, visible, forceUp = false }: {
   anchorRef: React.RefObject<HTMLDivElement | null>;
@@ -233,32 +260,22 @@ function PortalTooltip({ anchorRef, children, visible, forceUp = false }: {
   const [pos, setPos] = useState<{ top: number; left: number; transformY: string } | null>(null);
 
   useLayoutEffect(() => {
-    if (!visible || !anchorRef.current) {
-      setPos(null);
-      return;
-    }
+    if (!visible || !anchorRef.current) { setPos(null); return; }
     const rect = anchorRef.current.getBoundingClientRect();
-
-    const top        = forceUp ? rect.top        : rect.top + rect.height / 2;
-    const transformY = forceUp ? '-100%'         : '-50%';
-
+    const top        = forceUp ? rect.top              : rect.top + rect.height / 2;
+    const transformY = forceUp ? '-100%'               : '-50%';
     setPos({ top, left: rect.left - 8, transformY });
   }, [visible, forceUp, anchorRef]);
 
   if (!pos || !visible) return null;
 
   return ReactDOM.createPortal(
-    <div
-      style={{
-        position: 'fixed',
-        top: pos.top,
-        left: pos.left,
-        transform: `translate(-100%, ${pos.transformY})`,
-        zIndex: 9999,
-        pointerEvents: 'none',
-        animation: 'ft-tooltip-in 0.15s ease-out both',
-      }}
-    >
+    <div style={{
+      position: 'fixed', top: pos.top, left: pos.left,
+      transform: `translate(-100%, ${pos.transformY})`,
+      zIndex: 9999, pointerEvents: 'none',
+      animation: 'ft-tooltip-in 0.15s ease-out both',
+    }}>
       {children}
     </div>,
     document.body
@@ -266,7 +283,7 @@ function PortalTooltip({ anchorRef, children, visible, forceUp = false }: {
 }
 
 // =============================================================================
-// BOOKING TOOLTIP CONTENT
+// BOOKING TOOLTIP
 // =============================================================================
 
 function BookingTooltipContent({ event }: { event: FireteamEvent }) {
@@ -280,15 +297,17 @@ function BookingTooltipContent({ event }: { event: FireteamEvent }) {
       borderRadius: 8, padding: '10px 12px',
       boxShadow: `0 8px 32px rgba(0,0,0,0.85), 0 0 16px ${ac}10`,
       backdropFilter: 'blur(12px)', fontSize: 10, lineHeight: 1.5,
-      minWidth: 220, maxWidth: 260,
+      minWidth: 220, maxWidth: 280,
     }}>
-      {/* caret pointing right */}
+      {/* Caret */}
       <div style={{
         position: 'absolute', top: '50%', right: -6, transform: 'translateY(-50%)',
         width: 0, height: 0,
         borderTop: '6px solid transparent', borderBottom: '6px solid transparent',
         borderLeft: `6px solid ${ac}35`,
       }} />
+
+      {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid rgba(255,255,255,0.06)',
@@ -297,45 +316,47 @@ function BookingTooltipContent({ event }: { event: FireteamEvent }) {
           {event.isPrepay ? '💳 PREPAY' : '✓ PREBOOK'}
           {event.isPrepay && event.price ? ` $${event.price}` : ''}
         </span>
-        <span style={{ fontFamily: 'monospace', fontWeight: 900, color: '#fff', fontSize: 12 }}>
-          +{event.points}
-        </span>
+        <span style={{ fontFamily: 'monospace', fontWeight: 900, color: '#fff', fontSize: 12 }}>+{event.points}</span>
       </div>
 
-      <div style={{ marginBottom: multEntries.length > 0 || badgeEntries.length > 0 ? 6 : 0 }}>
+      {/* Score */}
+      <div style={{ marginBottom: multEntries.length > 0 || (event.newBadges || []).length > 0 ? 8 : 0 }}>
         <div style={{ color: '#555', fontSize: 9, marginBottom: 3, letterSpacing: '1px', fontWeight: 700 }}>SCORE</div>
         <div style={{ color: '#aaa', fontFamily: 'monospace', fontSize: 10 }}>
-          {event.multiplier > 1 ? (
-            <>
-              {event.base}
-              <span style={{ color: '#555', margin: '0 4px' }}>×</span>
-              <span style={{ color: ac }}>{event.multiplier}x</span>
-              {event.badgeBonusTotal > 0 && (
-                <><span style={{ color: '#555', margin: '0 4px' }}>+</span><span style={{ color: '#9b59b6' }}>{event.badgeBonusTotal} bonus</span></>
-              )}
-              <span style={{ color: '#555', margin: '0 4px' }}>=</span>
-              <span style={{ color: '#fff', fontWeight: 900 }}>{event.points}</span>
-            </>
-          ) : (
-            <span style={{ color: '#fff', fontWeight: 900 }}>+{event.points} pts</span>
-          )}
+          <span style={{ color: '#fff', fontWeight: 900 }}>+{event.points} pts</span>
         </div>
       </div>
 
+      {/* Active multipliers */}
       {multEntries.length > 0 && (
-        <div style={{ marginBottom: badgeEntries.length > 0 ? 6 : 0 }}>
-          <div style={{ color: '#555', fontSize: 9, marginBottom: 3, letterSpacing: '1px', fontWeight: 700 }}>MULTIPLIERS</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
-            {multEntries.map(([id, val]) => (
-              <span key={id} style={{ fontFamily: 'monospace', fontSize: 9, color: '#777' }}>
-                <span style={{ color: OR }}>+{val}x</span>{' '}
-                <span style={{ color: '#555' }}>{MULT_LABELS[id] || id}</span>
-              </span>
-            ))}
+        <div style={{ marginBottom: (event.newBadges || []).length > 0 ? 8 : 0 }}>
+          <div style={{ color: '#555', fontSize: 9, marginBottom: 4, letterSpacing: '1px', fontWeight: 700 }}>ACTIVE MULTIPLIERS</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {multEntries.map(([id]) => {
+              const icon = getMultiplierIcon(id, 14);
+              const color = MULT_COLORS[id] || CY;
+              const label = MULT_LABELS[id] || id.replace(/_/g, ' ');
+              return (
+                <div key={id} style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  background: `${color}08`, border: `1px solid ${color}18`,
+                  borderRadius: 4, padding: '3px 7px',
+                }}>
+                  <span style={{
+                    display: 'inline-flex', lineHeight: 1,
+                    filter: `drop-shadow(0 0 3px ${GREEN}80) sepia(1) saturate(4) hue-rotate(100deg)`,
+                  }}>
+                    {icon || <span style={{ filter: 'none', fontSize: 11 }}>{MULT_ICONS_EMOJI[id] || '⚡'}</span>}
+                  </span>
+                  <span style={{ fontSize: 9, fontWeight: 700, color, letterSpacing: '0.5px' }}>{label}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
+      {/* Badges earned */}
       {(event.newBadges || []).length > 0 && (
         <div>
           <div style={{ color: '#555', fontSize: 9, marginBottom: 4, letterSpacing: '1px', fontWeight: 700 }}>BADGES EARNED</div>
@@ -364,7 +385,7 @@ function BookingTooltipContent({ event }: { event: FireteamEvent }) {
 }
 
 // =============================================================================
-// MULTIPLIER TOOLTIP CONTENT
+// MULTIPLIER TOOLTIP
 // =============================================================================
 
 function MultiplierTooltipContent({ event }: { event: FireteamEvent }) {
@@ -374,10 +395,8 @@ function MultiplierTooltipContent({ event }: { event: FireteamEvent }) {
       background: 'rgba(0,8,14,0.97)', border: `1px solid ${color}30`,
       borderRadius: 8, padding: '10px 14px',
       boxShadow: `0 8px 32px rgba(0,0,0,0.85), 0 0 12px ${color}12`,
-      backdropFilter: 'blur(12px)', fontSize: 10,
-      minWidth: 160,
+      backdropFilter: 'blur(12px)', fontSize: 10, minWidth: 160,
     }}>
-      {/* caret pointing right */}
       <div style={{
         position: 'absolute', top: '50%', right: -6, transform: 'translateY(-50%)',
         width: 0, height: 0,
@@ -390,9 +409,7 @@ function MultiplierTooltipContent({ event }: { event: FireteamEvent }) {
           <div style={{ fontWeight: 900, fontSize: 11, color, letterSpacing: '1px', fontFamily: 'monospace' }}>
             {MULT_LABELS[event.multiplierId || ''] || event.multiplierId || 'Multiplier'}
           </div>
-          <div style={{ color: '#555', fontSize: 9, marginTop: 2, letterSpacing: '0.5px' }}>
-            {event.multiplierText || 'ACTIVATED'}
-          </div>
+          <div style={{ color: '#555', fontSize: 9, marginTop: 2 }}>{event.multiplierText || 'ACTIVATED'}</div>
         </div>
       </div>
     </div>
@@ -401,7 +418,6 @@ function MultiplierTooltipContent({ event }: { event: FireteamEvent }) {
 
 // =============================================================================
 // BOOKING ROW
-// Format: [bar] [time] [Name] [+PTS] [badge icons WHITE] [mult icons GREEN]
 // =============================================================================
 
 function BookingRow({ event, index, totalCount }: { event: FireteamEvent; index: number; totalCount: number }) {
@@ -410,8 +426,6 @@ function BookingRow({ event, index, totalCount }: { event: FireteamEvent; index:
   const color = event.isPrepay ? OR : CY;
   const visibleBadges = (event.newBadges || []).slice(0, 3);
   const extraBadges = (event.newBadges || []).length - 3;
-
-  // Multiplier icons from the event's multiplierBreakdown keys
   const multIds = Object.keys(event.multiplierBreakdown || {});
 
   return (
@@ -433,9 +447,7 @@ function BookingRow({ event, index, totalCount }: { event: FireteamEvent; index:
         <BookingTooltipContent event={event} />
       </PortalTooltip>
 
-      {event.isOwn && (
-        <div style={{ width: 2, height: 14, borderRadius: 1, background: color, flexShrink: 0, opacity: 0.6 }} />
-      )}
+      {event.isOwn && <div style={{ width: 2, height: 14, borderRadius: 1, background: color, flexShrink: 0, opacity: 0.6 }} />}
 
       <span style={{ fontFamily: 'monospace', fontSize: 9, color: '#444', flexShrink: 0, minWidth: 34 }}>
         {formatTime(event.timestamp)}
@@ -449,7 +461,6 @@ function BookingRow({ event, index, totalCount }: { event: FireteamEvent; index:
         {event.name}
       </span>
 
-      {/* Points */}
       <span style={{
         fontFamily: 'monospace', fontWeight: 900, fontSize: 11, color, flexShrink: 0,
         textShadow: hovered ? `0 0 8px ${color}60` : 'none', transition: 'text-shadow 0.15s',
@@ -464,42 +475,33 @@ function BookingRow({ event, index, totalCount }: { event: FireteamEvent; index:
             const icon = getBadgeIcon(id, 13);
             if (!icon) return null;
             return (
-              <span
-                key={id}
-                style={{
-                  display: 'inline-flex', lineHeight: 1,
-                  filter: 'brightness(0) invert(1)',
-                  opacity: 0.9,
-                }}
-              >
+              <span key={id} style={{ display: 'inline-flex', lineHeight: 1, filter: 'brightness(0) invert(1)', opacity: 0.9 }}>
                 {icon}
               </span>
             );
           })}
-          {extraBadges > 0 && (
-            <span style={{ fontSize: 8, color: '#555', fontWeight: 700, marginLeft: 1 }}>+{extraBadges}</span>
-          )}
+          {extraBadges > 0 && <span style={{ fontSize: 8, color: '#555', fontWeight: 700, marginLeft: 1 }}>+{extraBadges}</span>}
         </div>
       )}
 
       {/* Multiplier icons — GREEN */}
       {multIds.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
-          {multIds.slice(0, 3).map(id => {
+          {multIds.slice(0, 4).map(id => {
             const icon = getMultiplierIcon(id, 13);
             if (!icon) return null;
             return (
-              <span
-                key={id}
-                style={{
-                  display: 'inline-flex', lineHeight: 1,
-                  filter: `drop-shadow(0 0 3px ${GREEN}80) sepia(1) saturate(4) hue-rotate(100deg)`,
-                }}
-              >
+              <span key={id} style={{
+                display: 'inline-flex', lineHeight: 1,
+                filter: `drop-shadow(0 0 3px ${GREEN}80) sepia(1) saturate(4) hue-rotate(100deg)`,
+              }}>
                 {icon}
               </span>
             );
           })}
+          {multIds.length > 4 && (
+            <span style={{ fontSize: 8, color: '#3a6a3a', fontWeight: 700, marginLeft: 1 }}>+{multIds.length - 4}</span>
+          )}
         </div>
       )}
     </div>
@@ -508,8 +510,6 @@ function BookingRow({ event, index, totalCount }: { event: FireteamEvent; index:
 
 // =============================================================================
 // MULTIPLIER ROW
-// Shows for ALL teammates, not just own.
-// Full text: "Justice N is in a Ghost Town"
 // =============================================================================
 
 function MultiplierRow({ event, index, totalCount }: { event: FireteamEvent; index: number; totalCount: number }) {
@@ -528,8 +528,7 @@ function MultiplierRow({ event, index, totalCount }: { event: FireteamEvent; ind
         border: `1px solid ${hovered ? `${color}18` : 'transparent'}`,
         cursor: 'default', transition: 'background 0.15s, border-color 0.15s',
         animation: `ft-row-in 0.25s ease-out ${Math.min(index * 0.03, 0.3)}s both`,
-        minWidth: 0, overflow: 'visible',
-        opacity: hovered ? 1 : 0.75,
+        minWidth: 0, overflow: 'visible', opacity: hovered ? 1 : 0.75,
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -544,10 +543,8 @@ function MultiplierRow({ event, index, totalCount }: { event: FireteamEvent; ind
         {formatTime(event.timestamp)}
       </span>
 
-      {/* Full text: "Justice N is in a Ghost Town" */}
       <span style={{
-        fontSize: 10,
-        color: event.isOwn ? '#7a9ea8' : '#666',
+        fontSize: 10, color: event.isOwn ? '#7a9ea8' : '#666',
         fontWeight: event.isOwn ? 600 : 400,
         flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         fontStyle: 'italic',
@@ -555,7 +552,6 @@ function MultiplierRow({ event, index, totalCount }: { event: FireteamEvent; ind
         {event.multiplierText || `${event.name} activated multiplier`}
       </span>
 
-      {/* Multiplier icon — green tint */}
       <span style={{
         display: 'inline-flex', lineHeight: 1, flexShrink: 0,
         filter: `drop-shadow(0 0 4px ${GREEN}80) sepia(1) saturate(4) hue-rotate(100deg)`,
@@ -621,10 +617,6 @@ export default function FireteamPanel({
   const globalUnsubRef = useRef<(() => void) | null>(null);
   const fireteamUnsubRef = useRef<(() => void) | null>(null);
 
-  // Track live multiplier event IDs already inserted so we don't double-render
-  // when the Supabase INSERT echoes back the same event we published.
-  const liveMultIdSetRef = useRef<Set<string>>(new Set());
-
   const upsertEvents = useCallback((
     setter: React.Dispatch<React.SetStateAction<Map<string, FireteamEvent>>>,
     incoming: FireteamEvent[]
@@ -640,6 +632,10 @@ export default function FireteamPanel({
     if (!campaignId || !managerId) return;
     let cancelled = false;
 
+    // Compute today's midnight EST once per mount — panel resets if remounted after midnight
+    const todayMidnightISO = getTodayMidnightISO();
+    const todayMidnightMs  = new Date(todayMidnightISO).getTime();
+
     const setup = async () => {
       setLoading(true);
 
@@ -651,40 +647,37 @@ export default function FireteamPanel({
       if (cancelled) return;
 
       const toFE = (evt: any) => teamEventToFireteam(evt, managerId);
-      upsertEvents(setGlobalEvents, globalRaw.map(toFE));
-      upsertEvents(setFireteamEvents, fireteamRaw.map(toFE));
+      // Filter to today only in case the service returns multi-day data
+      const isToday = (fe: FireteamEvent) => fe.timestamp >= todayMidnightMs;
+
+      upsertEvents(setGlobalEvents,   globalRaw.map(toFE).filter(isToday));
+      upsertEvents(setFireteamEvents, fireteamRaw.map(toFE).filter(isToday));
       setLoading(false);
 
-      // ── GLOBAL channel: all campaigns, all event types ────────────────────
+      // ── GLOBAL realtime channel ───────────────────────────────────────────
       globalUnsubRef.current = dialerRealtimeService.createIsolatedChannel(
         `ft_panel_global_${campaignId}_${managerId}`,
         { event: 'INSERT', schema: 'public', table: 'dialer_team_events' },
         (row) => {
-          // Accept bookings, logins, and multiplier events
           if (!row.is_booking && !row.is_login && !row.is_multiplier) return;
-
-          // Dedupe: if this is a multiplier event from ourselves, it's already
-          // in the panel via liveMultiplierEvents; skip to avoid double entry.
           if (row.is_multiplier && row.manager_id === managerId) return;
+          // Drop rows from yesterday (shouldn't happen but guards against timezone edge cases)
+          if (new Date(row.created_at).getTime() < todayMidnightMs) return;
 
           const evt = {
-            id:           row.id,
-            name:         row.manager_name,
-            points:       row.points,
-            badges:       row.badges || [],
-            multipliers:  row.multipliers || [],
-            isPrepay:     row.is_prepay || false,
-            isLogin:      row.is_login || false,
+            id: row.id, name: row.manager_name, points: row.points,
+            badges: row.badges || [], multipliers: row.multipliers || [],
+            isPrepay: row.is_prepay || false, isLogin: row.is_login || false,
             isMultiplier: row.is_multiplier || false,
             multiplierId: row.multiplier_id || undefined,
-            timestamp:    new Date(row.created_at).getTime(),
-            managerId:    row.manager_id,
+            timestamp: new Date(row.created_at).getTime(),
+            managerId: row.manager_id,
           };
           upsertEvents(setGlobalEvents, [teamEventToFireteam(evt, managerId)]);
         }
       );
 
-      // ── FIRETEAM channel: current campaign only ───────────────────────────
+      // ── FIRETEAM realtime channel ─────────────────────────────────────────
       fireteamUnsubRef.current = dialerRealtimeService.createIsolatedChannel(
         `ft_panel_fireteam_${campaignId}_${managerId}`,
         {
@@ -692,27 +685,19 @@ export default function FireteamPanel({
           filter: `campaign_id=eq.${campaignId}`,
         },
         (row) => {
-          // Show bookings from others + multiplier events from everyone (incl own but own is deduped below)
           if (!row.is_booking && !row.is_multiplier) return;
-
-          // For bookings: skip own
-          if (row.is_booking && row.manager_id === managerId) return;
-
-          // For multiplier events from ourselves: skip (already in panel via liveMultiplierEvents)
+          if (row.is_booking   && row.manager_id === managerId) return;
           if (row.is_multiplier && row.manager_id === managerId) return;
+          if (new Date(row.created_at).getTime() < todayMidnightMs) return;
 
           const evt = {
-            id:           row.id,
-            name:         row.manager_name,
-            points:       row.points,
-            badges:       row.badges || [],
-            multipliers:  row.multipliers || [],
-            isPrepay:     row.is_prepay || false,
-            isLogin:      false,
+            id: row.id, name: row.manager_name, points: row.points,
+            badges: row.badges || [], multipliers: row.multipliers || [],
+            isPrepay: row.is_prepay || false, isLogin: false,
             isMultiplier: row.is_multiplier || false,
             multiplierId: row.multiplier_id || undefined,
-            timestamp:    new Date(row.created_at).getTime(),
-            managerId:    row.manager_id,
+            timestamp: new Date(row.created_at).getTime(),
+            managerId: row.manager_id,
           };
           upsertEvents(setFireteamEvents, [teamEventToFireteam(evt, managerId)]);
         }
@@ -747,19 +732,14 @@ export default function FireteamPanel({
   const buildDisplayEvents = (): FireteamEvent[] => {
     const bookingMap = activeTab === 'global' ? globalEvents : fireteamEvents;
     const bookings = Array.from(bookingMap.values());
-
     const filtered = activeTab === 'fireteam'
       ? bookings.filter(e => e.eventType !== 'login')
       : bookings;
 
-    // liveMultiplierEvents = own activations shown instantly (before DB round-trip)
     const liveMultFEs = liveMultiplierEvents.map(multActivationToFireteam);
-
-    // Merge: live events go in keyed by their id; DB channel skips own multipliers
     const allEvents = new Map<string, FireteamEvent>();
     for (const e of filtered) allEvents.set(e.id, e);
     for (const e of liveMultFEs) allEvents.set(e.id, e);
-
     return Array.from(allEvents.values()).sort((a, b) => a.timestamp - b.timestamp);
   };
 
@@ -770,7 +750,6 @@ export default function FireteamPanel({
       <style>{PANEL_STYLES}</style>
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'visible' }}>
 
-        {/* Tab header */}
         <div style={{
           display: 'flex', alignItems: 'center',
           padding: '3px 8px 0', flexShrink: 0,
@@ -796,7 +775,6 @@ export default function FireteamPanel({
               </span>
             </button>
           ))}
-
           {displayEvents.length > 0 && (
             <span style={{ fontSize: 8, color: '#2a3a3a', fontFamily: 'monospace', paddingLeft: 6, flexShrink: 0 }}>
               {displayEvents.length}
