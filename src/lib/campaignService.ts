@@ -12,7 +12,7 @@ export interface SniperConfig {
   years: number[];        // Target years to include (default [2025])
   ppOnly: boolean;        // Only show groups with prepaid rows
   minEntries: number;     // Minimum rows per group (default 1)
-  linkShot: boolean;      // Only show groups on streets that have AER
+  linkShot: boolean;      // Only show streets that have AER
   hideCTS: boolean;       // Hide groups with CTS disposition (default true)
   maxNA: number;          // BLACKLIST: skip groups where max NA >= this value (0 = OFF)
 }
@@ -381,7 +381,7 @@ class CampaignService {
    * Get or create today's session row for this manager.
    * "Today" is always in EST so the whole team shares the same date.
    * One row per manager per day — if they switch campaign tabs,
-   * we update campaign_id on the existing row (Option A).
+   * we update campaign_id on the existing row.
    */
   public async getOrCreateTodaySession(
     campaignId: string,
@@ -469,7 +469,7 @@ class CampaignService {
   // RESUME DATA
   //
   // Reads the most recent dialer_sessions row for this manager (any date) and
-  // extracts the _resumeTab and _resumeBookingId fields that dialerEngine embeds
+  // extracts the _resumeTab and _resumePosition fields that dialerEngine embeds
   // on every save. Returns null if no resume position exists.
   //
   // Why "most recent" instead of "today only"?
@@ -480,7 +480,6 @@ class CampaignService {
 
   public async getResumeData(managerId: string): Promise<ResumeData | null> {
     try {
-      // Fetch the single most recent session row for this manager
       const { data, error } = await supabase
         .from('dialer_sessions')
         .select('id, session_date, gamification_state, updated_at')
@@ -491,13 +490,16 @@ class CampaignService {
 
       if (error || !data) return null;
 
-      const state = data.gamification_state as Record<string, any> | null;
-      if (!state) return null;
+      // Parse state if stored as a string
+      let state = data.gamification_state as Record<string, any> | string | null;
+      if (typeof state === 'string') {
+        try { state = JSON.parse(state); } catch { return null; }
+      }
+      if (!state || typeof state !== 'object') return null;
 
-      const tab = state._resumeTab as string | undefined;
-      const position = (state._resumePosition || state._resumeBookingId) as string | undefined;
+      const tab = (state as any)._resumeTab as string | undefined;
+      const position = ((state as any)._resumePosition || (state as any)._resumeBookingId) as string | undefined;
 
-      // Both fields must be present and non-empty to offer a resume
       if (!tab || !position) return null;
 
       return {
@@ -505,11 +507,10 @@ class CampaignService {
         position,
         sessionDate: data.session_date,
         sessionId: data.id,
-        gamificationState: state,
+        gamificationState: state as Record<string, any>,
         lastUpdatedAt: data.updated_at ?? null,
       };
     } catch (err) {
-      // Non-critical — if this fails the rep just doesn't see the resume banner
       console.warn('getResumeData failed:', err);
       return null;
     }
@@ -571,12 +572,24 @@ class CampaignService {
   }
 
   private mapDbToSession(data: any): DialerSession {
+    // gamification_state may come back from Supabase as a JSON string
+    // rather than a parsed object — parse it here so the engine always
+    // receives a plain object and the date check doesn't silently fail.
+    let gamificationState = data.gamification_state || {};
+    if (typeof gamificationState === 'string') {
+      try {
+        gamificationState = JSON.parse(gamificationState);
+      } catch {
+        gamificationState = {};
+      }
+    }
+
     return {
       id: data.id,
       campaignId: data.campaign_id,
       managerId: data.manager_id,
       sessionDate: data.session_date,
-      gamificationState: data.gamification_state || {},
+      gamificationState,
       createdAt: data.created_at,
       updatedAt: data.updated_at,
     };
