@@ -202,64 +202,67 @@ function ResumeBanner({
         padding: '10px 14px',
         animation: 'cs-resume-enter 0.4s ease-out both, cs-resume-pulse 3s ease-in-out 0.5s infinite',
         position: 'relative',
-        overflow: 'hidden',
       }}
     >
+      {/* Shimmer in its own clipped wrapper so it doesn't affect layout */}
       <div style={{
-        position: 'absolute',
-        top: 0, bottom: 0, width: '40%',
-        background: 'linear-gradient(90deg, transparent, rgba(245,166,35,0.05), transparent)',
-        animation: 'cs-resume-sweep 4s ease-in-out infinite',
-        pointerEvents: 'none',
-      }} />
+        position: 'absolute', inset: 0, borderRadius: 8, overflow: 'hidden', pointerEvents: 'none',
+      }}>
+        <div style={{
+          position: 'absolute',
+          top: 0, bottom: 0, width: '40%',
+          background: 'linear-gradient(90deg, transparent, rgba(245,166,35,0.05), transparent)',
+          animation: 'cs-resume-sweep 4s ease-in-out infinite',
+        }} />
+      </div>
 
-      <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ flexShrink: 0 }}>
-          <div style={{ fontSize: 18, lineHeight: 1, marginBottom: 2 }}>📡</div>
-        </div>
-
-        <div style={{ flex: 1, minWidth: 160 }}>
-          <div style={{
-            fontSize: 8, fontWeight: 800, letterSpacing: '3px',
-            color: '#f5a623', opacity: 0.7, textTransform: 'uppercase',
-            marginBottom: 3,
-          }}>
-            LAST OPERATION DETECTED
+      <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {/* Top row: icon + text */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ flexShrink: 0 }}>
+            <div style={{ fontSize: 18, lineHeight: 1 }}>📡</div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, fontWeight: 900, color: '#fff', letterSpacing: '0.5px' }}>
-              {resumeData.tab}
-            </span>
-            <span style={{
-              fontSize: 8, fontWeight: 700, color: '#f5a623',
-              background: 'rgba(245,166,35,0.12)',
-              border: '1px solid rgba(245,166,35,0.25)',
-              borderRadius: 3, padding: '1px 6px', letterSpacing: '1px',
-              textTransform: 'uppercase',
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontSize: 8, fontWeight: 800, letterSpacing: '3px',
+              color: '#f5a623', opacity: 0.7, textTransform: 'uppercase',
+              marginBottom: 3,
             }}>
-              {isToday ? '🟢 TODAY' : '🟡 PREV SESSION'}
-            </span>
-            {lastSeen && (
-              <span style={{ fontSize: 9, color: '#666', fontWeight: 600 }}>{lastSeen}</span>
-            )}
-          </div>
-          <div style={{ fontSize: 9, color: '#555', marginTop: 2, fontFamily: 'monospace' }}>
-            Position: {resumeData.position.startsWith('ROW:') ? `Row ${resumeData.position.slice(4)}` : resumeData.position}
-            {!isToday && (
-              <span style={{ color: '#444', marginLeft: 8 }}>· Gamification resets (new day)</span>
-            )}
+              LAST OPERATION DETECTED
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, fontWeight: 900, color: '#fff', letterSpacing: '0.5px' }}>
+                {resumeData.tab}
+              </span>
+              <span style={{
+                fontSize: 8, fontWeight: 700, color: '#f5a623',
+                background: 'rgba(245,166,35,0.12)',
+                border: '1px solid rgba(245,166,35,0.25)',
+                borderRadius: 3, padding: '1px 6px', letterSpacing: '1px',
+                textTransform: 'uppercase',
+              }}>
+                {isToday ? '🟢 TODAY' : '🟡 PREV SESSION'}
+              </span>
+              {lastSeen && (
+                <span style={{ fontSize: 9, color: '#666', fontWeight: 600 }}>{lastSeen}</span>
+              )}
+            </div>
+            <div style={{ fontSize: 9, color: '#555', marginTop: 2, fontFamily: 'monospace' }}>
+              Position: {resumeData.position.startsWith('ROW:') ? `Row ${resumeData.position.slice(4)}` : resumeData.position}
+              {!isToday && (
+                <span style={{ color: '#444', marginLeft: 8 }}>· Gamification resets (new day)</span>
+              )}
+            </div>
           </div>
         </div>
 
+        {/* Bottom row: full-width resume button */}
         <button
           onClick={onResume}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           style={{
-            flexShrink: 0,
-            flexGrow: 1,
-            minWidth: 120,
-            maxWidth: 180,
+            width: '100%',
             padding: '10px 16px',
             borderRadius: 6,
             border: `1.5px solid ${hovered ? '#f5a623' : 'rgba(245,166,35,0.5)'}`,
@@ -272,11 +275,10 @@ function ResumeBanner({
             textTransform: 'uppercase',
             cursor: 'pointer',
             transition: 'all 0.15s ease',
-            whiteSpace: 'nowrap',
             textAlign: 'center',
           }}
         >
-          ⚡ RESUME
+          ⚡ RESUME OPERATION
         </button>
       </div>
     </div>
