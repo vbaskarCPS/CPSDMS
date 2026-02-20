@@ -457,19 +457,27 @@ export function applyOrdering(
  *   Returns null when no such group exists (engine handles wrap).
  *
  * siege:
- *   Returns the first group in the tier-sorted list with firstRow >= afterRow.
- *   Returns null when exhausted (mission complete — no wrap for Siege).
+ *   Returns the group at position afterIndex in the tier-sorted list.
+ *   afterIndex is a list index (not a row number) — this is the fix for the
+ *   bug where row-based lookup would skip earlier tiers after dispositioning
+ *   a group at a high row number.
+ *   Returns null when afterIndex >= list length (mission complete — no wrap).
  */
 export function findNextGroup(
   ordered: ClientGroup[],
   afterRow: number,
-  direction: Direction
+  direction: Direction,
+  siegeIndex?: number
 ): ClientGroup | null {
   if (ordered.length === 0) return null;
 
-  // All three modes: find first group at or after afterRow in the ordered list.
-  // For siege the list is tier-sorted, so this naturally walks blanks → 1s → 2s.
-  // For ambush/infiltrate the list is firstRow-sorted; engine wraps when null.
+  if (direction === 'siege') {
+    // Use list index for Siege — never skip tiers due to row position
+    const idx = siegeIndex ?? 0;
+    return idx < ordered.length ? ordered[idx] : null;
+  }
+
+  // ambush / infiltrate: find first group at or after afterRow in row-sorted list
   for (const g of ordered) {
     if (g.firstRow >= afterRow) return g;
   }
@@ -478,8 +486,27 @@ export function findNextGroup(
 }
 
 /**
+ * For Siege resume: given a sheet row number, find the closest matching
+ * list index in the tier-sorted ordered array. Used to restore position
+ * after a session resume.
+ *
+ * Returns 0 if not found (safe fallback — restart from top of tier list).
+ */
+export function findSiegeIndexByRow(
+  ordered: ClientGroup[],
+  afterRow: number
+): number {
+  for (let i = 0; i < ordered.length; i++) {
+    if (ordered[i].firstRow >= afterRow) return i;
+  }
+  return 0;
+}
+
+/**
  * Calculate the afterRow value for advancing to the next group after disposition.
  * All three modes advance forward (downward in the sheet).
+ * For Siege the engine uses the index directly, but afterRow is still stored
+ * for resume purposes and used by ambush/infiltrate.
  */
 export function nextAfterRow(groupSheetRows: number[], direction: Direction): number {
   if (!groupSheetRows || groupSheetRows.length === 0) return 2;

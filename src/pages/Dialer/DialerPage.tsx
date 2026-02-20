@@ -271,7 +271,7 @@ export default function DialerPage() {
   const { badgeToasts, pointToasts, queueBadgeToast, showPointToast } = useToasts();
 
   // =======================================================================
-  // AUTH CHECK
+  // AUTH CHECK + LOAD USER PREFERENCES
   // =======================================================================
 
   useEffect(() => {
@@ -283,9 +283,16 @@ export default function DialerPage() {
     }
     setManager(mgr);
     setCampaign(cmp);
-    if (cmp.sniperConfig) {
-      setSniperConfig(cmp.sniperConfig);
-    }
+
+    // Load user preferences from Supabase (sniper config + last direction).
+    // User prefs take priority over campaign-level sniper config.
+    campaignService.getUserPreferences(mgr.id).then((prefs) => {
+      setSniperConfig(prefs.sniperConfig);
+      setDirection(prefs.lastDirection);
+    }).catch(() => {
+      // Fallback to campaign-level sniper config if prefs load fails
+      if (cmp.sniperConfig) setSniperConfig(cmp.sniperConfig);
+    });
   }, [navigate]);
 
   // =======================================================================
@@ -477,7 +484,7 @@ export default function DialerPage() {
   const handleCampaignDeploy = async (tabId: string) => {
     setDeployingTab(tabId);
     setSelectedTab(tabId);
-    setDirection('ambush');
+    // direction is NOT reset here — it stays as the last saved user preference
     setStartBookingId('');
     setDeployError('');
     setShowDeployConfig(true);
@@ -502,6 +509,11 @@ export default function DialerPage() {
     setShowDeployConfig(false);
     setLoading(true);
     setLogMessage('Acquiring target...');
+
+    // Save the chosen direction to user preferences (fire-and-forget)
+    if (manager?.id) {
+      campaignService.saveUserPreferences(manager.id, { lastDirection: direction }).catch(() => {});
+    }
 
     const config: EngineConfig = {
       spreadsheetId: campaign.spreadsheetId,
@@ -633,7 +645,12 @@ export default function DialerPage() {
     setSniperConfig(config);
     if (configRef.current) configRef.current.sniperConfig = config;
     invalidateCache();
-  }, []);
+
+    // Persist to user preferences (fire-and-forget)
+    if (manager?.id) {
+      campaignService.saveUserPreferences(manager.id, { sniperConfig: config }).catch(() => {});
+    }
+  }, [manager?.id]);
 
   // =======================================================================
   // PREFILL YES FORM

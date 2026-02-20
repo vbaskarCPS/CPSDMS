@@ -26,6 +26,20 @@ export const DEFAULT_SNIPER_CONFIG: SniperConfig = {
   maxNA: 0,
 };
 
+// --- USER PREFERENCES ---
+
+export type Direction = 'ambush' | 'infiltrate' | 'siege';
+
+export interface UserPreferences {
+  sniperConfig: SniperConfig;
+  lastDirection: Direction;
+}
+
+export const DEFAULT_USER_PREFERENCES: UserPreferences = {
+  sniperConfig: { ...DEFAULT_SNIPER_CONFIG },
+  lastDirection: 'ambush',
+};
+
 export interface Campaign {
   id: string;
   displayName: string;
@@ -44,6 +58,7 @@ export interface CampaignManager {
   repCode: string;
   password: string;
   createdAt?: string;
+  userPreferences?: UserPreferences;
 }
 
 export interface DialerSession {
@@ -532,6 +547,70 @@ class CampaignService {
     }
   }
 
+  // --- USER PREFERENCES ---
+
+  /**
+   * Loads user_preferences JSONB from campaign_managers for this manager.
+   * Returns DEFAULT_USER_PREFERENCES if none saved yet.
+   * Silent fail — never breaks the UI.
+   */
+  public async getUserPreferences(managerId: string): Promise<UserPreferences> {
+    try {
+      const { data, error } = await supabase
+        .from('campaign_managers')
+        .select('user_preferences')
+        .eq('id', managerId)
+        .maybeSingle();
+
+      if (error || !data) return { ...DEFAULT_USER_PREFERENCES };
+
+      const raw = data.user_preferences;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return { ...DEFAULT_USER_PREFERENCES };
+      }
+
+      const prefs = raw as Record<string, any>;
+
+      // Safely reconstruct SniperConfig with fallbacks
+      const sc = prefs.sniperConfig;
+      const sniperConfig: SniperConfig = sc && typeof sc === 'object' ? {
+        years: Array.isArray(sc.years) && sc.years.length > 0 ? sc.years : [2025],
+        ppOnly: typeof sc.ppOnly === 'boolean' ? sc.ppOnly : false,
+        minEntries: typeof sc.minEntries === 'number' && sc.minEntries >= 1 ? sc.minEntries : 1,
+        linkShot: typeof sc.linkShot === 'boolean' ? sc.linkShot : false,
+        hideCTS: typeof sc.hideCTS === 'boolean' ? sc.hideCTS : true,
+        maxNA: typeof sc.maxNA === 'number' ? sc.maxNA : 0,
+      } : { ...DEFAULT_SNIPER_CONFIG };
+
+      const validDirections = ['ambush', 'infiltrate', 'siege'];
+      const lastDirection: Direction = validDirections.includes(prefs.lastDirection)
+        ? prefs.lastDirection as Direction
+        : 'ambush';
+
+      return { sniperConfig, lastDirection };
+    } catch {
+      return { ...DEFAULT_USER_PREFERENCES };
+    }
+  }
+
+  /**
+   * Saves user_preferences JSONB to campaign_managers for this manager.
+   * Fire-and-forget safe — errors are swallowed.
+   */
+  public async saveUserPreferences(
+    managerId: string,
+    prefs: UserPreferences
+  ): Promise<void> {
+    try {
+      await supabase
+        .from('campaign_managers')
+        .update({ user_preferences: prefs })
+        .eq('id', managerId);
+    } catch {
+      // Silent fail — non-critical
+    }
+  }
+
   // --- VALIDATION ---
 
   public async isRepCodeAvailable(repCode: string, excludeCampaignId?: string): Promise<boolean> {
@@ -584,6 +663,7 @@ class CampaignService {
       repCode: data.rep_code,
       password: data.password,
       createdAt: data.created_at,
+      userPreferences: undefined, // loaded on-demand via getUserPreferences()
     };
   }
 

@@ -27,6 +27,7 @@ import {
   filterAvailable,
   applyOrdering,
   findNextGroup,
+  findSiegeIndexByRow,
   findInfiltrateStart,
   nextAfterRow,
   Direction,
@@ -116,6 +117,8 @@ interface CachedSheetData {
   infiltrateWindowStart: number;
   // Ambush: the firstRow we started from — used to detect full loop completion
   ambushStartRow: number;
+  // Siege: current position in the tier-sorted list (list index, not row number)
+  siegeIndex: number;
 }
 
 let cachedSheet: CachedSheetData | null = null;
@@ -207,6 +210,7 @@ async function loadSheetData(
     timestamp: Date.now(),
     infiltrateWindowStart: 0,
     ambushStartRow: 0,
+    siegeIndex: 0,
   };
 
   return cachedSheet;
@@ -381,13 +385,27 @@ export async function initialize(config: EngineConfig): Promise<EngineSnapshot |
   }
 
   // ── SIEGE ────────────────────────────────────────────────────────────────────
-  // Tier-sorted. Start from afterRow = config.startRow (typically 2 = top).
+  // Tier-sorted. Always start from index 0 on fresh deploy.
+  // Resume is handled by DialerPage passing startRow from _resumePosition,
+  // but for Siege we always start fresh at 0 (index-based, not row-based).
   {
+    sheet.siegeIndex = 0;
+
     const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
-    const group = findNextGroup(ordered, config.startRow, config.direction);
+    const group = findNextGroup(ordered, config.startRow, config.direction, 0);
     if (!group) return null;
 
     const session = await loadOrCreateSession(config);
+
+    // If this is a resume (session has _siegeIndex saved), restore it
+    const storedIndex = (session as any)._siegeIndex;
+    if (typeof storedIndex === 'number' && storedIndex > 0 && storedIndex < ordered.length) {
+      sheet.siegeIndex = storedIndex;
+      const resumedGroup = ordered[storedIndex];
+      if (!resumedGroup) return null;
+      return buildSnapshot(sheet, resumedGroup, config, session);
+    }
+
     return buildSnapshot(sheet, group, config, session);
   }
 }
@@ -442,7 +460,15 @@ export async function getNextState(
   const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
 
   const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
-  let group = findNextGroup(ordered, afterRow, config.direction);
+  let group: ClientGroup | null = null;
+
+  if (config.direction === 'siege') {
+    // Advance the siege index by one and look up by index
+    sheet.siegeIndex = sheet.siegeIndex + 1;
+    group = findNextGroup(ordered, afterRow, config.direction, sheet.siegeIndex);
+  } else {
+    group = findNextGroup(ordered, afterRow, config.direction);
+  }
 
   // ── WRAP LOGIC ─────────────────────────────────────────────────────────────
 
@@ -557,7 +583,15 @@ function getPrefetchState(
 ): DialerState | null {
   const afterRow = nextAfterRow(currentState.rows, direction);
   const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, direction);
-  const group = findNextGroup(ordered, afterRow, direction);
+
+  let group: ClientGroup | null = null;
+  if (direction === 'siege') {
+    // Peek at the NEXT index without advancing sheet.siegeIndex
+    const peekIndex = sheet.siegeIndex + 1;
+    group = peekIndex < ordered.length ? ordered[peekIndex] : null;
+  } else {
+    group = findNextGroup(ordered, afterRow, direction);
+  }
 
   if (!group) return null;
 
@@ -949,6 +983,8 @@ async function saveSession(session: GamificationSession): Promise<void> {
       ...session,
       _resumeTab: resumeTab || undefined,
       _resumePosition: resumePosition || undefined,
+      // Persist current siege index so Resume can pick up where we left off
+      _siegeIndex: cachedSheet?.siegeIndex ?? undefined,
     };
 
     await campaignService.upsertGamificationState(activeSessionRowId, stateWithResume);
