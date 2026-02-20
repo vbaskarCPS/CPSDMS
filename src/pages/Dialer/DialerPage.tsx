@@ -1005,66 +1005,102 @@ export default function DialerPage() {
                 </div>
                 <div className="flex gap-2">
                   {([
-                    { dir: 'ambush',     label: 'AMBUSH',     icon: 'lorc/hidden',        bg: '#0f3460' },
-                    { dir: 'infiltrate', label: 'INFILTRATE', icon: 'lorc/deadly-strike',  bg: '#533483' },
-                    { dir: 'siege',      label: 'SIEGE',      icon: 'lorc/tower-fall',     bg: '#7b1a1a' },
-                  ] as const).map(({ dir, label, icon, bg }) => {
+                    { dir: 'ambush',     label: 'AMBUSH',     icon: 'lorc/hidden',        bg: '#0f3460', tip: 'Start at a specific Booking ID and call down. Wraps back to the top and completes a full loop.' },
+                    { dir: 'infiltrate', label: 'INFILTRATE', icon: 'lorc/deadly-strike',  bg: '#533483', tip: 'Scans the sheet in 20-row windows and strikes the zone with the lowest NA count.' },
+                    { dir: 'siege',      label: 'SIEGE',      icon: 'lorc/tower-fall',     bg: '#7b1a1a', tip: 'Works every group in NA order — blanks first, then 1s, then 2s. No wrap. Mission complete when all tiers are exhausted.' },
+                  ] as const).map(({ dir, label, icon, bg, tip }) => {
                     const isSelected = direction === dir;
                     const iconUrl = `https://game-icons.net/icons/ffffff/transparent/1x1/${icon}.svg`;
                     return (
-                      <button
-                        key={dir}
-                        onClick={() => {
-                          setDirection(dir as Direction);
-                          setDeployError('');
-                          if (dir !== 'ambush') setStartBookingId('');
-                        }}
-                        className="flex-1 rounded transition-all"
-                        style={{
-                          position: 'relative',
-                          overflow: 'hidden',
-                          padding: '10px 4px 8px',
-                          background: isSelected ? bg : '#1a2e1a',
-                          color: isSelected ? '#fff' : '#666',
-                          border: isSelected ? `1.5px solid ${bg}` : '1.5px solid rgba(0,229,255,0.15)',
-                          fontFamily: 'inherit',
-                          minHeight: 64,
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          justifyContent: 'flex-end',
-                          gap: 4,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {/* Icon watermark — large, faded behind the label */}
-                        <img
-                          src={iconUrl}
-                          alt=""
-                          style={{
-                            position: 'absolute',
-                            top: '50%',
-                            left: '50%',
-                            transform: 'translate(-50%, -50%)',
-                            width: 52,
-                            height: 52,
-                            opacity: isSelected ? 0.18 : 0.07,
-                            pointerEvents: 'none',
-                            filter: isSelected ? 'none' : 'grayscale(100%)',
-                            transition: 'opacity 0.2s ease',
+                      <div key={dir} className="flex-1 relative group">
+                        <button
+                          onClick={() => {
+                            setDirection(dir as Direction);
+                            setDeployError('');
+                            if (dir !== 'ambush') setStartBookingId('');
                           }}
-                        />
-                        <span style={{
-                          position: 'relative',
-                          zIndex: 1,
-                          fontSize: 9,
-                          fontWeight: 800,
-                          letterSpacing: '1.5px',
-                          textTransform: 'uppercase',
-                        }}>
-                          {label}
-                        </span>
-                      </button>
+                          className="w-full rounded transition-all"
+                          style={{
+                            position: 'relative',
+                            overflow: 'hidden',
+                            padding: '10px 4px 8px',
+                            background: isSelected ? bg : '#1a2e1a',
+                            color: isSelected ? '#fff' : '#666',
+                            border: isSelected ? `1.5px solid ${bg}` : '1.5px solid rgba(0,229,255,0.15)',
+                            fontFamily: 'inherit',
+                            minHeight: 64,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'flex-end',
+                            gap: 4,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <img
+                            src={iconUrl}
+                            alt=""
+                            style={{
+                              position: 'absolute',
+                              top: '50%',
+                              left: '50%',
+                              transform: 'translate(-50%, -50%)',
+                              width: 52,
+                              height: 52,
+                              opacity: isSelected ? 0.18 : 0.07,
+                              pointerEvents: 'none',
+                              filter: isSelected ? 'none' : 'grayscale(100%)',
+                              transition: 'opacity 0.2s ease',
+                            }}
+                          />
+                          <span style={{
+                            position: 'relative',
+                            zIndex: 1,
+                            fontSize: 9,
+                            fontWeight: 800,
+                            letterSpacing: '1.5px',
+                            textTransform: 'uppercase',
+                          }}>
+                            {label}
+                          </span>
+                        </button>
+                        {/* Hover tooltip */}
+                        <div
+                          className="absolute left-1/2 z-50 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+                          style={{
+                            bottom: 'calc(100% + 8px)',
+                            transform: 'translateX(-50%)',
+                            width: 180,
+                            background: 'rgba(0,8,14,0.97)',
+                            border: '1px solid rgba(0,229,255,0.25)',
+                            borderRadius: 6,
+                            padding: '8px 10px',
+                            boxShadow: '0 4px 20px rgba(0,0,0,0.8)',
+                            color: '#aaa',
+                            fontSize: 10,
+                            lineHeight: 1.5,
+                            fontWeight: 400,
+                            letterSpacing: '0.3px',
+                            textAlign: 'left',
+                          }}
+                        >
+                          <div style={{ color: '#00e5ff', fontWeight: 800, fontSize: 9, letterSpacing: '1.5px', marginBottom: 4, textTransform: 'uppercase' }}>{label}</div>
+                          {tip}
+                          {/* Arrow pointing down */}
+                          <div style={{
+                            position: 'absolute',
+                            bottom: -5,
+                            left: '50%',
+                            transform: 'translateX(-50%) rotate(45deg)',
+                            width: 8,
+                            height: 8,
+                            background: 'rgba(0,8,14,0.97)',
+                            border: '1px solid rgba(0,229,255,0.25)',
+                            borderTop: 'none',
+                            borderLeft: 'none',
+                          }} />
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
