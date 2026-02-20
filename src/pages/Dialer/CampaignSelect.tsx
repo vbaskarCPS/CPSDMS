@@ -213,12 +213,12 @@ function ResumeBanner({
         pointerEvents: 'none',
       }} />
 
-      <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ flexShrink: 0 }}>
           <div style={{ fontSize: 18, lineHeight: 1, marginBottom: 2 }}>📡</div>
         </div>
 
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 160 }}>
           <div style={{
             fontSize: 8, fontWeight: 800, letterSpacing: '3px',
             color: '#f5a623', opacity: 0.7, textTransform: 'uppercase',
@@ -257,7 +257,10 @@ function ResumeBanner({
           onMouseLeave={() => setHovered(false)}
           style={{
             flexShrink: 0,
-            padding: '10px 20px',
+            flexGrow: 1,
+            minWidth: 120,
+            maxWidth: 180,
+            padding: '10px 16px',
             borderRadius: 6,
             border: `1.5px solid ${hovered ? '#f5a623' : 'rgba(245,166,35,0.5)'}`,
             background: hovered ? 'rgba(245,166,35,0.18)' : 'rgba(245,166,35,0.08)',
@@ -270,6 +273,7 @@ function ResumeBanner({
             cursor: 'pointer',
             transition: 'all 0.15s ease',
             whiteSpace: 'nowrap',
+            textAlign: 'center',
           }}
         >
           ⚡ RESUME
