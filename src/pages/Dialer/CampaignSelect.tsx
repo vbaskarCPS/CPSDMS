@@ -475,7 +475,7 @@ export default function CampaignSelect({
 
           {/* Fireteam Panel — 200px wide (down from 450) */}
           <div style={{
-            width: 200,
+            width: 250,
             flexShrink: 0,
             borderLeft: '1px solid rgba(0,229,255,0.10)',
             background: 'rgba(4,8,4,0.98)',
