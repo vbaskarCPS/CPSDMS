@@ -152,10 +152,6 @@ function tabsToPlaceholderCards(tabs: string[], campaignName: string): CampaignC
 // RESUME HELPERS
 // =============================================================================
 
-/**
- * Formats a "last seen" string for the resume banner.
- * e.g. "2h ago", "Yesterday", "3d ago"
- */
 function formatLastSeen(isoTimestamp: string | null): string {
   if (!isoTimestamp) return '';
   const diff = Date.now() - new Date(isoTimestamp).getTime();
@@ -197,8 +193,9 @@ export default function DialerPage() {
 
   // --- Launcher config ---
   const [selectedTab, setSelectedTab] = useState('');
-  const [direction, setDirection] = useState<Direction>('down');
+  const [direction, setDirection] = useState<Direction>('ambush');
   const [startBookingId, setStartBookingId] = useState('');
+  const [deployError, setDeployError] = useState('');
   const [showDeployConfig, setShowDeployConfig] = useState(false);
   const [deployingTab, setDeployingTab] = useState('');
 
@@ -252,14 +249,14 @@ export default function DialerPage() {
   const [multipliersAt, setMultipliersAt] = useState(0);
   const [rank, setRank] = useState<Rank | null>(null);
 
-  // --- HUD team feed toasts (other managers' bookings) ---
+  // --- HUD team feed toasts ---
   const [teamFeed, setTeamFeed] = useState<TeamBookingEvent[]>([]);
 
   // --- Multiplier activation toasts + live panel events ---
   const [multActivations, setMultActivations] = useState<MultiplierActivationEvent[]>([]);
   const prevOwnMultipliersRef = useRef<MultiplierSnapshot[]>([]);
 
-  // --- Active tab being dialed (for presence heartbeat) ---
+  // --- Active tab being dialed ---
   const [activeDialTab, setActiveDialTab] = useState('');
 
   // --- Presence heartbeat ref ---
@@ -292,19 +289,15 @@ export default function DialerPage() {
   }, [navigate]);
 
   // =======================================================================
-  // RESUME DATA — load on mount once manager is known
+  // RESUME DATA
   // =======================================================================
 
   useEffect(() => {
     if (!manager?.id) return;
     setResumeLoading(true);
     campaignService.getResumeData(manager.id)
-      .then(data => {
-        setResumeData(data);
-      })
-      .catch(() => {
-        // Non-critical — just don't show the banner
-      })
+      .then(data => { setResumeData(data); })
+      .catch(() => {})
       .finally(() => setResumeLoading(false));
   }, [manager?.id]);
 
@@ -319,16 +312,12 @@ export default function DialerPage() {
   }, [campaign]);
 
   // =======================================================================
-  // PRESENCE HEARTBEAT — publishes every 30s while in dialer mode
-  // Clears on unmount, or when returning to campaign-select
+  // PRESENCE HEARTBEAT
   // =======================================================================
 
   const startHeartbeat = useCallback((managerId: string, managerName: string, tabCampaignId: string) => {
     if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-
-    // Fire immediately
     dialerRealtimeService.publishPresence({ managerId, managerName, campaignId: tabCampaignId }).catch(() => {});
-
     heartbeatRef.current = setInterval(() => {
       dialerRealtimeService.publishPresence({ managerId, managerName, campaignId: tabCampaignId }).catch(() => {});
     }, 30_000);
@@ -341,7 +330,6 @@ export default function DialerPage() {
     }
   }, []);
 
-  // Clear presence and stop heartbeat on unmount
   useEffect(() => {
     return () => {
       stopHeartbeat();
@@ -352,18 +340,12 @@ export default function DialerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manager?.id]);
 
-  // When tab being dialed changes, restart heartbeat with new campaign ID
   useEffect(() => {
     if (mode !== 'dialer' || !manager?.id || !activeDialTab) return;
-    startHeartbeat(
-      manager.id,
-      manager.name || manager.repCode || 'Unknown',
-      activeDialTab,
-    );
+    startHeartbeat(manager.id, manager.name || manager.repCode || 'Unknown', activeDialTab);
     return () => stopHeartbeat();
   }, [mode, activeDialTab, manager?.id, manager?.name, manager?.repCode, startHeartbeat, stopHeartbeat]);
 
-  // When returning to campaign select, clear presence
   useEffect(() => {
     if (mode === 'campaign-select' && manager?.id) {
       stopHeartbeat();
@@ -372,39 +354,31 @@ export default function DialerPage() {
   }, [mode, manager?.id, stopHeartbeat]);
 
   // =======================================================================
-  // TEAM FEED — HUD toasts only (FireteamPanel handles its own data)
+  // TEAM FEED
   // =======================================================================
 
   useEffect(() => {
     if (!campaign?.id || !manager?.id) return;
-
     const unsubscribe = dialerRealtimeService.subscribeToTeamFeed(
-      campaign.id,
-      manager.id,
-      (event) => {
-        setTeamFeed(prev => [...prev, event]);
-      }
+      campaign.id, manager.id,
+      (event) => { setTeamFeed(prev => [...prev, event]); }
     );
-
     return () => { unsubscribe(); };
   }, [campaign?.id, manager?.id]);
 
   // =======================================================================
-  // OWN MULTIPLIER ACTIVATION DETECTION + PUBLISH TO SUPABASE
+  // OWN MULTIPLIER ACTIVATION DETECTION
   // =======================================================================
 
   useEffect(() => {
     const prev = prevOwnMultipliersRef.current;
     const activations = detectNewlyActivated(
-      prev,
-      multipliers,
+      prev, multipliers,
       manager?.name || manager?.repCode || 'You',
       true,
     );
     if (activations.length > 0) {
       setMultActivations(p => [...p, ...activations]);
-
-      // Publish each activation to Supabase so teammates see it in FireteamPanel
       if (campaign?.id && manager?.id) {
         for (const activation of activations) {
           const payload: PublishMultiplierPayload = {
@@ -438,25 +412,16 @@ export default function DialerPage() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (mode !== 'dialer' || !currentState) return;
       if (showYesPanel || cardModalOpen || achievementsOpen || statsOpen || sniperSettingsOpen || showDeployConfig) return;
-
       const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-
       const key = e.key.toLowerCase();
       const target = HOTKEY_MAP[key];
       if (!target) return;
-
       e.preventDefault();
       triggerFlash(target);
-
-      if (target === 'YES') {
-        setShowYesPanel(true);
-      } else {
-        doDisp(target as DispositionType);
-      }
+      if (target === 'YES') { setShowYesPanel(true); } else { doDisp(target as DispositionType); }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [mode, currentState, showYesPanel, cardModalOpen, achievementsOpen, statsOpen, sniperSettingsOpen, showDeployConfig, triggerFlash]);
@@ -480,29 +445,18 @@ export default function DialerPage() {
         try {
           const callbookTabs = await dialerSheetsService.getCallbookTabs(campaign.spreadsheetId);
           setTabs(callbookTabs);
-
           const placeholders = tabsToPlaceholderCards(callbookTabs, campaign.displayName || 'Campaign');
           setCampaignCards(placeholders);
           setTabsLoading(false);
-
           callbookTabs.forEach(async (tabName) => {
             try {
               const stats = await dialerSheetsService.computeTabStats(campaign.spreadsheetId, tabName);
               setCampaignCards(prev => prev.map(card =>
                 card.id === tabName
-                  ? {
-                      ...card,
-                      totalRows:    stats.totalRows,
-                      bookings:     stats.bookings,
-                      reachedPct:   stats.reachedPct,
-                      avgAttempts:  stats.avgAttempts,
-                      lastDeployed: stats.lastUsed ?? undefined,
-                    }
+                  ? { ...card, totalRows: stats.totalRows, bookings: stats.bookings, reachedPct: stats.reachedPct, avgAttempts: stats.avgAttempts, lastDeployed: stats.lastUsed ?? undefined }
                   : card
               ));
-            } catch {
-              // Non-critical
-            }
+            } catch { /* Non-critical */ }
           });
         } catch (err: any) {
           setTabsError(err.message || 'Failed to load tabs');
@@ -523,22 +477,29 @@ export default function DialerPage() {
   const handleCampaignDeploy = async (tabId: string) => {
     setDeployingTab(tabId);
     setSelectedTab(tabId);
-    setDirection('down');
+    setDirection('ambush');
     setStartBookingId('');
+    setDeployError('');
     setShowDeployConfig(true);
 
     if (campaign?.spreadsheetId) {
       try {
         const years = await discoverAvailableYears(campaign.spreadsheetId, tabId);
         setAvailableYears(years);
-      } catch {
-        // Non-critical
-      }
+      } catch { /* Non-critical */ }
     }
   };
 
   const handleConfirmDeploy = async () => {
     if (!selectedTab || !campaign) return;
+
+    // Ambush requires a Booking ID — catch this before even calling initialize
+    if (direction === 'ambush' && !startBookingId.trim()) {
+      setDeployError('AMBUSH requires a Booking ID. Please enter one above.');
+      return;
+    }
+
+    setDeployError('');
     setShowDeployConfig(false);
     setLoading(true);
     setLogMessage('Acquiring target...');
@@ -573,23 +534,22 @@ export default function DialerPage() {
       prevOwnMultipliersRef.current = newMults;
       prefillYesForm(snapshot.state);
 
-      // Track resume position immediately
       const bookingId = snapshot.state.bookingId || '';
       setResumePosition(selectedTab, bookingId, snapshot.state.firstRow);
 
-      // Start presence heartbeat
       setActiveDialTab(selectedTab);
       setMode('dialer');
     } catch (err: any) {
-      setEmptyMessage(err.message || 'Failed to initialize dialer.');
-      setMode('dialer');
+      // Show the error back in the deploy modal (e.g. Booking ID not found for Ambush)
+      setShowDeployConfig(true);
+      setDeployError(err.message || 'Failed to initialize dialer.');
     } finally {
       setLoading(false);
     }
   };
 
   // =======================================================================
-  // RESUME DEPLOY — skips deploy config, jumps straight into last position
+  // RESUME DEPLOY
   // =======================================================================
 
   const handleResumeDeploy = async () => {
@@ -599,7 +559,6 @@ export default function DialerPage() {
     const position  = resumeData.position;
     const isToday   = resumeData.sessionDate === getTodayEST();
 
-    // Parse position: either a booking ID or "ROW:N"
     let startBookingIdResume: string | undefined;
     let startRowResume = 2;
     if (position.startsWith('ROW:')) {
@@ -615,7 +574,7 @@ export default function DialerPage() {
     const config: EngineConfig = {
       spreadsheetId: campaign.spreadsheetId,
       sheetName: tab,
-      direction: 'down',
+      direction: 'ambush',
       startRow: startRowResume,
       repCode: manager?.repCode || '',
       managerId: manager?.id || '',
@@ -637,7 +596,6 @@ export default function DialerPage() {
 
       setCurrentState(snapshot.state);
 
-      // Restore gamification only if same day
       if (isToday) {
         setSession(snapshot.session);
         const newMults = getActiveMultipliers(snapshot.session);
@@ -646,7 +604,6 @@ export default function DialerPage() {
         setRank(getCurrentRank(snapshot.session));
         prevOwnMultipliersRef.current = newMults;
       } else {
-        // New day — fresh gamification, keep position
         setSession(snapshot.session);
         setMultipliers([]);
         setMultipliersAt(Date.now());
@@ -656,7 +613,6 @@ export default function DialerPage() {
 
       prefillYesForm(snapshot.state);
 
-      // Update resume position to where we landed
       const newBookingId = snapshot.state.bookingId || '';
       setResumePosition(tab, newBookingId, snapshot.state.firstRow);
 
@@ -715,7 +671,6 @@ export default function DialerPage() {
     prefillYesForm(state);
     setLogMessage(`Group loaded: row ${state.firstRow}`);
 
-    // Update resume position every time we advance to a new group
     const bookingId = state.bookingId || '';
     if (configRef.current?.sheetName) {
       setResumePosition(configRef.current.sheetName, bookingId, state.firstRow);
@@ -773,8 +728,6 @@ export default function DialerPage() {
       case 'team': setStatsOpen(true); break;
       case 'scope': setSniperSettingsOpen(true); break;
       case 'campaigns':
-        // Refresh resume data when returning to campaign select,
-        // so the banner reflects the most recent position
         if (manager?.id) {
           campaignService.getResumeData(manager.id).then(setResumeData).catch(() => {});
         }
@@ -861,12 +814,9 @@ export default function DialerPage() {
 
     try {
       if (subType === 'PREPAY') {
-        // Just store everything in the engine — no sheet writes, no gamification yet.
-        // All of that fires in handleChamber after the rep enters card details.
         await applyDisposition(
           configRef.current, currentState, 'PREPAY', currentState.phone, session!, extra, yesStartTimeRef.current
         );
-        // Pre-fill the amount field in the card modal from what was entered in the YES form
         setCcAmt(yPrice.trim());
         setCcNum(''); setCcExp(''); setCcCvv(''); setCcType(''); setCardStatus(''); setCardStaging(false);
         setCardModalOpen(true);
@@ -911,9 +861,7 @@ export default function DialerPage() {
     setCardStaging(true); setCardStatus('Staging card...');
     try {
       const cardData = stageCardData(num, ccExp.trim(), ccCvv.trim(), ccAmt.trim());
-      // finalizePrepay now handles sheet writes + gamification + CCD
       const result = await finalizePrepay(configRef.current!, cardData, session!);
-      // Fire gamification result now that everything has been written
       handleGamResult(result.gamification, true, true, ccAmt.trim());
       setCardStatus('✓ Card staged');
       setTimeout(() => {
@@ -928,14 +876,10 @@ export default function DialerPage() {
   };
 
   const handleEject = () => {
-    // Cancel the pending prepay — no sheet writes have happened yet, so the
-    // group is completely clean. Remove the group key lock so the rep can
-    // re-disposition (e.g. book as COMPLETE instead).
     cancelPrepay();
     setCardModalOpen(false);
     if (currentState) dispositionedKeysRef.current.delete(currentState.groupKey);
     setPendingDial(false);
-    // Return to YES form so rep can choose COMPLETE or try prepay again
     setShowYesPanel(true);
     setLogMessage('Prepay cancelled — select a disposition.');
   };
@@ -1054,47 +998,97 @@ export default function DialerPage() {
                 </div>
               </div>
 
+              {/* APPROACH VECTOR — Ambush / Infiltrate / Siege */}
               <div className="mb-4">
                 <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>
                   APPROACH VECTOR
                 </div>
                 <div className="flex gap-2">
                   {([
-                    ['down', '⬇️ Down', '#0f3460'],
-                    ['up', '⬆️ Up', '#533483'],
-                    ['scatter', '🎯 Scatter', '#e94560'],
-                  ] as const).map(([dir, label, bg]) => (
-                    <button
-                      key={dir}
-                      onClick={() => setDirection(dir as Direction)}
-                      className="flex-1 py-2.5 rounded text-xs font-bold tracking-wider uppercase transition-all"
-                      style={{
-                        background: direction === dir ? bg : '#1a2e1a',
-                        color: direction === dir ? '#fff' : '#666',
-                        border: direction === dir ? `1.5px solid ${bg}` : '1.5px solid rgba(0,229,255,0.15)',
-                        fontFamily: 'inherit',
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                    { dir: 'ambush',     label: 'AMBUSH',     icon: 'lorc/hidden',        bg: '#0f3460' },
+                    { dir: 'infiltrate', label: 'INFILTRATE', icon: 'lorc/deadly-strike',  bg: '#533483' },
+                    { dir: 'siege',      label: 'SIEGE',      icon: 'lorc/tower-fall',     bg: '#7b1a1a' },
+                  ] as const).map(({ dir, label, icon, bg }) => {
+                    const isSelected = direction === dir;
+                    const iconUrl = `https://game-icons.net/icons/ffffff/transparent/1x1/${icon}.svg`;
+                    return (
+                      <button
+                        key={dir}
+                        onClick={() => {
+                          setDirection(dir as Direction);
+                          setDeployError('');
+                          if (dir !== 'ambush') setStartBookingId('');
+                        }}
+                        className="flex-1 rounded transition-all"
+                        style={{
+                          position: 'relative',
+                          overflow: 'hidden',
+                          padding: '10px 4px 8px',
+                          background: isSelected ? bg : '#1a2e1a',
+                          color: isSelected ? '#fff' : '#666',
+                          border: isSelected ? `1.5px solid ${bg}` : '1.5px solid rgba(0,229,255,0.15)',
+                          fontFamily: 'inherit',
+                          minHeight: 64,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'flex-end',
+                          gap: 4,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {/* Icon watermark — large, faded behind the label */}
+                        <img
+                          src={iconUrl}
+                          alt=""
+                          style={{
+                            position: 'absolute',
+                            top: '50%',
+                            left: '50%',
+                            transform: 'translate(-50%, -50%)',
+                            width: 52,
+                            height: 52,
+                            opacity: isSelected ? 0.18 : 0.07,
+                            pointerEvents: 'none',
+                            filter: isSelected ? 'none' : 'grayscale(100%)',
+                            transition: 'opacity 0.2s ease',
+                          }}
+                        />
+                        <span style={{
+                          position: 'relative',
+                          zIndex: 1,
+                          fontSize: 9,
+                          fontWeight: 800,
+                          letterSpacing: '1.5px',
+                          textTransform: 'uppercase',
+                        }}>
+                          {label}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              <div className="mb-4">
-                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
-                  STARTING BOOKING ID <span style={{ opacity: 0.4 }}>(OPTIONAL)</span>
+              {/* BOOKING ID — only shown when Ambush is selected */}
+              {direction === 'ambush' && (
+                <div className="mb-4">
+                  <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
+                    STARTING BOOKING ID{' '}
+                    <span style={{ color: '#e74c3c', opacity: 0.9 }}>REQUIRED</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={startBookingId}
+                    onChange={(e) => { setStartBookingId(e.target.value); setDeployError(''); }}
+                    placeholder="e.g. ACE01-042"
+                    className="w-full px-3 py-2 rounded text-sm font-mono"
+                    style={S.yesInput}
+                  />
                 </div>
-                <input
-                  type="text"
-                  value={startBookingId}
-                  onChange={(e) => setStartBookingId(e.target.value)}
-                  placeholder="e.g. ACE01-042"
-                  className="w-full px-3 py-2 rounded text-sm font-mono"
-                  style={S.yesInput}
-                />
-              </div>
+              )}
 
+              {/* SNIPER SCOPE */}
               <div className="mb-5">
                 <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
                   SNIPER SCOPE
@@ -1106,11 +1100,7 @@ export default function DialerPage() {
                 >
                   <div className="flex flex-wrap gap-1.5">
                     {sniperConfig.years.map(yr => (
-                      <span key={yr} style={{
-                        fontSize: 9, fontWeight: 800, color: '#00e5ff',
-                        background: 'rgba(0,229,255,0.12)', border: '1px solid rgba(0,229,255,0.25)',
-                        borderRadius: 3, padding: '1px 6px', letterSpacing: '0.5px',
-                      }}>{yr}</span>
+                      <span key={yr} style={{ fontSize: 9, fontWeight: 800, color: '#00e5ff', background: 'rgba(0,229,255,0.12)', border: '1px solid rgba(0,229,255,0.25)', borderRadius: 3, padding: '1px 6px', letterSpacing: '0.5px' }}>{yr}</span>
                     ))}
                     {sniperConfig.ppOnly && <span style={{ fontSize: 8, fontWeight: 800, color: '#f1c40f', background: 'rgba(241,196,15,0.12)', border: '1px solid rgba(241,196,15,0.25)', borderRadius: 3, padding: '1px 6px' }}>PP</span>}
                     {sniperConfig.minEntries > 1 && <span style={{ fontSize: 8, fontWeight: 800, color: '#f5a623', background: 'rgba(245,166,35,0.12)', border: '1px solid rgba(245,166,35,0.25)', borderRadius: 3, padding: '1px 6px' }}>MIN:{sniperConfig.minEntries}</span>}
@@ -1122,6 +1112,15 @@ export default function DialerPage() {
                 </button>
               </div>
 
+              {/* ERROR MESSAGE */}
+              {deployError && (
+                <div className="mb-3 px-3 py-2 rounded text-xs font-bold"
+                  style={{ background: 'rgba(231,76,60,0.12)', border: '1px solid rgba(231,76,60,0.35)', color: '#e74c3c', letterSpacing: '0.5px' }}>
+                  ⚠ {deployError}
+                </div>
+              )}
+
+              {/* ACTION BUTTONS */}
               <div className="flex gap-3">
                 <button
                   onClick={() => setShowDeployConfig(false)}

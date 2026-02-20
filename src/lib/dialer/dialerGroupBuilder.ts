@@ -9,6 +9,11 @@
 // Sniper filtering: post-group-building filter that removes groups based on
 // campaign config (years, prepaid-only, min entries, link shot, hide CTS).
 //
+// Direction modes:
+//   ambush    — start at user-defined Booking ID, call down, wrap to top, full loop
+//   infiltrate — find 20-raw-row window with lowest avg NA, call down, wrap to window top
+//   siege     — call all blanks top-to-bottom, then 1s, then 2s, etc. Mission complete when done.
+//
 
 import { ColumnIndices } from './dialerHeaders';
 import {
@@ -25,7 +30,7 @@ import type { SniperConfig } from '../campaignService';
 
 // --- Types ---
 
-export type Direction = 'down' | 'up' | 'scatter';
+export type Direction = 'ambush' | 'infiltrate' | 'siege';
 
 export interface ClientGroup {
   /** 0-based data-array indices of rows in this group */
@@ -185,7 +190,6 @@ export function sniperFilterGroups(
   config: SniperConfig
 ): ClientGroup[] {
   // Pre-compute: which streets have AER (for linkShot filter)
-  // Keyed by ROUTE_PREFIX|NORMALIZED_STREET — same as buildStreetKey()
   const aerStreets = new Set<string>();
   if (config.linkShot && CI.AER >= 0 && CI.STREET >= 0 && CI.ROUTE_CODE >= 0) {
     for (let r = 0; r < all.length; r++) {
@@ -198,12 +202,10 @@ export function sniperFilterGroups(
     }
   }
 
-  // Determine effective years — default to [2025] if somehow empty
   const targetYears = config.years.length > 0 ? config.years : [2025];
 
   return groups.filter((group) => {
     // --- 1. Year filter ---
-    // Group must have at least one row with a YEAR matching a selected year
     if (CI.YEAR >= 0) {
       let hasMatchingYear = false;
       for (const r of group.rows) {
@@ -233,7 +235,7 @@ export function sniperFilterGroups(
       return false;
     }
 
-    // --- 4. Link Shot: group must be on a street that has AER ---
+    // --- 4. Link Shot ---
     if (config.linkShot && CI.STREET >= 0 && CI.ROUTE_CODE >= 0) {
       let onAerStreet = false;
       for (const r of group.rows) {
@@ -260,7 +262,7 @@ export function sniperFilterGroups(
       if (hasCTS) return false;
     }
 
-    // --- 6. BLACKLIST: skip groups where max NA >= threshold ---
+    // --- 6. BLACKLIST ---
     if ((config.maxNA ?? 0) > 0 && CI.NA >= 0) {
       let maxNAVal = 0;
       for (const r of group.rows) {
@@ -276,7 +278,7 @@ export function sniperFilterGroups(
 }
 
 // =============================================================================
-// AVAILABLE GROUP FILTERING (existing — unchanged)
+// AVAILABLE GROUP FILTERING — unchanged
 // =============================================================================
 
 /**
@@ -290,7 +292,6 @@ export function filterAvailable(
   CI: ColumnIndices
 ): ClientGroup[] {
   return groups.filter((group) => {
-    // Check for undispositioned rows (YES/NO/REMOVE mark a row as done; WN alone does NOT)
     let hasUndispositioned = false;
     for (const r of group.rows) {
       let hasDisp = false;
@@ -301,11 +302,10 @@ export function filterAvailable(
     }
     if (!hasUndispositioned) return false;
 
-    // Check for a dialable phone on a non-WN row
     if (CI.PHONE < 0) return false;
     for (const r of group.rows) {
       const wnVal = CI.WN >= 0 ? String(all[r][CI.WN] ?? '').trim() : '';
-      if (wnVal !== '') continue; // skip WN'd rows
+      if (wnVal !== '') continue;
       const ph = normalizePhone(String(all[r][CI.PHONE] ?? ''));
       if (ph.length === 10) return true;
     }
@@ -314,31 +314,113 @@ export function filterAvailable(
 }
 
 // =============================================================================
-// DIRECTION ORDERING (existing — unchanged)
+// NA HELPERS
 // =============================================================================
 
 /**
- * Get the max NA count for a group (used by scatter mode).
+ * Get the NA count for a group — blank/non-numeric = 0.
+ * Used by Infiltrate (window scoring) and Siege (tier ordering).
  */
-function groupMaxNA(group: ClientGroup, all: any[][], naCol: number): number {
+function groupNA(group: ClientGroup, all: any[][], naCol: number): number {
   if (naCol < 0) return 0;
-  let maxNA = 0;
-  for (const r of group.rows) {
-    const raw = String(all[r][naCol] ?? '0').trim();
-    // NA column may contain "CTS" or a number — only parse numbers
-    const val = parseInt(raw, 10) || 0;
-    if (val > maxNA) maxNA = val;
-  }
-  return maxNA;
+  // Use the NA value from the first (primary) row of the group
+  const raw = String(all[group.rows[0]][naCol] ?? '').trim();
+  const val = parseInt(raw, 10);
+  return isNaN(val) ? 0 : val;
 }
+
+// =============================================================================
+// INFILTRATE — window finder
+// =============================================================================
+
+/**
+ * Find the best 20-raw-row window in the full data array (all rows, not just
+ * available groups) with the lowest average NA count.
+ *
+ * "NA count" for a raw row: numeric value in CI.NA column; blank/non-numeric = 0.
+ * Only rows that belong to available groups are considered when computing the
+ * average — rows with no valid group are ignored (they're already dispositioned
+ * or filtered out).
+ *
+ * Returns the firstRow (1-based sheet row) of the available group at or after
+ * the start of the best window. If tied, picks the earliest window.
+ *
+ * @param available   Already-filtered available groups (sorted by firstRow asc).
+ * @param all         Full raw data array.
+ * @param CI          Column indices.
+ * @param dataStartRow 1-based sheet row of first data row.
+ * @returns 1-based sheet row to start calling from, or the first available group's firstRow as fallback.
+ */
+export function findInfiltrateStart(
+  available: ClientGroup[],
+  all: any[][],
+  CI: ColumnIndices,
+  dataStartRow: number
+): number {
+  if (available.length === 0) return dataStartRow;
+
+  const WINDOW = 20;
+  const totalRows = all.length;
+
+  // Build a lookup: dataIndex → group (for available groups only)
+  const rowToGroup = new Map<number, ClientGroup>();
+  for (const g of available) {
+    for (const r of g.rows) {
+      rowToGroup.set(r, g);
+    }
+  }
+
+  if (totalRows < WINDOW) {
+    // Sheet is smaller than window — just start at the first available group
+    return available[0].firstRow;
+  }
+
+  let bestWindowStart = 0;  // 0-based data index
+  let bestAvgNA = Infinity;
+
+  for (let winStart = 0; winStart <= totalRows - WINDOW; winStart++) {
+    let naSum = 0;
+    let rowCount = 0;
+
+    for (let r = winStart; r < winStart + WINDOW; r++) {
+      const group = rowToGroup.get(r);
+      if (!group) continue; // not an available group row — skip
+      const raw = String(all[r][CI.NA >= 0 ? CI.NA : -1] ?? '').trim();
+      const val = CI.NA >= 0 ? (parseInt(raw, 10) || 0) : 0;
+      naSum += val;
+      rowCount++;
+    }
+
+    // If no available group rows in this window, treat avg as Infinity
+    const avgNA = rowCount > 0 ? naSum / rowCount : Infinity;
+
+    if (avgNA < bestAvgNA) {
+      bestAvgNA = avgNA;
+      bestWindowStart = winStart;
+    }
+  }
+
+  // Find the first available group at or after bestWindowStart
+  const windowSheetRow = bestWindowStart + dataStartRow;
+  for (const g of available) {
+    if (g.firstRow >= windowSheetRow) return g.firstRow;
+  }
+
+  // Fallback: first available group
+  return available[0].firstRow;
+}
+
+// =============================================================================
+// ORDERING
+// =============================================================================
 
 /**
  * Apply ordering to available groups based on direction mode.
  * Returns a NEW array (does not mutate input).
  *
- * - down: natural order (ascending firstRow) — already sorted
- * - up: reversed order (descending firstRow)
- * - scatter: sorted by lowest NA count first, then ascending row
+ * - ambush:    natural order (ascending firstRow) — wrap logic handled by engine
+ * - infiltrate: natural order — start point + wrap handled by engine
+ * - siege:     sorted by NA tier (0/blank first, then 1s, then 2s…), then firstRow within tier
  */
 export function applyOrdering(
   available: ClientGroup[],
@@ -348,31 +430,35 @@ export function applyOrdering(
 ): ClientGroup[] {
   const ordered = [...available];
 
-  if (direction === 'scatter') {
+  if (direction === 'siege') {
     ordered.sort((a, b) => {
-      const naA = groupMaxNA(a, all, CI.NA);
-      const naB = groupMaxNA(b, all, CI.NA);
+      const naA = groupNA(a, all, CI.NA);
+      const naB = groupNA(b, all, CI.NA);
       if (naA !== naB) return naA - naB;
       return a.firstRow - b.firstRow;
     });
     return ordered;
   }
 
-  if (direction === 'up') {
-    ordered.reverse();
-    return ordered;
-  }
-
-  // 'down' — already in ascending firstRow order
+  // ambush and infiltrate both walk in natural (ascending firstRow) order.
+  // The engine controls where they start and how they wrap.
   return ordered;
 }
 
+// =============================================================================
+// NAVIGATION
+// =============================================================================
+
 /**
- * Find the next group to dial from the ordered list, starting after `afterRow`.
+ * Find the next group to dial from the ordered list.
  *
- * - down: first group with firstRow >= afterRow
- * - up: first group (in reversed list) with firstRow < afterRow
- * - scatter: always returns ordered[0] (the lowest NA group)
+ * ambush / infiltrate:
+ *   Returns the first group with firstRow >= afterRow.
+ *   Returns null when no such group exists (engine handles wrap).
+ *
+ * siege:
+ *   Returns the first group in the tier-sorted list with firstRow >= afterRow.
+ *   Returns null when exhausted (mission complete — no wrap for Siege).
  */
 export function findNextGroup(
   ordered: ClientGroup[],
@@ -381,31 +467,22 @@ export function findNextGroup(
 ): ClientGroup | null {
   if (ordered.length === 0) return null;
 
-  if (direction === 'up') {
-    for (const g of ordered) {
-      if (g.firstRow < afterRow) return g;
-    }
-    return null;
-  }
-
-  if (direction === 'scatter') {
-    return ordered[0] ?? null;
-  }
-
-  // 'down'
+  // All three modes: find first group at or after afterRow in the ordered list.
+  // For siege the list is tier-sorted, so this naturally walks blanks → 1s → 2s.
+  // For ambush/infiltrate the list is firstRow-sorted; engine wraps when null.
   for (const g of ordered) {
     if (g.firstRow >= afterRow) return g;
   }
+
   return null;
 }
 
 /**
  * Calculate the afterRow value for advancing to the next group after disposition.
+ * All three modes advance forward (downward in the sheet).
  */
 export function nextAfterRow(groupSheetRows: number[], direction: Direction): number {
   if (!groupSheetRows || groupSheetRows.length === 0) return 2;
-  if (direction === 'up') {
-    return Math.min(...groupSheetRows);
-  }
+  // Always advance past the last row of the current group
   return Math.max(...groupSheetRows) + 1;
 }

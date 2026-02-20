@@ -10,13 +10,14 @@
 // - Phone highlighting via Google Sheets API (replaces Apps Script bridge)
 // - Gamification processing
 //
+// Direction modes:
+//   ambush    — start at user Booking ID, call down, wrap to top, full loop
+//   infiltrate — find best 20-raw-row window (lowest avg NA), call down, wrap to window top
+//   siege     — tier-sorted (blanks → 1s → 2s…), no wrap, mission complete when exhausted
+//
 // Session persistence: Supabase dialer_sessions table.
 // One row per manager per day (EST date). State is written after every
 // disposition so stats survive browser clears, tab switches, and device changes.
-//
-// Resume support: _resumeTab and _resumeBookingId are embedded into the
-// gamification_state jsonb on every save. DialerPage reads these on mount
-// to offer a "Resume Last Operation" shortcut on the Campaign Select screen.
 //
 
 import { resolveHeaders, findHeaders, ColumnIndices } from './dialerHeaders';
@@ -26,6 +27,7 @@ import {
   filterAvailable,
   applyOrdering,
   findNextGroup,
+  findInfiltrateStart,
   nextAfterRow,
   Direction,
   ClientGroup,
@@ -68,22 +70,18 @@ export interface EngineConfig {
   spreadsheetId: string;
   sheetName: string;
   direction: Direction;
-  startRow: number;         // 1-based row to start from (or afterRow for subsequent calls)
+  startRow: number;         // 1-based row to start from
   repCode: string;
-  managerId: string;        // UUID from campaign_managers — required for Supabase session
-  campaignId: string;       // UUID from campaigns — required for Supabase session
+  managerId: string;
+  campaignId: string;
   sniperConfig?: SniperConfig;
-  startBookingId?: string;
+  startBookingId?: string;  // Required for Ambush; used as hint for Infiltrate resume
 }
 
 export interface EngineSnapshot {
-  /** Current group state */
   state: DialerState;
-  /** Prefetched next group state (if available) */
   prefetchState: DialerState | null;
-  /** Gamification session */
   session: GamificationSession;
-  /** All groups in the sheet (for progress tracking) */
   totalGroups: number;
   availableGroups: number;
 }
@@ -94,13 +92,12 @@ export interface PrepayPending {
   phone: string;
   extra: DispositionExtra;
   dataStartRow: number;
-  // Store the gamification context so finalizePrepay can fire it correctly
   gamContext: DispositionContext;
   yesStartTime: number;
 }
 
 // =============================================================================
-// ENGINE STATE — in-memory cache of sheet data + groups
+// ENGINE STATE
 // =============================================================================
 
 interface CachedSheetData {
@@ -115,43 +112,30 @@ interface CachedSheetData {
   available: ClientGroup[];
   sheetTabId: number;
   timestamp: number;
+  // Infiltrate: the firstRow of the window we started from — used for wrap
+  infiltrateWindowStart: number;
+  // Ambush: the firstRow we started from — used to detect full loop completion
+  ambushStartRow: number;
 }
 
 let cachedSheet: CachedSheetData | null = null;
 let pendingPrepay: PrepayPending | null = null;
 
-// Track highlighted rows so we can clear them on next advance
 let highlightedRows: { current: number[]; next: number[] } = { current: [], next: [] };
 
 // =============================================================================
-// SESSION ROW — in-memory reference to the Supabase dialer_sessions row
-// Set once on initialize(), used for all subsequent saves.
+// SESSION ROW
 // =============================================================================
 
 let activeSessionRowId: string | null = null;
 
 // =============================================================================
-// RESUME POSITION — in-memory, updated by setResumePosition()
-// Embedded into every gamification_state save so it survives browser clears.
-//
-// _resumePosition stores either:
-//   - The booking ID string (e.g. "ACE01-042") when the sheet has one, OR
-//   - "ROW:1234" as a fallback when no BOOKING_ID column exists
-// Both are handled by handleResumeDeploy in DialerPage.
+// RESUME POSITION
 // =============================================================================
 
 let resumeTab: string = '';
-let resumePosition: string = '';   // booking ID or "ROW:N" fallback
+let resumePosition: string = '';
 
-/**
- * Call this whenever the current group changes (after initialize and after
- * every disposition). Stores the tab + position so the next saveSession
- * call embeds them into gamification_state for later resume.
- *
- * @param tab       - The sheet tab name
- * @param bookingId - The booking ID string, or empty string if the sheet has none
- * @param firstRow  - The 1-based row number of the group (used as fallback when no booking ID)
- */
 export function setResumePosition(tab: string, bookingId: string, firstRow?: number): void {
   resumeTab = tab;
   resumePosition = bookingId || (firstRow ? `ROW:${firstRow}` : '');
@@ -221,6 +205,8 @@ async function loadSheetData(
     available,
     sheetTabId,
     timestamp: Date.now(),
+    infiltrateWindowStart: 0,
+    ambushStartRow: 0,
   };
 
   return cachedSheet;
@@ -257,11 +243,7 @@ async function highlightPhones(
           startColumnIndex: phoneCol,
           endColumnIndex: phoneCol + 1,
         },
-        cell: {
-          userEnteredFormat: {
-            backgroundColor: { red: 1, green: 1, blue: 1 },
-          },
-        },
+        cell: { userEnteredFormat: { backgroundColor: { red: 1, green: 1, blue: 1 } } },
         fields: 'userEnteredFormat.backgroundColor',
       },
     });
@@ -277,11 +259,7 @@ async function highlightPhones(
           startColumnIndex: phoneCol,
           endColumnIndex: phoneCol + 1,
         },
-        cell: {
-          userEnteredFormat: {
-            backgroundColor: { red: 1, green: 0.839, blue: 0 },
-          },
-        },
+        cell: { userEnteredFormat: { backgroundColor: { red: 1, green: 0.839, blue: 0 } } },
         fields: 'userEnteredFormat.backgroundColor',
       },
     });
@@ -297,11 +275,7 @@ async function highlightPhones(
           startColumnIndex: phoneCol,
           endColumnIndex: phoneCol + 1,
         },
-        cell: {
-          userEnteredFormat: {
-            backgroundColor: { red: 0, green: 0.69, blue: 1 },
-          },
-        },
+        cell: { userEnteredFormat: { backgroundColor: { red: 0, green: 0.69, blue: 1 } } },
         fields: 'userEnteredFormat.backgroundColor',
       },
     });
@@ -333,24 +307,101 @@ export async function initialize(config: EngineConfig): Promise<EngineSnapshot |
     return null;
   }
 
-  let afterRow = config.startRow;
+  // ── AMBUSH ──────────────────────────────────────────────────────────────────
+  // Must have a valid Booking ID. Validate it exists and resolve to a row.
+  if (config.direction === 'ambush') {
+    const bid = (config.startBookingId || '').trim();
+    if (!bid) {
+      throw new Error('AMBUSH requires a Booking ID. Please enter a Booking ID to start from.');
+    }
+    if (sheet.CI.BOOKING_ID < 0) {
+      throw new Error('No Booking ID column found in this sheet. Cannot use AMBUSH mode.');
+    }
 
-  if (config.startBookingId && sheet.CI.BOOKING_ID >= 0) {
-    const bid = config.startBookingId.trim();
+    // Find the row matching this Booking ID
+    let ambushRow = -1;
     for (let r = 0; r < sheet.all.length; r++) {
       const rowBid = String(sheet.all[r][sheet.CI.BOOKING_ID] ?? '').trim();
       if (rowBid === bid) {
-        afterRow = r + sheet.dataStartRow;
+        ambushRow = r + sheet.dataStartRow;
         break;
       }
     }
+
+    if (ambushRow < 0) {
+      throw new Error(`Booking ID "${bid}" not found in this sheet. Please check and try again.`);
+    }
+
+    // Store where Ambush started so the engine can detect a full loop
+    sheet.ambushStartRow = ambushRow;
+
+    const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
+    const group = findNextGroup(ordered, ambushRow, config.direction);
+
+    if (!group) {
+      // The booking ID exists but there are no available groups at or after it —
+      // wrap immediately to the top
+      const wrappedGroup = ordered[0] ?? null;
+      if (!wrappedGroup) return null;
+      return buildSnapshot(sheet, wrappedGroup, config);
+    }
+
+    const session = await loadOrCreateSession(config);
+    const snapshot = await buildSnapshot(sheet, group, config, session);
+    return snapshot;
   }
 
-  const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
-  const group = findNextGroup(ordered, afterRow, config.direction);
+  // ── INFILTRATE ───────────────────────────────────────────────────────────────
+  // Find the 20-raw-row window with the lowest average NA count and start there.
+  if (config.direction === 'infiltrate') {
+    let startRow: number;
 
-  if (!group) return null;
+    // If resuming with a specific row hint, honour it
+    if (config.startBookingId && sheet.CI.BOOKING_ID >= 0) {
+      const bid = config.startBookingId.trim();
+      let found = -1;
+      for (let r = 0; r < sheet.all.length; r++) {
+        const rowBid = String(sheet.all[r][sheet.CI.BOOKING_ID] ?? '').trim();
+        if (rowBid === bid) { found = r + sheet.dataStartRow; break; }
+      }
+      startRow = found > 0 ? found : findInfiltrateStart(sheet.available, sheet.all, sheet.CI, sheet.dataStartRow);
+    } else {
+      startRow = findInfiltrateStart(sheet.available, sheet.all, sheet.CI, sheet.dataStartRow);
+    }
 
+    // Store the window start for wrap-around
+    sheet.infiltrateWindowStart = startRow;
+
+    const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
+    const group = findNextGroup(ordered, startRow, config.direction);
+    if (!group) return null;
+
+    const session = await loadOrCreateSession(config);
+    return buildSnapshot(sheet, group, config, session);
+  }
+
+  // ── SIEGE ────────────────────────────────────────────────────────────────────
+  // Tier-sorted. Start from afterRow = config.startRow (typically 2 = top).
+  {
+    const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
+    const group = findNextGroup(ordered, config.startRow, config.direction);
+    if (!group) return null;
+
+    const session = await loadOrCreateSession(config);
+    return buildSnapshot(sheet, group, config, session);
+  }
+}
+
+// =============================================================================
+// BUILD SNAPSHOT HELPER
+// =============================================================================
+
+async function buildSnapshot(
+  sheet: CachedSheetData,
+  group: ClientGroup,
+  config: EngineConfig,
+  session?: GamificationSession
+): Promise<EngineSnapshot> {
   let currentGroupIndex = 0;
   for (let i = 0; i < sheet.groups.length; i++) {
     if (sheet.groups[i].firstRow === group.firstRow) { currentGroupIndex = i + 1; break; }
@@ -366,19 +417,15 @@ export async function initialize(config: EngineConfig): Promise<EngineSnapshot |
     sheet.dataStartRow
   );
 
-  // Load session from Supabase — this is the single source of truth
-  const session = await loadOrCreateSession(config);
+  const resolvedSession = session ?? await loadOrCreateSession(config);
 
-  // Prefetch next group
   const prefetchState = getPrefetchState(sheet, state, config.direction);
-
-  // Highlight phones in the sheet
   highlightPhones(sheet, state.rows, prefetchState?.rows || []);
 
   return {
     state,
     prefetchState,
-    session,
+    session: resolvedSession,
     totalGroups: sheet.groups.length,
     availableGroups: sheet.available.length,
   };
@@ -395,10 +442,50 @@ export async function getNextState(
   const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
 
   const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
-  const group = findNextGroup(ordered, afterRow, config.direction);
+  let group = findNextGroup(ordered, afterRow, config.direction);
+
+  // ── WRAP LOGIC ─────────────────────────────────────────────────────────────
 
   if (!group) {
-    return { found: false, message: `No more groups in ${config.direction} direction from row ${afterRow}.` };
+    if (config.direction === 'siege') {
+      // Siege never wraps — mission complete
+      return { found: false, message: 'All targets neutralized. Mission complete.' };
+    }
+
+    if (config.direction === 'ambush') {
+      // Wrap to the very top of the available list
+      group = ordered[0] ?? null;
+      if (!group) return { found: false, message: 'No available groups found.' };
+
+      // Check if we've looped back past our original start point
+      // (i.e. the group we just wrapped to is at or past ambushStartRow)
+      // The full loop is complete when we've come back around — return mission complete
+      if (sheet.ambushStartRow > 0 && group.firstRow >= sheet.ambushStartRow) {
+        return { found: false, message: 'Full loop complete. Mission accomplished.' };
+      }
+    }
+
+    if (config.direction === 'infiltrate') {
+      // Wrap back to the top of the winning window
+      const windowRow = sheet.infiltrateWindowStart > 0
+        ? sheet.infiltrateWindowStart
+        : ordered[0]?.firstRow ?? sheet.dataStartRow;
+
+      group = findNextGroup(ordered, windowRow, config.direction);
+      if (!group) group = ordered[0] ?? null;
+      if (!group) return { found: false, message: 'No available groups found.' };
+    }
+  } else {
+    // Ambush: check if we've advanced past the start point after wrapping
+    // (handles the case where we started mid-list and have now returned to start)
+    if (config.direction === 'ambush' && sheet.ambushStartRow > 0) {
+      // If we've gone below where we started, that's fine — normal forward progress.
+      // The full loop detection triggers on the NEXT wrap.
+    }
+  }
+
+  if (!group) {
+    return { found: false, message: 'No more available groups.' };
   }
 
   let currentGroupIndex = 0;
@@ -511,9 +598,6 @@ export async function applyDisposition(
 ): Promise<DispositionResult> {
   const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
 
-  // PREPAY: do not write to the sheet or fire gamification yet.
-  // Just store everything in pendingPrepay so finalizePrepay can handle it
-  // after the rep successfully enters card details.
   if (disposition === 'PREPAY') {
     const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
     pendingPrepay = {
@@ -525,11 +609,7 @@ export async function applyDisposition(
       gamContext: gamCtx,
       yesStartTime: yesStartTime || 0,
     };
-    // Return the current state unchanged — UI stays open for card entry
-    return {
-      nextState: state,
-      gamification: null,
-    };
+    return { nextState: state, gamification: null };
   }
 
   const dispResult = buildDispositionUpdates(
@@ -583,10 +663,7 @@ export async function applyDisposition(
     highlightPhones(sheet, ns.rows, prefetch?.rows || []);
   }
 
-  return {
-    nextState: nextStateResult,
-    gamification: gamResult,
-  };
+  return { nextState: nextStateResult, gamification: gamResult };
 }
 
 // =============================================================================
@@ -623,8 +700,6 @@ export async function finalizePrepay(
     pp.extra.price = cardData.amount;
   }
 
-  // Now write the disposition to the sheet (this is where it was previously
-  // happening in applyDisposition — moved here so it only fires on successful card entry)
   const dispResult = buildDispositionUpdates(
     'PREPAY',
     sheet.all,
@@ -648,8 +723,6 @@ export async function finalizePrepay(
     }
   }
 
-  // Now fire gamification — using the context that was stored at prepay click time
-  // Update the price in context in case it changed during card entry
   const gamCtx = { ...pp.gamContext, price: parseFloat(pp.extra.price || '0') || 0 };
   const gamResult = processGamification(session, 'PREPAY', gamCtx);
   await saveSession(session);
@@ -714,10 +787,7 @@ export async function finalizePrepay(
     highlightPhones(sheet, ns.rows, prefetch?.rows || []);
   }
 
-  return {
-    nextState: nextStateResult,
-    gamification: gamResult,
-  };
+  return { nextState: nextStateResult, gamification: gamResult };
 }
 
 export function cancelPrepay(): void {
@@ -835,18 +905,7 @@ function buildGamificationContext(
 }
 
 // =============================================================================
-// SESSION PERSISTENCE — Supabase dialer_sessions
-//
-// loadOrCreateSession: called once on initialize(). Fetches today's row from
-//   Supabase (or creates one). Stores the row ID in activeSessionRowId so all
-//   subsequent saves know exactly which row to update — no extra lookups.
-//
-// saveSession: called after every disposition. Writes the full GamificationSession
-//   object to gamification_state, and also embeds _resumeTab + _resumeBookingId
-//   so position can be restored on the Campaign Select screen.
-//
-// migrateSession: fills in any missing fields when loading an older session
-//   format. Keeps old sessions compatible as we add new gamification features.
+// SESSION PERSISTENCE
 // =============================================================================
 
 async function loadOrCreateSession(config: EngineConfig): Promise<GamificationSession> {
@@ -858,28 +917,22 @@ async function loadOrCreateSession(config: EngineConfig): Promise<GamificationSe
       config.managerId
     );
 
-    // Store the row ID for all future saves this session
     activeSessionRowId = dbSession.id;
 
     const stored = dbSession.gamificationState;
 
-    // If we have a non-empty state saved, restore it
     if (stored && typeof stored === 'object' && Object.keys(stored).length > 0) {
       const restored = stored as GamificationSession;
-      // Verify it's actually today's session (sanity check)
       if (restored.date === today) {
         return migrateSession(restored, config.repCode, today);
       }
     }
 
-    // No valid state — start fresh
     const fresh = createFreshSession(config.repCode, today);
     fresh.sessionStartTime = Date.now();
     return fresh;
 
   } catch (err) {
-    // Supabase unavailable — fall back to a fresh in-memory session
-    // The rep can still dial; we just won't persist this session
     console.warn('Failed to load session from Supabase, starting fresh in-memory:', err);
     activeSessionRowId = null;
     const fresh = createFreshSession(config.repCode, today);
@@ -889,16 +942,9 @@ async function loadOrCreateSession(config: EngineConfig): Promise<GamificationSe
 }
 
 async function saveSession(session: GamificationSession): Promise<void> {
-  if (!activeSessionRowId) {
-    // No row ID means Supabase was unavailable at load time — skip silently
-    return;
-  }
+  if (!activeSessionRowId) return;
 
   try {
-    // Embed resume position into the state object before saving.
-    // We cast to any to avoid polluting the GamificationSession type with
-    // internal fields. These _ prefixed keys are ignored by the gamification
-    // engine and only read by campaignService.getResumeData().
     const stateWithResume: any = {
       ...session,
       _resumeTab: resumeTab || undefined,
@@ -907,7 +953,6 @@ async function saveSession(session: GamificationSession): Promise<void> {
 
     await campaignService.upsertGamificationState(activeSessionRowId, stateWithResume);
   } catch (err) {
-    // Never block the rep — log and move on
     console.warn('Session save to Supabase failed (non-critical):', err);
   }
 }
@@ -952,6 +997,6 @@ export type { Direction } from './dialerGroupBuilder';
 export type { DispositionType, DispositionExtra } from './dialerDispositions';
 export type { GamificationSession } from './gamificationDefs';
 export type { GamificationResult, MultiplierSnapshot } from './gamificationEngine';
-export { getCurrentRank } from './gamificationDefs';
+export { getCurrentRank, createFreshSession } from './gamificationDefs';
 export { getActiveMultipliers } from './gamificationEngine';
 export { formatPhoneDisplay } from './dialerUtils';

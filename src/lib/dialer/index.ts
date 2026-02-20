@@ -23,6 +23,7 @@ export {
   getCurrentRank,
   getActiveMultipliers,
   setResumePosition,
+  createFreshSession,
 } from './dialerEngine';
 
 export type {
@@ -43,7 +44,15 @@ export type {
 export { resolveHeaders, findHeaders } from './dialerHeaders';
 export type { ColumnIndices } from './dialerHeaders';
 
-export { buildGroups, sniperFilterGroups, filterAvailable, applyOrdering, findNextGroup, nextAfterRow } from './dialerGroupBuilder';
+export {
+  buildGroups,
+  sniperFilterGroups,
+  filterAvailable,
+  applyOrdering,
+  findNextGroup,
+  findInfiltrateStart,
+  nextAfterRow,
+} from './dialerGroupBuilder';
 export type { ClientGroup } from './dialerGroupBuilder';
 
 export { buildState, countStreetAER } from './dialerStateBuilder';
