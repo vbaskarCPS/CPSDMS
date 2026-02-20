@@ -311,8 +311,14 @@ function ResumeBanner({
 
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ flexShrink: 0 }}>
-            <div style={{ fontSize: 18, lineHeight: 1 }}>📡</div>
+          <div style={{ flexShrink: 0, width: 28, height: 28, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <img
+              src={`${GAME_ICON_BASE}/lorc/return-arrow.svg`}
+              width={24}
+              height={24}
+              draggable={false}
+              style={{ opacity: 0.65, filter: 'sepia(1) saturate(3) hue-rotate(5deg)' }}
+            />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{
@@ -380,6 +386,30 @@ function ResumeBanner({
 // MAIN TAB BAR
 // =============================================================================
 
+const GAME_ICON_BASE = 'https://game-icons.net/icons/ffffff/transparent';
+
+function GameIcon({
+  path,
+  size = 16,
+  opacity = 1,
+  style: extraStyle,
+}: {
+  path: string;
+  size?: number;
+  opacity?: number;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <img
+      src={`${GAME_ICON_BASE}/${path}.svg`}
+      width={size}
+      height={size}
+      style={{ opacity, display: 'block', flexShrink: 0, ...extraStyle }}
+      draggable={false}
+    />
+  );
+}
+
 function MainTabBar({
   active,
   onChange,
@@ -387,10 +417,10 @@ function MainTabBar({
   active: MainTab;
   onChange: (t: MainTab) => void;
 }) {
-  const tabs: { id: MainTab; label: string; icon: string }[] = [
-    { id: 'campaigns',    label: 'CAMPAIGNS',    icon: '🗺️' },
-    { id: 'stats',        label: 'STATS',        icon: '📊' },
-    { id: 'achievements', label: 'ACHIEVEMENTS', icon: '🏆' },
+  const tabs: { id: MainTab; label: string; iconPath: string }[] = [
+    { id: 'campaigns',    label: 'CAMPAIGNS',    iconPath: 'lorc/compass' },
+    { id: 'stats',        label: 'STATS',        iconPath: 'lorc/podium' },
+    { id: 'achievements', label: 'ACHIEVEMENTS', iconPath: 'delapouite/trophy-cup' },
   ];
 
   return (
@@ -423,10 +453,30 @@ function MainTabBar({
               display: 'flex',
               alignItems: 'center',
               gap: 6,
+              overflow: 'hidden',
+              minWidth: 0,
             }}
           >
-            <span style={{ fontSize: 12 }}>{t.icon}</span>
-            {t.label}
+            {/* Ghosted background splash icon */}
+            <img
+              src={`${GAME_ICON_BASE}/${t.iconPath}.svg`}
+              width={44}
+              height={44}
+              draggable={false}
+              style={{
+                position: 'absolute',
+                left: '50%',
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                opacity: isActive ? 0.10 : 0.04,
+                transition: 'opacity 0.25s ease',
+                pointerEvents: 'none',
+                filter: isActive ? 'none' : 'grayscale(1)',
+              }}
+            />
+            {/* Label text */}
+            <span style={{ position: 'relative', zIndex: 1 }}>{t.label}</span>
+            {/* Active underline */}
             {isActive && (
               <div style={{
                 position: 'absolute',
@@ -516,7 +566,17 @@ function StatsView({ campaignId, managerId }: { campaignId?: string; managerId?:
                 cursor: 'pointer',
               }}
             >
-              {t === 'global' ? '🌐 Global' : '👥 Fireteam'}
+              {t === 'global' ? (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <img src={`${GAME_ICON_BASE}/lorc/world.svg`} width={11} height={11} draggable={false} style={{ opacity: tab === t ? 0.8 : 0.3 }} />
+                  WORLD
+                </span>
+              ) : (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <img src={`${GAME_ICON_BASE}/lorc/rally-the-troops.svg`} width={11} height={11} draggable={false} style={{ opacity: tab === t ? 0.8 : 0.3 }} />
+                  FIRETEAM
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -796,7 +856,17 @@ function AchievementsView({
                   cursor: 'pointer',
                 }}
               >
-                {t === 'today' ? '📅 Today' : '🏆 Lifetime'}
+                {t === 'today' ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <img src={`${GAME_ICON_BASE}/lorc/sunrise.svg`} width={11} height={11} draggable={false} style={{ opacity: subTab === t ? 0.8 : 0.3 }} />
+                    TODAY
+                  </span>
+                ) : (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <img src={`${GAME_ICON_BASE}/lorc/open-book.svg`} width={11} height={11} draggable={false} style={{ opacity: subTab === t ? 0.8 : 0.3 }} />
+                    LIFETIME
+                  </span>
+                )}
               </button>
             ))}
           </div>
