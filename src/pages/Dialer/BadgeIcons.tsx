@@ -10,7 +10,7 @@ import React, { useState } from 'react';
 // --- Icon path mapping: badge/multiplier ID → "author/icon-name" ---
 
 const ICON_PATHS: Record<string, string> = {
-  // ─── BADGE ICONS (50) ───
+  // ─── BADGE ICONS ───
   // Streaks
   double_kill:    'lorc/crossed-swords',
   triple_kill:    'lorc/triple-skulls',
@@ -53,6 +53,10 @@ const ICON_PATHS: Record<string, string> = {
   necromancer:    'lorc/grim-reaper',
   lich_king:      'lorc/daemon-skull',
   resurrection:   'lorc/angel-wings',
+  // Graveyard (repeatable — per inactive year)
+  almost_dead:    'lorc/skeleton-inside',   // 2022 client — Almost Dead (+25)
+  actually_dead:  'lorc/tombstone',         // 2021 client — Actually Dead (+50)
+  really_dead:    'lorc/grim-reaper',       // 2020 client — Really Dead (+100)
   // Ranks
   sergeant:       'delapouite/corporal',
   lieutenant:     'lorc/crested-helmet',
@@ -90,12 +94,13 @@ const ICON_PATHS: Record<string, string> = {
   mult_enraged_fku:     'delapouite/uprising',
   mult_ratio_focus:     'lorc/on-target',
   mult_war_machine:     'lorc/gears',
-  mult_ghost_town:      'lorc/ghost',       // T1 Ghost Town    (+0.5x)
-  mult_ghost_town_t2:   'lorc/spectre',     // T2 Super Ghost Town (+1.0x)
-  mult_ghost_town_t3:   'lorc/haunting',    // T3 Haunted Town  (+2.0x)
+  mult_ghost_town:      'lorc/ghost',
+  mult_ghost_town_t2:   'lorc/spectre',
+  mult_ghost_town_t3:   'lorc/haunting',
   mult_cold_streak:     'delapouite/frozen-body',
   mult_scorched_earth:  'lorc/fire-zone',
   mult_indoctrinate:    'lorc/psychic-waves',
+  mult_exhumer:         'lorc/skull-in-jar',  // Exhumer: 2× FINAL after 20 dead-year dispositions
 };
 
 // --- Category accent colors ---
@@ -109,6 +114,7 @@ const C = {
   special:    '#00BCD4',
   headhunter: '#9b59b6',
   dead:       '#8e44ad',
+  graveyard:  '#6c3483',
   conversion: '#e056a0',
   rank:       '#f1c40f',
   milestone:  '#3498db',
@@ -125,6 +131,7 @@ const CATEGORY_MAP: Record<string, string> = {
   first_blood: C.special, no_scope: C.special, fast_start: C.special,
   headhunter: C.headhunter, trophy_hunter: C.headhunter, apex_predator: C.headhunter,
   grave_digger: C.dead, necromancer: C.dead, lich_king: C.dead, resurrection: C.dead,
+  almost_dead: C.graveyard, actually_dead: C.graveyard, really_dead: C.graveyard,
   sergeant: C.rank, lieutenant: C.rank, captain: C.rank, commander: C.rank,
   general: C.rank, field_marshal: C.rank, warlord: C.rank, supreme_cmdr: C.rank,
   first_deploy: C.milestone, sharpshooter: C.milestone, veteran: C.milestone, war_hero: C.milestone, legend: C.milestone,

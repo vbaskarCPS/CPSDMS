@@ -22,6 +22,7 @@ const SECTION_ORDER = [
   'Special',
   'Headhunter',
   'Raise the Dead',
+  'Graveyard',
   'Conversion',
   'Ranks',
   'Milestones',
@@ -38,7 +39,8 @@ const SECTION_DESC: Record<string, string> = {
   'Spree': 'Booking volume within a 1-hour window',
   'Special': 'Unique one-time achievements',
   'Headhunter': 'Booking on streets with no prior AER',
-  'Raise the Dead': 'Reviving clients with last service in 2021',
+  'Raise the Dead': 'Reviving clients last serviced in 2020, 2021, or 2022',
+  'Graveyard': 'Bonus points per booking based on how long a client has been inactive',
   'Conversion': 'Converting non-app clients to prepay',
   'Ranks': 'Prepay dollar milestones',
   'Milestones': 'Total booking count achievements',
@@ -56,6 +58,7 @@ const SECTION_COLORS: Record<string, string> = {
   'Special': '#00BCD4',
   'Headhunter': '#9b59b6',
   'Raise the Dead': '#8e44ad',
+  'Graveyard': '#6c3483',
   'Conversion': '#e056a0',
   'Ranks': '#f1c40f',
   'Milestones': '#3498db',
@@ -73,6 +76,7 @@ const SECTION_ICONS: Record<string, string> = {
   'Special': '✦',
   'Headhunter': '🎯',
   'Raise the Dead': '💀',
+  'Graveyard': '⚰️',
   'Conversion': '🧠',
   'Ranks': '⭐',
   'Milestones': '🏅',
@@ -94,6 +98,7 @@ const MULT_DESCRIPTIONS: Record<string, string> = {
   cold_streak: '20 dials without YES → +1.0x (2 charges).',
   scorched_earth: 'Clear an entire street → tiered bonus (0.1x–2.0x), 2 charges per trigger.',
   indoctrinate: 'Convert a non-app client to prepay → badge bonuses get multiplied by ALL active multipliers for 2 bookings.',
+  exhumer: 'Disposition 20 inactive clients (2020–2022) with WN/NIS, NO, or REMOVE → earn a 2× FINAL charge. Next booking doubles the entire grand total.',
 };
 
 // --- Props ---
@@ -428,7 +433,7 @@ function MultipliersTab({ session }: { session: GamificationSession }) {
   return (
     <div className="space-y-2">
       <div className="text-xs mb-3 px-1" style={{ color: '#555', fontSize: 10, lineHeight: 1.5 }}>
-        Multipliers stack on 1.0x base. Score = base × total multiplier + badge bonuses.
+        Multipliers stack on 1.0x base. Score = base × total multiplier + badge bonuses. Exhumer doubles the entire final total after everything else.
       </div>
       {multEntries.map(([id, def]) => {
         const ms = (session.multipliers as any)[id];
@@ -474,6 +479,14 @@ function MultipliersTab({ session }: { session: GamificationSession }) {
         if (id === 'ghost_town' && ms?.chargesRemaining > 0) { isActive = true; currentVal = `tier ${ms.tier} (${ms.chargesRemaining}ch)`; }
         if (id === 'cold_streak' && ms?.chargesRemaining > 0) { isActive = true; currentVal = `${ms.chargesRemaining}ch`; }
         if (id === 'scorched_earth' && ms?.bonusStack?.length > 0) { isActive = true; currentVal = `${ms.bonusStack.length} stacks`; }
+        if (id === 'exhumer') {
+          if (ms?.chargesRemaining > 0) {
+            isActive = true;
+            currentVal = '2× FINAL ready';
+          } else if (ms?.dispositionCount > 0) {
+            currentVal = `${ms.dispositionCount}/20 dispositions`;
+          }
+        }
 
         // Get game-icons.net multiplier icon, fall back to emoji
         const multIcon = getMultiplierIcon(id, 18);
@@ -520,6 +533,17 @@ function MultipliersTab({ session }: { session: GamificationSession }) {
                     letterSpacing: 1,
                   }}>
                     ACTIVE — {currentVal}
+                  </span>
+                )}
+                {!isActive && id === 'exhumer' && (ms as any)?.dispositionCount > 0 && (
+                  <span className="text-xs font-bold px-2 py-0.5 rounded-full font-mono" style={{
+                    background: 'rgba(108,52,131,0.1)',
+                    color: '#6c3483',
+                    fontSize: 8,
+                    border: '1px solid rgba(108,52,131,0.2)',
+                    letterSpacing: 1,
+                  }}>
+                    {(ms as any).dispositionCount}/20
                   </span>
                 )}
               </div>

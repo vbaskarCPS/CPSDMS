@@ -67,6 +67,11 @@ export const BADGE_DEFS: Record<string, BadgeDef> = {
   lich_king:      { icon: '👑',      name: 'Lich King',       desc: '20 raised dead clients',   section: 'Raise the Dead', color: 'toast-lichking',      type: 'once', bonus: 500 },
   resurrection:   { icon: '🧟',      name: 'Resurrection',    desc: '40 raised dead clients',   section: 'Raise the Dead', color: 'toast-resurrection',  type: 'once', bonus: 2000 },
 
+  // ─── GRAVEYARD (3) — Repeatable ───
+  almost_dead:    { icon: '🦴',      name: 'Almost Dead',     desc: 'Book a 2022 client',       section: 'Graveyard',     color: 'toast-almostdead',    type: 'repeatable', bonus: 25 },
+  actually_dead:  { icon: '💀',      name: 'Actually Dead',   desc: 'Book a 2021 client',       section: 'Graveyard',     color: 'toast-actuallydead',  type: 'repeatable', bonus: 50 },
+  really_dead:    { icon: '👻',      name: 'Really Dead',     desc: 'Book a 2020 client',       section: 'Graveyard',     color: 'toast-reallydead',    type: 'repeatable', bonus: 100 },
+
   // ─── CONVERSION (3) — Once ───
   conversion_therapy: { icon: '🧠', name: 'Conversion Therapy', desc: '2 non-app prepay converts',  section: 'Conversion', color: 'toast-conversion',   type: 'once', bonus: 200 },
   born_again:         { icon: '✨', name: 'Born Again',         desc: '5 non-app prepay converts',  section: 'Conversion', color: 'toast-bornagain',    type: 'once', bonus: 500 },
@@ -137,14 +142,15 @@ export interface MultiplierDef {
   inactivityWindowMs?: number;
   /** For war_machine: number of dials required to activate */
   dialThreshold?: number;
+  /** For exhumer: number of qualifying dispositions required to earn a charge */
+  requiredDispositions?: number;
+  /** If true, this multiplier doubles the entire final score (applied after all other scoring) */
+  doublesFinalScore?: boolean;
 }
 
 export const MULTIPLIER_DEFS: Record<string, MultiplierDef> = {
   op_tempo: {
     name: 'Op Tempo', icon: '⚡',
-    // Activates when rolling 60-min booking window reaches 5+.
-    // Value = windowCount * perLevelBonus (5→0.5x, 6→0.6x, no cap).
-    // Re-evaluated on each disposition. Drops when window falls below activationThreshold.
     activationThreshold: 5,
     perLevelBonus: 0.1,
     timerDuration: 0, decays: false,
@@ -189,11 +195,9 @@ export const MULTIPLIER_DEFS: Record<string, MultiplierDef> = {
   },
   war_machine: {
     name: 'War Machine', icon: '⚙️',
-    // New logic: activate at dialThreshold dials → +0.5x flat
-    // drops after inactivityWindowMs without any disposition
     flatMultiplier: 0.5,
     dialThreshold: 50,
-    inactivityWindowMs: 600000, // 10 minutes
+    inactivityWindowMs: 600000,
     timerDuration: 0, decays: false,
   },
   ghost_town: {
@@ -208,7 +212,7 @@ export const MULTIPLIER_DEFS: Record<string, MultiplierDef> = {
   },
   scorched_earth: {
     name: 'Scorched Earth', icon: '🔥',
-    chargesPerTrigger: 2,  // reduced from 5
+    chargesPerTrigger: 2,
     tiers: [
       { minGroups: 21, bonus: 2.0, multiplier: 2.0, name: 'Scorched Earth', icon: '🔥' },
       { minGroups: 16, bonus: 1.0, multiplier: 1.0, name: 'Scorched Earth', icon: '🔥' },
@@ -223,6 +227,17 @@ export const MULTIPLIER_DEFS: Record<string, MultiplierDef> = {
     charges: 2,
     timerDuration: 0, decays: false,
     modifiesScoring: true,
+  },
+  exhumer: {
+    name: 'Exhumer', icon: '⚰️',
+    // Activated by: 20 WN/NIS, NO, or REMOVE dispositions on clients
+    // whose mostRecentYear is 2020, 2021, or 2022.
+    // Effect: doubles the entire final grand total on the next booking (1 charge).
+    // After firing, counter resets to 0 — need another 20 to earn again.
+    requiredDispositions: 20,
+    charges: 1,
+    doublesFinalScore: true,
+    timerDuration: 0, decays: false,
   },
 };
 
@@ -277,6 +292,11 @@ export interface GamificationSession {
   raisedDeadCount: number;
   conversionCount: number;
 
+  // Graveyard badge counters (incremented on every YES of matching year)
+  almostDeadCount: number;   // 2022 clients booked
+  actuallyDeadCount: number; // 2021 clients booked
+  reallyDeadCount: number;   // 2020 clients booked
+
   totalDials: number;
   hourlyDials: Record<string, number>;
   bookingTimestamps: number[];
@@ -295,19 +315,22 @@ export interface GamificationSession {
   _prepayStreakBadgeEpoch?: number;
 
   multipliers: {
-    op_tempo: { windowCount: number };  // bookings in rolling 60-min window
+    op_tempo: { windowCount: number };
     tracer_rounds: { prepayCount: number; expiresAt: number };
     high_ground: { activeStreet: string; active: boolean };
     night_vision: { bookingsAfter8: number };
     blitz: { earlyYesCount: number; triggered: boolean; triggerTime: number; tier: number };
     enraged: { consecutiveRejections: number; tier: number; chargesRemaining: number; frozen: boolean };
     ratio_focus: Record<string, never>;
-    // War Machine: new fields — totalDials counter + last disposition timestamp
     war_machine: { totalDials: number; active: boolean; lastDialAt: number };
     ghost_town: { consecutiveUnreached: number; chargesRemaining: number; tier: number };
     cold_streak: { dialsSinceLastYes: number; chargesRemaining: number };
     scorched_earth: { bonusStack: ScorchedEarthStack[]; clearedStreets: Record<string, boolean> };
     indoctrinate: { chargesRemaining: number };
+    // Exhumer: counts qualifying dispositions (WN/NIS, NO, REMOVE on dead-year clients).
+    // Once dispositionCount reaches 20, chargesRemaining becomes 1.
+    // On the next YES the charge fires (doubles final score) and dispositionCount resets to 0.
+    exhumer: { dispositionCount: number; chargesRemaining: number };
   };
 }
 
@@ -321,6 +344,7 @@ export function createFreshSession(repCode: string, dateStr: string): Gamificati
     pbs: 0, pps: 0, ppDollars: 0, totalBookings: 0,
     consecutiveYes: 0, consecutivePrepays: 0,
     newStreetBookings: 0, raisedDeadCount: 0, conversionCount: 0,
+    almostDeadCount: 0, actuallyDeadCount: 0, reallyDeadCount: 0,
     totalDials: 0, hourlyDials: {}, bookingTimestamps: [], sessionStartTime: 0,
     totalSessionPoints: 0, recentBookings: [],
     badges: [], badgeOnceClaimed: {},
@@ -338,6 +362,7 @@ export function createFreshSession(repCode: string, dateStr: string): Gamificati
       cold_streak: { dialsSinceLastYes: 0, chargesRemaining: 0 },
       scorched_earth: { bonusStack: [], clearedStreets: {} },
       indoctrinate: { chargesRemaining: 0 },
+      exhumer: { dispositionCount: 0, chargesRemaining: 0 },
     },
   };
 }

@@ -64,6 +64,9 @@ function getActivationVerb(
     case 'indoctrinate':
       return 'is Indoctrinating';
 
+    case 'exhumer':
+      return 'is an Exhumer — 2× FINAL ready';
+
     default:
       return `activated ${id.replace(/_/g, ' ')}`;
   }
@@ -83,6 +86,7 @@ const MULT_COLORS: Record<string, string> = {
   cold_streak: '#85c1e9',
   scorched_earth: '#ff5722',
   indoctrinate: '#e056a0',
+  exhumer: '#6c3483',
 };
 
 const MULT_ICONS: Record<string, string> = {
@@ -98,6 +102,7 @@ const MULT_ICONS: Record<string, string> = {
   cold_streak: '❄️',
   scorched_earth: '🌋',
   indoctrinate: '🧠',
+  exhumer: '⚰️',
 };
 
 // =============================================================================

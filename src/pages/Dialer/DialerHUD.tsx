@@ -75,6 +75,7 @@ const MULT_THEME: Record<string, { color: string; glow: string }> = {
   cold_streak:    { color: '#85c1e9', glow: 'rgba(133,193,233,0.4)' },
   scorched_earth: { color: '#ff5722', glow: 'rgba(255,87,34,0.5)' },
   indoctrinate:   { color: '#e056a0', glow: 'rgba(224,86,160,0.5)' },
+  exhumer:        { color: '#6c3483', glow: 'rgba(108,52,131,0.5)' },
 };
 
 const MULT_DESC: Record<string, string> = {
@@ -90,6 +91,7 @@ const MULT_DESC: Record<string, string> = {
   cold_streak: '20 dials without YES → +1.0x (2 charges).',
   scorched_earth: 'Clear a street → 1.1x-3.0x, 5 charges.',
   indoctrinate: 'Convert a non-app client → badge bonuses get multiplied for 2 bookings.',
+  exhumer: '20 WN/NIS, NO, or REMOVE on 2020–2022 clients → next booking doubles the entire final total.',
 };
 
 const MENU_ITEMS: { id: HUDMenuAction; icon: string; label: string; desc: string }[] = [
@@ -121,6 +123,10 @@ const HUD_STYLES = `
   @keyframes hud-scorched-pulse {
     0%, 100% { box-shadow: 0 0 6px rgba(255,87,34,0.15); }
     50% { box-shadow: 0 0 16px rgba(255,87,34,0.45); }
+  }
+  @keyframes hud-exhumer-pulse {
+    0%, 100% { box-shadow: 0 0 8px rgba(108,52,131,0.2), inset 0 0 12px rgba(108,52,131,0.05); }
+    50% { box-shadow: 0 0 22px rgba(108,52,131,0.6), inset 0 0 16px rgba(108,52,131,0.15); }
   }
   @keyframes hud-tooltip-in {
     0% { opacity: 0; transform: translateY(6px) scale(0.95); }
@@ -246,6 +252,8 @@ function MultiplierStrip({
         const charges = (m.extra as any)?.charges;
         const isEnraged = m.id === 'enraged';
         const isScorched = m.id === 'scorched_earth';
+        const isExhumer = m.id === 'exhumer';
+        const doublesFinal = (m.extra as any)?.doublesFinalScore;
         const isHovered = hoveredId === m.id;
 
         let timerProgress = 1;
@@ -278,7 +286,9 @@ function MultiplierStrip({
                   ? 'hud-enraged-pulse 1.2s ease-in-out infinite'
                   : isScorched
                     ? 'hud-scorched-pulse 2s ease-in-out infinite'
-                    : `hud-tile-enter 0.45s cubic-bezier(0.34,1.56,0.64,1) ${idx * 0.07}s both, hud-tile-breathe 4s ease-in-out ${idx * 0.5}s infinite`,
+                    : isExhumer
+                      ? 'hud-exhumer-pulse 1.8s ease-in-out infinite'
+                      : `hud-tile-enter 0.45s cubic-bezier(0.34,1.56,0.64,1) ${idx * 0.07}s both, hud-tile-breathe 4s ease-in-out ${idx * 0.5}s infinite`,
                 boxShadow: isHovered
                   ? `0 4px 20px rgba(0,0,0,0.7), 0 0 20px ${theme.color}50`
                   : shadowRest,
@@ -298,7 +308,9 @@ function MultiplierStrip({
               }}>
                 <MultiplierIconDisplay multiplier={m} size={ICON_SIZE} />
               </div>
-              {!m.extra?.modifiesScoring && (
+
+              {/* Label at bottom of tile */}
+              {!m.extra?.modifiesScoring && !doublesFinal && (
                 <div style={{
                   position: 'absolute', bottom: 2, left: 0, right: 0,
                   textAlign: 'center', fontFamily: 'monospace', fontWeight: 900, fontSize: 13, lineHeight: 1,
@@ -320,6 +332,19 @@ function MultiplierStrip({
                   ALL×
                 </div>
               )}
+              {/* Exhumer shows "2x FINAL" */}
+              {doublesFinal && (
+                <div style={{
+                  position: 'absolute', bottom: 2, left: 0, right: 0,
+                  textAlign: 'center', fontFamily: 'monospace', fontWeight: 900, fontSize: 10, lineHeight: 1,
+                  color: '#fff',
+                  textShadow: `0 0 6px ${theme.color}, 0 1px 2px rgba(0,0,0,0.8), 0 0 14px ${theme.color}60`,
+                  pointerEvents: 'none',
+                }}>
+                  2× FINAL
+                </div>
+              )}
+
               {m.expiresIn > 0 && timerProgress > 0 && timerProgress < 1 && (
                 <svg
                   style={{ position: 'absolute', inset: -1, width: TILE + 2, height: TILE + 2, pointerEvents: 'none' }}
@@ -402,7 +427,7 @@ function MultiplierStrip({
                         color: '#fff', textShadow: `0 0 12px ${theme.color}80`,
                         lineHeight: 1.1, marginTop: 1,
                       }}>
-                        {m.extra?.modifiesScoring ? 'ALL×' : `+${m.value}x`}
+                        {m.extra?.modifiesScoring ? 'ALL×' : doublesFinal ? '2× FINAL' : `+${m.value}x`}
                       </div>
                     </div>
                   </div>
@@ -833,7 +858,7 @@ export default function DialerHUD({
 
   const streak = s?.consecutiveYes ?? 0;
   const points = s?.totalSessionPoints ?? 0;
-  const totalMult = activeMultipliers.reduce((sum, m) => m.extra?.modifiesScoring ? sum : sum + m.value, 1.0);
+  const totalMult = activeMultipliers.reduce((sum, m) => (m.extra?.modifiesScoring || (m.extra as any)?.doublesFinalScore) ? sum : sum + m.value, 1.0);
 
   const handleMenuAction = useCallback((action: HUDMenuAction) => {
     if (action === 'achievements') onTrophyClick();

@@ -13,7 +13,7 @@ import type { GamificationSession } from '../../lib/dialer/gamificationDefs';
 // Section display order — must match AchievementsPanel
 const SECTION_ORDER: string[] = [
   'Streaks', 'Prepay Streak', 'Street', 'Time', 'Spree',
-  'Special', 'Headhunter', 'Raise the Dead', 'Conversion',
+  'Special', 'Headhunter', 'Raise the Dead', 'Graveyard', 'Conversion',
   'Ranks', 'Milestones', 'Workhorse',
 ];
 
@@ -25,7 +25,8 @@ const SECTION_DESC: Record<string, string> = {
   Spree: 'Booking volume within a 1-hour window',
   Special: 'Unique one-time achievements',
   Headhunter: 'Booking on streets with no prior AER',
-  'Raise the Dead': 'Reviving clients with last service in 2021',
+  'Raise the Dead': 'Reviving clients last serviced in 2020, 2021, or 2022',
+  'Graveyard': 'Bonus points per booking based on how long a client has been inactive',
   Conversion: 'Converting non-app clients to prepay',
   Ranks: 'Prepay dollar milestones',
   Milestones: 'Total booking count achievements',
@@ -41,6 +42,7 @@ const SECTION_COLORS: Record<string, string> = {
   Special: '#00BCD4',
   Headhunter: '#9b59b6',
   'Raise the Dead': '#8e44ad',
+  'Graveyard': '#6c3483',
   Conversion: '#e056a0',
   Ranks: '#f1c40f',
   Milestones: '#3498db',
@@ -56,6 +58,7 @@ const SECTION_ICONS: Record<string, string> = {
   Special: '✦',
   Headhunter: '🎯',
   'Raise the Dead': '💀',
+  'Graveyard': '⚰️',
   Conversion: '🧠',
   Ranks: '⭐',
   Milestones: '🏅',
