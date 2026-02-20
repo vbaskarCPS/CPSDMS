@@ -386,7 +386,7 @@ function ResumeBanner({
 // MAIN TAB BAR
 // =============================================================================
 
-const GAME_ICON_BASE = 'https://game-icons.net/icons/ffffff/transparent';
+const GAME_ICON_BASE = 'https://game-icons.net/icons/ffffff/transparent/1x1';
 
 function GameIcon({
   path,
