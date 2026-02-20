@@ -71,7 +71,6 @@ export {
   BADGE_DEFS,
   MULTIPLIER_DEFS,
   BASE_POINTS,
-  createFreshSession,
 } from './gamificationDefs';
 export type {
   BadgeDef,
