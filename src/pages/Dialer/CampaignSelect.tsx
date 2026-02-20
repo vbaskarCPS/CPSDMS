@@ -1,26 +1,4 @@
 // src/pages/Dialer/CampaignSelect.tsx
-//
-// Video-game-style campaign / map selection screen for AutoSniper.
-// Think: Call of Duty map selection meets military command center.
-//
-// Heat scale based on avgAttempts (call-through rate):
-//   ≤ 1.1  → green  (#2ecc71) — barely touched
-//   1.1–2  → yellow (#f1c40f)
-//   2–3    → orange (#e67e22)
-//   3–4    → red    (#e74c3c)
-//   4–5    → purple (#9b59b6)
-//   5+     → brown  (#8B6914)
-//
-// HOT badge: driven by live presence — a teammate is currently deployed
-//            in this campaign (last heartbeat within 90 seconds).
-//
-// Layout: card grid (left, flex-1) | FireteamPanel (right, 300px fixed)
-// Deploy flow: click card → arms it (scan line, accent glow) → DEPLOY
-//              button appears on card → click DEPLOY → modal opens
-//
-// Resume banner: shown at top of card area when resumeData is present.
-//   Clicking RESUME OPERATION calls onResume() which bypasses deploy config.
-
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Settings } from 'lucide-react';
 import FireteamPanel from './FireteamPanel';
@@ -28,10 +6,6 @@ import { dialerRealtimeService } from '../../lib/dialerRealtimeService';
 import type { PresenceRecord } from '../../lib/dialerRealtimeService';
 import type { ResumeData } from '../../lib/campaignService';
 import { getTodayEST } from '../../lib/campaignService';
-
-// =============================================================================
-// TYPES
-// =============================================================================
 
 export interface Campaign {
   id: string;
@@ -47,7 +21,7 @@ export interface Campaign {
   lastDeployed?: string;
   locked?: boolean;
   lockedReason?: string;
-  hot?: boolean; // manual override — forces HOT regardless of presence
+  hot?: boolean;
 }
 
 interface CampaignSelectProps {
@@ -55,19 +29,13 @@ interface CampaignSelectProps {
   onDeploy: (campaignId: string) => void;
   onSettingsClick?: () => void;
   filterSummary?: React.ReactNode;
-  // Passed through to FireteamPanel
   campaignId?: string;
   managerId?: string;
   managerName?: string;
-  // Resume Game
   resumeData?: ResumeData | null;
   resumeLoading?: boolean;
   onResume?: () => void;
 }
-
-// =============================================================================
-// HEAT SCALE
-// =============================================================================
 
 function heatColor(avgAttempts: number): string {
   if (avgAttempts <= 1.1) return '#2ecc71';
@@ -97,10 +65,6 @@ function heatGradient(avgAttempts: number): string {
 function isAutoHot(avgAttempts: number): boolean {
   return avgAttempts >= 4;
 }
-
-// =============================================================================
-// HELPERS
-// =============================================================================
 
 function reachStatus(pct: number): { label: string; color: string } {
   if (pct < 20) return { label: 'FRESH', color: '#2ecc71' };
@@ -133,7 +97,6 @@ function formatLastSeen(isoTimestamp: string | null): string {
   return `${days}d ago`;
 }
 
-// Procedural topo-map pattern SVG (unique per campaign based on id hash)
 function topoPattern(id: string, accent: string): string {
   let hash = 0;
   for (let i = 0; i < id.length; i++) hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
@@ -160,10 +123,6 @@ function gridOverlay(accent: string): string {
     <line x1='40' y1='0' x2='40' y2='40' stroke='${accent}' stroke-width='0.3' opacity='0.06'/>
   </svg>`;
 }
-
-// =============================================================================
-// STYLES
-// =============================================================================
 
 const CAMPAIGN_STYLES = `
   @keyframes cs-scan-line {
@@ -222,10 +181,6 @@ const CAMPAIGN_STYLES = `
   }
 `;
 
-// =============================================================================
-// RESUME BANNER
-// =============================================================================
-
 function ResumeBanner({
   resumeData,
   onResume,
@@ -250,7 +205,6 @@ function ResumeBanner({
         overflow: 'hidden',
       }}
     >
-      {/* Subtle animated shimmer */}
       <div style={{
         position: 'absolute',
         top: 0, bottom: 0, width: '40%',
@@ -260,12 +214,10 @@ function ResumeBanner({
       }} />
 
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 12 }}>
-        {/* Left: signal icon + label */}
         <div style={{ flexShrink: 0 }}>
           <div style={{ fontSize: 18, lineHeight: 1, marginBottom: 2 }}>📡</div>
         </div>
 
-        {/* Center: text */}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontSize: 8, fontWeight: 800, letterSpacing: '3px',
@@ -275,10 +227,7 @@ function ResumeBanner({
             LAST OPERATION DETECTED
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{
-              fontSize: 12, fontWeight: 900, color: '#fff',
-              letterSpacing: '0.5px',
-            }}>
+            <span style={{ fontSize: 12, fontWeight: 900, color: '#fff', letterSpacing: '0.5px' }}>
               {resumeData.tab}
             </span>
             <span style={{
@@ -291,22 +240,17 @@ function ResumeBanner({
               {isToday ? '🟢 TODAY' : '🟡 PREV SESSION'}
             </span>
             {lastSeen && (
-              <span style={{ fontSize: 9, color: '#666', fontWeight: 600 }}>
-                {lastSeen}
-              </span>
+              <span style={{ fontSize: 9, color: '#666', fontWeight: 600 }}>{lastSeen}</span>
             )}
           </div>
           <div style={{ fontSize: 9, color: '#555', marginTop: 2, fontFamily: 'monospace' }}>
             Position: {resumeData.position.startsWith('ROW:') ? `Row ${resumeData.position.slice(4)}` : resumeData.position}
             {!isToday && (
-              <span style={{ color: '#444', marginLeft: 8 }}>
-                · Gamification resets (new day)
-              </span>
+              <span style={{ color: '#444', marginLeft: 8 }}>· Gamification resets (new day)</span>
             )}
           </div>
         </div>
 
-        {/* Right: Resume button */}
         <button
           onClick={onResume}
           onMouseEnter={() => setHovered(true)}
@@ -316,9 +260,7 @@ function ResumeBanner({
             padding: '10px 20px',
             borderRadius: 6,
             border: `1.5px solid ${hovered ? '#f5a623' : 'rgba(245,166,35,0.5)'}`,
-            background: hovered
-              ? 'rgba(245,166,35,0.18)'
-              : 'rgba(245,166,35,0.08)',
+            background: hovered ? 'rgba(245,166,35,0.18)' : 'rgba(245,166,35,0.08)',
             color: '#f5a623',
             fontSize: 11,
             fontWeight: 900,
@@ -337,10 +279,6 @@ function ResumeBanner({
   );
 }
 
-// =============================================================================
-// MAIN COMPONENT
-// =============================================================================
-
 export default function CampaignSelect({
   campaigns,
   onDeploy,
@@ -357,23 +295,17 @@ export default function CampaignSelect({
   const [deploying, setDeploying] = useState(false);
   const [presence, setPresence] = useState<PresenceRecord[]>([]);
 
-  // ---- Fetch and subscribe to presence ----
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
-
     dialerRealtimeService.fetchActivePresence().then(setPresence);
-
     unsubscribe = dialerRealtimeService.subscribeToPresence((records) => {
       setPresence(records);
     });
-
     return () => { unsubscribe?.(); };
   }, []);
 
-  // Set of campaign IDs that have a teammate actively deployed
   const hotCampaignIds = new Set(presence.map(p => p.campaignId));
 
-  // Sort: presence-hot first, auto-hot next, then unlocked, then locked
   const sorted = [...campaigns].sort((a, b) => {
     const aHot = hotCampaignIds.has(a.id) || a.hot || isAutoHot(a.avgAttempts);
     const bHot = hotCampaignIds.has(b.id) || b.hot || isAutoHot(b.avgAttempts);
@@ -391,16 +323,13 @@ export default function CampaignSelect({
 
   const handleDeploy = useCallback((id: string) => {
     setDeploying(true);
-    setTimeout(() => {
-      onDeploy(id);
-    }, 600);
+    setTimeout(() => { onDeploy(id); }, 600);
   }, [onDeploy]);
 
   return (
     <>
       <style>{CAMPAIGN_STYLES}</style>
 
-      {/* === NOISE OVERLAY === */}
       <div style={{
         position: 'fixed', inset: 0, opacity: 0.03, pointerEvents: 'none', zIndex: 0,
         backgroundImage: `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/></filter><rect width='200' height='200' filter='url(%23n)'/></svg>`)}")`,
@@ -418,7 +347,7 @@ export default function CampaignSelect({
         flexDirection: 'column',
       }}>
 
-        {/* === HEADER === */}
+        {/* HEADER */}
         <div style={{
           padding: '24px 24px 0',
           position: 'relative',
@@ -493,7 +422,7 @@ export default function CampaignSelect({
           }} />
         </div>
 
-        {/* === MAIN BODY: card grid + fireteam panel === */}
+        {/* MAIN BODY */}
         <div style={{
           flex: 1,
           display: 'flex',
@@ -502,7 +431,7 @@ export default function CampaignSelect({
           minHeight: 0,
         }}>
 
-          {/* --- Campaign Cards Grid --- */}
+          {/* Campaign Cards Grid */}
           <div style={{
             flex: 1,
             padding: '0 16px 24px 24px',
@@ -510,12 +439,10 @@ export default function CampaignSelect({
             display: 'flex',
             flexDirection: 'column',
           }}>
-            {/* Resume Banner — shown above cards when a last position exists */}
             {!resumeLoading && resumeData && onResume && (
               <ResumeBanner resumeData={resumeData} onResume={onResume} />
             )}
 
-            {/* Cards grid */}
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
@@ -546,16 +473,15 @@ export default function CampaignSelect({
             </div>
           </div>
 
-          {/* --- Permanent Fireteam Panel --- */}
+          {/* Fireteam Panel — 200px wide (down from 450) */}
           <div style={{
-            width: 450,
+            width: 200,
             flexShrink: 0,
             borderLeft: '1px solid rgba(0,229,255,0.10)',
             background: 'rgba(4,8,4,0.98)',
             display: 'flex',
             flexDirection: 'column',
           }}>
-            {/* Live Ops header */}
             <div style={{
               padding: '14px 12px 8px',
               borderBottom: '1px solid rgba(0,229,255,0.08)',
@@ -578,7 +504,6 @@ export default function CampaignSelect({
               )}
             </div>
 
-            {/* FireteamPanel — only renders if we have IDs */}
             {campaignId && managerId && managerName ? (
               <FireteamPanel
                 campaignId={campaignId}
@@ -601,10 +526,6 @@ export default function CampaignSelect({
     </>
   );
 }
-
-// =============================================================================
-// CAMPAIGN CARD
-// =============================================================================
 
 function CampaignCard({
   campaign: c,
@@ -661,21 +582,17 @@ function CampaignCard({
         animation: `cs-card-enter 0.4s ease-out ${index * 0.04}s both`,
       }}
     >
-      {/* Topo pattern bg */}
       <div style={{
         position: 'absolute', inset: 0,
         backgroundImage: `url("data:image/svg+xml,${encodeURIComponent(topo)}")`,
         backgroundSize: 'cover', pointerEvents: 'none',
       }} />
-
-      {/* Grid overlay */}
       <div style={{
         position: 'absolute', inset: 0,
         backgroundImage: `url("data:image/svg+xml,${encodeURIComponent(grid)}")`,
         backgroundSize: '40px 40px', pointerEvents: 'none',
       }} />
 
-      {/* Scan line — only when armed */}
       {isArmed && (
         <div style={{
           position: 'absolute', left: 0, right: 0, height: 2,
@@ -685,10 +602,7 @@ function CampaignCard({
         }} />
       )}
 
-      {/* Card content */}
       <div style={{ position: 'relative', zIndex: 2, padding: '14px 16px' }}>
-
-        {/* Top row: codename + HOT badge */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
           {c.codename ? (
             <span style={{
@@ -713,7 +627,6 @@ function CampaignCard({
           )}
         </div>
 
-        {/* Campaign name */}
         <h3 style={{
           fontSize: 16, fontWeight: 900, color: '#fff',
           margin: '0 0 8px 0', letterSpacing: '0.5px', lineHeight: 1.2,
@@ -722,7 +635,6 @@ function CampaignCard({
           {c.name}
         </h3>
 
-        {/* Stats row */}
         <div style={{ display: 'flex', gap: 12, marginBottom: 10 }}>
           <MiniStat label="ROWS"     value={(c.totalRows).toLocaleString()} color={accent} />
           <MiniStat label="BOOKINGS" value={c.bookings}                     color={c.bookings > 0 ? '#f1c40f' : '#555'} />
@@ -730,7 +642,6 @@ function CampaignCard({
           <MiniStat label="AVG ATT"  value={c.avgAttempts.toFixed(1)}       color={accent} />
         </div>
 
-        {/* Reached progress bar */}
         <div style={{ marginBottom: isArmed ? 10 : 8 }}>
           <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
             <div style={{
@@ -742,15 +653,12 @@ function CampaignCard({
           </div>
         </div>
 
-        {/* Bottom row: last deployed */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontSize: 7, fontWeight: 700, color: '#444', letterSpacing: '1px' }}>
             {c.locked
               ? `🔒 ${c.lockedReason || 'LOCKED'}`
               : `LAST: ${formatDate(c.lastDeployed)}`}
           </span>
-
-          {/* Heat indicator dot */}
           {!c.locked && (
             <div style={{
               width: 6, height: 6, borderRadius: '50%',
@@ -761,7 +669,6 @@ function CampaignCard({
           )}
         </div>
 
-        {/* === DEPLOY BUTTON — slides in when armed === */}
         {isArmed && !c.locked && (
           <div style={{ marginTop: 12 }}>
             <button
@@ -789,7 +696,6 @@ function CampaignCard({
                   : 'cs-deploy-glow 3s ease-in-out infinite',
               }}
             >
-              {/* Sweep shimmer */}
               {!isDeploying && (
                 <div style={{
                   position: 'absolute',
@@ -807,7 +713,6 @@ function CampaignCard({
         )}
       </div>
 
-      {/* Armed accent bar at bottom */}
       {isArmed && (
         <div style={{
           position: 'absolute', bottom: 0, left: 0, right: 0, height: 3,
@@ -818,10 +723,6 @@ function CampaignCard({
     </div>
   );
 }
-
-// =============================================================================
-// MINI STAT
-// =============================================================================
 
 function MiniStat({ label, value, color }: { label: string; value: string | number; color: string }) {
   return (
