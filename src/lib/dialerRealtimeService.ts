@@ -18,11 +18,22 @@
 // - fetchGlobalStatsFromSessions():   reads per-member stats from dialer_sessions
 // - createIsolatedChannel(): creates a private realtime subscription
 //
+// CALM MODE: ROBA (repCode === 'ROBA') is completely invisible to all team
+// systems. All publish* functions return early if managerId === 'ROBA'.
+// fetchFireteamStatsFromSessions and fetchGlobalStatsFromSessions filter
+// ROBA's rows out before returning results to other users.
+//
 
 import { supabase } from './supabase';
 import { getTodayEST } from './campaignService';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import type { TeamBookingEvent } from '../pages/Dialer/DialerHUD';
+
+// =============================================================================
+// CALM MODE CONSTANT
+// =============================================================================
+
+const CALM_MODE_USER = 'ROBA';
 
 // =============================================================================
 // TYPES
@@ -49,8 +60,8 @@ export interface PublishMultiplierPayload {
   campaignId: string;
   managerId: string;
   managerName: string;
-  multiplierId: string;   // e.g. 'ghost_town', 'blitz'
-  multiplierText: string; // e.g. 'Justice N is in a Ghost Town'
+  multiplierId: string;
+  multiplierText: string;
 }
 
 export interface PresenceRecord {
@@ -136,9 +147,11 @@ class DialerRealtimeService {
 
   // =========================================================================
   // PUBLISH BOOKING
+  // ROBA never writes to the shared team events table.
   // =========================================================================
 
   public async publishBookingEvent(payload: PublishBookingPayload): Promise<void> {
+    if (payload.managerId === CALM_MODE_USER) return;
     try {
       const { error } = await supabase
         .from('dialer_team_events')
@@ -162,12 +175,11 @@ class DialerRealtimeService {
 
   // =========================================================================
   // PUBLISH MULTIPLIER ACTIVATION
-  // Inserts a row with is_multiplier=true so all teammates see it in realtime.
-  // multiplier_id stores which multiplier fired (e.g. 'ghost_town').
-  // manager_name stores the display name for rendering in FireteamPanel.
+  // ROBA never writes multiplier activations to the shared feed.
   // =========================================================================
 
   public async publishMultiplierEvent(payload: PublishMultiplierPayload): Promise<void> {
+    if (payload.managerId === CALM_MODE_USER) return;
     try {
       const { error } = await supabase
         .from('dialer_team_events')
@@ -185,11 +197,6 @@ class DialerRealtimeService {
           is_login:       false,
           is_multiplier:  true,
           multiplier_id:  payload.multiplierId,
-          // Store the display text in the multipliers array slot [0] is already
-          // the id; we embed the text as manager_name suffix via a separate
-          // approach — we store it JSON-encoded in a dedicated column.
-          // Since we only have multiplier_id as new column, the full text
-          // is reconstructed client-side from multiplierId + managerName.
         });
       if (error) console.error('Failed to publish multiplier event:', error.message);
     } catch (err) {
@@ -199,6 +206,7 @@ class DialerRealtimeService {
 
   // =========================================================================
   // PUBLISH LOGIN EVENT
+  // ROBA never announces herself to the team.
   // =========================================================================
 
   public async publishLoginEvent(payload: {
@@ -206,6 +214,7 @@ class DialerRealtimeService {
     managerId: string;
     managerName: string;
   }): Promise<void> {
+    if (payload.managerId === CALM_MODE_USER) return;
     try {
       const { error } = await supabase
         .from('dialer_team_events')
@@ -230,9 +239,11 @@ class DialerRealtimeService {
 
   // =========================================================================
   // PUBLISH DIAL TICK
+  // ROBA's dial ticks are not shared with the team.
   // =========================================================================
 
   public async publishDialEvent(payload: PublishDialPayload): Promise<void> {
+    if (payload.managerId === CALM_MODE_USER) return;
     try {
       const { error } = await supabase
         .from('dialer_team_events')
@@ -256,6 +267,7 @@ class DialerRealtimeService {
 
   // =========================================================================
   // PRESENCE — UPSERT
+  // ROBA does not appear in presence (invisible to team).
   // =========================================================================
 
   public async publishPresence(payload: {
@@ -263,6 +275,7 @@ class DialerRealtimeService {
     managerName: string;
     campaignId: string;
   }): Promise<void> {
+    if (payload.managerId === CALM_MODE_USER) return;
     try {
       const { error } = await supabase
         .from('dialer_presence')
@@ -351,9 +364,7 @@ class DialerRealtimeService {
   }
 
   // =========================================================================
-  // FETCH TODAY'S EVENTS — bookings + logins + multiplier activations
-  // campaignId = undefined → global
-  // campaignId = string    → fireteam bookings + all logins + all multipliers
+  // FETCH TODAY'S EVENTS
   // =========================================================================
 
   public async fetchTodayEvents(campaignId?: string): Promise<(TeamBookingEvent & { isLogin?: boolean; isMultiplier?: boolean; multiplierId?: string })[]> {
@@ -401,7 +412,7 @@ class DialerRealtimeService {
   }
 
   // =========================================================================
-  // SUBSCRIBE — Fireteam (current campaign, skip own bookings)
+  // SUBSCRIBE — Fireteam
   // =========================================================================
 
   public subscribeToTeamFeed(
@@ -457,7 +468,7 @@ class DialerRealtimeService {
   }
 
   // =========================================================================
-  // SUBSCRIBE — Global (all campaigns, include own, include login + multiplier)
+  // SUBSCRIBE — Global
   // =========================================================================
 
   public subscribeToGlobalFeed(
@@ -541,6 +552,7 @@ class DialerRealtimeService {
 
   // =========================================================================
   // FETCH FIRETEAM STATS FROM SESSIONS
+  // ROBA's rows are filtered out before returning to other users.
   // =========================================================================
 
   public async fetchFireteamStatsFromSessions(campaignId: string): Promise<MemberStats[]> {
@@ -554,6 +566,7 @@ class DialerRealtimeService {
     if (error) { console.error('Failed to fetch fireteam session stats:', error.message); return []; }
 
     return (data || [])
+      .filter(row => row.manager_id !== CALM_MODE_USER)
       .map(row => sessionRowToMemberStats(row))
       .filter(Boolean)
       .sort((a, b) => b!.points - a!.points) as MemberStats[];
@@ -561,6 +574,7 @@ class DialerRealtimeService {
 
   // =========================================================================
   // FETCH GLOBAL STATS FROM SESSIONS
+  // ROBA's rows are filtered out before returning to other users.
   // =========================================================================
 
   public async fetchGlobalStatsFromSessions(): Promise<MemberStats[]> {
@@ -574,6 +588,8 @@ class DialerRealtimeService {
 
     const map = new Map<string, MemberStats>();
     for (const row of (data || [])) {
+      // Skip ROBA — she's completely invisible to the leaderboard
+      if (row.manager_id === CALM_MODE_USER) continue;
       const parsed = sessionRowToMemberStats(row);
       if (!parsed) continue;
       if (!map.has(parsed.managerId)) {

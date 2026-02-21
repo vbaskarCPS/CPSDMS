@@ -4,6 +4,12 @@
 // multiplier calculation, point scoring.
 // Ported faithfully from Engine.gs. Pure functions operating on GamificationSession.
 //
+// CALM MODE: If session.repCode === 'ROBA', all scoring and badge evaluation
+// is skipped. Session stat counters (pbs, pps, ppDollars, totalBookings) are
+// still updated so the calm HUD can display raw numbers. Points are never
+// written. dispType and consecutiveYes/consecutiveNos are returned for the
+// motivational panel to react to.
+//
 
 import {
   BADGE_DEFS,
@@ -60,12 +66,26 @@ export interface ProcessResult {
   pointBreakdown: PointBreakdown | null;
   activeMultipliers: MultiplierSnapshot[];
   rank: Rank | null;
+  /** Which raw disposition type was just processed — used by calm mode motivational panel */
+  dispType?: string;
+  /** Consecutive YES count at time of result — used by calm mode */
+  consecutiveYes?: number;
+  /** Consecutive NOs/REMOVEs (resets on any YES) — used by calm mode no-streak messages */
+  consecutiveNos?: number;
+}
+
+// =============================================================================
+// CALM MODE IDENTIFIER
+// =============================================================================
+
+const CALM_MODE_USER = 'ROBA';
+
+function isCalmMode(session: GamificationSession): boolean {
+  return session.repCode === CALM_MODE_USER;
 }
 
 // =============================================================================
 // DEAD-YEAR HELPER
-// Returns true if mostRecentYear is one of the three "graveyard" years.
-// Used to gate Exhumer disposition counting and Graveyard badge awarding.
 // =============================================================================
 
 function isDeadYear(year: number): boolean {
@@ -86,14 +106,10 @@ export function processDisposition(
   let pointBreakdown: PointBreakdown | null = null;
 
   recordDial(session, now);
-
-  // --- Op Tempo: recount rolling window on every disposition ---
   updateOpTempo(session, now);
-
-  // --- War Machine: record last dial time and check inactivity ---
   updateWarMachine(session, now);
 
-  // --- High Ground: check BEFORE updating activeStreet ---
+  // High Ground check BEFORE updating activeStreet
   const currentStreet = context.street || '';
   const hg = session.multipliers.high_ground;
   if (hg.activeStreet && currentStreet === hg.activeStreet) {
@@ -102,7 +118,7 @@ export function processDisposition(
     hg.active = false;
   }
 
-  // Reset streak epochs on rejection
+  // Reset streak badge epochs on rejection
   if (dispType === 'NO' || dispType === 'REMOVE') {
     session._streakBadgeEpoch = session.badges.length;
   }
@@ -110,15 +126,83 @@ export function processDisposition(
     session._prepayStreakBadgeEpoch = session.badges.length;
   }
 
-  // --- Exhumer: count qualifying dispositions on dead-year clients ---
-  // WN/NIS, NO, and REMOVE on 2020/2021/2022 clients increment the counter.
-  // When it hits 20, award 1 charge. Counter resets to 0 after charging.
+  // Exhumer: count qualifying dispositions on dead-year clients
   if (
     (dispType === 'WN/NIS' || dispType === 'NO' || dispType === 'REMOVE') &&
     isDeadYear(context.mostRecentYear || 0)
   ) {
     updateExhumer(session);
   }
+
+  // ============================================================
+  // CALM MODE — skip all scoring & badge evaluation
+  // Only update stat counters (pbs/pps/ppDollars/totalBookings)
+  // and consecutive tracking for the motivational panel.
+  // ============================================================
+
+  if (isCalmMode(session)) {
+    // Ensure _consecutiveNos is tracked
+    if (typeof (session as any)._consecutiveNos !== 'number') {
+      (session as any)._consecutiveNos = 0;
+    }
+
+    switch (dispType) {
+      case 'NA':
+      case 'CTS':
+      case 'WN/NIS':
+        processUnreached(session);
+        if (session.multipliers.cold_streak.chargesRemaining <= 0) {
+          session.multipliers.cold_streak.dialsSinceLastYes++;
+        }
+        checkColdStreakTrigger(session);
+        // NAs/WN don't affect consecutive counts
+        break;
+
+      case 'NO':
+      case 'REMOVE':
+        session.consecutiveYes = 0;
+        (session as any)._consecutiveNos = ((session as any)._consecutiveNos || 0) + 1;
+        break;
+
+      case 'COMPLETE':
+        session.totalBookings++;
+        session.consecutiveYes++;
+        session.pbs++;
+        (session as any)._consecutiveNos = 0;
+        session.bookingTimestamps.push(now);
+        if ((context.streetAerCount || 0) <= 1) session.newStreetBookings++;
+        if (isDeadYear(context.mostRecentYear || 0)) session.raisedDeadCount++;
+        break;
+
+      case 'PREPAY': {
+        const price = context.price || 0;
+        session.totalBookings++;
+        session.consecutiveYes++;
+        session.pps++;
+        session.ppDollars += price;
+        (session as any)._consecutiveNos = 0;
+        session.bookingTimestamps.push(now);
+        if ((context.streetAerCount || 0) <= 1) session.newStreetBookings++;
+        if (isDeadYear(context.mostRecentYear || 0)) session.raisedDeadCount++;
+        break;
+      }
+    }
+
+    return {
+      session,
+      newBadges: [],
+      pointBreakdown: null,
+      activeMultipliers: getActiveMultipliers(session),
+      rank: null,
+      dispType,
+      consecutiveYes: session.consecutiveYes,
+      consecutiveNos: (session as any)._consecutiveNos || 0,
+    };
+  }
+
+  // ============================================================
+  // NORMAL MODE — full processing for all other users
+  // ============================================================
 
   switch (dispType) {
     case 'NA':
@@ -146,7 +230,6 @@ export function processDisposition(
     }
   }
 
-  // Check workhorse badges
   const wh = checkWorkhorseBadges(session);
   newBadges = newBadges.concat(wh);
 
@@ -156,22 +239,21 @@ export function processDisposition(
     pointBreakdown,
     activeMultipliers: getActiveMultipliers(session),
     rank: getCurrentRank(session),
+    dispType,
+    consecutiveYes: session.consecutiveYes,
   };
 }
 
 // =============================================================================
-// EXHUMER — disposition counter
+// EXHUMER
 // =============================================================================
 
 function updateExhumer(session: GamificationSession): void {
-  // Ensure state exists (migration safety)
   if (!session.multipliers.exhumer) {
     (session.multipliers as any).exhumer = { dispositionCount: 0, chargesRemaining: 0 };
   }
   const ex = session.multipliers.exhumer;
-  // Only count if we don't already have a charge banked
   if (ex.chargesRemaining > 0) return;
-
   ex.dispositionCount++;
   if (ex.dispositionCount >= (MULTIPLIER_DEFS.exhumer.requiredDispositions || 20)) {
     ex.chargesRemaining = 1;
@@ -187,7 +269,6 @@ function processUnreached(session: GamificationSession): void {
   const gt = session.multipliers.ghost_town;
   if (!gt.tier) gt.tier = 0;
   gt.consecutiveUnreached++;
-
   const def = MULTIPLIER_DEFS.ghost_town;
   if (gt.consecutiveUnreached >= (def.requiredUnreached || 10)) {
     gt.consecutiveUnreached = 0;
@@ -216,7 +297,6 @@ function checkColdStreakTrigger(session: GamificationSession): void {
 function processRejection(session: GamificationSession, now: number): void {
   session.consecutiveYes = 0;
 
-  // Enraged tiered logic
   const en = session.multipliers.enraged;
   if (!en.tier) en.tier = 0;
   if (!en.frozen) {
@@ -235,7 +315,6 @@ function processRejection(session: GamificationSession, now: number): void {
     }
   }
 
-  // Ghost Town: rejection resets consecutive unreached and consumes a charge
   session.multipliers.ghost_town.consecutiveUnreached = 0;
   if (session.multipliers.ghost_town.chargesRemaining > 0) {
     session.multipliers.ghost_town.chargesRemaining--;
@@ -244,7 +323,6 @@ function processRejection(session: GamificationSession, now: number): void {
     }
   }
 
-  // Cold streak: count dials during rejection too
   if (session.multipliers.cold_streak.chargesRemaining <= 0) {
     session.multipliers.cold_streak.dialsSinceLastYes++;
   }
@@ -280,11 +358,8 @@ function processYes(
   }
 
   if (streetAerCount <= 1) session.newStreetBookings++;
-
-  // Raise the Dead: counts 2020, 2021, OR 2022 clients (combined)
   if (isDeadYear(mostRecentYear)) session.raisedDeadCount++;
 
-  // Graveyard counters: per-year tracking for Graveyard badges
   if (mostRecentYear === 2022) {
     session.almostDeadCount = (session.almostDeadCount || 0) + 1;
   } else if (mostRecentYear === 2021) {
@@ -293,7 +368,6 @@ function processYes(
     session.reallyDeadCount = (session.reallyDeadCount || 0) + 1;
   }
 
-  // Conversion: track first-time prepays from non-app clients
   if (isPrepay && context.isFirstTimePrepay) {
     session.conversionCount = (session.conversionCount || 0) + 1;
     const indoc = session.multipliers.indoctrinate;
@@ -301,7 +375,6 @@ function processYes(
     session.multipliers.indoctrinate.chargesRemaining = (MULTIPLIER_DEFS.indoctrinate.charges || 2);
   }
 
-  // Ghost Town: YES resets consecutive unreached and consumes a charge
   session.multipliers.ghost_town.consecutiveUnreached = 0;
   if (session.multipliers.ghost_town.chargesRemaining > 0) {
     session.multipliers.ghost_town.chargesRemaining--;
@@ -310,7 +383,6 @@ function processYes(
     }
   }
 
-  // Cold Streak
   session.multipliers.cold_streak.dialsSinceLastYes = 0;
   if (session.multipliers.cold_streak.chargesRemaining > 0) {
     session.multipliers.cold_streak.chargesRemaining--;
@@ -369,15 +441,12 @@ function updateBlitz(session: GamificationSession, now: number): void {
   const s = session.multipliers.blitz;
   const d = MULTIPLIER_DEFS.blitz;
   if (s.triggered) return;
-
   const sessionStart = session.sessionStartTime || 0;
   if (sessionStart <= 0) return;
-
   const elapsed = now - sessionStart;
   const tiers = d.tiers || [];
   const maxWindow = (tiers[tiers.length - 1]?.maxMinutes || 60) * 60000;
   if (elapsed > maxWindow) return;
-
   s.earlyYesCount = (s.earlyYesCount || 0) + 1;
   if (s.earlyYesCount >= (d.requiredBookings || 5)) {
     s.triggered = true;
@@ -440,7 +509,6 @@ function triggerScorchedEarth(
   const se = session.multipliers.scorched_earth;
   if (!se.clearedStreets) se.clearedStreets = {};
   if (se.clearedStreets[street]) return;
-
   const def = MULTIPLIER_DEFS.scorched_earth;
   const tiers = def.tiers || [];
   let bonus = 0;
@@ -448,7 +516,6 @@ function triggerScorchedEarth(
     if (groupCount >= (tier.minGroups || 0)) { bonus = tier.bonus || 0; break; }
   }
   if (bonus <= 0) return;
-
   se.clearedStreets[street] = true;
   if (!se.bonusStack) se.bonusStack = [];
   se.bonusStack.push({ bonus, charges: def.chargesPerTrigger || 2 });
@@ -472,7 +539,6 @@ function calculateMultiplier(session: GamificationSession, now: number): {
   const breakdown: Record<string, number> = {};
   let total = 1.0;
 
-  // Op Tempo
   const opS = session.multipliers.op_tempo;
   const opD = MULTIPLIER_DEFS.op_tempo;
   {
@@ -486,7 +552,6 @@ function calculateMultiplier(session: GamificationSession, now: number): {
     }
   }
 
-  // Tracer Rounds
   const trS = session.multipliers.tracer_rounds;
   const trD = MULTIPLIER_DEFS.tracer_rounds;
   if (trS.expiresAt > 0 && now > trS.expiresAt) { trS.prepayCount = 0; trS.expiresAt = 0; }
@@ -496,13 +561,11 @@ function calculateMultiplier(session: GamificationSession, now: number): {
     total += v;
   }
 
-  // High Ground
   if (session.multipliers.high_ground.active) {
     breakdown.high_ground = MULTIPLIER_DEFS.high_ground.flatMultiplier || 1.0;
     total += breakdown.high_ground;
   }
 
-  // Night Vision
   const nvC = session.multipliers.night_vision.bookingsAfter8;
   if (nvC > 0) {
     const v = nvC * (MULTIPLIER_DEFS.night_vision.perBookingBonus || 0.2);
@@ -510,7 +573,6 @@ function calculateMultiplier(session: GamificationSession, now: number): {
     total += v;
   }
 
-  // Blitz
   const blS = session.multipliers.blitz;
   const blD = MULTIPLIER_DEFS.blitz;
   if (blS.triggered && blS.triggerTime > 0) {
@@ -526,7 +588,6 @@ function calculateMultiplier(session: GamificationSession, now: number): {
     }
   }
 
-  // Enraged
   const enS = session.multipliers.enraged;
   if (!enS.tier) enS.tier = 0;
   if (enS.tier > 0 && enS.chargesRemaining > 0) {
@@ -536,7 +597,6 @@ function calculateMultiplier(session: GamificationSession, now: number): {
     total += breakdown.enraged;
   }
 
-  // Ratio Focus
   if (session.totalBookings > 0) {
     const ratio = session.pps / session.totalBookings;
     if (ratio >= (MULTIPLIER_DEFS.ratio_focus.minimumRatio || 0.20)) {
@@ -546,7 +606,6 @@ function calculateMultiplier(session: GamificationSession, now: number): {
     }
   }
 
-  // War Machine
   const wmS = session.multipliers.war_machine;
   if (wmS.active) {
     const wmVal = MULTIPLIER_DEFS.war_machine.flatMultiplier || 0.5;
@@ -554,7 +613,6 @@ function calculateMultiplier(session: GamificationSession, now: number): {
     total += wmVal;
   }
 
-  // Ghost Town
   const gtS = session.multipliers.ghost_town;
   if (gtS.chargesRemaining > 0) {
     const gtTier = gtS.tier || 1;
@@ -563,13 +621,11 @@ function calculateMultiplier(session: GamificationSession, now: number): {
     total += gtVal;
   }
 
-  // Cold Streak
   if (session.multipliers.cold_streak.chargesRemaining > 0) {
     breakdown.cold_streak = MULTIPLIER_DEFS.cold_streak.flatMultiplier || 1.0;
     total += breakdown.cold_streak;
   }
 
-  // Scorched Earth
   const seS = session.multipliers.scorched_earth;
   if (seS.bonusStack && seS.bonusStack.length > 0) {
     let seT = 0;
@@ -583,9 +639,7 @@ function calculateMultiplier(session: GamificationSession, now: number): {
 }
 
 // =============================================================================
-// POINT SCORING
-// NOTE: Exhumer is NOT included in calculateMultiplier. It doubles the
-// entire final grand total AFTER all other badges and multipliers are applied.
+// POINT SCORING (normal users only)
 // =============================================================================
 
 function scorePoints(
@@ -612,23 +666,18 @@ function scorePoints(
     }
   }
 
-  // Indoctrinate: when active, badge bonuses get multiplied too
   const indoc = session.multipliers.indoctrinate;
   const indocActive = indoc && indoc.chargesRemaining > 0;
   const finalBadgeBonus = indocActive
     ? Math.round(badgeBonusTotal * mult.total)
     : badgeBonusTotal;
 
-  // Pre-Exhumer total (base × multiplier + badge bonuses)
   let grandTotal = multipliedTotal + finalBadgeBonus;
 
-  // Consume Indoctrinate charge after scoring
   if (indocActive) {
     indoc.chargesRemaining--;
   }
 
-  // Exhumer: if a charge is banked, double the entire grand total,
-  // then consume the charge and reset the disposition counter to 0.
   const exhumer = session.multipliers.exhumer;
   const exhumerFired = exhumer && exhumer.chargesRemaining > 0;
   if (exhumerFired) {
@@ -682,7 +731,6 @@ function evaluateAllBadges(
   const earned: string[] = [];
   const sn = context.sheetName || '';
 
-  // Streak badges
   const s = session.consecutiveYes;
   const streakBadges: [number, string][] = [
     [10, 'beyond_godlike'], [9, 'tactical_nuke'], [8, 'legendary'], [7, 'godlike'],
@@ -692,7 +740,6 @@ function evaluateAllBadges(
     if (s >= threshold) { if (tryAwardBadge(session, id, now, sn)) earned.push(id); break; }
   }
 
-  // Prepay streak
   if (isPrepay) {
     const cp = session.consecutivePrepays;
     const ppBadges: [number, string][] = [
@@ -703,7 +750,6 @@ function evaluateAllBadges(
     }
   }
 
-  // Special prepay badges
   if (isPrepay) {
     if (session.pps === 1) {
       if (tryAwardBadge(session, 'first_blood', now, sn)) earned.push('first_blood');
@@ -720,7 +766,6 @@ function evaluateAllBadges(
     }
   }
 
-  // Milestone badges
   const mileBadges: [number, string][] = [
     [100, 'legend'], [75, 'war_hero'], [50, 'veteran'], [25, 'sharpshooter'], [10, 'first_deploy'],
   ];
@@ -728,23 +773,19 @@ function evaluateAllBadges(
     if (session.totalBookings >= threshold) { if (tryAwardBadge(session, id, now, sn)) earned.push(id); break; }
   }
 
-  // Time badges
   const hr = new Date(now).getHours();
   if (hr < 10) { if (tryAwardBadge(session, 'early_bird', now, sn)) earned.push('early_bird'); }
   if (hr >= 20) { if (tryAwardBadge(session, 'buzzer_beater', now, sn)) earned.push('buzzer_beater'); }
 
-  // Fast start
   if (session.sessionStartTime > 0 && (now - session.sessionStartTime) < 600000) {
     if (tryAwardBadge(session, 'fast_start', now, sn)) earned.push('fast_start');
   }
 
-  // Street badges
   const sac = context.streetAerCount || 0;
   if (sac >= 7) { if (tryAwardBadge(session, 'ducksplosion', now, sn)) earned.push('ducksplosion'); }
   else if (sac >= 5) { if (tryAwardBadge(session, 'ducks_in_a_row', now, sn)) earned.push('ducks_in_a_row'); }
   else if (sac >= 3) { if (tryAwardBadge(session, 'link_shot_kill', now, sn)) earned.push('link_shot_kill'); }
 
-  // Headhunter
   const hhBadges: [number, string][] = [
     [30, 'apex_predator'], [20, 'trophy_hunter'], [10, 'headhunter'],
   ];
@@ -752,7 +793,6 @@ function evaluateAllBadges(
     if (session.newStreetBookings >= threshold) { if (tryAwardBadge(session, id, now, sn)) earned.push(id); break; }
   }
 
-  // Raise the Dead — now counts 2020+2021+2022 combined via raisedDeadCount
   const rtdBadges: [number, string][] = [
     [40, 'resurrection'], [20, 'lich_king'], [10, 'necromancer'], [5, 'grave_digger'],
   ];
@@ -760,7 +800,6 @@ function evaluateAllBadges(
     if (session.raisedDeadCount >= threshold) { if (tryAwardBadge(session, id, now, sn)) earned.push(id); break; }
   }
 
-  // Graveyard — repeatable, awarded on every qualifying YES
   const mostRecentYear = context.mostRecentYear || 0;
   if (mostRecentYear === 2022) {
     if (tryAwardBadge(session, 'almost_dead', now, sn)) earned.push('almost_dead');
@@ -770,7 +809,6 @@ function evaluateAllBadges(
     if (tryAwardBadge(session, 'really_dead', now, sn)) earned.push('really_dead');
   }
 
-  // Conversion
   const convBadges: [number, string][] = [
     [10, 'cult_leader'], [5, 'born_again'], [2, 'conversion_therapy'],
   ];
@@ -778,7 +816,6 @@ function evaluateAllBadges(
     if ((session.conversionCount || 0) >= threshold) { if (tryAwardBadge(session, id, now, sn)) earned.push(id); break; }
   }
 
-  // Spree badges
   const spree = evaluateSpreeBadges(session, now);
   earned.push(...spree);
 
@@ -840,9 +877,6 @@ function tryAwardBadge(
     if (def.section === 'Spree') {
       if (hasRecentBadge(session, badgeId, 3600000)) return false;
     }
-    // Graveyard badges: one per booking (no dedup needed beyond the YES event itself)
-    // Each YES only calls tryAwardBadge once for the relevant year badge, so
-    // we allow it to stack freely. No extra dedup logic required.
   }
 
   const d = new Date(now);
@@ -918,7 +952,6 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
   const now = Date.now();
   const active: MultiplierSnapshot[] = [];
 
-  // Op Tempo
   const opS = session.multipliers.op_tempo;
   const opD = MULTIPLIER_DEFS.op_tempo;
   {
@@ -934,7 +967,6 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     }
   }
 
-  // Tracer Rounds
   const trS = session.multipliers.tracer_rounds;
   const trD = MULTIPLIER_DEFS.tracer_rounds;
   if (trS.expiresAt > 0 && now < trS.expiresAt && trS.prepayCount >= (trD.activationThreshold || 2)) {
@@ -945,7 +977,6 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     });
   }
 
-  // High Ground
   if (session.multipliers.high_ground.active) {
     active.push({
       id: 'high_ground', name: MULTIPLIER_DEFS.high_ground.name,
@@ -954,7 +985,6 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     });
   }
 
-  // Night Vision
   const nvC = session.multipliers.night_vision.bookingsAfter8;
   if (nvC > 0) {
     active.push({
@@ -965,7 +995,6 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     });
   }
 
-  // Blitz
   const blS = session.multipliers.blitz;
   const blD = MULTIPLIER_DEFS.blitz;
   if (blS.triggered && blS.triggerTime > 0) {
@@ -986,7 +1015,6 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     }
   }
 
-  // Enraged
   const enS = session.multipliers.enraged;
   if (enS.tier > 0 && enS.chargesRemaining > 0) {
     const enTiers = MULTIPLIER_DEFS.enraged.tiers || [];
@@ -998,7 +1026,6 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     });
   }
 
-  // Ratio Focus
   if (session.totalBookings > 0) {
     const ratio = session.pps / session.totalBookings;
     if (ratio >= (MULTIPLIER_DEFS.ratio_focus.minimumRatio || 0.20)) {
@@ -1010,7 +1037,6 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     }
   }
 
-  // War Machine
   const wmS = session.multipliers.war_machine;
   const wmDef = MULTIPLIER_DEFS.war_machine;
   if (wmS.active) {
@@ -1018,27 +1044,22 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     const elapsed = wmS.lastDialAt > 0 ? now - wmS.lastDialAt : 0;
     const remaining = Math.max(0, inactivityWindow - elapsed);
     active.push({
-      id: 'war_machine', name: wmDef.name,
-      icon: wmDef.icon,
-      value: wmDef.flatMultiplier || 0.5,
-      expiresIn: remaining,
+      id: 'war_machine', name: wmDef.name, icon: wmDef.icon,
+      value: wmDef.flatMultiplier || 0.5, expiresIn: remaining,
     });
   }
 
-  // Ghost Town
   const gtS = session.multipliers.ghost_town;
   if (gtS.chargesRemaining > 0) {
     const gtTier = gtS.tier || 1;
     const gtName = gtTier === 3 ? 'Haunted Town' : gtTier === 2 ? 'Super Ghost Town' : 'Ghost Town';
-    const gtIcon = gtTier === 3 ? '👻' : gtTier === 2 ? '👻' : '👻';
     const gtVal = gtTier === 3 ? 2.0 : gtTier === 2 ? 1.0 : 0.5;
     active.push({
-      id: 'ghost_town', name: gtName, icon: gtIcon, value: gtVal,
+      id: 'ghost_town', name: gtName, icon: '👻', value: gtVal,
       expiresIn: -1, extra: { charges: gtS.chargesRemaining, tier: gtTier },
     });
   }
 
-  // Cold Streak
   const csS = session.multipliers.cold_streak;
   if (csS.chargesRemaining > 0) {
     active.push({
@@ -1049,7 +1070,6 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     });
   }
 
-  // Scorched Earth
   const seS = session.multipliers.scorched_earth;
   if (seS.bonusStack && seS.bonusStack.length > 0) {
     let seT = 0;
@@ -1063,7 +1083,6 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     });
   }
 
-  // Indoctrinate
   const indocS = session.multipliers.indoctrinate;
   if (indocS && indocS.chargesRemaining > 0) {
     active.push({
@@ -1074,7 +1093,6 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
     });
   }
 
-  // Exhumer — shows as "2x FINAL" with charge count
   const exhumerS = session.multipliers.exhumer;
   if (exhumerS && exhumerS.chargesRemaining > 0) {
     active.push({
@@ -1085,7 +1103,6 @@ export function getActiveMultipliers(session: GamificationSession): MultiplierSn
       extra: {
         charges: exhumerS.chargesRemaining,
         doublesFinalScore: true,
-        // Show progress toward next charge even while one is banked
         dispositionCount: exhumerS.dispositionCount,
       },
     });

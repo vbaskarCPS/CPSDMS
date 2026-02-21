@@ -1,4 +1,9 @@
 // src/pages/Dialer/CampaignSelect.tsx
+//
+// CALM MODE: When managerId === 'ROBA', only the Campaigns tab is shown.
+// Stats and Achievements tabs are hidden. The Fireteam panel on the right
+// is also hidden. Everything else is identical for all other users.
+//
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Settings, RefreshCw } from 'lucide-react';
 import FireteamPanel from './FireteamPanel';
@@ -9,6 +14,12 @@ import { getTodayEST, campaignService } from '../../lib/campaignService';
 import { BADGE_DEFS } from '../../lib/dialer/gamificationDefs';
 import { getBadgeIcon, getBadgeCategoryColor } from './BadgeIcons';
 import type { GamificationSession } from '../../lib/dialer/gamificationDefs';
+
+// =============================================================================
+// CALM MODE CONSTANT
+// =============================================================================
+
+const CALM_MODE_USER = 'ROBA';
 
 // Section display order — must match AchievementsPanel
 const SECTION_ORDER: string[] = [
@@ -291,18 +302,33 @@ function ResumeBanner({
 }) {
   const [hovered, setHovered] = useState(false);
   const [myStats, setMyStats] = useState<MemberStats | null>(null);
+  const isCalm = managerId === CALM_MODE_USER;
 
   useEffect(() => {
-    if (!managerId) return;
+    if (!managerId || isCalm) return;
     dialerRealtimeService.fetchGlobalStatsFromSessions().then(rows => {
       const mine = rows.find(r => r.managerId === managerId) ?? null;
       setMyStats(mine);
     }).catch(() => {});
-  }, [managerId]);
+  }, [managerId, isCalm]);
 
   const isToday = resumeData.sessionDate === getTodayEST();
   const lastSeen = formatLastSeen(resumeData.lastUpdatedAt);
   const badgeCount = session?.badges?.length ?? myStats?.badges?.length ?? 0;
+
+  // For calm mode, only show PB / PP / PP$ (no PTS, no DIALS, no BDGS)
+  const calmStats = isCalm ? [
+    { label: 'PB',  value: session?.pbs ?? '—',                                  color: '#ff6eb4' },
+    { label: 'PP',  value: session?.pps ?? '—',                                  color: '#ff6eb4' },
+    { label: 'PP$', value: session ? `$${session.ppDollars}` : '—',              color: '#ff6eb4' },
+  ] : [
+    { label: 'PTS',   value: myStats?.points    ?? '—',                    color: '#ffffff' },
+    { label: 'PB',    value: myStats?.pbs        ?? '—',                    color: '#2ecc71' },
+    { label: 'PP',    value: myStats?.pps        ?? '—',                    color: '#f1c40f' },
+    { label: 'PP$',   value: myStats ? `$${myStats.ppDollars}` : '—',       color: '#e67e22' },
+    { label: 'DIALS', value: myStats?.totalDials ?? '—',                    color: '#3498db' },
+    { label: 'BDGS',  value: badgeCount || '—',                             color: '#9b59b6' },
+  ];
 
   return (
     <div
@@ -374,16 +400,9 @@ function ResumeBanner({
         {/* Divider */}
         <div style={{ width: 1, alignSelf: 'stretch', background: 'rgba(245,166,35,0.12)', flexShrink: 0, margin: '0 4px' }} />
 
-        {/* Center: today's stat strip */}
+        {/* Center: stat strip */}
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
-          {[
-            { label: 'PTS',   value: myStats?.points    ?? '—',                    color: '#ffffff' },
-            { label: 'PB',    value: myStats?.pbs        ?? '—',                    color: '#2ecc71' },
-            { label: 'PP',    value: myStats?.pps        ?? '—',                    color: '#f1c40f' },
-            { label: 'PP$',   value: myStats ? `$${myStats.ppDollars}` : '—',       color: '#e67e22' },
-            { label: 'DIALS', value: myStats?.totalDials ?? '—',                    color: '#3498db' },
-            { label: 'BDGS',  value: badgeCount || '—',                             color: '#9b59b6' },
-          ].map(({ label, value, color }) => (
+          {calmStats.map(({ label, value, color }) => (
             <div key={label} style={{
               flex: 1,
               display: 'flex', flexDirection: 'column', alignItems: 'center',
@@ -483,15 +502,20 @@ function GameIcon({
 function MainTabBar({
   active,
   onChange,
+  isCalm,
 }: {
   active: MainTab;
   onChange: (t: MainTab) => void;
+  isCalm?: boolean;
 }) {
-  const tabs: { id: MainTab; label: string; iconPath: string }[] = [
+  const allTabs: { id: MainTab; label: string; iconPath: string }[] = [
     { id: 'campaigns',    label: 'CAMPAIGNS',    iconPath: 'lorc/compass' },
     { id: 'stats',        label: 'STATS',        iconPath: 'lorc/podium' },
     { id: 'achievements', label: 'ACHIEVEMENTS', iconPath: 'delapouite/trophy-cup' },
   ];
+
+  // ROBA only sees Campaigns
+  const tabs = isCalm ? allTabs.filter(t => t.id === 'campaigns') : allTabs;
 
   return (
     <div style={{
@@ -527,7 +551,6 @@ function MainTabBar({
               minWidth: 0,
             }}
           >
-            {/* Ghosted background splash icon */}
             <img
               src={`${GAME_ICON_BASE}/${t.iconPath}.svg`}
               width={44}
@@ -544,9 +567,7 @@ function MainTabBar({
                 filter: isActive ? 'none' : 'grayscale(1)',
               }}
             />
-            {/* Label text */}
             <span style={{ position: 'relative', zIndex: 1 }}>{t.label}</span>
-            {/* Active underline */}
             {isActive && (
               <div style={{
                 position: 'absolute',
@@ -567,7 +588,7 @@ function MainTabBar({
 }
 
 // =============================================================================
-// STATS VIEW — mirrors StatsPanel exactly
+// STATS VIEW
 // =============================================================================
 
 function StatsView({ campaignId, managerId }: { campaignId?: string; managerId?: string }) {
@@ -597,7 +618,6 @@ function StatsView({ campaignId, managerId }: { campaignId?: string; managerId?:
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  // Auto-refresh every 30 seconds
   useEffect(() => {
     const interval = setInterval(fetchAll, 30_000);
     return () => clearInterval(interval);
@@ -608,7 +628,6 @@ function StatsView({ campaignId, managerId }: { campaignId?: string; managerId?:
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Sub-header */}
       <div style={{
         padding: '12px 24px 8px',
         borderBottom: '1px solid rgba(46,204,113,0.1)',
@@ -673,7 +692,6 @@ function StatsView({ campaignId, managerId }: { campaignId?: string; managerId?:
         </div>
       </div>
 
-      {/* Leaderboard */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
         {loading && rows.length === 0 && (
           <div style={{ textAlign: 'center', padding: '60px 0', color: '#2ecc71', opacity: 0.3, fontSize: 11, letterSpacing: '2px' }}>
@@ -705,8 +723,6 @@ function StatsView({ campaignId, managerId }: { campaignId?: string; managerId?:
     </div>
   );
 }
-
-// --- Member card (mirrors StatsPanel) ---
 
 function MemberCard({
   member,
@@ -860,7 +876,6 @@ function AchievementsView({
   const [lifetimeBadges, setLifetimeBadges] = useState<Record<string, number>>({});
   const [lifetimeLoading, setLifetimeLoading] = useState(false);
 
-  // Fetch lifetime badges from Supabase when tab opens or switches to lifetime
   useEffect(() => {
     if (subTab !== 'lifetime' || !managerId) return;
     setLifetimeLoading(true);
@@ -870,7 +885,6 @@ function AchievementsView({
       .finally(() => setLifetimeLoading(false));
   }, [subTab, managerId]);
 
-  // Build today's badge counts from the session
   const todayBadgeCounts: Record<string, number> = {};
   if (session?.badges) {
     for (const b of session.badges) {
@@ -886,7 +900,6 @@ function AchievementsView({
   const totalEarned = Object.values(badgeCounts).reduce((s, c) => s + c, 0);
   const progressPct = Math.round((uniqueEarned / totalBadgesDefined) * 100);
 
-  // Group badges by section
   const badgesBySection: Record<string, { id: string; def: any; earned: boolean; count: number }[]> = {};
   for (const section of SECTION_ORDER) {
     badgesBySection[section] = [];
@@ -900,7 +913,6 @@ function AchievementsView({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Sub-header: sub-tabs + progress */}
       <div style={{
         padding: '10px 24px 8px',
         borderBottom: '1px solid rgba(46,204,113,0.1)',
@@ -952,7 +964,6 @@ function AchievementsView({
           </div>
         </div>
 
-        {/* Progress bar */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
             <div style={{
@@ -969,7 +980,6 @@ function AchievementsView({
         </div>
       </div>
 
-      {/* Badge grid */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
         {lifetimeLoading && (
           <div style={{ textAlign: 'center', padding: '60px 0', color: '#2ecc71', opacity: 0.3, fontSize: 11, letterSpacing: '2px' }}>
@@ -988,7 +998,6 @@ function AchievementsView({
 
               return (
                 <div key={section}>
-                  {/* Section header */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                     <span style={{ fontSize: 12 }}>{sectionIcon}</span>
                     <span style={{
@@ -1010,7 +1019,6 @@ function AchievementsView({
                     {SECTION_DESC[section]}
                   </div>
 
-                  {/* Badge grid — 3 columns */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
                     {badges.map(({ id, def, earned, count }) => {
                       const icon = getBadgeIcon(id, 26);
@@ -1039,7 +1047,6 @@ function AchievementsView({
                             }} />
                           )}
 
-                          {/* Icon */}
                           <div style={{
                             width: 30, height: 30, flexShrink: 0,
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1048,7 +1055,6 @@ function AchievementsView({
                             {icon || <span style={{ fontSize: 18 }}>{def.icon}</span>}
                           </div>
 
-                          {/* Text */}
                           <div style={{ minWidth: 0, flex: 1, position: 'relative' }}>
                             <div style={{
                               fontSize: 10, fontWeight: 700, color: earned ? '#e0e0e0' : '#555',
@@ -1061,7 +1067,6 @@ function AchievementsView({
                             </div>
                           </div>
 
-                          {/* Count / lock */}
                           {earned && (
                             <div style={{ flexShrink: 0, position: 'relative', textAlign: 'right' }}>
                               {count > 1 && (
@@ -1115,6 +1120,8 @@ export default function CampaignSelect({
   onResume,
   session,
 }: CampaignSelectProps) {
+  const isCalm = managerId === CALM_MODE_USER;
+
   const [activeTab, setActiveTab] = useState<MainTab>('campaigns');
   const [armedId, setArmedId] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
@@ -1128,6 +1135,13 @@ export default function CampaignSelect({
     });
     return () => { unsubscribe?.(); };
   }, []);
+
+  // If calm mode user somehow navigated to stats/achievements, reset to campaigns
+  useEffect(() => {
+    if (isCalm && activeTab !== 'campaigns') {
+      setActiveTab('campaigns');
+    }
+  }, [isCalm, activeTab]);
 
   const hotCampaignIds = new Set(presence.map(p => p.campaignId));
 
@@ -1151,7 +1165,6 @@ export default function CampaignSelect({
     setTimeout(() => { onDeploy(id); }, 600);
   }, [onDeploy]);
 
-  // Dynamic header title per tab
   const headerTitle =
     activeTab === 'stats' ? 'TEAM STATS' :
     activeTab === 'achievements' ? 'ACHIEVEMENTS' :
@@ -1166,7 +1179,6 @@ export default function CampaignSelect({
     <>
       <style>{CAMPAIGN_STYLES}</style>
 
-      {/* Noise overlay */}
       <div style={{
         position: 'fixed', inset: 0, opacity: 0.03, pointerEvents: 'none', zIndex: 0,
         backgroundImage: `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/></filter><rect width='200' height='200' filter='url(%23n)'/></svg>`)}")`,
@@ -1256,15 +1268,13 @@ export default function CampaignSelect({
 
           {filterSummary && activeTab === 'campaigns' && <div style={{ marginBottom: 8 }}>{filterSummary}</div>}
 
-          {/* Green divider line */}
           <div style={{
             height: 1,
             background: 'linear-gradient(to right, rgba(46,204,113,0.5) 0%, rgba(46,204,113,0.1) 60%, transparent 100%)',
             marginBottom: 0,
           }} />
 
-          {/* Main tab bar */}
-          <MainTabBar active={activeTab} onChange={setActiveTab} />
+          <MainTabBar active={activeTab} onChange={setActiveTab} isCalm={isCalm} />
         </div>
 
         {/* ── MAIN BODY ── */}
@@ -1276,7 +1286,7 @@ export default function CampaignSelect({
           minHeight: 0,
         }}>
 
-          {/* LEFT: Content area (switches per tab) */}
+          {/* LEFT: Content area */}
           <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
 
             {/* CAMPAIGNS TAB */}
@@ -1319,65 +1329,67 @@ export default function CampaignSelect({
               </div>
             )}
 
-            {/* STATS TAB */}
-            {activeTab === 'stats' && (
+            {/* STATS TAB — not shown to ROBA */}
+            {activeTab === 'stats' && !isCalm && (
               <StatsView campaignId={campaignId} managerId={managerId} />
             )}
 
-            {/* ACHIEVEMENTS TAB */}
-            {activeTab === 'achievements' && (
+            {/* ACHIEVEMENTS TAB — not shown to ROBA */}
+            {activeTab === 'achievements' && !isCalm && (
               <AchievementsView managerId={managerId} session={session} />
             )}
           </div>
 
-          {/* RIGHT: Fireteam panel — always visible */}
-          <div style={{
-            width: 250,
-            flexShrink: 0,
-            borderLeft: '1px solid rgba(0,229,255,0.10)',
-            background: 'rgba(4,8,4,0.98)',
-            display: 'flex',
-            flexDirection: 'column',
-          }}>
+          {/* RIGHT: Fireteam panel — hidden for ROBA */}
+          {!isCalm && (
             <div style={{
-              padding: '14px 12px 8px',
-              borderBottom: '1px solid rgba(0,229,255,0.08)',
+              width: 250,
               flexShrink: 0,
+              borderLeft: '1px solid rgba(0,229,255,0.10)',
+              background: 'rgba(4,8,4,0.98)',
+              display: 'flex',
+              flexDirection: 'column',
             }}>
               <div style={{
-                fontSize: 8, fontWeight: 800, letterSpacing: '3px',
-                color: '#00e5ff', opacity: 0.35, textTransform: 'uppercase',
+                padding: '14px 12px 8px',
+                borderBottom: '1px solid rgba(0,229,255,0.08)',
+                flexShrink: 0,
               }}>
-                LIVE OPS INTEL
-              </div>
-              {presence.length > 0 && (
                 <div style={{
-                  fontSize: 8, color: '#2ecc71', opacity: 0.5,
-                  fontWeight: 700, letterSpacing: '1px', marginTop: 3,
+                  fontSize: 8, fontWeight: 800, letterSpacing: '3px',
+                  color: '#00e5ff', opacity: 0.35, textTransform: 'uppercase',
                 }}>
-                  <span style={{ marginRight: 4 }}>●</span>
-                  {presence.length} OPERATIVE{presence.length !== 1 ? 'S' : ''} DEPLOYED
+                  LIVE OPS INTEL
+                </div>
+                {presence.length > 0 && (
+                  <div style={{
+                    fontSize: 8, color: '#2ecc71', opacity: 0.5,
+                    fontWeight: 700, letterSpacing: '1px', marginTop: 3,
+                  }}>
+                    <span style={{ marginRight: 4 }}>●</span>
+                    {presence.length} OPERATIVE{presence.length !== 1 ? 'S' : ''} DEPLOYED
+                  </div>
+                )}
+              </div>
+
+              {campaignId && managerId && managerName ? (
+                <FireteamPanel
+                  campaignId={campaignId}
+                  managerId={managerId}
+                  managerName={managerName}
+                  liveMultiplierEvents={[]}
+                />
+              ) : (
+                <div style={{
+                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: '#1a2a1a', fontSize: 9, fontWeight: 700, letterSpacing: '2px',
+                  textAlign: 'center', padding: '20px',
+                }}>
+                  AWAITING<br />DEPLOYMENT
                 </div>
               )}
             </div>
-
-            {campaignId && managerId && managerName ? (
-              <FireteamPanel
-                campaignId={campaignId}
-                managerId={managerId}
-                managerName={managerName}
-                liveMultiplierEvents={[]}
-              />
-            ) : (
-              <div style={{
-                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: '#1a2a1a', fontSize: 9, fontWeight: 700, letterSpacing: '2px',
-                textAlign: 'center', padding: '20px',
-              }}>
-                AWAITING<br />DEPLOYMENT
-              </div>
-            )}
-          </div>
+          )}
         </div>
       </div>
     </>
@@ -1385,7 +1397,7 @@ export default function CampaignSelect({
 }
 
 // =============================================================================
-// CAMPAIGN CARD (unchanged from original)
+// CAMPAIGN CARD (unchanged)
 // =============================================================================
 
 function CampaignCard({
