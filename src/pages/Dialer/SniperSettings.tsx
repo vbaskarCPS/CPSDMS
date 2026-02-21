@@ -191,10 +191,10 @@ export default function SniperSettings({
           }} />
         </div>
 
-        <div style={{ padding: '18px 22px 20px' }}>
+        <div style={{ padding: '14px 22px 20px' }}>
 
           {/* Header */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
             <div>
               <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: '3px', color: CY, opacity: 0.45, textTransform: 'uppercase', marginBottom: 3 }}>
                 SCOPE CONFIGURATION
