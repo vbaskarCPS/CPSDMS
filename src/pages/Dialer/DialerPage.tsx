@@ -1465,14 +1465,14 @@ export default function DialerPage() {
             />
           </div>
 
-          {campaign?.id && manager?.id && (
-            <FireteamPanel
-              campaignId={campaign.id}
-              managerId={manager.id}
-              managerName={manager.name || manager.repCode || 'You'}
-              liveMultiplierEvents={multActivations}
-            />
-          )}
+          {campaign?.id && manager?.id && manager?.repCode !== 'ROBA' && (
+  <FireteamPanel
+    campaignId={campaign.id}
+    managerId={manager.id}
+    managerName={manager.name || manager.repCode || 'You'}
+    liveMultiplierEvents={multActivations}
+  />
+)}
 
           <div className="text-center px-2 py-1 flex-shrink-0 text-xs" style={{
             color: '#00e5ff', opacity: 0.4, letterSpacing: '1px', fontSize: 8,
