@@ -162,7 +162,7 @@ export default function SniperSettings({
       <div
         style={{
           position: 'fixed',
-          top: '50%', left: '50%',
+          top: 'calc(50% + 16px)', left: '50%',
           transform: 'translate(-50%, -50%)',
           zIndex: 61,
           width: 'calc(100vw - 32px)',
@@ -191,7 +191,7 @@ export default function SniperSettings({
           }} />
         </div>
 
-        <div style={{ padding: '14px 22px 20px' }}>
+        <div style={{ padding: '6px 18px 18px' }}>
 
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
