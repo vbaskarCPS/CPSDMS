@@ -2,7 +2,8 @@
 //
 // Sniper filter configuration modal for AutoSniper.
 // Tactical HUD aesthetic matching the rest of the dialer UI.
-// Configures: years, ppOnly, minEntries, linkShot, hideCTS, maxNA (BLACKLIST).
+// Configures: years, ppOnly, minEntries, linkShot, hideCTS, maxNA (BLACKLIST),
+//             teamCooldownEnabled, teamCooldownDays, selfCooldownDays (NA COOLDOWN).
 //
 
 import { useState, useEffect, useCallback } from 'react';
@@ -48,6 +49,7 @@ const GR = '#2ecc71';
 const YL = '#f1c40f';
 const RD = '#e74c3c';
 const BL = '#ff4444'; // BLACKLIST red
+const OR = '#f5a623'; // COOLDOWN orange
 
 // =============================================================================
 // COMPONENT
@@ -68,6 +70,9 @@ export default function SniperSettings({
   const [linkShot, setLinkShot] = useState(currentConfig.linkShot);
   const [hideCTS, setHideCTS] = useState(currentConfig.hideCTS);
   const [maxNA, setMaxNA] = useState(currentConfig.maxNA ?? 0);
+  const [teamCooldownEnabled, setTeamCooldownEnabled] = useState(currentConfig.teamCooldownEnabled ?? true);
+  const [teamCooldownDays, setTeamCooldownDays] = useState(currentConfig.teamCooldownDays ?? 2);
+  const [selfCooldownDays, setSelfCooldownDays] = useState(currentConfig.selfCooldownDays ?? 4);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -80,6 +85,9 @@ export default function SniperSettings({
       setLinkShot(currentConfig.linkShot);
       setHideCTS(currentConfig.hideCTS);
       setMaxNA(currentConfig.maxNA ?? 0);
+      setTeamCooldownEnabled(currentConfig.teamCooldownEnabled ?? true);
+      setTeamCooldownDays(currentConfig.teamCooldownDays ?? 2);
+      setSelfCooldownDays(currentConfig.selfCooldownDays ?? 4);
       setError('');
       setSaving(false);
     }
@@ -88,7 +96,6 @@ export default function SniperSettings({
   const toggleYear = useCallback((yr: number) => {
     setYears(prev => {
       if (prev.includes(yr)) {
-        // Don't allow deselecting ALL years
         if (prev.length <= 1) return prev;
         return prev.filter(y => y !== yr);
       }
@@ -107,6 +114,9 @@ export default function SniperSettings({
       linkShot,
       hideCTS,
       maxNA,
+      teamCooldownEnabled,
+      teamCooldownDays: Math.min(7, Math.max(1, teamCooldownDays)),
+      selfCooldownDays: Math.min(7, Math.max(1, selfCooldownDays)),
     };
 
     try {
@@ -127,14 +137,15 @@ export default function SniperSettings({
     setLinkShot(DEFAULT_SNIPER_CONFIG.linkShot);
     setHideCTS(DEFAULT_SNIPER_CONFIG.hideCTS);
     setMaxNA(DEFAULT_SNIPER_CONFIG.maxNA ?? 0);
+    setTeamCooldownEnabled(DEFAULT_SNIPER_CONFIG.teamCooldownEnabled);
+    setTeamCooldownDays(DEFAULT_SNIPER_CONFIG.teamCooldownDays);
+    setSelfCooldownDays(DEFAULT_SNIPER_CONFIG.selfCooldownDays);
   };
 
   if (!open) return null;
 
-  // Determine which years to show — union of available + currently selected
   const yearOptions = Array.from(new Set([...availableYears, ...years])).sort((a, b) => b - a);
 
-  // BLACKLIST display label
   const maxNALabel = maxNA === 0 ? 'OFF' : maxNA >= 10 ? 'NA 10+' : `NA ${maxNA}+`;
   const maxNAHint = maxNA === 0
     ? 'No NA filter — all groups pass through'
@@ -287,28 +298,11 @@ export default function SniperSettings({
           {/* ── MIN ENTRIES ── */}
           <Section label="MINIMUM ENTRIES" hint="Groups must have at least this many rows">
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <button
-                onClick={() => setMinEntries(prev => Math.max(1, prev - 1))}
-                style={stepBtnStyle}
-              >
-                −
-              </button>
-              <span style={{
-                fontSize: 20,
-                fontWeight: 900,
-                color: '#fff',
-                minWidth: 36,
-                textAlign: 'center',
-                letterSpacing: '1px',
-              }}>
+              <button onClick={() => setMinEntries(prev => Math.max(1, prev - 1))} style={stepBtnStyle}>−</button>
+              <span style={{ fontSize: 20, fontWeight: 900, color: '#fff', minWidth: 36, textAlign: 'center', letterSpacing: '1px' }}>
                 {minEntries}
               </span>
-              <button
-                onClick={() => setMinEntries(prev => Math.min(20, prev + 1))}
-                style={stepBtnStyle}
-              >
-                +
-              </button>
+              <button onClick={() => setMinEntries(prev => Math.min(20, prev + 1))} style={stepBtnStyle}>+</button>
             </div>
           </Section>
 
@@ -328,41 +322,106 @@ export default function SniperSettings({
               <button
                 onClick={() => setMaxNA(prev => Math.max(0, prev - 1))}
                 style={{ ...stepBtnStyle, borderColor: `${BL}25`, background: `${BL}08`, color: BL }}
-              >
-                −
-              </button>
-              <span style={{
-                fontSize: 16,
-                fontWeight: 900,
-                minWidth: 52,
-                textAlign: 'center',
-                letterSpacing: '1px',
-                color: maxNA === 0 ? '#444' : BL,
-              }}>
+              >−</button>
+              <span style={{ fontSize: 16, fontWeight: 900, minWidth: 52, textAlign: 'center', letterSpacing: '1px', color: maxNA === 0 ? '#444' : BL }}>
                 {maxNALabel}
               </span>
               <button
                 onClick={() => setMaxNA(prev => Math.min(10, prev + 1))}
                 style={{ ...stepBtnStyle, borderColor: `${BL}25`, background: `${BL}08`, color: BL }}
-              >
-                +
-              </button>
+              >+</button>
             </div>
-            {/* Progress bar — 10 segments */}
             {maxNA > 0 && (
               <div style={{ display: 'flex', gap: 3, marginTop: 8 }}>
                 {Array.from({ length: 10 }, (_, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      flex: 1,
-                      height: 4,
-                      borderRadius: 2,
-                      background: i < maxNA ? BL : 'rgba(255,68,68,0.12)',
-                      transition: 'background 0.15s ease',
-                    }}
-                  />
+                  <div key={i} style={{
+                    flex: 1, height: 4, borderRadius: 2,
+                    background: i < maxNA ? BL : 'rgba(255,68,68,0.12)',
+                    transition: 'background 0.15s ease',
+                  }} />
                 ))}
+              </div>
+            )}
+          </Section>
+
+          {/* ── NA COOLDOWN ── */}
+          <Section
+            label="⏱ NA COOLDOWN"
+            hint="Silently skip clients recently marked NA — fetched fresh from Supabase on every group load"
+          >
+            {/* Team cooldown toggle */}
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 9, color: OR, opacity: 0.6, fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase', marginBottom: 6 }}>
+                TEAM COOLDOWN
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Toggle
+                  active={teamCooldownEnabled}
+                  onToggle={() => setTeamCooldownEnabled(prev => !prev)}
+                  labelOn="ACTIVE"
+                  labelOff="OFF"
+                  color={OR}
+                />
+                {teamCooldownEnabled && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 4 }}>
+                    <button
+                      onClick={() => setTeamCooldownDays(prev => Math.max(1, prev - 1))}
+                      style={{ ...stepBtnStyle, borderColor: `${OR}25`, background: `${OR}08`, color: OR, width: 26, height: 26 }}
+                    >−</button>
+                    <span style={{ fontSize: 14, fontWeight: 900, color: OR, minWidth: 60, textAlign: 'center' }}>
+                      {teamCooldownDays}d
+                    </span>
+                    <button
+                      onClick={() => setTeamCooldownDays(prev => Math.min(7, prev + 1))}
+                      style={{ ...stepBtnStyle, borderColor: `${OR}25`, background: `${OR}08`, color: OR, width: 26, height: 26 }}
+                    >+</button>
+                  </div>
+                )}
+              </div>
+              {teamCooldownEnabled && (
+                <div style={{ display: 'flex', gap: 3, marginTop: 6 }}>
+                  {Array.from({ length: 7 }, (_, i) => (
+                    <div key={i} style={{
+                      flex: 1, height: 3, borderRadius: 2,
+                      background: i < teamCooldownDays ? OR : `${OR}18`,
+                      transition: 'background 0.15s ease',
+                    }} />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Self cooldown (always enabled when team is on — separate days control) */}
+            {teamCooldownEnabled && (
+              <div>
+                <div style={{ fontSize: 9, color: OR, opacity: 0.45, fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase', marginBottom: 6 }}>
+                  SELF COOLDOWN
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <button
+                    onClick={() => setSelfCooldownDays(prev => Math.max(1, prev - 1))}
+                    style={{ ...stepBtnStyle, borderColor: `${OR}20`, background: `${OR}06`, color: `${OR}99`, width: 26, height: 26 }}
+                  >−</button>
+                  <span style={{ fontSize: 14, fontWeight: 900, color: `${OR}aa`, minWidth: 60, textAlign: 'center' }}>
+                    {selfCooldownDays}d
+                  </span>
+                  <button
+                    onClick={() => setSelfCooldownDays(prev => Math.min(7, prev + 1))}
+                    style={{ ...stepBtnStyle, borderColor: `${OR}20`, background: `${OR}06`, color: `${OR}99`, width: 26, height: 26 }}
+                  >+</button>
+                </div>
+                <div style={{ display: 'flex', gap: 3, marginTop: 6 }}>
+                  {Array.from({ length: 7 }, (_, i) => (
+                    <div key={i} style={{
+                      flex: 1, height: 3, borderRadius: 2,
+                      background: i < selfCooldownDays ? `${OR}99` : `${OR}12`,
+                      transition: 'background 0.15s ease',
+                    }} />
+                  ))}
+                </div>
+                <div style={{ fontSize: 8, color: '#444', marginTop: 5, fontWeight: 500 }}>
+                  Clients you NA'd within {selfCooldownDays} day{selfCooldownDays !== 1 ? 's' : ''} will also be skipped
+                </div>
               </div>
             )}
           </Section>
@@ -376,13 +435,7 @@ export default function SniperSettings({
 
           {/* Error */}
           {error && (
-            <div style={{
-              fontSize: 10,
-              color: RD,
-              textAlign: 'center',
-              marginBottom: 10,
-              fontWeight: 600,
-            }}>
+            <div style={{ fontSize: 10, color: RD, textAlign: 'center', marginBottom: 10, fontWeight: 600 }}>
               {error}
             </div>
           )}
@@ -451,12 +504,7 @@ function Section({ label, hint, children }: { label: string; hint: string; child
       }}>
         {label}
       </div>
-      <div style={{
-        fontSize: 9,
-        color: '#444',
-        marginBottom: 8,
-        fontWeight: 500,
-      }}>
+      <div style={{ fontSize: 9, color: '#444', marginBottom: 8, fontWeight: 500 }}>
         {hint}
       </div>
       {children}
@@ -492,19 +540,14 @@ function Toggle({
         transition: 'all 0.15s ease',
       }}
     >
-      {/* Toggle track */}
       <div style={{
-        width: 34,
-        height: 18,
-        borderRadius: 9,
+        width: 34, height: 18, borderRadius: 9,
         background: active ? color + '40' : 'rgba(255,255,255,0.08)',
         position: 'relative',
         transition: 'background 0.15s ease',
       }}>
         <div style={{
-          width: 14,
-          height: 14,
-          borderRadius: 7,
+          width: 14, height: 14, borderRadius: 7,
           background: active ? color : '#555',
           position: 'absolute',
           top: 2,
@@ -513,12 +556,7 @@ function Toggle({
           boxShadow: active ? `0 0 8px ${color}50` : 'none',
         }} />
       </div>
-      <span style={{
-        fontSize: 10,
-        fontWeight: 800,
-        letterSpacing: '1.5px',
-        color: active ? color : '#555',
-      }}>
+      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '1.5px', color: active ? color : '#555' }}>
         {active ? labelOn : labelOff}
       </span>
     </button>

@@ -68,6 +68,10 @@ import { dialerRealtimeService } from '../../lib/dialerRealtimeService';
 import type { PublishMultiplierPayload } from '../../lib/dialerRealtimeService';
 import FireteamPanel from './FireteamPanel';
 import { detectNewlyActivated } from './multiplierActivations';
+// ── NA COOLDOWN ──────────────────────────────────────────────────────────────
+import { logNA, fetchCooldownList } from '../../lib/naCooldownService';
+import type { NACooldownList } from '../../lib/naCooldownService';
+// ────────────────────────────────────────────────────────────────────────────
 
 // =============================================================================
 // STYLES
@@ -215,7 +219,7 @@ export default function DialerPage() {
   // --- Sniper Settings ---
   const [sniperSettingsOpen, setSniperSettingsOpen] = useState(false);
   const [sniperConfig, setSniperConfig] = useState<SniperConfig>(
-    () => campaign?.sniperConfig || { years: [2025], ppOnly: false, minEntries: 1, linkShot: false, hideCTS: true, maxNA: 0 }
+    () => campaign?.sniperConfig || { years: [2025], ppOnly: false, minEntries: 1, linkShot: false, hideCTS: true, maxNA: 0, teamCooldownEnabled: true, teamCooldownDays: 2, selfCooldownDays: 4 }
   );
   const [availableYears, setAvailableYears] = useState<number[]>([]);
 
@@ -284,6 +288,9 @@ export default function DialerPage() {
   const configRef = useRef<EngineConfig | null>(null);
   const yesStartTimeRef = useRef(0);
   const dispositionedKeysRef = useRef<Set<string>>(new Set());
+
+  // --- NA Cooldown list — refreshed from Supabase on every group load ---
+  const cooldownListRef = useRef<NACooldownList>({ entries: [], fetchedAt: 0 });
 
   // --- Toasts ---
   const { badgeToasts, pointToasts, queueBadgeToast, showPointToast } = useToasts();
@@ -619,6 +626,14 @@ export default function DialerPage() {
         setLoading(false);
         return;
       }
+
+      // ── Fetch NA cooldown list for this session (fire-and-forget, silent fail) ──
+      if (campaign?.id) {
+        fetchCooldownList(campaign.id)
+          .then(list => { cooldownListRef.current = list; })
+          .catch(() => {});
+      }
+
       setCurrentState(snapshot.state);
       setSession(snapshot.session);
       const newMults = getActiveMultipliers(snapshot.session);
@@ -687,6 +702,13 @@ export default function DialerPage() {
         setMode('dialer');
         setLoading(false);
         return;
+      }
+
+      // ── Fetch NA cooldown list for resumed session (fire-and-forget, silent fail) ──
+      if (campaign?.id) {
+        fetchCooldownList(campaign.id)
+          .then(list => { cooldownListRef.current = list; })
+          .catch(() => {});
       }
 
       setCurrentState(snapshot.state);
@@ -885,6 +907,24 @@ export default function DialerPage() {
       const result = await applyDisposition(
         configRef.current, currentState, disp, currentState.phone, session!, {}, yesStartTimeRef.current
       );
+
+      // ── Log NA to cooldown table (fire-and-forget, silent fail) ──
+      if (disp === 'NA' && campaign?.id && manager?.id) {
+        logNA(currentState.phone, campaign.id, manager.id).catch(() => {});
+        // Optimistically add to the in-memory list so the current session
+        // benefits immediately without waiting for the next Supabase fetch
+        cooldownListRef.current = {
+          entries: [
+            {
+              phone: currentState.phone,
+              repId: manager.id,
+              createdAt: new Date().toISOString(),
+            },
+            ...cooldownListRef.current.entries,
+          ],
+          fetchedAt: cooldownListRef.current.fetchedAt,
+        };
+      }
 
       handleGamResult(result.gamification, false);
 
@@ -1300,6 +1340,7 @@ export default function DialerPage() {
                     {sniperConfig.linkShot && <span style={{ fontSize: 8, fontWeight: 800, color: '#2ecc71', background: 'rgba(46,204,113,0.12)', border: '1px solid rgba(46,204,113,0.25)', borderRadius: 3, padding: '1px 6px' }}>LINK</span>}
                     {sniperConfig.hideCTS && <span style={{ fontSize: 8, fontWeight: 800, color: '#e74c3c', background: 'rgba(231,76,60,0.10)', border: '1px solid rgba(231,76,60,0.20)', borderRadius: 3, padding: '1px 6px' }}>-CTS</span>}
                     {(sniperConfig.maxNA ?? 0) > 0 && <span style={{ fontSize: 8, fontWeight: 800, color: '#ff4444', background: 'rgba(255,68,68,0.10)', border: '1px solid rgba(255,68,68,0.25)', borderRadius: 3, padding: '1px 6px' }}>☠ NA{sniperConfig.maxNA >= 10 ? '10+' : sniperConfig.maxNA}+</span>}
+                    {sniperConfig.teamCooldownEnabled && <span style={{ fontSize: 8, fontWeight: 800, color: '#f5a623', background: 'rgba(245,166,35,0.10)', border: '1px solid rgba(245,166,35,0.25)', borderRadius: 3, padding: '1px 6px' }}>⏱ {sniperConfig.teamCooldownDays}d</span>}
                   </div>
                   <Settings size={14} color="#00e5ff" style={{ opacity: 0.4, flexShrink: 0, marginLeft: 8 }} />
                 </button>

@@ -15,6 +15,10 @@ export interface SniperConfig {
   linkShot: boolean;      // Only show streets that have AER
   hideCTS: boolean;       // Hide groups with CTS disposition (default true)
   maxNA: number;          // BLACKLIST: skip groups where max NA >= this value (0 = OFF)
+  // NA Cooldown — prevents re-dialing recently NA'd clients
+  teamCooldownEnabled: boolean; // Team-wide cooldown toggle (default true)
+  teamCooldownDays: number;     // Days for team cooldown (default 2, max 7)
+  selfCooldownDays: number;     // Days for self cooldown (default 4, max 7)
 }
 
 export const DEFAULT_SNIPER_CONFIG: SniperConfig = {
@@ -24,6 +28,9 @@ export const DEFAULT_SNIPER_CONFIG: SniperConfig = {
   linkShot: false,
   hideCTS: true,
   maxNA: 0,
+  teamCooldownEnabled: true,
+  teamCooldownDays: 2,
+  selfCooldownDays: 4,
 };
 
 // --- USER PREFERENCES ---
@@ -100,6 +107,24 @@ export function getTodayEST(): string {
   const m = String(estNow.getUTCMonth() + 1).padStart(2, '0');
   const d = String(estNow.getUTCDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+// =============================================================================
+// SNIPER CONFIG RECONSTRUCTOR — shared by mapper and getUserPreferences
+// =============================================================================
+
+function reconstructSniperConfig(sc: any): SniperConfig {
+  return {
+    years: Array.isArray(sc.years) && sc.years.length > 0 ? sc.years : [2025],
+    ppOnly: typeof sc.ppOnly === 'boolean' ? sc.ppOnly : false,
+    minEntries: typeof sc.minEntries === 'number' && sc.minEntries >= 1 ? sc.minEntries : 1,
+    linkShot: typeof sc.linkShot === 'boolean' ? sc.linkShot : false,
+    hideCTS: typeof sc.hideCTS === 'boolean' ? sc.hideCTS : true,
+    maxNA: typeof sc.maxNA === 'number' ? sc.maxNA : 0,
+    teamCooldownEnabled: typeof sc.teamCooldownEnabled === 'boolean' ? sc.teamCooldownEnabled : true,
+    teamCooldownDays: typeof sc.teamCooldownDays === 'number' && sc.teamCooldownDays >= 1 ? Math.min(sc.teamCooldownDays, 7) : 2,
+    selfCooldownDays: typeof sc.selfCooldownDays === 'number' && sc.selfCooldownDays >= 1 ? Math.min(sc.selfCooldownDays, 7) : 4,
+  };
 }
 
 class CampaignService {
@@ -485,11 +510,6 @@ class CampaignService {
 
   // --- LIFETIME BADGES ---
 
-  /**
-   * Merges newly earned badge IDs into campaign_managers.lifetime_badges.
-   * Stored as { "badge_id": count } — increments each count.
-   * Fire-and-forget safe: errors are swallowed so a Supabase hiccup never breaks dialing.
-   */
   public async updateLifetimeBadges(
     managerId: string,
     badgeIds: string[]
@@ -523,10 +543,6 @@ class CampaignService {
     }
   }
 
-  /**
-   * Fetches the lifetime_badges map for a manager.
-   * Returns { "badge_id": count } or empty object if none yet.
-   */
   public async getLifetimeBadges(managerId: string): Promise<Record<string, number>> {
     try {
       const { data, error } = await supabase
@@ -549,11 +565,6 @@ class CampaignService {
 
   // --- USER PREFERENCES ---
 
-  /**
-   * Loads user_preferences JSONB from campaign_managers for this manager.
-   * Returns DEFAULT_USER_PREFERENCES if none saved yet.
-   * Silent fail — never breaks the UI.
-   */
   public async getUserPreferences(managerId: string): Promise<UserPreferences> {
     try {
       const { data, error } = await supabase
@@ -571,16 +582,10 @@ class CampaignService {
 
       const prefs = raw as Record<string, any>;
 
-      // Safely reconstruct SniperConfig with fallbacks
       const sc = prefs.sniperConfig;
-      const sniperConfig: SniperConfig = sc && typeof sc === 'object' ? {
-        years: Array.isArray(sc.years) && sc.years.length > 0 ? sc.years : [2025],
-        ppOnly: typeof sc.ppOnly === 'boolean' ? sc.ppOnly : false,
-        minEntries: typeof sc.minEntries === 'number' && sc.minEntries >= 1 ? sc.minEntries : 1,
-        linkShot: typeof sc.linkShot === 'boolean' ? sc.linkShot : false,
-        hideCTS: typeof sc.hideCTS === 'boolean' ? sc.hideCTS : true,
-        maxNA: typeof sc.maxNA === 'number' ? sc.maxNA : 0,
-      } : { ...DEFAULT_SNIPER_CONFIG };
+      const sniperConfig: SniperConfig = sc && typeof sc === 'object'
+        ? reconstructSniperConfig(sc)
+        : { ...DEFAULT_SNIPER_CONFIG };
 
       const validDirections = ['ambush', 'infiltrate', 'siege'];
       const lastDirection: Direction = validDirections.includes(prefs.lastDirection)
@@ -593,10 +598,6 @@ class CampaignService {
     }
   }
 
-  /**
-   * Saves user_preferences JSONB to campaign_managers for this manager.
-   * Fire-and-forget safe — errors are swallowed.
-   */
   public async saveUserPreferences(
     managerId: string,
     prefs: UserPreferences
@@ -632,15 +633,7 @@ class CampaignService {
   private mapDbToCampaign(data: any): Campaign {
     let sniperConfig: SniperConfig = { ...DEFAULT_SNIPER_CONFIG };
     if (data.sniper_config && typeof data.sniper_config === 'object') {
-      const sc = data.sniper_config;
-      sniperConfig = {
-        years: Array.isArray(sc.years) && sc.years.length > 0 ? sc.years : [2025],
-        ppOnly: typeof sc.ppOnly === 'boolean' ? sc.ppOnly : false,
-        minEntries: typeof sc.minEntries === 'number' && sc.minEntries >= 1 ? sc.minEntries : 1,
-        linkShot: typeof sc.linkShot === 'boolean' ? sc.linkShot : false,
-        hideCTS: typeof sc.hideCTS === 'boolean' ? sc.hideCTS : true,
-        maxNA: typeof sc.maxNA === 'number' ? sc.maxNA : 0,
-      };
+      sniperConfig = reconstructSniperConfig(data.sniper_config);
     }
 
     return {
