@@ -320,20 +320,14 @@ function buildYes(
     if (CI.NA >= 0) updates.push({ row: sheetRow, col: CI.NA, value: '' });
   }
 
-  // --- Update corrected client info on ALL group rows ---
-  // If the rep changed the name, house number, or street during the call,
-  // write those corrections back to every row in the group so future reps
-  // see the accurate data.
-  for (const r of groupDataIndices) {
-    const sheetRow = r + dataStartRow;
-    if (CI.FIRST_NAME >= 0 && extra.name)       updates.push({ row: sheetRow, col: CI.FIRST_NAME, value: extra.name });
-    if (CI.LAST_NAME >= 0 && extra.lastName)     updates.push({ row: sheetRow, col: CI.LAST_NAME,  value: extra.lastName });
-    if (CI.PREFIX >= 0 && extra.houseNum)        updates.push({ row: sheetRow, col: CI.PREFIX,      value: extra.houseNum });
-    if (CI.STREET >= 0 && extra.streetName)      updates.push({ row: sheetRow, col: CI.STREET,      value: extra.streetName });
-  }
-
   // --- Write booking details to the selected detail row ---
   if (CI.AER >= 0) updates.push({ row: detailRow, col: CI.AER, value: 'x' });
+
+  // Correct client info on the detail row (the one getting the AER x)
+  if (CI.FIRST_NAME >= 0 && extra.name)    updates.push({ row: detailRow, col: CI.FIRST_NAME, value: extra.name });
+  if (CI.LAST_NAME >= 0 && extra.lastName) updates.push({ row: detailRow, col: CI.LAST_NAME,  value: extra.lastName });
+  if (CI.PREFIX >= 0 && extra.houseNum)    updates.push({ row: detailRow, col: CI.PREFIX,      value: extra.houseNum });
+  if (CI.STREET >= 0 && extra.streetName)  updates.push({ row: detailRow, col: CI.STREET,      value: extra.streetName });
 
   const dateStr = `${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()}`;
   if (CI.DATE1 >= 0) updates.push({ row: detailRow, col: CI.DATE1, value: dateStr });
