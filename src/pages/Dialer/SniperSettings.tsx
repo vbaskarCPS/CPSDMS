@@ -172,13 +172,13 @@ export default function SniperSettings({
       <div
         style={{
           position: 'fixed',
-          top: '10%',
+          top: '5%',
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 61,
           width: '100%',
-          maxWidth: 400,
-          maxHeight: '90vh',
+          maxWidth: 560,
+          maxHeight: '92vh',
           overflowY: 'auto',
           borderRadius: 12,
           background: 'rgba(0,14,22,0.97)',
@@ -492,7 +492,7 @@ export default function SniperSettings({
 
 function Section({ label, hint, children }: { label: string; hint: string; children: React.ReactNode }) {
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div style={{ marginBottom: 12 }}>
       <div style={{
         fontSize: 9,
         fontWeight: 800,
