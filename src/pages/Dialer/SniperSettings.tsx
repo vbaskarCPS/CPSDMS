@@ -165,14 +165,16 @@ export default function SniperSettings({
           top: '50%', left: '50%',
           transform: 'translate(-50%, -50%)',
           zIndex: 61,
-          width: '94%', maxWidth: 600,
+          width: 'calc(100vw - 32px)',
+          maxWidth: 600,
+          maxHeight: 'calc(100vh - 32px)',
+          overflowY: 'auto',
           borderRadius: 12,
           background: 'rgba(0,14,22,0.97)',
           border: `1.5px solid ${CY}30`,
           boxShadow: `0 12px 60px rgba(0,0,0,0.8), 0 0 40px ${CY}08`,
           fontFamily: '"Segoe UI", Arial, sans-serif',
           animation: 'ss-slide-up 0.25s ease-out both',
-          overflow: 'hidden',
         }}
         onClick={(e) => e.stopPropagation()}
       >
