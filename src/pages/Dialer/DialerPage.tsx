@@ -249,6 +249,11 @@ export default function DialerPage() {
   const [multipliersAt, setMultipliersAt] = useState(0);
   const [rank, setRank] = useState<Rank | null>(null);
 
+  // --- CALM MODE: disposition context for motivational panel ---
+  const [lastDispType, setLastDispType] = useState<string | undefined>(undefined);
+  const [calmConsecutiveYes, setCalmConsecutiveYes] = useState(0);
+  const [calmConsecutiveNos, setCalmConsecutiveNos] = useState(0);
+
   // --- HUD team feed toasts ---
   const [teamFeed, setTeamFeed] = useState<TeamBookingEvent[]>([]);
 
@@ -714,6 +719,11 @@ export default function DialerPage() {
     if (result.session) setSession(result.session);
     if (result.rank) setRank(result.rank);
     if (result.activeMultipliers) { setMultipliers(result.activeMultipliers); setMultipliersAt(Date.now()); }
+
+    // --- CALM MODE: capture disposition context for motivational panel ---
+    if (result.dispType !== undefined) setLastDispType(result.dispType);
+    if (result.consecutiveYes !== undefined) setCalmConsecutiveYes(result.consecutiveYes);
+    if (result.consecutiveNos !== undefined) setCalmConsecutiveNos(result.consecutiveNos);
 
     // ── PATCH: award lifetime badges whenever new badges are earned ──
     if (result.newBadges?.length > 0) {
@@ -1222,6 +1232,10 @@ export default function DialerPage() {
           session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt}
           rank={rank} onTrophyClick={() => setAchievementsOpen(true)} onMenuAction={handleMenuAction}
           teamFeed={teamFeed} multiplierActivations={multActivations} autoFire={autoFire} onAutoFireChange={setAutoFire}
+          managerId={manager?.repCode}
+          lastDispType={lastDispType}
+          consecutiveYes={calmConsecutiveYes}
+          consecutiveNos={calmConsecutiveNos}
         />
         <BadgeToastContainer toasts={badgeToasts} />
         <PointToastContainer toasts={pointToasts} />
@@ -1265,6 +1279,10 @@ export default function DialerPage() {
         session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt}
         rank={rank} onTrophyClick={() => setAchievementsOpen(true)} onMenuAction={handleMenuAction}
         teamFeed={teamFeed} multiplierActivations={multActivations} autoFire={autoFire} onAutoFireChange={setAutoFire}
+        managerId={manager?.repCode}
+        lastDispType={lastDispType}
+        consecutiveYes={calmConsecutiveYes}
+        consecutiveNos={calmConsecutiveNos}
       />
       <BadgeToastContainer toasts={badgeToasts} />
       <PointToastContainer toasts={pointToasts} />
@@ -1466,13 +1484,13 @@ export default function DialerPage() {
           </div>
 
           {campaign?.id && manager?.id && manager?.repCode !== 'ROBA' && (
-  <FireteamPanel
-    campaignId={campaign.id}
-    managerId={manager.id}
-    managerName={manager.name || manager.repCode || 'You'}
-    liveMultiplierEvents={multActivations}
-  />
-)}
+            <FireteamPanel
+              campaignId={campaign.id}
+              managerId={manager.id}
+              managerName={manager.name || manager.repCode || 'You'}
+              liveMultiplierEvents={multActivations}
+            />
+          )}
 
           <div className="text-center px-2 py-1 flex-shrink-0 text-xs" style={{
             color: '#00e5ff', opacity: 0.4, letterSpacing: '1px', fontSize: 8,
