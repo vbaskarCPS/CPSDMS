@@ -1,23 +1,16 @@
 // src/lib/dialer/dialerEngine.ts
 //
-// Main dialer engine orchestrator. Ties together:
-// - Sheet data fetching (via dialerSheetsService)
-// - Header resolution
-// - Union-find group building
-// - Sniper filtering (client-side, replaces Apps Script Sniper.gs)
-// - Direction-aware navigation
-// - Disposition application (builds updates, writes to sheet)
-// - Phone highlighting via Google Sheets API (replaces Apps Script bridge)
-// - Gamification processing
+// AutoSniper Dialer — main engine orchestrator.
 //
 // Direction modes:
 //   ambush    — start at user Booking ID, call down, wrap to top, full loop
 //   infiltrate — find best 20-raw-row window (lowest avg NA), call down, wrap to window top
 //   siege     — tier-sorted (blanks → 1s → 2s…), no wrap, mission complete when exhausted
 //
-// Session persistence: Supabase dialer_sessions table.
-// One row per manager per day (EST date). State is written after every
-// disposition so stats survive browser clears, tab switches, and device changes.
+// City mode: when cityTabs + cityName are set in EngineConfig, the engine
+// loads rows from ALL cityTabs, filters to only rows matching cityName in the
+// CITY column, merges them into a single ordered group list, and dials through
+// that merged list. When exhausted, returns mission complete.
 //
 
 import { resolveHeaders, findHeaders, ColumnIndices } from './dialerHeaders';
@@ -77,6 +70,12 @@ export interface EngineConfig {
   campaignId: string;
   sniperConfig?: SniperConfig;
   startBookingId?: string;  // Required for Ambush; used as hint for Infiltrate resume
+
+  // --- City mode fields ---
+  // When these are set, the engine loads all tabs in cityTabs, filters by cityName,
+  // and merges into one group list. sheetName is used as a fallback / display name.
+  cityName?: string;
+  cityTabs?: string[];
 }
 
 export interface EngineSnapshot {
@@ -95,10 +94,12 @@ export interface PrepayPending {
   dataStartRow: number;
   gamContext: DispositionContext;
   yesStartTime: number;
+  // City mode: which tab this group actually lives in
+  sourceTab?: string;
 }
 
 // =============================================================================
-// ENGINE STATE
+// CACHED SHEET DATA — single tab
 // =============================================================================
 
 interface CachedSheetData {
@@ -113,31 +114,66 @@ interface CachedSheetData {
   available: ClientGroup[];
   sheetTabId: number;
   timestamp: number;
-  // Infiltrate: the firstRow of the window we started from — used for wrap
   infiltrateWindowStart: number;
-  // Ambush: the firstRow we started from — used to detect full loop completion
   ambushStartRow: number;
-  // Siege: current position in the tier-sorted list (list index, not row number)
   siegeIndex: number;
 }
 
+// =============================================================================
+// CACHED CITY DATA — merged across tabs
+// =============================================================================
+
+interface TabSlice {
+  tabName: string;
+  headers: any[];
+  CI: ColumnIndices;
+  dataStartRow: number;
+  /** Full data rows for this tab (no header) */
+  all: any[][];
+  sheetTabId: number;
+}
+
+interface CachedCityData {
+  spreadsheetId: string;
+  cityName: string;
+  sniperConfigHash: string;
+  timestamp: number;
+
+  // Each row in mergedAll maps back to a tab slice so dispositions know which tab to write to
+  mergedAll: any[][];
+  mergedCI: ColumnIndices;
+  mergedDataStartRow: number; // always 2 (virtual)
+
+  // Maps merged data index → source tab name
+  rowToTab: string[];
+  // Maps merged data index → real sheet row number in that tab
+  rowToRealSheetRow: number[];
+
+  // Tab slices (for CCD writes and format batches)
+  tabSlices: TabSlice[];
+
+  groups: ClientGroup[];
+  available: ClientGroup[];
+
+  infiltrateWindowStart: number;
+  siegeIndex: number;
+}
+
+// =============================================================================
+// MODULE STATE
+// =============================================================================
+
 let cachedSheet: CachedSheetData | null = null;
+let cachedCity: CachedCityData | null = null;
 let pendingPrepay: PrepayPending | null = null;
-
 let highlightedRows: { current: number[]; next: number[] } = { current: [], next: [] };
-
-// =============================================================================
-// SESSION ROW
-// =============================================================================
-
 let activeSessionRowId: string | null = null;
+let resumeTab: string = '';
+let resumePosition: string = '';
 
 // =============================================================================
 // RESUME POSITION
 // =============================================================================
-
-let resumeTab: string = '';
-let resumePosition: string = '';
 
 export function setResumePosition(tab: string, bookingId: string, firstRow?: number): void {
   resumeTab = tab;
@@ -145,7 +181,16 @@ export function setResumePosition(tab: string, bookingId: string, firstRow?: num
 }
 
 // =============================================================================
-// DATA LOADING
+// CACHE INVALIDATION
+// =============================================================================
+
+export function invalidateCache(): void {
+  cachedSheet = null;
+  cachedCity = null;
+}
+
+// =============================================================================
+// SINGLE-TAB DATA LOADING (unchanged)
 // =============================================================================
 
 async function loadSheetData(
@@ -216,37 +261,142 @@ async function loadSheetData(
   return cachedSheet;
 }
 
-export function invalidateCache(): void {
-  cachedSheet = null;
+// =============================================================================
+// CITY DATA LOADING — merges rows from all tabs filtered by city
+// =============================================================================
+
+async function loadCityData(
+  spreadsheetId: string,
+  cityName: string,
+  cityTabs: string[],
+  sniperConfig?: SniperConfig
+): Promise<CachedCityData> {
+  const configHash = JSON.stringify(sniperConfig || DEFAULT_SNIPER_CONFIG);
+
+  if (
+    cachedCity &&
+    cachedCity.spreadsheetId === spreadsheetId &&
+    cachedCity.cityName === cityName &&
+    cachedCity.sniperConfigHash === configHash &&
+    Date.now() - cachedCity.timestamp < 30000
+  ) {
+    return cachedCity;
+  }
+
+  const config = sniperConfig || DEFAULT_SNIPER_CONFIG;
+  const tabSlices: TabSlice[] = [];
+
+  // Load each tab
+  for (const tabName of cityTabs) {
+    try {
+      const rawData = await dialerSheetsService.sheetsGet(spreadsheetId, `'${tabName}'`);
+      if (!rawData || rawData.length < 2) continue;
+
+      const { headerRowIndex, CI } = findHeaders(rawData);
+      if (CI.PHONE < 0) continue;
+
+      const headers = rawData[headerRowIndex];
+      const dataStartRow = headerRowIndex + 2;
+      const all = rawData.slice(headerRowIndex + 1);
+
+      let sheetTabId = 0;
+      try {
+        const tabs = await dialerSheetsService.getSheetTabs(spreadsheetId);
+        const tab = tabs.find((t) => t.title === tabName);
+        if (tab) sheetTabId = tab.sheetId;
+      } catch { /* Non-critical */ }
+
+      tabSlices.push({ tabName, headers, CI, dataStartRow, all, sheetTabId });
+    } catch {
+      // Skip tabs that fail to load
+    }
+  }
+
+  if (tabSlices.length === 0) {
+    throw new Error(`No tabs could be loaded for city "${cityName}".`);
+  }
+
+  // Use the first tab's CI as the merged CI (headers should be consistent across tabs)
+  const mergedCI = tabSlices[0].CI;
+
+  // Build merged arrays filtered by city
+  const mergedAll: any[][] = [];
+  const rowToTab: string[] = [];
+  const rowToRealSheetRow: number[] = [];
+
+  // Virtual dataStartRow for the merged dataset — always 2
+  const mergedDataStartRow = 2;
+
+  for (const slice of tabSlices) {
+    for (let r = 0; r < slice.all.length; r++) {
+      const row = slice.all[r];
+
+      // Filter by city name (case-insensitive trim match)
+      if (slice.CI.CITY >= 0) {
+        const rowCity = String(row[slice.CI.CITY] ?? '').trim().toLowerCase();
+        if (rowCity !== cityName.trim().toLowerCase()) continue;
+      } else {
+        // No CITY column in this tab — skip all rows from this tab
+        continue;
+      }
+
+      mergedAll.push(row);
+      rowToTab.push(slice.tabName);
+      // Real sheet row = data index (0-based) + dataStartRow (1-based offset)
+      rowToRealSheetRow.push(r + slice.dataStartRow);
+    }
+  }
+
+  if (mergedAll.length === 0) {
+    throw new Error(`No rows found for city "${cityName}".`);
+  }
+
+  // Build groups on the merged data
+  const emptyHidden = new Set<number>();
+  const allGroups = buildGroups(mergedAll, mergedCI, emptyHidden, mergedDataStartRow);
+  const sniperFiltered = sniperFilterGroups(allGroups, mergedAll, mergedCI, config);
+  const available = filterAvailable(sniperFiltered, mergedAll, mergedCI);
+
+  cachedCity = {
+    spreadsheetId,
+    cityName,
+    sniperConfigHash: configHash,
+    timestamp: Date.now(),
+    mergedAll,
+    mergedCI,
+    mergedDataStartRow,
+    rowToTab,
+    rowToRealSheetRow,
+    tabSlices,
+    groups: sniperFiltered,
+    available,
+    infiltrateWindowStart: 0,
+    siegeIndex: 0,
+  };
+
+  return cachedCity;
 }
 
 // =============================================================================
-// PHONE HIGHLIGHTING
+// PHONE HIGHLIGHTING — works for both single tab and city mode
 // =============================================================================
 
 async function highlightPhones(
-  sheet: CachedSheetData,
+  spreadsheetId: string,
+  sheetTabId: number,
+  phoneCol: number,
   currentRows: number[],
   nextRows: number[]
 ): Promise<void> {
-  if (sheet.CI.PHONE < 0) return;
+  if (phoneCol < 0) return;
 
-  const phoneCol = sheet.CI.PHONE;
   const requests: any[] = [];
 
   const allPrevRows = [...highlightedRows.current, ...highlightedRows.next];
   for (const row of allPrevRows) {
-    const dataIdx = row - sheet.dataStartRow;
-    if (dataIdx < 0) continue;
     requests.push({
       repeatCell: {
-        range: {
-          sheetId: sheet.sheetTabId,
-          startRowIndex: row - 1,
-          endRowIndex: row,
-          startColumnIndex: phoneCol,
-          endColumnIndex: phoneCol + 1,
-        },
+        range: { sheetId: sheetTabId, startRowIndex: row - 1, endRowIndex: row, startColumnIndex: phoneCol, endColumnIndex: phoneCol + 1 },
         cell: { userEnteredFormat: { backgroundColor: { red: 1, green: 1, blue: 1 } } },
         fields: 'userEnteredFormat.backgroundColor',
       },
@@ -256,13 +406,7 @@ async function highlightPhones(
   for (const row of currentRows) {
     requests.push({
       repeatCell: {
-        range: {
-          sheetId: sheet.sheetTabId,
-          startRowIndex: row - 1,
-          endRowIndex: row,
-          startColumnIndex: phoneCol,
-          endColumnIndex: phoneCol + 1,
-        },
+        range: { sheetId: sheetTabId, startRowIndex: row - 1, endRowIndex: row, startColumnIndex: phoneCol, endColumnIndex: phoneCol + 1 },
         cell: { userEnteredFormat: { backgroundColor: { red: 1, green: 0.839, blue: 0 } } },
         fields: 'userEnteredFormat.backgroundColor',
       },
@@ -272,13 +416,7 @@ async function highlightPhones(
   for (const row of nextRows) {
     requests.push({
       repeatCell: {
-        range: {
-          sheetId: sheet.sheetTabId,
-          startRowIndex: row - 1,
-          endRowIndex: row,
-          startColumnIndex: phoneCol,
-          endColumnIndex: phoneCol + 1,
-        },
+        range: { sheetId: sheetTabId, startRowIndex: row - 1, endRowIndex: row, startColumnIndex: phoneCol, endColumnIndex: phoneCol + 1 },
         cell: { userEnteredFormat: { backgroundColor: { red: 0, green: 0.69, blue: 1 } } },
         fields: 'userEnteredFormat.backgroundColor',
       },
@@ -286,13 +424,58 @@ async function highlightPhones(
   }
 
   if (requests.length === 0) return;
-
   highlightedRows = { current: [...currentRows], next: [...nextRows] };
 
   try {
-    await dialerSheetsService.sheetsFormatBatch(sheet.spreadsheetId, requests);
+    await dialerSheetsService.sheetsFormatBatch(spreadsheetId, requests);
   } catch {
     // Silent fail
+  }
+}
+
+// Helper: highlight from a single-tab cached sheet (original behavior)
+async function highlightPhonesFromSheet(
+  sheet: CachedSheetData,
+  currentRows: number[],
+  nextRows: number[]
+): Promise<void> {
+  if (sheet.CI.PHONE < 0) return;
+  await highlightPhones(sheet.spreadsheetId, sheet.sheetTabId, sheet.CI.PHONE, currentRows, nextRows);
+}
+
+// Helper: highlight from city mode — rows are virtual merged rows, need to map back
+async function highlightPhonesFromCity(
+  city: CachedCityData,
+  currentMergedRows: number[],
+  nextMergedRows: number[]
+): Promise<void> {
+  if (city.mergedCI.PHONE < 0) return;
+
+  // Group rows by tab so we can batch per tab
+  const tabBatches = new Map<string, { current: number[]; next: number[] }>();
+
+  for (const mergedRow of currentMergedRows) {
+    const dataIdx = mergedRow - city.mergedDataStartRow;
+    if (dataIdx < 0 || dataIdx >= city.rowToTab.length) continue;
+    const tabName = city.rowToTab[dataIdx];
+    const realRow = city.rowToRealSheetRow[dataIdx];
+    if (!tabBatches.has(tabName)) tabBatches.set(tabName, { current: [], next: [] });
+    tabBatches.get(tabName)!.current.push(realRow);
+  }
+
+  for (const mergedRow of nextMergedRows) {
+    const dataIdx = mergedRow - city.mergedDataStartRow;
+    if (dataIdx < 0 || dataIdx >= city.rowToTab.length) continue;
+    const tabName = city.rowToTab[dataIdx];
+    const realRow = city.rowToRealSheetRow[dataIdx];
+    if (!tabBatches.has(tabName)) tabBatches.set(tabName, { current: [], next: [] });
+    tabBatches.get(tabName)!.next.push(realRow);
+  }
+
+  for (const [tabName, batch] of tabBatches) {
+    const slice = city.tabSlices.find(s => s.tabName === tabName);
+    if (!slice) continue;
+    await highlightPhones(city.spreadsheetId, slice.sheetTabId, city.mergedCI.PHONE, batch.current, batch.next);
   }
 }
 
@@ -301,66 +484,45 @@ async function highlightPhones(
 // =============================================================================
 
 export async function initialize(config: EngineConfig): Promise<EngineSnapshot | null> {
-  const sheet = await loadSheetData(
-    config.spreadsheetId,
-    config.sheetName,
-    config.sniperConfig
-  );
 
-  if (sheet.available.length === 0) {
-    return null;
+  // ── CITY MODE ───────────────────────────────────────────────────────────────
+  if (config.cityName && config.cityTabs && config.cityTabs.length > 0) {
+    return initializeCity(config);
   }
 
-  // ── AMBUSH ──────────────────────────────────────────────────────────────────
-  // Must have a valid Booking ID. Validate it exists and resolve to a row.
+  // ── SINGLE TAB MODE (original) ───────────────────────────────────────────────
+  const sheet = await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
+
+  if (sheet.available.length === 0) return null;
+
   if (config.direction === 'ambush') {
     const bid = (config.startBookingId || '').trim();
-    if (!bid) {
-      throw new Error('AMBUSH requires a Booking ID. Please enter a Booking ID to start from.');
-    }
-    if (sheet.CI.BOOKING_ID < 0) {
-      throw new Error('No Booking ID column found in this sheet. Cannot use AMBUSH mode.');
-    }
+    if (!bid) throw new Error('AMBUSH requires a Booking ID. Please enter a Booking ID to start from.');
+    if (sheet.CI.BOOKING_ID < 0) throw new Error('No Booking ID column found in this sheet. Cannot use AMBUSH mode.');
 
-    // Find the row matching this Booking ID
     let ambushRow = -1;
     for (let r = 0; r < sheet.all.length; r++) {
       const rowBid = String(sheet.all[r][sheet.CI.BOOKING_ID] ?? '').trim();
-      if (rowBid === bid) {
-        ambushRow = r + sheet.dataStartRow;
-        break;
-      }
+      if (rowBid === bid) { ambushRow = r + sheet.dataStartRow; break; }
     }
+    if (ambushRow < 0) throw new Error(`Booking ID "${bid}" not found in this sheet. Please check and try again.`);
 
-    if (ambushRow < 0) {
-      throw new Error(`Booking ID "${bid}" not found in this sheet. Please check and try again.`);
-    }
-
-    // Store where Ambush started so the engine can detect a full loop
     sheet.ambushStartRow = ambushRow;
-
     const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
     const group = findNextGroup(ordered, ambushRow, config.direction);
 
     if (!group) {
-      // The booking ID exists but there are no available groups at or after it —
-      // wrap immediately to the top
       const wrappedGroup = ordered[0] ?? null;
       if (!wrappedGroup) return null;
-      return buildSnapshot(sheet, wrappedGroup, config);
+      return buildSnapshotFromSheet(sheet, wrappedGroup, config);
     }
 
     const session = await loadOrCreateSession(config);
-    const snapshot = await buildSnapshot(sheet, group, config, session);
-    return snapshot;
+    return buildSnapshotFromSheet(sheet, group, config, session);
   }
 
-  // ── INFILTRATE ───────────────────────────────────────────────────────────────
-  // Find the 20-raw-row window with the lowest average NA count and start there.
   if (config.direction === 'infiltrate') {
     let startRow: number;
-
-    // If resuming with a specific row hint, honour it
     if (config.startBookingId && sheet.CI.BOOKING_ID >= 0) {
       const bid = config.startBookingId.trim();
       let found = -1;
@@ -373,48 +535,88 @@ export async function initialize(config: EngineConfig): Promise<EngineSnapshot |
       startRow = findInfiltrateStart(sheet.available, sheet.all, sheet.CI, sheet.dataStartRow);
     }
 
-    // Store the window start for wrap-around
     sheet.infiltrateWindowStart = startRow;
-
     const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
     const group = findNextGroup(ordered, startRow, config.direction);
     if (!group) return null;
 
     const session = await loadOrCreateSession(config);
-    return buildSnapshot(sheet, group, config, session);
+    return buildSnapshotFromSheet(sheet, group, config, session);
   }
 
-  // ── SIEGE ────────────────────────────────────────────────────────────────────
-  // Tier-sorted. Always start from index 0 on fresh deploy.
-  // Resume is handled by DialerPage passing startRow from _resumePosition,
-  // but for Siege we always start fresh at 0 (index-based, not row-based).
+  // Siege
   {
     sheet.siegeIndex = 0;
-
     const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
     const group = findNextGroup(ordered, config.startRow, config.direction, 0);
     if (!group) return null;
 
     const session = await loadOrCreateSession(config);
-
-    // If this is a resume (session has _siegeIndex saved), restore it
     const storedIndex = (session as any)._siegeIndex;
     if (typeof storedIndex === 'number' && storedIndex > 0 && storedIndex < ordered.length) {
       sheet.siegeIndex = storedIndex;
       const resumedGroup = ordered[storedIndex];
       if (!resumedGroup) return null;
-      return buildSnapshot(sheet, resumedGroup, config, session);
+      return buildSnapshotFromSheet(sheet, resumedGroup, config, session);
     }
 
-    return buildSnapshot(sheet, group, config, session);
+    return buildSnapshotFromSheet(sheet, group, config, session);
   }
 }
 
 // =============================================================================
-// BUILD SNAPSHOT HELPER
+// INITIALIZE — CITY MODE
 // =============================================================================
 
-async function buildSnapshot(
+async function initializeCity(config: EngineConfig): Promise<EngineSnapshot | null> {
+  const city = await loadCityData(
+    config.spreadsheetId,
+    config.cityName!,
+    config.cityTabs!,
+    config.sniperConfig
+  );
+
+  if (city.available.length === 0) return null;
+
+  // City mode only supports infiltrate and siege
+  if (config.direction === 'infiltrate') {
+    const startRow = findInfiltrateStart(
+      city.available, city.mergedAll, city.mergedCI, city.mergedDataStartRow
+    );
+    city.infiltrateWindowStart = startRow;
+    const ordered = applyOrdering(city.available, city.mergedAll, city.mergedCI, 'infiltrate');
+    const group = findNextGroup(ordered, startRow, 'infiltrate');
+    if (!group) return null;
+
+    const session = await loadOrCreateSession(config);
+    return buildSnapshotFromCity(city, group, config, session);
+  }
+
+  // Siege
+  {
+    city.siegeIndex = 0;
+    const ordered = applyOrdering(city.available, city.mergedAll, city.mergedCI, 'siege');
+    const group = findNextGroup(ordered, city.mergedDataStartRow, 'siege', 0);
+    if (!group) return null;
+
+    const session = await loadOrCreateSession(config);
+    const storedIndex = (session as any)._siegeIndex;
+    if (typeof storedIndex === 'number' && storedIndex > 0 && storedIndex < ordered.length) {
+      city.siegeIndex = storedIndex;
+      const resumedGroup = ordered[storedIndex];
+      if (!resumedGroup) return null;
+      return buildSnapshotFromCity(city, resumedGroup, config, session);
+    }
+
+    return buildSnapshotFromCity(city, group, config, session);
+  }
+}
+
+// =============================================================================
+// BUILD SNAPSHOT HELPERS
+// =============================================================================
+
+async function buildSnapshotFromSheet(
   sheet: CachedSheetData,
   group: ClientGroup,
   config: EngineConfig,
@@ -426,19 +628,13 @@ async function buildSnapshot(
   }
 
   const state = buildState(
-    group.rows,
-    sheet.all,
-    sheet.CI,
-    config.sheetName,
-    currentGroupIndex,
-    sheet.groups.length,
-    sheet.dataStartRow
+    group.rows, sheet.all, sheet.CI, config.sheetName,
+    currentGroupIndex, sheet.groups.length, sheet.dataStartRow
   );
 
   const resolvedSession = session ?? await loadOrCreateSession(config);
-
-  const prefetchState = getPrefetchState(sheet, state, config.direction);
-  highlightPhones(sheet, state.rows, prefetchState?.rows || []);
+  const prefetchState = getPrefetchStateFromSheet(sheet, state, config.direction);
+  highlightPhonesFromSheet(sheet, state.rows, prefetchState?.rows || []);
 
   return {
     state,
@@ -446,6 +642,38 @@ async function buildSnapshot(
     session: resolvedSession,
     totalGroups: sheet.groups.length,
     availableGroups: sheet.available.length,
+  };
+}
+
+async function buildSnapshotFromCity(
+  city: CachedCityData,
+  group: ClientGroup,
+  config: EngineConfig,
+  session?: GamificationSession
+): Promise<EngineSnapshot> {
+  let currentGroupIndex = 0;
+  for (let i = 0; i < city.groups.length; i++) {
+    if (city.groups[i].firstRow === group.firstRow) { currentGroupIndex = i + 1; break; }
+  }
+
+  // Display name: use cityName as the sheetName for the state
+  const displayName = config.cityName || config.sheetName;
+
+  const state = buildState(
+    group.rows, city.mergedAll, city.mergedCI, displayName,
+    currentGroupIndex, city.groups.length, city.mergedDataStartRow
+  );
+
+  const resolvedSession = session ?? await loadOrCreateSession(config);
+  const prefetchState = getPrefetchStateFromCity(city, state, config.direction);
+  highlightPhonesFromCity(city, state.rows, prefetchState?.rows || []);
+
+  return {
+    state,
+    prefetchState,
+    session: resolvedSession,
+    totalGroups: city.groups.length,
+    availableGroups: city.available.length,
   };
 }
 
@@ -457,88 +685,83 @@ export async function getNextState(
   config: EngineConfig,
   afterRow: number
 ): Promise<DialerStateResult> {
-  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
 
+  // ── CITY MODE ──
+  if (config.cityName && config.cityTabs) {
+    return getNextStateCity(config, afterRow);
+  }
+
+  // ── SINGLE TAB MODE (original) ──
+  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
   const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
   let group: ClientGroup | null = null;
 
   if (config.direction === 'siege') {
-    // Advance the siege index by one and look up by index
     sheet.siegeIndex = sheet.siegeIndex + 1;
     group = findNextGroup(ordered, afterRow, config.direction, sheet.siegeIndex);
   } else {
     group = findNextGroup(ordered, afterRow, config.direction);
   }
 
-  // ── WRAP LOGIC ─────────────────────────────────────────────────────────────
-
   if (!group) {
-    if (config.direction === 'siege') {
-      // Siege never wraps — mission complete
-      return { found: false, message: 'All targets neutralized. Mission complete.' };
-    }
-
+    if (config.direction === 'siege') return { found: false, message: 'All targets neutralized. Mission complete.' };
     if (config.direction === 'ambush') {
-      // Wrap to the very top of the available list
       group = ordered[0] ?? null;
       if (!group) return { found: false, message: 'No available groups found.' };
-
-      // Check if we've looped back past our original start point
-      // (i.e. the group we just wrapped to is at or past ambushStartRow)
-      // The full loop is complete when we've come back around — return mission complete
       if (sheet.ambushStartRow > 0 && group.firstRow >= sheet.ambushStartRow) {
         return { found: false, message: 'Full loop complete. Mission accomplished.' };
       }
     }
-
     if (config.direction === 'infiltrate') {
-      // Wrap back to the top of the winning window
-      const windowRow = sheet.infiltrateWindowStart > 0
-        ? sheet.infiltrateWindowStart
-        : ordered[0]?.firstRow ?? sheet.dataStartRow;
-
+      const windowRow = sheet.infiltrateWindowStart > 0 ? sheet.infiltrateWindowStart : ordered[0]?.firstRow ?? sheet.dataStartRow;
       group = findNextGroup(ordered, windowRow, config.direction);
       if (!group) group = ordered[0] ?? null;
       if (!group) return { found: false, message: 'No available groups found.' };
     }
-  } else {
-    // Ambush: check if we've advanced past the start point after wrapping
-    // (handles the case where we started mid-list and have now returned to start)
-    if (config.direction === 'ambush' && sheet.ambushStartRow > 0) {
-      // If we've gone below where we started, that's fine — normal forward progress.
-      // The full loop detection triggers on the NEXT wrap.
-    }
   }
 
-  if (!group) {
-    return { found: false, message: 'No more available groups.' };
-  }
+  if (!group) return { found: false, message: 'No more available groups.' };
 
   let currentGroupIndex = 0;
   for (let i = 0; i < sheet.groups.length; i++) {
     if (sheet.groups[i].firstRow === group.firstRow) { currentGroupIndex = i + 1; break; }
   }
 
-  return buildState(
-    group.rows,
-    sheet.all,
-    sheet.CI,
-    config.sheetName,
-    currentGroupIndex,
-    sheet.groups.length,
-    sheet.dataStartRow
-  );
+  return buildState(group.rows, sheet.all, sheet.CI, config.sheetName, currentGroupIndex, sheet.groups.length, sheet.dataStartRow);
 }
 
-export async function findGroupByBookingId(
-  config: EngineConfig,
-  bookingId: string
-): Promise<DialerStateResult> {
-  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
+async function getNextStateCity(config: EngineConfig, afterRow: number): Promise<DialerStateResult> {
+  const city = cachedCity || await loadCityData(config.spreadsheetId, config.cityName!, config.cityTabs!, config.sniperConfig);
+  const ordered = applyOrdering(city.available, city.mergedAll, city.mergedCI, config.direction);
+  let group: ClientGroup | null = null;
 
-  if (sheet.CI.BOOKING_ID < 0) {
-    return { found: false, message: 'No Booking ID column found.' };
+  if (config.direction === 'siege') {
+    city.siegeIndex = city.siegeIndex + 1;
+    group = findNextGroup(ordered, afterRow, 'siege', city.siegeIndex);
+    if (!group) return { found: false, message: 'All targets neutralized. Mission complete.' };
+  } else {
+    // infiltrate
+    group = findNextGroup(ordered, afterRow, 'infiltrate');
+    if (!group) {
+      const windowRow = city.infiltrateWindowStart > 0 ? city.infiltrateWindowStart : ordered[0]?.firstRow ?? city.mergedDataStartRow;
+      group = findNextGroup(ordered, windowRow, 'infiltrate');
+      if (!group) group = ordered[0] ?? null;
+      if (!group) return { found: false, message: 'No available groups found.' };
+    }
   }
+
+  let currentGroupIndex = 0;
+  for (let i = 0; i < city.groups.length; i++) {
+    if (city.groups[i].firstRow === group.firstRow) { currentGroupIndex = i + 1; break; }
+  }
+
+  const displayName = config.cityName || config.sheetName;
+  return buildState(group.rows, city.mergedAll, city.mergedCI, displayName, currentGroupIndex, city.groups.length, city.mergedDataStartRow);
+}
+
+export async function findGroupByBookingId(config: EngineConfig, bookingId: string): Promise<DialerStateResult> {
+  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
+  if (sheet.CI.BOOKING_ID < 0) return { found: false, message: 'No Booking ID column found.' };
 
   for (let r = 0; r < sheet.all.length; r++) {
     const bid = String(sheet.all[r][sheet.CI.BOOKING_ID] ?? '').trim();
@@ -547,18 +770,13 @@ export async function findGroupByBookingId(
       return getNextState(config, afterRow);
     }
   }
-
   return { found: false, message: `Booking ID "${bookingId}" not found.` };
 }
 
-export async function findGroupByPhone(
-  config: EngineConfig,
-  phone: string
-): Promise<DialerStateResult> {
+export async function findGroupByPhone(config: EngineConfig, phone: string): Promise<DialerStateResult> {
   const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
   const normalized = normalizePhone(phone);
   if (!normalized) return { found: false, message: 'Invalid phone number.' };
-
   if (sheet.CI.PHONE < 0) return { found: false, message: 'No PHONE column found.' };
 
   for (let r = 0; r < sheet.all.length; r++) {
@@ -568,7 +786,6 @@ export async function findGroupByPhone(
       return getNextState(config, afterRow);
     }
   }
-
   return { found: false, message: `Phone "${phone}" not found.` };
 }
 
@@ -576,7 +793,7 @@ export async function findGroupByPhone(
 // PREFETCH
 // =============================================================================
 
-function getPrefetchState(
+function getPrefetchStateFromSheet(
   sheet: CachedSheetData,
   currentState: DialerState,
   direction: Direction
@@ -586,29 +803,44 @@ function getPrefetchState(
 
   let group: ClientGroup | null = null;
   if (direction === 'siege') {
-    // Peek at the NEXT index without advancing sheet.siegeIndex
     const peekIndex = sheet.siegeIndex + 1;
     group = peekIndex < ordered.length ? ordered[peekIndex] : null;
   } else {
     group = findNextGroup(ordered, afterRow, direction);
   }
-
   if (!group) return null;
 
   let currentGroupIndex = 0;
   for (let i = 0; i < sheet.groups.length; i++) {
     if (sheet.groups[i].firstRow === group.firstRow) { currentGroupIndex = i + 1; break; }
   }
+  return buildState(group.rows, sheet.all, sheet.CI, sheet.sheetName, currentGroupIndex, sheet.groups.length, sheet.dataStartRow);
+}
 
-  return buildState(
-    group.rows,
-    sheet.all,
-    sheet.CI,
-    sheet.sheetName,
-    currentGroupIndex,
-    sheet.groups.length,
-    sheet.dataStartRow
-  );
+function getPrefetchStateFromCity(
+  city: CachedCityData,
+  currentState: DialerState,
+  direction: Direction
+): DialerState | null {
+  const afterRow = nextAfterRow(currentState.rows, direction);
+  const ordered = applyOrdering(city.available, city.mergedAll, city.mergedCI, direction);
+
+  let group: ClientGroup | null = null;
+  if (direction === 'siege') {
+    const peekIndex = city.siegeIndex + 1;
+    group = peekIndex < ordered.length ? ordered[peekIndex] : null;
+  } else {
+    group = findNextGroup(ordered, afterRow, direction);
+  }
+  if (!group) return null;
+
+  let currentGroupIndex = 0;
+  for (let i = 0; i < city.groups.length; i++) {
+    if (city.groups[i].firstRow === group.firstRow) { currentGroupIndex = i + 1; break; }
+  }
+
+  const displayName = currentState.sheetName;
+  return buildState(group.rows, city.mergedAll, city.mergedCI, displayName, currentGroupIndex, city.groups.length, city.mergedDataStartRow);
 }
 
 // =============================================================================
@@ -630,6 +862,13 @@ export async function applyDisposition(
   extra: DispositionExtra = {},
   yesStartTime?: number
 ): Promise<DispositionResult> {
+
+  // ── CITY MODE ──
+  if (config.cityName && config.cityTabs) {
+    return applyDispositionCity(config, state, disposition, phone, session, extra, yesStartTime);
+  }
+
+  // ── SINGLE TAB MODE (original) ──
   const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
 
   if (disposition === 'PREPAY') {
@@ -647,25 +886,15 @@ export async function applyDisposition(
   }
 
   const dispResult = buildDispositionUpdates(
-    disposition,
-    sheet.all,
-    sheet.CI,
-    state.dataIndices,
-    sheet.dataStartRow,
-    phone,
-    config.repCode,
-    extra
+    disposition, sheet.all, sheet.CI, state.dataIndices, sheet.dataStartRow, phone, config.repCode, extra
   );
 
   if (dispResult.updates.length > 0) {
     const sheetsData = cellUpdatesToSheetsData(config.sheetName, dispResult.updates);
     await dialerSheetsService.sheetsBatchUpdate(config.spreadsheetId, sheetsData);
-
     for (const u of dispResult.updates) {
       const dataIdx = u.row - sheet.dataStartRow;
-      if (dataIdx >= 0 && dataIdx < sheet.all.length) {
-        sheet.all[dataIdx][u.col] = u.value;
-      }
+      if (dataIdx >= 0 && dataIdx < sheet.all.length) sheet.all[dataIdx][u.col] = u.value;
     }
   }
 
@@ -673,7 +902,6 @@ export async function applyDisposition(
     const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
     const gamResult = processGamification(session, disposition, gamCtx);
     await saveSession(session);
-
     return {
       nextState: { found: true, ...state, phone: dispResult.redial.newPhone } as DialerState,
       gamification: gamResult,
@@ -693,11 +921,119 @@ export async function applyDisposition(
 
   if (nextStateResult.found) {
     const ns = nextStateResult as DialerState;
-    const prefetch = getPrefetchState(sheet, ns, config.direction);
-    highlightPhones(sheet, ns.rows, prefetch?.rows || []);
+    const prefetch = getPrefetchStateFromSheet(sheet, ns, config.direction);
+    highlightPhonesFromSheet(sheet, ns.rows, prefetch?.rows || []);
   }
 
   return { nextState: nextStateResult, gamification: gamResult };
+}
+
+// =============================================================================
+// DISPOSITION — CITY MODE
+// =============================================================================
+
+async function applyDispositionCity(
+  config: EngineConfig,
+  state: DialerState,
+  disposition: DispositionType,
+  phone: string,
+  session: GamificationSession,
+  extra: DispositionExtra,
+  yesStartTime?: number
+): Promise<DispositionResult> {
+  const city = cachedCity || await loadCityData(config.spreadsheetId, config.cityName!, config.cityTabs!, config.sniperConfig);
+
+  if (disposition === 'PREPAY') {
+    // Find which tab this group's first row lives in
+    const firstDataIdx = state.dataIndices[0];
+    const sourceTab = city.rowToTab[firstDataIdx] || config.sheetName;
+    const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
+    pendingPrepay = {
+      sheetName: sourceTab,
+      groupDataIndices: state.dataIndices,
+      phone,
+      extra,
+      dataStartRow: city.mergedDataStartRow,
+      gamContext: gamCtx,
+      yesStartTime: yesStartTime || 0,
+      sourceTab,
+    };
+    return { nextState: state, gamification: null };
+  }
+
+  // For each data index in the group, map back to real tab + row, then batch updates per tab
+  const updatesByTab = new Map<string, { range: string; values: any[][] }[]>();
+
+  const dispResult = buildDispositionUpdates(
+    disposition, city.mergedAll, city.mergedCI, state.dataIndices,
+    city.mergedDataStartRow, phone, config.repCode, extra
+  );
+
+  if (dispResult.updates.length > 0) {
+    // Map each update's virtual row back to its real tab + row
+    for (const u of dispResult.updates) {
+      const dataIdx = u.row - city.mergedDataStartRow;
+      if (dataIdx < 0 || dataIdx >= city.rowToTab.length) continue;
+
+      const tabName = city.rowToTab[dataIdx];
+      const realSheetRow = city.rowToRealSheetRow[dataIdx];
+
+      // Build A1 range using real row
+      const colLetter = columnToLetter(u.col + 1);
+      const range = `'${tabName}'!${colLetter}${realSheetRow}`;
+
+      if (!updatesByTab.has(tabName)) updatesByTab.set(tabName, []);
+      updatesByTab.get(tabName)!.push({ range, values: [[u.value]] });
+
+      // Update in-memory merged data too
+      city.mergedAll[dataIdx][u.col] = u.value;
+    }
+
+    // Write to each tab
+    for (const [, sheetsData] of updatesByTab) {
+      await dialerSheetsService.sheetsBatchUpdate(config.spreadsheetId, sheetsData);
+    }
+  }
+
+  if (dispResult.redial) {
+    const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
+    const gamResult = processGamification(session, disposition, gamCtx);
+    await saveSession(session);
+    return {
+      nextState: { found: true, ...state, phone: dispResult.redial.newPhone } as DialerState,
+      gamification: gamResult,
+      redialPhone: dispResult.redial.newPhone,
+    };
+  }
+
+  const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
+  const gamResult = processGamification(session, disposition, gamCtx);
+  await saveSession(session);
+
+  city.available = filterAvailable(city.groups, city.mergedAll, city.mergedCI);
+  city.timestamp = Date.now();
+
+  const afterRow = nextAfterRow(state.rows, config.direction);
+  const nextStateResult = await getNextStateCity(config, afterRow);
+
+  if (nextStateResult.found) {
+    const ns = nextStateResult as DialerState;
+    const prefetch = getPrefetchStateFromCity(city, ns, config.direction);
+    highlightPhonesFromCity(city, ns.rows, prefetch?.rows || []);
+  }
+
+  return { nextState: nextStateResult, gamification: gamResult };
+}
+
+function columnToLetter(col: number): string {
+  let s = '';
+  let c = col;
+  while (c > 0) {
+    c--;
+    s = String.fromCharCode(65 + (c % 26)) + s;
+    c = Math.floor(c / 26);
+  }
+  return s;
 }
 
 // =============================================================================
@@ -721,38 +1057,62 @@ export async function finalizePrepay(
   session: GamificationSession
 ): Promise<DispositionResult> {
   if (!pendingPrepay) {
-    return {
-      nextState: { found: false, message: 'No pending prepay to finalize.' },
-      gamification: null,
-    };
+    return { nextState: { found: false, message: 'No pending prepay to finalize.' }, gamification: null };
   }
 
-  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
+  const isCityMode = !!(config.cityName && config.cityTabs);
   const pp = pendingPrepay;
 
-  if (cardData.amount) {
-    pp.extra.price = cardData.amount;
+  if (cardData.amount) pp.extra.price = cardData.amount;
+
+  let all: any[][];
+  let CI: ColumnIndices;
+  let dataStartRow: number;
+  let headers: any[];
+
+  if (isCityMode) {
+    const city = cachedCity || await loadCityData(config.spreadsheetId, config.cityName!, config.cityTabs!, config.sniperConfig);
+    all = city.mergedAll;
+    CI = city.mergedCI;
+    dataStartRow = city.mergedDataStartRow;
+    // Find headers from the source tab
+    const slice = city.tabSlices.find(s => s.tabName === pp.sourceTab) || city.tabSlices[0];
+    headers = slice.headers;
+  } else {
+    const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
+    all = sheet.all;
+    CI = sheet.CI;
+    dataStartRow = sheet.dataStartRow;
+    headers = sheet.headers;
   }
 
-  const dispResult = buildDispositionUpdates(
-    'PREPAY',
-    sheet.all,
-    sheet.CI,
-    pp.groupDataIndices,
-    pp.dataStartRow,
-    pp.phone,
-    config.repCode,
-    pp.extra
-  );
+  const dispResult = buildDispositionUpdates('PREPAY', all, CI, pp.groupDataIndices, dataStartRow, pp.phone, config.repCode, pp.extra);
 
   if (dispResult.updates.length > 0) {
-    const sheetsData = cellUpdatesToSheetsData(config.sheetName, dispResult.updates);
-    await dialerSheetsService.sheetsBatchUpdate(config.spreadsheetId, sheetsData);
-
-    for (const u of dispResult.updates) {
-      const dataIdx = u.row - sheet.dataStartRow;
-      if (dataIdx >= 0 && dataIdx < sheet.all.length) {
-        sheet.all[dataIdx][u.col] = u.value;
+    if (isCityMode) {
+      const city = cachedCity!;
+      const updatesByTab = new Map<string, { range: string; values: any[][] }[]>();
+      for (const u of dispResult.updates) {
+        const dataIdx = u.row - city.mergedDataStartRow;
+        if (dataIdx < 0 || dataIdx >= city.rowToTab.length) continue;
+        const tabName = city.rowToTab[dataIdx];
+        const realSheetRow = city.rowToRealSheetRow[dataIdx];
+        const colLetter = columnToLetter(u.col + 1);
+        const range = `'${tabName}'!${colLetter}${realSheetRow}`;
+        if (!updatesByTab.has(tabName)) updatesByTab.set(tabName, []);
+        updatesByTab.get(tabName)!.push({ range, values: [[u.value]] });
+        city.mergedAll[dataIdx][u.col] = u.value;
+      }
+      for (const [, sheetsData] of updatesByTab) {
+        await dialerSheetsService.sheetsBatchUpdate(config.spreadsheetId, sheetsData);
+      }
+    } else {
+      const sheet = cachedSheet!;
+      const sheetsData = cellUpdatesToSheetsData(pp.sheetName, dispResult.updates);
+      await dialerSheetsService.sheetsBatchUpdate(config.spreadsheetId, sheetsData);
+      for (const u of dispResult.updates) {
+        const dataIdx = u.row - sheet.dataStartRow;
+        if (dataIdx >= 0 && dataIdx < sheet.all.length) sheet.all[dataIdx][u.col] = u.value;
       }
     }
   }
@@ -761,17 +1121,18 @@ export async function finalizePrepay(
   const gamResult = processGamification(session, 'PREPAY', gamCtx);
   await saveSession(session);
 
+  // Find detail row for CCD write
   let detailIdx = pp.groupDataIndices[0];
   let bestYear = 0;
   let globalBestIdx = pp.groupDataIndices[0];
   let globalBestYear = 0;
 
-  if (sheet.CI.YEAR >= 0) {
+  if (CI.YEAR >= 0) {
     for (const r of pp.groupDataIndices) {
-      const yr = parseInt(String(sheet.all[r]?.[sheet.CI.YEAR] ?? '0'), 10) || 0;
+      const yr = parseInt(String(all[r]?.[CI.YEAR] ?? '0'), 10) || 0;
       if (yr > globalBestYear) { globalBestYear = yr; globalBestIdx = r; }
-      if (sheet.CI.PHONE >= 0) {
-        const rowPh = normalizePhone(String(sheet.all[r]?.[sheet.CI.PHONE] ?? ''));
+      if (CI.PHONE >= 0) {
+        const rowPh = normalizePhone(String(all[r]?.[CI.PHONE] ?? ''));
         if (rowPh === pp.phone && yr > bestYear) { bestYear = yr; detailIdx = r; }
       }
     }
@@ -783,22 +1144,9 @@ export async function finalizePrepay(
     const ccdHeaderData = await dialerSheetsService.sheetsGet(config.spreadsheetId, ccdRange);
     if (ccdHeaderData && ccdHeaderData.length > 0) {
       const ccdHeaders = ccdHeaderData[0];
-      const sourceRow = sheet.all[detailIdx];
-
-      const ccdWrite = buildCCDRow(
-        sourceRow,
-        sheet.headers,
-        ccdHeaders,
-        cardData,
-        config.repCode,
-        { email: pp.extra.email, name: pp.extra.name, price: pp.extra.price }
-      );
-
-      await dialerSheetsService.sheetsAppend(
-        config.spreadsheetId,
-        `'CCD'!A1`,
-        [ccdWrite.rowValues]
-      );
+      const sourceRow = all[detailIdx];
+      const ccdWrite = buildCCDRow(sourceRow, headers, ccdHeaders, cardData, config.repCode, { email: pp.extra.email, name: pp.extra.name, price: pp.extra.price });
+      await dialerSheetsService.sheetsAppend(config.spreadsheetId, `'CCD'!A1`, [ccdWrite.rowValues]);
     }
   } catch (err) {
     console.warn('CCD write failed (CCD tab may not exist):', err);
@@ -806,51 +1154,58 @@ export async function finalizePrepay(
 
   pendingPrepay = null;
 
-  sheet.available = filterAvailable(sheet.groups, sheet.all, sheet.CI);
-  sheet.timestamp = Date.now();
-
-  const afterRow = nextAfterRow(
-    pp.groupDataIndices.map((r) => r + pp.dataStartRow),
-    config.direction
-  );
-  const nextStateResult = await getNextState(config, afterRow);
-
-  if (nextStateResult.found) {
-    const ns = nextStateResult as DialerState;
-    const prefetch = getPrefetchState(sheet, ns, config.direction);
-    highlightPhones(sheet, ns.rows, prefetch?.rows || []);
+  if (isCityMode) {
+    const city = cachedCity!;
+    city.available = filterAvailable(city.groups, city.mergedAll, city.mergedCI);
+    city.timestamp = Date.now();
+    const afterRow = nextAfterRow(pp.groupDataIndices.map(r => r + city.mergedDataStartRow), config.direction);
+    const nextStateResult = await getNextStateCity(config, afterRow);
+    if (nextStateResult.found) {
+      const ns = nextStateResult as DialerState;
+      const prefetch = getPrefetchStateFromCity(city, ns, config.direction);
+      highlightPhonesFromCity(city, ns.rows, prefetch?.rows || []);
+    }
+    return { nextState: nextStateResult, gamification: gamResult };
+  } else {
+    const sheet = cachedSheet!;
+    sheet.available = filterAvailable(sheet.groups, sheet.all, sheet.CI);
+    sheet.timestamp = Date.now();
+    const afterRow = nextAfterRow(pp.groupDataIndices.map(r => r + pp.dataStartRow), config.direction);
+    const nextStateResult = await getNextState(config, afterRow);
+    if (nextStateResult.found) {
+      const ns = nextStateResult as DialerState;
+      const prefetch = getPrefetchStateFromSheet(sheet, ns, config.direction);
+      highlightPhonesFromSheet(sheet, ns.rows, prefetch?.rows || []);
+    }
+    return { nextState: nextStateResult, gamification: gamResult };
   }
-
-  return { nextState: nextStateResult, gamification: gamResult };
 }
 
-export function cancelPrepay(): void {
-  pendingPrepay = null;
-}
-
-export function hasPendingPrepay(): boolean {
-  return pendingPrepay !== null;
-}
+export function cancelPrepay(): void { pendingPrepay = null; }
+export function hasPendingPrepay(): boolean { return pendingPrepay !== null; }
 
 // =============================================================================
 // STREET CLEARED CHECK
 // =============================================================================
 
-export function checkStreetCleared(
-  state: DialerState
-): { cleared: boolean; visibleGroupCount: number } {
-  if (!cachedSheet) return { cleared: false, visibleGroupCount: 0 };
+export function checkStreetCleared(state: DialerState): { cleared: boolean; visibleGroupCount: number } {
+  const isCityMode = !!cachedCity;
 
-  const sheet = cachedSheet;
+  const all = isCityMode ? cachedCity!.mergedAll : cachedSheet?.all;
+  const CI = isCityMode ? cachedCity!.mergedCI : cachedSheet?.CI;
+  const groups = isCityMode ? cachedCity!.groups : cachedSheet?.groups;
+
+  if (!all || !CI || !groups) return { cleared: false, visibleGroupCount: 0 };
+
   const streetKey = state.streetKey;
   if (!streetKey) return { cleared: false, visibleGroupCount: 0 };
 
   const streetGroups: ClientGroup[] = [];
-  for (const group of sheet.groups) {
+  for (const group of groups) {
     let inStreet = false;
     for (const r of group.rows) {
-      const s = sheet.CI.STREET >= 0 ? String(sheet.all[r]?.[sheet.CI.STREET] ?? '').trim() : '';
-      const rc = sheet.CI.ROUTE_CODE >= 0 ? String(sheet.all[r]?.[sheet.CI.ROUTE_CODE] ?? '').trim() : '';
+      const s = CI.STREET >= 0 ? String(all[r]?.[CI.STREET] ?? '').trim() : '';
+      const rc = CI.ROUTE_CODE >= 0 ? String(all[r]?.[CI.ROUTE_CODE] ?? '').trim() : '';
       const key = buildStreetKey(rc, s);
       if (key === streetKey) { inStreet = true; break; }
     }
@@ -863,10 +1218,10 @@ export function checkStreetCleared(
   for (const group of streetGroups) {
     let hasDisposition = false;
     for (const r of group.rows) {
-      if (sheet.CI.YES >= 0 && String(sheet.all[r]?.[sheet.CI.YES] ?? '').trim() !== '') { hasDisposition = true; break; }
-      if (sheet.CI.NO >= 0 && String(sheet.all[r]?.[sheet.CI.NO] ?? '').trim() !== '') { hasDisposition = true; break; }
-      if (sheet.CI.WN >= 0 && String(sheet.all[r]?.[sheet.CI.WN] ?? '').trim() !== '') { hasDisposition = true; break; }
-      if (sheet.CI.REMOVE >= 0 && String(sheet.all[r]?.[sheet.CI.REMOVE] ?? '').trim() !== '') { hasDisposition = true; break; }
+      if (CI.YES >= 0 && String(all[r]?.[CI.YES] ?? '').trim() !== '') { hasDisposition = true; break; }
+      if (CI.NO >= 0 && String(all[r]?.[CI.NO] ?? '').trim() !== '') { hasDisposition = true; break; }
+      if (CI.WN >= 0 && String(all[r]?.[CI.WN] ?? '').trim() !== '') { hasDisposition = true; break; }
+      if (CI.REMOVE >= 0 && String(all[r]?.[CI.REMOVE] ?? '').trim() !== '') { hasDisposition = true; break; }
     }
     if (!hasDisposition) { allCleared = false; break; }
   }
@@ -878,10 +1233,7 @@ export function checkStreetCleared(
 // YEAR DISCOVERY
 // =============================================================================
 
-export async function discoverAvailableYears(
-  spreadsheetId: string,
-  sheetName: string
-): Promise<number[]> {
+export async function discoverAvailableYears(spreadsheetId: string, sheetName: string): Promise<number[]> {
   const sheet = cachedSheet && cachedSheet.spreadsheetId === spreadsheetId && cachedSheet.sheetName === sheetName
     ? cachedSheet
     : await loadSheetData(spreadsheetId, sheetName);
@@ -891,12 +1243,131 @@ export async function discoverAvailableYears(
   const yearSet = new Set<number>();
   for (let r = 0; r < sheet.all.length; r++) {
     const yr = parseInt(String(sheet.all[r][sheet.CI.YEAR] ?? ''), 10);
-    if (!isNaN(yr) && yr >= 2000 && yr <= 2100) {
-      yearSet.add(yr);
+    if (!isNaN(yr) && yr >= 2000 && yr <= 2100) yearSet.add(yr);
+  }
+  return Array.from(yearSet).sort((a, b) => b - a);
+}
+
+// =============================================================================
+// CITY DISCOVERY — called by DialerPage during connect scan
+// =============================================================================
+
+export interface CityInfo {
+  cityName: string;
+  tabs: string[];
+  totalRows: number;
+  bookings: number;
+  reachedPct: number;
+  avgAttempts: number;
+  lastUsed: string | null;
+}
+
+/**
+ * Scan all provided tabs and group rows by CITY column.
+ * Returns one CityInfo per unique city name.
+ * onProgress is called after each tab is scanned: (scanned, total, tabName)
+ */
+export async function discoverCities(
+  spreadsheetId: string,
+  tabNames: string[],
+  onProgress?: (scanned: number, total: number, tabName: string) => void
+): Promise<CityInfo[]> {
+  // city name (lowercase) → aggregated data
+  const cityMap = new Map<string, {
+    displayName: string;
+    tabs: Set<string>;
+    totalRows: number;
+    bookings: number;
+    reachedRows: number;
+    naValues: number[];
+    latestDate: Date | null;
+  }>();
+
+  const hasValue = (v: any) => v !== null && v !== undefined && String(v).trim() !== '';
+  const hasAER = (v: any) => { const s = String(v ?? '').trim().toUpperCase(); return s === 'X' || s === 'AER' || s === 'YES' || s === 'Y'; };
+  const isDisposed = (row: any[], YES: number, NO: number, WN: number, REMOVE: number) =>
+    [YES, NO, WN, REMOVE].some(c => c >= 0 && hasValue(row[c]));
+  const getNA = (row: any[], NA: number) => {
+    if (NA < 0) return 0;
+    const v = parseInt(String(row[NA] ?? '0'), 10);
+    return isNaN(v) ? 0 : Math.max(0, v);
+  };
+  const normalizePhone = (v: any) => {
+    let s = String(v ?? '').trim();
+    if (s.endsWith('.0')) s = s.slice(0, -2);
+    const d = s.replace(/\D/g, '');
+    const t = d.length > 10 ? d.slice(-10) : d;
+    return t.length === 10 ? t : '';
+  };
+
+  for (let i = 0; i < tabNames.length; i++) {
+    const tabName = tabNames[i];
+    onProgress?.(i, tabNames.length, tabName);
+
+    try {
+      const rawData = await dialerSheetsService.sheetsGet(spreadsheetId, `'${tabName}'`);
+      if (!rawData || rawData.length < 2) continue;
+
+      const { headerRowIndex, CI } = findHeaders(rawData);
+      if (CI.PHONE < 0 || CI.CITY < 0) continue;
+
+      const dataStartRow = headerRowIndex + 2;
+      const rows = rawData.slice(headerRowIndex + 1);
+
+      for (const row of rows) {
+        if (!row[0]) continue;
+        if (!normalizePhone(row[CI.PHONE])) continue;
+        const route = CI.ROUTE_CODE >= 0 ? String(row[CI.ROUTE_CODE] ?? '').trim() : '';
+        if (!route) continue;
+
+        const cityRaw = String(row[CI.CITY] ?? '').trim();
+        if (!cityRaw) continue;
+        const cityKey = cityRaw.toLowerCase();
+
+        if (!cityMap.has(cityKey)) {
+          cityMap.set(cityKey, { displayName: cityRaw, tabs: new Set(), totalRows: 0, bookings: 0, reachedRows: 0, naValues: [], latestDate: null });
+        }
+        const entry = cityMap.get(cityKey)!;
+        entry.tabs.add(tabName);
+        entry.totalRows++;
+
+        if (CI.AER >= 0 && hasAER(row[CI.AER])) entry.bookings++;
+        if (isDisposed(row, CI.YES, CI.NO, CI.WN, CI.REMOVE)) entry.reachedRows++;
+        else entry.naValues.push(getNA(row, CI.NA));
+
+        if (CI.DATE1 >= 0 && hasValue(row[CI.DATE1])) {
+          try {
+            const d = new Date(row[CI.DATE1]);
+            if (!isNaN(d.getTime()) && (!entry.latestDate || d > entry.latestDate)) entry.latestDate = d;
+          } catch { /* skip */ }
+        }
+      }
+    } catch {
+      // Skip tabs that fail
     }
+
+    onProgress?.(i + 1, tabNames.length, tabName);
   }
 
-  return Array.from(yearSet).sort((a, b) => b - a);
+  const result: CityInfo[] = [];
+  for (const [, entry] of cityMap) {
+    const reachedPct = entry.totalRows > 0 ? Math.round((entry.reachedRows / entry.totalRows) * 100) : 0;
+    const avgAttempts = entry.naValues.length > 0
+      ? Math.round((entry.naValues.reduce((s, n) => s + n, 0) / entry.naValues.length) * 10) / 10
+      : 0;
+    result.push({
+      cityName: entry.displayName,
+      tabs: Array.from(entry.tabs),
+      totalRows: entry.totalRows,
+      bookings: entry.bookings,
+      reachedPct,
+      avgAttempts,
+      lastUsed: entry.latestDate ? entry.latestDate.toISOString() : null,
+    });
+  }
+
+  result.sort((a, b) => a.cityName.localeCompare(b.cityName));
+  return result;
 }
 
 // =============================================================================
@@ -921,16 +1392,12 @@ function buildGamificationContext(
     ctx.price = parseFloat(extra.price || '0') || 0;
     ctx.yesStartTime = yesStartTime;
 
-    if (cachedSheet) {
-      const { cleared, visibleGroupCount } = checkStreetCleared(state);
-      ctx.streetFullyCleared = cleared;
-      ctx.streetVisibleGroupCount = visibleGroupCount;
-    }
+    const { cleared, visibleGroupCount } = checkStreetCleared(state);
+    ctx.streetFullyCleared = cleared;
+    ctx.streetVisibleGroupCount = visibleGroupCount;
 
     if (disposition === 'PREPAY') {
-      const hasPriorPrepay = state.serviceHistory.some(
-        (h) => h.pmtType === 'Prepaid'
-      );
+      const hasPriorPrepay = state.serviceHistory.some(h => h.pmtType === 'Prepaid');
       ctx.isFirstTimePrepay = !hasPriorPrepay;
     }
   }
@@ -939,33 +1406,24 @@ function buildGamificationContext(
 }
 
 // =============================================================================
-// SESSION PERSISTENCE
+// SESSION PERSISTENCE (unchanged)
 // =============================================================================
 
 async function loadOrCreateSession(config: EngineConfig): Promise<GamificationSession> {
   const today = getTodayEST();
-
   try {
-    const dbSession = await campaignService.getOrCreateTodaySession(
-      config.campaignId,
-      config.managerId
-    );
-
+    const dbSession = await campaignService.getOrCreateTodaySession(config.campaignId, config.managerId);
     activeSessionRowId = dbSession.id;
 
     const stored = dbSession.gamificationState;
-
     if (stored && typeof stored === 'object' && Object.keys(stored).length > 0) {
       const restored = stored as GamificationSession;
-      if (restored.date === today) {
-        return migrateSession(restored, config.repCode, today);
-      }
+      if (restored.date === today) return migrateSession(restored, config.repCode, today);
     }
 
     const fresh = createFreshSession(config.repCode, today);
     fresh.sessionStartTime = Date.now();
     return fresh;
-
   } catch (err) {
     console.warn('Failed to load session from Supabase, starting fresh in-memory:', err);
     activeSessionRowId = null;
@@ -977,35 +1435,24 @@ async function loadOrCreateSession(config: EngineConfig): Promise<GamificationSe
 
 async function saveSession(session: GamificationSession): Promise<void> {
   if (!activeSessionRowId) return;
-
   try {
     const stateWithResume: any = {
       ...session,
       _resumeTab: resumeTab || undefined,
       _resumePosition: resumePosition || undefined,
-      // Persist current siege index so Resume can pick up where we left off
-      _siegeIndex: cachedSheet?.siegeIndex ?? undefined,
+      _siegeIndex: cachedSheet?.siegeIndex ?? cachedCity?.siegeIndex ?? undefined,
     };
-
     await campaignService.upsertGamificationState(activeSessionRowId, stateWithResume);
   } catch (err) {
     console.warn('Session save to Supabase failed (non-critical):', err);
   }
 }
 
-function migrateSession(
-  loaded: GamificationSession,
-  repCode: string,
-  dateStr: string
-): GamificationSession {
+function migrateSession(loaded: GamificationSession, repCode: string, dateStr: string): GamificationSession {
   const fresh = createFreshSession(repCode, dateStr);
-
   for (const key of Object.keys(fresh) as (keyof GamificationSession)[]) {
-    if ((loaded as any)[key] === undefined) {
-      (loaded as any)[key] = (fresh as any)[key];
-    }
+    if ((loaded as any)[key] === undefined) (loaded as any)[key] = (fresh as any)[key];
   }
-
   if (!loaded.multipliers) loaded.multipliers = fresh.multipliers;
   for (const mKey of Object.keys(fresh.multipliers) as (keyof typeof fresh.multipliers)[]) {
     if (!(loaded.multipliers as any)[mKey]) {
@@ -1014,13 +1461,10 @@ function migrateSession(
       const freshSub = (fresh.multipliers as any)[mKey];
       const loadedSub = (loaded.multipliers as any)[mKey];
       for (const sKey of Object.keys(freshSub)) {
-        if (loadedSub[sKey] === undefined) {
-          loadedSub[sKey] = freshSub[sKey];
-        }
+        if (loadedSub[sKey] === undefined) loadedSub[sKey] = freshSub[sKey];
       }
     }
   }
-
   return loaded;
 }
 

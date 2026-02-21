@@ -19,6 +19,7 @@ export {
   checkStreetCleared,
   invalidateCache,
   discoverAvailableYears,
+  discoverCities,
   formatPhoneDisplay,
   getCurrentRank,
   getActiveMultipliers,
@@ -38,6 +39,7 @@ export type {
   GamificationSession,
   GamificationResult,
   MultiplierSnapshot,
+  CityInfo,
 } from './dialerEngine';
 
 // --- Sub-modules (for advanced usage) ---

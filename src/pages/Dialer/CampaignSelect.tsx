@@ -4,6 +4,11 @@
 // Stats and Achievements tabs are hidden. The Fireteam panel on the right
 // is also hidden. Everything else is identical for all other users.
 //
+// CITY VIEW: A BY TAB / BY CITY toggle on the Campaigns tab lets the user
+// switch between tab-based cards (default) and city-grouped cards.
+// City cards aggregate stats across all tabs that contain that city.
+// City deploys support Infiltrate and Siege only (no Ambush).
+//
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Settings, RefreshCw } from 'lucide-react';
 import FireteamPanel from './FireteamPanel';
@@ -14,6 +19,7 @@ import { getTodayEST, campaignService } from '../../lib/campaignService';
 import { BADGE_DEFS } from '../../lib/dialer/gamificationDefs';
 import { getBadgeIcon, getBadgeCategoryColor } from './BadgeIcons';
 import type { GamificationSession } from '../../lib/dialer/gamificationDefs';
+import type { CityInfo } from '../../lib/dialer/dialerEngine';
 
 // =============================================================================
 // CALM MODE CONSTANT
@@ -112,10 +118,15 @@ interface CampaignSelectProps {
   onResume?: () => void;
   /** Today's gamification session — used for the Today achievements sub-tab */
   session?: GamificationSession | null;
+  /** City cards — populated after city scan on connect */
+  cityCards?: CityInfo[];
+  /** Called when user deploys a city card */
+  onCityDeploy?: (city: CityInfo) => void;
 }
 
 type MainTab = 'campaigns' | 'stats' | 'achievements';
 type AchievementsSubTab = 'today' | 'lifetime';
+type ViewMode = 'tab' | 'city';
 
 // =============================================================================
 // HELPERS
@@ -157,7 +168,7 @@ function reachStatus(pct: number): { label: string; color: string } {
   return { label: 'SATURATED', color: '#e74c3c' };
 }
 
-function formatDate(iso?: string): string {
+function formatDate(iso?: string | null): string {
   if (!iso) return 'NEVER';
   const d = new Date(iso);
   const now = new Date();
@@ -579,6 +590,61 @@ function MainTabBar({
                 background: '#2ecc71',
                 boxShadow: '0 0 8px rgba(46,204,113,0.6)',
               }} />
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// =============================================================================
+// VIEW MODE TOGGLE  (BY TAB / BY CITY)
+// =============================================================================
+
+function ViewModeToggle({
+  mode,
+  onChange,
+  hasCityCards,
+}: {
+  mode: ViewMode;
+  onChange: (m: ViewMode) => void;
+  hasCityCards: boolean;
+}) {
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 0,
+      padding: '8px 0 4px',
+      marginBottom: 4,
+    }}>
+      {(['tab', 'city'] as ViewMode[]).map((m) => {
+        const isActive = mode === m;
+        const label = m === 'tab' ? '⊞ BY TAB' : '🏙 BY CITY';
+        return (
+          <button
+            key={m}
+            onClick={() => onChange(m)}
+            disabled={m === 'city' && !hasCityCards}
+            style={{
+              padding: '5px 16px',
+              border: `1px solid ${isActive ? 'rgba(46,204,113,0.5)' : 'rgba(255,255,255,0.07)'}`,
+              borderRadius: m === 'tab' ? '6px 0 0 6px' : '0 6px 6px 0',
+              background: isActive ? 'rgba(46,204,113,0.10)' : 'rgba(255,255,255,0.02)',
+              color: isActive ? '#2ecc71' : (m === 'city' && !hasCityCards ? '#333' : '#555'),
+              fontFamily: 'inherit',
+              fontSize: 9,
+              fontWeight: 800,
+              letterSpacing: '1.5px',
+              textTransform: 'uppercase',
+              cursor: (m === 'city' && !hasCityCards) ? 'not-allowed' : 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            {label}
+            {m === 'city' && !hasCityCards && (
+              <span style={{ marginLeft: 6, fontSize: 7, color: '#444', opacity: 0.7 }}>scanning...</span>
             )}
           </button>
         );
@@ -1119,10 +1185,13 @@ export default function CampaignSelect({
   resumeLoading,
   onResume,
   session,
+  cityCards,
+  onCityDeploy,
 }: CampaignSelectProps) {
   const isCalm = managerId === CALM_MODE_USER;
 
   const [activeTab, setActiveTab] = useState<MainTab>('campaigns');
+  const [viewMode, setViewMode] = useState<ViewMode>('tab');
   const [armedId, setArmedId] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
   const [presence, setPresence] = useState<PresenceRecord[]>([]);
@@ -1143,6 +1212,12 @@ export default function CampaignSelect({
     }
   }, [isCalm, activeTab]);
 
+  // Reset armed state when switching view modes
+  useEffect(() => {
+    setArmedId(null);
+    setDeploying(false);
+  }, [viewMode]);
+
   const hotCampaignIds = new Set(presence.map(p => p.campaignId));
 
   const sorted = [...campaigns].sort((a, b) => {
@@ -1155,6 +1230,8 @@ export default function CampaignSelect({
     return a.name.localeCompare(b.name);
   });
 
+  const sortedCities = [...(cityCards ?? [])].sort((a, b) => a.cityName.localeCompare(b.cityName));
+
   const handleArm = useCallback((id: string) => {
     setArmedId(prev => prev === id ? null : id);
     setDeploying(false);
@@ -1165,6 +1242,11 @@ export default function CampaignSelect({
     setTimeout(() => { onDeploy(id); }, 600);
   }, [onDeploy]);
 
+  const handleCityDeploy = useCallback((city: CityInfo) => {
+    setDeploying(true);
+    setTimeout(() => { onCityDeploy?.(city); }, 600);
+  }, [onCityDeploy]);
+
   const headerTitle =
     activeTab === 'stats' ? 'TEAM STATS' :
     activeTab === 'achievements' ? 'ACHIEVEMENTS' :
@@ -1174,6 +1256,10 @@ export default function CampaignSelect({
     activeTab === 'stats' ? 'GLOBAL LEADERBOARD // TODAY' :
     activeTab === 'achievements' ? 'BADGES & RECORDS' :
     'AUTOSNIPER M82 // TACTICAL OPERATIONS';
+
+  const availableCount = viewMode === 'city'
+    ? (cityCards?.length ?? 0)
+    : campaigns.filter(c => !c.locked).length;
 
   return (
     <>
@@ -1260,7 +1346,7 @@ export default function CampaignSelect({
                     background: '#2ecc71', display: 'inline-block',
                     animation: 'cs-hot-pulse 2s ease-in-out infinite',
                   }} />
-                  {campaigns.filter(c => !c.locked).length} CAMPAIGNS AVAILABLE
+                  {availableCount} {viewMode === 'city' ? 'CITIES' : 'CAMPAIGNS'} AVAILABLE
                 </div>
               )}
             </div>
@@ -1299,33 +1385,76 @@ export default function CampaignSelect({
                 {!resumeLoading && resumeData && onResume && (
                   <ResumeBanner resumeData={resumeData} onResume={onResume} managerId={managerId} session={session} />
                 )}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-                  gap: 12,
-                  alignContent: 'start',
-                }}>
-                  {sorted.map((c, idx) => (
-                    <CampaignCard
-                      key={c.id}
-                      campaign={c}
-                      isHot={hotCampaignIds.has(c.id) || !!c.hot || isAutoHot(c.avgAttempts)}
-                      isArmed={c.id === armedId}
-                      isDeploying={c.id === armedId && deploying}
-                      index={idx}
-                      onArm={() => handleArm(c.id)}
-                      onDeploy={() => handleDeploy(c.id)}
-                    />
-                  ))}
-                  {sorted.length === 0 && (
-                    <div style={{
-                      gridColumn: '1 / -1', textAlign: 'center', padding: '60px 20px',
-                      color: '#444', fontSize: 12, fontWeight: 700, letterSpacing: '2px',
-                    }}>
-                      NO CAMPAIGNS AVAILABLE
-                    </div>
-                  )}
-                </div>
+
+                {/* View mode toggle */}
+                <ViewModeToggle
+                  mode={viewMode}
+                  onChange={setViewMode}
+                  hasCityCards={!!cityCards && cityCards.length > 0}
+                />
+
+                {/* Tab View */}
+                {viewMode === 'tab' && (
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+                    gap: 12,
+                    alignContent: 'start',
+                    marginTop: 8,
+                  }}>
+                    {sorted.map((c, idx) => (
+                      <CampaignCard
+                        key={c.id}
+                        campaign={c}
+                        isHot={hotCampaignIds.has(c.id) || !!c.hot || isAutoHot(c.avgAttempts)}
+                        isArmed={c.id === armedId}
+                        isDeploying={c.id === armedId && deploying}
+                        index={idx}
+                        onArm={() => handleArm(c.id)}
+                        onDeploy={() => handleDeploy(c.id)}
+                      />
+                    ))}
+                    {sorted.length === 0 && (
+                      <div style={{
+                        gridColumn: '1 / -1', textAlign: 'center', padding: '60px 20px',
+                        color: '#444', fontSize: 12, fontWeight: 700, letterSpacing: '2px',
+                      }}>
+                        NO CAMPAIGNS AVAILABLE
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* City View */}
+                {viewMode === 'city' && (
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+                    gap: 12,
+                    alignContent: 'start',
+                    marginTop: 8,
+                  }}>
+                    {sortedCities.map((city, idx) => (
+                      <CityCard
+                        key={city.cityName}
+                        city={city}
+                        isArmed={city.cityName === armedId}
+                        isDeploying={city.cityName === armedId && deploying}
+                        index={idx}
+                        onArm={() => handleArm(city.cityName)}
+                        onDeploy={() => handleCityDeploy(city)}
+                      />
+                    ))}
+                    {sortedCities.length === 0 && (
+                      <div style={{
+                        gridColumn: '1 / -1', textAlign: 'center', padding: '60px 20px',
+                        color: '#444', fontSize: 12, fontWeight: 700, letterSpacing: '2px',
+                      }}>
+                        NO CITIES FOUND
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1568,6 +1697,191 @@ function CampaignCard({
     </div>
   );
 }
+
+// =============================================================================
+// CITY CARD
+// =============================================================================
+
+function CityCard({
+  city,
+  isArmed,
+  isDeploying,
+  index,
+  onArm,
+  onDeploy,
+}: {
+  city: CityInfo;
+  isArmed: boolean;
+  isDeploying: boolean;
+  index: number;
+  onArm: () => void;
+  onDeploy: () => void;
+}) {
+  const avgAttempts = city.avgAttempts ?? 0;
+  const accent = heatColor(avgAttempts);
+  const bg = heatGradient(avgAttempts);
+  const glow = heatGlow(avgAttempts);
+  const topo = topoPattern(city.cityName, accent);
+  const grid = gridOverlay(accent);
+  const reach = reachStatus(city.reachedPct);
+
+  const cardBoxShadow = isArmed
+    ? `${glow}, 0 0 0 1.5px ${accent}60`
+    : '0 2px 8px rgba(0,0,0,0.3)';
+
+  return (
+    <div
+      onClick={onArm}
+      style={{
+        position: 'relative', borderRadius: 8,
+        border: `1.5px solid ${isArmed ? accent : `${accent}28`}`,
+        background: bg,
+        cursor: 'pointer',
+        overflow: 'hidden',
+        transition: 'all 0.2s ease',
+        transform: isArmed ? 'scale(1.01)' : 'scale(1)',
+        boxShadow: cardBoxShadow,
+        animation: `cs-card-enter 0.4s ease-out ${index * 0.04}s both`,
+      }}
+    >
+      {/* Background textures */}
+      <div style={{
+        position: 'absolute', inset: 0,
+        backgroundImage: `url("data:image/svg+xml,${encodeURIComponent(topo)}")`,
+        backgroundSize: 'cover', pointerEvents: 'none',
+      }} />
+      <div style={{
+        position: 'absolute', inset: 0,
+        backgroundImage: `url("data:image/svg+xml,${encodeURIComponent(grid)}")`,
+        backgroundSize: '40px 40px', pointerEvents: 'none',
+      }} />
+
+      {isArmed && (
+        <div style={{
+          position: 'absolute', left: 0, right: 0, height: 2,
+          background: `linear-gradient(to right, transparent, ${accent}50, transparent)`,
+          animation: 'cs-scan-line 2s linear infinite',
+          pointerEvents: 'none', zIndex: 5,
+        }} />
+      )}
+
+      <div style={{ position: 'relative', zIndex: 2, padding: '14px 16px' }}>
+        {/* Top row: CITY label + tab count badge */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: '2.5px', color: accent, opacity: 0.6, textTransform: 'uppercase' }}>
+            🏙 CITY OPS
+          </span>
+          <span style={{
+            fontSize: 7, fontWeight: 800, color: '#3498db',
+            background: 'rgba(52,152,219,0.10)', border: '1px solid rgba(52,152,219,0.25)',
+            borderRadius: 3, padding: '2px 6px', letterSpacing: '1px',
+          }}>
+            {city.tabs.length} TAB{city.tabs.length !== 1 ? 'S' : ''}
+          </span>
+        </div>
+
+        {/* City name */}
+        <h3 style={{
+          fontSize: 16, fontWeight: 900, color: '#fff',
+          margin: '0 0 8px 0', letterSpacing: '0.5px', lineHeight: 1.2,
+          textShadow: isArmed ? `0 0 12px ${accent}50` : 'none',
+        }}>
+          {city.cityName}
+        </h3>
+
+        {/* Stats row */}
+        <div style={{ display: 'flex', gap: 12, marginBottom: 10 }}>
+          <MiniStat label="ROWS"     value={city.totalRows.toLocaleString()} color={accent} />
+          <MiniStat label="BOOKINGS" value={city.bookings}                   color={city.bookings > 0 ? '#f1c40f' : '#555'} />
+          <MiniStat label="REACHED"  value={`${Math.round(city.reachedPct)}%`} color={reach.color} />
+          <MiniStat label="AVG ATT"  value={avgAttempts.toFixed(1)}          color={accent} />
+        </div>
+
+        {/* Reach progress bar */}
+        <div style={{ marginBottom: isArmed ? 10 : 8 }}>
+          <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+            <div style={{
+              height: '100%', width: `${Math.min(city.reachedPct, 100)}%`, borderRadius: 2,
+              background: `linear-gradient(to right, ${reach.color}80, ${reach.color})`,
+              transition: 'width 0.5s ease',
+            }} />
+          </div>
+        </div>
+
+        {/* Tab source badges */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: isArmed ? 8 : 0 }}>
+          {city.tabs.slice(0, 6).map(tab => (
+            <span key={tab} style={{
+              fontSize: 7, fontWeight: 700, color: '#3498db',
+              background: 'rgba(52,152,219,0.08)', border: '1px solid rgba(52,152,219,0.18)',
+              borderRadius: 3, padding: '1px 5px', letterSpacing: '0.5px',
+            }}>
+              {tab}
+            </span>
+          ))}
+          {city.tabs.length > 6 && (
+            <span style={{ fontSize: 7, fontWeight: 700, color: '#555' }}>+{city.tabs.length - 6}</span>
+          )}
+        </div>
+
+        {/* Last used */}
+        {!isArmed && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
+            <span style={{ fontSize: 7, fontWeight: 700, color: '#444', letterSpacing: '1px' }}>
+              LAST: {formatDate(city.lastUsed)}
+            </span>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: accent, boxShadow: `0 0 6px ${accent}80`, opacity: 0.7 }} />
+          </div>
+        )}
+
+        {/* Deploy button */}
+        {isArmed && (
+          <div style={{ marginTop: 12 }}>
+            <button
+              onClick={(e) => { e.stopPropagation(); onDeploy(); }}
+              disabled={isDeploying}
+              style={{
+                width: '100%', padding: '14px 20px', borderRadius: 7,
+                border: `1.5px solid ${isDeploying ? accent : `${accent}90`}`,
+                background: isDeploying ? `${accent}30` : `linear-gradient(135deg, ${accent}20 0%, ${accent}0a 100%)`,
+                color: isDeploying ? '#fff' : accent,
+                fontSize: 13, fontWeight: 900, fontFamily: 'inherit',
+                letterSpacing: '4px', textTransform: 'uppercase',
+                cursor: isDeploying ? 'not-allowed' : 'pointer',
+                position: 'relative', overflow: 'hidden',
+                animation: isDeploying ? 'cs-deploy-confirm 0.5s ease-out both' : 'cs-deploy-glow 3s ease-in-out infinite',
+              }}
+            >
+              {!isDeploying && (
+                <div style={{
+                  position: 'absolute', top: 0, bottom: 0, width: '60%',
+                  background: `linear-gradient(90deg, transparent, ${accent}18, transparent)`,
+                  animation: 'cs-deploy-sweep 2.5s ease-in-out infinite',
+                  pointerEvents: 'none',
+                }} />
+              )}
+              <span style={{ position: 'relative', zIndex: 1 }}>
+                {isDeploying ? '⚡ DEPLOYING...' : '🏙 DEPLOY CITY'}
+              </span>
+            </button>
+          </div>
+        )}
+      </div>
+
+      {isArmed && (
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0, height: 3,
+          background: `linear-gradient(to right, transparent, ${accent}, transparent)`,
+          animation: 'cs-arm-border 1.5s ease-in-out infinite',
+        }} />
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// MINI STAT (shared)
+// =============================================================================
 
 function MiniStat({ label, value, color }: { label: string; value: string | number; color: string }) {
   return (

@@ -15,6 +15,11 @@
 // the Campaign Select screen. Clicking Resume skips the deploy config modal
 // and jumps straight back in with position + gamification restored.
 //
+// City View: after all tabs load, discoverCities scans every tab in the
+// background (with a progress bar overlay). City cards are passed down to
+// CampaignSelect. Deploying a city card builds an EngineConfig with cityName
+// + cityTabs and supports Infiltrate and Siege only (no Ambush).
+//
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -32,6 +37,7 @@ import {
   invalidateCache,
   getNextState,
   discoverAvailableYears,
+  discoverCities,
   formatPhoneDisplay,
   getActiveMultipliers,
   getCurrentRank,
@@ -47,6 +53,7 @@ import type {
   DispositionExtra,
   GamificationSession,
   MultiplierSnapshot,
+  CityInfo,
 } from '../../lib/dialer';
 import type { Rank, StagedCard } from '../../lib/dialer';
 import DialerHUD from './DialerHUD';
@@ -191,6 +198,10 @@ export default function DialerPage() {
   const [tabsLoading, setTabsLoading] = useState(false);
   const [tabsError, setTabsError] = useState('');
 
+  // --- City View state ---
+  const [cityCards, setCityCards] = useState<CityInfo[]>([]);
+  const [cityProgress, setCityProgress] = useState<{ current: number; total: number; tabName: string } | null>(null);
+
   // --- Launcher config ---
   const [selectedTab, setSelectedTab] = useState('');
   const [direction, setDirection] = useState<Direction>('ambush');
@@ -198,6 +209,8 @@ export default function DialerPage() {
   const [deployError, setDeployError] = useState('');
   const [showDeployConfig, setShowDeployConfig] = useState(false);
   const [deployingTab, setDeployingTab] = useState('');
+  // cityDeployPending holds the city being deployed (if in city mode)
+  const [pendingCityDeploy, setPendingCityDeploy] = useState<CityInfo | null>(null);
 
   // --- Sniper Settings ---
   const [sniperSettingsOpen, setSniperSettingsOpen] = useState(false);
@@ -460,6 +473,8 @@ export default function DialerPage() {
           const placeholders = tabsToPlaceholderCards(callbookTabs, campaign.displayName || 'Campaign');
           setCampaignCards(placeholders);
           setTabsLoading(false);
+
+          // ── Load per-tab stats (original behavior) ──
           callbookTabs.forEach(async (tabName) => {
             try {
               const stats = await dialerSheetsService.computeTabStats(campaign.spreadsheetId, tabName);
@@ -470,6 +485,26 @@ export default function DialerPage() {
               ));
             } catch { /* Non-critical */ }
           });
+
+          // ── City scan — runs in background after tabs are loaded ──
+          if (callbookTabs.length > 0) {
+            setCityProgress({ current: 0, total: callbookTabs.length, tabName: callbookTabs[0] });
+            try {
+              const cities = await discoverCities(
+                campaign.spreadsheetId,
+                callbookTabs,
+                (scanned: number, total: number, tabName: string) => {
+                  setCityProgress({ current: scanned, total, tabName });
+                }
+              );
+              setCityCards(cities);
+            } catch {
+              // City scan failure is non-critical — tab view still works
+            } finally {
+              setCityProgress(null);
+            }
+          }
+
         } catch (err: any) {
           setTabsError(err.message || 'Failed to load tabs');
           setTabsLoading(false);
@@ -483,12 +518,13 @@ export default function DialerPage() {
   };
 
   // =======================================================================
-  // CAMPAIGN SELECT → DEPLOY CONFIG → DEPLOY
+  // CAMPAIGN SELECT → DEPLOY CONFIG → DEPLOY (tab mode)
   // =======================================================================
 
   const handleCampaignDeploy = async (tabId: string) => {
     setDeployingTab(tabId);
     setSelectedTab(tabId);
+    setPendingCityDeploy(null);
     // direction is NOT reset here — it stays as the last saved user preference
     setStartBookingId('');
     setDeployError('');
@@ -502,10 +538,32 @@ export default function DialerPage() {
     }
   };
 
-  const handleConfirmDeploy = async () => {
-    if (!selectedTab || !campaign) return;
+  // =======================================================================
+  // CITY DEPLOY
+  // =======================================================================
 
-    if (direction === 'ambush' && !startBookingId.trim()) {
+  const handleCityDeploy = useCallback((city: CityInfo) => {
+    setPendingCityDeploy(city);
+    setDeployingTab(''); // empty = city mode
+    setSelectedTab(city.cityName); // used as display name
+    setStartBookingId('');
+    setDeployError('');
+    // Default to infiltrate for city deploys
+    if (direction === 'ambush') setDirection('infiltrate');
+    setShowDeployConfig(true);
+  }, [direction]);
+
+  // =======================================================================
+  // CONFIRM DEPLOY (shared for both tab and city modes)
+  // =======================================================================
+
+  const handleConfirmDeploy = async () => {
+    const isCityMode = pendingCityDeploy !== null;
+
+    if (!campaign) return;
+    if (!isCityMode && !selectedTab) return;
+
+    if (!isCityMode && direction === 'ambush' && !startBookingId.trim()) {
       setDeployError('AMBUSH requires a Booking ID. Please enter one above.');
       return;
     }
@@ -517,26 +575,46 @@ export default function DialerPage() {
 
     // Save the chosen direction to user preferences (fire-and-forget)
     if (manager?.id) {
-      campaignService.saveUserPreferences(manager.id, { lastDirection: direction }).catch(() => {});
+      campaignService.saveUserPreferences(manager.id, { lastDirection: direction, sniperConfig }).catch(() => {});
     }
 
-    const config: EngineConfig = {
-      spreadsheetId: campaign.spreadsheetId,
-      sheetName: selectedTab,
-      direction,
-      startRow: 2,
-      repCode: manager?.repCode || '',
-      managerId: manager?.id || '',
-      campaignId: campaign?.id || '',
-      sniperConfig,
-      startBookingId: startBookingId.trim() || undefined,
-    };
+    let config: EngineConfig;
+
+    if (isCityMode) {
+      config = {
+        spreadsheetId: campaign.spreadsheetId,
+        sheetName: pendingCityDeploy!.cityName,
+        direction,
+        startRow: 2,
+        repCode: manager?.repCode || '',
+        managerId: manager?.id || '',
+        campaignId: campaign?.id || '',
+        sniperConfig,
+        cityName: pendingCityDeploy!.cityName,
+        cityTabs: pendingCityDeploy!.tabs,
+      };
+    } else {
+      config = {
+        spreadsheetId: campaign.spreadsheetId,
+        sheetName: selectedTab,
+        direction,
+        startRow: 2,
+        repCode: manager?.repCode || '',
+        managerId: manager?.id || '',
+        campaignId: campaign?.id || '',
+        sniperConfig,
+        startBookingId: startBookingId.trim() || undefined,
+      };
+    }
+
     configRef.current = config;
 
     try {
       const snapshot = await initialize(config);
       if (!snapshot) {
-        setEmptyMessage('No available groups found in this tab.');
+        setEmptyMessage(isCityMode
+          ? `No available groups found in city "${pendingCityDeploy!.cityName}".`
+          : 'No available groups found in this tab.');
         setMode('dialer');
         setLoading(false);
         return;
@@ -551,10 +629,12 @@ export default function DialerPage() {
       prefillYesForm(snapshot.state);
 
       const bookingId = snapshot.state.bookingId || '';
-      setResumePosition(selectedTab, bookingId, snapshot.state.firstRow);
+      const displayTab = isCityMode ? pendingCityDeploy!.cityName : selectedTab;
+      setResumePosition(displayTab, bookingId, snapshot.state.firstRow);
 
-      setActiveDialTab(selectedTab);
+      setActiveDialTab(displayTab);
       setMode('dialer');
+      setPendingCityDeploy(null);
     } catch (err: any) {
       setShowDeployConfig(true);
       setDeployError(err.message || 'Failed to initialize dialer.');
@@ -981,10 +1061,11 @@ export default function DialerPage() {
 
     return (
       <>
-        {/* ── PATCH: session prop added so Achievements tab can show Today's badges ── */}
         <CampaignSelect
           campaigns={campaignCards}
           onDeploy={handleCampaignDeploy}
+          cityCards={cityCards}
+          onCityDeploy={handleCityDeploy}
           onSettingsClick={() => {
             if (availableYears.length === 0 && campaign?.spreadsheetId && tabs.length > 0) {
               discoverAvailableYears(campaign.spreadsheetId, tabs[0]).then(setAvailableYears).catch(() => {});
@@ -999,6 +1080,38 @@ export default function DialerPage() {
           onResume={handleResumeDeploy}
           session={session}
         />
+
+        {/* ── CITY SCAN PROGRESS BAR ── */}
+        {cityProgress && (
+          <div style={{
+            position: 'fixed',
+            bottom: 0, left: 0, right: 0,
+            zIndex: 200,
+            background: 'rgba(0,8,14,0.97)',
+            borderTop: '1px solid rgba(46,204,113,0.25)',
+            padding: '10px 24px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 16,
+          }}>
+            <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '2px', color: '#2ecc71', opacity: 0.6, textTransform: 'uppercase', flexShrink: 0 }}>
+              🏙 CITY SCAN
+            </span>
+            <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+              <div style={{
+                height: '100%',
+                borderRadius: 2,
+                width: `${cityProgress.total > 0 ? Math.round((cityProgress.current / cityProgress.total) * 100) : 0}%`,
+                background: 'linear-gradient(90deg, #2ecc71, #27ae60)',
+                boxShadow: '0 0 8px rgba(46,204,113,0.4)',
+                transition: 'width 0.3s ease',
+              }} />
+            </div>
+            <span style={{ fontSize: 9, fontWeight: 700, color: '#2ecc71', opacity: 0.5, fontFamily: 'monospace', flexShrink: 0, minWidth: 120, textAlign: 'right' }}>
+              Scanning {cityProgress.current} of {cityProgress.total} tabs...
+            </span>
+          </div>
+        )}
 
         {campaign?.id && (
           <SniperSettings
@@ -1015,7 +1128,7 @@ export default function DialerPage() {
           <div
             className="fixed inset-0 z-50 flex items-center justify-center"
             style={{ background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)' }}
-            onClick={() => setShowDeployConfig(false)}
+            onClick={() => { setShowDeployConfig(false); setPendingCityDeploy(null); }}
           >
             <div
               className="rounded-lg p-6 w-full max-w-sm"
@@ -1028,11 +1141,16 @@ export default function DialerPage() {
             >
               <div className="text-center mb-4">
                 <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: '3px', color: '#00e5ff', opacity: 0.5, textTransform: 'uppercase' }}>
-                  MISSION PARAMETERS
+                  {pendingCityDeploy ? '🏙 CITY MISSION PARAMETERS' : 'MISSION PARAMETERS'}
                 </div>
                 <div className="text-base font-black tracking-wider uppercase mt-1" style={{ color: '#fff' }}>
-                  {deployingTab}
+                  {pendingCityDeploy ? pendingCityDeploy.cityName : deployingTab}
                 </div>
+                {pendingCityDeploy && (
+                  <div style={{ fontSize: 8, color: '#3498db', opacity: 0.6, marginTop: 4, fontFamily: 'monospace' }}>
+                    {pendingCityDeploy.tabs.length} tab{pendingCityDeploy.tabs.length !== 1 ? 's' : ''} · {pendingCityDeploy.totalRows.toLocaleString()} rows
+                  </div>
+                )}
               </div>
 
               {/* APPROACH VECTOR */}
@@ -1045,7 +1163,10 @@ export default function DialerPage() {
                     { dir: 'ambush',     label: 'AMBUSH',     icon: 'lorc/hidden',        bg: '#0f3460', tip: 'Start at a specific Booking ID and call down. Wraps back to the top and completes a full loop.' },
                     { dir: 'infiltrate', label: 'INFILTRATE', icon: 'lorc/deadly-strike',  bg: '#533483', tip: 'Scans the sheet in 20-row windows and strikes the zone with the lowest NA count.' },
                     { dir: 'siege',      label: 'SIEGE',      icon: 'lorc/tower-fall',     bg: '#7b1a1a', tip: 'Works every group in NA order — blanks first, then 1s, then 2s. No wrap. Mission complete when all tiers are exhausted.' },
-                  ] as const).map(({ dir, label, icon, bg, tip }) => {
+                  ] as const)
+                    // Hide Ambush for city deploys
+                    .filter(({ dir }) => !(pendingCityDeploy && dir === 'ambush'))
+                    .map(({ dir, label, icon, bg, tip }) => {
                     const isSelected = direction === dir;
                     const iconUrl = `https://game-icons.net/icons/ffffff/transparent/1x1/${icon}.svg`;
                     return (
@@ -1142,8 +1263,8 @@ export default function DialerPage() {
                 </div>
               </div>
 
-              {/* BOOKING ID */}
-              {direction === 'ambush' && (
+              {/* BOOKING ID — only for tab deploys in ambush mode */}
+              {!pendingCityDeploy && direction === 'ambush' && (
                 <div className="mb-4">
                   <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
                     STARTING BOOKING ID{' '}
@@ -1195,7 +1316,7 @@ export default function DialerPage() {
               {/* ACTION BUTTONS */}
               <div className="flex gap-3">
                 <button
-                  onClick={() => setShowDeployConfig(false)}
+                  onClick={() => { setShowDeployConfig(false); setPendingCityDeploy(null); }}
                   className="flex-shrink-0 px-4 py-3 rounded text-xs font-bold tracking-wider uppercase"
                   style={{ background: '#222', color: '#666', border: '1px solid #333', fontFamily: 'inherit' }}
                 >
@@ -1399,7 +1520,7 @@ export default function DialerPage() {
                   <div className="flex-1"><YesField label="Street Name" value={yStreetName} onChange={setYStreetName} /></div>
                 </div>
                 <div className="flex gap-2 mb-1.5">
-                  <div style={{ width: 100 }}><YesField label="Price" value={yPrice} onChange={setYPrice} /></div>
+                  <div style={{ width: 100 }}><YesField label="Price" value={yPrice} onChange={yPrice => setYPrice(yPrice)} /></div>
                   <div className="flex-1"><YesField label="Email" value={yEmail} onChange={setYEmail} /></div>
                 </div>
                 <div className="flex items-end gap-4 mb-1.5">
