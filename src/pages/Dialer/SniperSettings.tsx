@@ -39,10 +39,6 @@ const SETTINGS_KEYFRAMES = `
     0% { transform: translateY(24px) scale(0.97); opacity: 0; }
     100% { transform: translateY(0) scale(1); opacity: 1; }
   }
-  @keyframes ss-scan {
-    0% { left: -30%; }
-    100% { left: 130%; }
-  }
 `;
 
 const CY = '#00e5ff';
@@ -162,7 +158,7 @@ export default function SniperSettings({
       <div
         style={{
           position: 'fixed',
-          top: 'calc(50% + 16px)', left: '50%',
+          top: '50%', left: '50%',
           transform: 'translate(-50%, -50%)',
           zIndex: 61,
           width: 'calc(100vw - 32px)',
@@ -170,6 +166,7 @@ export default function SniperSettings({
           maxHeight: 'calc(100vh - 32px)',
           overflowY: 'auto',
           borderRadius: 12,
+          borderTop: `2px solid ${CY}50`,
           background: 'rgba(0,14,22,0.97)',
           border: `1.5px solid ${CY}30`,
           boxShadow: `0 12px 60px rgba(0,0,0,0.8), 0 0 40px ${CY}08`,
@@ -178,20 +175,7 @@ export default function SniperSettings({
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Scan line accent */}
-        <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-          background: `linear-gradient(to right, transparent, ${CY}50, transparent)`,
-          borderRadius: '12px 12px 0 0', overflow: 'hidden',
-        }}>
-          <div style={{
-            position: 'absolute', top: 0, width: '30%', height: '100%',
-            background: `linear-gradient(to right, transparent, ${CY}, transparent)`,
-            animation: 'ss-scan 3s linear infinite',
-          }} />
-        </div>
-
-        <div style={{ padding: '6px 18px 18px' }}>
+        <div style={{ padding: '14px 18px 18px' }}>
 
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
