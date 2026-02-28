@@ -118,7 +118,7 @@ class ContractorService {
    * upsert new contractors into Supabase for this CC.
    * Returns counts of { added, skipped }.
    *
-   * Expected row format (0-indexed columns, matching screenshot):
+   * Expected row format (0-indexed columns):
    *   col 1 = CN# (contractor_id)
    *   col 2 = First Name
    *   col 3 = Last Name
@@ -135,7 +135,6 @@ class ContractorService {
     let added = 0;
     let skipped = 0;
 
-    // Build records to upsert (ignore_duplicates via onConflict)
     const records: any[] = [];
 
     for (const row of rows) {
@@ -172,7 +171,6 @@ class ContractorService {
 
     if (error) throw new Error(error.message);
 
-    // data contains only the rows that were actually inserted (not skipped)
     added = data?.length ?? 0;
     skipped += records.length - added;
 
@@ -251,6 +249,57 @@ class ContractorService {
 
       return { contractor: c, progress, attempts, completedCount, totalModules };
     });
+  }
+
+  // -------------------------------------------------------------------
+  // DELETE CONTRACTOR
+  // -------------------------------------------------------------------
+
+  /**
+   * Delete a contractor and all their training data (progress + attempts).
+   * Uses the row UUID (id), not contractor_id, to be precise.
+   */
+  public async deleteContractor(id: string, commandCenterId: string): Promise<void> {
+    // First fetch the contractor_id so we can delete related records
+    const { data: contractor, error: fetchError } = await supabase
+      .from('contractors')
+      .select('contractor_id')
+      .eq('id', id)
+      .eq('command_center_id', commandCenterId)
+      .single();
+
+    if (fetchError || !contractor) {
+      throw new Error('Contractor not found');
+    }
+
+    const contractorId = contractor.contractor_id;
+
+    // Delete all quiz attempts for this contractor in this CC
+    const { error: attemptsError } = await supabase
+      .from('training_attempts')
+      .delete()
+      .eq('contractor_id', contractorId)
+      .eq('command_center_id', commandCenterId);
+
+    if (attemptsError) throw new Error(attemptsError.message);
+
+    // Delete all training progress for this contractor in this CC
+    const { error: progressError } = await supabase
+      .from('training_progress')
+      .delete()
+      .eq('contractor_id', contractorId)
+      .eq('command_center_id', commandCenterId);
+
+    if (progressError) throw new Error(progressError.message);
+
+    // Delete the contractor record itself
+    const { error: deleteError } = await supabase
+      .from('contractors')
+      .delete()
+      .eq('id', id)
+      .eq('command_center_id', commandCenterId);
+
+    if (deleteError) throw new Error(deleteError.message);
   }
 
   // -------------------------------------------------------------------

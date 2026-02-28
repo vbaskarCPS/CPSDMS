@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Search,
   Users,
+  Trash2,
 } from 'lucide-react';
 import { CommandCenter } from '../../lib/commandCenterService';
 import { contractorService, ContractorTrainingSummary, TrainingAttempt } from '../../lib/contractorService';
@@ -32,6 +33,7 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedContractorId, setExpandedContractorId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Modules relevant to this CC's region
   const modules = getModulesForRegion(commandCenter.region as any);
@@ -64,17 +66,13 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
     setSyncResult(null);
 
     try {
-      // Authenticate with Google if needed
       const isAuthenticated = googleSheetsService.isAuthenticated();
       if (!isAuthenticated) {
         const success = await googleSheetsService.authenticate();
         if (!success) throw new Error('Failed to authenticate with Google Sheets');
       }
 
-      // Read the Workerbook Contractors tab (columns A–K cover all contractor fields)
       const rows = await googleSheetsService.readWorkerbookRange('A:K');
-
-      // Skip header rows (first 2 rows are headers)
       const dataRows = rows.slice(WORKERBOOK_COLUMNS.dataStartRow);
 
       const result = await contractorService.syncContractorsFromRows(
@@ -84,11 +82,34 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
       );
 
       setSyncResult(result);
-      await loadData(); // Refresh the list
+      await loadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sync failed');
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // --- DELETE CONTRACTOR ---
+  const handleDelete = async (contractorId: string, displayName: string) => {
+    if (!window.confirm(`Delete ${displayName}? This will also remove all their training progress and quiz attempts. This cannot be undone.`)) {
+      return;
+    }
+
+    setDeletingId(contractorId);
+    setError(null);
+
+    try {
+      await contractorService.deleteContractor(contractorId, commandCenter.id);
+      // Remove from local state immediately (no need to reload)
+      setSummaries((prev) => prev.filter((s) => s.contractor.id !== contractorId));
+      if (expandedContractorId === contractorId) {
+        setExpandedContractorId(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete contractor');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -137,11 +158,7 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
               disabled={syncing}
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
             >
-              {syncing ? (
-                <Loader className="animate-spin" size={16} />
-              ) : (
-                <CloudUpload size={16} />
-              )}
+              {syncing ? <Loader className="animate-spin" size={16} /> : <CloudUpload size={16} />}
               Sync from Workerbook
             </button>
           </div>
@@ -200,18 +217,27 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
         ) : (
           <div className="space-y-2">
             {/* Column headers */}
-            <div className="grid gap-2 px-4 pb-2 border-b border-gray-800" style={{ gridTemplateColumns: `1fr repeat(${totalModules}, minmax(60px, 80px)) 80px` }}>
+            <div
+              className="grid gap-2 px-4 pb-2 border-b border-gray-800"
+              style={{ gridTemplateColumns: `1fr repeat(${totalModules}, minmax(60px, 80px)) 80px 40px` }}
+            >
               <span className="text-xs font-medium text-gray-500 uppercase">Contractor</span>
               {modules.map((m) => (
-                <span key={m.module_id} className="text-xs font-medium text-gray-500 uppercase text-center truncate" title={m.title}>
+                <span
+                  key={m.module_id}
+                  className="text-xs font-medium text-gray-500 uppercase text-center truncate"
+                  title={m.title}
+                >
                   M{m.order_index}
                 </span>
               ))}
               <span className="text-xs font-medium text-gray-500 uppercase text-center">Total</span>
+              <span /> {/* Delete column — no header */}
             </div>
 
             {filtered.map((summary) => {
               const isExpanded = expandedContractorId === summary.contractor.contractorId;
+              const isDeleting = deletingId === summary.contractor.id;
 
               return (
                 <ContractorRow
@@ -219,7 +245,14 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
                   summary={summary}
                   modules={modules}
                   isExpanded={isExpanded}
+                  isDeleting={isDeleting}
                   onToggle={() => toggleExpand(summary.contractor.contractorId)}
+                  onDelete={() =>
+                    handleDelete(
+                      summary.contractor.id,
+                      `${summary.contractor.firstName} ${summary.contractor.lastName} (${summary.contractor.contractorId})`
+                    )
+                  }
                 />
               );
             })}
@@ -235,14 +268,18 @@ interface ContractorRowProps {
   summary: ContractorTrainingSummary;
   modules: typeof TRAINING_MODULES;
   isExpanded: boolean;
+  isDeleting: boolean;
   onToggle: () => void;
+  onDelete: () => void;
 }
 
 const ContractorRow: React.FC<ContractorRowProps> = ({
   summary,
   modules,
   isExpanded,
+  isDeleting,
   onToggle,
+  onDelete,
 }) => {
   const { contractor, progress, attempts, completedCount, totalModules } = summary;
 
@@ -257,54 +294,70 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
   const allDone = completedCount === totalModules && totalModules > 0;
 
   return (
-    <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
+    <div className={`bg-gray-900 rounded-lg border border-gray-800 overflow-hidden transition-opacity ${isDeleting ? 'opacity-40 pointer-events-none' : ''}`}>
       {/* Main row */}
-      <button
-        onClick={onToggle}
-        className="w-full text-left px-4 py-3 hover:bg-gray-800/50 transition-colors"
+      <div
+        className="grid gap-2 items-center px-4 py-3 hover:bg-gray-800/50 transition-colors"
+        style={{ gridTemplateColumns: `1fr repeat(${modules.length}, minmax(60px, 80px)) 80px 40px` }}
       >
-        <div className="grid gap-2 items-center" style={{ gridTemplateColumns: `1fr repeat(${modules.length}, minmax(60px, 80px)) 80px` }}>
-          {/* Name */}
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-7 h-7 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center flex-shrink-0">
-              <User size={14} className="text-gray-400" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-white text-sm font-medium truncate">
-                {contractor.lastName}, {contractor.firstName}
-              </p>
-              <p className="text-gray-500 text-xs">{contractor.contractorId}</p>
-            </div>
+        {/* Name — clickable to expand */}
+        <button onClick={onToggle} className="flex items-center gap-2 min-w-0 text-left">
+          <div className="w-7 h-7 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center flex-shrink-0">
+            <User size={14} className="text-gray-400" />
           </div>
-
-          {/* Per-module status */}
-          {modules.map((m) => {
-            const completed = getModuleStatus(m.module_id);
-            const moduleAttempts = getModuleAttempts(m.module_id);
-            return (
-              <div key={m.module_id} className="flex justify-center">
-                {completed ? (
-                  <CheckCircle size={18} className="text-green-400" />
-                ) : moduleAttempts.length > 0 ? (
-                  <XCircle size={18} className="text-red-400" />
-                ) : (
-                  <div className="w-4 h-4 rounded-full border border-gray-700" />
-                )}
-              </div>
-            );
-          })}
-
-          {/* Total */}
-          <div className="flex items-center justify-center gap-1">
-            <span className={`text-sm font-bold ${allDone ? 'text-green-400' : 'text-gray-300'}`}>
-              {completedCount}/{totalModules}
-            </span>
-            <span className="text-gray-600">
-              {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </span>
+          <div className="min-w-0">
+            <p className="text-white text-sm font-medium truncate">
+              {contractor.lastName}, {contractor.firstName}
+            </p>
+            <p className="text-gray-500 text-xs">{contractor.contractorId}</p>
           </div>
+        </button>
+
+        {/* Per-module status — clickable to expand */}
+        {modules.map((m) => {
+          const completed = getModuleStatus(m.module_id);
+          const moduleAttempts = getModuleAttempts(m.module_id);
+          return (
+            <button key={m.module_id} onClick={onToggle} className="flex justify-center">
+              {completed ? (
+                <CheckCircle size={18} className="text-green-400" />
+              ) : moduleAttempts.length > 0 ? (
+                <XCircle size={18} className="text-red-400" />
+              ) : (
+                <div className="w-4 h-4 rounded-full border border-gray-700" />
+              )}
+            </button>
+          );
+        })}
+
+        {/* Total — clickable to expand */}
+        <button onClick={onToggle} className="flex items-center justify-center gap-1">
+          <span className={`text-sm font-bold ${allDone ? 'text-green-400' : 'text-gray-300'}`}>
+            {completedCount}/{totalModules}
+          </span>
+          <span className="text-gray-600">
+            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </span>
+        </button>
+
+        {/* Delete button */}
+        <div className="flex justify-center">
+          {isDeleting ? (
+            <Loader size={16} className="animate-spin text-gray-500" />
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              className="p-1.5 text-gray-600 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors"
+              title="Delete contractor"
+            >
+              <Trash2 size={15} />
+            </button>
+          )}
         </div>
-      </button>
+      </div>
 
       {/* Expanded: per-module attempt history */}
       {isExpanded && (
@@ -324,7 +377,10 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
                   <span className="text-sm font-medium text-gray-300">{m.title}</span>
                   {completed && (
                     <span className="text-xs text-green-500 ml-auto">
-                      Passed {completed.completedAt ? new Date(completed.completedAt).toLocaleDateString() : ''}
+                      Passed{' '}
+                      {completed.completedAt
+                        ? new Date(completed.completedAt).toLocaleDateString()
+                        : ''}
                     </span>
                   )}
                 </div>
@@ -342,7 +398,8 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
                           {i === 0 ? 'Latest' : `Attempt ${moduleAttempts.length - i}`}
                         </span>
                         <span>
-                          {a.score}/{a.totalQuestions} ({Math.round((a.score / a.totalQuestions) * 100)}%)
+                          {a.score}/{a.totalQuestions} (
+                          {Math.round((a.score / a.totalQuestions) * 100)}%)
                         </span>
                         <span className={a.passed ? 'text-green-400' : 'text-red-400'}>
                           {a.passed ? 'Passed' : 'Failed'}
