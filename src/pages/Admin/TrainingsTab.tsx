@@ -14,18 +14,23 @@ import {
   Search,
   Users,
   Trash2,
+  Mail,
+  Settings,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { CommandCenter } from '../../lib/commandCenterService';
 import { contractorService, ContractorTrainingSummary, TrainingAttempt } from '../../lib/contractorService';
 import { googleSheetsService } from '../../lib/googleSheetsService';
 import { WORKERBOOK_COLUMNS } from '../../lib/googleSheetsConfig';
 import { TRAINING_MODULES, getModulesForRegion } from '../../lib/trainingModules';
+import { onboardingService } from '../../lib/onboardingService';
 
 interface TrainingsTabProps {
   commandCenter: CommandCenter;
 }
 
 const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
+  const navigate = useNavigate();
   const [summaries, setSummaries] = useState<ContractorTrainingSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -34,6 +39,7 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedContractorId, setExpandedContractorId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [sendingEmailId, setSendingEmailId] = useState<string | null>(null);
 
   // Modules relevant to this CC's region
   const modules = getModulesForRegion(commandCenter.region as any);
@@ -102,7 +108,6 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
 
     try {
       await contractorService.deleteContractor(contractorId, commandCenter.id);
-      // Remove from local state immediately (no need to reload)
       setSummaries((prev) => prev.filter((s) => s.contractor.id !== contractorId));
       if (expandedContractorId === contractorId) {
         setExpandedContractorId(null);
@@ -111,6 +116,53 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
       setError(err instanceof Error ? err.message : 'Failed to delete contractor');
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  // --- SEND ONBOARDING EMAIL ---
+  const handleSendOnboardingEmail = async (summary: ContractorTrainingSummary) => {
+    const { contractor } = summary;
+
+    if (!contractor.email) return;
+
+    const displayName = `${contractor.firstName} ${contractor.lastName} (${contractor.contractorId})`;
+    if (!window.confirm(`Send onboarding email to ${displayName}?\n\nEmail: ${contractor.email}`)) {
+      return;
+    }
+
+    setSendingEmailId(contractor.id);
+    setError(null);
+
+    try {
+      await onboardingService.sendOnboardingEmail({
+        contractorId: contractor.contractorId,
+        firstName: contractor.firstName,
+        lastName: contractor.lastName,
+        email: contractor.email,
+        shuttle: contractor.shuttle || undefined,
+        firstDayBooked: contractor.firstDayBooked || undefined,
+        commandCenterId: commandCenter.id,
+        commandCenterName: commandCenter.displayName,
+      });
+
+      // Update local state to show green icon
+      setSummaries((prev) =>
+        prev.map((s) =>
+          s.contractor.id === contractor.id
+            ? {
+                ...s,
+                contractor: {
+                  ...s.contractor,
+                  onboardingEmailSentAt: new Date().toISOString(),
+                },
+              }
+            : s
+        )
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send onboarding email');
+    } finally {
+      setSendingEmailId(null);
     }
   };
 
@@ -146,6 +198,14 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => navigate('/admin/onboarding-setup')}
+              className="flex items-center gap-2 px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition-colors"
+              title="Onboarding Email Setup"
+            >
+              <Mail size={16} />
+              <span className="hidden sm:inline">Onboarding Email</span>
+            </button>
             <button
               onClick={loadData}
               disabled={loading}
@@ -220,8 +280,9 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
             {/* Column headers */}
             <div
               className="grid gap-2 px-4 pb-2 border-b border-gray-800"
-              style={{ gridTemplateColumns: `1fr repeat(${totalModules}, minmax(60px, 80px)) 80px 40px` }}
+              style={{ gridTemplateColumns: `32px 1fr repeat(${totalModules}, minmax(60px, 80px)) 80px 40px 40px` }}
             >
+              <span /> {/* Email column — no header */}
               <span className="text-xs font-medium text-gray-500 uppercase">Contractor</span>
               {modules.map((m) => (
                 <span
@@ -234,6 +295,7 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
               ))}
               <span className="text-xs font-medium text-gray-500 uppercase text-center">Total</span>
               <span /> {/* Delete column — no header */}
+              <span /> {/* Spacer for alignment */}
             </div>
 
             {filtered.map((summary) => {
@@ -247,6 +309,7 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
                   modules={modules}
                   isExpanded={isExpanded}
                   isDeleting={isDeleting}
+                  isSendingEmail={sendingEmailId === summary.contractor.id}
                   onToggle={() => toggleExpand(summary.contractor.contractorId)}
                   onDelete={() =>
                     handleDelete(
@@ -254,6 +317,7 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
                       `${summary.contractor.firstName} ${summary.contractor.lastName} (${summary.contractor.contractorId})`
                     )
                   }
+                  onSendEmail={() => handleSendOnboardingEmail(summary)}
                 />
               );
             })}
@@ -270,8 +334,10 @@ interface ContractorRowProps {
   modules: typeof TRAINING_MODULES;
   isExpanded: boolean;
   isDeleting: boolean;
+  isSendingEmail: boolean;
   onToggle: () => void;
   onDelete: () => void;
+  onSendEmail: () => void;
 }
 
 const ContractorRow: React.FC<ContractorRowProps> = ({
@@ -279,8 +345,10 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
   modules,
   isExpanded,
   isDeleting,
+  isSendingEmail,
   onToggle,
   onDelete,
+  onSendEmail,
 }) => {
   const { contractor, progress, attempts, completedCount, totalModules } = summary;
 
@@ -294,13 +362,52 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
 
   const allDone = completedCount === totalModules && totalModules > 0;
 
+  // Email status: grey (no email), yellow (has email, not sent), green (sent)
+  const hasEmail = !!contractor.email;
+  const emailSent = !!contractor.onboardingEmailSentAt;
+
+  let emailIconColor = 'text-gray-600'; // grey — no email
+  let emailTooltip = 'No email address on file';
+  if (hasEmail && emailSent) {
+    emailIconColor = 'text-green-400';
+    emailTooltip = `Onboarding email sent ${new Date(contractor.onboardingEmailSentAt!).toLocaleDateString()}`;
+  } else if (hasEmail && !emailSent) {
+    emailIconColor = 'text-yellow-400';
+    emailTooltip = `Click to send onboarding email to ${contractor.email}`;
+  }
+
   return (
     <div className={`bg-gray-900 rounded-lg border border-gray-800 overflow-hidden transition-opacity ${isDeleting ? 'opacity-40 pointer-events-none' : ''}`}>
       {/* Main row */}
       <div
         className="grid gap-2 items-center px-4 py-3 hover:bg-gray-800/50 transition-colors"
-        style={{ gridTemplateColumns: `1fr repeat(${modules.length}, minmax(60px, 80px)) 80px 40px` }}
+        style={{ gridTemplateColumns: `32px 1fr repeat(${modules.length}, minmax(60px, 80px)) 80px 40px 40px` }}
       >
+        {/* Email icon */}
+        <div className="flex justify-center">
+          {isSendingEmail ? (
+            <Loader size={16} className="animate-spin text-yellow-400" />
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (hasEmail && !emailSent) onSendEmail();
+              }}
+              disabled={!hasEmail || emailSent}
+              className={`p-1 rounded transition-colors ${
+                hasEmail && !emailSent
+                  ? 'hover:bg-yellow-900/30 cursor-pointer'
+                  : hasEmail && emailSent
+                  ? 'cursor-default'
+                  : 'cursor-not-allowed opacity-50'
+              }`}
+              title={emailTooltip}
+            >
+              <Mail size={15} className={emailIconColor} />
+            </button>
+          )}
+        </div>
+
         {/* Name — clickable to expand */}
         <button onClick={onToggle} className="flex items-center gap-2 min-w-0 text-left">
           <div className="w-7 h-7 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center flex-shrink-0">
@@ -358,6 +465,9 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
             </button>
           )}
         </div>
+
+        {/* Empty spacer for alignment */}
+        <div />
       </div>
 
       {/* Expanded: per-module attempt history */}

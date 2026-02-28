@@ -17,6 +17,7 @@ export interface Contractor {
   commandCenterId: string;
   region?: string;
   createdAt?: string;
+  onboardingEmailSentAt?: string;  // null = not sent, timestamp = sent
 }
 
 export interface TrainingProgress {
@@ -449,6 +450,7 @@ class ContractorService {
       commandCenterId: data.command_center_id,
       region: data.region,
       createdAt: data.created_at,
+      onboardingEmailSentAt: data.onboarding_email_sent_at,
     };
   }
 

@@ -10,6 +10,7 @@ import CommandCenterCreator from './pages/SuperAdmin/CommandCenterCreator';
 // Admin pages - regular imports for reliability (avoid chunk loading issues)
 import EmailTemplates from './pages/Admin/EmailTemplates';
 import EmailTemplateEditor from './pages/Admin/EmailTemplateEditor';
+import OnboardingSetup from './pages/Admin/OnboardingSetup';
 
 // Lazy load less frequently used pages
 const RMLogbook = React.lazy(() => import('./pages/Management/RMLogbook'));
@@ -56,6 +57,7 @@ function App() {
         <Route path="/admin/payout/:contractorId" element={<PayoutContractor />} />
         <Route path="/admin/email-templates" element={<EmailTemplates />} />
         <Route path="/admin/email-templates/:templateType" element={<EmailTemplateEditor />} />
+        <Route path="/admin/onboarding-setup" element={<OnboardingSetup />} />
 
         {/* Route Manager Routes */}
         <Route path="/rm-logbook" element={<RMLogbook />} />
