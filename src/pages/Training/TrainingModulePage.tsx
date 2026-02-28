@@ -7,14 +7,326 @@ import {
   CheckCircle,
   XCircle,
   ChevronRight,
+  ChevronLeft,
   RotateCcw,
   Trophy,
   AlertCircle,
+  MapPin,
 } from 'lucide-react';
 import { contractorService, TrainingAttempt } from '../../lib/contractorService';
-import { getModuleById, QUIZ_PASS_THRESHOLD } from '../../lib/trainingModules';
+import {
+  getModuleById,
+  QUIZ_PASS_THRESHOLD,
+  LessonSection,
+  TextSection,
+  ImageSection,
+  StoryboardSection,
+} from '../../lib/trainingModules';
 
 type PageView = 'lesson' | 'quiz' | 'results';
+
+// =============================================================================
+// SECTION RENDERERS
+// =============================================================================
+
+/** Renders a plain text section with optional heading */
+const TextSectionRenderer: React.FC<{ section: TextSection }> = ({ section }) => {
+  const paragraphs = section.body.split('\n\n').filter((p) => p.trim().length > 0);
+
+  return (
+    <div className="mb-8">
+      {section.heading && (
+        <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
+          <div className="w-1 h-6 bg-blue-500 rounded-full flex-shrink-0" />
+          {section.heading}
+        </h3>
+      )}
+      <div className="space-y-4">
+        {paragraphs.map((para, i) => {
+          // Check if paragraph starts with a number + period (numbered list)
+          const isNumberedItem = /^\d+\.\s/.test(para.trim());
+          if (isNumberedItem) {
+            return (
+              <p
+                key={i}
+                className="text-gray-300 leading-relaxed text-sm pl-4 border-l-2 border-gray-800"
+              >
+                {para}
+              </p>
+            );
+          }
+
+          return (
+            <p key={i} className="text-gray-300 leading-relaxed text-sm">
+              {para}
+            </p>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+/** Renders a text section with an accompanying image */
+const ImageSectionRenderer: React.FC<{ section: ImageSection }> = ({ section }) => {
+  const paragraphs = section.body.split('\n\n').filter((p) => p.trim().length > 0);
+  const pos = section.image.position || 'top';
+  const maxH = section.image.maxHeight || 200;
+
+  // Top position: image above text
+  if (pos === 'top') {
+    return (
+      <div className="mb-8">
+        {section.heading && (
+          <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
+            <div className="w-1 h-6 bg-blue-500 rounded-full flex-shrink-0" />
+            {section.heading}
+          </h3>
+        )}
+        <div className="mb-4 rounded-xl overflow-hidden bg-gray-800/50 flex items-center justify-center p-4">
+          <img
+            src={section.image.src}
+            alt={section.image.alt}
+            style={{ maxHeight: `${maxH}px` }}
+            className="object-contain rounded-lg"
+            loading="lazy"
+          />
+        </div>
+        <div className="space-y-4">
+          {paragraphs.map((para, i) => (
+            <p key={i} className="text-gray-300 leading-relaxed text-sm">
+              {para}
+            </p>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Inline right/left: image floated beside text
+  const isRight = pos === 'inline-right';
+
+  return (
+    <div className="mb-8">
+      {section.heading && (
+        <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
+          <div className="w-1 h-6 bg-blue-500 rounded-full flex-shrink-0" />
+          {section.heading}
+        </h3>
+      )}
+      <div className="sm:flex sm:gap-5">
+        {/* Image */}
+        <div
+          className={`flex-shrink-0 mb-4 sm:mb-0 ${
+            isRight ? 'sm:order-2' : 'sm:order-1'
+          }`}
+          style={{ maxWidth: '180px' }}
+        >
+          <div className="rounded-xl overflow-hidden bg-gray-800/50 p-3 flex items-center justify-center">
+            <img
+              src={section.image.src}
+              alt={section.image.alt}
+              style={{ maxHeight: `${maxH}px` }}
+              className="object-contain"
+              loading="lazy"
+            />
+          </div>
+        </div>
+        {/* Text */}
+        <div className={`flex-1 space-y-4 ${isRight ? 'sm:order-1' : 'sm:order-2'}`}>
+          {paragraphs.map((para, i) => (
+            <p key={i} className="text-gray-300 leading-relaxed text-sm">
+              {para}
+            </p>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/** Interactive storyboard with clickable Next/Previous steps */
+const StoryboardRenderer: React.FC<{ section: StoryboardSection }> = ({ section }) => {
+  const [currentFrame, setCurrentFrame] = useState(0);
+  const frame = section.frames[currentFrame];
+  const totalFrames = section.frames.length;
+
+  const goNext = () => setCurrentFrame((prev) => Math.min(prev + 1, totalFrames - 1));
+  const goPrev = () => setCurrentFrame((prev) => Math.max(prev - 1, 0));
+
+  return (
+    <div className="mb-8">
+      {/* Heading */}
+      <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+        <div className="w-1 h-6 bg-purple-500 rounded-full flex-shrink-0" />
+        {section.heading}
+      </h3>
+      {section.description && (
+        <p className="text-gray-400 text-sm mb-4">{section.description}</p>
+      )}
+
+      {/* Map container */}
+      <div className="bg-gray-900 rounded-xl border border-gray-700 overflow-hidden">
+        {/* Step label bar */}
+        <div className="bg-gray-800 px-4 py-2.5 flex items-center justify-between border-b border-gray-700">
+          <div className="flex items-center gap-2">
+            <MapPin size={14} className="text-purple-400" />
+            <span className="text-white text-sm font-bold">{frame.label}</span>
+          </div>
+          <span className="text-xs text-gray-500">
+            {currentFrame + 1} / {totalFrames}
+          </span>
+        </div>
+
+        {/* Map image with overlays */}
+        <div className="relative w-full" style={{ paddingBottom: '70%' }}>
+          {/* Base map */}
+          <img
+            src={section.baseImage.src}
+            alt={section.baseImage.alt}
+            className="absolute inset-0 w-full h-full object-cover"
+            loading="lazy"
+          />
+
+          {/* Dark overlay for better label readability */}
+          <div className="absolute inset-0 bg-black/20" />
+
+          {/* Overlays for current frame */}
+          {frame.overlays?.map((overlay, idx) => {
+            const style: React.CSSProperties = {
+              position: 'absolute',
+              left: `${overlay.x}%`,
+              top: `${overlay.y}%`,
+              transform: 'translate(-50%, -50%)',
+              zIndex: overlay.type === 'label' ? 30 : 20,
+            };
+
+            if (overlay.type === 'label') {
+              return (
+                <div
+                  key={idx}
+                  style={style}
+                  className="pointer-events-none animate-fade-in"
+                >
+                  <span
+                    className="text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap shadow-lg"
+                    style={{
+                      backgroundColor: `${overlay.color || '#22c55e'}22`,
+                      color: overlay.color || '#22c55e',
+                      border: `1px solid ${overlay.color || '#22c55e'}66`,
+                      textShadow: '0 1px 3px rgba(0,0,0,0.8)',
+                    }}
+                  >
+                    {overlay.text}
+                  </span>
+                </div>
+              );
+            }
+
+            if (overlay.type === 'flag') {
+              return (
+                <div
+                  key={idx}
+                  style={style}
+                  className="pointer-events-none animate-fade-in"
+                >
+                  <img
+                    src={overlay.src}
+                    alt="CPS flag"
+                    className="w-6 h-8 object-contain drop-shadow-lg"
+                  />
+                </div>
+              );
+            }
+
+            // Icon type
+            return (
+              <div
+                key={idx}
+                style={style}
+                className="pointer-events-none animate-fade-in"
+              >
+                <img
+                  src={overlay.src}
+                  alt=""
+                  className="w-10 h-10 object-contain drop-shadow-lg"
+                />
+              </div>
+            );
+          })}
+
+          {/* Progress dots */}
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-40">
+            {section.frames.map((_, i) => (
+              <button
+                key={i}
+                onClick={() => setCurrentFrame(i)}
+                className={`w-2 h-2 rounded-full transition-all ${
+                  i === currentFrame
+                    ? 'bg-white w-4'
+                    : i < currentFrame
+                    ? 'bg-white/60'
+                    : 'bg-white/30'
+                }`}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Caption + navigation */}
+        <div className="p-4 bg-gray-800/80 border-t border-gray-700">
+          <p className="text-gray-300 text-sm leading-relaxed mb-4 min-h-[3rem]">
+            {frame.caption}
+          </p>
+
+          <div className="flex items-center justify-between">
+            <button
+              onClick={goPrev}
+              disabled={currentFrame === 0}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-30 disabled:cursor-not-allowed bg-gray-700 hover:bg-gray-600 text-white"
+            >
+              <ChevronLeft size={16} />
+              Previous
+            </button>
+
+            {currentFrame < totalFrames - 1 ? (
+              <button
+                onClick={goNext}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-purple-600 hover:bg-purple-500 text-white"
+              >
+                Next Step
+                <ChevronRight size={16} />
+              </button>
+            ) : (
+              <span className="text-xs text-green-400 font-medium flex items-center gap-1">
+                <CheckCircle size={14} />
+                Storyboard complete
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/** Routes a LessonSection to the correct renderer */
+const SectionRenderer: React.FC<{ section: LessonSection }> = ({ section }) => {
+  switch (section.type) {
+    case 'text':
+      return <TextSectionRenderer section={section} />;
+    case 'image':
+      return <ImageSectionRenderer section={section} />;
+    case 'storyboard':
+      return <StoryboardRenderer section={section} />;
+    default:
+      return null;
+  }
+};
+
+// =============================================================================
+// MAIN PAGE COMPONENT
+// =============================================================================
 
 const TrainingModulePage: React.FC = () => {
   const { moduleId } = useParams<{ moduleId: string }>();
@@ -70,10 +382,13 @@ const TrainingModulePage: React.FC = () => {
   const quiz = module.quiz;
   const totalQ = quiz.length;
 
-  // --- LESSON HELPERS ---
-  const lessonParagraphs = module.lesson_content
-    .split('\n\n')
-    .filter((p) => p.trim().length > 0);
+  // --- LESSON: decide between structured or plain text ---
+  const hasStructuredSections =
+    module.lesson_sections && module.lesson_sections.length > 0;
+
+  const legacyParagraphs = !hasStructuredSections
+    ? module.lesson_content.split('\n\n').filter((p) => p.trim().length > 0)
+    : [];
 
   // --- QUIZ HELPERS ---
   const startQuiz = () => {
@@ -207,24 +522,37 @@ const TrainingModulePage: React.FC = () => {
             {pastAttempts.length > 0 && (
               <div className="mb-6 p-3 bg-gray-900 border border-gray-800 rounded-lg text-xs text-gray-400 flex items-center gap-2">
                 <AlertCircle size={14} className="text-yellow-400 flex-shrink-0" />
-                You have {pastAttempts.length} previous quiz attempt{pastAttempts.length > 1 ? 's' : ''} on this module.
+                You have {pastAttempts.length} previous quiz attempt
+                {pastAttempts.length > 1 ? 's' : ''} on this module.
               </div>
             )}
 
-            {/* Lesson content */}
-            <div className="space-y-5 mb-10">
-              {lessonParagraphs.map((para, i) => (
-                <p key={i} className="text-gray-300 leading-relaxed text-sm">
-                  {para}
-                </p>
-              ))}
-            </div>
+            {/* Structured sections (modules 2 & 3) */}
+            {hasStructuredSections ? (
+              <div>
+                {module.lesson_sections!.map((section, i) => (
+                  <SectionRenderer key={i} section={section} />
+                ))}
+              </div>
+            ) : (
+              /* Legacy plain-text rendering (modules 1, 4, 5) */
+              <div className="space-y-5 mb-10">
+                {legacyParagraphs.map((para, i) => (
+                  <p key={i} className="text-gray-300 leading-relaxed text-sm">
+                    {para}
+                  </p>
+                ))}
+              </div>
+            )}
 
             {/* CTA to quiz */}
             <div className="border-t border-gray-800 pt-8 text-center">
-              <h3 className="text-white font-bold text-lg mb-2">Ready to test your knowledge?</h3>
+              <h3 className="text-white font-bold text-lg mb-2">
+                Ready to test your knowledge?
+              </h3>
               <p className="text-gray-400 text-sm mb-6">
-                You need {Math.round(QUIZ_PASS_THRESHOLD * 100)}% or higher to pass. You can retry as many times as you like.
+                You need {Math.round(QUIZ_PASS_THRESHOLD * 100)}% or higher to pass. You
+                can retry as many times as you like.
               </p>
               <button
                 onClick={startQuiz}
@@ -250,8 +578,10 @@ const TrainingModulePage: React.FC = () => {
             {/* Progress bar */}
             <div className="mb-6">
               <div className="flex justify-between text-xs text-gray-500 mb-1">
-                <span>Question {currentQuestion + 1} of {totalQ}</span>
-                <span>{Math.round(((currentQuestion) / totalQ) * 100)}% done</span>
+                <span>
+                  Question {currentQuestion + 1} of {totalQ}
+                </span>
+                <span>{Math.round((currentQuestion / totalQ) * 100)}% done</span>
               </div>
               <div className="w-full bg-gray-800 rounded-full h-2">
                 <div
@@ -311,12 +641,19 @@ const TrainingModulePage: React.FC = () => {
                 }`}
               >
                 {isCorrect ? (
-                  <CheckCircle className="text-green-400 flex-shrink-0 mt-0.5" size={18} />
+                  <CheckCircle
+                    className="text-green-400 flex-shrink-0 mt-0.5"
+                    size={18}
+                  />
                 ) : (
                   <XCircle className="text-red-400 flex-shrink-0 mt-0.5" size={18} />
                 )}
                 <div>
-                  <p className={`font-bold text-sm mb-1 ${isCorrect ? 'text-green-300' : 'text-red-300'}`}>
+                  <p
+                    className={`font-bold text-sm mb-1 ${
+                      isCorrect ? 'text-green-300' : 'text-red-300'
+                    }`}
+                  >
                     {isCorrect ? 'Correct!' : 'Not quite.'}
                   </p>
                   <p className="text-gray-300 text-xs leading-relaxed">
@@ -400,7 +737,9 @@ const TrainingModulePage: React.FC = () => {
             {/* Past attempts */}
             {pastAttempts.length > 1 && (
               <div className="bg-gray-900 rounded-xl border border-gray-800 p-4 mb-8 text-left">
-                <h4 className="text-sm font-bold text-gray-400 mb-3">Your Attempt History</h4>
+                <h4 className="text-sm font-bold text-gray-400 mb-3">
+                  Your Attempt History
+                </h4>
                 <div className="space-y-2">
                   {pastAttempts.slice(0, 5).map((a, i) => (
                     <div
@@ -414,9 +753,7 @@ const TrainingModulePage: React.FC = () => {
                         {a.score}/{a.totalQuestions} (
                         {Math.round((a.score / a.totalQuestions) * 100)}%)
                       </span>
-                      <span
-                        className={a.passed ? 'text-green-400' : 'text-red-400'}
-                      >
+                      <span className={a.passed ? 'text-green-400' : 'text-red-400'}>
                         {a.passed ? 'Passed' : 'Failed'}
                       </span>
                     </div>
@@ -449,6 +786,17 @@ const TrainingModulePage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Fade-in animation for storyboard overlays */}
+      <style>{`
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+          to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+        }
+        .animate-fade-in {
+          animation: fadeIn 0.3s ease-out forwards;
+        }
+      `}</style>
     </div>
   );
 };
