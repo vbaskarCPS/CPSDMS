@@ -60,7 +60,15 @@ export interface StoryboardSection {
   frames: StoryboardFrame[];
 }
 
-export type LessonSection = TextSection | ImageSection | StoryboardSection;
+export type LessonSection = TextSection | ImageSection | StoryboardSection | VideoSection;
+
+export interface VideoSection {
+  type: 'video';
+  heading: string;
+  description?: string;  // short intro text above the player
+  youtubeId: string;      // just the video ID, e.g. 'C-1wiX42wIE'
+  note?: string;          // optional disclaimer like "Prices may be outdated"
+}
 
 // --- Training Module ---
 export interface TrainingModule {
@@ -77,7 +85,7 @@ export interface TrainingModule {
 
 export const TRAINING_MODULES: TrainingModule[] = [
   // =====================================================================
-  // MODULE 1 — The Basic Rookie Mindset (UNCHANGED)
+  // MODULE 1 — The Basic Rookie Mindset (REWRITTEN — structured sections + videos + 10 Qs)
   // =====================================================================
   {
     module_id: 'module_01_mindset',
@@ -85,76 +93,205 @@ export const TRAINING_MODULES: TrainingModule[] = [
     is_active: true,
     title: 'The Basic Rookie Mindset: Your Blueprint for Success',
     description:
-      'Discover the winning attitude and mental toughness required to thrive in door-to-door lawn care sales. You\'ll learn how to handle rejection, prepare for your day, and treat the season like a professional sport.',
-    lesson_content: `Welcome to the team! You are entering a training program to join the Professional Aerating League. Working door-to-door property maintenance is a physically and mentally demanding job, but it is also extremely rewarding. As a rookie, the most important tool you have isn't the aerator or the fertilizer—it's your mindset. You will face rejection, long hours on your feet, and varying Canadian weather conditions. A strong, positive attitude is what separates the top earners from the rest.
+      'Discover the winning attitude and mental toughness required to thrive in door-to-door lawn care sales. Learn how top CPS stars build confidence, handle rejection, and treat every day like a championship game.',
+    lesson_content: '', // structured sections below
+    lesson_sections: [
+      {
+        type: 'text',
+        heading: 'Welcome to the Professional Aerating League',
+        body: `You are entering a training program to join the Professional Aerating League. Working door-to-door property maintenance is a physically and mentally demanding job, but it is also extremely rewarding. As a rookie, the most important tool you have isn't the aerator or the fertilizer — it's your mindset. You will face rejection, long hours on your feet, and varying Canadian weather conditions. A strong, positive attitude is what separates the top earners from the rest.
 
-Your success depends on maintaining a '100% positivity' rule while on the route. It's natural to feel frustrated when a homeowner says no or if nobody is answering the door. However, dwelling on negativity will only ruin your focus and cost you money. When you encounter a tough customer, shake it off quickly and move to the next door. Remember, every 'no' brings you closer to a 'yes,' and you only need a fraction of a neighbourhood to have an incredibly profitable day.
+CPS was designed to truly bring out the very best in each of its workers. Since the workload is very intense, it takes a special kind of person — or at least special effort — to be successful day after day. The concepts in this module come directly from the CPS founder's playbook and will help you understand what it takes to maximize your success this summer.`,
+      },
+      {
+        type: 'video',
+        heading: 'Tilo McAllister on the Door-to-Door Mindset',
+        description: 'Hear from one of CPS\'s top trainers about the mental approach that separates average workers from stars.',
+        youtubeId: 'h6sDMh5xDA4',
+      },
+      {
+        type: 'text',
+        heading: 'Building Confidence and a Healthy Ego',
+        body: `On your way to the top with CPS it will be vital to develop your confidence and allow a healthy amount of ego into your life. A healthy ego is not cockiness or arrogance — it's the inner drive that holds you to your goals when the going gets tough.
 
-Consistency and endurance are key to your earnings. The door-to-door season is a marathon, not a sprint. To stay sharp and perform at your best, you need to manage your personal time well. Sleep management is critical—that means getting plenty of rest after work and saving the partying for the off-season. You need to set goals and stay extremely competitive every day, showing up as many days as possible without giving up.
+Confidence is built from belief. The more you believe in yourself, the business, the service, and your ability, the quicker your confidence will increase. Confidence grows through working more days (experience), learning new tricks of the trade (knowledge), and by achieving goals you set for yourself — "first sale," "first link," "first end-of-night sale," "first chair," "first win."
 
-Daily preparation is just as important as your pitch. The doors open at 8:10 AM, and the earlier you arrive, the better. Always bring a knapsack packed with enough food and drinks to last the entire day. Dress for the Canadian weather forecast—if rain is predicted, be prepared. Bring sunscreen for sunny days and extra socks for wet days. Mandatory footwear includes high-quality shoes or steel-toed work boots; old sneakers or sandals are strictly prohibited.
+Before you leave your seat in morning meeting, check your ego. Your ego should tell you what goals you want to hit — 10 steps, 3 links, or top 3 of the day. When you set that goal, you now have something for your ego to hold you to during the day. When you hit a cold patch, your ego will command you to pick it up, knock again, and try harder.
 
-Think of your first week like learning to play hockey: you need to learn how to 'skate' before you can 'score.' Show up with a winning attitude, a ready mind to learn, and be coachable. Trust the company systems, lean on your managers, and push through the initial learning curve. By mastering this rookie mindset, you are setting yourself up for massive commission cheques.`,
+The more confident you become, the more assertive you will be. The more confident you become, the quicker you will get what you want. The more confident you become, the richer your life will be. Confidence and a healthy ego are the two main ingredients in TAKING YOUR LIFE TO THE NEXT LEVEL.`,
+      },
+      {
+        type: 'text',
+        heading: 'Treat the Business Like You Own It',
+        body: `As an independent contractor working with CPS, you literally are a small business owner. You are running a small business within a bigger business. Your route is your office and each street is a CPS masterpiece waiting to happen.
+
+Imagine how fast the business would grow if every contractor treated every aspect like it was their own. The top workers link 3 to 10 homes together multiple times per day while average workers speckle a lawn here and there. The main reason stars link so well is the magnetic customer experience they offer — when they ask for neighbours' names and referrals, customers are more inclined to help someone who clearly cares about their job.
+
+If you owned Canadian Property Stars, would you come to work excited or bored? Would you come well-dressed or looking like a slob? Would you work hard or go through the motions? Would you treat customers with respect and honesty? You DO own Canadian Property Stars — treat it that way and the rewards will follow.`,
+      },
+      {
+        type: 'video',
+        heading: 'Dave Wilkerson on Attitude and Effort',
+        description: 'Dave breaks down why your attitude and effort level are the two factors completely within your control — and why they determine everything.',
+        youtubeId: '6RePD5Wo6Bg',
+      },
+      {
+        type: 'text',
+        heading: 'On Stage at All Times',
+        body: `From the moment you arrive at the shop each morning, act as if you are "on stage." People spend a lifetime building credibility but it only takes one act to destroy it all. CPS stars understand that homeowners are watching everything on their street.
+
+Here's what top stars do to maximize their "stage presence": smile and wave at all drivers passing down the street. Greet all homeowners with a big smile. Treat every homeowner with honesty and respect. Compliment their property. Show that you are hustling hard all day. Appear organized and expert. Use neighbours' names to build credibility.
+
+And the no-nos that can ruin your day: getting in an argument with a homeowner, using curse words, letting anyone see you smoking, complaining about rain or your day, walking slowly, cutting corners on work, sitting or lying down on a lawn, overcharging, lying, or causing property damage.
+
+Once you realize you are being watched and you step up your game, your results will skyrocket.`,
+      },
+      {
+        type: 'text',
+        heading: 'The 100% Positivity Rule',
+        body: `Your success depends on maintaining a "100% positivity" rule while on the route. It's natural to feel frustrated when a homeowner says no or nobody is answering the door. However, dwelling on negativity will ruin your focus and cost you money. When you encounter a tough customer, shake it off quickly and move to the next door. Every "no" brings you closer to a "yes," and you only need a fraction of a neighbourhood to have an incredibly profitable day.
+
+CPS is a journey, not a sprint. We need to look at the big picture when we have a really tough day. A tough day might mean a ghost town, lots of no's that beat up your confidence, or a take-home pay of only $40. The first thing you must do is put it in perspective by accepting that you had one tough day. With your training, route management support, superior effort, and past results, you are positioned for success. How you respond to your struggles today sets the tone for every day that follows.`,
+      },
+      {
+        type: 'text',
+        heading: '"One More Round" — The Champion\'s Mentality',
+        body: `"One More Round" is a concept developed by the CPS founder with his karate instructor. After training for hours, exhausted and ready to quit, his instructor would challenge him to go just one more round. Over time, it became a defining philosophy: the body can, and will, do exactly what the mind tells it to do.
+
+Going One More Round in everything you do will place you in a class of your own. Most people are simply not willing to go One More Round. Why don't you decide to be someone who always does?
+
+At CPS, here's what One More Round looks like: when you're tired at 7:30 PM and want to quit, push for one more sale. When you've been told "no" five times in a row, knock one more door. When your body aches and you want to sit down, run to one more house. The extra effort you put in during those moments is what separates the stars from the average — and it's what will earn you the chair at payout.`,
+      },
+      {
+        type: 'text',
+        heading: 'Daily Preparation — Set Yourself Up for Success',
+        body: `Consistency and endurance are key to your earnings. The door-to-door season is a marathon, not a sprint. To stay sharp and perform at your best, manage your personal time well. Sleep management is critical — get plenty of rest after work and save the partying for the off-season. Set goals and stay extremely competitive every day, showing up as many days as possible.
+
+Daily preparation is just as important as your pitch. Always bring a knapsack packed with enough food and drinks to last the entire day. Dress for the Canadian weather forecast — if rain is predicted, be prepared. Bring sunscreen for sunny days and extra socks for wet days. Mandatory footwear includes high-quality running shoes or steel-toed work boots; old sneakers or sandals are strictly prohibited.
+
+Think of your first week like learning to play hockey: you need to learn how to "skate" before you can "score." Show up with a winning attitude, a ready mind to learn, and be coachable. Trust the company systems, lean on your managers, and push through the initial learning curve.`,
+      },
+    ],
     quiz: [
       {
-        question: 'What is considered mandatory footwear for the job?',
+        question: 'What is the difference between "cockiness" and a "healthy ego" at CPS?',
         options: [
-          'Running shoes',
-          'High-quality shoes or steel-toed work boots',
-          'Sandals',
-          'Rubber rain boots only',
+          'There is no difference — both mean the same thing',
+          'Cockiness treats others as inferior; a healthy ego drives you toward your own goals and helps others improve',
+          'A healthy ego means never setting goals',
+          'Cockiness is required to close sales',
         ],
         correct_index: 1,
         explanation:
-          'Proper, high-quality footwear or steel-toed boots are mandatory to prevent injury and handle the physical demands of the job.',
+          'A healthy ego pushes you to achieve your goals and uplift others, while cockiness tears others down to make yourself feel better.',
       },
       {
-        question: 'How should you handle rejection at the door?',
+        question: 'What does "On Stage at All Times" mean?',
         options: [
-          'Argue with the homeowner to change their mind',
-          'Take a 15-minute break to recover',
-          'Shake it off quickly and move to the next door',
-          'Call your manager to complain',
+          'You must literally perform comedy at the door',
+          'Every action you take on the route is being watched by homeowners, so always present yourself professionally',
+          'You should only work when a manager is watching',
+          'It means wearing a costume while aerating',
+        ],
+        correct_index: 1,
+        explanation:
+          'Homeowners observe everything happening on their street. Your professionalism — or lack of it — directly affects referrals and sales.',
+      },
+      {
+        question: 'How should you handle a really tough day with no sales?',
+        options: [
+          'Quit and go home early',
+          'Blame the neighbourhood and demand a new route',
+          'Accept it was one tough day, maintain perspective, and come back harder tomorrow',
+          'Call your manager to complain about the territory',
         ],
         correct_index: 2,
         explanation:
-          'Dwelling on rejection ruins your focus; moving on quickly keeps your momentum high.',
+          'Even top CPS stars occasionally have zero days. How you respond to struggles sets the tone for every day that follows.',
       },
       {
-        question: 'What does "sleep management" mean in the context of this job?',
+        question: 'What does "Treat the Business Like You Own It" mean in practice?',
         options: [
-          'Sleeping in the work truck between lawns',
-          'Getting plenty of rest after work and avoiding partying during the season',
-          'Working overnight shifts only',
-          'Taking daily afternoon naps on the route',
+          'You can set your own hours and skip morning meetings',
+          'Come to work excited, dress professionally, work hard, treat customers with respect, and take care of equipment',
+          'You can fire your route manager if you disagree',
+          'It means nothing — you\'re just an employee',
         ],
         correct_index: 1,
         explanation:
-          'The job is physically demanding, so prioritizing sleep over late-night activities is crucial for endurance.',
+          'As an independent contractor, you are a small business owner within CPS. Your professionalism creates the magnetic customer experience that drives referrals.',
       },
       {
-        question: 'What should always be packed in your daily knapsack?',
+        question: 'What is the "100% Positivity Rule"?',
         options: [
-          'Food, drinks, sunscreen, and extra socks',
-          'A portable video game console',
-          'Extra marketing flyers only',
-          'A spare uniform',
-        ],
-        correct_index: 0,
-        explanation:
-          'Proper nutrition, hydration, and weather protection are vital for maintaining energy throughout a long physical day.',
-      },
-      {
-        question: 'What does the "learning to skate before you score" analogy mean?',
-        options: [
-          'You must join the company hockey team',
-          'You need to master the basics of the job before expecting to break sales records',
-          'You should wear rollerblades on the route',
-          'You need to rush through the training program',
+          'Never admit when you\'ve had a bad day',
+          'Maintain a positive attitude on the route — shake off rejection quickly and keep moving to the next door',
+          'Always agree with the customer, even if they\'re wrong',
+          'Post only positive things on social media',
         ],
         correct_index: 1,
         explanation:
-          'Just like in sports, you must master fundamental skills before achieving high-level success.',
+          'Dwelling on negativity ruins your focus and momentum. Every "no" brings you closer to a "yes."',
+      },
+      {
+        question: 'What does the "One More Round" philosophy teach?',
+        options: [
+          'Only work one round of the neighbourhood per day',
+          'When you\'re exhausted and want to quit, push for one more effort — the body does what the mind commands',
+          'Do one round of push-ups each morning',
+          'Always leave one house un-aerated per street',
+        ],
+        correct_index: 1,
+        explanation:
+          'The extra effort during those final moments separates stars from average workers and often leads to end-of-night sales.',
+      },
+      {
+        question: 'Why is sleep management important for CPS workers?',
+        options: [
+          'Because sleeping on the route is encouraged',
+          'The job is physically demanding — rest allows you to maintain energy and performance across the whole season',
+          'To avoid being late only on Mondays',
+          'It\'s not important — you can party every night',
+        ],
+        correct_index: 1,
+        explanation:
+          'The season is a marathon. Consistent rest ensures you can bring maximum energy and effort day after day.',
+      },
+      {
+        question: 'What is considered mandatory footwear for the job?',
+        options: [
+          'Any comfortable sandals',
+          'Old sneakers are fine',
+          'High-quality running shoes or steel-toed work boots',
+          'Rubber rain boots only',
+        ],
+        correct_index: 2,
+        explanation:
+          'Proper footwear prevents injury and provides the support needed for running between houses all day.',
+      },
+      {
+        question: 'Which of the following is a "no-no" that can ruin your stage presence?',
+        options: [
+          'Smiling and waving at passing cars',
+          'Complimenting a homeowner\'s landscaping',
+          'Sitting down on a homeowner\'s lawn or street corner during work',
+          'Using neighbours\' names as referrals',
+        ],
+        correct_index: 2,
+        explanation:
+          'Sitting or lying down signals laziness to every homeowner watching the street, destroying your credibility and potential referrals.',
+      },
+      {
+        question: 'How does confidence grow at CPS?',
+        options: [
+          'It\'s something you\'re born with and can\'t develop',
+          'Through experience (working more days), knowledge (learning tricks of the trade), and achieving progressive goals',
+          'By avoiding all difficult situations',
+          'Only through reading the Next Level Book',
+        ],
+        correct_index: 1,
+        explanation:
+          'Confidence builds through a combination of reps, learning, and small wins that compound into bigger achievements over time.',
       },
     ],
   },
@@ -355,6 +492,19 @@ Use smooth curves instead of sharp turns. Develop a consistent pattern — start
             ],
           },
         ],
+      },
+      {
+        type: 'video',
+        heading: 'Dave Wilkerson on 5 Steps to High Steps',
+        description: 'Hear directly from Dave Wilkerson as he breaks down the 5 Steps system and explains why each step multiplies your earning potential.',
+        youtubeId: 'LPkzijaQ_oE',
+        note: 'These videos were recorded several years ago — prices mentioned may be outdated, but the concepts still apply 100%.',
+      },
+      {
+        type: 'video',
+        heading: 'Dave Wilkerson on Stepping High',
+        description: 'Dave goes deeper into what it takes to consistently step high, day after day, and how the top stars use the 5 Steps system as their foundation.',
+        youtubeId: '2_DXdsTRt4w',
       },
       {
         type: 'text',
@@ -814,6 +964,19 @@ Goal 2: Expand each cold sale into at least 3 more lawns within view. If over th
         ],
       },
       {
+        type: 'video',
+        heading: 'Dave Wilkerson on Mushroom with a Name',
+        description: 'Dave explains the Mushroom linking strategy in detail — how one cold sale mushrooms outward into an entire street of customers using names as your secret weapon.',
+        youtubeId: 'cRgTNwCbw0o',
+        note: 'These videos were recorded several years ago — prices mentioned may be outdated, but the concepts still apply 100%.',
+      },
+      {
+        type: 'video',
+        heading: 'Tilo McAllister on Eyes and Ears',
+        description: 'Tilo breaks down the Eyes & Ears linking method — the highest-percentage sale type in the CPS system. When you see or hear a homeowner outside, STOP everything and go link.',
+        youtubeId: 'cImSAtGbKjU',
+      },
+      {
         type: 'text',
         heading: 'Staying Organized — Your Tools Are Your Ammunition',
         body: `To effectively manage all this linking, you must stay organized. Names are your most valuable currency on the route — if you forget a name, you've lost a potential sale. Write every name down immediately.
@@ -957,7 +1120,7 @@ Keep your folder organized so you can quickly jot down neighbour names and trans
   },
 
   // =====================================================================
-  // MODULE 4 — Basic Sales Concepts (UNCHANGED)
+  // MODULE 4 — Basic Sales Concepts (REWRITTEN — structured sections + videos + 10 Qs)
   // =====================================================================
   {
     module_id: 'module_04_sales_basics',
@@ -965,37 +1128,112 @@ Keep your folder organized so you can quickly jot down neighbour names and trans
     is_active: true,
     title: 'Basic Sales Concepts: Pricing, Pitching, and Closing',
     description:
-      'Learn the fundamental sales scripts and pricing strategies. We\'ll cover how to navigate to the backyard, quote the "Lawn Split," and confidently close the deal using company standards.',
-    lesson_content: `A successful door-to-door pitch is fast, confident, and structured—this is your 'shooting' practice. Your Goal #1 at the door is to gain the customer's trust and quickly direct the conversation toward the backyard. Introduce yourself, tell them exactly what you are doing on the street, and ask your first engaging question: 'Have you ever had your lawn aerated before?' Whether they affirm or need education, transition smoothly to your second question: 'Which way is it to your backyard—left or right?' Getting physical access to the backyard makes the full property sale highly probable.
+      'Master the fundamental sales scripts and pricing strategies used by top CPS stars. Learn how to approach the door, navigate to the backyard, quote using the "Lawn Split," handle objections, and confidently close the deal.',
+    lesson_content: '', // structured sections below
+    lesson_sections: [
+      {
+        type: 'text',
+        heading: 'The CPS Sales Process — Your Earning Engine',
+        body: `A successful door-to-door pitch is fast, confident, and structured — this is your "shooting" practice. The CPS sales system is designed so that even a worker with developing scripts will succeed if they follow the systems and get to enough doors. But when you combine strong scripting with the 5 Steps and Linking systems, you become an unstoppable earning machine.
 
-Goal #2 is mastering pricing and closing using the 'Lawn Split' strategy. Never quote a single, massive number right away. Instead, pull out your Service Guide and break it down. Say, 'Normally, the front is $60 and the back is $60. But since I'm already here doing the neighbour's property, I can do the front for $60 and give you the backyard for half off, making it just $90 for the whole property.' This negotiation tactic makes the pricing feel like an exclusive, time-sensitive deal.
+Your sales conversation should last 60 seconds to 5 minutes maximum. Time is money. Every extra minute you spend at a property before or after a sale is counterproductive — and the customer understands you need to get going. Be very polite but keep all conversation beyond the sale on point.`,
+      },
+      {
+        type: 'video',
+        heading: 'Dave Wilkerson on the Basic Script',
+        description: 'Dave walks you through the core script structure that every CPS worker needs to master before hitting the route.',
+        youtubeId: 'C-1wiX42wIE',
+        note: 'These videos were recorded several years ago — prices mentioned may be outdated, but the concepts still apply 100%.',
+      },
+      {
+        type: 'text',
+        heading: 'Goal #1: Build Trust and Get to the Backyard',
+        body: `Your first goal at the door is to gain the customer's trust and quickly direct the conversation toward the backyard. Introduce yourself, tell them exactly what you are doing on the street, and ask your first engaging question: "Have you ever had your lawn aerated before?"
 
-You must absolutely adhere to the company's minimum pricing structures. The absolute minimum charge for the smallest chunk of front lawn is $50.00. The minimum for a front and back (like a small townhouse) is $60.00. However, professionals aim higher; the average property should be billed at $80.00+. Finally, do not undercharge for large corner lots—these require more time and effort, so the minimum charge for a corner lot is $100.00+.
+Whether they confirm or need education, transition smoothly to your second question: "Which way is it to your backyard — left or right?" This is a powerful assumptive close technique. It bypasses a yes-or-no decision and physically moves the conversation toward the larger, more profitable backyard. Getting physical access to the backyard makes the full property sale highly probable.
 
-Closing the deal involves securing the commitment and determining the payment method. Ask for the sale confidently with a simple phrase like, 'Sounds good?' while nodding your head. Let them know we accept Cash, Cheque, Credit Card, or E-Transfer. If they pay by cheque, ensure it is made payable exactly to 'Canadian Property Stars'.
+Remember: you are interrupting a homeowner's day, so you need to quickly and effectively communicate that you have a solution to a problem they weren't thinking about. If you can get to the backyard, you've already won half the battle.`,
+      },
+      {
+        type: 'video',
+        heading: 'Getting Into the Backyard with Marco Morelli',
+        description: 'Marco demonstrates the techniques for smoothly transitioning from the front door to the backyard — where the real money is. While this video was made for window cleaning, the exact same approach applies for aeration.',
+        youtubeId: 'f161cP0wfW8',
+      },
+      {
+        type: 'video',
+        heading: 'Tilo McAllister on Maximizing Your Presentation',
+        description: 'Tilo shares advanced tips for making your sales presentation irresistible — from body language to value building to creating urgency.',
+        youtubeId: 'TJmGzew2SMs',
+      },
+      {
+        type: 'text',
+        heading: 'Goal #2: The "Lawn Split" Pricing Strategy',
+        body: `Never quote a single massive number right away. Instead, use the "Lawn Split" strategy: pull out your Service Guide and break the price down into front and back.
 
-Finally, as a legitimate Canadian business, you must charge HST on every single lawn. Do not offer 'under the table' deals. Accurately complete the receipt and log sheet for every transaction. Deliver your pitch with a clean uniform (always wear your Canadian Property Stars shirt), a positive attitude, and max effort, and your closing rate will soar.`,
+Say: "Normally, the front is $60 and the back is $60. But since I'm already here doing the neighbour's property, I can do the front for $60 and give you the backyard for half off, making it just $90 for the whole property."
+
+This negotiation tactic makes the pricing feel like an exclusive, time-sensitive deal. The customer feels like they're getting a special neighbourhood discount, which increases urgency and reduces price resistance.
+
+You must absolutely adhere to the company's minimum pricing structures: the absolute minimum charge for the smallest front lawn is $50.00. The minimum for a front and back (like a small townhouse) is $60.00. Professionals aim higher — the average property should be billed at $80.00+. Do not undercharge large corner lots — these require more time and effort, so the minimum charge is $100.00+.`,
+      },
+      {
+        type: 'text',
+        heading: 'Supply and Demand — Adjusting Your Price to the Street',
+        body: `Understanding basic supply and demand economics will make you a smarter seller. In the CPS context, the primary "supply" factor is you and your aerator on the street. "Demand" is expressed by homeowners purchasing the service.
+
+If you're knocking for 30 minutes and you've lost 2–3 potential customers based on price, you have a problem. Maybe your value-building scripts are weak, or maybe there just isn't enough demand at your asking price. Use supply and demand to adapt.
+
+Conversely, if you sell the first three homes on a new street for $60 with no resistance and neighbours are stopping you asking to be next — the demand is overwhelming and supply is limited to you. Raise your price to $80 and keep going. We use $3,000+ machinery and the service is easily worth more than $100. The reason we sometimes get a lower price is too much competition or weak salespeople.
+
+When you're on a hot link with flags everywhere, you've created high demand and low supply. That's when you push the price up closer to what the service is actually worth.`,
+      },
+      {
+        type: 'text',
+        heading: 'Closing the Deal',
+        body: `Closing involves securing the commitment and determining payment. Ask for the sale confidently with a simple phrase like "Sounds good?" while nodding your head. Let them know we accept Cash, Cheque, Credit Card, or E-Transfer. If they pay by cheque, ensure it is made payable exactly to "Canadian Property Stars."
+
+As a legitimate Canadian business, you must charge HST on every single lawn. Do not offer "under the table" deals. Accurately complete the receipt and log sheet for every transaction.
+
+When a customer is on the fence, use your link credibility: "John and Mary next door both just got it done, and I can extend the same neighbourhood deal to you since I'm already here." The combination of names, visible flags, and urgency is incredibly powerful.`,
+      },
+      {
+        type: 'video',
+        heading: 'Closing the Sale with Dave Wilkerson',
+        description: 'Dave demonstrates proven closing techniques that turn "maybe" into "yes" — from creating urgency to handling the final objection.',
+        youtubeId: 'cuFSilgE7UI',
+      },
+      {
+        type: 'text',
+        heading: 'Pre-Framing the Street and Handling Objections',
+        body: `Pre-framing means setting up your sales environment before you even knock. When you flag a lawn and start aerating, every homeowner on the street sees and hears you working. The sound of the aerator, the sight of flags and cores on the lawn, and the knowledge that neighbours bought the service — these all pre-frame the next door you knock on.
+
+Common objections and how to think about them: "Too expensive" — you haven't built enough value yet, or your pricing structure needs adjustment. "Not interested" — you may need to work on your opening approach. "I already have a service" — respect it, but mention that many customers use CPS for the convenience of same-day service. "Nobody home" — mark it and come back later as a Go-Back.
+
+Think critically about where in the process you're losing prospects. Are you getting no's before the backyard? Work on your presentation. No's based on price? You're not building enough value or structuring pricing correctly. Work with your manager on a new approach.
+
+Keep in mind: all of the top stars get no's every day! Some of the best workers in company history got the MOST no's on a regular basis — they just follow 5 Steps so consistently that they reach enough doors to make up for it.`,
+      },
+    ],
     quiz: [
       {
-        question:
-          'What is the absolute minimum charge allowed for a small front lawn aeration?',
+        question: 'What is the absolute minimum charge allowed for a small front lawn aeration?',
         options: ['$20.00', '$30.00', '$50.00', '$80.00'],
         correct_index: 2,
         explanation:
           'To maintain profitability and professional standards, the absolute minimum charge for even the smallest front lawn is $50.00.',
       },
       {
-        question:
-          'What is the strategic purpose of asking "Which way is it to your backyard—left or right?"',
+        question: 'What is the strategic purpose of asking "Which way is it to your backyard — left or right?"',
         options: [
-          'To figure out where to park your truck',
+          'To figure out where to park the aerator',
           'It assumes the sale and physically moves the conversation toward the larger, more profitable backyard',
           'To check if they have a dog',
           'To see if they have a gate lock',
         ],
         correct_index: 1,
         explanation:
-          'This question bypasses a yes or no decision and smoothly advances the physical inspection of the property.',
+          'This assumptive question bypasses a yes/no decision and smoothly advances the physical inspection of the property.',
       },
       {
         question: 'How should cheques be made payable?',
@@ -1003,7 +1241,7 @@ Finally, as a legitimate Canadian business, you must charge HST on every single 
           'To your personal name',
           'To "Cash"',
           'To "Canadian Property Stars"',
-          'To "Lawn Care Pros"',
+          'To your route manager',
         ],
         correct_index: 2,
         explanation:
@@ -1012,32 +1250,92 @@ Finally, as a legitimate Canadian business, you must charge HST on every single 
       {
         question: 'What is the "Lawn Split" pricing strategy?',
         options: [
-          'Charging separately for the left and right sides of the lawn',
-          'Breaking the quote into front and back prices, then offering a discount on the back to incentivize a full property sale',
+          'Charging separately for the left and right sides',
+          'Breaking the quote into front and back prices, then offering a discount on the back to incentivize the full property sale',
           'Physically dividing the lawn with flags',
-          'Splitting the total bill with the neighbour',
+          'Splitting the bill with the neighbour',
         ],
         correct_index: 1,
         explanation:
-          'Splitting the price makes the total cost seem more digestible and highlights the discount they are receiving.',
+          'Splitting the price makes the total feel more digestible and highlights the discount they\'re receiving as a neighbourhood deal.',
       },
       {
         question: 'What is the minimum pricing rule for large corner lots?',
         options: [
-          'They are the same price as standard lawns',
-          'They should be heavily discounted to win the business',
-          'Do not undercharge; the minimum is $100+',
+          'Same price as standard lawns',
+          'Heavily discounted to win the business',
+          'Minimum $100+ because of the extra square footage',
           'Charge by the hour instead',
         ],
         correct_index: 2,
         explanation:
-          'Corner lots have significantly more square footage and require more work, so they must be priced at a minimum of $100+.',
+          'Corner lots have significantly more square footage and require more work — they must be priced at a minimum of $100+.',
+      },
+      {
+        question: 'When should you raise your pricing above $60?',
+        options: [
+          'Never — always charge the same price',
+          'When demand is high (no resistance, neighbours asking for service) and you\'re the only supply on the street',
+          'Only when the manager tells you to',
+          'When you\'re tired and want to go home early',
+        ],
+        correct_index: 1,
+        explanation:
+          'When supply is limited (just you) and demand is high (everyone wants the service), basic economics say the price should go up.',
+      },
+      {
+        question: 'How long should a typical sales conversation last?',
+        options: [
+          '15 to 30 minutes',
+          '60 seconds to 5 minutes maximum',
+          'At least 20 minutes to build deep rapport',
+          'As long as the customer wants to talk',
+        ],
+        correct_index: 1,
+        explanation:
+          'Time is money. A quick, confident pitch closes more deals than a drawn-out conversation, and the customer understands you need to keep moving.',
+      },
+      {
+        question: 'What does "pre-framing the street" mean?',
+        options: [
+          'Building a picture frame for the customer',
+          'The sound of the aerator, sight of flags, and cores on lawns set up your next sale before you even knock',
+          'Framing photos of the street',
+          'Pre-ordering materials for the job',
+        ],
+        correct_index: 1,
+        explanation:
+          'Pre-framing creates social proof — every visible sign of your work on the street makes the next homeowner more likely to say yes.',
+      },
+      {
+        question: 'If you keep losing sales based on price, what should you do?',
+        options: [
+          'Get angry at the customers',
+          'Always drop to the minimum price immediately',
+          'Analyze whether your value-building is weak or pricing is wrong, and work with your manager on a new approach',
+          'Stop selling and only aerate the lawns you already have',
+        ],
+        correct_index: 2,
+        explanation:
+          'Price resistance usually means you aren\'t building enough value or are structuring prices incorrectly — work with your manager to adjust.',
+      },
+      {
+        question: 'Must you charge HST on every lawn service?',
+        options: [
+          'Only on large properties over $100',
+          'Yes — as a legitimate Canadian business, HST is mandatory on every transaction',
+          'No — you can offer "under the table" deals to win the sale',
+          'Only when the customer asks for a receipt',
+        ],
+        correct_index: 1,
+        explanation:
+          'HST must be charged on every single lawn. Offering "under the table" deals is not permitted.',
       },
     ],
   },
 
   // =====================================================================
-  // MODULE 5 — Your First Week (UNCHANGED)
+  // MODULE 5 — Your First Week (REWRITTEN — structured sections + 10 Qs)
   // =====================================================================
   {
     module_id: 'module_05_first_week',
@@ -1045,16 +1343,89 @@ Finally, as a legitimate Canadian business, you must charge HST on every single 
     is_active: true,
     title: 'Your First Week: 3 Goals for Rookie Success',
     description:
-      'Prepare for your first week on the job by focusing on three clear, achievable goals. Learn how to "tie your skates," operate safely, and master the basics of the route.',
-    lesson_content: `Your first week on the job is like a professional training camp. It's perfectly normal to feel nervous or overwhelmed by the physical work and the reality of sales rejection. To ensure you succeed, we want you to focus strictly on mastering the basics rather than worrying about breaking sales records immediately. You are entering the Professional Aerating League, and you need to build a solid foundation. Set personal goals for the day, bring a great attitude, and give maximum effort.
+      'Prepare for your first week on the job by focusing on three clear, achievable goals. Learn how to "tie your skates," operate safely, handle early-day challenges, and master the basics of the route.',
+    lesson_content: '', // structured sections below
+    lesson_sections: [
+      {
+        type: 'text',
+        heading: 'Welcome to Training Camp',
+        body: `Your first week on the job is like a professional training camp. It's perfectly normal to feel nervous or overwhelmed by the physical work and the reality of sales rejection. To ensure you succeed, focus strictly on mastering the basics rather than worrying about breaking sales records. You are entering the Professional Aerating League, and you need to build a solid foundation.
 
-Your first goal is 'Skating': learning how to safely and effectively operate the equipment. Whether you are using a core aerator or applying lawn rejuvenation products, spend your first few days focusing on machine control, turning, and loading or unloading safely. Your machine is your livelihood—respect it, maintain it, and never cut corners on safety protocols. Once you can operate the machine effortlessly, your speed will naturally increase.
+The focus for your first week is to learn the basic systems: 5-Steps-to-High-Steps, Linking, End-of-Night Sales, machine training, and basic sales scripts. With these basic systems firmly in your toolbox, you will be able to start generating very good income. Set personal goals for the day, bring a great attitude, and give maximum effort.`,
+      },
+      {
+        type: 'text',
+        heading: 'Goal 1: "Skating" — Learn to Operate the Equipment',
+        body: `Your first goal is Skating: learning how to safely and effectively operate the equipment. Whether you are using a core aerator or applying lawn rejuvenation products, spend your first few days focusing on machine control, turning, and loading or unloading safely.
 
-Your second goal is 'Shooting': mastering the basic sales script. Don't worry about complex, advanced objection handling during your first week. Focus entirely on delivering a smooth, confident introduction and executing a proper 'lawn split' price quote. Practice your pitch in the mirror and with your manager until the words flow naturally without sounding robotic.
+Your machine is your livelihood — respect it, maintain it, and never cut corners on safety protocols. Once you can operate the machine effortlessly, your speed will naturally increase. Remember: your only two roles as a CPS contractor are selling or aerating. You are either trying to find a customer or you are servicing a customer. There is literally nothing else you do during the day.
 
-Your third goal is 'Tying Your Skates': mastering the paperwork and daily procedures. This means strictly following the 5 steps to high steps, accurately filling out your daily log sheet, managing your 5 receipts and 2 upsell contracts, placing flags correctly, and understanding how your payout works at the end of the day. Proper administrative work is what guarantees you get paid correctly for the physical work you've done.
+If you ever have a machine breakdown, don't panic. Attempt to troubleshoot it yourself, then call your route manager. While your manager is on the way to fix it, set a goal for the number of sales you will have lined up before they arrive. A breakdown is never an excuse to stop working — it's an opportunity to pre-sell your next 2–3 lawns.`,
+      },
+      {
+        type: 'text',
+        heading: 'Goal 2: "Shooting" — Master the Basic Sales Script',
+        body: `Don't worry about complex, advanced objection handling during your first week. Focus entirely on delivering a smooth, confident introduction and executing a proper "lawn split" price quote. Practice your pitch in the mirror and with your manager until the words flow naturally without sounding robotic.
 
-Preparation ties all these goals together. Check your gear before you leave the shop: 10 flags, 10 poles, your folder (with map and log sheet), pouch, pen, and your knapsack with food and drinks. Ensure you are wearing your CPS shirt. Most importantly, communicate. Never leave the route without authorization, and always work with your team for load-ins and load-outs. Focus on these core goals, and the high-commission days will follow!`,
+The continuous learning mindset is what separates stars from one-season workers. CPS is all about adding to your toolbox. We realize that the more you can internalize the systems and psychology behind the game, the better you will become. But don't try to learn everything in week one — master the basic script first, then layer in advanced techniques as you gain confidence.
+
+Many workers assume (wrongly) that once they've succeeded at the basic level, they don't need to keep learning. The truth is that even the top stars of CPS are constantly refining their approach. Every morning meeting is an opportunity to learn something new.`,
+      },
+      {
+        type: 'text',
+        heading: 'Goal 3: "Tying Your Skates" — Master the Paperwork',
+        body: `Mastering the paperwork and daily procedures is what guarantees you get paid correctly for the physical work you've done. This means strictly following the 5 Steps, accurately filling out your daily log sheet, managing your 5 receipts and 2 upsell contracts, placing flags correctly, and understanding how your payout works at the end of the day.
+
+Before you leave the shop, check your gear: 10 flags, 10 poles, your folder (with route map and log sheet), pouch, pen, and your knapsack with food and drinks. Ensure you are wearing your CPS shirt. Most importantly, communicate — never leave the route without authorization, and always work with your team for load-ins and load-outs.
+
+Your All-Star Preparation checklist: Folder stocked with route map, log sheet, 5 receipts, and 2 upsell contracts. Sales glossy for your pitch. Pouch loaded for collecting cash and cheques. At least one working pen. Knapsack with food, drinks, sunscreen, extra socks, and rain gear if needed. 10 flags and 10 poles. CPS shirt on, clean and professional.`,
+      },
+      {
+        type: 'text',
+        heading: 'Early Day Pains — Your Body Will Adjust',
+        body: `If you've never worked with CPS before and haven't been extremely active coming up to the season, your body is in for a shock. Walking, jogging, or running with an aerator all day is incredibly taxing. Most workers find their first day or two are the most dreadful — old injuries surface, foot and knee aches appear, and general stiffness sets in. This is simply your body working its way into a groove.
+
+Stay well-hydrated throughout the day and wear very good running shoes. Good running shoes provide the shock absorbers that prevent shin splints, knee pain, and foot issues as you rack up consecutive days. There's no way around developing blisters and stiffness, but the good news is that it's only temporary for workers who work 5 or more days per week.
+
+If you're feeling beat up after your 1st or 2nd day — congratulations! You kicked your own ass! Just like with any sport, the best way to overcome stiffness is to get up and go after it again. Most workers remark that morning stiffness is completely gone by the time they finish their 1st or 2nd lawn. It just takes an elevated heart rate and a little adrenaline for the cobwebs to disappear.`,
+      },
+      {
+        type: 'text',
+        heading: 'Bad Weather Is Your Opportunity',
+        body: `The reality of outdoor work in spring or summer is that you are at the mercy of the weather. You can look at bad weather in one of two ways: as a negative where you'll be wet, cold, and miserable — or as a positive because homeowners will be impressed by your hustle on a crappy day while your competition stays home.
+
+Things to remember about bad weather: always check the forecast and pack a rain jacket, extra socks, bags to cover your socks, and a sweater. On cold and rainy days, the "equivalent bar" needed to win a chair lowers — increasing your odds if you bring your A-game. More people are actually home on bad weather days because families prefer to stay in. If you come to doors excited about the rain, explaining that wet days give even better tine penetration, you will impress homeowners. And the competition stays home — giving you a monopoly on the street.
+
+Bad weather is an opportunity for workers who look at it correctly. Top CPS workers look forward to and prepare for cold and wet weather to maximize their paydays.`,
+      },
+      {
+        type: 'text',
+        heading: 'You Are Not Alone',
+        body: `You might feel isolated working solo on your route, but remember: you are not alone. You drove out in a van with 10+ co-workers. Your location has multiple vans with more co-workers. Across the country, dozens of CPS vans are filled with fellow workers. You are part of the largest outdoor direct sales company in Canada.
+
+The reason you work solo is because it's more profitable for you — splitting commission with a partner would cut your earnings in half. Your route manager is always just around the corner for safety, equipment checks, motivation, and sales training when needed.
+
+If you're ever lonely out there, keep in mind that you're only a few doors away from a potential new friend — and at CPS, your new friends at the door will pay you for talking to them!`,
+      },
+      {
+        type: 'text',
+        heading: 'The Importance of Your 1st Step',
+        body: `Your 1st step of the day is your most important step. The momentum from that first sale will propel you through the entire day if people are home and your linking is on the money. Even though we know it only takes about 3–4 hours of real aeration to get paid well, most workers get demoralized if they don't make a sale in the first hour or two.
+
+You must decide when you get dropped off that you will maintain the same level of intensity at every door until you get that 1st sale. Since timeline is important to your mentality, there must be urgency in your voice. Be willing to give a homeowner a great deal if it's going to get you on a lawn and off a zero. Your first step is setting you up for a huge day — the homeowner should be rewarded for helping keep your mentality in check.
+
+And your 2nd most important step? That's right — your 2nd step. Top stars immediately link from their first sale, while average workers can go 2–3 hours before finding sale #2. The difference? Mental pressure. Stars create pressure to continually get more steps — no number is ever enough. Average workers create pressure around money, so once they have some "in the bank," they release the pressure and results drop. Focus on scoring more steps, not on the money, and the money will follow.`,
+      },
+      {
+        type: 'text',
+        heading: 'End-of-Night Sales — The Chair Maker',
+        body: `End-of-Night Sales have been the reason top CPS stars capture their spots atop the payout chairs for years. Many workers have equally strong mornings, afternoons, and evenings — so it comes down to those who capitalize on End-of-Night.
+
+The psychology: it's 8:00 PM and a homeowner opens their door to find a very excited, hard-working person who has been aerating the neighbourhood all day. They're offering an amazing end-of-night price with extra quality (cross-hatch, doubling up areas). The homeowner thinks: "This kid is still going hard right up until pickup. Most of my neighbours got it done and I can get an even better deal."
+
+Top 10 End-of-Night tricks: Run with flags in your hands as a goal counter. Run fast, speak fast, push on impulse and energy. Pre-frame that since it's darker, you'll double up and give a discount. Write the total with HST on the flyer — ask them to leave a cheque in the mailbox. If you have 3+ lawns lined up, let the homeowner know the whole team is coming to help. Flag and aerate all fronts immediately so they can't cancel. Remember: if you don't line up your own End-of-Night Sale, you'll be aerating for someone else!`,
+      },
+    ],
     quiz: [
       {
         question: 'What does the "Skating" goal refer to in your first week?',
@@ -1066,7 +1437,7 @@ Preparation ties all these goals together. Check your gear before you leave the 
         ],
         correct_index: 0,
         explanation:
-          'Safety and basic operational competence are the foundation you need before you can focus on working quickly and selling.',
+          'Safety and basic operational competence are the foundation you need before you can focus on speed and selling.',
       },
       {
         question: 'What is meant by "Tying Your Skates"?',
@@ -1078,24 +1449,58 @@ Preparation ties all these goals together. Check your gear before you leave the 
         ],
         correct_index: 1,
         explanation:
-          'Mastering the administrative and procedural tasks ensures you stay organized and get paid accurately.',
+          'Mastering administrative and procedural tasks ensures you stay organized and get paid accurately.',
       },
       {
-        question:
-          'What type of sales script should a rookie focus on mastering first ("Shooting")?',
+        question: 'What should you do if your aerator breaks down on the route?',
         options: [
-          'A highly complex script with 20 advanced objection rebuttals',
-          'A basic script with a smooth introduction and proper "lawn split" quote',
-          'A telemarketing script',
-          'A script focused entirely on weather patterns',
+          'Sit down and wait for your manager',
+          'Go home for the day',
+          'Try to fix it yourself, call your manager, then canvass for sales while waiting for repair',
+          'Ask a homeowner to fix it',
+        ],
+        correct_index: 2,
+        explanation:
+          'Your only two jobs are selling and aerating. If you can\'t aerate, you should be selling. A breakdown is never an excuse to stop working.',
+      },
+      {
+        question: 'Why should bad weather excite you as a CPS worker?',
+        options: [
+          'Because you can go home early',
+          'Because competitors stay home, more people are inside to answer doors, and the bar to win a chair is lower',
+          'Because the aerator works better in snow',
+          'Because managers cancel morning meetings',
         ],
         correct_index: 1,
         explanation:
-          'Mastering the fundamentals of the basic script prevents you from getting overwhelmed early on.',
+          'Bad weather gives you a monopoly on the street, more people home, lower competition for chairs, and impressed homeowners.',
       },
       {
-        question:
-          'How many flags and poles should you check that you have before leaving the shop?',
+        question: 'Why is your 1st step of the day the most important?',
+        options: [
+          'Because it\'s always the most expensive lawn',
+          'Because the momentum from your first sale propels you through the entire day and sets your mentality',
+          'Because your manager only checks on you once',
+          'Because the first lawn is always the easiest',
+        ],
+        correct_index: 1,
+        explanation:
+          'Getting off zero early prevents the mentality drop that stalls many workers. The first step sets up your linking system for the whole day.',
+      },
+      {
+        question: 'What separates stars from average workers after the 1st sale?',
+        options: [
+          'Stars take a break to celebrate',
+          'Stars focus on money and relax once they have some "in the bank"',
+          'Stars create pressure to keep scoring more steps — no number is ever enough — while average workers release pressure once they have income',
+          'Stars switch to a different route',
+        ],
+        correct_index: 2,
+        explanation:
+          'Stars maintain "morning energy" all day by focusing on step count rather than money. Average workers ease up once they have income secured.',
+      },
+      {
+        question: 'How many flags and poles should you have before leaving the shop?',
         options: [
           '5 flags / 5 poles',
           '10 flags / 10 poles',
@@ -1104,20 +1509,43 @@ Preparation ties all these goals together. Check your gear before you leave the 
         ],
         correct_index: 1,
         explanation:
-          'Standard daily preparation requires starting the route with 10 flags and 10 poles ready to mark completed lawns.',
+          'Standard daily preparation requires 10 flags and 10 poles ready to mark completed and upcoming lawns.',
       },
       {
-        question:
-          'What should be your primary focus regarding sales expectations during your very first week?',
+        question: 'What is the key psychology behind End-of-Night Sales?',
         options: [
-          'Breaking the all-time company sales record',
-          'Focusing strictly on mastering the basics, setting personal goals, and giving max effort',
-          'Selling higher-priced upsells only',
-          'Only talking to people who already want the service',
+          'Homeowners feel bad for you being out late',
+          'Homeowners see your energy and hard work all day, want a neighbourhood deal, and respond to the urgency of "last one of the night"',
+          'Homeowners are too tired to say no',
+          'The aerator is quieter at night',
         ],
         correct_index: 1,
         explanation:
-          'Your first week is about building a foundation of operational and basic sales skills, not stressing over breaking records immediately.',
+          'The combination of visible hustle, social proof (flags everywhere), discounted pricing, and urgency creates a powerful close.',
+      },
+      {
+        question: 'How should you handle body soreness after your first or second day?',
+        options: [
+          'Take the rest of the week off to recover',
+          'Get up and go after it again — morning stiffness disappears after your 1st or 2nd lawn from elevated heart rate and adrenaline',
+          'Switch to a desk job within CPS',
+          'Only work half days until it passes',
+        ],
+        correct_index: 1,
+        explanation:
+          'The best cure for stiffness is to work through it. Consecutive days help your body adapt — taking days off actually makes it worse.',
+      },
+      {
+        question: 'If you don\'t line up your own End-of-Night Sale, what happens?',
+        options: [
+          'You get to go home early',
+          'You\'ll be aerating someone else\'s End-of-Night Sale instead of earning your own commission',
+          'Nothing — End-of-Night is optional',
+          'Your manager lines one up for you automatically',
+        ],
+        correct_index: 1,
+        explanation:
+          'Workers who don\'t hustle for their own End-of-Night end up doing the hard labour on someone else\'s sale. Line up your own to earn your own.',
       },
     ],
   },

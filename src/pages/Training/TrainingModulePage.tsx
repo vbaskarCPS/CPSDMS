@@ -21,6 +21,7 @@ import {
   TextSection,
   ImageSection,
   StoryboardSection,
+  VideoSection,
 } from '../../lib/trainingModules';
 
 type PageView = 'lesson' | 'quiz' | 'results';
@@ -311,6 +312,35 @@ const StoryboardRenderer: React.FC<{ section: StoryboardSection }> = ({ section 
 };
 
 /** Routes a LessonSection to the correct renderer */
+/** Renders an embedded YouTube video with heading and optional note */
+const VideoSectionRenderer: React.FC<{ section: VideoSection }> = ({ section }) => {
+  return (
+    <div className="mb-8">
+      {section.heading && (
+        <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
+          <div className="w-1 h-6 bg-red-500 rounded-full flex-shrink-0" />
+          {section.heading}
+        </h3>
+      )}
+      {section.description && (
+        <p className="text-gray-300 text-sm leading-relaxed mb-3">{section.description}</p>
+      )}
+      <div className="relative w-full overflow-hidden rounded-lg border border-gray-700" style={{ paddingBottom: '56.25%' }}>
+        <iframe
+          className="absolute inset-0 w-full h-full"
+          src={`https://www.youtube.com/embed/${section.youtubeId}?rel=0`}
+          title={section.heading}
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+        />
+      </div>
+      {section.note && (
+        <p className="text-amber-400/80 text-xs mt-2 italic">⚠️ {section.note}</p>
+      )}
+    </div>
+  );
+};
+
 const SectionRenderer: React.FC<{ section: LessonSection }> = ({ section }) => {
   switch (section.type) {
     case 'text':
@@ -319,6 +349,8 @@ const SectionRenderer: React.FC<{ section: LessonSection }> = ({ section }) => {
       return <ImageSectionRenderer section={section} />;
     case 'storyboard':
       return <StoryboardRenderer section={section} />;
+    case 'video':
+      return <VideoSectionRenderer section={section} />;
     default:
       return null;
   }
