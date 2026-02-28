@@ -24,6 +24,7 @@ import {
   Wind,
   Package,
   UserPlus,
+  GraduationCap,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
@@ -35,17 +36,21 @@ import { removeStorageItem } from '../../lib/localStorage';
 import { DailySessionData, SortOption, LogsheetSession, SeasonType, SEASON_CONFIGS, EQ_DIVISOR } from '../../types';
 import PayoutToday from '../Management/PayoutToday';
 import JobFairManager from './JobFairManager';
+import TrainingsTab from './TrainingsTab';
 
 const SessionCommandCenter: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   
-  const [activeTab, setActiveTab] = useState<'lifecycle' | 'payout' | 'jobfair'>(() => {
+  const [activeTab, setActiveTab] = useState<'lifecycle' | 'payout' | 'onboarding'>(() => {
     const tabParam = searchParams.get('tab');
     if (tabParam === 'payout') return 'payout';
-    if (tabParam === 'jobfair') return 'jobfair';
+    if (tabParam === 'onboarding') return 'onboarding';
     return 'lifecycle';
   });
+
+  // Sub-tab within Onboarding
+  const [onboardingSubTab, setOnboardingSubTab] = useState<'jobfairs' | 'trainings'>('jobfairs');
 
   // --- COMMAND CENTER CONTEXT (stored in state to avoid infinite loops) ---
   const [currentCC, setCurrentCC] = useState(() => commandCenterService.getCurrentCommandCenter());
@@ -126,8 +131,8 @@ const SessionCommandCenter: React.FC = () => {
   // Computed: Is imported from Google Sheets
   const isFromSheets = importMeta?.source === 'sheets';
 
-  // Computed: Has job fairs enabled
-  const hasJobFairs = currentCC?.jobFairsEnabled || false;
+  // Computed: Has job fairs / onboarding enabled
+  const hasOnboarding = currentCC?.jobFairsEnabled || false;
 
   // Load session function (memoized to avoid recreation)
   const loadSession = useCallback(async () => {
@@ -176,7 +181,7 @@ const SessionCommandCenter: React.FC = () => {
     }
   }, [currentCC?.id, loadSession]);
 
-  const handleTabChange = (tab: 'lifecycle' | 'payout' | 'jobfair') => {
+  const handleTabChange = (tab: 'lifecycle' | 'payout' | 'onboarding') => {
     setActiveTab(tab);
     setSearchParams({ tab });
   };
@@ -435,7 +440,6 @@ const SessionCommandCenter: React.FC = () => {
 
   // --- SUPER ADMIN: Exit impersonation ---
   const handleExitImpersonation = () => {
-    // Keep super admin mode but navigate back to CC list
     navigate('/super-admin');
   };
 
@@ -576,15 +580,16 @@ const SessionCommandCenter: React.FC = () => {
               >
                 Payout Today
               </button>
-              {hasJobFairs && (
+              {/* ONBOARDING TAB (replaces Job Fairs, shown when jobFairsEnabled) */}
+              {hasOnboarding && (
                 <button
-                  onClick={() => handleTabChange('jobfair')}
+                  onClick={() => handleTabChange('onboarding')}
                   className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1 ${
-                    activeTab === 'jobfair' ? 'bg-purple-600 text-white shadow' : 'text-gray-400 hover:text-white'
+                    activeTab === 'onboarding' ? 'bg-purple-600 text-white shadow' : 'text-gray-400 hover:text-white'
                   }`}
                 >
                   <UserPlus size={14} />
-                  Job Fairs
+                  Onboarding
                 </button>
               )}
             </div>
@@ -1110,11 +1115,42 @@ const SessionCommandCenter: React.FC = () => {
           </div>
         )}
 
-        {/* --- VIEW 3: JOB FAIRS --- */}
-        {activeTab === 'jobfair' && hasJobFairs && (
+        {/* --- VIEW 3: ONBOARDING (Job Fairs + Trainings sub-tabs) --- */}
+        {activeTab === 'onboarding' && hasOnboarding && (
           <div className="animate-fade-in">
+            {/* Sub-tab switcher */}
+            <div className="flex gap-2 mb-4">
+              <button
+                onClick={() => setOnboardingSubTab('jobfairs')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  onboardingSubTab === 'jobfairs'
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:text-white border border-gray-700'
+                }`}
+              >
+                <UserPlus size={16} />
+                Job Fairs
+              </button>
+              <button
+                onClick={() => setOnboardingSubTab('trainings')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  onboardingSubTab === 'trainings'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:text-white border border-gray-700'
+                }`}
+              >
+                <GraduationCap size={16} />
+                Trainings
+              </button>
+            </div>
+
             <div className="bg-gray-800 rounded-xl border border-gray-700 min-h-[500px] flex flex-col overflow-hidden">
-              <JobFairManager commandCenter={currentCC} />
+              {onboardingSubTab === 'jobfairs' && (
+                <JobFairManager commandCenter={currentCC} />
+              )}
+              {onboardingSubTab === 'trainings' && (
+                <TrainingsTab commandCenter={currentCC} />
+              )}
             </div>
           </div>
         )}

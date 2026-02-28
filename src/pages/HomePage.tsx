@@ -5,6 +5,7 @@ import { KeyRound, AlertCircle, Lock, GraduationCap } from 'lucide-react';
 import { sessionService } from '../lib/sessionService';
 import { commandCenterService, isSuperAdminCredentials } from '../lib/commandCenterService';
 import { campaignService } from '../lib/campaignService';
+import { contractorService } from '../lib/contractorService';
 import { setStorageItem } from '../lib/localStorage';
 import { isTrainingCredentials, TRAINING_WORKER } from '../lib/trainingData';
 import { trainingService } from '../lib/trainingService';
@@ -63,7 +64,7 @@ const HomePage: React.FC = () => {
         return;
       }
 
-      // 4. Check Worker
+      // 4. Check Worker (active logsheet session required)
       const worker = await sessionService.authenticateWorker(username, password);
       if (worker) {
         trainingService.disableTrainingMode();
@@ -73,7 +74,46 @@ const HomePage: React.FC = () => {
         return;
       }
 
-      // 5. Check Campaign Manager (rep_code as username)
+      // 5. Check if this contractor_id has an active logsheet session in ANY command center.
+      //    This handles the "road trip" rule: if they're active somewhere, go to logsheet.
+      //    (authenticateWorker already checks the current CC; this catches cross-CC sessions.)
+      const activeCCId = await contractorService.findActiveSessionAcrossAllCCs(username);
+      if (activeCCId) {
+        // They have an active session in another CC — direct them to logsheet.
+        // The logsheet page itself will load their session correctly.
+        trainingService.disableTrainingMode();
+        // We need to set the CC context so logsheet can find the session
+        const activeCC = await commandCenterService.getCommandCenterById(activeCCId);
+        if (activeCC) {
+          commandCenterService.setCurrentCommandCenter(activeCC);
+        }
+        // Re-authenticate as worker in that CC context
+        const roamingWorker = await sessionService.authenticateWorker(username, password);
+        if (roamingWorker) {
+          setStorageItem('current_user', roamingWorker);
+          await sessionService.startLogsheetSession(roamingWorker.contractorId);
+          navigate('/logsheet');
+          return;
+        }
+      }
+
+      // 6. No active session anywhere — check the contractors table for training access.
+      //    Password = first name (case-insensitive).
+      const contractor = await contractorService.authenticateContractor(username, password);
+      if (contractor) {
+        trainingService.disableTrainingMode();
+        contractorService.setCurrentTrainingContractor({
+          contractorId: contractor.contractorId,
+          firstName: contractor.firstName,
+          lastName: contractor.lastName,
+          commandCenterId: contractor.commandCenterId,
+          region: contractor.region,
+        });
+        navigate('/training');
+        return;
+      }
+
+      // 7. Check Campaign Manager (rep_code as username)
       const campaignAuth = await campaignService.authenticateCampaignManager(username, password);
       if (campaignAuth) {
         trainingService.disableTrainingMode();
@@ -100,9 +140,9 @@ const HomePage: React.FC = () => {
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="mb-4">
-            <img 
-              src={LOGO_URL} 
-              alt="Company Logo" 
+            <img
+              src={LOGO_URL}
+              alt="Company Logo"
               className="h-36 mx-auto"
             />
           </div>
@@ -132,7 +172,7 @@ const HomePage: React.FC = () => {
                   </div>
                 </div>
                 <p className="text-gray-400 text-xs mt-2">
-                  Your payout has been processed and your logsheet is closed for today. 
+                  Your payout has been processed and your logsheet is closed for today.
                   Great work! See you next time.
                 </p>
               </div>

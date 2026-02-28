@@ -61,7 +61,7 @@ export interface ImportMeta {
   dateTab?: string;
   sheetsExported?: boolean;
   seasonType?: SeasonType;
-  productCostPercent?: number; // Percentage (0-100), e.g., 25 means 25% product cost deduction
+  productCostPercent?: number;
 }
 
 class GoogleSheetsService {
@@ -167,7 +167,7 @@ class GoogleSheetsService {
     this.accessToken = null;
   }
 
-  // --- HELPER METHODS ---
+  // --- PRIVATE HELPER METHODS ---
 
   private async sheetsGet(spreadsheetId: string, range: string): Promise<any[][]> {
     if (!this.accessToken) {
@@ -278,9 +278,6 @@ class GoogleSheetsService {
     return `${lastPart}${firstPart}`;
   }
 
-  /**
-   * Parse service flags from row data (for seasons that use them)
-   */
   private parseServiceFlags(row: any[], colConfig: typeof FEED_COLUMNS['mapping']): ServiceFlags {
     return {
       aeration: isServiceIncluded(row[colConfig.serviceAeration]),
@@ -291,9 +288,8 @@ class GoogleSheetsService {
     };
   }
 
-  /**
-   * Convert ServiceFlags to display string like "(ADFS)" or "(ADF)"
-   */
+  // --- PUBLIC UTILITY METHODS ---
+
   public serviceFlagsToString(services?: ServiceFlags): string {
     if (!services) return '';
     
@@ -323,7 +319,17 @@ class GoogleSheetsService {
   }
 
   /**
-   * Import session data from Google Sheets
+   * Read a range from the Workerbook spreadsheet.
+   * Used by TrainingsTab to sync contractors.
+   * @param range - A1 notation, e.g. "A:K"
+   */
+  public async readWorkerbookRange(range: string): Promise<any[][]> {
+    const config = this.getConfig();
+    return this.sheetsGet(config.spreadsheets.workerbook, range);
+  }
+
+  /**
+   * Import session data from Google Sheets.
    * @param dateTab - The date tab name (e.g., "Feb01")
    * @param seasonType - The season type ('aeration' or 'lawn_rejuv')
    */
@@ -343,11 +349,8 @@ class GoogleSheetsService {
       throw new Error(`Tab "${dateTab}" not found in Workerbook. Please check the tab name.`);
     }
 
-    // Get the feed range (unified for all seasons)
     const feedRange = getFeedRange(seasonType);
     const feedColumns = getFeedColumnsConfig(seasonType);
-    
-    // For team seasons, we need to read column I (Teams) from workerbook
     const workerbookRange = `'${dateTab}'!A:K`;
 
     const [routesData, bookingsData, workersData, managersData] = await Promise.all([
@@ -435,8 +438,6 @@ class GoogleSheetsService {
       const alumniRate = parseFloat(row[workerColMap.alumniRate]) || 0;
       const silverRate = parseFloat(row[workerColMap.silverRate]) || 0;
       const managerName = row[workerColMap.managerName]?.toString().trim() || '';
-      
-      // Team ID (only relevant for lawn_rejuv season)
       const teamId = isTeamSeason ? row[workerColMap.teamId]?.toString().trim() || '' : '';
 
       if (!contractorId) {
@@ -467,7 +468,7 @@ class GoogleSheetsService {
       const teamMap = new Map<string, Worker[]>();
       
       workers.forEach(w => {
-        const tid = w.teamId || w.contractorId; // Solo workers use their own ID as team
+        const tid = w.teamId || w.contractorId;
         if (!teamMap.has(tid)) {
           teamMap.set(tid, []);
         }
@@ -491,7 +492,6 @@ class GoogleSheetsService {
 
       if (!routeNum) continue;
 
-      // Parse service flags only for seasons that use them
       let services: ServiceFlags | undefined;
       if (useServiceFlags) {
         services = this.parseServiceFlags(row, colMap);
@@ -515,7 +515,7 @@ class GoogleSheetsService {
         'Completed': undefined,
         isPrebooked: true,
         sort_order: i - 2,
-        _sourceRow: i + 1, // Store the actual spreadsheet row number (1-indexed)
+        _sourceRow: i + 1,
         commandCenterId: ccId || undefined,
         services,
       };
@@ -523,7 +523,6 @@ class GoogleSheetsService {
       pendingBookings.push(booking);
     }
 
-    // Return with import metadata embedded
     const result: DailySessionData = { 
       date, 
       managers, 
@@ -535,8 +534,6 @@ class GoogleSheetsService {
       teamCarts,
     };
 
-    // Add import metadata (will be stored in session)
-    // Include default product cost percent from season config
     (result as any)._importMeta = {
       source: 'sheets',
       dateTab: dateTab,
@@ -550,19 +547,13 @@ class GoogleSheetsService {
 
   // --- WRITE OPERATIONS ---
 
-  /**
-   * Update completed bookings in Feed Placeholder
-   * Uses _sourceRow for reliable row-based updates
-   * Writes "Cancelled" to date column for cancelled bookings
-   * Service flags (L-P) are only written for seasons that use them
-   */
   public async updateCompletedBookings(
     bookings: Array<{
-      _sourceRow: number;          // Original row number from import
-      dateCompleted: string;       // Date string OR "Cancelled"
-      contractorId: string;        // Can be comma-separated for teams
-      services?: ServiceFlags;     // For lawn_rejuv
-      isCancelled?: boolean;       // If true, writes "Cancelled" to date column
+      _sourceRow: number;
+      dateCompleted: string;
+      contractorId: string;
+      services?: ServiceFlags;
+      isCancelled?: boolean;
     }>,
     seasonType: SeasonType = 'aeration'
   ): Promise<number> {
@@ -574,7 +565,6 @@ class GoogleSheetsService {
     for (const booking of bookings) {
       const rowNum = booking._sourceRow;
       
-      // Skip if no valid source row
       if (!rowNum || rowNum < 1) {
         console.warn('Skipping booking with invalid _sourceRow:', booking);
         continue;
@@ -584,7 +574,6 @@ class GoogleSheetsService {
       const contractorValue = booking.isCancelled ? '' : booking.contractorId;
 
       if (useServiceFlags && booking.services && !booking.isCancelled) {
-        // Seasons with service flags: Update L-R (service flags + date + contractor)
         const values = [
           booking.services.aeration ? 'x' : '',
           booking.services.dethatch ? 'x' : '',
@@ -599,7 +588,6 @@ class GoogleSheetsService {
           values: [values],
         });
       } else {
-        // Seasons without service flags OR cancelled: Only update Q-R (date + contractor)
         updates.push({
           range: `'${SHEET_TABS.feedPlaceholder}'!Q${rowNum}:R${rowNum}`,
           values: [[dateValue, contractorValue]],
@@ -614,10 +602,6 @@ class GoogleSheetsService {
     return updates.length;
   }
 
-  /**
-   * Append accounts (Sales/Upgrades)
-   * Includes service flags notation for lawn_rejuv
-   */
   public async appendAccounts(
     accounts: Array<{
       routeNumber: string;
@@ -636,7 +620,7 @@ class GoogleSheetsService {
       paymentDetails: string;
       expiry: string;
       cvc: string;
-      services?: ServiceFlags; // For lawn_rejuv
+      services?: ServiceFlags;
     }>
   ): Promise<void> {
     if (accounts.length === 0) return;
@@ -644,7 +628,6 @@ class GoogleSheetsService {
     const config = this.getConfig();
 
     const rows = accounts.map(a => {
-      // Add service flags to notes if present
       const servicesStr = this.serviceFlagsToString(a.services);
       const notesWithServices = servicesStr 
         ? `${a.notes} ${servicesStr}`.trim() 
@@ -677,10 +660,6 @@ class GoogleSheetsService {
     );
   }
 
-  /**
-   * Append logsheets (completed jobs)
-   * Includes service flags notation for lawn_rejuv
-   */
   public async appendLogsheets(
     logsheets: Array<{
       routeNumber: string;
@@ -695,7 +674,7 @@ class GoogleSheetsService {
       notes: string;
       price: number;
       paymentType: string;
-      contractorName: string; // Can include multiple names for teams
+      contractorName: string;
       services?: ServiceFlags;
     }>
   ): Promise<void> {
@@ -704,7 +683,6 @@ class GoogleSheetsService {
     const config = this.getConfig();
 
     const rows = logsheets.map(l => {
-      // Add service flags to notes if present
       const servicesStr = this.serviceFlagsToString(l.services);
       const notesWithServices = servicesStr 
         ? `${l.notes} ${servicesStr}`.trim() 
@@ -734,11 +712,6 @@ class GoogleSheetsService {
     );
   }
 
-  /**
-   * Append payout stats to Workerbook
-   * FIXED: Uses correct property names and 34-column structure (A-AH)
-   * Changed insertDataOption to INSERT_ROWS to prevent horizontal append
-   */
   public async appendPayoutStats(
     dateTab: string,
     stats: Array<{
@@ -758,7 +731,6 @@ class GoogleSheetsService {
       prodPrepaidSplit: number;
       prodGross: number;
       prodPayable: number;
-      // Accept both property names for totalEQ
       totalEQ?: number;
       teamTotalEQ?: number;
       assignedEQ?: number;
@@ -770,7 +742,6 @@ class GoogleSheetsService {
       upsellPrepaid: number;
       upsellGross: number;
       upsellPayable: number;
-      // Accept both property names for payoutRate
       payoutRate?: number;
       totalPayoutRate?: number;
       productionComm: number;
@@ -780,7 +751,6 @@ class GoogleSheetsService {
       deductions: number;
       bonuses: number;
       finalPay: number;
-      // Team fields (optional, not written to spreadsheet)
       teamId?: string;
       equivSplitPercent?: number;
       upsellSplitPercent?: number;
@@ -790,53 +760,48 @@ class GoogleSheetsService {
 
     const config = this.getConfig();
 
-    // Build rows matching the 34-column header structure (A-AH)
     const rows = stats.map(s => {
-      // Handle both property names for totalEQ: prefer assignedEQ, then teamTotalEQ, then totalEQ
       const eqValue = s.assignedEQ ?? s.teamTotalEQ ?? s.totalEQ ?? 0;
-      
-      // Handle both property names for payoutRate
       const rateValue = s.totalPayoutRate ?? s.payoutRate ?? 0;
       
       return [
-        dateTab,           // A: Date
-        s.contractorId,    // B: Contractor ID
-        s.firstName,       // C: First Name
-        s.lastName,        // D: Last Name
-        s.manager,         // E: Manager
-        s.stepCount,       // F: Step Count
-        s.iosCount,        // G: IOSCount
-        s.prodBilled,      // H: prodBilled
-        s.prodCash,        // I: prodCash
-        s.prodCheque,      // J: prodCheque
-        s.prodCreditCard,  // K: prodCreditCard
-        s.prodETransfer,   // L: prodETransfer
-        s.prodFlats,       // M: ProdFlats
-        s.prodPrepaid,     // N: prodPrepaid
-        s.prodPrepaidSplit,// O: prodPrepaidSplit
-        s.prodGross,       // P: ProdGross
-        s.prodPayable,     // Q: ProdPayable
-        eqValue,           // R: totalEQ
-        s.upsellCount,     // S: upsellCount
-        s.upsellCash,      // T: upsellCash
-        s.upsellCheque,    // U: upsellCheque
-        s.upsellCreditCard,// V: upsellCreditCard
-        s.upsellETransfer, // W: upsellETransfer
-        s.upsellPrepaid,   // X: upsellPrepaid
-        s.upsellGross,     // Y: upsellGross
-        s.upsellPayable,   // Z: upsellPayable
-        rateValue,         // AA: Payout rate
-        s.productionComm,  // AB: Production Comm.
-        s.upsellComm,      // AC: Upsell Commission
-        s.iosComm,         // AD: IOS Commission
-        s.machineRental,   // AE: Machine Rental
-        s.deductions,      // AF: Deductions
-        s.bonuses,         // AG: Bonuses
-        s.finalPay,        // AH: Final Pay
+        dateTab,            // A: Date
+        s.contractorId,     // B: Contractor ID
+        s.firstName,        // C: First Name
+        s.lastName,         // D: Last Name
+        s.manager,          // E: Manager
+        s.stepCount,        // F: Step Count
+        s.iosCount,         // G: IOSCount
+        s.prodBilled,       // H: prodBilled
+        s.prodCash,         // I: prodCash
+        s.prodCheque,       // J: prodCheque
+        s.prodCreditCard,   // K: prodCreditCard
+        s.prodETransfer,    // L: prodETransfer
+        s.prodFlats,        // M: ProdFlats
+        s.prodPrepaid,      // N: prodPrepaid
+        s.prodPrepaidSplit, // O: prodPrepaidSplit
+        s.prodGross,        // P: ProdGross
+        s.prodPayable,      // Q: ProdPayable
+        eqValue,            // R: totalEQ
+        s.upsellCount,      // S: upsellCount
+        s.upsellCash,       // T: upsellCash
+        s.upsellCheque,     // U: upsellCheque
+        s.upsellCreditCard, // V: upsellCreditCard
+        s.upsellETransfer,  // W: upsellETransfer
+        s.upsellPrepaid,    // X: upsellPrepaid
+        s.upsellGross,      // Y: upsellGross
+        s.upsellPayable,    // Z: upsellPayable
+        rateValue,          // AA: Payout rate
+        s.productionComm,   // AB: Production Comm.
+        s.upsellComm,       // AC: Upsell Commission
+        s.iosComm,          // AD: IOS Commission
+        s.machineRental,    // AE: Machine Rental
+        s.deductions,       // AF: Deductions
+        s.bonuses,          // AG: Bonuses
+        s.finalPay,         // AH: Final Pay
       ];
     });
 
-    // Use the correct range matching the header (A:AH = 34 columns)
     await this.sheetsAppend(
       config.spreadsheets.workerbook,
       `'${SHEET_TABS.payoutStats}'!${PAYOUT_STATS_COLUMNS.range}`,
@@ -844,14 +809,6 @@ class GoogleSheetsService {
     );
   }
 
-  /**
-   * Append job fair applicants to the Applicants tab in Workerbook
-   * Column structure:
-   * A: Shuttle (blank), B: CN # (blank), C: First Name, D: Last Name, E: Cell Phone,
-   * F: Next Day (blank), G: Status (blank), H: Alt. Phone, I: Email Address,
-   * J: Notes, K: Address, L: City, M: Postal Code, N: JF Date, O: Age,
-   * P: SIN #, Q: DL #, R: Health Card #, S: Passport #, T: Rating
-   */
   public async appendApplicants(applicants: any[][]): Promise<void> {
     if (applicants.length === 0) return;
 

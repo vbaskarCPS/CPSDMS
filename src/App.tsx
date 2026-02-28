@@ -24,6 +24,10 @@ const ApplicantForm = React.lazy(() => import('./pages/Public/ApplicantForm'));
 const CampaignCreator = React.lazy(() => import('./pages/SuperAdmin/CampaignCreator'));
 const DialerPage = React.lazy(() => import('./pages/Dialer/DialerPage'));
 
+// Training pages
+const TrainingPortal = React.lazy(() => import('./pages/Training/TrainingPortal'));
+const TrainingModulePage = React.lazy(() => import('./pages/Training/TrainingModulePage'));
+
 // Loading fallback
 const LoadingFallback = () => (
   <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -60,6 +64,10 @@ function App() {
         <Route path="/logsheet" element={<Logsheet />} />
         <Route path="/logsheet/new" element={<NewJob />} />
         <Route path="/job-detail/:jobId" element={<JobDetail />} />
+
+        {/* Training Routes (contractors with no active session) */}
+        <Route path="/training" element={<TrainingPortal />} />
+        <Route path="/training/:moduleId" element={<TrainingModulePage />} />
 
         {/* Dialer Route (Campaign Managers land here after login) */}
         <Route path="/dialer" element={<DialerPage />} />
