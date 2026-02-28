@@ -32,6 +32,7 @@ type PageView = 'lesson' | 'quiz' | 'results';
 
 /** Renders a plain text section with optional heading */
 const TextSectionRenderer: React.FC<{ section: TextSection }> = ({ section }) => {
+  const navigate = useNavigate();
   const paragraphs = section.body.split('\n\n').filter((p) => p.trim().length > 0);
 
   return (
@@ -64,6 +65,15 @@ const TextSectionRenderer: React.FC<{ section: TextSection }> = ({ section }) =>
           );
         })}
       </div>
+      {section.linkTo && (
+        <button
+          onClick={() => navigate(section.linkTo!)}
+          className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg transition-colors"
+        >
+          {section.linkLabel || 'Open'}
+          <ChevronRight size={16} />
+        </button>
+      )}
     </div>
   );
 };

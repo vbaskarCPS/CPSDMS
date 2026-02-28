@@ -22,6 +22,8 @@ export interface TextSection {
   type: 'text';
   heading?: string;
   body: string; // paragraphs separated by \n\n
+  linkTo?: string;      // optional internal route path, e.g. '/logsheet'
+  linkLabel?: string;   // button label, e.g. 'Open Training Log Sheet'
 }
 
 export interface ImageSection {
@@ -1378,7 +1380,20 @@ Many workers assume (wrongly) that once they've succeeded at the basic level, th
 
 Before you leave the shop, check your gear: 10 flags, 10 poles, your folder (with route map and log sheet), pouch, pen, and your knapsack with food and drinks. Ensure you are wearing your CPS shirt. Most importantly, communicate — never leave the route without authorization, and always work with your team for load-ins and load-outs.
 
-Your All-Star Preparation checklist: Folder stocked with route map, log sheet, 5 receipts, and 2 upsell contracts. Sales glossy for your pitch. Pouch loaded for collecting cash and cheques. At least one working pen. Knapsack with food, drinks, sunscreen, extra socks, and rain gear if needed. 10 flags and 10 poles. CPS shirt on, clean and professional.`,
+Your All-Star Preparation checklist: Folder stocked with route map, log sheet, 5 receipts, and 2 upsell contracts. Sales glossy for your pitch. Pouch loaded for collecting cash and cheques. At least one working pen. Knapsack with food, drinks, sunscreen, extra socks, and rain gear if needed. 10 flags and 10 poles. CPS shirt on, clean and professional.
+
+CPS uses a digital log sheet that you'll use every day on the route. You can practice with it right now in Training Mode — log in with username "training" and password "training" to access a sandbox log sheet loaded with sample prebooks. Try completing a job, logging a new sale, and reviewing your stats so you're comfortable before your first real day.`,
+      },
+      {
+        type: 'text',
+        heading: '🖥️ Try the Digital Log Sheet — Training Mode',
+        body: `Ready to practice? The CPS Digital Log Sheet has a built-in Training Mode that lets you experience the full workflow without affecting any real data.
+
+How to access it: Go to the Log Sheet section of the app and log in with username: training / password: training. You'll be loaded in as "Super Star" with pre-booked customers on a practice route (Wayne Gretzky, Sidney Crosby, Connor McDavid, and more). Practice completing prebooks, adding new cold sales, handling different payment types (Cash, Cheque, E-Transfer, Credit Card, Prepaid), and watch how your daily stats update in real time.
+
+This is the exact same interface you'll use on the job — the only difference is that Training Mode uses sample data and resets when you log out. Get comfortable with it now so your first real day is smooth and stress-free.`,
+        linkTo: '/logsheet',
+        linkLabel: '📋 Open Digital Log Sheet',
       },
       {
         type: 'text',
