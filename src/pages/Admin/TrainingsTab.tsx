@@ -72,7 +72,8 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
         if (!success) throw new Error('Failed to authenticate with Google Sheets');
       }
 
-      const rows = await googleSheetsService.readWorkerbookRange('A:K');
+      // Read from the Contractors tab, columns A through S
+      const rows = await googleSheetsService.readWorkerbookRange(WORKERBOOK_COLUMNS.syncRange);
       const dataRows = rows.slice(WORKERBOOK_COLUMNS.dataStartRow);
 
       const result = await contractorService.syncContractorsFromRows(
@@ -168,8 +169,8 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
         {syncResult && (
           <div className="mt-3 p-3 bg-green-900/20 border border-green-700/50 rounded-lg text-xs text-green-300 flex items-center gap-2">
             <CheckCircle size={14} />
-            Sync complete: {syncResult.added} new contractor{syncResult.added !== 1 ? 's' : ''} added,{' '}
-            {syncResult.skipped} already existed.
+            Sync complete: {syncResult.added} contractor{syncResult.added !== 1 ? 's' : ''} synced,{' '}
+            {syncResult.skipped} skipped (no CN#).
           </div>
         )}
 

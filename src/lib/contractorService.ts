@@ -1,6 +1,7 @@
 // src/lib/contractorService.ts
 import { supabase } from './supabase';
 import { QUIZ_PASS_THRESHOLD } from './trainingModules';
+import { WORKERBOOK_COLUMNS, parseNextDayValue } from './googleSheetsConfig';
 
 // --- TYPES ---
 
@@ -10,6 +11,9 @@ export interface Contractor {
   firstName: string;
   lastName: string;
   cellPhone?: string;
+  email?: string;
+  shuttle?: string;
+  firstDayBooked?: string;  // e.g. "Mar26" or null
   commandCenterId: string;
   region?: string;
   createdAt?: string;
@@ -42,6 +46,9 @@ export interface TrainingContractor {
   lastName: string;
   commandCenterId: string;
   region?: string;
+  email?: string;
+  shuttle?: string;
+  firstDayBooked?: string;
 }
 
 // Per-worker summary for the CC admin view
@@ -114,18 +121,21 @@ class ContractorService {
   // -------------------------------------------------------------------
 
   /**
-   * Given rows read from the Contractors/Workerbook tab,
+   * Given rows read from the Contractors tab (range A:S),
    * upsert new contractors into Supabase for this CC.
    * Returns counts of { added, skipped }.
    *
-   * Expected row format (0-indexed columns):
-   *   col 1 = CN# (contractor_id)
-   *   col 2 = First Name
-   *   col 3 = Last Name
-   *   col 4 = Cell Phone
+   * Expected column layout (0-indexed from column A):
+   *   col 1  (B) = Shuttle
+   *   col 2  (C) = CN# (contractor_id)
+   *   col 3  (D) = First Name
+   *   col 4  (E) = Last Name
+   *   col 5  (F) = Cell Phone
+   *   col 12 (M) = Next Day (first day booked, e.g. "To: Mar26")
+   *   col 18 (S) = Email Address
    *
-   * Rows with no contractor_id are skipped.
-   * Existing contractor_ids (per CC) are skipped (no overwrite).
+   * Rows with no contractor_id (CN#) are skipped.
+   * Existing contractor_ids (per CC) are updated with latest data.
    */
   public async syncContractorsFromRows(
     rows: any[][],
@@ -135,13 +145,17 @@ class ContractorService {
     let added = 0;
     let skipped = 0;
 
+    const colMap = WORKERBOOK_COLUMNS.mapping;
     const records: any[] = [];
 
     for (const row of rows) {
-      const contractorId = row[1]?.toString().trim();
-      const firstName = row[2]?.toString().trim();
-      const lastName = row[3]?.toString().trim();
-      const cellPhone = row[4]?.toString().trim() || null;
+      const contractorId = row[colMap.contractorId]?.toString().trim();
+      const firstName = row[colMap.firstName]?.toString().trim();
+      const lastName = row[colMap.lastName]?.toString().trim();
+      const cellPhone = row[colMap.cellPhone]?.toString().trim() || null;
+      const shuttle = row[colMap.shuttle]?.toString().trim() || null;
+      const email = row[colMap.email]?.toString().trim() || null;
+      const firstDayBooked = parseNextDayValue(row[colMap.nextDay]);
 
       if (!contractorId || !firstName) {
         skipped++;
@@ -153,6 +167,9 @@ class ContractorService {
         first_name: firstName,
         last_name: lastName || '',
         cell_phone: cellPhone,
+        shuttle: shuttle,
+        email: email,
+        first_day_booked: firstDayBooked,
         command_center_id: commandCenterId,
         region: region || null,
       });
@@ -160,12 +177,11 @@ class ContractorService {
 
     if (records.length === 0) return { added: 0, skipped };
 
-    // Upsert — on conflict (contractor_id, command_center_id) do nothing
+    // Upsert — on conflict (contractor_id, command_center_id) update with latest data
     const { data, error } = await supabase
       .from('contractors')
       .upsert(records, {
         onConflict: 'contractor_id,command_center_id',
-        ignoreDuplicates: true,
       })
       .select();
 
@@ -427,6 +443,9 @@ class ContractorService {
       firstName: data.first_name,
       lastName: data.last_name,
       cellPhone: data.cell_phone,
+      email: data.email,
+      shuttle: data.shuttle,
+      firstDayBooked: data.first_day_booked,
       commandCenterId: data.command_center_id,
       region: data.region,
       createdAt: data.created_at,

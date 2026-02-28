@@ -16,6 +16,7 @@ export const SHEET_TABS = {
   accounts: 'Accounts',
   logsheets: 'Logsheets',
   payoutStats: 'Payout Stats',
+  contractors: 'Contractors',
 };
 
 // --- FEED PLACEHOLDER COLUMN MAPPINGS ---
@@ -63,22 +64,37 @@ export const LAWN_REJUV_FEED_COLUMNS = FEED_COLUMNS;
 
 // --- WORKERBOOK COLUMN MAPPINGS ---
 
-// Standard workerbook columns (for worker data)
+// Contractors tab columns (for contractor sync + worker import)
+// Matches the actual "Contractors" tab layout:
+//   A = (row nums/empty), B = Shuttle, C = CN#, D = First Name,
+//   E = Last Name, F = Cell Phone, G = Alm Inc, H = Slv Inc,
+//   I = Manager, J = Team, K = Conf, L = Show, M = Next Day,
+//   N = Status, O = A/R, P = Days, Q = NS, R = Alt. Phone,
+//   S = Email Address
 export const WORKERBOOK_COLUMNS = {
   // Row index 0 is header row
   dataStartRow: 2, // Data starts at row 3 (index 2)
+  syncRange: `'Contractors'!A:S`, // Range for contractor sync (includes email in col S)
   mapping: {
-    // Column indices
-    contractorId: 1,    // B
-    firstName: 2,       // C
-    lastName: 3,        // D
-    cellPhone: 4,       // E
-    alumniRate: 5,      // F
-    silverRate: 6,      // G
-    managerName: 7,     // H
-    teamId: 8,          // I (Teams column - only used in lawn_rejuv)
-    // ... other columns
-    showFlag: 10,       // K (Show column - 'x' means active)
+    // Column indices (0-based, where 0 = Column A)
+    shuttle: 1,         // B - Shuttle point number
+    contractorId: 2,    // C - CN# (e.g. H1001)
+    firstName: 3,       // D - First Name
+    lastName: 4,        // E - Last Name
+    cellPhone: 5,       // F - Cell Phone
+    alumniRate: 6,      // G - Alm Inc
+    silverRate: 7,      // H - Slv Inc
+    managerName: 8,     // I - Manager
+    teamId: 9,          // J - Team (only used in lawn_rejuv)
+    // K = Conf (not used)
+    showFlag: 11,       // L - Show column ('x' means active)
+    nextDay: 12,        // M - Next Day (first day booked, e.g. "To: Mar26")
+    // N = Status (not used in sync)
+    // O = A/R (not used in sync)
+    // P = Days (not used in sync)
+    // Q = NS (not used in sync)
+    // R = Alt. Phone (not used in sync)
+    email: 18,          // S - Email Address
   },
 };
 
@@ -156,6 +172,38 @@ export const isServiceIncluded = (value: any): boolean => {
  */
 export const seasonUsesServiceFlags = (seasonType: SeasonType): boolean => {
   return seasonType === 'lawn_rejuv';
+};
+
+/**
+ * Parse the "Next Day" column value into a first-day-booked date string or null.
+ * Examples:
+ *   "To: Mar26"  → "Mar26"
+ *   "To: Apr02"  → "Apr02"
+ *   "To: TNB"    → null (not booked)
+ *   "To: BC"     → null (not booked)
+ *   ""           → null
+ *
+ * Logic: strip "To: " prefix, then check if remainder matches MmmDD pattern.
+ * If it's a date, return it. If it's text (TNB, BC, etc.), return null.
+ */
+export const parseNextDayValue = (value: any): string | null => {
+  if (!value) return null;
+
+  let str = String(value).trim();
+
+  // Strip the "To: " or "To:" prefix (case-insensitive)
+  str = str.replace(/^to:\s*/i, '').trim();
+
+  if (!str) return null;
+
+  // Check if it matches a date pattern: MmmDD (e.g. Mar26, Apr02, Jan01)
+  const datePattern = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\d{1,2}$/i;
+  if (datePattern.test(str)) {
+    return str;
+  }
+
+  // Anything else (TNB, BC, etc.) = not booked
+  return null;
 };
 
 // Dynamic config based on current command center
