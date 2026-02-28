@@ -1353,7 +1353,7 @@ Keep in mind: all of the top stars get no's every day! Some of the best workers 
         heading: 'Welcome to Training Camp',
         body: `Your first week on the job is like a professional training camp. It's perfectly normal to feel nervous or overwhelmed by the physical work and the reality of sales rejection. To ensure you succeed, focus strictly on mastering the basics rather than worrying about breaking sales records. You are entering the Professional Aerating League, and you need to build a solid foundation.
 
-The focus for your first week is to learn the basic systems: 5-Steps-to-High-Steps, Linking, End-of-Night Sales, machine training, and basic sales scripts. With these basic systems firmly in your toolbox, you will be able to start generating very good income. Set personal goals for the day, bring a great attitude, and give maximum effort.`,
+The focus for your first week is to learn the basic systems: 5-Steps-to-High-Steps, Linking, machine training, and basic sales scripts. With these basic systems firmly in your toolbox, you will be able to start generating very good income. Set personal goals for the day, bring a great attitude, and give maximum effort.`,
       },
       {
         type: 'text',
@@ -1430,15 +1430,6 @@ If you're ever lonely out there, keep in mind that you're only a few doors away 
 You must decide when you get dropped off that you will maintain the same level of intensity at every door until you get that 1st sale. Since timeline is important to your mentality, there must be urgency in your voice. Be willing to give a homeowner a great deal if it's going to get you on a lawn and off a zero. Your first step is setting you up for a huge day — the homeowner should be rewarded for helping keep your mentality in check.
 
 And your 2nd most important step? That's right — your 2nd step. Top stars immediately link from their first sale, while average workers can go 2–3 hours before finding sale #2. The difference? Mental pressure. Stars create pressure to continually get more steps — no number is ever enough. Average workers create pressure around money, so once they have some "in the bank," they release the pressure and results drop. Focus on scoring more steps, not on the money, and the money will follow.`,
-      },
-      {
-        type: 'text',
-        heading: 'End-of-Night Sales — The Chair Maker',
-        body: `End-of-Night Sales have been the reason top CPS stars capture their spots atop the payout chairs for years. Many workers have equally strong mornings, afternoons, and evenings — so it comes down to those who capitalize on End-of-Night.
-
-The psychology: it's 8:00 PM and a homeowner opens their door to find a very excited, hard-working person who has been aerating the neighbourhood all day. They're offering an amazing end-of-night price with extra quality (cross-hatch, doubling up areas). The homeowner thinks: "This kid is still going hard right up until pickup. Most of my neighbours got it done and I can get an even better deal."
-
-Top 10 End-of-Night tricks: Run with flags in your hands as a goal counter. Run fast, speak fast, push on impulse and energy. Pre-frame that since it's darker, you'll double up and give a discount. Write the total with HST on the flyer — ask them to leave a cheque in the mailbox. If you have 3+ lawns lined up, let the homeowner know the whole team is coming to help. Flag and aerate all fronts immediately so they can't cancel. Remember: if you don't line up your own End-of-Night Sale, you'll be aerating for someone else!`,
       },
     ],
     quiz: [
@@ -1527,18 +1518,6 @@ Top 10 End-of-Night tricks: Run with flags in your hands as a goal counter. Run 
           'Standard daily preparation requires 10 flags and 10 poles ready to mark completed and upcoming lawns.',
       },
       {
-        question: 'What is the key psychology behind End-of-Night Sales?',
-        options: [
-          'Homeowners feel bad for you being out late',
-          'Homeowners see your energy and hard work all day, want a neighbourhood deal, and respond to the urgency of "last one of the night"',
-          'Homeowners are too tired to say no',
-          'The aerator is quieter at night',
-        ],
-        correct_index: 1,
-        explanation:
-          'The combination of visible hustle, social proof (flags everywhere), discounted pricing, and urgency creates a powerful close.',
-      },
-      {
         question: 'How should you handle body soreness after your first or second day?',
         options: [
           'Take the rest of the week off to recover',
@@ -1551,16 +1530,28 @@ Top 10 End-of-Night tricks: Run with flags in your hands as a goal counter. Run 
           'The best cure for stiffness is to work through it. Consecutive days help your body adapt — taking days off actually makes it worse.',
       },
       {
-        question: 'If you don\'t line up your own End-of-Night Sale, what happens?',
+        question: 'What should you do while waiting for your manager to fix a broken aerator?',
         options: [
-          'You get to go home early',
-          'You\'ll be aerating someone else\'s End-of-Night Sale instead of earning your own commission',
-          'Nothing — End-of-Night is optional',
-          'Your manager lines one up for you automatically',
+          'Sit down and wait',
+          'Go home for the day',
+          'Canvass for sales so you have lawns lined up when the machine is back online',
+          'Walk to the nearest coffee shop',
+        ],
+        correct_index: 2,
+        explanation:
+          'Your only two jobs are selling and aerating. If you can\'t aerate, you should be selling. Use the downtime to pre-sell your next several lawns.',
+      },
+      {
+        question: 'Why should you work as many consecutive days as possible?',
+        options: [
+          'Because the company requires it',
+          'Because your body adapts, your confidence builds, and momentum from linking carries into the next day',
+          'Because you only get paid on consecutive days',
+          'Because the weather is always better on consecutive days',
         ],
         correct_index: 1,
         explanation:
-          'Workers who don\'t hustle for their own End-of-Night end up doing the hard labour on someone else\'s sale. Line up your own to earn your own.',
+          'Working consecutive days builds physical endurance, sharpens your scripts, and maintains the mental momentum that drives high step counts.',
       },
     ],
   },

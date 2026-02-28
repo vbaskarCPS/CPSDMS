@@ -448,6 +448,22 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex gap-2">
+            {/* Back to Training Lesson button (training mode only) */}
+            {isTrainingMode && !isRMViewMode && (
+              <button
+                onClick={() => {
+                  const returnPath = sessionStorage.getItem('training_return_path');
+                  trainingService.disableTrainingMode();
+                  sessionStorage.removeItem('training_return_path');
+                  removeStorageItem('current_user');
+                  navigate(returnPath || '/training');
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-600/50 text-amber-400 text-xs font-semibold rounded-lg transition-colors"
+              >
+                <GraduationCap size={16} />
+                <span className="hidden sm:inline">Back to Lesson</span>
+              </button>
+            )}
             {hasAssignedRoutes && (
               <button
                 onClick={() => navigate('/logsheet/new')}
