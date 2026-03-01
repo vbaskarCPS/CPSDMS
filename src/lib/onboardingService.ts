@@ -229,13 +229,13 @@ class OnboardingService {
 
     const { data, error } = await supabase.functions.invoke('bright-processor', {
       body: {
-        emailType: 'level2_unlock',
+        emailType: 'onboarding',
         customerEmail: emailData.email,
         subject,
         html,
         replyTo: config?.replyToEmail || undefined,
         commandCenterId: emailData.commandCenterId,
-        fromAddress: 'training@propertystars.app',
+        fromAddress: 'onboarding@propertystars.app',
       },
     });
 
