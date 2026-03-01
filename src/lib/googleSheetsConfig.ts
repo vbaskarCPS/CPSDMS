@@ -66,11 +66,14 @@ export const LAWN_REJUV_FEED_COLUMNS = FEED_COLUMNS;
 
 // Contractors tab columns (for contractor sync + worker import)
 // Matches the actual "Contractors" tab layout:
-//   A = (row nums/empty), B = Shuttle, C = CN#, D = First Name,
+//   (empty A), B = Shuttle, C = CN#, D = First Name,
 //   E = Last Name, F = Cell Phone, G = Alm Inc, H = Slv Inc,
 //   I = Manager, J = Team, K = Conf, L = Show, M = Next Day,
 //   N = Status, O = A/R, P = Days, Q = NS, R = Alt. Phone,
 //   S = Email Address
+//
+// NOTE: Column A is empty/row numbers on the Contractors tab,
+// so indices are 1-based relative to the sheet columns (B=1, C=2, etc.)
 export const WORKERBOOK_COLUMNS = {
   // Row index 0 is header row
   dataStartRow: 2, // Data starts at row 3 (index 2)
@@ -95,6 +98,42 @@ export const WORKERBOOK_COLUMNS = {
     // Q = NS (not used in sync)
     // R = Alt. Phone (not used in sync)
     email: 18,          // S - Email Address
+  },
+};
+
+// --- DATE TAB COLUMN MAPPINGS ---
+// Date tabs (e.g. "Feb01", "Mar01") have the SAME columns as the Contractors tab,
+// but shifted LEFT by 1 because column A contains "Shuttle" directly
+// (no empty/row-number column A like the Contractors tab has).
+//
+// Date tab layout:
+//   A = Shuttle, B = CN#, C = First Name, D = Last Name,
+//   E = Cell Phone, F = Alm Inc, G = Slv Inc, H = Manager,
+//   I = Team, J = Conf, K = Show, L = Next Day, M = Status,
+//   N = A/R, O = Days, P = NS, Q = Alt. Phone, R = Email Address,
+//   S = Notes, T = AER, U = RJ, V = SE, W = CL
+export const DATE_TAB_COLUMNS = {
+  dataStartRow: 2, // Data starts at row 3 (index 2), same as Contractors
+  range: 'A:W',    // Full range including season columns
+  mapping: {
+    shuttle: 0,         // A - Shuttle
+    contractorId: 1,    // B - CN#
+    firstName: 2,       // C - First Name
+    lastName: 3,        // D - Last Name
+    cellPhone: 4,       // E - Cell Phone
+    alumniRate: 5,      // F - Alm Inc
+    silverRate: 6,      // G - Slv Inc
+    managerName: 7,     // H - Manager
+    teamId: 8,          // I - Team
+    // J (9) = Conf (not used)
+    showFlag: 10,       // K - Show column ('x' means active)
+    nextDay: 11,        // L - Next Day
+    // M (12) = Status (not used)
+    // N (13) = A/R (not used)
+    // O (14) = Days (not used)
+    // P (15) = NS (not used)
+    // Q (16) = Alt. Phone (not used)
+    email: 17,          // R - Email Address
   },
 };
 

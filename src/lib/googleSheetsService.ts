@@ -9,6 +9,7 @@ import {
   isServiceIncluded,
   seasonUsesServiceFlags,
   WORKERBOOK_COLUMNS,
+  DATE_TAB_COLUMNS,
   FEED_COLUMNS,
   PAYOUT_STATS_COLUMNS
 } from './googleSheetsConfig';
@@ -351,7 +352,11 @@ class GoogleSheetsService {
 
     const feedRange = getFeedRange(seasonType);
     const feedColumns = getFeedColumnsConfig(seasonType);
-    const workerbookRange = `'${dateTab}'!A:W`;
+
+    // FIXED: Use DATE_TAB_COLUMNS range (A:W) instead of the old hardcoded A:K.
+    // Date tabs have a different column layout than the Contractors tab —
+    // columns start at A (Shuttle) with no empty column A prefix.
+    const workerbookRange = `'${dateTab}'!${DATE_TAB_COLUMNS.range}`;
 
     const [routesData, bookingsData, workersData, managersData] = await Promise.all([
       this.sheetsGet(config.spreadsheets.masterbookings, `'${SHEET_TABS.routes}'!A:G`),
@@ -422,23 +427,26 @@ class GoogleSheetsService {
     }
 
     // --- PROCESS WORKERS ---
+    // FIXED: Use DATE_TAB_COLUMNS.mapping for date tabs instead of WORKERBOOK_COLUMNS.mapping.
+    // Date tabs start at column A (Shuttle) whereas the Contractors tab has an empty column A,
+    // so all indices are shifted left by 1 on date tabs.
     const workers: Worker[] = [];
-    const workerColMap = WORKERBOOK_COLUMNS.mapping;
+    const dateTabColMap = DATE_TAB_COLUMNS.mapping;
 
-    for (let i = WORKERBOOK_COLUMNS.dataStartRow; i < workersData.length; i++) {
+    for (let i = DATE_TAB_COLUMNS.dataStartRow; i < workersData.length; i++) {
       const row = workersData[i];
-      const showValue = row[workerColMap.showFlag]?.toString().trim().toLowerCase();
+      const showValue = row[dateTabColMap.showFlag]?.toString().trim().toLowerCase();
 
       if (showValue !== 'x') continue;
 
-      const contractorId = row[workerColMap.contractorId]?.toString().trim() || '';
-      const firstName = row[workerColMap.firstName]?.toString().trim() || '';
-      const lastName = row[workerColMap.lastName]?.toString().trim() || '';
-      const cellPhone = row[workerColMap.cellPhone]?.toString().trim() || '';
-      const alumniRate = parseFloat(row[workerColMap.alumniRate]) || 0;
-      const silverRate = parseFloat(row[workerColMap.silverRate]) || 0;
-      const managerName = row[workerColMap.managerName]?.toString().trim() || '';
-      const teamId = isTeamSeason ? row[workerColMap.teamId]?.toString().trim() || '' : '';
+      const contractorId = row[dateTabColMap.contractorId]?.toString().trim() || '';
+      const firstName = row[dateTabColMap.firstName]?.toString().trim() || '';
+      const lastName = row[dateTabColMap.lastName]?.toString().trim() || '';
+      const cellPhone = row[dateTabColMap.cellPhone]?.toString().trim() || '';
+      const alumniRate = parseFloat(row[dateTabColMap.alumniRate]) || 0;
+      const silverRate = parseFloat(row[dateTabColMap.silverRate]) || 0;
+      const managerName = row[dateTabColMap.managerName]?.toString().trim() || '';
+      const teamId = isTeamSeason ? row[dateTabColMap.teamId]?.toString().trim() || '' : '';
 
       if (!contractorId) {
         console.warn(`⚠️ Worker ${firstName} ${lastName} has no contractor ID, skipping.`);
