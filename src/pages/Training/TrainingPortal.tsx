@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BookOpen, CheckCircle, LogOut, ChevronRight, Trophy, Lock } from 'lucide-react';
 import { contractorService, TrainingProgress } from '../../lib/contractorService';
-import { getModulesForLevel, TrainingModule, QUIZ_PASS_THRESHOLD } from '../../lib/training';
+import { getModulesForLevel, TrainingModule, QUIZ_PASS_THRESHOLD } from '../../lib/training/index';
 
 const LOGO_URL =
   'https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png';

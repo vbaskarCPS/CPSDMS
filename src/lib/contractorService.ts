@@ -1,6 +1,6 @@
 // src/lib/contractorService.ts
 import { supabase } from './supabase';
-import { QUIZ_PASS_THRESHOLD } from './training';
+import { QUIZ_PASS_THRESHOLD } from './training/index';
 import { WORKERBOOK_COLUMNS, parseNextDayValue } from './googleSheetsConfig';
 
 // --- TYPES ---

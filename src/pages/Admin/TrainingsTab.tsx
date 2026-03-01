@@ -24,7 +24,7 @@ import { CommandCenter } from '../../lib/commandCenterService';
 import { contractorService, ContractorTrainingSummary, TrainingAttempt } from '../../lib/contractorService';
 import { googleSheetsService } from '../../lib/googleSheetsService';
 import { WORKERBOOK_COLUMNS } from '../../lib/googleSheetsConfig';
-import { TRAINING_MODULES, getModulesForRegion, getModulesForLevel } from '../../lib/training';
+import { TRAINING_MODULES, getModulesForRegion, getModulesForLevel } from '../../lib/training/index';
 import { onboardingService } from '../../lib/onboardingService';
 
 interface TrainingsTabProps {
