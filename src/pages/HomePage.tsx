@@ -108,6 +108,7 @@ const HomePage: React.FC = () => {
           lastName: contractor.lastName,
           commandCenterId: contractor.commandCenterId,
           region: contractor.region,
+          level2UnlockedAt: contractor.level2UnlockedAt,
         });
         navigate('/training');
         return;
