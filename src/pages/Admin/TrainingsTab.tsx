@@ -229,16 +229,33 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
     }
   };
 
-  // --- FILTERED SUMMARIES ---
-  const filtered = summaries.filter((s) => {
-    if (!searchTerm.trim()) return true;
-    const term = searchTerm.toLowerCase();
-    return (
-      s.contractor.firstName.toLowerCase().includes(term) ||
-      s.contractor.lastName.toLowerCase().includes(term) ||
-      s.contractor.contractorId.toLowerCase().includes(term)
-    );
-  });
+  // --- FILTERED & SORTED SUMMARIES ---
+  const filtered = summaries
+    .filter((s) => {
+      if (!searchTerm.trim()) return true;
+      const term = searchTerm.toLowerCase();
+      return (
+        s.contractor.firstName.toLowerCase().includes(term) ||
+        s.contractor.lastName.toLowerCase().includes(term) ||
+        s.contractor.contractorId.toLowerCase().includes(term)
+      );
+    })
+    .sort((a, b) => {
+      // 1. Email not sent → top
+      const aEmailSent = a.contractor.onboardingEmailSentAt ? 1 : 0;
+      const bEmailSent = b.contractor.onboardingEmailSentAt ? 1 : 0;
+      if (aEmailSent !== bEmailSent) return aEmailSent - bEmailSent;
+
+      // 2. Most completed modules → top
+      const aCompleted = a.progress.filter((p) => p.isCompleted).length;
+      const bCompleted = b.progress.filter((p) => p.isCompleted).length;
+      if (aCompleted !== bCompleted) return bCompleted - aCompleted;
+
+      // 3. Alphabetical by last name, then first name
+      const lastCmp = a.contractor.lastName.localeCompare(b.contractor.lastName);
+      if (lastCmp !== 0) return lastCmp;
+      return a.contractor.firstName.localeCompare(b.contractor.firstName);
+    });
 
   const toggleExpand = (contractorId: string) => {
     setExpandedContractorId((prev) => (prev === contractorId ? null : contractorId));
