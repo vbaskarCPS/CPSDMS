@@ -351,7 +351,7 @@ class GoogleSheetsService {
 
     const feedRange = getFeedRange(seasonType);
     const feedColumns = getFeedColumnsConfig(seasonType);
-    const workerbookRange = `'${dateTab}'!A:K`;
+    const workerbookRange = `'${dateTab}'!A:W`;
 
     const [routesData, bookingsData, workersData, managersData] = await Promise.all([
       this.sheetsGet(config.spreadsheets.masterbookings, `'${SHEET_TABS.routes}'!A:G`),
