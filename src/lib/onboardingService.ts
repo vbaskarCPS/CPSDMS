@@ -43,6 +43,15 @@ export interface OnboardingEmailData {
   commandCenterName: string;
 }
 
+export interface Level2UnlockEmailData {
+  contractorId: string;       // CN# e.g. "H1001"
+  firstName: string;
+  lastName: string;
+  email: string;
+  commandCenterId: string;
+  commandCenterName: string;
+}
+
 // --- HELPER ---
 const getCCId = (): string => {
   const ccId = commandCenterService.getCurrentCommandCenterId();
@@ -209,7 +218,174 @@ class OnboardingService {
   }
 
   // ---------------------------------------------------------------
-  // EMAIL HTML BUILDER
+  // SEND LEVEL 2 UNLOCK EMAIL
+  // ---------------------------------------------------------------
+
+  public async sendLevel2UnlockEmail(emailData: Level2UnlockEmailData): Promise<void> {
+    const config = await this.getConfig();
+
+    const html = this.buildLevel2UnlockEmailHtml(emailData, config);
+    const subject = `Level 2 Training Now Available, ${emailData.firstName}! 🚀`;
+
+    const { data, error } = await supabase.functions.invoke('bright-processor', {
+      body: {
+        emailType: 'level2_unlock',
+        customerEmail: emailData.email,
+        subject,
+        html,
+        replyTo: config?.replyToEmail || undefined,
+        commandCenterId: emailData.commandCenterId,
+        fromAddress: 'training@propertystars.app',
+      },
+    });
+
+    if (error) throw new Error(error.message || 'Failed to send Level 2 unlock email');
+  }
+
+  // ---------------------------------------------------------------
+  // LEVEL 2 UNLOCK EMAIL HTML BUILDER
+  // ---------------------------------------------------------------
+
+  public buildLevel2UnlockEmailHtml(
+    emailData: Level2UnlockEmailData,
+    config: OnboardingConfig | null
+  ): string {
+    const { firstName, contractorId, commandCenterName } = emailData;
+
+    // Signature
+    const hasSignature = config?.signatureName;
+    const signatureHtml = hasSignature
+      ? `
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-top: 25px; border-top: 1px solid #e5e7eb; padding-top: 20px;">
+          <tr>
+            <td style="font-size: 14px; color: #374151;">
+              <strong style="font-size: 16px;">${config.signatureName}</strong><br/>
+              ${config.signatureTitle ? `<span style="color: #6b7280;">${config.signatureTitle}</span><br/>` : ''}
+              ${config.signaturePhone ? `<span style="color: #6b7280;">📞 ${config.signaturePhone}</span><br/>` : ''}
+              ${config.signatureEmail ? `<span style="color: #6b7280;">✉️ ${config.signatureEmail}</span>` : ''}
+            </td>
+          </tr>
+        </table>
+      `
+      : '';
+
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; background-color: #f3f4f6; font-family: Arial, sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+
+          <!-- Header with Logo -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #1f2937 0%, #374151 100%); padding: 30px; border-radius: 12px 12px 0 0; text-align: center;">
+              <img src="${LOGO_URL}" alt="${commandCenterName}" style="max-width: 200px; height: auto;" />
+            </td>
+          </tr>
+
+          <!-- Heading -->
+          <tr>
+            <td style="padding: 30px 30px 10px 30px;">
+              <h1 style="margin: 0; color: #1f2937; font-size: 24px;">Level 2 Training Unlocked! 🚀</h1>
+              <p style="margin: 10px 0 0 0; color: #4b5563; font-size: 16px; line-height: 1.6;">
+                Great work, ${firstName}! Your manager has unlocked <strong>Level 2 Training</strong> for you. Five new advanced modules are now available in your training portal.
+              </p>
+            </td>
+          </tr>
+
+          <!-- What's in Level 2 -->
+          <tr>
+            <td style="padding: 15px 30px;">
+              <h2 style="margin: 0 0 12px 0; color: #1f2937; font-size: 18px;">📚 What's in Level 2?</h2>
+              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px;">
+                <tr>
+                  <td style="padding: 18px; font-size: 14px; color: #166534; line-height: 2;">
+                    <strong>Module 6:</strong> Goal-Setting Your Way to the Top<br/>
+                    <strong>Module 7:</strong> Time Management & Working Like a Star<br/>
+                    <strong>Module 8:</strong> Route Strategy & Reading Your Territory<br/>
+                    <strong>Module 9:</strong> Turning Negatives into Positives<br/>
+                    <strong>Module 10:</strong> Your CPS Career & Financial Freedom
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Description -->
+          <tr>
+            <td style="padding: 10px 30px;">
+              <p style="margin: 0; color: #4b5563; font-size: 14px; line-height: 1.6;">
+                These modules cover advanced strategies from the CPS playbook — goal-setting frameworks, time management, route mastery, mental toughness, career development, and personal finance. Each module includes a quiz you'll need to pass at 80% or higher.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Login Instructions -->
+          <tr>
+            <td style="padding: 15px 30px;">
+              <h2 style="margin: 0 0 12px 0; color: #1f2937; font-size: 18px;">💻 Log In to Get Started</h2>
+              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px;">
+                <tr>
+                  <td style="padding: 18px; font-size: 14px; color: #1e40af; line-height: 1.8;">
+                    <strong>Website:</strong> <a href="https://propertystars.app" style="color: #2563eb; font-weight: bold;">propertystars.app</a><br/>
+                    <strong>Username:</strong> <span style="font-size: 16px; font-weight: bold; color: #1e3a8a;">${contractorId}</span><br/>
+                    <strong>Password:</strong> <span style="font-size: 16px; font-weight: bold; color: #1e3a8a;">${firstName}</span> <span style="font-size: 12px; color: #6b7280;">(case sensitive)</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Motivational CTA -->
+          <tr>
+            <td style="padding: 10px 30px;">
+              <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #059669 0%, #047857 100%); border-radius: 8px;">
+                <tr>
+                  <td style="padding: 20px; text-align: center;">
+                    <p style="margin: 0; color: #ffffff; font-size: 16px; font-weight: bold;">
+                      🏆 Take your game to the next level — complete all 5 modules!
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Signature -->
+          ${hasSignature ? `
+          <tr>
+            <td style="padding: 20px 30px 10px 30px;">
+              ${signatureHtml}
+            </td>
+          </tr>
+          ` : ''}
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 20px 30px 30px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
+              <p style="margin: 0; color: #9ca3af; font-size: 12px;">
+                © 2026 ${commandCenterName}. All rights reserved.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `.trim();
+  }
+
+  // ---------------------------------------------------------------
+  // ONBOARDING EMAIL HTML BUILDER
   // ---------------------------------------------------------------
 
   public buildOnboardingEmailHtml(

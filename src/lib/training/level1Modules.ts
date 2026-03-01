@@ -1,0 +1,710 @@
+// src/lib/training/level1Modules.ts
+// Level 1 Training Modules — The fundamentals for new CPS contractors.
+
+import { TrainingModule } from './trainingModules';
+
+const STORAGE_BASE =
+  'https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/training-images';
+
+export const LEVEL_1_MODULES: TrainingModule[] = [
+  // =====================================================================
+  // MODULE 1 — The Basic Rookie Mindset
+  // =====================================================================
+  {
+    module_id: 'module_01_mindset',
+    order_index: 1,
+    is_active: true,
+    level: 1,
+    title: 'The Basic Rookie Mindset: Your Blueprint for Success',
+    description:
+      'Discover the winning attitude and mental toughness required to thrive in door-to-door lawn care sales. Learn how top CPS stars build confidence, handle rejection, and treat every day like a championship game.',
+    lesson_content: '',
+    lesson_sections: [
+      {
+        type: 'text',
+        heading: 'Welcome to the Professional Aerating League',
+        body: `You are entering a training program to join the Professional Aerating League. Working door-to-door property maintenance is a physically and mentally demanding job, but it is also extremely rewarding. As a rookie, the most important tool you have isn't the aerator or the fertilizer — it's your mindset. You will face rejection, long hours on your feet, and varying Canadian weather conditions. A strong, positive attitude is what separates the top earners from the rest.
+
+CPS was designed to truly bring out the very best in each of its workers. Since the workload is very intense, it takes a special kind of person — or at least special effort — to be successful day after day. The concepts in this module come directly from the CPS founder's playbook and will help you understand what it takes to maximize your success this summer.`,
+      },
+      {
+        type: 'video',
+        heading: 'Tilo McAllister on the Door-to-Door Mindset',
+        description: 'Hear from one of CPS\'s top trainers about the mental approach that separates average workers from stars.',
+        youtubeId: 'h6sDMh5xDA4',
+      },
+      {
+        type: 'text',
+        heading: 'Building Confidence and a Healthy Ego',
+        body: `On your way to the top with CPS it will be vital to develop your confidence and allow a healthy amount of ego into your life. A healthy ego is not cockiness or arrogance — it's the inner drive that holds you to your goals when the going gets tough.
+
+Confidence is built from belief. The more you believe in yourself, the business, the service, and your ability, the quicker your confidence will increase. Confidence grows through working more days (experience), learning new tricks of the trade (knowledge), and by achieving goals you set for yourself — "first sale," "first link," "first end-of-night sale," "first chair," "first win."
+
+Before you leave your seat in morning meeting, check your ego. Your ego should tell you what goals you want to hit — 10 steps, 3 links, or top 3 of the day. When you set that goal, you now have something for your ego to hold you to during the day. When you hit a cold patch, your ego will command you to pick it up, knock again, and try harder.
+
+The more confident you become, the more assertive you will be. The more confident you become, the quicker you will get what you want. The more confident you become, the richer your life will be. Confidence and a healthy ego are the two main ingredients in TAKING YOUR LIFE TO THE NEXT LEVEL.`,
+      },
+      {
+        type: 'text',
+        heading: 'Treat the Business Like You Own It',
+        body: `As an independent contractor working with CPS, you literally are a small business owner. You are running a small business within a bigger business. Your route is your office and each street is a CPS masterpiece waiting to happen.
+
+Imagine how fast the business would grow if every contractor treated every aspect like it was their own. The top workers link 3 to 10 homes together multiple times per day while average workers speckle a lawn here and there. The main reason stars link so well is the magnetic customer experience they offer — when they ask for neighbours' names and referrals, customers are more inclined to help someone who clearly cares about their job.
+
+If you owned Canadian Property Stars, would you come to work excited or bored? Would you come well-dressed or looking like a slob? Would you work hard or go through the motions? Would you treat customers with respect and honesty? You DO own Canadian Property Stars — treat it that way and the rewards will follow.`,
+      },
+      {
+        type: 'video',
+        heading: 'Dave Wilkerson on Attitude and Effort',
+        description: 'Dave breaks down why your attitude and effort level are the two factors completely within your control — and why they determine everything.',
+        youtubeId: '6RePD5Wo6Bg',
+      },
+      {
+        type: 'text',
+        heading: 'On Stage at All Times',
+        body: `From the moment you arrive at the shop each morning, act as if you are "on stage." People spend a lifetime building credibility but it only takes one act to destroy it all. CPS stars understand that homeowners are watching everything on their street.
+
+Here's what top stars do to maximize their "stage presence": smile and wave at all drivers passing down the street. Greet all homeowners with a big smile. Treat every homeowner with honesty and respect. Compliment their property. Show that you are hustling hard all day. Appear organized and expert. Use neighbours' names to build credibility.
+
+And the no-nos that can ruin your day: getting in an argument with a homeowner, using curse words, letting anyone see you smoking, complaining about rain or your day, walking slowly, cutting corners on work, sitting or lying down on a lawn, overcharging, lying, or causing property damage.
+
+Once you realize you are being watched and you step up your game, your results will skyrocket.`,
+      },
+      {
+        type: 'text',
+        heading: 'The 100% Positivity Rule',
+        body: `Your success depends on maintaining a "100% positivity" rule while on the route. It's natural to feel frustrated when a homeowner says no or nobody is answering the door. However, dwelling on negativity will ruin your focus and cost you money. When you encounter a tough customer, shake it off quickly and move to the next door. Every "no" brings you closer to a "yes," and you only need a fraction of a neighbourhood to have an incredibly profitable day.
+
+CPS is a journey, not a sprint. We need to look at the big picture when we have a really tough day. A tough day might mean a ghost town, lots of no's that beat up your confidence, or a take-home pay of only $40. The first thing you must do is put it in perspective by accepting that you had one tough day. With your training, route management support, superior effort, and past results, you are positioned for success. How you respond to your struggles today sets the tone for every day that follows.`,
+      },
+      {
+        type: 'text',
+        heading: '"One More Round" — The Champion\'s Mentality',
+        body: `"One More Round" is a concept developed by the CPS founder with his karate instructor. After training for hours, exhausted and ready to quit, his instructor would challenge him to go just one more round. Over time, it became a defining philosophy: the body can, and will, do exactly what the mind tells it to do.
+
+Going One More Round in everything you do will place you in a class of your own. Most people are simply not willing to go One More Round. Why don't you decide to be someone who always does?
+
+At CPS, here's what One More Round looks like: when you're tired at 7:30 PM and want to quit, push for one more sale. When you've been told "no" five times in a row, knock one more door. When your body aches and you want to sit down, run to one more house. The extra effort you put in during those moments is what separates the stars from the average — and it's what will earn you the chair at payout.`,
+      },
+      {
+        type: 'text',
+        heading: 'Daily Preparation — Set Yourself Up for Success',
+        body: `Consistency and endurance are key to your earnings. The door-to-door season is a marathon, not a sprint. To stay sharp and perform at your best, manage your personal time well. Sleep management is critical — get plenty of rest after work and save the partying for the off-season. Set goals and stay extremely competitive every day, showing up as many days as possible.
+
+Daily preparation is just as important as your pitch. Always bring a knapsack packed with enough food and drinks to last the entire day. Dress for the Canadian weather forecast — if rain is predicted, be prepared. Bring sunscreen for sunny days and extra socks for wet days. Mandatory footwear includes high-quality running shoes or steel-toed work boots; old sneakers or sandals are strictly prohibited.
+
+Think of your first week like learning to play hockey: you need to learn how to "skate" before you can "score." Show up with a winning attitude, a ready mind to learn, and be coachable. Trust the company systems, lean on your managers, and push through the initial learning curve.`,
+      },
+    ],
+    quiz: [
+      { question: 'What is the difference between "cockiness" and a "healthy ego" at CPS?', options: ['There is no difference — both mean the same thing', 'Cockiness treats others as inferior; a healthy ego drives you toward your own goals and helps others improve', 'A healthy ego means never setting goals', 'Cockiness is required to close sales'], correct_index: 1, explanation: 'A healthy ego pushes you to achieve your goals and uplift others, while cockiness tears others down to make yourself feel better.' },
+      { question: 'What does "On Stage at All Times" mean?', options: ['You must literally perform comedy at the door', 'Every action you take on the route is being watched by homeowners, so always present yourself professionally', 'You should only work when a manager is watching', 'It means wearing a costume while aerating'], correct_index: 1, explanation: 'Homeowners observe everything happening on their street. Your professionalism — or lack of it — directly affects referrals and sales.' },
+      { question: 'How should you handle a really tough day with no sales?', options: ['Quit and go home early', 'Blame the neighbourhood and demand a new route', 'Accept it was one tough day, maintain perspective, and come back harder tomorrow', 'Call your manager to complain about the territory'], correct_index: 2, explanation: 'Even top CPS stars occasionally have zero days. How you respond to struggles sets the tone for every day that follows.' },
+      { question: 'What does "Treat the Business Like You Own It" mean in practice?', options: ['You can set your own hours and skip morning meetings', 'Come to work excited, dress professionally, work hard, treat customers with respect, and take care of equipment', 'You can fire your route manager if you disagree', 'It means nothing — you\'re just an employee'], correct_index: 1, explanation: 'As an independent contractor, you are a small business owner within CPS. Your professionalism creates the magnetic customer experience that drives referrals.' },
+      { question: 'What is the "100% Positivity Rule"?', options: ['Never admit when you\'ve had a bad day', 'Maintain a positive attitude on the route — shake off rejection quickly and keep moving to the next door', 'Always agree with the customer, even if they\'re wrong', 'Post only positive things on social media'], correct_index: 1, explanation: 'Dwelling on negativity ruins your focus and momentum. Every "no" brings you closer to a "yes."' },
+      { question: 'What does the "One More Round" philosophy teach?', options: ['Only work one round of the neighbourhood per day', 'When you\'re exhausted and want to quit, push for one more effort — the body does what the mind commands', 'Do one round of push-ups each morning', 'Always leave one house un-aerated per street'], correct_index: 1, explanation: 'The extra effort during those final moments separates stars from average workers and often leads to end-of-night sales.' },
+      { question: 'Why is sleep management important for CPS workers?', options: ['Because sleeping on the route is encouraged', 'The job is physically demanding — rest allows you to maintain energy and performance across the whole season', 'To avoid being late only on Mondays', 'It\'s not important — you can party every night'], correct_index: 1, explanation: 'The season is a marathon. Consistent rest ensures you can bring maximum energy and effort day after day.' },
+      { question: 'What is considered mandatory footwear for the job?', options: ['Any comfortable sandals', 'Old sneakers are fine', 'High-quality running shoes or steel-toed work boots', 'Rubber rain boots only'], correct_index: 2, explanation: 'Proper footwear prevents injury and provides the support needed for running between houses all day.' },
+      { question: 'Which of the following is a "no-no" that can ruin your stage presence?', options: ['Smiling and waving at passing cars', 'Complimenting a homeowner\'s landscaping', 'Sitting down on a homeowner\'s lawn or street corner during work', 'Using neighbours\' names as referrals'], correct_index: 2, explanation: 'Sitting or lying down signals laziness to every homeowner watching the street, destroying your credibility and potential referrals.' },
+      { question: 'How does confidence grow at CPS?', options: ['It\'s something you\'re born with and can\'t develop', 'Through experience (working more days), knowledge (learning tricks of the trade), and achieving progressive goals', 'By avoiding all difficult situations', 'Only through reading the Next Level Book'], correct_index: 1, explanation: 'Confidence builds through a combination of reps, learning, and small wins that compound into bigger achievements over time.' },
+    ],
+  },
+
+  // =====================================================================
+  // MODULE 2 — 5 Steps to High Steps
+  // =====================================================================
+  {
+    module_id: 'module_02_high_steps',
+    order_index: 2,
+    is_active: true,
+    level: 1,
+    title: '5 Steps to High Steps: Maximizing Your Daily Sales Efficiency',
+    description:
+      'Learn the vital speed, efficiency, and safety techniques that will allow you to visit up to five times more homes every day. Master these rules to skyrocket your daily step count.',
+    lesson_content: `In our business, 'steps' mean sales. The more lawns you complete, the higher your daily payout will be. The '5 Steps to High Steps' system is designed to maximize the number of doors you knock on and the lawns you complete, without even needing advanced sales skills.`,
+    lesson_sections: [
+      {
+        type: 'text',
+        body: `In our business, 'steps' mean sales. The more lawns you complete, the higher your daily payout will be. The '5 Steps to High Steps' system is designed to maximize the number of doors you knock on and the lawns you complete — without even needing advanced sales skills.
+
+Here's what makes this system so powerful: you can't always count on a lot of people being home, or on the receptivity of homeowners, or even on your own scripting ability. What you CAN count on is 5 Steps to High Steps. It's preached every morning meeting for a reason. If this system is implemented, even a worker with rough scripts and little experience will still get sales — because they get to enough doors.
+
+None of these 5 steps require sales skills, but together they will allow you to visit up to 5 times more homes in a single day. By simply moving faster and working smarter, you can dramatically increase your earning potential.`,
+      },
+      {
+        type: 'image',
+        heading: 'Step 1: Run All Day',
+        body: `Literally run all day. This is the simplest and most impactful step. Instead of walking casually between houses, jog lightly or run. The numbers don't lie: running between doors gets you to 3 times more houses than walking over the course of the day.
+
+Think about it — if walking gets you to 30 doors in a day, running gets you to 90. That's 60 extra chances to make a sale, just by picking up your pace. Every top CPS star treats their route like a fitness challenge. You're not strolling through a park — you're an athlete competing for the highest step count of the day.
+
+Leave your machine on the side of the road at the edge of a driveway and canvass 2 to 3 homes up one side and then 2 to 3 homes down the other before moving the machine.`,
+        image: { src: `${STORAGE_BASE}/red-running-figure.png`, alt: 'Red running figure — run all day', position: 'inline-right', maxHeight: 180 },
+      },
+      {
+        type: 'text',
+        heading: 'Step 2: Ring \'n\' Listen — The 10-Second Rule',
+        body: `When you knock on the door or ring the bell, listen carefully for the sound of someone inside the house. Never wait more than 10 seconds after ringing unless you hear someone approaching the door.
+
+This might seem like a small thing, but the math is massive. Waiting an extra 30 to 60 seconds at every empty house adds up fast. Over the course of a full day, those wasted seconds become at least one full extra hour — an hour you could have spent finding your next sale.
+
+The psychology behind this is about momentum. Every second you stand idle at an empty door chips away at your energy and focus. Top stars keep their feet moving and their rhythm unbroken. Ring, listen, 10 seconds — move.`,
+      },
+      {
+        type: 'text',
+        heading: 'Step 3: Across the Lawn — The Horseshoe Method',
+        body: `Instead of walking down the driveway, along the sidewalk, and back up the next driveway, cut straight across the lawn to the neighbour's front door. This is called the 'Horseshoe Method' because you canvass 2–3 homes up one side, cross, and come back down the other side in a horseshoe pattern — all without going back to the street.
+
+This saves massive amounts of time. Walking the sidewalk route between two neighbouring doors might take 30–45 seconds. Cutting across the lawn takes 5–10 seconds. Multiply that by every house on the street, and the Horseshoe Method gives you a 3-to-1 time advantage over using the street.
+
+It also keeps you visible to homeowners. When people see you confidently moving from lawn to lawn, it creates the impression that you belong there and that business is happening all around them.`,
+      },
+      {
+        type: 'image',
+        heading: 'Step 4: No Long-Term Relationships',
+        body: `You are a lawn care professional, not a conversationalist. In professional sales, it can take 4 to 6 meetings with a prospect before you close a deal — sometimes stretching over weeks or months. At CPS, an aeration sales call should last 60 seconds to 5 minutes. Maximum. Time is money.
+
+It's very easy during the day to get caught up in a long conversation about school, your future, or a customer's family. As much as that's a nice thing to do, it will hurt you financially and will often break any rhythm or momentum you've created. Spending an extra 15 minutes chatting with a friendly customer means you just missed out on your next sale — potentially $60–$100 in commission.
+
+Be very polite, but do your best to keep all conversation beyond the sale brief. The customer understands that you have to get going. They don't expect you to hang around — they respect the hustle.`,
+        image: { src: `${STORAGE_BASE}/no-long-term-relationships.jpg`, alt: 'No long term relationships — keep it brief', position: 'top', maxHeight: 200 },
+      },
+      {
+        type: 'image',
+        heading: 'Step 5: Aerate Efficiently',
+        body: `When you get the sale, don't cuddle with the lawn. You're there to work. Figure out the most efficient manner to get the job done well and get to it. Most normal-sized single-family homes should not take more than 20 minutes to aerate correctly.
+
+Put yourself on a clock and track your productivity. Here's the math that will change how you think about efficiency:
+
+Aerating 10 lawns at 30 minutes each = 5 hours of work.
+Aerating 10 lawns at 15 minutes each = 2.5 hours of work.
+That's 2.5 extra hours freed up to sell and aerate 5 more lawns.
+
+Use smooth curves instead of sharp turns. Develop a consistent pattern — start at one edge, work in smooth loops to cover the entire property. The more lawns you aerate, the more natural and fast your technique will become. Speed comes from repetition, not from rushing.`,
+        image: { src: `${STORAGE_BASE}/aeration-pattern.png`, alt: 'Efficient aeration pattern with smooth curves', position: 'top', maxHeight: 220 },
+      },
+      {
+        type: 'storyboard',
+        heading: '5 Steps in Action',
+        description: 'Walk through a real neighbourhood and see how each step plays out on the route. Use the arrows to step through the sequence.',
+        baseImage: { src: `${STORAGE_BASE}/5steps-aerial-map.png`, alt: 'Aerial view of Kathleen Circle neighbourhood' },
+        frames: [
+          { label: 'Drop-Off Point', caption: 'You arrive at the corner of Kathleen Circle and Shauna Drive. Your machine is unloaded and your day begins. Check your gear: flags, folder, pouch, pen, knapsack.', overlays: [{ type: 'icon', src: `${STORAGE_BASE}/cps-van.png`, x: 46, y: 97 }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 47, y: 83 }] },
+          { label: 'Step 1: Run All Day', caption: 'Run or jog lightly between houses — 3x more doors than walking. Leave your machine at the edge of a driveway and canvass 2–3 homes in each direction.', overlays: [{ type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 36, y: 91 }, { type: 'icon', src: `${STORAGE_BASE}/red-running-figure.png`, x: 32, y: 91 }, { type: 'label', text: 'Run Forest, Run...', x: 49, y: 78, color: '#ef4444' }] },
+          { label: 'Step 2: The 10-Second Rule', caption: 'Ring the doorbell, listen for 10 seconds max. No footsteps? Move immediately. This saves 20–60 seconds per door = at least 1 extra hour per day.', overlays: [{ type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 36, y: 91 }, { type: 'icon', src: `${STORAGE_BASE}/red-running-figure.png`, x: 32, y: 91 }, { type: 'label', text: '10', x: 49, y: 56, color: '#f59e0b' }] },
+          { label: 'Step 3: Horseshoe Method', caption: 'Cut straight across lawns to the neighbour\'s door instead of using the sidewalk. Canvass up one side, cross, and come back down — a horseshoe pattern.', overlays: [{ type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 38, y: 51 }, { type: 'icon', src: `${STORAGE_BASE}/red-running-figure.png`, x: 38, y: 53 }, { type: 'label', text: 'Cut across lawn', x: 60, y: 50, color: '#ef4444' }] },
+          { label: 'First Sale!', caption: 'You\'ve got your first sale! Flag the lawn at the street beside the driveway. Start aerating the front lawn. This flag is now marketing for the whole street.', overlays: [{ type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 38, y: 51 }, { type: 'icon', src: `${STORAGE_BASE}/red-running-figure.png`, x: 43, y: 47 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 32, y: 31 }, { type: 'label', text: '1st sale', x: 25, y: 31, color: '#ef4444' }] },
+          { label: 'Complete the Horseshoe', caption: 'After your first sale, complete the horseshoe pattern. The red figure runs across lawns to canvass the neighbours — never going back to the street.', overlays: [{ type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 38, y: 51 }, { type: 'icon', src: `${STORAGE_BASE}/red-running-figure.png`, x: 48, y: 33 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 32, y: 31 }, { type: 'label', text: '1st sale', x: 25, y: 31, color: '#ef4444' }] },
+          { label: 'Step 4: No Long-Term Relationships', caption: 'Quick, friendly, and done. Your sales conversation is 60 seconds to 5 minutes max. Don\'t get caught chatting — every extra minute is a missed sale next door.', overlays: [{ type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 38, y: 51 }, { type: 'icon', src: `${STORAGE_BASE}/red-running-figure.png`, x: 36, y: 55 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 32, y: 31 }, { type: 'label', text: '1st sale', x: 25, y: 31, color: '#ef4444' }, { type: 'label', text: 'Fancy a cold one?', x: 67, y: 14, color: '#ef4444' }] },
+          { label: 'Step 5: Aerate Efficiently', caption: 'Smooth curves, 15–20 minutes per lawn. Don\'t cuddle the lawn. 10 lawns at 15 min = 2.5 hrs saved vs 30 min each. That\'s 5 more lawns you can sell and complete.', overlays: [{ type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 32, y: 31 }, { type: 'label', text: '1st sale', x: 25, y: 31, color: '#ef4444' }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 48, y: 32 }] },
+          { label: 'Repeat All Day', caption: 'Aerate efficiently, then use the Horseshoe to find your next sale. Flag it, sell it, aerate it. Go back to horseshoe pattern and repeat this cycle all day.', overlays: [{ type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 32, y: 31 }, { type: 'label', text: '1st sale', x: 25, y: 31, color: '#ef4444' }, { type: 'label', text: 'Go Back', x: 26, y: 41, color: '#ef4444' }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 48, y: 32 }] },
+        ],
+      },
+      {
+        type: 'video',
+        heading: 'Dave Wilkerson on 5 Steps to High Steps',
+        description: 'Hear directly from Dave Wilkerson as he breaks down the 5 Steps system and explains why each step multiplies your earning potential.',
+        youtubeId: 'LPkzijaQ_oE',
+        note: 'These videos were recorded several years ago — prices mentioned may be outdated, but the concepts still apply 100%.',
+      },
+      {
+        type: 'video',
+        heading: 'Dave Wilkerson on Stepping High',
+        description: 'Dave goes deeper into what it takes to consistently step high, day after day, and how the top stars use the 5 Steps system as their foundation.',
+        youtubeId: '2_DXdsTRt4w',
+      },
+      {
+        type: 'text',
+        heading: 'Safety & Equipment Rules',
+        body: `Beyond speed, you must operate safely and responsibly to protect your earnings. These rules are non-negotiable:
+
+Keep your eyes on your machine. Your aerator is your livelihood — never leave it unattended on the street or sidewalk. When you park it to knock on doors, always keep it within your line of sight.
+
+18-inch rule. When aerating, you must stay exactly 18 inches away from all fixed objects — sprinklers, lights, walkway edges, garden borders. The rule is simple: if you break it, you pay for it. Sprinkler head repairs can cost $50–$150, which comes straight out of your commission.
+
+Never leave your route. Do not leave your assigned route to meet up with a co-worker. Stay in your zone and maximize your time. Every minute spent off your route is money lost.
+
+Complete the entire lawn. Always confirm the property boundaries with the homeowner before you start. Leaving patches undone creates unhappy customers and hurts the company's reputation on the street — which directly hurts your linking potential.
+
+Charge HST on every lawn. As a legitimate Canadian business, HST must be collected on every transaction. Do not offer 'under the table' deals. Accurately complete the receipt and log sheet for every sale.`,
+      },
+      {
+        type: 'text',
+        heading: 'Start & End of Day Efficiency',
+        body: `Efficiency doesn't start when you hit your first door — it starts at the shop. All staff must help with loading and unloading the machines. Teamwork during drop-off and pick-up makes the process quick and smooth for everyone. The faster the load-out, the sooner you're on your route earning money.
+
+Before you leave the shop, make sure you're set: 10 flags, 10 poles, your folder with route map and log sheet, pouch, pen, and your knapsack with food and drinks for the day.
+
+On completed lawns, always place a company flag at the street beside the driveway. These flags are your marketing — every neighbour who drives by sees proof that business is happening on their street. At the end of the day, return any extra flags to the stock bins before leaving.
+
+If cheques are used as payment, ensure they are made payable exactly to 'Canadian Property Stars.'`,
+      },
+    ],
+    quiz: [
+      { question: 'What is the "Horseshoe Method"?', options: ['A game played during lunch breaks', 'Cutting directly across the lawn to the neighbour\'s door instead of using the sidewalk', 'Walking in a wide circle around the entire property', 'A special technique for aerating corner lots'], correct_index: 1, explanation: 'Cutting across the lawn saves massive time at every house. The horseshoe pattern means you canvass 2–3 homes up one side and back down the other — all without returning to the street.' },
+      { question: 'How far must you keep the aerator from fixed objects like sprinklers and walkway edges?', options: ['6 inches', '12 inches', '18 inches', '3 feet'], correct_index: 2, explanation: '18 inches is the mandatory distance. If you damage a sprinkler head, light, or walkway edge, you are personally responsible for the repair cost.' },
+      { question: 'What is the "10-Second Rule"?', options: ['You must deliver your pitch in under 10 seconds', 'After ringing the doorbell, wait a maximum of 10 seconds before moving on if you don\'t hear anyone', 'Run to the next house in under 10 seconds', 'You have 10 seconds to start the aerator after arriving at a property'], correct_index: 1, explanation: 'Waiting longer at empty houses wastes 20–60 seconds per door, which adds up to at least one full hour lost per day. Ring, listen, move.' },
+      { question: 'Why is "Run All Day" (Step 1) considered the most impactful single step?', options: ['It helps you stay warm in cold weather', 'It gives you a 3-to-1 door advantage over walking, tripling your sales opportunities', 'It impresses homeowners when they see you running', 'It counts as your daily exercise so you don\'t need to work out after'], correct_index: 1, explanation: 'Running between doors gets you to roughly 3 times more houses than walking. More doors = more chances to sell, which is the foundation of the entire system.' },
+      { question: 'According to the efficiency math, if you aerate 10 lawns at 15 minutes each instead of 30 minutes each, how much extra time do you free up?', options: ['30 minutes', '1 hour', '2.5 hours', '5 hours'], correct_index: 2, explanation: '10 lawns × 30 min = 5 hours. 10 lawns × 15 min = 2.5 hours. That\'s 2.5 extra hours you can use to sell and aerate roughly 5 more lawns.' },
+      { question: 'What must you do to clearly mark a completed job for the neighbourhood to see?', options: ['Spray paint the curb', 'Place a company flag in the lawn at the street beside the driveway', 'Leave a business card taped to the mailbox', 'Take a photo and text it to your manager'], correct_index: 1, explanation: 'Flags serve as both proof of your work and powerful marketing. Every neighbour who drives by sees that business is happening on their street.' },
+      { question: 'What is the maximum time an aeration sales conversation should last?', options: ['30 seconds', '5 minutes', '15 minutes', 'As long as the customer wants to talk'], correct_index: 1, explanation: 'An aeration sales call should last 60 seconds to 5 minutes maximum. Spending unnecessary time in conversation breaks your momentum and costs you money.' },
+      { question: 'What is the policy regarding your equipment when knocking on doors?', options: ['Leave it running on the sidewalk so customers know you\'re working', 'Keep your eyes on your machine at all times and never leave it unattended', 'Ask a neighbour to watch it while you canvass', 'Lock it to a fence post'], correct_index: 1, explanation: 'Aerators are expensive and essential to your earnings. They must always be within your line of sight, never left unattended.' },
+      { question: 'Why does the 5 Steps to High Steps system work even for workers with weak sales scripts?', options: ['Because the system includes a cheat sheet with scripts', 'Because getting to enough doors means you\'ll find buyers regardless of your pitch quality', 'Because managers close the sales for you', 'Because the steps teach advanced negotiation techniques'], correct_index: 1, explanation: 'The entire philosophy is based on volume. You can\'t control how receptive homeowners are or how polished your pitch is — but you CAN control how many doors you reach.' },
+      { question: 'What should you NEVER do while on your assigned route?', options: ['Take a short water break on a customer\'s porch', 'Leave your route to meet up with a co-worker', 'Check your route map between streets', 'Ask a customer for their neighbour\'s name'], correct_index: 1, explanation: 'Leaving your route wastes time and takes you away from your earning zone. Every minute off your route is money lost.' },
+    ],
+  },
+
+  // =====================================================================
+  // MODULE 3 — Basic Linking Strategies
+  // =====================================================================
+  {
+    module_id: 'module_03_linking',
+    order_index: 3,
+    is_active: true,
+    level: 1,
+    title: 'Basic Linking Strategies: The Power of the Neighbourhood',
+    description:
+      'Master the "passing" game of sales. Learn how to use linking, the "Mushroom with a Name" strategy, and situational awareness to dominate an entire street.',
+    lesson_content: `Selling 'cold' at the door can be tough because the homeowner doesn't know you or your company. But what if you told them that you're already taking care of their neighbour's lawn? This is called 'linking.'`,
+    lesson_sections: [
+      {
+        type: 'text',
+        body: `Selling 'cold' at the door is tough. The homeowner doesn't know you, doesn't know the company, and wasn't thinking about lawn care when you rang the bell. You're interrupting their day and asking them to buy something on the spot. But what if you told them you're already taking care of their neighbour's lawn? Everything changes.
+
+This is called 'linking' — the act of expanding outward from a single initial customer into multiple customers, all within view of one another on the same or connected streets. It has been proven year after year that closing a customer on a link is at least 5 times easier than closing a cold customer.
+
+Here's what separates average workers from top stars. Average workers step about 6–10 lawns per day: 5–7 from cold sales, only 1–3 from linking. Top workers step 20 lawns per day: only 3–5 from cold sales, and 15–17 from linking.
+
+Do you see the difference? Top earners don't have magical sales skills — they master linking. The bulk of their income comes from the credibility and momentum of their links, not from cold-knocking 60 houses hoping for a yes.
+
+Make it your goal every day that more than 50% of your lawns come as direct links from other lawns. The higher you raise this percentage, the fewer dry spells you'll have and the higher your step count will climb.`,
+      },
+      {
+        type: 'text',
+        heading: 'The Psychology Behind Linking',
+        body: `Homeowners inherently want to take care of their properties, but they typically procrastinate when it comes to acting on their intentions. When you show up cold at a door, you're asking someone to make an immediate decision about a service they weren't thinking about, from a person they've never met, representing a company they may not know. That's a lot of barriers.
+
+Linking removes almost all of those barriers at once. Here are some of the actual thoughts that go through homeowners' minds when they see you working on their street:
+
+1. "Well, if Tommy next door is doing it, then we probably need it too."
+2. "If Tommy paid $60, then I should do the same."
+3. "If Tommy is helping this kid at the door, then so should I."
+4. "If everyone on the street is getting it done, I don't want to be left out."
+5. "If his lawn is going to be green, I want mine to be green too."
+6. "If he paid for it, I don't want to look cheap by passing on it."
+7. "If they're all doing it, then obviously the service and value must be good."
+8. "If they're all doing it, then obviously this is a great company."
+9. "If this kid knows all my neighbours' names, what have I been missing out on?"
+10. "Wow, I'm glad he caught me at home — I would have missed out on the street sale."
+
+These aren't random. They represent powerful psychological forces: social proof (everyone else is doing it), fear of missing out (I don't want to be left out), trust transfer (if my neighbour trusts this person, I can too), and reciprocity (my neighbours helped this worker, so should I).
+
+When you knock on a door cold, you have zero credibility. When you knock on a door with 5 names and 5 flags on the street, you have overwhelming credibility. That's the power of linking.`,
+      },
+      {
+        type: 'text',
+        heading: 'Technique 1: Mushroom with a Name',
+        body: `When you close your first sale of the day or on a new street, don't just start aerating. Before you fire up the machine, ask the customer for their first name and the names of their surrounding neighbours. Mention that you want all the lawns to be equally green and that you'd appreciate any help getting as many people as possible involved in the same great street deal.
+
+Here's the step-by-step process:
+
+1. Close your first sale. Get the customer's name (let's say it's John).
+
+2. Get neighbour names. Ask John: "Do you know the names of your neighbours on either side or across the street?" Even one name is gold.
+
+3. Flag the lawn near the driveway so it's visible from the street.
+
+4. Aerate half the front lawn — specifically the section that connects to the property next door. This is strategic: you're creating a visual chain.
+
+5. Approach the neighbour. Turn down your throttle (so it's not too loud), go to the connecting house, and say something like: "Hi! I'm just next door doing a core aeration for John, and since I'm already here, I can give you the same street deal."
+
+6. Address them by name if John gave it to you. This dramatically lowers their guard.
+
+7. Close, get MORE names, flag, and continue. Follow this process 2–3 houses to one side, then cross the street and work back the other way.
+
+This is called 'mushrooming' because your sales spread outward from a single point — like a mushroom growing from a single spore. Each new sale gives you more names and more credibility for the next door.
+
+The psychology: You're no longer a stranger. You're "John's guy." The neighbour can literally look over and see the flag on John's lawn and hear your machine. All the barriers of a cold sale have vanished.`,
+      },
+      {
+        type: 'image',
+        heading: 'Technique 2: Eyes & Ears — Trumps Everything',
+        body: `Eyes & Ears sales have a closing percentage that is twice that of Mushroom linking and Go-Backs. From the moment you start your day, your eyes and ears should be on high alert.
+
+The concept is simple: no matter what you're doing during the day, whenever you see or hear the presence of a homeowner you haven't serviced yet, you must stop what you're doing and approach them. This means:
+
+A car pulling into or out of a driveway. Someone working in their yard or garage. Someone walking their dog. Someone walking to their mailbox. Someone looking over their hedge or fence at you. Someone looking out their window at you.
+
+Why is the closing rate so much higher? Because these people are already outside. There's no door between you and them. They can see your flags, hear your machine, and watch you working. You're approaching them in a natural, non-threatening way — not interrupting them behind a closed door.
+
+The critical rule: If you are in the middle of aerating and you see someone outside — stop and go link. If you're in the middle of your Mushroom canvassing and you see a car pulling into a driveway four doors up — run over and get your link. If you see someone walking their dog in the opposite direction — stop and go link.
+
+Eyes & Ears trumps everything. The lawn can wait. The mushroom can wait. An outdoor prospect who is right there, right now, cannot wait.`,
+        image: { src: `${STORAGE_BASE}/car-overhead.png`, alt: 'Car pulling into driveway — Eyes & Ears opportunity', position: 'inline-right', maxHeight: 120 },
+      },
+      {
+        type: 'image',
+        heading: 'Technique 3: Go-Backs with Names',
+        body: `Throughout the day, you've been knocking on doors where nobody was home. You've also had some homeowners who were 'on the fence' — not a definite yes, but not a hard no either. Between 5:00 PM and 7:00 PM, these people come home from work. This is when you execute your Go-Backs.
+
+Here's what makes Go-Backs so powerful: when you knocked on these doors at 10 AM, you were a cold stranger with zero credibility. Now you're returning at 6 PM with a list of 5–6 names of neighbours who all bought the service today, flags visible up and down the street, and the confidence of someone who has been working the neighbourhood all day.
+
+The key to effective Go-Backs is how you SET THEM UP earlier in the day. When a homeowner is objecting or trying to dismiss you in the morning, don't push for a hard close. Instead, respectfully say: "I can see you aren't sure right now and need to think about it. I'll go aerate a few more of your neighbours and will try back after I'm done." Then move on.
+
+By doing this, you've avoided a definite "No" — the door is still open. When you return later and address them by name, the homeowner is caught off guard. They ask how you know their name, and you say: "Oh, I was just down the street with John and he mentioned your name. I've done John, Mary, Mark, Joe, and Julie today and just wanted to check back with you because I could tell you were interested."
+
+That's how you turn a maybe into a yes. As homeowners see more and more neighbours getting aerated throughout the day, they realize it's better to just get it done rather than be the odd one out. The social proof compounds with every flag that goes up.`,
+        image: { src: `${STORAGE_BASE}/lady-walking-dog.png`, alt: 'Lady walking dog — Eyes & Ears opportunity', position: 'inline-right', maxHeight: 160 },
+      },
+      {
+        type: 'text',
+        heading: 'Your Two Daily Linking Goals',
+        body: `To keep your linking sharp every single day, commit to these two goals:
+
+Goal 1: Always have the next lawn sold and flagged BEFORE finishing your current lawn. Think about when your confidence is highest — it's right after getting a sale. Your energy is up, your scripts are flowing naturally, and you're in the zone. Use that moment of heightened confidence to approach the next neighbour. The last thing you want is to finish aerating, collect payment, and then have to start cold with zero momentum. Don't worry if keeping the link going means some lawns take a little longer to get done. The customers are waiting next to no time at all — what's most important is that you keep the chain going.
+
+Goal 2: Expand each cold sale into at least 3 more lawns within view. If over the course of your day you make 5 cold sales and you link at least 2–3 steps off each one, you'll hit 15–20 steps every day. Getting 5 cold sales is not difficult. With the correct focus on linking, you can ensure yourself a seat at the winner's table every night.`,
+      },
+      {
+        type: 'storyboard',
+        heading: 'Linking in Action: A Real Neighbourhood Story',
+        description: 'Step through a full day of linking on a real neighbourhood map. Watch how one cold sale turns into 9+ steps through Mushroom, Eyes & Ears, and Go-Backs.',
+        baseImage: { src: `${STORAGE_BASE}/linking-aerial-map.png`, alt: 'Aerial view of Fessenden Way & Jarlan Terrace neighbourhood' },
+        frames: [
+          { label: 'Drop-Off Point', caption: 'You\'re dropped off at the corner of Fessenden Way & Jarlan Terrace. Machine unloaded, gear checked. Time to find your first sale.', overlays: [{ type: 'icon', src: `${STORAGE_BASE}/cps-van.png`, x: 96, y: 61 }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 68, y: 76 }] },
+          { label: '1st Cold Sale: John', caption: 'You close your first cold sale — John. Ask for his name and neighbours\' names. Flag the lawn. Aerate the front, starting with the section connecting to the neighbour. The linking system begins.', overlays: [{ type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 75, y: 31 }, { type: 'label', text: '1st sale (John)', x: 80, y: 31, color: '#dc2626' }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 66, y: 14 }, { type: 'label', text: '1st mushroom (Mary)', x: 72, y: 16, color: '#dc2626' }, { type: 'label', text: 'On the fence', x: 74, y: 23, color: '#f59e0b' }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 68, y: 76 }] },
+          { label: 'Mushroom Sales: Mary & Mark', caption: 'Using John\'s name, you approach Mary next door — she says yes! Then using John and Mary\'s names, you continue mushrooming across the street. Mark says yes. Some doors say "Not today" or "Too expensive" — that\'s fine. You now have 3 names and 3 flags.', overlays: [{ type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 75, y: 31 }, { type: 'label', text: '1st sale (John)', x: 80, y: 31, color: '#dc2626' }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 66, y: 14 }, { type: 'label', text: '1st mushroom (Mary)', x: 72, y: 16, color: '#dc2626' }, { type: 'label', text: 'On the fence', x: 74, y: 23, color: '#f59e0b' }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 42, y: 43 }, { type: 'label', text: '2nd Mushroom (Mark)', x: 36, y: 44, color: '#dc2626' }, { type: 'label', text: 'Not today', x: 35, y: 36, color: '#f59e0b' }, { type: 'label', text: 'Nobody home', x: 42, y: 53, color: '#6b7280' }, { type: 'label', text: 'Nobody home', x: 45, y: 62, color: '#6b7280' }, { type: 'label', text: 'On the fence', x: 84, y: 41, color: '#f59e0b' }, { type: 'label', text: 'Too expensive', x: 84, y: 50, color: '#f59e0b' }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 66, y: 31 }] },
+          { label: 'Eyes & Ears: Car Spotted', caption: 'After completing the mushroom, you return to finish John\'s lawn. On the way back you notice a car pulling into a driveway. STOP. Run over. Using John, Mary, and Mark\'s names, you approach Joe.', overlays: [{ type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 75, y: 31 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 66, y: 14 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 42, y: 43 }, { type: 'label', text: 'Not today', x: 35, y: 36, color: '#f59e0b' }, { type: 'label', text: 'Nobody home', x: 42, y: 53, color: '#6b7280' }, { type: 'label', text: 'Nobody home', x: 45, y: 62, color: '#6b7280' }, { type: 'label', text: 'On the fence', x: 84, y: 41, color: '#f59e0b' }, { type: 'label', text: 'Too expensive', x: 84, y: 50, color: '#f59e0b' }, { type: 'icon', src: `${STORAGE_BASE}/car-overhead.png`, x: 59, y: 98 }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 66, y: 31 }] },
+          { label: 'Eyes & Ears Sale: Joe', caption: 'Joe says yes — that\'s your 4th sale. Flag his lawn. Now complete the aerations for John, Mary, and Mark. While aerating, keep your eyes and ears on high alert.', overlays: [{ type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 75, y: 31 }, { type: 'label', text: '1st sale (John)', x: 80, y: 31, color: '#dc2626' }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 66, y: 14 }, { type: 'label', text: '1st mushroom (Mary)', x: 72, y: 16, color: '#dc2626' }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 42, y: 43 }, { type: 'label', text: '2nd Mushroom (Mark)', x: 36, y: 44, color: '#dc2626' }, { type: 'label', text: 'Not today', x: 35, y: 36, color: '#f59e0b' }, { type: 'label', text: 'Nobody home', x: 42, y: 53, color: '#6b7280' }, { type: 'label', text: 'Nobody home', x: 45, y: 62, color: '#6b7280' }, { type: 'label', text: 'On the fence', x: 84, y: 41, color: '#f59e0b' }, { type: 'label', text: 'Too expensive', x: 84, y: 50, color: '#f59e0b' }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 83, y: 57 }, { type: 'label', text: '1st Eyes & Ears (Joe)', x: 89, y: 58, color: '#dc2626' }, { type: 'icon', src: `${STORAGE_BASE}/car-overhead.png`, x: 68, y: 60 }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 66, y: 31 }] },
+          { label: 'Eyes & Ears Sale: Julie', caption: 'While aerating Mark\'s lawn, you see a lady walking her dog. STOP the machine. Approach her with your list of names. Julie says yes. That\'s 5 sales from 1 cold start.', overlays: [{ type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 75, y: 31 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 66, y: 14 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 42, y: 43 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 83, y: 57 }, { type: 'label', text: '1st Eyes & Ears (Joe)', x: 89, y: 58, color: '#dc2626' }, { type: 'label', text: '2nd Eyes & Ears (Julie)', x: 35, y: 5, color: '#dc2626' }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 51, y: 25 }, { type: 'icon', src: `${STORAGE_BASE}/lady-walking-dog.png`, x: 64, y: 86 }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 56, y: 33 }, { type: 'label', text: 'On the fence', x: 84, y: 41, color: '#f59e0b' }, { type: 'label', text: 'Too expensive', x: 84, y: 50, color: '#f59e0b' }, { type: 'icon', src: `${STORAGE_BASE}/car-overhead.png`, x: 68, y: 60 }] },
+          { label: 'Mushroom from Joe: Joanne', caption: 'After completing Joe\'s lawn, start a new mushroom from his house. Joanne says yes — but the rest of the mushroom hits "Not interested," "Too dry," "Have contractor." That\'s fine. Aerate Joanne\'s lawn.', overlays: [{ type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 75, y: 31 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 66, y: 14 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 42, y: 43 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 83, y: 57 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 21, y: 7 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 79, y: 67 }, { type: 'label', text: 'Mushroom (Joanne)', x: 87, y: 69, color: '#dc2626' }, { type: 'label', text: 'Not interested', x: 47, y: 79, color: '#f59e0b' }, { type: 'label', text: 'Too dry', x: 44, y: 86, color: '#f59e0b' }, { type: 'label', text: 'Have contractor', x: 65, y: 95, color: '#f59e0b' }, { type: 'label', text: 'Nobody home', x: 51, y: 98, color: '#6b7280' }, { type: 'label', text: 'No Habla Ingles', x: 95, y: 89, color: '#f59e0b' }, { type: 'label', text: 'Too wet', x: 94, y: 96, color: '#f59e0b' }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 64, y: 47 }] },
+          { label: 'Go-Back Sale: Bill', caption: 'On the way to aerate Julie\'s lawn, you pass Bill\'s house — he was "on the fence" this morning. Now you have 6 names to drop. "John, Mary, Mark, Joe, Julie, and Joanne all got it done today..." Bill caves.', overlays: [{ type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 75, y: 31 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 66, y: 14 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 42, y: 43 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 83, y: 57 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 21, y: 7 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 79, y: 67 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 79, y: 40 }, { type: 'label', text: 'Go back (Bill)', x: 84, y: 41, color: '#dc2626' }, { type: 'label', text: 'Too expensive', x: 84, y: 50, color: '#f59e0b' }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 65, y: 64 }] },
+          { label: 'Go-Back Sale: Rita', caption: 'Rita said "too expensive" earlier. With 7 names and flags everywhere, the social proof is overwhelming. She agrees to the original price. Go-Back closed. That\'s 8 sales from 1 cold start.', overlays: [{ type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 75, y: 31 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 66, y: 14 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 42, y: 43 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 83, y: 57 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 21, y: 7 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 79, y: 67 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 79, y: 40 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 69, y: 23 }, { type: 'label', text: 'Go Back (Rita)', x: 74, y: 23, color: '#dc2626' }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 63, y: 36 }] },
+          { label: 'The Cycle Restarts', caption: 'Head to Julie\'s house to complete her lawn aeration, then start the entire Mushroom process over from her location. This is how top stars step 20 lawns in a day — one cold sale mushrooms into an entire street.', overlays: [{ type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 75, y: 31 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 66, y: 14 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 42, y: 43 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 83, y: 57 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 21, y: 7 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 79, y: 67 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 79, y: 40 }, { type: 'flag', src: `${STORAGE_BASE}/flag.png`, x: 69, y: 23 }, { type: 'icon', src: `${STORAGE_BASE}/aerator-icon.png`, x: 56, y: 29 }, { type: 'label', text: 'Start over from here!', x: 56, y: 22, color: '#22c55e' }] },
+        ],
+      },
+      {
+        type: 'video',
+        heading: 'Dave Wilkerson on Mushroom with a Name',
+        description: 'Dave explains the Mushroom linking strategy in detail — how one cold sale mushrooms outward into an entire street of customers using names as your secret weapon.',
+        youtubeId: 'cRgTNwCbw0o',
+        note: 'These videos were recorded several years ago — prices mentioned may be outdated, but the concepts still apply 100%.',
+      },
+      {
+        type: 'video',
+        heading: 'Tilo McAllister on Eyes and Ears',
+        description: 'Tilo breaks down the Eyes & Ears linking method — the highest-percentage sale type in the CPS system. When you see or hear a homeowner outside, STOP everything and go link.',
+        youtubeId: 'cImSAtGbKjU',
+      },
+      {
+        type: 'text',
+        heading: 'Staying Organized — Your Tools Are Your Ammunition',
+        body: `To effectively manage all this linking, you must stay organized. Names are your most valuable currency on the route — if you forget a name, you've lost a potential sale. Write every name down immediately.
+
+Before you leave the shop, make sure your folder is stocked and ready:
+
+Route map and log sheet — your game plan and scorecard for the day. 5 receipts and 2 upsell contracts — always have more than you think you'll need. Sales glossy — your visual tool for the pitch. Pouch loaded — for collecting cash and cheques. At least one working pen — sounds basic, but running out of ink mid-route is a rookie mistake.
+
+Keep your folder organized so you can quickly jot down neighbour names and transition seamlessly from one linked sale to the next. The fastest way to break a hot link is to fumble around looking for a receipt or pen.`,
+      },
+    ],
+    quiz: [
+      { question: 'How many times easier is it to close a customer on a link compared to a cold sale?', options: ['2 times easier', '3 times easier', '5 times easier', '10 times easier'], correct_index: 2, explanation: 'It has been proven year after year that closing on a link is at least 5 times easier than cold-selling.' },
+      { question: 'What is the "Mushroom with a Name" strategy?', options: ['Selling organic mushroom compost to clients', 'Closing a sale, then getting the customer\'s name and neighbours\' names to use at surrounding doors', 'Finding mushrooms on the lawn to show the customer their soil needs help', 'A special pricing discount for bulk neighbourhood sales'], correct_index: 1, explanation: 'After closing your first sale, you gather names from that customer and use them to build instant credibility at the next doors.' },
+      { question: 'Which linking method has the HIGHEST closing percentage?', options: ['Cold knocking', 'Mushroom with a Name', 'Go-Backs with Names', 'Eyes & Ears'], correct_index: 3, explanation: 'Eyes & Ears has a closing percentage twice that of Mushroom linking and Go-Backs.' },
+      { question: 'According to CPS data, how do top workers (20 steps/day) get most of their sales?', options: ['15–17 from cold sales, 3–5 from linking', '10 from cold sales, 10 from linking', '3–5 from cold sales, 15–17 from linking', 'All 20 from cold sales — they just knock faster'], correct_index: 2, explanation: 'Top workers get the vast majority of their sales from linking. Only 3–5 come from cold knocking.' },
+      { question: 'What should you do if you\'re in the middle of aerating a lawn and you see someone getting out of their car 4 doors up?', options: ['Finish the lawn first, then go talk to them', 'Wave but keep aerating — you\'ll catch them on the Go-Back', 'Stop aerating immediately and go approach them with your names', 'Yell your pitch from across the street'], correct_index: 2, explanation: 'Eyes & Ears trumps everything. The lawn can wait — an outdoor prospect who is right there right now cannot.' },
+      { question: 'Which of the following is NOT one of the psychological reasons homeowners buy off a link?', options: ['"If my neighbour is doing it, we probably need it too"', '"I don\'t want to look cheap by passing on it"', '"This salesperson offered me the lowest price on the street"', '"If everyone on the street is getting it done, I don\'t want to be left out"'], correct_index: 2, explanation: 'Linking psychology is based on social proof, fear of missing out, and trust transfer — not on low prices.' },
+      { question: 'What is the ideal time window for executing Go-Backs?', options: ['8:00 AM – 10:00 AM', '12:00 PM – 2:00 PM', '5:00 PM – 7:00 PM', 'After 8:00 PM'], correct_index: 2, explanation: 'Between 5–7 PM is when people who weren\'t home earlier return from work.' },
+      { question: 'When a homeowner is objecting to your pitch in the morning and you plan to Go-Back later, what is the KEY thing to avoid?', options: ['Giving them a flyer', 'Letting them say a definite "No"', 'Telling them your name', 'Mentioning the neighbours'], correct_index: 1, explanation: 'If they say a hard "No," the door is closed. Instead, respectfully say you\'ll try back after doing a few more neighbours.' },
+      { question: 'What is your first daily linking goal?', options: ['Get at least 20 cold sales before starting to link', 'Always have the next lawn sold and flagged BEFORE finishing your current lawn', 'Complete your entire route map before 3 PM', 'Memorize every homeowner\'s name on the street'], correct_index: 1, explanation: 'You want to use the confidence high from each sale to immediately secure the next one.' },
+      { question: 'What should be ready in your folder at all times while linking?', options: ['Your lunch, water bottle, and phone charger', 'Route map, log sheet, 5 receipts, 2 upsell contracts, sales glossy, and a pen', 'Personal magazines and spare aerator parts', 'A laptop for looking up property records'], correct_index: 1, explanation: 'Names are your ammunition, and organized paperwork ensures you can close and log sales instantly.' },
+    ],
+  },
+
+  // =====================================================================
+  // MODULE 4 — Sales Basics: The CPS Pitch
+  // =====================================================================
+  {
+    module_id: 'module_04_sales_basics',
+    order_index: 4,
+    is_active: true,
+    level: 1,
+    title: 'Sales Basics: The CPS Pitch That Closes',
+    description:
+      'Learn the proven CPS sales presentation — from approach to close. Master the scripts, body language, and objection handling techniques that turn a cold knock into a paid lawn.',
+    lesson_content: '',
+    lesson_sections: [
+      {
+        type: 'text',
+        heading: 'The CPS Sales Approach',
+        body: `The sale begins before you open your mouth. How you approach a door, how you stand, how you smile — all of it sets the stage for whether a homeowner will listen to you or shut you down in seconds.
+
+Here's the CPS formula: Approach confidently. Smile genuinely. Speak clearly. Be brief. Close directly. Every successful pitch follows this sequence. The best CPS stars don't use fancy words or high-pressure tactics. They use a natural, friendly, and professional approach that makes homeowners feel comfortable and informed.
+
+Your goal at the door is simple: introduce yourself, explain the service, show value, and ask for the sale. That's it. The entire interaction should take 60 seconds to 5 minutes max. If you're spending longer than that, you're either over-explaining or getting pulled into a conversation — both of which cost you money.`,
+      },
+      {
+        type: 'text',
+        heading: 'Step 1: The Knock and Introduction',
+        body: `When you arrive at the door, knock firmly (three solid knocks) or ring the bell once. Step back about 3 feet from the door — this gives the homeowner space and makes them feel safe when they open.
+
+Never stand directly in front of the door or lean against the frame. Homeowners peek through windows and peepholes. If you look too close or too aggressive, they won't even open the door.
+
+When the door opens, smile immediately and say:
+
+"Hi there! My name is [Your Name] and I'm out here with Canadian Property Stars doing the neighbourhood lawn care service today."
+
+That's your opener. Clean, confident, and immediate. You've told them your name, your company, and that you're already working the neighbourhood — all in one sentence. The phrase "doing the neighbourhood" is critical because it implies that this is already happening on their street. It's not a cold pitch — it's an invitation to join what's already in progress.`,
+      },
+      {
+        type: 'text',
+        heading: 'Step 2: The Service Explanation',
+        body: `After your introduction, transition immediately into the service explanation. Don't wait for them to ask "what is it?" — lead them there:
+
+"What we do is a core aeration — we go over your entire lawn with a commercial-grade aerator that pulls small plugs of soil out of the ground. This breaks up the compacted soil, lets water and nutrients reach the roots, and gives your lawn the room it needs to grow thicker and healthier."
+
+Keep it simple and visual. Many homeowners don't know what aeration is, so paint the picture for them. If you have your sales glossy with you (you should), hold it up and point to the before-and-after photos while you explain. Visual proof is more powerful than any words.
+
+If the homeowner says "I already know what aeration is," great — skip ahead. Don't over-explain to someone who's already informed. Read the situation and adapt.`,
+      },
+      {
+        type: 'text',
+        heading: 'Step 3: Establish Credibility with Names',
+        body: `This is where your linking work pays off. After explaining the service, drop names:
+
+"I was actually just next door doing [Neighbour's Name]'s lawn, and since I'm already here with the machine, I wanted to offer you the same street deal."
+
+Or if you have multiple names:
+
+"I've already done [Name], [Name], and [Name] on the street today, and they're all getting the neighbourhood rate."
+
+The power of names cannot be overstated. When you mention a neighbour by name, the homeowner's brain shifts from "random salesperson" to "neighbourhood service provider my friends are using." Their guard drops significantly.
+
+If you don't have any names yet (first sale of the day), use the company's credibility instead: "We've been servicing this area for years and the lawns we've treated always come back noticeably thicker and greener."`,
+      },
+      {
+        type: 'text',
+        heading: 'Step 4: The Price and Close',
+        body: `Once you've explained the service and established credibility, go directly to the price and close. Don't dance around it:
+
+"For a standard front and back lawn, it's just $XX including tax. I can have it done in about 15–20 minutes and you'll see plugs on the lawn for about a week before they break down into the soil."
+
+Then close with a direct question:
+
+"Would you like me to get yours done while I'm here?"
+
+Or the assumptive close:
+
+"I'll get started on your front lawn right now — would you prefer I do the back as well?"
+
+The key is to ask for the sale. Many rookies explain beautifully but then just stand there waiting for the homeowner to volunteer. That almost never happens. You must ask. The worst they can say is no — and even then, you've planted the seed for a Go-Back later.`,
+      },
+      {
+        type: 'text',
+        heading: 'Handling Common Objections',
+        body: `Every homeowner objection falls into a few predictable categories. Here's how to handle the most common ones:
+
+"I'm not interested." → "No problem! Most of the folks on the street said the same thing at first, but once they saw the results on [Neighbour's Name]'s lawn, they changed their mind. I'll be here for a bit if you'd like to see the results — and I can always swing back later."
+
+"It's too expensive." → "I totally understand. The great news is that aeration is one of the most cost-effective things you can do for your lawn — it actually saves you money on watering and fertilizer in the long run. Plus, with [X] neighbours already on board, you're getting the best rate we offer."
+
+"I need to talk to my spouse." → "Of course! What time will they be home? I'll be working the street for a few more hours so I can easily swing back. What's your name so I can check in later?"
+
+"I already have a lawn care company." → "That's great — you clearly take pride in your property! Do you know if they do core aeration specifically? A lot of lawn companies don't include it in their packages, and it's the one thing that makes the biggest difference."
+
+"My lawn looks fine." → "It does look great! That's exactly why aeration would be perfect right now — it keeps a good lawn looking good and prevents the soil from compacting over time. Think of it like an oil change for your lawn."
+
+The golden rule with objections: never argue. Acknowledge, empathize, redirect. If they still say no after your response, smile, thank them, and move on. You can always Go-Back later with more names.`,
+      },
+      {
+        type: 'text',
+        heading: 'Body Language and Tone',
+        body: `Your body language communicates more than your words. Here are the non-negotiables:
+
+Smile. Always. Even if the last 5 doors said no. Your smile is the first thing a homeowner sees and it immediately sets the tone for the interaction. A genuine smile says "I'm friendly, I'm professional, and I'm here to help."
+
+Stand tall with open body language. Don't cross your arms, don't put your hands in your pockets, and don't slouch. Stand at a slight angle to the door rather than square-on — this feels less confrontational.
+
+Make eye contact. Look them in the eye when you speak and when they speak. This builds trust and shows confidence.
+
+Speak at a natural pace. Don't rush through your pitch like you're trying to get it over with. But don't drag it out either. Speak the way you'd talk to a friend's parent — respectful, clear, and conversational.
+
+Use hand gestures naturally. Point toward the lawn, gesture toward the neighbours' flags, hold up your sales glossy. Movement keeps the homeowner engaged and makes your pitch feel dynamic rather than rehearsed.
+
+Match their energy. If a homeowner is relaxed and chatty, be a little more casual. If they seem busy and to-the-point, get to the price quickly. Reading the room is one of the most valuable skills you can develop.`,
+      },
+      {
+        type: 'video',
+        heading: 'Dave Wilkerson on the Perfect CPS Pitch',
+        description: 'Dave walks through the complete CPS sales presentation from start to finish — the approach, the explanation, the name-drop, the price, and the close.',
+        youtubeId: 'vQJ7lmKnMkw',
+        note: 'These videos were recorded several years ago — prices mentioned may be outdated, but the concepts still apply 100%.',
+      },
+      {
+        type: 'video',
+        heading: 'Tilo McAllister on Handling Objections',
+        description: 'Tilo covers the most common objections you will hear at the door and how to handle each one with confidence and professionalism.',
+        youtubeId: 'FcS_z6U1y9k',
+      },
+      {
+        type: 'text',
+        heading: 'The Upsell: Fertilizer and Premium Services',
+        body: `Once a homeowner says yes to aeration, you have an opportunity to increase your revenue per lawn with an upsell. The most common upsell is fertilizer application, which pairs naturally with aeration.
+
+Here's a smooth transition: "Great! While I'm doing the aeration, I can also put down a professional-grade fertilizer that will really maximize the results. The plugs I pull create perfect channels for the fertilizer to reach the roots directly. It's an additional $XX — would you like me to add that on?"
+
+The timing matters. Only offer the upsell AFTER they've committed to the aeration. If you try to sell both at once, it can feel overwhelming and actually reduce your close rate on the base service. Let them say yes first, then offer the upgrade.
+
+Some homeowners will want both, some won't. Never pressure the upsell — a happy aeration customer who might call back next year is more valuable than an annoyed customer who feels they were oversold.`,
+      },
+    ],
+    quiz: [
+      { question: 'How far back should you stand from the door after knocking?', options: ['Right at the doorstep', 'About 3 feet back', 'At the end of the driveway', 'On the sidewalk'], correct_index: 1, explanation: 'Standing about 3 feet back gives the homeowner space and makes them feel comfortable when they open the door.' },
+      { question: 'What is the purpose of saying "doing the neighbourhood" in your opening line?', options: ['To imply the homeowner has no choice', 'To tell them you\'re lost and looking for directions', 'To imply the service is already happening on their street — making it an invitation, not a cold pitch', 'To suggest you\'re offering a free service'], correct_index: 2, explanation: 'The phrase shifts the dynamic from cold pitch to neighbourhood event. The homeowner feels like they\'re joining something already in progress.' },
+      { question: 'What is the golden rule for handling objections?', options: ['Argue your point until they agree', 'Never argue — acknowledge, empathize, and redirect', 'Offer a lower price immediately', 'Walk away without responding'], correct_index: 1, explanation: 'Arguing with a homeowner never works. Acknowledge their concern, show empathy, and gently redirect toward the value of the service.' },
+      { question: 'When should you offer the fertilizer upsell?', options: ['Before explaining the aeration service', 'At the same time as the aeration pitch', 'After they\'ve already committed to the aeration', 'Only if they specifically ask about fertilizer'], correct_index: 2, explanation: 'Offering both at once can overwhelm the customer. Let them say yes to aeration first, then offer the upsell as an add-on.' },
+      { question: 'A homeowner says "I need to talk to my spouse." What is the best response?', options: ['"They don\'t need to know about it."', '"I\'ll wait here until they get home."', '"Of course! What time will they be home? I can swing back. What\'s your name?"', '"If you don\'t decide now, the deal expires."'], correct_index: 2, explanation: 'Get their name, find out when the spouse returns, and plan your Go-Back. You\'ve kept the door open and gathered valuable info.' },
+      { question: 'Why is making eye contact important during your pitch?', options: ['It\'s a way to intimidate the homeowner into buying', 'It builds trust and shows confidence', 'It\'s required by CPS policy', 'It helps you read the fine print on their door sign'], correct_index: 1, explanation: 'Eye contact signals confidence, honesty, and engagement — all of which build trust with the homeowner.' },
+      { question: 'If a homeowner says "I already have a lawn care company," what is the recommended response?', options: ['Tell them their company does a bad job', 'Ask if their company specifically does core aeration, since many don\'t include it', 'Offer to undercut their current company\'s price', 'Say "never mind" and leave'], correct_index: 1, explanation: 'Many lawn companies don\'t include aeration. By asking, you position your service as a complement, not a replacement.' },
+      { question: 'What should your complete pitch interaction last?', options: ['30 seconds or less', '60 seconds to 5 minutes maximum', '10 to 15 minutes for thoroughness', 'As long as it takes to convince them'], correct_index: 1, explanation: 'The full interaction — intro, explanation, name-drop, price, close — should take 60 seconds to 5 minutes max.' },
+      { question: 'What is the "assumptive close"?', options: ['Assuming they don\'t want the service and walking away', 'Phrasing your close as if they\'ve already decided to buy: "I\'ll get started on your front lawn right now"', 'Assuming they\'ll pay with cash only', 'Closing your eyes and hoping for the best'], correct_index: 1, explanation: 'The assumptive close skips the "would you like to" and goes straight to "I\'ll get started" — it gently guides the homeowner toward yes.' },
+      { question: 'What should you do if 5 doors in a row say no?', options: ['Take a 30-minute break to recover', 'Change your entire pitch to something new', 'Smile, keep your energy up, and knock the next door — every "no" brings you closer to a "yes"', 'Call your manager to complain about the territory'], correct_index: 2, explanation: 'Rejection is part of the game. Maintaining a positive attitude and momentum is what separates stars from average workers.' },
+    ],
+  },
+
+  // =====================================================================
+  // MODULE 5 — Preparing for Your First Week
+  // =====================================================================
+  {
+    module_id: 'module_05_first_week',
+    order_index: 5,
+    is_active: true,
+    level: 1,
+    title: 'Preparing for Your First Week: Hit the Ground Running',
+    description:
+      'Everything you need to know before Day 1 — from what to pack and what to wear, to understanding the shop routine, your pay structure, and what a typical first day looks like.',
+    lesson_content: '',
+    lesson_sections: [
+      {
+        type: 'text',
+        heading: 'Before Day 1: Your Pre-Season Checklist',
+        body: `Your first week at CPS sets the tone for your entire season. The contractors who earn the most money are the ones who show up on Day 1 fully prepared — physically, mentally, and logistically. Here's everything you need to have sorted before you step foot in the shop.
+
+Footwear: Invest in high-quality running shoes or steel-toed work boots. You will be on your feet running for 10+ hours a day. Old sneakers, sandals, or fashion shoes will destroy your feet and slow you down. This is not optional — it's the single most important gear decision you'll make.
+
+Clothing: Dress in layers for Canadian spring weather. Mornings can be cold and afternoons can be warm. Bring a light rain jacket — you will work in light rain. Avoid baggy clothing that can catch on the aerator. Wear clothes you don't mind getting dirty.
+
+Knapsack essentials: Pack enough food and drinks to last the entire day (you won't have access to a fridge or microwave). Water (at least 2 litres), high-energy snacks (granola bars, trail mix, fruit), and a substantial lunch (sandwiches, wraps). Dehydration and hunger are the top reasons rookies fade in the afternoon.
+
+Sun protection: Sunscreen, sunglasses, and a hat or cap for sunny days. Sunburn can take you out for days.
+
+Rain gear: A lightweight rain jacket and an extra pair of socks. Wet feet are miserable and lead to blisters.
+
+Personal items: Phone (fully charged), a watch or way to track time, and a small amount of cash for emergencies.`,
+      },
+      {
+        type: 'text',
+        heading: 'The Shop Routine: Morning Meeting',
+        body: `Every day starts at the shop with the morning meeting. This is where the energy is set for the day, routes are assigned, and important updates are shared. Here's what to expect:
+
+Arrive on time. This is non-negotiable. If the meeting starts at 7:00 AM, be there by 6:45 AM. Late arrivals miss critical information and start the day on the wrong foot with their team and managers.
+
+The morning meeting typically includes: a recap of yesterday's results and recognition of top performers, the day's route assignments, weather and schedule updates, a motivational talk or training tip, and goal-setting for the day.
+
+This is YOUR time to get mentally locked in. Set your daily goals during the meeting. Write them down. Decide how many steps you want to hit, how many links you want to get, and what your personal targets are. Don't just sit there passively — engage, listen, and get fired up.
+
+After the meeting, help load machines and equipment onto the vehicles. This is a team effort. The faster the load-out, the sooner everyone gets to their routes and starts earning money.`,
+      },
+      {
+        type: 'text',
+        heading: 'Understanding Your Pay Structure',
+        body: `As a CPS contractor, you earn commission on every lawn you complete. There is no hourly wage — your income is 100% performance-based. This means your earning potential is unlimited, but it also means that every minute you waste is money you'll never get back.
+
+Here's how the pay structure works:
+
+Base commission: You earn a set dollar amount for every aeration you complete. The exact rate depends on your region and the service type (front only, front and back, with or without fertilizer).
+
+Upsell bonuses: When you add fertilizer or other premium services to an aeration, your commission per lawn increases. This is why the upsell is so valuable — same lawn, same time, more money.
+
+Daily payout: At the end of each work day, your sales are tallied and you receive your payout. Top performers are recognized and may earn bonus incentives.
+
+The chair system: Each day, the top performer earns "the chair" — a recognition that comes with bonus pay. The chair is the most coveted prize in the CPS daily competition. Earning it consistently is what separates good workers from legends.
+
+Volume is king. A worker who steps 15 lawns at base commission will out-earn a worker who steps 5 lawns with upsells on every one. Focus on steps first, then layer in upsells as your pitch improves.`,
+      },
+      {
+        type: 'text',
+        heading: 'Your First Day on the Route',
+        body: `Your first day will feel overwhelming — and that's completely normal. Every top CPS earner felt the exact same way on Day 1. Here's what to expect and how to handle it:
+
+You'll be dropped off in a neighbourhood with your aerator, your folder, your flags, and your knapsack. For your first few days, you'll typically be paired with or dropped near an experienced worker who can help if you have questions.
+
+Your first few doors will be nerve-wracking. Your voice might shake, you might forget your script, and you might get a few quick "no's." This is all part of the learning curve. Nobody closes 20 lawns on Day 1. Your goal for the first day is simple: get comfortable at the door, make your first sale, and learn from every interaction.
+
+Here's a realistic Day 1 game plan:
+
+First hour: Get oriented. Walk your route, identify the best streets to start on (look for homes with larger lawns and well-maintained properties). Practice your pitch out loud as you walk.
+
+Hours 2–4: Start knocking. Focus on your opening line and service explanation. Don't worry about being perfect — focus on being friendly and clear. Celebrate your first sale, no matter how small.
+
+Hours 5–7: Build on your first sale. Use it as a link to mushroom outward. Apply the techniques from Module 3. Track the names you collect.
+
+Hours 8–10: Execute Go-Backs and end-of-day sales. Return to doors where nobody was home earlier. Use all the names you've collected throughout the day.
+
+End of day: Return to the pick-up point on time. Help unload equipment. Attend the evening debrief. Reflect on what worked and what you'll improve tomorrow.
+
+Remember: your first week is about building the foundation. Every door you knock on is practice. Every "no" teaches you something. Every "yes" builds your confidence. The stars who earn $20,000+ in a summer all started exactly where you are right now.`,
+      },
+      {
+        type: 'text',
+        heading: 'Common First-Week Mistakes to Avoid',
+        body: `Learn from the mistakes of thousands of rookies who came before you:
+
+Not bringing enough food and water. You will burn through calories at an incredible rate. Pack more than you think you need. Running out of energy at 3 PM means your most profitable hours (5–7 PM Go-Back time) are wasted.
+
+Walking instead of running. It feels weird to run between houses at first. Do it anyway. The difference between walking and running is literally 3x the number of doors you reach. Force the habit from Day 1.
+
+Spending too long at each door. Whether it's over-explaining the service or chatting with a friendly homeowner, time at one door is money lost at the next. Be friendly, be professional, close or move on.
+
+Not asking for names. Every single customer should be asked: "What's your name?" and "Do you know your neighbours' names?" This is the foundation of your linking system. Forgetting to ask is leaving money on the table.
+
+Getting discouraged by rejection. You will hear "no" far more than "yes." This is normal. The average closing rate means that for every 10 doors you knock, 1–2 will buy. That means 8–9 will say no. The math works in your favour as long as you keep knocking.
+
+Leaving the route early. Some rookies get discouraged and try to leave before pick-up time. This is the worst thing you can do. The last 2 hours of the day (5–7 PM) are often the most profitable because of Go-Backs and people returning from work. Stay the full day, every day.
+
+Not asking for help. Your managers and experienced co-workers are there to help you succeed. If you're struggling with your pitch, your route, or your confidence, ask. There's no shame in being a rookie — there's only shame in not trying to improve.`,
+      },
+      {
+        type: 'video',
+        heading: 'What to Expect on Your First Day',
+        description: 'A walkthrough of what your first day at CPS will look like — from the morning meeting to your first knock to the end-of-day debrief.',
+        youtubeId: 'v8mzGNMa2to',
+        note: 'These videos were recorded several years ago — some details may differ from your specific region, but the overall experience is the same.',
+      },
+      {
+        type: 'text',
+        heading: 'Setting Yourself Up for Week 1 Success',
+        body: `The contractors who have the best first weeks all share the same traits. They don't necessarily have the best sales skills or the most experience — they have the best habits from Day 1:
+
+They show up early every single morning. They bring enough food and water for the entire day. They run between houses from the very first door. They ask for names at every sale. They stay positive after rejection. They stay on their route for the full day. They ask questions and accept coaching. They set specific, measurable goals every morning.
+
+Your first week is not about being perfect. It's about building habits that will compound over the entire season. A worker who develops strong habits in Week 1 will out-earn a naturally talented worker with poor habits every single time.
+
+Commit to these fundamentals and trust the CPS system. The training you've completed in these modules has given you the knowledge — now it's time to put it into action. Welcome to the Professional Aerating League.`,
+      },
+    ],
+    quiz: [
+      { question: 'What is the single most important gear decision for a CPS contractor?', options: ['A high-end rain jacket', 'High-quality running shoes or steel-toed work boots', 'The latest smartphone', 'A large cooler for food storage'], correct_index: 1, explanation: 'You\'ll be on your feet running for 10+ hours a day. Proper footwear prevents injury and keeps you moving fast.' },
+      { question: 'Why are the last 2 hours of the day (5–7 PM) often the most profitable?', options: ['Because the aerator works better in cooler temperatures', 'Because your manager offers bonus pay after 5 PM', 'Because homeowners return from work and Go-Backs become highly effective with a full day of names', 'Because competing companies have already gone home'], correct_index: 2, explanation: 'People who weren\'t home earlier are now back, and you have a full day of names and flags to leverage.' },
+      { question: 'What is the CPS "chair" system?', options: ['A physical chair you sit in during meetings if you\'re the top earner', 'The top daily performer earns recognition and bonus pay', 'A penalty for the lowest performer who must stand during meetings', 'A chair you carry to customer doors as a prop'], correct_index: 1, explanation: 'The chair is the most coveted daily prize — recognition plus bonus pay for the top performer.' },
+      { question: 'How is your income structured as a CPS contractor?', options: ['Hourly wage plus tips', 'Fixed salary per week', '100% commission — you earn based on every lawn you complete', 'Minimum wage with performance bonuses'], correct_index: 2, explanation: 'CPS contractors earn commission per lawn. No hourly wage means your earning potential is unlimited but every wasted minute costs you.' },
+      { question: 'What should your goal be on your first day?', options: ['Close 20 lawns to prove yourself', 'Get comfortable at the door, make your first sale, and learn from every interaction', 'Memorize every street name on your route map', 'Find the best lunch spot near your route'], correct_index: 1, explanation: 'Day 1 is about building comfort and confidence. Nobody closes 20 lawns on their first day — focus on learning.' },
+      { question: 'How much water should you bring for a full day on the route?', options: ['One small bottle', 'At least 2 litres', 'You don\'t need water — there are convenience stores nearby', 'Half a litre is plenty'], correct_index: 1, explanation: 'Dehydration is one of the top reasons rookies fade in the afternoon. At least 2 litres keeps you energized all day.' },
+      { question: 'What is the biggest common mistake rookies make regarding their route?', options: ['Knocking on too many doors', 'Leaving the route early when discouraged', 'Running too fast between houses', 'Asking too many customers for names'], correct_index: 1, explanation: 'Leaving early means missing the most profitable Go-Back hours (5–7 PM). Stay the full day, every day.' },
+      { question: 'When should you arrive at the shop for a 7:00 AM morning meeting?', options: ['7:00 AM sharp', '6:45 AM — 15 minutes early', '7:15 AM — a few minutes late is fine', 'Whenever you wake up'], correct_index: 1, explanation: 'Arriving early ensures you don\'t miss critical information and shows your team and managers that you\'re serious.' },
+      { question: 'What should you focus on MORE in your first week — sales skills or habits?', options: ['Sales skills — close as many deals as possible', 'Habits — showing up early, running between houses, asking for names, staying positive, and staying the full day', 'Neither — just observe and take notes', 'Social networking with other contractors'], correct_index: 1, explanation: 'Strong habits from Day 1 compound over the entire season. A worker with great habits will out-earn a talented worker with poor habits every time.' },
+      { question: 'What is the recommended approach if you\'re struggling with your pitch or confidence in Week 1?', options: ['Keep quiet and figure it out on your own', 'Quit and try again next season when you\'re more prepared', 'Ask your managers and experienced co-workers for help and coaching', 'Switch to a completely different pitch you found online'], correct_index: 2, explanation: 'Your managers and experienced co-workers want you to succeed. Asking for help is a sign of strength, not weakness.' },
+    ],
+  },
+];

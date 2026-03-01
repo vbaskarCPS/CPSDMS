@@ -1,6 +1,6 @@
 // src/lib/contractorService.ts
 import { supabase } from './supabase';
-import { QUIZ_PASS_THRESHOLD } from './trainingModules';
+import { QUIZ_PASS_THRESHOLD } from './training';
 import { WORKERBOOK_COLUMNS, parseNextDayValue } from './googleSheetsConfig';
 
 // --- TYPES ---
@@ -18,6 +18,7 @@ export interface Contractor {
   region?: string;
   createdAt?: string;
   onboardingEmailSentAt?: string;  // null = not sent, timestamp = sent
+  level2UnlockedAt?: string;       // null = locked, timestamp = unlocked
 }
 
 export interface TrainingProgress {
@@ -50,6 +51,7 @@ export interface TrainingContractor {
   email?: string;
   shuttle?: string;
   firstDayBooked?: string;
+  level2UnlockedAt?: string;
 }
 
 // Per-worker summary for the CC admin view
@@ -269,6 +271,33 @@ class ContractorService {
   }
 
   // -------------------------------------------------------------------
+  // LEVEL 2 UNLOCK
+  // -------------------------------------------------------------------
+
+  /**
+   * Unlock Level 2 training for a contractor.
+   * Sets level_2_unlocked_at to the current timestamp.
+   * Returns the updated contractor.
+   */
+  public async unlockLevel2(
+    contractorId: string,
+    commandCenterId: string
+  ): Promise<Contractor> {
+    const now = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('contractors')
+      .update({ level_2_unlocked_at: now })
+      .eq('contractor_id', contractorId)
+      .eq('command_center_id', commandCenterId)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    return this.mapDbToContractor(data);
+  }
+
+  // -------------------------------------------------------------------
   // DELETE CONTRACTOR
   // -------------------------------------------------------------------
 
@@ -451,6 +480,7 @@ class ContractorService {
       region: data.region,
       createdAt: data.created_at,
       onboardingEmailSentAt: data.onboarding_email_sent_at,
+      level2UnlockedAt: data.level_2_unlocked_at,
     };
   }
 

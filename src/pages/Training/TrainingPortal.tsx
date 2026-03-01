@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BookOpen, CheckCircle, LogOut, ChevronRight, Trophy, Lock } from 'lucide-react';
 import { contractorService, TrainingProgress } from '../../lib/contractorService';
-import { getModulesForRegion, TrainingModule, QUIZ_PASS_THRESHOLD } from '../../lib/trainingModules';
+import { getModulesForLevel, TrainingModule, QUIZ_PASS_THRESHOLD } from '../../lib/training';
 
 const LOGO_URL =
   'https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png';
@@ -23,10 +23,16 @@ const TrainingPortal: React.FC = () => {
   const [progress, setProgress] = useState<TrainingProgress[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Get modules filtered by region
-  const modules = contractor
-    ? getModulesForRegion(contractor.region as any)
-    : [];
+  // Get modules filtered by region, split by level
+  const region = contractor?.region as any;
+  const level1Modules = contractor ? getModulesForLevel(1, region) : [];
+  const level2Modules = contractor ? getModulesForLevel(2, region) : [];
+  const level2Unlocked = !!contractor?.level2UnlockedAt;
+
+  // Total visible modules (Level 1 always + Level 2 if unlocked)
+  const visibleModules = level2Unlocked
+    ? [...level1Modules, ...level2Modules]
+    : level1Modules;
 
   useEffect(() => {
     if (!contractor) return;
@@ -47,8 +53,12 @@ const TrainingPortal: React.FC = () => {
     return progress.some((p) => p.moduleId === moduleId && p.isCompleted);
   };
 
-  const completedCount = modules.filter((m) => isModuleCompleted(m.module_id)).length;
-  const progressPercent = modules.length > 0 ? Math.round((completedCount / modules.length) * 100) : 0;
+  const completedCount = visibleModules.filter((m) => isModuleCompleted(m.module_id)).length;
+  const progressPercent = visibleModules.length > 0 ? Math.round((completedCount / visibleModules.length) * 100) : 0;
+
+  // Per-level counts
+  const l1Completed = level1Modules.filter((m) => isModuleCompleted(m.module_id)).length;
+  const l2Completed = level2Modules.filter((m) => isModuleCompleted(m.module_id)).length;
 
   if (!contractor) return null;
 
@@ -85,7 +95,7 @@ const TrainingPortal: React.FC = () => {
               <span className="font-bold text-white">Your Progress</span>
             </div>
             <span className="text-sm text-gray-400">
-              {completedCount} / {modules.length} modules complete
+              {completedCount} / {visibleModules.length} modules complete
             </span>
           </div>
           <div className="w-full bg-gray-800 rounded-full h-3">
@@ -94,47 +104,102 @@ const TrainingPortal: React.FC = () => {
               style={{ width: `${progressPercent}%` }}
             />
           </div>
-          <p className="text-xs text-gray-500 mt-2">
-            Pass score: {Math.round(QUIZ_PASS_THRESHOLD * 100)}% or higher on each quiz
-          </p>
+          <div className="flex items-center justify-between mt-2">
+            <p className="text-xs text-gray-500">
+              Pass score: {Math.round(QUIZ_PASS_THRESHOLD * 100)}% or higher on each quiz
+            </p>
+            {level2Unlocked && (
+              <p className="text-xs text-gray-500">
+                L1: {l1Completed}/{level1Modules.length} • L2: {l2Completed}/{level2Modules.length}
+              </p>
+            )}
+          </div>
         </div>
-
-        {/* Module Cards */}
-        <h2 className="text-lg font-bold text-white mb-4">Training Modules</h2>
 
         {loading ? (
           <div className="text-center py-12 text-gray-500 animate-pulse">
             Loading your progress...
           </div>
         ) : (
-          <div className="space-y-3">
-            {modules.map((module, index) => {
-              const completed = isModuleCompleted(module.module_id);
+          <>
+            {/* Level 1 Modules */}
+            <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              Level 1 — Fundamentals
+              {l1Completed === level1Modules.length && level1Modules.length > 0 && (
+                <CheckCircle size={18} className="text-green-400" />
+              )}
+            </h2>
 
-              return (
-                <ModuleCard
-                  key={module.module_id}
-                  module={module}
-                  index={index}
-                  completed={completed}
-                  onClick={() => navigate(`/training/${module.module_id}`)}
-                />
-              );
-            })}
-          </div>
-        )}
+            <div className="space-y-3">
+              {level1Modules.map((module, index) => {
+                const completed = isModuleCompleted(module.module_id);
 
-        {/* All done banner */}
-        {!loading && completedCount === modules.length && modules.length > 0 && (
-          <div className="mt-8 bg-green-900/20 border border-green-700/50 rounded-xl p-6 text-center">
-            <CheckCircle className="text-green-400 mx-auto mb-3" size={40} />
-            <h3 className="text-green-300 font-bold text-lg mb-1">
-              All modules complete!
-            </h3>
-            <p className="text-gray-400 text-sm">
-              Great work, {contractor.firstName}. You're ready for the field.
-            </p>
-          </div>
+                return (
+                  <ModuleCard
+                    key={module.module_id}
+                    module={module}
+                    index={index}
+                    completed={completed}
+                    onClick={() => navigate(`/training/${module.module_id}`)}
+                  />
+                );
+              })}
+            </div>
+
+            {/* Level 2 Modules */}
+            {level2Unlocked && level2Modules.length > 0 && (
+              <>
+                <h2 className="text-lg font-bold text-white mb-4 mt-10 flex items-center gap-2">
+                  Level 2 — Advanced
+                  {l2Completed === level2Modules.length && level2Modules.length > 0 && (
+                    <CheckCircle size={18} className="text-green-400" />
+                  )}
+                </h2>
+
+                <div className="space-y-3">
+                  {level2Modules.map((module, index) => {
+                    const completed = isModuleCompleted(module.module_id);
+
+                    return (
+                      <ModuleCard
+                        key={module.module_id}
+                        module={module}
+                        index={level1Modules.length + index}
+                        completed={completed}
+                        onClick={() => navigate(`/training/${module.module_id}`)}
+                      />
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {/* Level 2 locked teaser */}
+            {!level2Unlocked && level2Modules.length > 0 && (
+              <div className="mt-10 bg-gray-900 rounded-xl border border-gray-800 p-6 text-center">
+                <Lock className="text-gray-600 mx-auto mb-3" size={32} />
+                <h3 className="text-gray-400 font-bold text-sm mb-1">Level 2 — Advanced Training</h3>
+                <p className="text-gray-600 text-xs">
+                  {level2Modules.length} additional modules will be unlocked by your manager when you're ready.
+                </p>
+              </div>
+            )}
+
+            {/* All done banner */}
+            {completedCount === visibleModules.length && visibleModules.length > 0 && (
+              <div className="mt-8 bg-green-900/20 border border-green-700/50 rounded-xl p-6 text-center">
+                <CheckCircle className="text-green-400 mx-auto mb-3" size={40} />
+                <h3 className="text-green-300 font-bold text-lg mb-1">
+                  {level2Unlocked ? 'All modules complete!' : 'Level 1 complete!'}
+                </h3>
+                <p className="text-gray-400 text-sm">
+                  {level2Unlocked
+                    ? `Great work, ${contractor.firstName}. You've completed all training modules.`
+                    : `Great work, ${contractor.firstName}. You're ready for the field.`}
+                </p>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

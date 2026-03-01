@@ -16,13 +16,15 @@ import {
   Trash2,
   Mail,
   Settings,
+  Unlock,
+  Lock,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { CommandCenter } from '../../lib/commandCenterService';
 import { contractorService, ContractorTrainingSummary, TrainingAttempt } from '../../lib/contractorService';
 import { googleSheetsService } from '../../lib/googleSheetsService';
 import { WORKERBOOK_COLUMNS } from '../../lib/googleSheetsConfig';
-import { TRAINING_MODULES, getModulesForRegion } from '../../lib/trainingModules';
+import { TRAINING_MODULES, getModulesForRegion, getModulesForLevel } from '../../lib/training';
 import { onboardingService } from '../../lib/onboardingService';
 
 interface TrainingsTabProps {
@@ -40,10 +42,14 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
   const [expandedContractorId, setExpandedContractorId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [sendingEmailId, setSendingEmailId] = useState<string | null>(null);
+  const [unlockingId, setUnlockingId] = useState<string | null>(null);
 
-  // Modules relevant to this CC's region
-  const modules = getModulesForRegion(commandCenter.region as any);
-  const totalModules = modules.length;
+  // Modules relevant to this CC's region, split by level
+  const region = commandCenter.region as any;
+  const level1Modules = getModulesForLevel(1, region);
+  const level2Modules = getModulesForLevel(2, region);
+  const allModules = getModulesForRegion(region);
+  const totalModules = allModules.length;
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -166,6 +172,63 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
     }
   };
 
+  // --- UNLOCK LEVEL 2 ---
+  const handleUnlockLevel2 = async (summary: ContractorTrainingSummary) => {
+    const { contractor } = summary;
+    const displayName = `${contractor.firstName} ${contractor.lastName} (${contractor.contractorId})`;
+
+    const hasEmail = !!contractor.email;
+    const confirmMsg = hasEmail
+      ? `Unlock Level 2 Training for ${displayName}?\n\nThis will send a notification email to ${contractor.email}.`
+      : `Unlock Level 2 Training for ${displayName}?\n\nNote: No email on file — they will not receive a notification.`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    setUnlockingId(contractor.id);
+    setError(null);
+
+    try {
+      // 1. Write timestamp to DB
+      await contractorService.unlockLevel2(contractor.contractorId, commandCenter.id);
+
+      // 2. Send email if they have one
+      if (hasEmail) {
+        try {
+          await onboardingService.sendLevel2UnlockEmail({
+            contractorId: contractor.contractorId,
+            firstName: contractor.firstName,
+            lastName: contractor.lastName,
+            email: contractor.email!,
+            commandCenterId: commandCenter.id,
+            commandCenterName: commandCenter.displayName,
+          });
+        } catch (emailErr) {
+          // Don't fail the unlock if just the email fails
+          console.error('Level 2 email failed:', emailErr);
+        }
+      }
+
+      // 3. Update local state
+      setSummaries((prev) =>
+        prev.map((s) =>
+          s.contractor.id === contractor.id
+            ? {
+                ...s,
+                contractor: {
+                  ...s.contractor,
+                  level2UnlockedAt: new Date().toISOString(),
+                },
+              }
+            : s
+        )
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to unlock Level 2');
+    } finally {
+      setUnlockingId(null);
+    }
+  };
+
   // --- FILTERED SUMMARIES ---
   const filtered = summaries.filter((s) => {
     if (!searchTerm.trim()) return true;
@@ -193,7 +256,8 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
             </h2>
             <p className="text-sm text-gray-400">
               {summaries.length} contractor{summaries.length !== 1 ? 's' : ''} •{' '}
-              {totalModules} module{totalModules !== 1 ? 's' : ''}
+              L1: {level1Modules.length} module{level1Modules.length !== 1 ? 's' : ''}
+              {level2Modules.length > 0 && ` • L2: ${level2Modules.length} module${level2Modules.length !== 1 ? 's' : ''}`}
             </p>
           </div>
 
@@ -279,23 +343,16 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
           <div className="space-y-2">
             {/* Column headers */}
             <div
-              className="grid gap-2 px-4 pb-2 border-b border-gray-800"
-              style={{ gridTemplateColumns: `32px 1fr repeat(${totalModules}, minmax(60px, 80px)) 80px 40px 40px` }}
+              className="grid gap-2 px-4 pb-2 border-b border-gray-800 items-end"
+              style={{ gridTemplateColumns: '32px 1fr 100px 100px 40px 40px 40px' }}
             >
-              <span /> {/* Email column — no header */}
+              <span /> {/* Email column */}
               <span className="text-xs font-medium text-gray-500 uppercase">Contractor</span>
-              {modules.map((m) => (
-                <span
-                  key={m.module_id}
-                  className="text-xs font-medium text-gray-500 uppercase text-center truncate"
-                  title={m.title}
-                >
-                  M{m.order_index}
-                </span>
-              ))}
-              <span className="text-xs font-medium text-gray-500 uppercase text-center">Total</span>
-              <span /> {/* Delete column — no header */}
-              <span /> {/* Spacer for alignment */}
+              <span className="text-xs font-medium text-gray-500 uppercase text-center">Level 1</span>
+              <span className="text-xs font-medium text-gray-500 uppercase text-center">Level 2</span>
+              <span /> {/* Unlock column */}
+              <span /> {/* Delete column */}
+              <span /> {/* Expand column */}
             </div>
 
             {filtered.map((summary) => {
@@ -306,10 +363,12 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
                 <ContractorRow
                   key={summary.contractor.id}
                   summary={summary}
-                  modules={modules}
+                  level1Modules={level1Modules}
+                  level2Modules={level2Modules}
                   isExpanded={isExpanded}
                   isDeleting={isDeleting}
                   isSendingEmail={sendingEmailId === summary.contractor.id}
+                  isUnlocking={unlockingId === summary.contractor.id}
                   onToggle={() => toggleExpand(summary.contractor.contractorId)}
                   onDelete={() =>
                     handleDelete(
@@ -318,6 +377,7 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
                     )
                   }
                   onSendEmail={() => handleSendOnboardingEmail(summary)}
+                  onUnlockLevel2={() => handleUnlockLevel2(summary)}
                 />
               );
             })}
@@ -331,26 +391,32 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
 // --- CONTRACTOR ROW ---
 interface ContractorRowProps {
   summary: ContractorTrainingSummary;
-  modules: typeof TRAINING_MODULES;
+  level1Modules: typeof TRAINING_MODULES;
+  level2Modules: typeof TRAINING_MODULES;
   isExpanded: boolean;
   isDeleting: boolean;
   isSendingEmail: boolean;
+  isUnlocking: boolean;
   onToggle: () => void;
   onDelete: () => void;
   onSendEmail: () => void;
+  onUnlockLevel2: () => void;
 }
 
 const ContractorRow: React.FC<ContractorRowProps> = ({
   summary,
-  modules,
+  level1Modules,
+  level2Modules,
   isExpanded,
   isDeleting,
   isSendingEmail,
+  isUnlocking,
   onToggle,
   onDelete,
   onSendEmail,
+  onUnlockLevel2,
 }) => {
-  const { contractor, progress, attempts, completedCount, totalModules } = summary;
+  const { contractor, progress, attempts } = summary;
 
   const getModuleStatus = (moduleId: string) => {
     return progress.find((p) => p.moduleId === moduleId && p.isCompleted);
@@ -360,13 +426,20 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
     return attempts.filter((a) => a.moduleId === moduleId);
   };
 
-  const allDone = completedCount === totalModules && totalModules > 0;
+  // Per-level completion counts
+  const l1Completed = level1Modules.filter((m) => getModuleStatus(m.module_id)).length;
+  const l2Completed = level2Modules.filter((m) => getModuleStatus(m.module_id)).length;
+  const l1Total = level1Modules.length;
+  const l2Total = level2Modules.length;
+  const l1Done = l1Completed === l1Total && l1Total > 0;
+  const l2Done = l2Completed === l2Total && l2Total > 0;
+  const l2Unlocked = !!contractor.level2UnlockedAt;
 
-  // Email status: grey (no email), yellow (has email, not sent), green (sent)
+  // Email status
   const hasEmail = !!contractor.email;
   const emailSent = !!contractor.onboardingEmailSentAt;
 
-  let emailIconColor = 'text-gray-600'; // grey — no email
+  let emailIconColor = 'text-gray-600';
   let emailTooltip = 'No email address on file';
   if (hasEmail && emailSent) {
     emailIconColor = 'text-green-400';
@@ -376,12 +449,15 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
     emailTooltip = `Click to send onboarding email to ${contractor.email}`;
   }
 
+  // All modules combined for expanded view
+  const allModules = [...level1Modules, ...level2Modules];
+
   return (
     <div className={`bg-gray-900 rounded-lg border border-gray-800 overflow-hidden transition-opacity ${isDeleting ? 'opacity-40 pointer-events-none' : ''}`}>
       {/* Main row */}
       <div
         className="grid gap-2 items-center px-4 py-3 hover:bg-gray-800/50 transition-colors"
-        style={{ gridTemplateColumns: `32px 1fr repeat(${modules.length}, minmax(60px, 80px)) 80px 40px 40px` }}
+        style={{ gridTemplateColumns: '32px 1fr 100px 100px 40px 40px 40px' }}
       >
         {/* Email icon */}
         <div className="flex justify-center">
@@ -421,32 +497,52 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
           </div>
         </button>
 
-        {/* Per-module status — clickable to expand */}
-        {modules.map((m) => {
-          const completed = getModuleStatus(m.module_id);
-          const moduleAttempts = getModuleAttempts(m.module_id);
-          return (
-            <button key={m.module_id} onClick={onToggle} className="flex justify-center">
-              {completed ? (
-                <CheckCircle size={18} className="text-green-400" />
-              ) : moduleAttempts.length > 0 ? (
-                <XCircle size={18} className="text-red-400" />
-              ) : (
-                <div className="w-4 h-4 rounded-full border border-gray-700" />
-              )}
-            </button>
-          );
-        })}
-
-        {/* Total — clickable to expand */}
-        <button onClick={onToggle} className="flex items-center justify-center gap-1">
-          <span className={`text-sm font-bold ${allDone ? 'text-green-400' : 'text-gray-300'}`}>
-            {completedCount}/{totalModules}
+        {/* Level 1 progress */}
+        <button onClick={onToggle} className="flex items-center justify-center">
+          <span className={`text-sm font-bold ${l1Done ? 'text-green-400' : 'text-gray-300'}`}>
+            {l1Completed}/{l1Total}
           </span>
-          <span className="text-gray-600">
-            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </span>
+          {l1Done && <CheckCircle size={14} className="text-green-400 ml-1" />}
         </button>
+
+        {/* Level 2 progress */}
+        <button onClick={onToggle} className="flex items-center justify-center">
+          {l2Unlocked ? (
+            <>
+              <span className={`text-sm font-bold ${l2Done ? 'text-green-400' : 'text-gray-300'}`}>
+                {l2Completed}/{l2Total}
+              </span>
+              {l2Done && <CheckCircle size={14} className="text-green-400 ml-1" />}
+            </>
+          ) : (
+            <span className="text-xs text-gray-600">Locked</span>
+          )}
+        </button>
+
+        {/* Unlock Level 2 button */}
+        <div className="flex justify-center">
+          {isUnlocking ? (
+            <Loader size={16} className="animate-spin text-amber-400" />
+          ) : l2Unlocked ? (
+            <div
+              className="p-1 cursor-default"
+              title={`Level 2 unlocked ${new Date(contractor.level2UnlockedAt!).toLocaleDateString()}`}
+            >
+              <Unlock size={15} className="text-green-500" />
+            </div>
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onUnlockLevel2();
+              }}
+              className="p-1 text-amber-500 hover:text-amber-400 hover:bg-amber-900/20 rounded transition-colors"
+              title="Unlock Level 2 Training"
+            >
+              <Lock size={15} />
+            </button>
+          )}
+        </div>
 
         {/* Delete button */}
         <div className="flex justify-center">
@@ -466,65 +562,115 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
           )}
         </div>
 
-        {/* Empty spacer for alignment */}
-        <div />
+        {/* Expand/collapse */}
+        <button onClick={onToggle} className="flex justify-center text-gray-600">
+          {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
       </div>
 
       {/* Expanded: per-module attempt history */}
       {isExpanded && (
-        <div className="border-t border-gray-800 px-4 py-4 space-y-4 bg-gray-900/50">
-          {modules.map((m) => {
-            const moduleAttempts = getModuleAttempts(m.module_id);
-            const completed = getModuleStatus(m.module_id);
+        <div className="border-t border-gray-800 px-4 py-4 space-y-5 bg-gray-900/50">
+          {/* Level 1 section */}
+          <div>
+            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3 flex items-center gap-2">
+              <GraduationCap size={13} className="text-blue-400" />
+              Level 1 — Fundamentals
+              <span className={`ml-auto text-xs font-medium ${l1Done ? 'text-green-400' : 'text-gray-500'}`}>
+                {l1Completed}/{l1Total}
+              </span>
+            </h4>
+            <div className="space-y-3">
+              {level1Modules.map((m) => (
+                <ModuleDetail key={m.module_id} module={m} getModuleStatus={getModuleStatus} getModuleAttempts={getModuleAttempts} />
+              ))}
+            </div>
+          </div>
 
-            return (
-              <div key={m.module_id}>
-                <div className="flex items-center gap-2 mb-2">
-                  {completed ? (
-                    <CheckCircle size={14} className="text-green-400" />
-                  ) : (
-                    <div className="w-3.5 h-3.5 rounded-full border border-gray-600" />
-                  )}
-                  <span className="text-sm font-medium text-gray-300">{m.title}</span>
-                  {completed && (
-                    <span className="text-xs text-green-500 ml-auto">
-                      Passed{' '}
-                      {completed.completedAt
-                        ? new Date(completed.completedAt).toLocaleDateString()
-                        : ''}
-                    </span>
-                  )}
-                </div>
-
-                {moduleAttempts.length === 0 ? (
-                  <p className="text-xs text-gray-600 ml-5">No attempts yet</p>
-                ) : (
-                  <div className="ml-5 space-y-1">
-                    {moduleAttempts.map((a, i) => (
-                      <div
-                        key={a.id}
-                        className="flex items-center justify-between text-xs text-gray-500 bg-gray-800/50 rounded px-3 py-1.5"
-                      >
-                        <span className="text-gray-400">
-                          {i === 0 ? 'Latest' : `Attempt ${moduleAttempts.length - i}`}
-                        </span>
-                        <span>
-                          {a.score}/{a.totalQuestions} (
-                          {Math.round((a.score / a.totalQuestions) * 100)}%)
-                        </span>
-                        <span className={a.passed ? 'text-green-400' : 'text-red-400'}>
-                          {a.passed ? 'Passed' : 'Failed'}
-                        </span>
-                        <span className="text-gray-600">
-                          {new Date(a.attemptedAt).toLocaleDateString()}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+          {/* Level 2 section */}
+          {l2Unlocked && level2Modules.length > 0 && (
+            <div>
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3 flex items-center gap-2">
+                <GraduationCap size={13} className="text-amber-400" />
+                Level 2 — Advanced
+                <span className={`ml-auto text-xs font-medium ${l2Done ? 'text-green-400' : 'text-gray-500'}`}>
+                  {l2Completed}/{l2Total}
+                </span>
+              </h4>
+              <div className="space-y-3">
+                {level2Modules.map((m) => (
+                  <ModuleDetail key={m.module_id} module={m} getModuleStatus={getModuleStatus} getModuleAttempts={getModuleAttempts} />
+                ))}
               </div>
-            );
-          })}
+            </div>
+          )}
+
+          {!l2Unlocked && level2Modules.length > 0 && (
+            <div className="text-center py-3 text-gray-600 text-xs flex items-center justify-center gap-2">
+              <Lock size={12} />
+              Level 2 not yet unlocked for this contractor
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// --- MODULE DETAIL (used in expanded view) ---
+interface ModuleDetailProps {
+  module: typeof TRAINING_MODULES[0];
+  getModuleStatus: (moduleId: string) => any;
+  getModuleAttempts: (moduleId: string) => TrainingAttempt[];
+}
+
+const ModuleDetail: React.FC<ModuleDetailProps> = ({ module, getModuleStatus, getModuleAttempts }) => {
+  const completed = getModuleStatus(module.module_id);
+  const moduleAttempts = getModuleAttempts(module.module_id);
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        {completed ? (
+          <CheckCircle size={14} className="text-green-400" />
+        ) : (
+          <div className="w-3.5 h-3.5 rounded-full border border-gray-600" />
+        )}
+        <span className="text-sm font-medium text-gray-300">{module.title}</span>
+        {completed && (
+          <span className="text-xs text-green-500 ml-auto">
+            Passed{' '}
+            {completed.completedAt
+              ? new Date(completed.completedAt).toLocaleDateString()
+              : ''}
+          </span>
+        )}
+      </div>
+
+      {moduleAttempts.length === 0 ? (
+        <p className="text-xs text-gray-600 ml-5">No attempts yet</p>
+      ) : (
+        <div className="ml-5 space-y-1">
+          {moduleAttempts.map((a, i) => (
+            <div
+              key={a.id}
+              className="flex items-center justify-between text-xs text-gray-500 bg-gray-800/50 rounded px-3 py-1.5"
+            >
+              <span className="text-gray-400">
+                {i === 0 ? 'Latest' : `Attempt ${moduleAttempts.length - i}`}
+              </span>
+              <span>
+                {a.score}/{a.totalQuestions} (
+                {Math.round((a.score / a.totalQuestions) * 100)}%)
+              </span>
+              <span className={a.passed ? 'text-green-400' : 'text-red-400'}>
+                {a.passed ? 'Passed' : 'Failed'}
+              </span>
+              <span className="text-gray-600">
+                {new Date(a.attemptedAt).toLocaleDateString()}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>
