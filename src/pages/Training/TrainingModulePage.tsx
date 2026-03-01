@@ -22,7 +22,7 @@ import {
   ImageSection,
   StoryboardSection,
   VideoSection,
-} from '../../lib/training/trainingModules';
+} from '../../lib/training/index';
 import { trainingService } from '../../lib/trainingService';
 import { TRAINING_WORKER } from '../../lib/trainingData';
 import { setStorageItem } from '../../lib/localStorage';
