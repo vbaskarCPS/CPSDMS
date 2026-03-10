@@ -388,9 +388,11 @@ export default function DialerPage() {
 
   useEffect(() => {
     if (!campaign || connected || connecting) return;
+    // Wait for books to finish loading before connecting
+    if (booksLoading) return;
     handleConnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaign]);
+  }, [campaign, booksLoading]);
 
   // =======================================================================
   // PRESENCE HEARTBEAT
@@ -542,7 +544,8 @@ export default function DialerPage() {
       }
 
       // ── LEGACY MODE: no books — load tabs from campaign.spreadsheetId ──
-      if (campaign?.spreadsheetId) {
+      const legacySpreadsheetId = campaign?.spreadsheetId;
+      if (legacySpreadsheetId && legacySpreadsheetId !== 'placeholder') {
         setTabsLoading(true);
         setTabsError('');
         try {
@@ -610,6 +613,17 @@ export default function DialerPage() {
       setActiveBook(book);
       setDeployingTab(book.displayName);
       setShowDeployConfig(true);
+
+      // Ensure connected before loading tabs
+      if (!connected) {
+        try {
+          await dialerSheetsService.authenticate();
+          setConnected(true);
+        } catch (err: any) {
+          setDeployError('Failed to connect to Google Sheets: ' + (err.message || ''));
+          return;
+        }
+      }
 
       // Load tabs from this book's spreadsheet
       try {
@@ -1203,7 +1217,7 @@ export default function DialerPage() {
         <div className="min-h-screen flex flex-col items-center justify-center" style={S.body}>
           <Crosshair className="mb-4 animate-pulse" size={40} color="#00e5ff" />
           <div className="text-sm font-bold tracking-widest uppercase" style={{ color: '#00e5ff', opacity: 0.6, letterSpacing: '4px' }}>
-            {connecting ? 'CONNECTING TO GOOGLE SHEETS...' : 'LOADING CALLBOOKS...'}
+            {connecting ? 'CONNECTING TO GOOGLE SHEETS...' : booksLoading ? 'LOADING BOOKS...' : 'LOADING CALLBOOKS...'}
           </div>
           <div className="text-xs mt-2" style={{ color: '#555' }}>
             {campaign?.displayName || ''} — {manager?.name || manager?.repCode || ''}
