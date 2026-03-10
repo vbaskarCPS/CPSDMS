@@ -26,6 +26,12 @@ import {
   CampaignManager,
   extractSheetId,
 } from '../../lib/campaignService';
+import type { CampaignType } from '../../lib/campaignService';
+
+const CAMPAIGN_TYPE_OPTIONS: { value: CampaignType; label: string; desc: string }[] = [
+  { value: 'standard', label: 'Standard', desc: 'Standard aeration callbook' },
+  { value: 'bc', label: 'BC Type', desc: 'BC book with service flags (ADFSL) and upsells' },
+];
 
 const CampaignCreator: React.FC = () => {
   const navigate = useNavigate();
@@ -44,6 +50,7 @@ const CampaignCreator: React.FC = () => {
     displayName: '',
     spreadsheetUrl: '',
     appsScriptUrl: '',
+    campaignType: 'standard' as CampaignType,
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -91,7 +98,7 @@ const CampaignCreator: React.FC = () => {
   // --- Campaign CRUD ---
 
   const resetForm = () => {
-    setFormData({ displayName: '', spreadsheetUrl: '', appsScriptUrl: '' });
+    setFormData({ displayName: '', spreadsheetUrl: '', appsScriptUrl: '', campaignType: 'standard' });
     setFormErrors({});
     setEditingCampaign(null);
   };
@@ -107,6 +114,7 @@ const CampaignCreator: React.FC = () => {
       displayName: c.displayName,
       spreadsheetUrl: c.spreadsheetUrl || ('https://docs.google.com/spreadsheets/d/' + c.spreadsheetId + '/edit'),
       appsScriptUrl: c.appsScriptUrl || '',
+      campaignType: c.campaignType || 'standard',
     });
     setFormErrors({});
     setShowModal(true);
@@ -139,6 +147,7 @@ const CampaignCreator: React.FC = () => {
           spreadsheetId,
           spreadsheetUrl: formData.spreadsheetUrl,
           appsScriptUrl: formData.appsScriptUrl || undefined,
+          campaignType: formData.campaignType,
         });
       } else {
         await campaignService.createCampaign({
@@ -146,6 +155,7 @@ const CampaignCreator: React.FC = () => {
           spreadsheetId,
           spreadsheetUrl: formData.spreadsheetUrl,
           appsScriptUrl: formData.appsScriptUrl || undefined,
+          campaignType: formData.campaignType,
         });
       }
       await loadCampaigns();
@@ -262,6 +272,17 @@ const CampaignCreator: React.FC = () => {
 
   const sheetIdPreview = getSheetIdPreview(formData.spreadsheetUrl);
 
+  const getCampaignTypeBadge = (type: CampaignType) => {
+    if (type === 'bc') {
+      return (
+        <span className="text-xs font-bold px-2 py-0.5 rounded" style={{ background: 'rgba(241,196,15,0.15)', border: '1px solid rgba(241,196,15,0.35)', color: '#f1c40f' }}>
+          BC
+        </span>
+      );
+    }
+    return null;
+  };
+
   // --- Render ---
 
   const renderCampaignCard = (c: Campaign) => {
@@ -278,7 +299,10 @@ const CampaignCreator: React.FC = () => {
                 <Crosshair className="text-green-400" size={24} />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-white">{c.displayName}</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-bold text-white">{c.displayName}</h3>
+                  {getCampaignTypeBadge(c.campaignType)}
+                </div>
                 <div className="flex items-center gap-3 text-sm text-gray-400">
                   <span className="flex items-center gap-1">
                     <Sheet size={12} />
@@ -480,6 +504,32 @@ const CampaignCreator: React.FC = () => {
                     (formErrors.displayName ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-green-500')}
                 />
                 {formErrors.displayName && <p className="text-red-400 text-xs mt-1">{formErrors.displayName}</p>}
+              </div>
+
+              {/* Campaign Type */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Campaign Type</label>
+                <div className="flex gap-3">
+                  {CAMPAIGN_TYPE_OPTIONS.map((opt) => {
+                    const isSelected = formData.campaignType === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setFormData({ ...formData, campaignType: opt.value })}
+                        className={'flex-1 rounded-lg py-3 px-4 text-left transition-all border ' +
+                          (isSelected
+                            ? 'bg-green-900/30 border-green-600 ring-2 ring-green-500'
+                            : 'bg-gray-900 border-gray-600 hover:border-gray-500')}
+                      >
+                        <div className={'text-sm font-bold ' + (isSelected ? 'text-green-400' : 'text-gray-300')}>
+                          {opt.label}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-0.5">{opt.desc}</div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Spreadsheet URL */}

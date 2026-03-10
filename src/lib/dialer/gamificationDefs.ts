@@ -284,6 +284,7 @@ export interface GamificationSession {
   pps: number;
   ppDollars: number;
   totalBookings: number;
+  upsells: number;
 
   consecutiveYes: number;
   consecutivePrepays: number;
@@ -341,7 +342,7 @@ export function createFreshSession(repCode: string, dateStr: string): Gamificati
   return {
     repCode: repCode || '',
     date: dateStr || '',
-    pbs: 0, pps: 0, ppDollars: 0, totalBookings: 0,
+    pbs: 0, pps: 0, ppDollars: 0, totalBookings: 0, upsells: 0,
     consecutiveYes: 0, consecutivePrepays: 0,
     newStreetBookings: 0, raisedDeadCount: 0, conversionCount: 0,
     almostDeadCount: 0, actuallyDeadCount: 0, reallyDeadCount: 0,

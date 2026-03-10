@@ -23,6 +23,8 @@ export interface CellUpdate {
   value: string | number;
 }
 
+export type UpsellType = 'none' | 'dethatch' | 'rejuv';
+
 export interface DispositionExtra {
   price?: string;
   name?: string;
@@ -34,6 +36,13 @@ export interface DispositionExtra {
   sprinkler?: boolean;
   notes?: string;
   foValue?: string;       // 'FO' | 'BO' | 'FP'
+
+  // --- BC upsell fields ---
+  upsellType?: UpsellType;    // 'none' | 'dethatch' | 'rejuv'
+  dtPrice?: string;           // Dethatch upsell amount
+  dtPrepaid?: boolean;        // Dethatch prepaid flag
+  skipAeration?: boolean;     // Dethatch sold WITHOUT aeration
+  rejuvPrice?: string;        // Lawn Rejuv total amount
 }
 
 export interface DispositionResult {
@@ -279,6 +288,11 @@ function buildYes(
   const updates: CellUpdate[] = [];
   const now = new Date();
 
+  // --- Upsell flags ---
+  const upsellType = extra.upsellType || 'none';
+  const isDethatchOnly = upsellType === 'dethatch' && !!extra.skipAeration;
+  const isRejuv = upsellType === 'rejuv';
+
   // --- Find most-recent-year row matching the phone being called ---
   let bestIdx = groupDataIndices[0];
   let bestYear = 0;
@@ -321,7 +335,11 @@ function buildYes(
   }
 
   // --- Write booking details to the selected detail row ---
-  if (CI.AER >= 0) updates.push({ row: detailRow, col: CI.AER, value: 'x' });
+
+  // AER column: skip for dethatch-only (no aeration sold)
+  if (CI.AER >= 0 && !isDethatchOnly) {
+    updates.push({ row: detailRow, col: CI.AER, value: 'x' });
+  }
 
   // Correct client info on the detail row (the one getting the AER x)
   if (CI.FIRST_NAME >= 0 && extra.name)    updates.push({ row: detailRow, col: CI.FIRST_NAME, value: extra.name });
@@ -341,14 +359,22 @@ function buildYes(
 
   if (CI.CPS_REP >= 0) updates.push({ row: detailRow, col: CI.CPS_REP, value: repCode });
   if (CI.NAME >= 0 && extra.name) updates.push({ row: detailRow, col: CI.NAME, value: extra.name });
-  if (CI.AMT >= 0) updates.push({ row: detailRow, col: CI.AMT, value: extra.price ?? '' });
+
+  // AMT column: skip for dethatch-only; for rejuv use rejuv price
+  if (CI.AMT >= 0 && !isDethatchOnly) {
+    const amtValue = isRejuv ? (extra.rejuvPrice ?? extra.price ?? '') : (extra.price ?? '');
+    updates.push({ row: detailRow, col: CI.AMT, value: amtValue });
+  }
+
   if (CI.GATE >= 0) updates.push({ row: detailRow, col: CI.GATE, value: extra.gate ? 'x' : '' });
   if (CI.SPRINK >= 0) updates.push({ row: detailRow, col: CI.SPRINK, value: extra.sprinkler ? 'x' : '' });
   if (CI.BOOKING_NOTES >= 0 && extra.notes) updates.push({ row: detailRow, col: CI.BOOKING_NOTES, value: extra.notes });
   if (CI.EMAIL >= 0 && extra.email) updates.push({ row: detailRow, col: CI.EMAIL, value: extra.email });
 
-  // PMT TYPE: 'Prepaid' for prepay, blank for complete
-  if (CI.PMT_TYPE >= 0) updates.push({ row: detailRow, col: CI.PMT_TYPE, value: isPrepay ? 'Prepaid' : '' });
+  // PMT TYPE: skip for dethatch-only; 'Prepaid' for prepay, blank for complete
+  if (CI.PMT_TYPE >= 0 && !isDethatchOnly) {
+    updates.push({ row: detailRow, col: CI.PMT_TYPE, value: isPrepay ? 'Prepaid' : '' });
+  }
 
   // FO: FO→X, BO→BO, FP→clear
   if (CI.FO >= 0 && extra.foValue !== undefined && extra.foValue !== '') {
@@ -358,9 +384,39 @@ function buildYes(
     updates.push({ row: detailRow, col: CI.FO, value: foWrite });
   }
 
-  // PP column for prepay
-  if (isPrepay && CI.PP >= 0) {
+  // PP column for prepay: skip for dethatch-only
+  if (isPrepay && CI.PP >= 0 && !isDethatchOnly) {
     updates.push({ row: detailRow, col: CI.PP, value: 'x' });
+  }
+
+  // =================================================================
+  // BC UPSELL WRITES
+  // =================================================================
+
+  if (upsellType === 'dethatch') {
+    // DE-THATCH column = x
+    if (CI.DETHATCH >= 0) {
+      updates.push({ row: detailRow, col: CI.DETHATCH, value: 'x' });
+    }
+    // PP.1 column = x if dethatch is prepaid
+    if (CI.DETHATCH_PP >= 0 && extra.dtPrepaid) {
+      updates.push({ row: detailRow, col: CI.DETHATCH_PP, value: 'x' });
+    }
+    // AMT.1 column = dethatch amount
+    if (CI.DETHATCH_AMT >= 0 && extra.dtPrice) {
+      updates.push({ row: detailRow, col: CI.DETHATCH_AMT, value: extra.dtPrice });
+    }
+  }
+
+  if (upsellType === 'rejuv') {
+    // REJUV+ column = x
+    if (CI.REJUV >= 0) {
+      updates.push({ row: detailRow, col: CI.REJUV, value: 'x' });
+    }
+    // AMT.2 column = rejuv total amount (same as AMT)
+    if (CI.REJUV_AMT >= 0 && extra.rejuvPrice) {
+      updates.push({ row: detailRow, col: CI.REJUV_AMT, value: extra.rejuvPrice });
+    }
   }
 
   return { updates };

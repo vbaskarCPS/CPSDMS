@@ -25,7 +25,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Wifi, WifiOff, ArrowDown, ArrowUp, Crosshair, Phone, ChevronRight, ChevronLeft, Settings } from 'lucide-react';
 import { campaignService, getTodayEST } from '../../lib/campaignService';
-import type { SniperConfig, ResumeData } from '../../lib/campaignService';
+import type { SniperConfig, ResumeData, CampaignType } from '../../lib/campaignService';
 import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import {
   initialize,
@@ -54,6 +54,7 @@ import type {
   GamificationSession,
   MultiplierSnapshot,
   CityInfo,
+  UpsellType,
 } from '../../lib/dialer';
 import type { Rank, StagedCard } from '../../lib/dialer';
 import DialerHUD from './DialerHUD';
@@ -251,6 +252,13 @@ export default function DialerPage() {
   const [yFO, setYFO] = useState('FP');
   const [yNotes, setYNotes] = useState('');
 
+  // --- BC Upsell fields ---
+  const [yUpsellType, setYUpsellType] = useState<UpsellType>('none');
+  const [yDtPrice, setYDtPrice] = useState('');
+  const [yDtPrepaid, setYDtPrepaid] = useState(false);
+  const [ySkipAeration, setYSkipAeration] = useState(false);
+  const [yRejuvPrice, setYRejuvPrice] = useState('');
+
   // --- Card entry ---
   const [ccNum, setCcNum] = useState('');
   const [ccExp, setCcExp] = useState('');
@@ -294,6 +302,9 @@ export default function DialerPage() {
 
   // --- Toasts ---
   const { badgeToasts, pointToasts, queueBadgeToast, showPointToast } = useToasts();
+
+  // --- BC campaign type shorthand ---
+  const isBCCampaign = campaign?.campaignType === 'bc';
 
   // =======================================================================
   // AUTH CHECK + LOAD USER PREFERENCES
@@ -599,6 +610,7 @@ export default function DialerPage() {
         sniperConfig,
         cityName: pendingCityDeploy!.cityName,
         cityTabs: pendingCityDeploy!.tabs,
+        campaignType: campaign?.campaignType || 'standard',
       };
     } else {
       config = {
@@ -611,6 +623,7 @@ export default function DialerPage() {
         campaignId: campaign?.id || '',
         sniperConfig,
         startBookingId: startBookingId.trim() || undefined,
+        campaignType: campaign?.campaignType || 'standard',
       };
     }
 
@@ -691,6 +704,7 @@ export default function DialerPage() {
       campaignId: campaign?.id || '',
       sniperConfig,
       startBookingId: startBookingIdResume,
+      campaignType: campaign?.campaignType || 'standard',
     };
     configRef.current = config;
     setSelectedTab(tab);
@@ -776,6 +790,12 @@ export default function DialerPage() {
     setYNotes('');
     setShowYesPanel(false);
     yesStartTimeRef.current = Date.now();
+    // Reset BC upsell fields
+    setYUpsellType('none');
+    setYDtPrice('');
+    setYDtPrepaid(false);
+    setYSkipAeration(false);
+    setYRejuvPrice('');
   };
 
   // =======================================================================
@@ -967,12 +987,28 @@ export default function DialerPage() {
       gate: yGate, sprinkler: ySprink, foValue: yFO, notes: yNotes.trim(),
     };
 
+    // --- BC upsell fields ---
+    if (isBCCampaign && yUpsellType !== 'none') {
+      extra.upsellType = yUpsellType;
+      if (yUpsellType === 'dethatch') {
+        extra.dtPrice = yDtPrice.trim();
+        extra.dtPrepaid = yDtPrepaid;
+        extra.skipAeration = ySkipAeration;
+      }
+      if (yUpsellType === 'rejuv') {
+        extra.rejuvPrice = yRejuvPrice.trim();
+        extra.price = yRejuvPrice.trim(); // Rejuv total replaces aeration price
+      }
+    }
+
     try {
       if (subType === 'PREPAY') {
         await applyDisposition(
           configRef.current, currentState, 'PREPAY', currentState.phone, session!, extra, yesStartTimeRef.current
         );
-        setCcAmt(yPrice.trim());
+        // For rejuv, use rejuv price as the card amount; otherwise use normal price
+        const cardAmount = (isBCCampaign && yUpsellType === 'rejuv') ? yRejuvPrice.trim() : yPrice.trim();
+        setCcAmt(cardAmount);
         setCcNum(''); setCcExp(''); setCcCvv(''); setCcType(''); setCardStatus(''); setCardStaging(false);
         setCardModalOpen(true);
         setPendingDial(false);
@@ -980,7 +1016,9 @@ export default function DialerPage() {
         const result = await applyDisposition(
           configRef.current, currentState, 'COMPLETE', currentState.phone, session!, extra, yesStartTimeRef.current
         );
-        handleGamResult(result.gamification, true, false);
+        // For dethatch-only, it's an upsell not a booking — pass isBooking=false
+        const isDtOnly = isBCCampaign && yUpsellType === 'dethatch' && ySkipAeration;
+        handleGamResult(result.gamification, !isDtOnly, false);
         if (result.nextState.found) { renderNewState(result.nextState as DialerState); if (autoFire) dialPhone((result.nextState as DialerState).phone); }
         else { renderNewState(null, (result.nextState as any).message); }
         setPendingDial(false);
@@ -1435,6 +1473,10 @@ export default function DialerPage() {
   const strat = STRATEGY_COLORS[cs.phoneStrategy] || STRATEGY_COLORS.single;
   const altNames = cl.allNames.filter(n => n !== `${cl.firstName} ${cl.lastName}`.trim());
 
+  // BC upsell button logic
+  const isDtOnly = isBCCampaign && yUpsellType === 'dethatch' && ySkipAeration;
+  const isRejuv = isBCCampaign && yUpsellType === 'rejuv';
+
   return (
     <div className="relative h-screen overflow-hidden" style={S.body}>
       <DialerHUD
@@ -1521,7 +1563,16 @@ export default function DialerPage() {
 
           <div className="flex justify-between items-baseline gap-3 px-2.5 py-1.5 flex-shrink-0" style={S.clientHeader}>
             <div>
-              <div className="text-base font-black tracking-wider uppercase text-white">{cl.firstName} {cl.lastName}</div>
+              <div className="flex items-center gap-2">
+                <div className="text-base font-black tracking-wider uppercase text-white">{cl.firstName} {cl.lastName}</div>
+                {/* BC service flags badge */}
+                {cs.serviceFlags && (
+                  <span className="text-xs font-black tracking-wider px-1.5 py-0.5 rounded"
+                    style={{ background: 'rgba(241,196,15,0.15)', border: '1px solid rgba(241,196,15,0.35)', color: '#f1c40f', fontSize: 9 }}>
+                    {cs.serviceFlags}
+                  </span>
+                )}
+              </div>
               {altNames.length > 0 && <div className="text-xs mt-0.5" style={{ color: '#80d0d0', opacity: 0.7, fontWeight: 400 }}>aka {altNames.join(', ')}</div>}
               {cl.routeCode && <div className="text-xs font-semibold tracking-wider" style={{ color: '#00e5ff', opacity: 0.4 }}>Route: {cl.routeCode}</div>}
             </div>
@@ -1586,10 +1637,91 @@ export default function DialerPage() {
                   </div>
                 </div>
                 <div className="mb-2"><YesField label="Notes" value={yNotes} onChange={setYNotes} /></div>
+
+                {/* ── BC UPSELL SECTION ── */}
+                {isBCCampaign && (
+                  <div className="mb-2 p-2 rounded" style={{ background: 'rgba(241,196,15,0.04)', border: '1px solid rgba(241,196,15,0.15)' }}>
+                    <div className="text-xs uppercase tracking-widest font-bold mb-1.5" style={{ color: '#f1c40f', opacity: 0.7, fontSize: 8 }}>⚡ UPSELL</div>
+
+                    {/* Upsell type dropdown */}
+                    <div className="flex gap-1.5 mb-1.5">
+                      {([
+                        { val: 'none' as UpsellType, label: 'No Upsell' },
+                        { val: 'dethatch' as UpsellType, label: 'Dethatching' },
+                        { val: 'rejuv' as UpsellType, label: 'Lawn Rejuv' },
+                      ]).map(({ val, label }) => (
+                        <button
+                          key={val}
+                          onClick={() => {
+                            setYUpsellType(val);
+                            if (val !== 'dethatch') { setYDtPrice(''); setYDtPrepaid(false); setYSkipAeration(false); }
+                            if (val !== 'rejuv') { setYRejuvPrice(''); }
+                          }}
+                          className="flex-1 py-1.5 rounded text-xs font-bold tracking-wider uppercase cursor-pointer transition-all"
+                          style={{
+                            background: yUpsellType === val ? 'rgba(241,196,15,0.15)' : 'rgba(0,10,18,0.6)',
+                            border: `1px solid ${yUpsellType === val ? 'rgba(241,196,15,0.5)' : 'rgba(255,255,255,0.08)'}`,
+                            color: yUpsellType === val ? '#f1c40f' : '#555',
+                            fontSize: 9,
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Dethatch fields */}
+                    {yUpsellType === 'dethatch' && (
+                      <div className="flex items-end gap-2">
+                        <div style={{ width: 90 }}><YesField label="DT Price" value={yDtPrice} onChange={setYDtPrice} /></div>
+                        <label className="flex items-center gap-1.5 text-xs cursor-pointer pb-1" style={{ color: '#ccc' }}>
+                          <input type="checkbox" checked={yDtPrepaid} onChange={(e) => setYDtPrepaid(e.target.checked)} style={{ accentColor: '#f1c40f', width: 14, height: 14 }} />
+                          <span style={{ fontSize: 9 }}>DT Prepaid</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 text-xs cursor-pointer pb-1" style={{ color: '#ccc' }}>
+                          <input type="checkbox" checked={ySkipAeration} onChange={(e) => setYSkipAeration(e.target.checked)} style={{ accentColor: '#e74c3c', width: 14, height: 14 }} />
+                          <span style={{ fontSize: 9, color: ySkipAeration ? '#e74c3c' : '#ccc' }}>Skip Aeration</span>
+                        </label>
+                      </div>
+                    )}
+
+                    {/* Rejuv fields */}
+                    {yUpsellType === 'rejuv' && (
+                      <div>
+                        <div className="flex items-end gap-2">
+                          <div style={{ width: 120 }}><YesField label="Rejuv Total Price" value={yRejuvPrice} onChange={setYRejuvPrice} /></div>
+                        </div>
+                        <div className="text-xs mt-1" style={{ color: '#f1c40f', opacity: 0.5, fontSize: 8 }}>
+                          ⚠ Lawn Rejuv must be prepaid. This replaces aeration price.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ── ACTION BUTTONS ── */}
                 <div className="flex gap-2">
                   <button onClick={() => setShowYesPanel(false)} className="px-3 py-2 rounded text-xs font-bold cursor-pointer" style={{ background: '#333', color: '#888', border: '1px solid #555' }}>✖ Cancel</button>
-                  <button onClick={() => doYes('COMPLETE')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#2ecc71', color: '#fff', border: 'none', letterSpacing: '2px' }}>✔ Complete</button>
-                  <button onClick={() => doYes('PREPAY')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none', letterSpacing: '2px' }}>💳 Prepay</button>
+
+                  {isDtOnly ? (
+                    /* Dethatch-only: single upsell button */
+                    <button onClick={() => doYes('COMPLETE')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer"
+                      style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none', letterSpacing: '2px' }}>
+                      ⚡ DT Upsell Only
+                    </button>
+                  ) : isRejuv ? (
+                    /* Rejuv: forced prepay only */
+                    <button onClick={() => doYes('PREPAY')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer"
+                      style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none', letterSpacing: '2px' }}>
+                      💳 Prepay (Rejuv)
+                    </button>
+                  ) : (
+                    /* Normal: Complete + Prepay */
+                    <>
+                      <button onClick={() => doYes('COMPLETE')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#2ecc71', color: '#fff', border: 'none', letterSpacing: '2px' }}>✔ Complete</button>
+                      <button onClick={() => doYes('PREPAY')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none', letterSpacing: '2px' }}>💳 Prepay</button>
+                    </>
+                  )}
                 </div>
               </div>
             ) : (

@@ -25,6 +25,8 @@ import {
 
 // --- Types ---
 
+export type UpsellType = 'none' | 'dethatch' | 'rejuv';
+
 export interface DispositionContext {
   timestamp?: number;
   street?: string;
@@ -37,6 +39,12 @@ export interface DispositionContext {
   yesStartTime?: number;
   /** True if this prepay is from a client who has never prepaid before (no 'Prepaid' in service history) */
   isFirstTimePrepay?: boolean;
+
+  // --- BC upsell fields ---
+  upsellType?: UpsellType;
+  dtPrice?: number;           // Dethatch upsell dollar amount
+  dtPrepaid?: boolean;        // Dethatch was prepaid
+  skipAeration?: boolean;     // Dethatch sold WITHOUT aeration (upsell-only, not a booking)
 }
 
 export interface MultiplierSnapshot {
@@ -105,6 +113,9 @@ export function processDisposition(
   let newBadges: string[] = [];
   let pointBreakdown: PointBreakdown | null = null;
 
+  // Ensure upsells counter exists (for sessions created before this field was added)
+  if (typeof session.upsells !== 'number') session.upsells = 0;
+
   recordDial(session, now);
   updateOpTempo(session, now);
   updateWarMachine(session, now);
@@ -133,6 +144,10 @@ export function processDisposition(
   ) {
     updateExhumer(session);
   }
+
+  // --- Check for dethatch-only (BC upsell without aeration) ---
+  const isDethatchOnly = (dispType === 'COMPLETE' || dispType === 'PREPAY') &&
+    context.upsellType === 'dethatch' && !!context.skipAeration;
 
   // ============================================================
   // CALM MODE — skip all scoring & badge evaluation
@@ -165,25 +180,59 @@ export function processDisposition(
         break;
 
       case 'COMPLETE':
-        session.totalBookings++;
-        session.consecutiveYes++;
-        session.pbs++;
-        (session as any)._consecutiveNos = 0;
-        session.bookingTimestamps.push(now);
-        if ((context.streetAerCount || 0) <= 1) session.newStreetBookings++;
-        if (isDeadYear(context.mostRecentYear || 0)) session.raisedDeadCount++;
+        if (isDethatchOnly) {
+          // Dethatch-only: only upsell, not a booking
+          session.upsells++;
+          if (context.dtPrepaid && context.dtPrice) {
+            session.ppDollars += context.dtPrice;
+          }
+        } else {
+          session.totalBookings++;
+          session.consecutiveYes++;
+          session.pbs++;
+          (session as any)._consecutiveNos = 0;
+          session.bookingTimestamps.push(now);
+          if ((context.streetAerCount || 0) <= 1) session.newStreetBookings++;
+          if (isDeadYear(context.mostRecentYear || 0)) session.raisedDeadCount++;
+          // Upsell with aeration
+          if (context.upsellType === 'dethatch') {
+            session.upsells++;
+            if (context.dtPrepaid && context.dtPrice) {
+              session.ppDollars += context.dtPrice;
+            }
+          }
+        }
         break;
 
       case 'PREPAY': {
         const price = context.price || 0;
-        session.totalBookings++;
-        session.consecutiveYes++;
-        session.pps++;
-        session.ppDollars += price;
-        (session as any)._consecutiveNos = 0;
-        session.bookingTimestamps.push(now);
-        if ((context.streetAerCount || 0) <= 1) session.newStreetBookings++;
-        if (isDeadYear(context.mostRecentYear || 0)) session.raisedDeadCount++;
+        if (isDethatchOnly) {
+          // Dethatch-only: only upsell, not a booking
+          session.upsells++;
+          if (context.dtPrepaid && context.dtPrice) {
+            session.ppDollars += context.dtPrice;
+          }
+        } else {
+          session.totalBookings++;
+          session.consecutiveYes++;
+          session.pps++;
+          session.ppDollars += price;
+          (session as any)._consecutiveNos = 0;
+          session.bookingTimestamps.push(now);
+          if ((context.streetAerCount || 0) <= 1) session.newStreetBookings++;
+          if (isDeadYear(context.mostRecentYear || 0)) session.raisedDeadCount++;
+          // Upsell with aeration (dethatch)
+          if (context.upsellType === 'dethatch') {
+            session.upsells++;
+            if (context.dtPrepaid && context.dtPrice) {
+              session.ppDollars += context.dtPrice;
+            }
+          }
+          // Upsell: rejuv (price already included in main price)
+          if (context.upsellType === 'rejuv') {
+            session.upsells++;
+          }
+        }
         break;
       }
     }
@@ -219,13 +268,47 @@ export function processDisposition(
       processRejection(session, now);
       break;
     case 'COMPLETE':
-      newBadges = processYes(session, false, 0, context, now);
-      pointBreakdown = scorePoints(session, false, 0, newBadges);
+      if (isDethatchOnly) {
+        // Dethatch-only: upsell counter + prepay dollars only, no booking logic
+        session.upsells++;
+        if (context.dtPrepaid && context.dtPrice) {
+          session.ppDollars += context.dtPrice;
+        }
+      } else {
+        newBadges = processYes(session, false, 0, context, now);
+        pointBreakdown = scorePoints(session, false, 0, newBadges);
+        // Upsell with aeration
+        if (context.upsellType === 'dethatch') {
+          session.upsells++;
+          if (context.dtPrepaid && context.dtPrice) {
+            session.ppDollars += context.dtPrice;
+          }
+        }
+      }
       break;
     case 'PREPAY': {
       const price = context.price || 0;
-      newBadges = processYes(session, true, price, context, now);
-      pointBreakdown = scorePoints(session, true, price, newBadges);
+      if (isDethatchOnly) {
+        // Dethatch-only: upsell counter + prepay dollars only, no booking logic
+        session.upsells++;
+        if (context.dtPrepaid && context.dtPrice) {
+          session.ppDollars += context.dtPrice;
+        }
+      } else {
+        newBadges = processYes(session, true, price, context, now);
+        pointBreakdown = scorePoints(session, true, price, newBadges);
+        // Upsell with aeration (dethatch)
+        if (context.upsellType === 'dethatch') {
+          session.upsells++;
+          if (context.dtPrepaid && context.dtPrice) {
+            session.ppDollars += context.dtPrice;
+          }
+        }
+        // Upsell: rejuv (price already included in main price)
+        if (context.upsellType === 'rejuv') {
+          session.upsells++;
+        }
+      }
       break;
     }
   }

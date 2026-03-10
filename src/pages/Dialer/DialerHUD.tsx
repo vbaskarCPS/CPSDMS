@@ -807,6 +807,7 @@ export default function DialerHUD({
   const pps = session?.pps || 0;
   const ppd = session?.ppDollars || 0;
   const dials = session?.totalDials || 0;
+  const upsells = session?.upsells || 0;
   const totalMult = activeMultipliers.reduce((s, m) => s + m.value, 0) + 1;
 
   return (
@@ -958,6 +959,7 @@ export default function DialerHUD({
               <CalmStat label="PB"  value={pbs} />
               <CalmStat label="PP"  value={pps} />
               <CalmStat label="PP$" value={`$${ppd}`} />
+              {upsells > 0 && <CalmStat label="UPS" value={upsells} />}
             </div>
 
             {/* Spacer */}
@@ -998,6 +1000,7 @@ export default function DialerHUD({
               <StatPill label="PP"    value={pps}  color="#f1c40f" />
               <StatPill label="PP$"   value={`$${ppd}`} color="#e67e22" />
               <StatPill label="DIALS" value={dials} color="#3498db" />
+              {upsells > 0 && <StatPill label="UPS" value={upsells} color="#f1c40f" />}
             </div>
 
             <div style={{ width: 1, height: 24, background: `rgba(0,229,255,0.08)`, flexShrink: 0 }} />

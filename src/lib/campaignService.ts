@@ -8,6 +8,8 @@ export { extractSheetId };
 
 // --- TYPES ---
 
+export type CampaignType = 'standard' | 'bc';
+
 export interface SniperConfig {
   years: number[];        // Target years to include (default [2025])
   ppOnly: boolean;        // Only show groups with prepaid rows
@@ -56,6 +58,7 @@ export interface Campaign {
   createdBy?: string;
   createdAt?: string;
   sniperConfig: SniperConfig;
+  campaignType: CampaignType;
 }
 
 export interface CampaignManager {
@@ -222,6 +225,7 @@ class CampaignService {
     spreadsheetUrl?: string;
     appsScriptUrl?: string;
     createdBy?: string;
+    campaignType?: CampaignType;
   }): Promise<Campaign> {
     const { data, error } = await supabase
       .from('campaigns')
@@ -231,6 +235,7 @@ class CampaignService {
         spreadsheet_url: campaign.spreadsheetUrl,
         apps_script_url: campaign.appsScriptUrl,
         created_by: campaign.createdBy,
+        campaign_type: campaign.campaignType || 'standard',
       })
       .select()
       .single();
@@ -246,6 +251,7 @@ class CampaignService {
       spreadsheetId: string;
       spreadsheetUrl: string;
       appsScriptUrl: string;
+      campaignType: CampaignType;
     }>
   ): Promise<Campaign> {
     const dbUpdates: any = {};
@@ -253,6 +259,7 @@ class CampaignService {
     if (updates.spreadsheetId !== undefined) dbUpdates.spreadsheet_id = updates.spreadsheetId;
     if (updates.spreadsheetUrl !== undefined) dbUpdates.spreadsheet_url = updates.spreadsheetUrl;
     if (updates.appsScriptUrl !== undefined) dbUpdates.apps_script_url = updates.appsScriptUrl;
+    if (updates.campaignType !== undefined) dbUpdates.campaign_type = updates.campaignType;
 
     const { data, error } = await supabase
       .from('campaigns')
@@ -636,6 +643,12 @@ class CampaignService {
       sniperConfig = reconstructSniperConfig(data.sniper_config);
     }
 
+    const validTypes: CampaignType[] = ['standard', 'bc'];
+    const rawType = String(data.campaign_type || 'standard').toLowerCase();
+    const campaignType: CampaignType = validTypes.includes(rawType as CampaignType)
+      ? (rawType as CampaignType)
+      : 'standard';
+
     return {
       id: data.id,
       displayName: data.display_name,
@@ -645,6 +658,7 @@ class CampaignService {
       createdBy: data.created_by,
       createdAt: data.created_at,
       sniperConfig,
+      campaignType,
     };
   }
 

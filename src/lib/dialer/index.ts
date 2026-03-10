@@ -36,6 +36,7 @@ export type {
   Direction,
   DispositionType,
   DispositionExtra,
+  UpsellType,
   GamificationSession,
   GamificationResult,
   MultiplierSnapshot,
@@ -43,7 +44,7 @@ export type {
 } from './dialerEngine';
 
 // --- Sub-modules (for advanced usage) ---
-export { resolveHeaders, findHeaders } from './dialerHeaders';
+export { resolveHeaders, findHeaders, applyBCFixedColumns } from './dialerHeaders';
 export type { ColumnIndices } from './dialerHeaders';
 
 export {

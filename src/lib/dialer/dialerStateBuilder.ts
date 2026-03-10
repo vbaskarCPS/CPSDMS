@@ -61,6 +61,8 @@ export interface DialerState {
   totalGroups: number;
   client: ClientInfo;
   serviceHistory: ServiceHistoryRow[];
+  /** BC campaigns only: service flags string like "ADFSL", "AD", "A", etc. Empty for standard campaigns. */
+  serviceFlags: string;
 }
 
 export interface DialerStateNotFound {
@@ -93,6 +95,33 @@ export function countStreetAER(all: any[][], CI: ColumnIndices, streetKey: strin
     if (aer === 'X' || aer === 'AER' || aer === 'YES' || aer === 'Y') count++;
   }
   return count;
+}
+
+// --- Build Service Flags (BC campaigns) ---
+
+/**
+ * Read fixed-position service flag columns (SVC_A through SVC_L) from a data row
+ * and build a string like "ADFSL", "AD", "A", etc.
+ * Returns empty string if no SVC columns are set (i.e. not a BC campaign).
+ */
+function buildServiceFlags(row: any[], CI: ColumnIndices): string {
+  // If SVC_A is -1, this isn't a BC campaign — return empty
+  if (CI.SVC_A < 0) return '';
+
+  let flags = '';
+  const isX = (col: number): boolean => {
+    if (col < 0 || col >= row.length) return false;
+    const v = String(row[col] ?? '').trim().toUpperCase();
+    return v === 'X' || v === 'YES' || v === 'Y';
+  };
+
+  if (isX(CI.SVC_A)) flags += 'A';
+  if (isX(CI.SVC_D)) flags += 'D';
+  if (isX(CI.SVC_F)) flags += 'F';
+  if (isX(CI.SVC_S)) flags += 'S';
+  if (isX(CI.SVC_L)) flags += 'L';
+
+  return flags;
 }
 
 // --- Build State ---
@@ -273,6 +302,9 @@ export function buildState(
 
   const rawCurrentFO = CI.FO >= 0 ? String(all[primaryIdx][CI.FO] ?? '').trim() : '';
 
+  // --- Service flags (BC campaigns only) ---
+  const serviceFlags = buildServiceFlags(all[primaryIdx], CI);
+
   // Convert data indices to 1-based sheet rows
   const sheetRows = groupDataIndices.map((r) => r + dataStartRow);
   const groupKey = sheetName + ':' + (groupDataIndices[0] + dataStartRow);
@@ -308,5 +340,6 @@ export function buildState(
       email,
     },
     serviceHistory: historyRows,
+    serviceFlags,
   };
 }

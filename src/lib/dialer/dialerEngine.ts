@@ -13,7 +13,7 @@
 // that merged list. When exhausted, returns mission complete.
 //
 
-import { resolveHeaders, findHeaders, ColumnIndices } from './dialerHeaders';
+import { resolveHeaders, findHeaders, applyBCFixedColumns, ColumnIndices } from './dialerHeaders';
 import {
   buildGroups,
   sniperFilterGroups,
@@ -53,7 +53,7 @@ import {
 } from './gamificationEngine';
 import { dialerSheetsService } from '../dialerSheetsService';
 import { campaignService, getTodayEST } from '../campaignService';
-import type { SniperConfig } from '../campaignService';
+import type { SniperConfig, CampaignType } from '../campaignService';
 import { DEFAULT_SNIPER_CONFIG } from '../campaignService';
 
 // =============================================================================
@@ -70,6 +70,7 @@ export interface EngineConfig {
   campaignId: string;
   sniperConfig?: SniperConfig;
   startBookingId?: string;  // Required for Ambush; used as hint for Infiltrate resume
+  campaignType?: CampaignType;  // 'standard' | 'bc' — defaults to 'standard'
 
   // --- City mode fields ---
   // When these are set, the engine loads all tabs in cityTabs, filters by cityName,
@@ -190,13 +191,14 @@ export function invalidateCache(): void {
 }
 
 // =============================================================================
-// SINGLE-TAB DATA LOADING (unchanged)
+// SINGLE-TAB DATA LOADING
 // =============================================================================
 
 async function loadSheetData(
   spreadsheetId: string,
   sheetName: string,
-  sniperConfig?: SniperConfig
+  sniperConfig?: SniperConfig,
+  campaignType?: CampaignType
 ): Promise<CachedSheetData> {
   const configHash = JSON.stringify(sniperConfig || DEFAULT_SNIPER_CONFIG);
 
@@ -219,6 +221,11 @@ async function loadSheetData(
   const { headerRowIndex, CI } = findHeaders(rawData);
   if (CI.PHONE < 0) {
     throw new Error('No PHONE column found in headers.');
+  }
+
+  // Apply BC fixed-position service flag columns if campaign type is 'bc'
+  if (campaignType === 'bc') {
+    applyBCFixedColumns(CI);
   }
 
   const headers = rawData[headerRowIndex];
@@ -269,7 +276,8 @@ async function loadCityData(
   spreadsheetId: string,
   cityName: string,
   cityTabs: string[],
-  sniperConfig?: SniperConfig
+  sniperConfig?: SniperConfig,
+  campaignType?: CampaignType
 ): Promise<CachedCityData> {
   const configHash = JSON.stringify(sniperConfig || DEFAULT_SNIPER_CONFIG);
 
@@ -294,6 +302,11 @@ async function loadCityData(
 
       const { headerRowIndex, CI } = findHeaders(rawData);
       if (CI.PHONE < 0) continue;
+
+      // Apply BC fixed-position service flag columns if campaign type is 'bc'
+      if (campaignType === 'bc') {
+        applyBCFixedColumns(CI);
+      }
 
       const headers = rawData[headerRowIndex];
       const dataStartRow = headerRowIndex + 2;
@@ -491,7 +504,7 @@ export async function initialize(config: EngineConfig): Promise<EngineSnapshot |
   }
 
   // ── SINGLE TAB MODE (original) ───────────────────────────────────────────────
-  const sheet = await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
+  const sheet = await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig, config.campaignType);
 
   if (sheet.available.length === 0) return null;
 
@@ -573,7 +586,8 @@ async function initializeCity(config: EngineConfig): Promise<EngineSnapshot | nu
     config.spreadsheetId,
     config.cityName!,
     config.cityTabs!,
-    config.sniperConfig
+    config.sniperConfig,
+    config.campaignType
   );
 
   if (city.available.length === 0) return null;
@@ -692,7 +706,7 @@ export async function getNextState(
   }
 
   // ── SINGLE TAB MODE (original) ──
-  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
+  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig, config.campaignType);
   const ordered = applyOrdering(sheet.available, sheet.all, sheet.CI, config.direction);
   let group: ClientGroup | null = null;
 
@@ -731,7 +745,7 @@ export async function getNextState(
 }
 
 async function getNextStateCity(config: EngineConfig, afterRow: number): Promise<DialerStateResult> {
-  const city = cachedCity || await loadCityData(config.spreadsheetId, config.cityName!, config.cityTabs!, config.sniperConfig);
+  const city = cachedCity || await loadCityData(config.spreadsheetId, config.cityName!, config.cityTabs!, config.sniperConfig, config.campaignType);
   const ordered = applyOrdering(city.available, city.mergedAll, city.mergedCI, config.direction);
   let group: ClientGroup | null = null;
 
@@ -760,7 +774,7 @@ async function getNextStateCity(config: EngineConfig, afterRow: number): Promise
 }
 
 export async function findGroupByBookingId(config: EngineConfig, bookingId: string): Promise<DialerStateResult> {
-  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
+  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig, config.campaignType);
   if (sheet.CI.BOOKING_ID < 0) return { found: false, message: 'No Booking ID column found.' };
 
   for (let r = 0; r < sheet.all.length; r++) {
@@ -774,7 +788,7 @@ export async function findGroupByBookingId(config: EngineConfig, bookingId: stri
 }
 
 export async function findGroupByPhone(config: EngineConfig, phone: string): Promise<DialerStateResult> {
-  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
+  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig, config.campaignType);
   const normalized = normalizePhone(phone);
   if (!normalized) return { found: false, message: 'Invalid phone number.' };
   if (sheet.CI.PHONE < 0) return { found: false, message: 'No PHONE column found.' };
@@ -869,7 +883,7 @@ export async function applyDisposition(
   }
 
   // ── SINGLE TAB MODE (original) ──
-  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
+  const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig, config.campaignType);
 
   if (disposition === 'PREPAY') {
     const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
@@ -941,7 +955,7 @@ async function applyDispositionCity(
   extra: DispositionExtra,
   yesStartTime?: number
 ): Promise<DispositionResult> {
-  const city = cachedCity || await loadCityData(config.spreadsheetId, config.cityName!, config.cityTabs!, config.sniperConfig);
+  const city = cachedCity || await loadCityData(config.spreadsheetId, config.cityName!, config.cityTabs!, config.sniperConfig, config.campaignType);
 
   if (disposition === 'PREPAY') {
     // Find which tab this group's first row lives in
@@ -1071,7 +1085,7 @@ export async function finalizePrepay(
   let headers: any[];
 
   if (isCityMode) {
-    const city = cachedCity || await loadCityData(config.spreadsheetId, config.cityName!, config.cityTabs!, config.sniperConfig);
+    const city = cachedCity || await loadCityData(config.spreadsheetId, config.cityName!, config.cityTabs!, config.sniperConfig, config.campaignType);
     all = city.mergedAll;
     CI = city.mergedCI;
     dataStartRow = city.mergedDataStartRow;
@@ -1079,7 +1093,7 @@ export async function finalizePrepay(
     const slice = city.tabSlices.find(s => s.tabName === pp.sourceTab) || city.tabSlices[0];
     headers = slice.headers;
   } else {
-    const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig);
+    const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig, config.campaignType);
     all = sheet.all;
     CI = sheet.CI;
     dataStartRow = sheet.dataStartRow;
@@ -1400,6 +1414,16 @@ function buildGamificationContext(
       const hasPriorPrepay = state.serviceHistory.some(h => h.pmtType === 'Prepaid');
       ctx.isFirstTimePrepay = !hasPriorPrepay;
     }
+
+    // --- BC upsell context ---
+    if (extra.upsellType && extra.upsellType !== 'none') {
+      ctx.upsellType = extra.upsellType;
+      ctx.skipAeration = extra.skipAeration || false;
+      if (extra.upsellType === 'dethatch') {
+        ctx.dtPrice = parseFloat(extra.dtPrice || '0') || 0;
+        ctx.dtPrepaid = extra.dtPrepaid || false;
+      }
+    }
   }
 
   return ctx;
@@ -1474,7 +1498,7 @@ function migrateSession(loaded: GamificationSession, repCode: string, dateStr: s
 
 export type { DialerState, DialerStateResult } from './dialerStateBuilder';
 export type { Direction } from './dialerGroupBuilder';
-export type { DispositionType, DispositionExtra } from './dialerDispositions';
+export type { DispositionType, DispositionExtra, UpsellType } from './dialerDispositions';
 export type { GamificationSession } from './gamificationDefs';
 export type { GamificationResult, MultiplierSnapshot } from './gamificationEngine';
 export { getCurrentRank, createFreshSession } from './gamificationDefs';
