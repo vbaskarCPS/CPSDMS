@@ -392,7 +392,7 @@ export default function DialerPage() {
     if (booksLoading) return;
     handleConnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaign, booksLoading]);
+  }, [campaign, booksLoading, books.length]);
 
   // =======================================================================
   // PRESENCE HEARTBEAT
@@ -523,14 +523,14 @@ export default function DialerPage() {
       await dialerSheetsService.authenticate();
       setConnected(true);
 
-      // ── BOOKS MODE: load per-book stats in background ──
+      // ── BOOKS MODE: load per-book stats in background (parallel) ──
       if (books.length > 0) {
         // Books are already loaded from Supabase (auth useEffect).
         // Load stats from each book's spreadsheet (first tab as sample).
-        for (const book of books) {
+        books.forEach(async (book) => {
           try {
             const bookTabs = await dialerSheetsService.getCallbookTabs(book.spreadsheetId);
-            if (bookTabs.length === 0) continue;
+            if (bookTabs.length === 0) return;
             const stats = await dialerSheetsService.computeTabStats(book.spreadsheetId, bookTabs[0]);
             setCampaignCards(prev => prev.map(card =>
               card.id === book.id
@@ -538,8 +538,7 @@ export default function DialerPage() {
                 : card
             ));
           } catch { /* Non-critical */ }
-        }
-        setConnecting(false);
+        });
         return;
       }
 
@@ -607,12 +606,24 @@ export default function DialerPage() {
     setStartBookingId('');
     setDeployError('');
 
-    // ── BOOKS MODE: cardId is a book UUID ──
+    // ── INSIDE A BOOK: cardId is a tab name → open deploy config ──
+    if (activeBook) {
+      setDeployingTab(cardId);
+      setSelectedTab(cardId);
+      setShowDeployConfig(true);
+
+      try {
+        const years = await discoverAvailableYears(activeBook.spreadsheetId, cardId);
+        setAvailableYears(years);
+      } catch { /* Non-critical */ }
+      return;
+    }
+
+    // ── TOP LEVEL WITH BOOKS: cardId is a book UUID → enter the book ──
     const book = books.find(b => b.id === cardId);
     if (book) {
       setActiveBook(book);
-      setDeployingTab(book.displayName);
-      setShowDeployConfig(true);
+      setCityCards([]); // reset city cards for this book
 
       // Ensure connected before loading tabs
       if (!connected) {
@@ -620,29 +631,54 @@ export default function DialerPage() {
           await dialerSheetsService.authenticate();
           setConnected(true);
         } catch (err: any) {
-          setDeployError('Failed to connect to Google Sheets: ' + (err.message || ''));
+          setTabsError('Failed to connect: ' + (err.message || ''));
+          setActiveBook(null);
           return;
         }
       }
 
-      // Load tabs from this book's spreadsheet
+      // Load tabs from this book's spreadsheet and build tab cards
       try {
         const bookTabs = await dialerSheetsService.getCallbookTabs(book.spreadsheetId);
         setTabs(bookTabs);
-        if (bookTabs.length > 0) {
-          setSelectedTab(bookTabs[0]);
+        const tabCards = tabsToPlaceholderCards(bookTabs, book.displayName);
+        setCampaignCards(tabCards);
+
+        // Load per-tab stats in background
+        bookTabs.forEach(async (tabName) => {
           try {
-            const years = await discoverAvailableYears(book.spreadsheetId, bookTabs[0]);
-            setAvailableYears(years);
+            const stats = await dialerSheetsService.computeTabStats(book.spreadsheetId, tabName);
+            setCampaignCards(prev => prev.map(card =>
+              card.id === tabName
+                ? { ...card, totalRows: stats.totalRows, bookings: stats.bookings, reachedPct: stats.reachedPct, avgAttempts: stats.avgAttempts, lastDeployed: stats.lastUsed ?? undefined }
+                : card
+            ));
           } catch { /* Non-critical */ }
+        });
+
+        // City scan for this book
+        if (bookTabs.length > 0) {
+          setCityProgress({ current: 0, total: bookTabs.length, tabName: bookTabs[0] });
+          try {
+            const cities = await discoverCities(
+              book.spreadsheetId,
+              bookTabs,
+              (scanned: number, total: number, tabName: string) => {
+                setCityProgress({ current: scanned, total, tabName });
+              }
+            );
+            setCityCards(cities);
+          } catch { /* Non-critical */ } finally {
+            setCityProgress(null);
+          }
         }
       } catch (err: any) {
-        setDeployError('Failed to load tabs: ' + (err.message || ''));
+        setTabsError('Failed to load tabs: ' + (err.message || ''));
       }
       return;
     }
 
-    // ── LEGACY MODE: cardId is a tab name ──
+    // ── LEGACY MODE: no books, cardId is a tab name ──
     setActiveBook(null);
     setDeployingTab(cardId);
     setSelectedTab(cardId);
@@ -655,6 +691,18 @@ export default function DialerPage() {
       } catch { /* Non-critical */ }
     }
   };
+
+  // =======================================================================
+  // BACK TO BOOKS (exit book → return to top-level book cards)
+  // =======================================================================
+
+  const handleBackToBooks = useCallback(() => {
+    setActiveBook(null);
+    setCampaignCards(booksToCards(books));
+    setCityCards([]);
+    setCityProgress(null);
+    setTabs([]);
+  }, [books]);
 
   // =======================================================================
   // CITY DEPLOY
@@ -1009,6 +1057,8 @@ export default function DialerPage() {
           campaignService.getResumeData(manager.id).then(setResumeData).catch(() => {});
         }
         setActiveBook(null);
+        if (books.length > 0) setCampaignCards(booksToCards(books));
+        setCityCards([]);
         setMode('campaign-select' as any);
         break;
       case 'reset': {
@@ -1226,7 +1276,7 @@ export default function DialerPage() {
       );
     }
 
-    if (!connected && !connecting) {
+    if (!connected && !connecting && books.length === 0) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center p-6" style={S.body}>
           <WifiOff className="mb-4" size={40} color="#e74c3c" />
@@ -1245,7 +1295,7 @@ export default function DialerPage() {
       );
     }
 
-    if (tabsError && tabs.length === 0) {
+    if (tabsError && tabs.length === 0 && books.length === 0) {
       return (
         <div className="min-h-screen flex flex-col items-center justify-center p-6" style={S.body}>
           <div className="text-sm font-bold tracking-widest uppercase mb-2" style={{ color: '#e74c3c' }}>FAILED TO LOAD TABS</div>
@@ -1263,20 +1313,47 @@ export default function DialerPage() {
         <CampaignSelect
           campaigns={campaignCards}
           onDeploy={handleCampaignDeploy}
-          cityCards={cityCards}
-          onCityDeploy={handleCityDeploy}
+          cityCards={books.length > 0 && !activeBook ? undefined : cityCards}
+          onCityDeploy={books.length > 0 && !activeBook ? undefined : handleCityDeploy}
           onSettingsClick={() => {
-            if (availableYears.length === 0 && campaign?.spreadsheetId && tabs.length > 0) {
-              discoverAvailableYears(campaign.spreadsheetId, tabs[0]).then(setAvailableYears).catch(() => {});
+            const ssId = activeBook?.spreadsheetId || campaign?.spreadsheetId;
+            if (availableYears.length === 0 && ssId && tabs.length > 0) {
+              discoverAvailableYears(ssId, tabs[0]).then(setAvailableYears).catch(() => {});
             }
             setSniperSettingsOpen(true);
           }}
+          filterSummary={activeBook && books.length > 0 ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+              <button
+                onClick={handleBackToBooks}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '5px 12px', borderRadius: 6,
+                  border: '1px solid rgba(0,229,255,0.20)',
+                  background: 'rgba(0,229,255,0.06)',
+                  cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 9, fontWeight: 800, letterSpacing: '1.5px',
+                  color: '#00e5ff', textTransform: 'uppercase' as const,
+                }}
+              >
+                ← BOOKS
+              </button>
+              <span style={{ fontSize: 11, fontWeight: 900, color: '#fff', letterSpacing: '0.5px' }}>
+                {activeBook.displayName}
+              </span>
+              {activeBook.campaignType === 'bc' ? (
+                <span style={{ fontSize: 8, fontWeight: 800, padding: '2px 7px', borderRadius: 3, background: 'rgba(241,196,15,0.15)', border: '1px solid rgba(241,196,15,0.35)', color: '#f1c40f' }}>BC</span>
+              ) : (
+                <span style={{ fontSize: 8, fontWeight: 800, padding: '2px 7px', borderRadius: 3, background: 'rgba(46,204,113,0.15)', border: '1px solid rgba(46,204,113,0.35)', color: '#2ecc71' }}>STD</span>
+              )}
+            </div>
+          ) : undefined}
           campaignId={campaign?.id}
           managerId={manager?.id}
           managerName={manager?.name || manager?.repCode || ''}
-          resumeData={resumeData}
-          resumeLoading={resumeLoading}
-          onResume={handleResumeDeploy}
+          resumeData={!activeBook ? resumeData : undefined}
+          resumeLoading={!activeBook ? resumeLoading : false}
+          onResume={!activeBook ? handleResumeDeploy : undefined}
           session={session}
         />
 
@@ -1352,6 +1429,9 @@ export default function DialerPage() {
                 )}
                 {activeBook && !pendingCityDeploy && (
                   <div style={{ marginTop: 4 }}>
+                    <div style={{ fontSize: 8, color: '#888', marginBottom: 3, fontFamily: 'monospace' }}>
+                      {activeBook.displayName}
+                    </div>
                     {activeBook.campaignType === 'bc' ? (
                       <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 8px', borderRadius: 3, background: 'rgba(241,196,15,0.15)', border: '1px solid rgba(241,196,15,0.35)', color: '#f1c40f' }}>BC</span>
                     ) : (
@@ -1360,29 +1440,6 @@ export default function DialerPage() {
                   </div>
                 )}
               </div>
-
-              {/* TAB SELECTOR — shown when deploying from a book */}
-              {activeBook && (
-                <div className="mb-4">
-                  <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.5, textTransform: 'uppercase', marginBottom: 6 }}>
-                    TARGET TAB
-                  </div>
-                  {tabs.length === 0 ? (
-                    <div className="text-center py-3 text-xs" style={{ color: '#555' }}>Loading tabs...</div>
-                  ) : (
-                    <select
-                      value={selectedTab}
-                      onChange={(e) => setSelectedTab(e.target.value)}
-                      className="w-full px-3 py-2 rounded text-sm font-mono"
-                      style={{ background: 'rgba(0,10,18,0.9)', color: '#fff', border: '1px solid rgba(0,229,255,0.20)', fontSize: 12 }}
-                    >
-                      {tabs.map(tab => (
-                        <option key={tab} value={tab}>{tab}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              )}
 
               {/* APPROACH VECTOR */}
               <div className="mb-4">
@@ -1605,7 +1662,7 @@ export default function DialerPage() {
             <div className="text-sm font-black tracking-widest uppercase" style={{ color: '#555' }}>Mission Complete</div>
             <div className="text-xs mt-2" style={{ color: '#444', maxWidth: 300 }}>{emptyMessage}</div>
             <button
-              onClick={() => { setMode('campaign-select'); setActiveBook(null); invalidateCache(); }}
+              onClick={() => { setMode('campaign-select'); setActiveBook(null); if (books.length > 0) setCampaignCards(booksToCards(books)); setCityCards([]); invalidateCache(); }}
               className="mt-4 px-4 py-2 rounded text-xs font-bold tracking-wider uppercase"
               style={{ background: 'rgba(0,20,30,0.8)', color: '#00e5ff', border: '1px solid rgba(0,229,255,0.20)' }}
             >

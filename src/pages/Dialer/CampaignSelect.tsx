@@ -1220,6 +1220,13 @@ export default function CampaignSelect({
     setDeploying(false);
   }, [viewMode]);
 
+  // Reset view mode to 'tab' when entering/leaving a book (cityCards goes undefined)
+  useEffect(() => {
+    if (cityCards === undefined) {
+      setViewMode('tab');
+    }
+  }, [cityCards]);
+
   const hotCampaignIds = new Set(presence.map(p => p.campaignId));
 
   const sorted = [...campaigns].sort((a, b) => {
@@ -1388,12 +1395,14 @@ export default function CampaignSelect({
                   <ResumeBanner resumeData={resumeData} onResume={onResume} managerId={managerId} session={session} />
                 )}
 
-                {/* View mode toggle */}
-                <ViewModeToggle
-                  mode={viewMode}
-                  onChange={setViewMode}
-                  hasCityCards={!!cityCards && cityCards.length > 0}
-                />
+                {/* View mode toggle — only shown in legacy tab mode (not books mode) */}
+                {onCityDeploy && (
+                  <ViewModeToggle
+                    mode={viewMode}
+                    onChange={setViewMode}
+                    hasCityCards={!!cityCards && cityCards.length > 0}
+                  />
+                )}
 
                 {/* Tab View */}
                 {viewMode === 'tab' && (
