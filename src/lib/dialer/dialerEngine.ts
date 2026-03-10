@@ -171,14 +171,16 @@ let highlightedRows: { current: number[]; next: number[] } = { current: [], next
 let activeSessionRowId: string | null = null;
 let resumeTab: string = '';
 let resumePosition: string = '';
+let resumeBookId: string = '';
 
 // =============================================================================
 // RESUME POSITION
 // =============================================================================
 
-export function setResumePosition(tab: string, bookingId: string, firstRow?: number): void {
+export function setResumePosition(tab: string, bookingId: string, firstRow?: number, bookId?: string): void {
   resumeTab = tab;
   resumePosition = bookingId || (firstRow ? `ROW:${firstRow}` : '');
+  if (bookId !== undefined) resumeBookId = bookId;
 }
 
 // =============================================================================
@@ -1430,7 +1432,7 @@ function buildGamificationContext(
 }
 
 // =============================================================================
-// SESSION PERSISTENCE (unchanged)
+// SESSION PERSISTENCE
 // =============================================================================
 
 async function loadOrCreateSession(config: EngineConfig): Promise<GamificationSession> {
@@ -1464,6 +1466,7 @@ async function saveSession(session: GamificationSession): Promise<void> {
       ...session,
       _resumeTab: resumeTab || undefined,
       _resumePosition: resumePosition || undefined,
+      _resumeBookId: resumeBookId || undefined,
       _siegeIndex: cachedSheet?.siegeIndex ?? cachedCity?.siegeIndex ?? undefined,
     };
     await campaignService.upsertGamificationState(activeSessionRowId, stateWithResume);

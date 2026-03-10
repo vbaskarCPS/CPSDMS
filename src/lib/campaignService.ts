@@ -61,6 +61,17 @@ export interface Campaign {
   campaignType: CampaignType;
 }
 
+export interface CampaignBook {
+  id: string;
+  campaignId: string;
+  displayName: string;
+  spreadsheetId: string;
+  spreadsheetUrl?: string;
+  appsScriptUrl?: string;
+  campaignType: CampaignType;
+  createdAt?: string;
+}
+
 export interface CampaignManager {
   id: string;
   campaignId: string;
@@ -196,7 +207,7 @@ class CampaignService {
     return { manager, campaign };
   }
 
-  // --- CAMPAIGN CRUD ---
+  // --- CAMPAIGN (TEAM) CRUD ---
 
   public async getAllCampaigns(): Promise<Campaign[]> {
     const { data, error } = await supabase
@@ -298,6 +309,94 @@ class CampaignService {
   public async deleteCampaign(id: string): Promise<void> {
     const { error } = await supabase
       .from('campaigns')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw new Error(error.message);
+  }
+
+  // =============================================================================
+  // CAMPAIGN BOOK CRUD
+  // =============================================================================
+
+  public async getBooksByCampaign(campaignId: string): Promise<CampaignBook[]> {
+    const { data, error } = await supabase
+      .from('campaign_books')
+      .select('*')
+      .eq('campaign_id', campaignId)
+      .order('created_at', { ascending: true });
+
+    if (error || !data) return [];
+    return data.map(this.mapDbToBook);
+  }
+
+  public async getBookById(id: string): Promise<CampaignBook | null> {
+    const { data, error } = await supabase
+      .from('campaign_books')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return this.mapDbToBook(data);
+  }
+
+  public async createBook(book: {
+    campaignId: string;
+    displayName: string;
+    spreadsheetId: string;
+    spreadsheetUrl?: string;
+    appsScriptUrl?: string;
+    campaignType?: CampaignType;
+  }): Promise<CampaignBook> {
+    const { data, error } = await supabase
+      .from('campaign_books')
+      .insert({
+        campaign_id: book.campaignId,
+        display_name: book.displayName,
+        spreadsheet_id: book.spreadsheetId,
+        spreadsheet_url: book.spreadsheetUrl,
+        apps_script_url: book.appsScriptUrl,
+        campaign_type: book.campaignType || 'standard',
+      })
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    return this.mapDbToBook(data);
+  }
+
+  public async updateBook(
+    id: string,
+    updates: Partial<{
+      displayName: string;
+      spreadsheetId: string;
+      spreadsheetUrl: string;
+      appsScriptUrl: string;
+      campaignType: CampaignType;
+    }>
+  ): Promise<CampaignBook> {
+    const dbUpdates: any = {};
+    if (updates.displayName !== undefined) dbUpdates.display_name = updates.displayName;
+    if (updates.spreadsheetId !== undefined) dbUpdates.spreadsheet_id = updates.spreadsheetId;
+    if (updates.spreadsheetUrl !== undefined) dbUpdates.spreadsheet_url = updates.spreadsheetUrl;
+    if (updates.appsScriptUrl !== undefined) dbUpdates.apps_script_url = updates.appsScriptUrl;
+    if (updates.campaignType !== undefined) dbUpdates.campaign_type = updates.campaignType;
+
+    const { data, error } = await supabase
+      .from('campaign_books')
+      .update(dbUpdates)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    return this.mapDbToBook(data);
+  }
+
+  public async deleteBook(id: string): Promise<void> {
+    const { error } = await supabase
+      .from('campaign_books')
       .delete()
       .eq('id', id);
 
@@ -659,6 +758,25 @@ class CampaignService {
       createdAt: data.created_at,
       sniperConfig,
       campaignType,
+    };
+  }
+
+  private mapDbToBook(data: any): CampaignBook {
+    const validTypes: CampaignType[] = ['standard', 'bc'];
+    const rawType = String(data.campaign_type || 'standard').toLowerCase();
+    const campaignType: CampaignType = validTypes.includes(rawType as CampaignType)
+      ? (rawType as CampaignType)
+      : 'standard';
+
+    return {
+      id: data.id,
+      campaignId: data.campaign_id,
+      displayName: data.display_name,
+      spreadsheetId: data.spreadsheet_id,
+      spreadsheetUrl: data.spreadsheet_url,
+      appsScriptUrl: data.apps_script_url,
+      campaignType,
+      createdAt: data.created_at,
     };
   }
 

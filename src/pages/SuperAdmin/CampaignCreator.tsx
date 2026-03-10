@@ -19,11 +19,13 @@ import {
   Link,
   ChevronDown,
   ChevronUp,
+  BookOpen,
 } from 'lucide-react';
 import {
   campaignService,
   Campaign,
   CampaignManager,
+  CampaignBook,
   extractSheetId,
 } from '../../lib/campaignService';
 import type { CampaignType } from '../../lib/campaignService';
@@ -42,22 +44,22 @@ const CampaignCreator: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Campaign modal
+  // Campaign (team) modal
   const [showModal, setShowModal] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
     displayName: '',
-    spreadsheetUrl: '',
-    appsScriptUrl: '',
-    campaignType: 'standard' as CampaignType,
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
-  // Expanded campaign (show managers)
+  // Expanded campaign (show books + managers)
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedSection, setExpandedSection] = useState<'books' | 'managers'>('books');
   const [managers, setManagers] = useState<CampaignManager[]>([]);
   const [managersLoading, setManagersLoading] = useState(false);
+  const [books, setBooks] = useState<CampaignBook[]>([]);
+  const [booksLoading, setBooksLoading] = useState(false);
 
   // Manager modal
   const [showManagerModal, setShowManagerModal] = useState(false);
@@ -66,6 +68,19 @@ const CampaignCreator: React.FC = () => {
   const [managerFormErrors, setManagerFormErrors] = useState<Record<string, string>>({});
   const [savingManager, setSavingManager] = useState(false);
   const [managerCampaignId, setManagerCampaignId] = useState<string | null>(null);
+
+  // Book modal
+  const [showBookModal, setShowBookModal] = useState(false);
+  const [editingBook, setEditingBook] = useState<CampaignBook | null>(null);
+  const [bookForm, setBookForm] = useState({
+    displayName: '',
+    spreadsheetUrl: '',
+    appsScriptUrl: '',
+    campaignType: 'standard' as CampaignType,
+  });
+  const [bookFormErrors, setBookFormErrors] = useState<Record<string, string>>({});
+  const [savingBook, setSavingBook] = useState(false);
+  const [bookCampaignId, setBookCampaignId] = useState<string | null>(null);
 
   useEffect(() => {
     loadCampaigns();
@@ -95,10 +110,22 @@ const CampaignCreator: React.FC = () => {
     }
   };
 
-  // --- Campaign CRUD ---
+  const loadBooks = async (campaignId: string) => {
+    setBooksLoading(true);
+    try {
+      const data = await campaignService.getBooksByCampaign(campaignId);
+      setBooks(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load books');
+    } finally {
+      setBooksLoading(false);
+    }
+  };
+
+  // --- Campaign (Team) CRUD ---
 
   const resetForm = () => {
-    setFormData({ displayName: '', spreadsheetUrl: '', appsScriptUrl: '', campaignType: 'standard' });
+    setFormData({ displayName: '' });
     setFormErrors({});
     setEditingCampaign(null);
   };
@@ -112,9 +139,6 @@ const CampaignCreator: React.FC = () => {
     setEditingCampaign(c);
     setFormData({
       displayName: c.displayName,
-      spreadsheetUrl: c.spreadsheetUrl || ('https://docs.google.com/spreadsheets/d/' + c.spreadsheetId + '/edit'),
-      appsScriptUrl: c.appsScriptUrl || '',
-      campaignType: c.campaignType || 'standard',
     });
     setFormErrors({});
     setShowModal(true);
@@ -127,9 +151,7 @@ const CampaignCreator: React.FC = () => {
 
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {};
-    if (!formData.displayName.trim()) errors.displayName = 'Display name is required';
-    const sheetId = extractSheetId(formData.spreadsheetUrl);
-    if (!sheetId) errors.spreadsheetUrl = 'Invalid Google Sheets URL or ID';
+    if (!formData.displayName.trim()) errors.displayName = 'Team name is required';
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -140,35 +162,27 @@ const CampaignCreator: React.FC = () => {
     setError(null);
 
     try {
-      const spreadsheetId = extractSheetId(formData.spreadsheetUrl)!;
       if (editingCampaign) {
         await campaignService.updateCampaign(editingCampaign.id, {
           displayName: formData.displayName,
-          spreadsheetId,
-          spreadsheetUrl: formData.spreadsheetUrl,
-          appsScriptUrl: formData.appsScriptUrl || undefined,
-          campaignType: formData.campaignType,
         });
       } else {
         await campaignService.createCampaign({
           displayName: formData.displayName,
-          spreadsheetId,
-          spreadsheetUrl: formData.spreadsheetUrl,
-          appsScriptUrl: formData.appsScriptUrl || undefined,
-          campaignType: formData.campaignType,
+          spreadsheetId: 'placeholder',
         });
       }
       await loadCampaigns();
       closeModal();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save campaign');
+      setError(err instanceof Error ? err.message : 'Failed to save team');
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (c: Campaign) => {
-    const msg = '⚠️ DELETE "' + c.displayName + '"?\n\nThis will permanently delete:\n• All campaign managers\n• All dialer sessions & gamification data\n\nThis action cannot be undone!';
+    const msg = '⚠️ DELETE "' + c.displayName + '"?\n\nThis will permanently delete:\n• All books (spreadsheets)\n• All campaign managers\n• All dialer sessions & gamification data\n\nThis action cannot be undone!';
     if (!window.confirm(msg)) return;
 
     try {
@@ -176,18 +190,111 @@ const CampaignCreator: React.FC = () => {
       if (expandedId === c.id) setExpandedId(null);
       await loadCampaigns();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete campaign');
+      setError(err instanceof Error ? err.message : 'Failed to delete team');
     }
   };
 
-  // --- Toggle expand / collapse managers ---
+  // --- Toggle expand / collapse ---
   const toggleExpand = async (campaignId: string) => {
     if (expandedId === campaignId) {
       setExpandedId(null);
       setManagers([]);
+      setBooks([]);
     } else {
       setExpandedId(campaignId);
-      await loadManagers(campaignId);
+      setExpandedSection('books');
+      await loadBooks(campaignId);
+    }
+  };
+
+  const switchSection = async (section: 'books' | 'managers') => {
+    setExpandedSection(section);
+    if (section === 'managers' && expandedId) {
+      await loadManagers(expandedId);
+    } else if (section === 'books' && expandedId) {
+      await loadBooks(expandedId);
+    }
+  };
+
+  // --- Book CRUD ---
+
+  const openAddBookModal = (campaignId: string) => {
+    setBookCampaignId(campaignId);
+    setEditingBook(null);
+    setBookForm({ displayName: '', spreadsheetUrl: '', appsScriptUrl: '', campaignType: 'standard' });
+    setBookFormErrors({});
+    setShowBookModal(true);
+  };
+
+  const openEditBookModal = (book: CampaignBook) => {
+    setBookCampaignId(book.campaignId);
+    setEditingBook(book);
+    setBookForm({
+      displayName: book.displayName,
+      spreadsheetUrl: book.spreadsheetUrl || ('https://docs.google.com/spreadsheets/d/' + book.spreadsheetId + '/edit'),
+      appsScriptUrl: book.appsScriptUrl || '',
+      campaignType: book.campaignType || 'standard',
+    });
+    setBookFormErrors({});
+    setShowBookModal(true);
+  };
+
+  const closeBookModal = () => {
+    setShowBookModal(false);
+    setEditingBook(null);
+    setBookCampaignId(null);
+  };
+
+  const validateBookForm = (): boolean => {
+    const errors: Record<string, string> = {};
+    if (!bookForm.displayName.trim()) errors.displayName = 'Book name is required';
+    const sheetId = extractSheetId(bookForm.spreadsheetUrl);
+    if (!sheetId) errors.spreadsheetUrl = 'Invalid Google Sheets URL or ID';
+    setBookFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleSaveBook = async () => {
+    if (!validateBookForm() || !bookCampaignId) return;
+    setSavingBook(true);
+    setError(null);
+
+    try {
+      const spreadsheetId = extractSheetId(bookForm.spreadsheetUrl)!;
+      if (editingBook) {
+        await campaignService.updateBook(editingBook.id, {
+          displayName: bookForm.displayName,
+          spreadsheetId,
+          spreadsheetUrl: bookForm.spreadsheetUrl,
+          appsScriptUrl: bookForm.appsScriptUrl || undefined,
+          campaignType: bookForm.campaignType,
+        });
+      } else {
+        await campaignService.createBook({
+          campaignId: bookCampaignId,
+          displayName: bookForm.displayName,
+          spreadsheetId,
+          spreadsheetUrl: bookForm.spreadsheetUrl,
+          appsScriptUrl: bookForm.appsScriptUrl || undefined,
+          campaignType: bookForm.campaignType,
+        });
+      }
+      await loadBooks(bookCampaignId);
+      closeBookModal();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save book');
+    } finally {
+      setSavingBook(false);
+    }
+  };
+
+  const handleDeleteBook = async (book: CampaignBook) => {
+    if (!window.confirm('Delete book "' + book.displayName + '"? This cannot be undone.')) return;
+    try {
+      await campaignService.deleteBook(book.id);
+      if (expandedId) await loadBooks(expandedId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete book');
     }
   };
 
@@ -270,9 +377,9 @@ const CampaignCreator: React.FC = () => {
     return 'ID: ' + id.substring(0, 30) + '...';
   };
 
-  const sheetIdPreview = getSheetIdPreview(formData.spreadsheetUrl);
+  const bookSheetIdPreview = getSheetIdPreview(bookForm.spreadsheetUrl);
 
-  const getCampaignTypeBadge = (type: CampaignType) => {
+  const getTypeBadge = (type: CampaignType) => {
     if (type === 'bc') {
       return (
         <span className="text-xs font-bold px-2 py-0.5 rounded" style={{ background: 'rgba(241,196,15,0.15)', border: '1px solid rgba(241,196,15,0.35)', color: '#f1c40f' }}>
@@ -280,14 +387,17 @@ const CampaignCreator: React.FC = () => {
         </span>
       );
     }
-    return null;
+    return (
+      <span className="text-xs font-bold px-2 py-0.5 rounded" style={{ background: 'rgba(46,204,113,0.15)', border: '1px solid rgba(46,204,113,0.35)', color: '#2ecc71' }}>
+        STD
+      </span>
+    );
   };
 
   // --- Render ---
 
   const renderCampaignCard = (c: Campaign) => {
     const isExpanded = expandedId === c.id;
-    const sheetPreview = c.spreadsheetId.substring(0, 24) + '...';
 
     return (
       <div key={c.id} className="bg-gray-800 rounded-xl border border-gray-700 hover:border-gray-600 transition-colors">
@@ -299,22 +409,8 @@ const CampaignCreator: React.FC = () => {
                 <Crosshair className="text-green-400" size={24} />
               </div>
               <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-lg font-bold text-white">{c.displayName}</h3>
-                  {getCampaignTypeBadge(c.campaignType)}
-                </div>
-                <div className="flex items-center gap-3 text-sm text-gray-400">
-                  <span className="flex items-center gap-1">
-                    <Sheet size={12} />
-                    <code className="text-xs">{sheetPreview}</code>
-                  </span>
-                  {c.appsScriptUrl && (
-                    <span className="flex items-center gap-1 text-xs text-blue-400">
-                      <Link size={10} />
-                      Bridge
-                    </span>
-                  )}
-                </div>
+                <h3 className="text-lg font-bold text-white">{c.displayName}</h3>
+                <div className="text-xs text-gray-500">Call Team</div>
               </div>
             </div>
 
@@ -323,21 +419,20 @@ const CampaignCreator: React.FC = () => {
                 onClick={() => toggleExpand(c.id)}
                 className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors text-sm"
               >
-                <Users size={16} />
-                Managers
                 {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                {isExpanded ? 'Collapse' : 'Expand'}
               </button>
               <button
                 onClick={() => openEditModal(c)}
                 className="bg-gray-700 hover:bg-gray-600 text-white p-2 rounded-lg transition-colors"
-                title="Edit"
+                title="Edit Team Name"
               >
                 <Edit2 size={18} />
               </button>
               <button
                 onClick={() => handleDelete(c)}
                 className="bg-red-900/30 hover:bg-red-900/50 text-red-400 p-2 rounded-lg transition-colors"
-                title="Delete"
+                title="Delete Team"
               >
                 <Trash2 size={18} />
               </button>
@@ -345,65 +440,167 @@ const CampaignCreator: React.FC = () => {
           </div>
         </div>
 
-        {/* Managers Panel (expanded) */}
+        {/* Expanded Panel */}
         {isExpanded && (
-          <div className="border-t border-gray-700 px-5 py-4 bg-gray-850">
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-bold text-gray-300 flex items-center gap-2">
-                <Users size={14} />
-                Campaign Managers
-              </h4>
+          <div className="border-t border-gray-700">
+            {/* Section Tabs */}
+            <div className="flex border-b border-gray-700">
               <button
-                onClick={() => openAddManagerModal(c.id)}
-                className="bg-green-900/50 hover:bg-green-900 text-green-400 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors border border-green-800"
+                onClick={() => switchSection('books')}
+                className={'flex-1 px-4 py-2.5 text-sm font-bold flex items-center justify-center gap-2 transition-colors ' +
+                  (expandedSection === 'books' ? 'text-green-400 border-b-2 border-green-400 bg-gray-800' : 'text-gray-500 hover:text-gray-300')}
               >
-                <Plus size={12} />
-                Add Manager
+                <BookOpen size={14} />
+                Books
+                {!booksLoading && <span className="text-xs opacity-60">({books.length})</span>}
+              </button>
+              <button
+                onClick={() => switchSection('managers')}
+                className={'flex-1 px-4 py-2.5 text-sm font-bold flex items-center justify-center gap-2 transition-colors ' +
+                  (expandedSection === 'managers' ? 'text-green-400 border-b-2 border-green-400 bg-gray-800' : 'text-gray-500 hover:text-gray-300')}
+              >
+                <Users size={14} />
+                Managers
+                {!managersLoading && expandedSection === 'managers' && <span className="text-xs opacity-60">({managers.length})</span>}
               </button>
             </div>
 
-            {managersLoading ? (
-              <div className="flex items-center justify-center py-6">
-                <Loader className="animate-spin text-gray-500" size={20} />
-              </div>
-            ) : managers.length === 0 ? (
-              <p className="text-gray-500 text-sm py-4 text-center">
-                No managers yet. Add managers manually or sync from the Managers tab.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {managers.map((mgr) => (
-                  <div
-                    key={mgr.id}
-                    className="flex items-center justify-between bg-gray-900 rounded-lg px-4 py-3 border border-gray-700"
+            {/* Books Section */}
+            {expandedSection === 'books' && (
+              <div className="px-5 py-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-bold text-gray-300 flex items-center gap-2">
+                    <BookOpen size={14} />
+                    Campaign Books
+                  </h4>
+                  <button
+                    onClick={() => openAddBookModal(c.id)}
+                    className="bg-green-900/50 hover:bg-green-900 text-green-400 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors border border-green-800"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-green-900/30 border border-green-800 flex items-center justify-center">
-                        <User size={14} className="text-green-400" />
-                      </div>
-                      <div>
-                        <span className="text-white text-sm font-medium">{mgr.name}</span>
-                        <span className="text-gray-500 text-xs ml-2">({mgr.repCode})</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => openEditManagerModal(mgr)}
-                        className="text-gray-500 hover:text-white p-1 transition-colors"
-                        title="Edit"
-                      >
-                        <Edit2 size={14} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteManager(mgr)}
-                        className="text-gray-500 hover:text-red-400 p-1 transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
+                    <Plus size={12} />
+                    Add Book
+                  </button>
+                </div>
+
+                {booksLoading ? (
+                  <div className="flex items-center justify-center py-6">
+                    <Loader className="animate-spin text-gray-500" size={20} />
                   </div>
-                ))}
+                ) : books.length === 0 ? (
+                  <p className="text-gray-500 text-sm py-4 text-center">
+                    No books yet. Add a spreadsheet to get started.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {books.map((book) => (
+                      <div
+                        key={book.id}
+                        className="flex items-center justify-between bg-gray-900 rounded-lg px-4 py-3 border border-gray-700"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-800 flex items-center justify-center">
+                            <Sheet size={14} className="text-blue-400" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-white text-sm font-medium">{book.displayName}</span>
+                              {getTypeBadge(book.campaignType)}
+                            </div>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <code className="text-gray-500 text-xs">{book.spreadsheetId.substring(0, 20)}...</code>
+                              {book.appsScriptUrl && (
+                                <span className="flex items-center gap-1 text-xs text-blue-400">
+                                  <Link size={8} />
+                                  Bridge
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => openEditBookModal(book)}
+                            className="text-gray-500 hover:text-white p-1 transition-colors"
+                            title="Edit Book"
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteBook(book)}
+                            className="text-gray-500 hover:text-red-400 p-1 transition-colors"
+                            title="Delete Book"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Managers Section */}
+            {expandedSection === 'managers' && (
+              <div className="px-5 py-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-bold text-gray-300 flex items-center gap-2">
+                    <Users size={14} />
+                    Campaign Managers
+                  </h4>
+                  <button
+                    onClick={() => openAddManagerModal(c.id)}
+                    className="bg-green-900/50 hover:bg-green-900 text-green-400 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors border border-green-800"
+                  >
+                    <Plus size={12} />
+                    Add Manager
+                  </button>
+                </div>
+
+                {managersLoading ? (
+                  <div className="flex items-center justify-center py-6">
+                    <Loader className="animate-spin text-gray-500" size={20} />
+                  </div>
+                ) : managers.length === 0 ? (
+                  <p className="text-gray-500 text-sm py-4 text-center">
+                    No managers yet. Add managers to give them access to this team's books.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {managers.map((mgr) => (
+                      <div
+                        key={mgr.id}
+                        className="flex items-center justify-between bg-gray-900 rounded-lg px-4 py-3 border border-gray-700"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-green-900/30 border border-green-800 flex items-center justify-center">
+                            <User size={14} className="text-green-400" />
+                          </div>
+                          <div>
+                            <span className="text-white text-sm font-medium">{mgr.name}</span>
+                            <span className="text-gray-500 text-xs ml-2">({mgr.repCode})</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => openEditManagerModal(mgr)}
+                            className="text-gray-500 hover:text-white p-1 transition-colors"
+                            title="Edit"
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteManager(mgr)}
+                            className="text-gray-500 hover:text-red-400 p-1 transition-colors"
+                            title="Delete"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -429,7 +626,7 @@ const CampaignCreator: React.FC = () => {
             </div>
             <div>
               <h1 className="text-lg font-bold text-white">Campaign Manager</h1>
-              <p className="text-xs text-gray-400">AutoSniper Dialer Campaigns</p>
+              <p className="text-xs text-gray-400">AutoSniper Dialer — Teams & Books</p>
             </div>
           </div>
         </div>
@@ -459,7 +656,7 @@ const CampaignCreator: React.FC = () => {
             className="bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
           >
             <Plus size={20} />
-            Create Campaign
+            Create Team
           </button>
         </div>
 
@@ -470,8 +667,8 @@ const CampaignCreator: React.FC = () => {
         ) : campaigns.length === 0 ? (
           <div className="bg-gray-800 rounded-xl border border-gray-700 p-12 text-center">
             <Crosshair className="mx-auto text-gray-600 mb-4" size={48} />
-            <h3 className="text-lg font-bold text-gray-400 mb-2">No Campaigns</h3>
-            <p className="text-gray-500 text-sm">Create your first campaign to start dialing.</p>
+            <h3 className="text-lg font-bold text-gray-400 mb-2">No Teams</h3>
+            <p className="text-gray-500 text-sm">Create your first call team to start adding books and managers.</p>
           </div>
         ) : (
           <div className="space-y-4">
@@ -480,43 +677,86 @@ const CampaignCreator: React.FC = () => {
         )}
       </div>
 
-      {/* Campaign Create/Edit Modal */}
+      {/* Team Create/Edit Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
-          <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+          <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md">
             <div className="p-4 border-b border-gray-700 flex items-center justify-between">
               <h2 className="text-lg font-bold text-white">
-                {editingCampaign ? 'Edit Campaign' : 'Create Campaign'}
+                {editingCampaign ? 'Edit Team' : 'Create Team'}
               </h2>
               <button onClick={closeModal} className="text-gray-400 hover:text-white"><X size={20} /></button>
             </div>
 
             <div className="p-6 space-y-4">
-              {/* Display Name */}
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">Display Name</label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Team Name</label>
                 <input
                   type="text"
                   value={formData.displayName}
                   onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
-                  placeholder="e.g., Hamilton Summer 2026"
+                  placeholder="e.g., Hamilton"
                   className={'w-full bg-gray-900 border rounded-lg py-2 px-3 text-white focus:ring-2 focus:outline-none ' +
                     (formErrors.displayName ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-green-500')}
                 />
                 {formErrors.displayName && <p className="text-red-400 text-xs mt-1">{formErrors.displayName}</p>}
               </div>
+            </div>
+
+            <div className="p-4 border-t border-gray-700 flex justify-end gap-3">
+              <button onClick={closeModal} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
+              >
+                {saving ? <Loader className="animate-spin" size={16} /> : <Check size={16} />}
+                {editingCampaign ? 'Save' : 'Create'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Book Create/Edit Modal */}
+      {showBookModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+          <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="p-4 border-b border-gray-700 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-white">
+                {editingBook ? 'Edit Book' : 'Add Book'}
+              </h2>
+              <button onClick={closeBookModal} className="text-gray-400 hover:text-white"><X size={20} /></button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* Book Name */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Book Name</label>
+                <input
+                  type="text"
+                  value={bookForm.displayName}
+                  onChange={(e) => setBookForm({ ...bookForm, displayName: e.target.value })}
+                  placeholder="e.g., Aeration Book, BC Interior"
+                  className={'w-full bg-gray-900 border rounded-lg py-2 px-3 text-white focus:ring-2 focus:outline-none ' +
+                    (bookFormErrors.displayName ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-green-500')}
+                />
+                {bookFormErrors.displayName && <p className="text-red-400 text-xs mt-1">{bookFormErrors.displayName}</p>}
+              </div>
 
               {/* Campaign Type */}
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">Campaign Type</label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Book Type</label>
                 <div className="flex gap-3">
                   {CAMPAIGN_TYPE_OPTIONS.map((opt) => {
-                    const isSelected = formData.campaignType === opt.value;
+                    const isSelected = bookForm.campaignType === opt.value;
                     return (
                       <button
                         key={opt.value}
                         type="button"
-                        onClick={() => setFormData({ ...formData, campaignType: opt.value })}
+                        onClick={() => setBookForm({ ...bookForm, campaignType: opt.value })}
                         className={'flex-1 rounded-lg py-3 px-4 text-left transition-all border ' +
                           (isSelected
                             ? 'bg-green-900/30 border-green-600 ring-2 ring-green-500'
@@ -534,23 +774,23 @@ const CampaignCreator: React.FC = () => {
 
               {/* Spreadsheet URL */}
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">Callbook Spreadsheet URL</label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Spreadsheet URL</label>
                 <div className="relative">
                   <Sheet className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                   <input
                     type="text"
-                    value={formData.spreadsheetUrl}
-                    onChange={(e) => setFormData({ ...formData, spreadsheetUrl: e.target.value })}
+                    value={bookForm.spreadsheetUrl}
+                    onChange={(e) => setBookForm({ ...bookForm, spreadsheetUrl: e.target.value })}
                     placeholder="https://docs.google.com/spreadsheets/d/..."
                     className={'w-full bg-gray-900 border rounded-lg py-2 pl-10 pr-3 text-white focus:ring-2 focus:outline-none text-sm ' +
-                      (formErrors.spreadsheetUrl ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-green-500')}
+                      (bookFormErrors.spreadsheetUrl ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-green-500')}
                   />
                 </div>
-                {formErrors.spreadsheetUrl && <p className="text-red-400 text-xs mt-1">{formErrors.spreadsheetUrl}</p>}
-                {sheetIdPreview && (
+                {bookFormErrors.spreadsheetUrl && <p className="text-red-400 text-xs mt-1">{bookFormErrors.spreadsheetUrl}</p>}
+                {bookSheetIdPreview && (
                   <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
                     <Check size={12} />
-                    <span>{sheetIdPreview}</span>
+                    <span>{bookSheetIdPreview}</span>
                   </p>
                 )}
               </div>
@@ -564,8 +804,8 @@ const CampaignCreator: React.FC = () => {
                   <Link className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                   <input
                     type="text"
-                    value={formData.appsScriptUrl}
-                    onChange={(e) => setFormData({ ...formData, appsScriptUrl: e.target.value })}
+                    value={bookForm.appsScriptUrl}
+                    onChange={(e) => setBookForm({ ...bookForm, appsScriptUrl: e.target.value })}
                     placeholder="https://script.google.com/macros/s/.../exec"
                     className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 pl-10 pr-3 text-white focus:ring-2 focus:ring-green-500 focus:outline-none text-sm"
                   />
@@ -575,16 +815,16 @@ const CampaignCreator: React.FC = () => {
             </div>
 
             <div className="p-4 border-t border-gray-700 flex justify-end gap-3">
-              <button onClick={closeModal} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">
+              <button onClick={closeBookModal} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">
                 Cancel
               </button>
               <button
-                onClick={handleSave}
-                disabled={saving}
+                onClick={handleSaveBook}
+                disabled={savingBook}
                 className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
               >
-                {saving ? <Loader className="animate-spin" size={16} /> : <Check size={16} />}
-                {editingCampaign ? 'Save Changes' : 'Create'}
+                {savingBook ? <Loader className="animate-spin" size={16} /> : <Check size={16} />}
+                {editingBook ? 'Save Changes' : 'Add Book'}
               </button>
             </div>
           </div>

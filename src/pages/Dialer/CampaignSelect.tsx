@@ -103,6 +103,8 @@ export interface Campaign {
   locked?: boolean;
   lockedReason?: string;
   hot?: boolean;
+  /** Book type — 'standard' or 'bc'. Used to show type badge on card. */
+  campaignType?: string;
 }
 
 interface CampaignSelectProps {
@@ -1526,7 +1528,7 @@ export default function CampaignSelect({
 }
 
 // =============================================================================
-// CAMPAIGN CARD (unchanged)
+// CAMPAIGN CARD — now shows BC/STD type badge
 // =============================================================================
 
 function CampaignCard({
@@ -1564,6 +1566,8 @@ function CampaignCard({
   const cardBoxShadow = isArmed
     ? `${glow}, 0 0 0 1.5px ${accent}60`
     : isHot ? `${glow}` : '0 2px 8px rgba(0,0,0,0.3)';
+
+  const isBC = c.campaignType === 'bc';
 
   return (
     <div
@@ -1603,11 +1607,29 @@ function CampaignCard({
 
       <div style={{ position: 'relative', zIndex: 2, padding: '14px 16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-          {c.codename ? (
-            <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: '2.5px', color: accent, opacity: 0.6, textTransform: 'uppercase' }}>
-              {c.codename}
-            </span>
-          ) : <span />}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {c.codename && (
+              <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: '2.5px', color: accent, opacity: 0.6, textTransform: 'uppercase' }}>
+                {c.codename}
+              </span>
+            )}
+            {/* Book type badge */}
+            {c.campaignType && (
+              <span style={{
+                fontSize: 7,
+                fontWeight: 900,
+                letterSpacing: '1px',
+                color: isBC ? '#f1c40f' : '#2ecc71',
+                background: isBC ? 'rgba(241,196,15,0.12)' : 'rgba(46,204,113,0.10)',
+                border: `1px solid ${isBC ? 'rgba(241,196,15,0.30)' : 'rgba(46,204,113,0.25)'}`,
+                borderRadius: 3,
+                padding: '2px 5px',
+                textTransform: 'uppercase',
+              }}>
+                {isBC ? 'BC' : 'STD'}
+              </span>
+            )}
+          </div>
           {isHot && (
             <span style={{
               fontSize: 7, fontWeight: 900, letterSpacing: '1.5px', color: '#ff4422',
