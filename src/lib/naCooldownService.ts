@@ -1,11 +1,12 @@
 // src/lib/naCooldownService.ts
 //
-// NA Cooldown System — prevents reps from re-dialing clients who were recently
-// marked NA. Logs are stored in Supabase and checked on every group load.
+// Cooldown System — prevents reps from re-dialing clients who were recently
+// reached by any disposition (NA, CTS, WN/NIS, NO, REMOVE, YES, PREPAY).
+// Logs are stored in Supabase and checked on every group load.
 //
 // Cooldown rules (configurable in SniperSettings, per campaign):
-//   - Team cooldown: skip if ANY rep NA'd this phone within X days (default 2)
-//   - Self cooldown: skip if THIS rep NA'd this phone within X days (default 4)
+//   - Team cooldown: skip if ANY rep disposed this phone within X days (default 2)
+//   - Self cooldown: skip if THIS rep disposed this phone within X days (default 4)
 //   - Max configurable period: 7 days (log retention matches this)
 //
 
@@ -18,7 +19,7 @@ import { normalizePhone } from './dialer/dialerUtils';
 
 export interface NACooldownEntry {
   phone: string;       // normalized 10-digit phone
-  repId: string;       // manager UUID who fired the NA
+  repId: string;       // manager UUID who fired the disposition
   createdAt: string;   // ISO timestamp
 }
 
@@ -28,19 +29,19 @@ export interface NACooldownList {
 }
 
 // =============================================================================
-// LOG AN NA DISPOSITION
+// LOG A DISPOSITION
 // =============================================================================
 
 /**
- * Writes one row to na_cooldown_log when a rep fires an NA disposition.
+ * Writes one row to na_cooldown_log when a rep fires any disposition.
  * Fire-and-forget safe — errors are swallowed so a Supabase hiccup never
  * interrupts the dialer.
  *
  * @param phone      Raw phone string from the dialer state (will be normalized)
  * @param campaignId Campaign UUID
- * @param repId      Manager UUID of the rep firing the NA
+ * @param repId      Manager UUID of the rep firing the disposition
  */
-export async function logNA(
+export async function logDisposition(
   phone: string,
   campaignId: string,
   repId: string
@@ -64,11 +65,9 @@ export async function logNA(
 // =============================================================================
 
 /**
- * Fetches all NA log entries for this campaign from the last 7 days.
- * Called fresh on every group load so multi-rep sessions stay in sync.
- *
- * Returns a flat NACooldownList. The dialer engine checks this list
- * against the current group's phone before presenting it to the rep.
+ * Fetches all disposition log entries for this campaign from the last 7 days.
+ * Called on deploy and refreshed every 30 seconds while dialing so
+ * multi-rep sessions stay in sync.
  *
  * @param campaignId Campaign UUID
  */
@@ -134,10 +133,10 @@ export function isOnCooldown(
 
     const ageMs = now - new Date(entry.createdAt).getTime();
 
-    // Team cooldown: any rep NA'd this phone recently
+    // Team cooldown: any rep disposed this phone recently
     if (teamCutoffMs > 0 && ageMs <= teamCutoffMs) return true;
 
-    // Self cooldown: this rep specifically NA'd this phone recently
+    // Self cooldown: this rep specifically disposed this phone recently
     if (selfCutoffMs > 0 && entry.repId === repId && ageMs <= selfCutoffMs) return true;
   }
 

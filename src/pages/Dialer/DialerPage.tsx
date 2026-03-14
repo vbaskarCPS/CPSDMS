@@ -1,24 +1,6 @@
 // src/pages/Dialer/DialerPage.tsx
 //
 // AutoSniper Dialer — full calling interface.
-// Three modes:
-//   1. Campaign Select — video-game-style map/tab picker
-//   2. Dialer — active calling UI
-//   3. Empty — mission complete / no groups
-//
-// Presence heartbeat: publishes every 30s while in dialer mode.
-// Tab switches update the heartbeat campaign_id in real time.
-// clearPresence fires on unmount and when returning to campaign select.
-//
-// Resume Game: on mount, reads the manager's most recent dialer_sessions row
-// from Supabase and offers a "LAST OPERATION DETECTED — RESUME" banner on
-// the Campaign Select screen. Clicking Resume skips the deploy config modal
-// and jumps straight back in with position + gamification restored.
-//
-// City View: after all tabs load, discoverCities scans every tab in the
-// background (with a progress bar overlay). City cards are passed down to
-// CampaignSelect. Deploying a city card builds an EngineConfig with cityName
-// + cityTabs and supports Infiltrate and Siege only (no Ambush).
 //
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -43,11 +25,13 @@ import {
   getCurrentRank,
   createFreshSession,
   setResumePosition,
+  getAvailableGroupPhones,
 } from '../../lib/dialer';
 import type {
   EngineConfig,
   EngineSnapshot,
   DialerState,
+  DialerStateResult,
   Direction,
   DispositionType,
   DispositionExtra,
@@ -70,7 +54,7 @@ import type { PublishMultiplierPayload } from '../../lib/dialerRealtimeService';
 import FireteamPanel from './FireteamPanel';
 import { detectNewlyActivated } from './multiplierActivations';
 // ── NA COOLDOWN ──────────────────────────────────────────────────────────────
-import { logNA, fetchCooldownList } from '../../lib/naCooldownService';
+import { logDisposition, fetchCooldownList, isOnCooldown } from '../../lib/naCooldownService';
 import type { NACooldownList } from '../../lib/naCooldownService';
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -160,10 +144,6 @@ function tabsToPlaceholderCards(tabs: string[], campaignName: string): CampaignC
   });
 }
 
-// =============================================================================
-// HELPERS — books → CampaignSelect cards
-// =============================================================================
-
 function booksToCards(books: CampaignBook[]): CampaignCard[] {
   return books.map((book, idx) => {
     const a = tabNameHash(book.id);
@@ -183,10 +163,6 @@ function booksToCards(books: CampaignBook[]): CampaignCard[] {
     };
   });
 }
-
-// =============================================================================
-// RESUME HELPERS
-// =============================================================================
 
 function formatLastSeen(isoTimestamp: string | null): string {
   if (!isoTimestamp) return '';
@@ -208,52 +184,34 @@ function formatLastSeen(isoTimestamp: string | null): string {
 export default function DialerPage() {
   const navigate = useNavigate();
 
-  // --- Auth ---
   const [manager, setManager] = useState<any>(null);
   const [campaign, setCampaign] = useState<any>(null);
-
-  // --- Mode ---
   const [mode, setMode] = useState<'campaign-select' | 'dialer'>('campaign-select');
-
-  // --- Resume ---
   const [resumeData, setResumeData] = useState<ResumeData | null>(null);
   const [resumeLoading, setResumeLoading] = useState(false);
-
-  // --- Campaign Select state ---
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [tabs, setTabs] = useState<string[]>([]);
   const [campaignCards, setCampaignCards] = useState<CampaignCard[]>([]);
   const [tabsLoading, setTabsLoading] = useState(false);
   const [tabsError, setTabsError] = useState('');
-
-  // --- City View state ---
   const [cityCards, setCityCards] = useState<CityInfo[]>([]);
   const [cityProgress, setCityProgress] = useState<{ current: number; total: number; tabName: string } | null>(null);
-
-  // --- Books state (team → books restructure) ---
   const [books, setBooks] = useState<CampaignBook[]>([]);
   const [booksLoading, setBooksLoading] = useState(false);
   const [activeBook, setActiveBook] = useState<CampaignBook | null>(null);
-
-  // --- Launcher config ---
   const [selectedTab, setSelectedTab] = useState('');
   const [direction, setDirection] = useState<Direction>('ambush');
   const [startBookingId, setStartBookingId] = useState('');
   const [deployError, setDeployError] = useState('');
   const [showDeployConfig, setShowDeployConfig] = useState(false);
   const [deployingTab, setDeployingTab] = useState('');
-  // cityDeployPending holds the city being deployed (if in city mode)
   const [pendingCityDeploy, setPendingCityDeploy] = useState<CityInfo | null>(null);
-
-  // --- Sniper Settings ---
   const [sniperSettingsOpen, setSniperSettingsOpen] = useState(false);
   const [sniperConfig, setSniperConfig] = useState<SniperConfig>(
     () => campaign?.sniperConfig || { years: [2025], ppOnly: false, minEntries: 1, linkShot: false, hideCTS: true, maxNA: 0, teamCooldownEnabled: true, teamCooldownDays: 2, selfCooldownDays: 4 }
   );
   const [availableYears, setAvailableYears] = useState<number[]>([]);
-
-  // --- Dialer state ---
   const [loading, setLoading] = useState(false);
   const [currentState, setCurrentState] = useState<DialerState | null>(null);
   const [emptyMessage, setEmptyMessage] = useState('');
@@ -265,11 +223,12 @@ export default function DialerPage() {
   const [achievementsOpen, setAchievementsOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
 
-  // --- Hotkey flash ---
+  // --- Net available count (available groups minus cooldown) ---
+  const [netAvailableCount, setNetAvailableCount] = useState(0);
+
   const [flashingKey, setFlashingKey] = useState<HotkeyTarget | null>(null);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // --- YES form fields ---
   const [yName, setYName] = useState('');
   const [yLastName, setYLastName] = useState('');
   const [yHouseNum, setYHouseNum] = useState('');
@@ -280,15 +239,11 @@ export default function DialerPage() {
   const [ySprink, setYSprink] = useState(false);
   const [yFO, setYFO] = useState('FP');
   const [yNotes, setYNotes] = useState('');
-
-  // --- BC Upsell fields ---
   const [yUpsellType, setYUpsellType] = useState<UpsellType>('none');
   const [yDtPrice, setYDtPrice] = useState('');
   const [yDtPrepaid, setYDtPrepaid] = useState(false);
   const [ySkipAeration, setYSkipAeration] = useState(false);
   const [yRejuvPrice, setYRejuvPrice] = useState('');
-
-  // --- Card entry ---
   const [ccNum, setCcNum] = useState('');
   const [ccExp, setCcExp] = useState('');
   const [ccCvv, setCcCvv] = useState('');
@@ -296,44 +251,83 @@ export default function DialerPage() {
   const [ccType, setCcType] = useState('');
   const [cardStaging, setCardStaging] = useState(false);
   const [cardStatus, setCardStatus] = useState('');
-
-  // --- Gamification ---
   const [session, setSession] = useState<GamificationSession | null>(null);
   const [multipliers, setMultipliers] = useState<MultiplierSnapshot[]>([]);
   const [multipliersAt, setMultipliersAt] = useState(0);
   const [rank, setRank] = useState<Rank | null>(null);
-
-  // --- CALM MODE: disposition context for motivational panel ---
   const [lastDispType, setLastDispType] = useState<string | undefined>(undefined);
   const [calmConsecutiveYes, setCalmConsecutiveYes] = useState(0);
   const [calmConsecutiveNos, setCalmConsecutiveNos] = useState(0);
-
-  // --- HUD team feed toasts ---
   const [teamFeed, setTeamFeed] = useState<TeamBookingEvent[]>([]);
-
-  // --- Multiplier activation toasts + live panel events ---
   const [multActivations, setMultActivations] = useState<MultiplierActivationEvent[]>([]);
   const prevOwnMultipliersRef = useRef<MultiplierSnapshot[]>([]);
-
-  // --- Active tab being dialed ---
   const [activeDialTab, setActiveDialTab] = useState('');
-
-  // --- Presence heartbeat ref ---
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // --- Engine config ---
   const configRef = useRef<EngineConfig | null>(null);
   const yesStartTimeRef = useRef(0);
   const dispositionedKeysRef = useRef<Set<string>>(new Set());
-
-  // --- NA Cooldown list — refreshed from Supabase on every group load ---
   const cooldownListRef = useRef<NACooldownList>({ entries: [], fetchedAt: 0 });
-
-  // --- Toasts ---
   const { badgeToasts, pointToasts, queueBadgeToast, showPointToast } = useToasts();
-
-  // --- BC campaign type shorthand (prefer activeBook, fall back to campaign) ---
   const isBCCampaign = (activeBook?.campaignType ?? campaign?.campaignType) === 'bc';
+
+  // =======================================================================
+  // COMPUTE NET AVAILABLE — groups that aren't on cooldown
+  // =======================================================================
+
+  const computeNetAvailable = useCallback(() => {
+    const config = configRef.current;
+    if (!config) return;
+    const sc = config.sniperConfig || sniperConfig;
+    const teamDays = sc.teamCooldownEnabled ? sc.teamCooldownDays : 0;
+    const groupPhones = getAvailableGroupPhones();
+    let count = 0;
+    for (const phones of groupPhones) {
+      if (phones.length === 0) { count++; continue; }
+      const anyAvailable = phones.some(phone =>
+        !isOnCooldown(phone, manager?.id || '', cooldownListRef.current, teamDays, sc.selfCooldownDays)
+      );
+      if (anyAvailable) count++;
+    }
+    setNetAvailableCount(count);
+  }, [sniperConfig, manager?.id]);
+
+  // =======================================================================
+  // ADVANCE TO NEXT VALID — skip groups where all phones are on cooldown
+  // =======================================================================
+
+  const advanceToNextValid = useCallback(async (
+    initialState: DialerState
+  ): Promise<DialerStateResult> => {
+    const config = configRef.current;
+    if (!config) return { found: false, message: 'No config.' };
+    const sc = config.sniperConfig || sniperConfig;
+    const teamDays = sc.teamCooldownEnabled ? sc.teamCooldownDays : 0;
+
+    const isGroupOnCooldown = (state: DialerState): boolean => {
+      const dialablePhones = [state.phone, state.alternatePhone].filter(Boolean);
+      if (dialablePhones.length === 0) return false;
+      return dialablePhones.every(phone =>
+        isOnCooldown(phone, manager?.id || '', cooldownListRef.current, teamDays, sc.selfCooldownDays)
+      );
+    };
+
+    let current: DialerStateResult = initialState;
+    const MAX_SKIPS = 200;
+    let skips = 0;
+
+    while (current.found && skips < MAX_SKIPS) {
+      const state = current as DialerState;
+      if (!isGroupOnCooldown(state)) return current;
+      skips++;
+      const afterRow = Math.max(...state.rows) + 1;
+      current = await getNextState(config, afterRow);
+    }
+
+    if (skips >= MAX_SKIPS) {
+      return { found: false, message: 'All remaining groups recently reached by team.' };
+    }
+    return current;
+  }, [sniperConfig, manager?.id]);
 
   // =======================================================================
   // AUTH CHECK + LOAD USER PREFERENCES
@@ -349,17 +343,13 @@ export default function DialerPage() {
     setManager(mgr);
     setCampaign(cmp);
 
-    // Load user preferences from Supabase (sniper config + last direction).
-    // User prefs take priority over campaign-level sniper config.
     campaignService.getUserPreferences(mgr.id).then((prefs) => {
       setSniperConfig(prefs.sniperConfig);
       setDirection(prefs.lastDirection);
     }).catch(() => {
-      // Fallback to campaign-level sniper config if prefs load fails
       if (cmp.sniperConfig) setSniperConfig(cmp.sniperConfig);
     });
 
-    // Load books for this team from Supabase
     setBooksLoading(true);
     campaignService.getBooksByCampaign(cmp.id).then((bks) => {
       setBooks(bks);
@@ -368,10 +358,6 @@ export default function DialerPage() {
       }
     }).catch(() => {}).finally(() => setBooksLoading(false));
   }, [navigate]);
-
-  // =======================================================================
-  // RESUME DATA
-  // =======================================================================
 
   useEffect(() => {
     if (!manager?.id) return;
@@ -382,13 +368,8 @@ export default function DialerPage() {
       .finally(() => setResumeLoading(false));
   }, [manager?.id]);
 
-  // =======================================================================
-  // AUTO-CONNECT
-  // =======================================================================
-
   useEffect(() => {
     if (!campaign || connected || connecting) return;
-    // Wait for books to finish loading before connecting
     if (booksLoading) return;
     handleConnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -436,10 +417,6 @@ export default function DialerPage() {
     }
   }, [mode, manager?.id, stopHeartbeat]);
 
-  // =======================================================================
-  // TEAM FEED
-  // =======================================================================
-
   useEffect(() => {
     if (!campaign?.id || !manager?.id) return;
     const unsubscribe = dialerRealtimeService.subscribeToTeamFeed(
@@ -448,10 +425,6 @@ export default function DialerPage() {
     );
     return () => { unsubscribe(); };
   }, [campaign?.id, manager?.id]);
-
-  // =======================================================================
-  // OWN MULTIPLIER ACTIVATION DETECTION
-  // =======================================================================
 
   useEffect(() => {
     const prev = prevOwnMultipliersRef.current;
@@ -477,6 +450,22 @@ export default function DialerPage() {
     }
     prevOwnMultipliersRef.current = multipliers;
   }, [multipliers, manager?.name, manager?.repCode, manager?.id, campaign?.id]);
+
+  // =======================================================================
+  // 30-SECOND COOLDOWN REFRESH
+  // =======================================================================
+
+  useEffect(() => {
+    if (mode !== 'dialer' || !campaign?.id) return;
+    const interval = setInterval(async () => {
+      try {
+        const list = await fetchCooldownList(campaign.id);
+        cooldownListRef.current = list;
+        computeNetAvailable();
+      } catch { /* silent fail */ }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [mode, campaign?.id, computeNetAvailable]);
 
   // =======================================================================
   // HOTKEYS
@@ -523,10 +512,7 @@ export default function DialerPage() {
       await dialerSheetsService.authenticate();
       setConnected(true);
 
-      // ── BOOKS MODE: load per-book stats in background (parallel) ──
       if (books.length > 0) {
-        // Books are already loaded from Supabase (auth useEffect).
-        // Load stats from each book's spreadsheet (first tab as sample).
         books.forEach(async (book) => {
           try {
             const bookTabs = await dialerSheetsService.getCallbookTabs(book.spreadsheetId);
@@ -542,7 +528,6 @@ export default function DialerPage() {
         return;
       }
 
-      // ── LEGACY MODE: no books — load tabs from campaign.spreadsheetId ──
       const legacySpreadsheetId = campaign?.spreadsheetId;
       if (legacySpreadsheetId && legacySpreadsheetId !== 'placeholder') {
         setTabsLoading(true);
@@ -554,7 +539,6 @@ export default function DialerPage() {
           setCampaignCards(placeholders);
           setTabsLoading(false);
 
-          // ── Load per-tab stats (original behavior) ──
           callbookTabs.forEach(async (tabName) => {
             try {
               const stats = await dialerSheetsService.computeTabStats(campaign.spreadsheetId, tabName);
@@ -566,7 +550,6 @@ export default function DialerPage() {
             } catch { /* Non-critical */ }
           });
 
-          // ── City scan — runs in background after tabs are loaded ──
           if (callbookTabs.length > 0) {
             setCityProgress({ current: 0, total: callbookTabs.length, tabName: callbookTabs[0] });
             try {
@@ -579,7 +562,7 @@ export default function DialerPage() {
               );
               setCityCards(cities);
             } catch {
-              // City scan failure is non-critical — tab view still works
+              // City scan failure is non-critical
             } finally {
               setCityProgress(null);
             }
@@ -598,7 +581,7 @@ export default function DialerPage() {
   };
 
   // =======================================================================
-  // CAMPAIGN SELECT → DEPLOY CONFIG → DEPLOY (tab mode)
+  // CAMPAIGN SELECT → DEPLOY CONFIG → DEPLOY
   // =======================================================================
 
   const handleCampaignDeploy = async (cardId: string) => {
@@ -606,12 +589,10 @@ export default function DialerPage() {
     setStartBookingId('');
     setDeployError('');
 
-    // ── INSIDE A BOOK: cardId is a tab name → open deploy config ──
     if (activeBook) {
       setDeployingTab(cardId);
       setSelectedTab(cardId);
       setShowDeployConfig(true);
-
       try {
         const years = await discoverAvailableYears(activeBook.spreadsheetId, cardId);
         setAvailableYears(years);
@@ -619,13 +600,11 @@ export default function DialerPage() {
       return;
     }
 
-    // ── TOP LEVEL WITH BOOKS: cardId is a book UUID → enter the book ──
     const book = books.find(b => b.id === cardId);
     if (book) {
       setActiveBook(book);
-      setCityCards([]); // reset city cards for this book
+      setCityCards([]);
 
-      // Ensure connected before loading tabs
       if (!connected) {
         try {
           await dialerSheetsService.authenticate();
@@ -637,14 +616,12 @@ export default function DialerPage() {
         }
       }
 
-      // Load tabs from this book's spreadsheet and build tab cards
       try {
         const bookTabs = await dialerSheetsService.getCallbookTabs(book.spreadsheetId);
         setTabs(bookTabs);
         const tabCards = tabsToPlaceholderCards(bookTabs, book.displayName);
         setCampaignCards(tabCards);
 
-        // Load per-tab stats in background
         bookTabs.forEach(async (tabName) => {
           try {
             const stats = await dialerSheetsService.computeTabStats(book.spreadsheetId, tabName);
@@ -656,7 +633,6 @@ export default function DialerPage() {
           } catch { /* Non-critical */ }
         });
 
-        // City scan for this book
         if (bookTabs.length > 0) {
           setCityProgress({ current: 0, total: bookTabs.length, tabName: bookTabs[0] });
           try {
@@ -678,7 +654,6 @@ export default function DialerPage() {
       return;
     }
 
-    // ── LEGACY MODE: no books, cardId is a tab name ──
     setActiveBook(null);
     setDeployingTab(cardId);
     setSelectedTab(cardId);
@@ -692,10 +667,6 @@ export default function DialerPage() {
     }
   };
 
-  // =======================================================================
-  // BACK TO BOOKS (exit book → return to top-level book cards)
-  // =======================================================================
-
   const handleBackToBooks = useCallback(() => {
     setActiveBook(null);
     setCampaignCards(booksToCards(books));
@@ -704,23 +675,18 @@ export default function DialerPage() {
     setTabs([]);
   }, [books]);
 
-  // =======================================================================
-  // CITY DEPLOY
-  // =======================================================================
-
   const handleCityDeploy = useCallback((city: CityInfo) => {
     setPendingCityDeploy(city);
-    setDeployingTab(''); // empty = city mode
-    setSelectedTab(city.cityName); // used as display name
+    setDeployingTab('');
+    setSelectedTab(city.cityName);
     setStartBookingId('');
     setDeployError('');
-    // Default to infiltrate for city deploys
     if (direction === 'ambush') setDirection('infiltrate');
     setShowDeployConfig(true);
   }, [direction]);
 
   // =======================================================================
-  // CONFIRM DEPLOY (shared for both tab and city modes)
+  // CONFIRM DEPLOY
   // =======================================================================
 
   const handleConfirmDeploy = async () => {
@@ -739,12 +705,10 @@ export default function DialerPage() {
     setLoading(true);
     setLogMessage('Acquiring target...');
 
-    // Save the chosen direction to user preferences (fire-and-forget)
     if (manager?.id) {
       campaignService.saveUserPreferences(manager.id, { lastDirection: direction, sniperConfig }).catch(() => {});
     }
 
-    // Resolve spreadsheetId and campaignType from activeBook (preferred) or campaign (legacy)
     const deploySpreadsheetId = activeBook?.spreadsheetId || campaign.spreadsheetId;
     const deployCampaignType = activeBook?.campaignType || campaign?.campaignType || 'standard';
 
@@ -792,29 +756,40 @@ export default function DialerPage() {
         return;
       }
 
-      // ── Fetch NA cooldown list for this session (fire-and-forget, silent fail) ──
+      // ── Fetch cooldown list BEFORE checking the first group ──
       if (campaign?.id) {
-        fetchCooldownList(campaign.id)
-          .then(list => { cooldownListRef.current = list; })
-          .catch(() => {});
+        try {
+          const list = await fetchCooldownList(campaign.id);
+          cooldownListRef.current = list;
+        } catch { /* silent fail */ }
       }
 
-      setCurrentState(snapshot.state);
+      // ── Skip forward if first group is on cooldown ──
+      const firstValidResult = await advanceToNextValid(snapshot.state);
+      if (!firstValidResult.found) {
+        setEmptyMessage((firstValidResult as any).message || 'No available groups found — all recently reached.');
+        setMode('dialer');
+        setLoading(false);
+        return;
+      }
+      const firstState = firstValidResult as DialerState;
+
+      setCurrentState(firstState);
       setSession(snapshot.session);
       const newMults = getActiveMultipliers(snapshot.session);
       setMultipliers(newMults);
       setMultipliersAt(Date.now());
       setRank(getCurrentRank(snapshot.session));
       prevOwnMultipliersRef.current = newMults;
-      prefillYesForm(snapshot.state);
+      prefillYesForm(firstState);
 
-      const bookingId = snapshot.state.bookingId || '';
       const displayTab = isCityMode ? pendingCityDeploy!.cityName : selectedTab;
-      setResumePosition(displayTab, bookingId, snapshot.state.firstRow, activeBook?.id);
+      setResumePosition(displayTab, '', firstState.firstRow, activeBook?.id);
 
       setActiveDialTab(displayTab);
       setMode('dialer');
       setPendingCityDeploy(null);
+      computeNetAvailable();
     } catch (err: any) {
       setShowDeployConfig(true);
       setDeployError(err.message || 'Failed to initialize dialer.');
@@ -834,19 +809,16 @@ export default function DialerPage() {
     const position  = resumeData.position;
     const isToday   = resumeData.sessionDate === getTodayEST();
 
-    // Try to find the book this session was running on
     const resumeBookId = (resumeData.gamificationState as any)?._resumeBookId;
     let resumeBook: CampaignBook | null = null;
     if (resumeBookId) {
       resumeBook = books.find(b => b.id === resumeBookId) || null;
     }
-    // Fallback: use the first book if books exist
     if (!resumeBook && books.length > 0) {
       resumeBook = books[0];
     }
     if (resumeBook) setActiveBook(resumeBook);
 
-    // Resolve spreadsheet from book (preferred) or campaign (legacy)
     const resumeSpreadsheetId = resumeBook?.spreadsheetId || campaign.spreadsheetId;
     const resumeCampaignType = resumeBook?.campaignType || campaign?.campaignType || 'standard';
 
@@ -886,14 +858,23 @@ export default function DialerPage() {
         return;
       }
 
-      // ── Fetch NA cooldown list for resumed session (fire-and-forget, silent fail) ──
+      // ── Fetch cooldown list BEFORE checking the first group ──
       if (campaign?.id) {
-        fetchCooldownList(campaign.id)
-          .then(list => { cooldownListRef.current = list; })
-          .catch(() => {});
+        try {
+          const list = await fetchCooldownList(campaign.id);
+          cooldownListRef.current = list;
+        } catch { /* silent fail */ }
       }
 
-      setCurrentState(snapshot.state);
+      // ── Skip forward if first group is on cooldown ──
+      const firstValidResult = await advanceToNextValid(snapshot.state);
+      if (!firstValidResult.found) {
+        setEmptyMessage('No available groups found — all recently reached.');
+        setMode('dialer');
+        setLoading(false);
+        return;
+      }
+      const firstState = firstValidResult as DialerState;
 
       if (isToday) {
         setSession(snapshot.session);
@@ -910,14 +891,13 @@ export default function DialerPage() {
         prevOwnMultipliersRef.current = [];
       }
 
-      prefillYesForm(snapshot.state);
-
-      const newBookingId = snapshot.state.bookingId || '';
-      setResumePosition(tab, newBookingId, snapshot.state.firstRow, resumeBook?.id);
-
+      setCurrentState(firstState);
+      prefillYesForm(firstState);
+      setResumePosition(tab, '', firstState.firstRow, resumeBook?.id);
       setActiveDialTab(tab);
       setMode('dialer');
       setLogMessage('Operation resumed.');
+      computeNetAvailable();
     } catch (err: any) {
       setEmptyMessage(err.message || 'Failed to resume.');
       setMode('dialer');
@@ -934,8 +914,6 @@ export default function DialerPage() {
     setSniperConfig(config);
     if (configRef.current) configRef.current.sniperConfig = config;
     invalidateCache();
-
-    // Persist to user preferences (fire-and-forget)
     if (manager?.id) {
       campaignService.saveUserPreferences(manager.id, { sniperConfig: config }).catch(() => {});
     }
@@ -958,7 +936,6 @@ export default function DialerPage() {
     setYNotes('');
     setShowYesPanel(false);
     yesStartTimeRef.current = Date.now();
-    // Reset BC upsell fields
     setYUpsellType('none');
     setYDtPrice('');
     setYDtPrepaid(false);
@@ -980,10 +957,8 @@ export default function DialerPage() {
     setEmptyMessage('');
     prefillYesForm(state);
     setLogMessage(`Group loaded: row ${state.firstRow}`);
-
-    const bookingId = state.bookingId || '';
     if (configRef.current?.sheetName) {
-      setResumePosition(configRef.current.sheetName, bookingId, state.firstRow, activeBook?.id);
+      setResumePosition(configRef.current.sheetName, '', state.firstRow, activeBook?.id);
     }
   }, []);
 
@@ -1010,20 +985,16 @@ export default function DialerPage() {
     if (result.rank) setRank(result.rank);
     if (result.activeMultipliers) { setMultipliers(result.activeMultipliers); setMultipliersAt(Date.now()); }
 
-    // --- CALM MODE: capture disposition context for motivational panel ---
     if (result.dispType !== undefined) setLastDispType(result.dispType);
     if (result.consecutiveYes !== undefined) setCalmConsecutiveYes(result.consecutiveYes);
     if (result.consecutiveNos !== undefined) setCalmConsecutiveNos(result.consecutiveNos);
 
-    // ── PATCH: award lifetime badges whenever new badges are earned ──
     if (result.newBadges?.length > 0) {
       for (const id of result.newBadges) queueBadgeToast(id);
       if (manager?.id) {
-        // Fire-and-forget — never blocks the UI
         campaignService.updateLifetimeBadges(manager.id, result.newBadges).catch(() => {});
       }
     }
-    // ── END PATCH ──
 
     if (result.pointBreakdown) { showPointToast(result.pointBreakdown.grandTotal, result.pointBreakdown.multiplier); }
     else if (!isBooking && result.badgeBonusTotal > 0) { showPointToast(result.badgeBonusTotal, 1); }
@@ -1099,18 +1070,12 @@ export default function DialerPage() {
         configRef.current, currentState, disp, currentState.phone, session!, {}, yesStartTimeRef.current
       );
 
-      // ── Log NA to cooldown table (fire-and-forget, silent fail) ──
-      if (disp === 'NA' && campaign?.id && manager?.id) {
-        logNA(currentState.phone, campaign.id, manager.id).catch(() => {});
-        // Optimistically add to the in-memory list so the current session
-        // benefits immediately without waiting for the next Supabase fetch
+      // ── Log disposition for all types (fire-and-forget) ──
+      if (campaign?.id && manager?.id) {
+        logDisposition(currentState.phone, campaign.id, manager.id).catch(() => {});
         cooldownListRef.current = {
           entries: [
-            {
-              phone: currentState.phone,
-              repId: manager.id,
-              createdAt: new Date().toISOString(),
-            },
+            { phone: currentState.phone, repId: manager.id, createdAt: new Date().toISOString() },
             ...cooldownListRef.current.entries,
           ],
           fetchedAt: cooldownListRef.current.fetchedAt,
@@ -1129,11 +1094,17 @@ export default function DialerPage() {
       }
 
       if (result.nextState.found) {
-        renderNewState(result.nextState as DialerState);
-        if (autoFire) dialPhone((result.nextState as DialerState).phone);
+        const validResult = await advanceToNextValid(result.nextState as DialerState);
+        if (validResult.found) {
+          renderNewState(validResult as DialerState);
+          if (autoFire) dialPhone((validResult as DialerState).phone);
+        } else {
+          renderNewState(null, (validResult as any).message);
+        }
       } else {
         renderNewState(null, (result.nextState as any).message);
       }
+      computeNetAvailable();
     } catch (err: any) {
       dispositionedKeysRef.current.delete(key);
       setLogMessage(`Error: ${err.message}`);
@@ -1158,7 +1129,6 @@ export default function DialerPage() {
       gate: yGate, sprinkler: ySprink, foValue: yFO, notes: yNotes.trim(),
     };
 
-    // --- BC upsell fields ---
     if (isBCCampaign && yUpsellType !== 'none') {
       extra.upsellType = yUpsellType;
       if (yUpsellType === 'dethatch') {
@@ -1168,7 +1138,7 @@ export default function DialerPage() {
       }
       if (yUpsellType === 'rejuv') {
         extra.rejuvPrice = yRejuvPrice.trim();
-        extra.price = yRejuvPrice.trim(); // Rejuv total replaces aeration price
+        extra.price = yRejuvPrice.trim();
       }
     }
 
@@ -1177,7 +1147,17 @@ export default function DialerPage() {
         await applyDisposition(
           configRef.current, currentState, 'PREPAY', currentState.phone, session!, extra, yesStartTimeRef.current
         );
-        // For rejuv, use rejuv price as the card amount; otherwise use normal price
+        // ── Log disposition (fire-and-forget) ──
+        if (campaign?.id && manager?.id) {
+          logDisposition(currentState.phone, campaign.id, manager.id).catch(() => {});
+          cooldownListRef.current = {
+            entries: [
+              { phone: currentState.phone, repId: manager.id, createdAt: new Date().toISOString() },
+              ...cooldownListRef.current.entries,
+            ],
+            fetchedAt: cooldownListRef.current.fetchedAt,
+          };
+        }
         const cardAmount = (isBCCampaign && yUpsellType === 'rejuv') ? yRejuvPrice.trim() : yPrice.trim();
         setCcAmt(cardAmount);
         setCcNum(''); setCcExp(''); setCcCvv(''); setCcType(''); setCardStatus(''); setCardStaging(false);
@@ -1187,11 +1167,31 @@ export default function DialerPage() {
         const result = await applyDisposition(
           configRef.current, currentState, 'COMPLETE', currentState.phone, session!, extra, yesStartTimeRef.current
         );
-        // For dethatch-only, it's an upsell not a booking — pass isBooking=false
+        // ── Log disposition (fire-and-forget) ──
+        if (campaign?.id && manager?.id) {
+          logDisposition(currentState.phone, campaign.id, manager.id).catch(() => {});
+          cooldownListRef.current = {
+            entries: [
+              { phone: currentState.phone, repId: manager.id, createdAt: new Date().toISOString() },
+              ...cooldownListRef.current.entries,
+            ],
+            fetchedAt: cooldownListRef.current.fetchedAt,
+          };
+        }
         const isDtOnly = isBCCampaign && yUpsellType === 'dethatch' && ySkipAeration;
         handleGamResult(result.gamification, !isDtOnly, false);
-        if (result.nextState.found) { renderNewState(result.nextState as DialerState); if (autoFire) dialPhone((result.nextState as DialerState).phone); }
-        else { renderNewState(null, (result.nextState as any).message); }
+        if (result.nextState.found) {
+          const validResult = await advanceToNextValid(result.nextState as DialerState);
+          if (validResult.found) {
+            renderNewState(validResult as DialerState);
+            if (autoFire) dialPhone((validResult as DialerState).phone);
+          } else {
+            renderNewState(null, (validResult as any).message);
+          }
+        } else {
+          renderNewState(null, (result.nextState as any).message);
+        }
+        computeNetAvailable();
         setPendingDial(false);
       }
     } catch (err: any) {
@@ -1228,10 +1228,20 @@ export default function DialerPage() {
       const result = await finalizePrepay(configRef.current!, cardData, session!);
       handleGamResult(result.gamification, true, true, ccAmt.trim());
       setCardStatus('✓ Card staged');
-      setTimeout(() => {
+      setTimeout(async () => {
         setCardModalOpen(false);
-        if (result.nextState.found) { renderNewState(result.nextState as DialerState); if (autoFire) dialPhone((result.nextState as DialerState).phone); }
-        else { renderNewState(null, (result.nextState as any).message); }
+        if (result.nextState.found) {
+          const validResult = await advanceToNextValid(result.nextState as DialerState);
+          if (validResult.found) {
+            renderNewState(validResult as DialerState);
+            if (autoFire) dialPhone((validResult as DialerState).phone);
+          } else {
+            renderNewState(null, (validResult as any).message);
+          }
+        } else {
+          renderNewState(null, (result.nextState as any).message);
+        }
+        computeNetAvailable();
       }, 800);
     } catch (err: any) {
       setCardStatus(`Error: ${err.message}`);
@@ -1357,29 +1367,20 @@ export default function DialerPage() {
           session={session}
         />
 
-        {/* ── CITY SCAN PROGRESS BAR ── */}
         {cityProgress && (
           <div style={{
-            position: 'fixed',
-            bottom: 0, left: 0, right: 0,
-            zIndex: 200,
-            background: 'rgba(0,8,14,0.97)',
-            borderTop: '1px solid rgba(46,204,113,0.25)',
-            padding: '10px 24px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 16,
+            position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
+            background: 'rgba(0,8,14,0.97)', borderTop: '1px solid rgba(46,204,113,0.25)',
+            padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 16,
           }}>
             <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '2px', color: '#2ecc71', opacity: 0.6, textTransform: 'uppercase', flexShrink: 0 }}>
               🏙 CITY SCAN
             </span>
             <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
               <div style={{
-                height: '100%',
-                borderRadius: 2,
+                height: '100%', borderRadius: 2,
                 width: `${cityProgress.total > 0 ? Math.round((cityProgress.current / cityProgress.total) * 100) : 0}%`,
                 background: 'linear-gradient(90deg, #2ecc71, #27ae60)',
-                boxShadow: '0 0 8px rgba(46,204,113,0.4)',
                 transition: 'width 0.3s ease',
               }} />
             </div>
@@ -1408,11 +1409,7 @@ export default function DialerPage() {
           >
             <div
               className="rounded-lg p-6 w-full max-w-sm"
-              style={{
-                background: 'rgba(0,14,22,0.96)',
-                border: `1.5px solid rgba(0,229,255,0.3)`,
-                boxShadow: '0 8px 40px rgba(0,0,0,0.8), 0 0 30px rgba(0,229,255,0.10)',
-              }}
+              style={{ background: 'rgba(0,14,22,0.96)', border: `1.5px solid rgba(0,229,255,0.3)`, boxShadow: '0 8px 40px rgba(0,0,0,0.8), 0 0 30px rgba(0,229,255,0.10)' }}
               onClick={(e) => e.stopPropagation()}
             >
               <div className="text-center mb-4">
@@ -1429,9 +1426,7 @@ export default function DialerPage() {
                 )}
                 {activeBook && !pendingCityDeploy && (
                   <div style={{ marginTop: 4 }}>
-                    <div style={{ fontSize: 8, color: '#888', marginBottom: 3, fontFamily: 'monospace' }}>
-                      {activeBook.displayName}
-                    </div>
+                    <div style={{ fontSize: 8, color: '#888', marginBottom: 3, fontFamily: 'monospace' }}>{activeBook.displayName}</div>
                     {activeBook.campaignType === 'bc' ? (
                       <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 8px', borderRadius: 3, background: 'rgba(241,196,15,0.15)', border: '1px solid rgba(241,196,15,0.35)', color: '#f1c40f' }}>BC</span>
                     ) : (
@@ -1441,109 +1436,44 @@ export default function DialerPage() {
                 )}
               </div>
 
-              {/* APPROACH VECTOR */}
               <div className="mb-4">
-                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>
-                  APPROACH VECTOR
-                </div>
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.5, textTransform: 'uppercase', marginBottom: 8 }}>APPROACH VECTOR</div>
                 <div className="flex gap-2">
                   {([
-                    { dir: 'ambush',     label: 'AMBUSH',     icon: 'lorc/hidden',        bg: '#0f3460', tip: 'Start at a specific Booking ID and call down. Wraps back to the top and completes a full loop.' },
-                    { dir: 'infiltrate', label: 'INFILTRATE', icon: 'lorc/deadly-strike',  bg: '#533483', tip: 'Scans the sheet in 20-row windows and strikes the zone with the lowest NA count.' },
-                    { dir: 'siege',      label: 'SIEGE',      icon: 'lorc/tower-fall',     bg: '#7b1a1a', tip: 'Works every group in NA order — blanks first, then 1s, then 2s. No wrap. Mission complete when all tiers are exhausted.' },
-                  ] as const)
-                    // Hide Ambush for city deploys
-                    .filter(({ dir }) => !(pendingCityDeploy && dir === 'ambush'))
-                    .map(({ dir, label, icon, bg, tip }) => {
+                    { dir: 'ambush',     label: 'AMBUSH',     icon: 'lorc/hidden',       bg: '#0f3460', tip: 'Start at a specific Booking ID and call down. Wraps back to the top and completes a full loop.' },
+                    { dir: 'infiltrate', label: 'INFILTRATE', icon: 'lorc/deadly-strike', bg: '#533483', tip: 'Scans the sheet in 20-row windows and strikes the zone with the lowest NA count.' },
+                    { dir: 'siege',      label: 'SIEGE',      icon: 'lorc/tower-fall',   bg: '#7b1a1a', tip: 'Works every group in NA order — blanks first, then 1s, then 2s. No wrap. Mission complete when exhausted.' },
+                  ] as const).filter(({ dir }) => !(pendingCityDeploy && dir === 'ambush')).map(({ dir, label, icon, bg, tip }) => {
                     const isSelected = direction === dir;
-                    const iconUrl = `https://game-icons.net/icons/ffffff/transparent/1x1/${icon}.svg`;
                     return (
                       <div key={dir} className="flex-1 relative group">
                         <button
-                          onClick={() => {
-                            setDirection(dir as Direction);
-                            setDeployError('');
-                            if (dir !== 'ambush') setStartBookingId('');
-                          }}
+                          onClick={() => { setDirection(dir as Direction); setDeployError(''); if (dir !== 'ambush') setStartBookingId(''); }}
                           className="w-full rounded transition-all"
                           style={{
-                            position: 'relative',
-                            overflow: 'hidden',
-                            padding: '10px 4px 8px',
-                            background: isSelected ? bg : '#1a2e1a',
-                            color: isSelected ? '#fff' : '#666',
+                            position: 'relative', overflow: 'hidden', padding: '10px 4px 8px',
+                            background: isSelected ? bg : '#1a2e1a', color: isSelected ? '#fff' : '#666',
                             border: isSelected ? `1.5px solid ${bg}` : '1.5px solid rgba(0,229,255,0.15)',
-                            fontFamily: 'inherit',
-                            minHeight: 64,
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            justifyContent: 'flex-end',
-                            gap: 4,
-                            cursor: 'pointer',
+                            fontFamily: 'inherit', minHeight: 64, display: 'flex', flexDirection: 'column',
+                            alignItems: 'center', justifyContent: 'flex-end', gap: 4, cursor: 'pointer',
                           }}
                         >
-                          <img
-                            src={iconUrl}
-                            alt=""
-                            style={{
-                              position: 'absolute',
-                              top: '50%',
-                              left: '50%',
-                              transform: 'translate(-50%, -50%)',
-                              width: 52,
-                              height: 52,
-                              opacity: isSelected ? 0.18 : 0.07,
-                              pointerEvents: 'none',
-                              filter: isSelected ? 'none' : 'grayscale(100%)',
-                              transition: 'opacity 0.2s ease',
-                            }}
-                          />
-                          <span style={{
-                            position: 'relative',
-                            zIndex: 1,
-                            fontSize: 9,
-                            fontWeight: 800,
-                            letterSpacing: '1.5px',
-                            textTransform: 'uppercase',
-                          }}>
-                            {label}
-                          </span>
+                          <img src={`https://game-icons.net/icons/ffffff/transparent/1x1/${icon}.svg`} alt=""
+                            style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                              width: 52, height: 52, opacity: isSelected ? 0.18 : 0.07, pointerEvents: 'none',
+                              filter: isSelected ? 'none' : 'grayscale(100%)', transition: 'opacity 0.2s ease' }} />
+                          <span style={{ position: 'relative', zIndex: 1, fontSize: 9, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase' }}>{label}</span>
                         </button>
-                        {/* Hover tooltip */}
-                        <div
-                          className="absolute left-1/2 z-50 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150"
-                          style={{
-                            bottom: 'calc(100% + 8px)',
-                            transform: 'translateX(-50%)',
-                            width: 180,
-                            background: 'rgba(0,8,14,0.97)',
-                            border: '1px solid rgba(0,229,255,0.25)',
-                            borderRadius: 6,
-                            padding: '8px 10px',
-                            boxShadow: '0 4px 20px rgba(0,0,0,0.8)',
-                            color: '#aaa',
-                            fontSize: 10,
-                            lineHeight: 1.5,
-                            fontWeight: 400,
-                            letterSpacing: '0.3px',
-                            textAlign: 'left',
-                          }}
-                        >
+                        <div className="absolute left-1/2 z-50 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+                          style={{ bottom: 'calc(100% + 8px)', transform: 'translateX(-50%)', width: 180,
+                            background: 'rgba(0,8,14,0.97)', border: '1px solid rgba(0,229,255,0.25)', borderRadius: 6,
+                            padding: '8px 10px', boxShadow: '0 4px 20px rgba(0,0,0,0.8)', color: '#aaa',
+                            fontSize: 10, lineHeight: 1.5, fontWeight: 400, letterSpacing: '0.3px', textAlign: 'left' }}>
                           <div style={{ color: '#00e5ff', fontWeight: 800, fontSize: 9, letterSpacing: '1.5px', marginBottom: 4, textTransform: 'uppercase' }}>{label}</div>
                           {tip}
-                          <div style={{
-                            position: 'absolute',
-                            bottom: -5,
-                            left: '50%',
-                            transform: 'translateX(-50%) rotate(45deg)',
-                            width: 8,
-                            height: 8,
-                            background: 'rgba(0,8,14,0.97)',
-                            border: '1px solid rgba(0,229,255,0.25)',
-                            borderTop: 'none',
-                            borderLeft: 'none',
-                          }} />
+                          <div style={{ position: 'absolute', bottom: -5, left: '50%', transform: 'translateX(-50%) rotate(45deg)',
+                            width: 8, height: 8, background: 'rgba(0,8,14,0.97)', border: '1px solid rgba(0,229,255,0.25)',
+                            borderTop: 'none', borderLeft: 'none' }} />
                         </div>
                       </div>
                     );
@@ -1551,37 +1481,25 @@ export default function DialerPage() {
                 </div>
               </div>
 
-              {/* BOOKING ID — only for tab deploys in ambush mode */}
               {!pendingCityDeploy && direction === 'ambush' && (
                 <div className="mb-4">
                   <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
-                    STARTING BOOKING ID{' '}
-                    <span style={{ color: '#e74c3c', opacity: 0.9 }}>REQUIRED</span>
+                    STARTING BOOKING ID <span style={{ color: '#e74c3c', opacity: 0.9 }}>REQUIRED</span>
                   </div>
-                  <input
-                    type="text"
-                    value={startBookingId}
+                  <input type="text" value={startBookingId}
                     onChange={(e) => { setStartBookingId(e.target.value); setDeployError(''); }}
-                    placeholder="e.g. ACE01-042"
-                    className="w-full px-3 py-2 rounded text-sm font-mono"
-                    style={S.yesInput}
-                  />
+                    placeholder="e.g. ACE01-042" className="w-full px-3 py-2 rounded text-sm font-mono" style={S.yesInput} />
                 </div>
               )}
 
-              {/* SNIPER SCOPE */}
               <div className="mb-5">
-                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
-                  SNIPER SCOPE
-                </div>
-                <button
-                  onClick={() => setSniperSettingsOpen(true)}
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>SNIPER SCOPE</div>
+                <button onClick={() => setSniperSettingsOpen(true)}
                   className="w-full flex items-center justify-between px-3 py-2.5 rounded transition-all"
-                  style={{ background: 'rgba(0,229,255,0.04)', border: '1px solid rgba(0,229,255,0.15)', cursor: 'pointer' }}
-                >
+                  style={{ background: 'rgba(0,229,255,0.04)', border: '1px solid rgba(0,229,255,0.15)', cursor: 'pointer' }}>
                   <div className="flex flex-wrap gap-1.5">
                     {sniperConfig.years.map(yr => (
-                      <span key={yr} style={{ fontSize: 9, fontWeight: 800, color: '#00e5ff', background: 'rgba(0,229,255,0.12)', border: '1px solid rgba(0,229,255,0.25)', borderRadius: 3, padding: '1px 6px', letterSpacing: '0.5px' }}>{yr}</span>
+                      <span key={yr} style={{ fontSize: 9, fontWeight: 800, color: '#00e5ff', background: 'rgba(0,229,255,0.12)', border: '1px solid rgba(0,229,255,0.25)', borderRadius: 3, padding: '1px 6px' }}>{yr}</span>
                     ))}
                     {sniperConfig.ppOnly && <span style={{ fontSize: 8, fontWeight: 800, color: '#f1c40f', background: 'rgba(241,196,15,0.12)', border: '1px solid rgba(241,196,15,0.25)', borderRadius: 3, padding: '1px 6px' }}>PP</span>}
                     {sniperConfig.minEntries > 1 && <span style={{ fontSize: 8, fontWeight: 800, color: '#f5a623', background: 'rgba(245,166,35,0.12)', border: '1px solid rgba(245,166,35,0.25)', borderRadius: 3, padding: '1px 6px' }}>MIN:{sniperConfig.minEntries}</span>}
@@ -1594,7 +1512,6 @@ export default function DialerPage() {
                 </button>
               </div>
 
-              {/* ERROR MESSAGE */}
               {deployError && (
                 <div className="mb-3 px-3 py-2 rounded text-xs font-bold"
                   style={{ background: 'rgba(231,76,60,0.12)', border: '1px solid rgba(231,76,60,0.35)', color: '#e74c3c', letterSpacing: '0.5px' }}>
@@ -1602,25 +1519,15 @@ export default function DialerPage() {
                 </div>
               )}
 
-              {/* ACTION BUTTONS */}
               <div className="flex gap-3">
-                <button
-                  onClick={() => { setShowDeployConfig(false); setPendingCityDeploy(null); }}
+                <button onClick={() => { setShowDeployConfig(false); setPendingCityDeploy(null); }}
                   className="flex-shrink-0 px-4 py-3 rounded text-xs font-bold tracking-wider uppercase"
-                  style={{ background: '#222', color: '#666', border: '1px solid #333', fontFamily: 'inherit' }}
-                >
+                  style={{ background: '#222', color: '#666', border: '1px solid #333', fontFamily: 'inherit' }}>
                   ABORT
                 </button>
-                <button
-                  onClick={handleConfirmDeploy}
-                  disabled={loading}
+                <button onClick={handleConfirmDeploy} disabled={loading}
                   className="flex-1 py-3 rounded font-black text-sm tracking-widest uppercase transition-all"
-                  style={{
-                    background: loading ? '#333' : 'linear-gradient(135deg, #27ae60, #2ecc71)',
-                    color: loading ? '#888' : '#fff',
-                    border: 'none', fontFamily: 'inherit', letterSpacing: '3px',
-                  }}
-                >
+                  style={{ background: loading ? '#333' : 'linear-gradient(135deg, #27ae60, #2ecc71)', color: loading ? '#888' : '#fff', border: 'none', fontFamily: 'inherit', letterSpacing: '3px' }}>
                   {loading ? 'DEPLOYING...' : '🎯 CONFIRM DEPLOY'}
                 </button>
               </div>
@@ -1642,10 +1549,8 @@ export default function DialerPage() {
           session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt}
           rank={rank} onTrophyClick={() => setAchievementsOpen(true)} onMenuAction={handleMenuAction}
           teamFeed={teamFeed} multiplierActivations={multActivations} autoFire={autoFire} onAutoFireChange={setAutoFire}
-          managerId={manager?.repCode}
-          lastDispType={lastDispType}
-          consecutiveYes={calmConsecutiveYes}
-          consecutiveNos={calmConsecutiveNos}
+          managerId={manager?.repCode} lastDispType={lastDispType}
+          consecutiveYes={calmConsecutiveYes} consecutiveNos={calmConsecutiveNos}
         />
         <BadgeToastContainer toasts={badgeToasts} />
         <PointToastContainer toasts={pointToasts} />
@@ -1682,8 +1587,6 @@ export default function DialerPage() {
   const cl = cs.client;
   const strat = STRATEGY_COLORS[cs.phoneStrategy] || STRATEGY_COLORS.single;
   const altNames = cl.allNames.filter(n => n !== `${cl.firstName} ${cl.lastName}`.trim());
-
-  // BC upsell button logic
   const isDtOnly = isBCCampaign && yUpsellType === 'dethatch' && ySkipAeration;
   const isRejuv = isBCCampaign && yUpsellType === 'rejuv';
 
@@ -1693,10 +1596,8 @@ export default function DialerPage() {
         session={session} activeMultipliers={multipliers} multipliersReceivedAt={multipliersAt}
         rank={rank} onTrophyClick={() => setAchievementsOpen(true)} onMenuAction={handleMenuAction}
         teamFeed={teamFeed} multiplierActivations={multActivations} autoFire={autoFire} onAutoFireChange={setAutoFire}
-        managerId={manager?.repCode}
-        lastDispType={lastDispType}
-        consecutiveYes={calmConsecutiveYes}
-        consecutiveNos={calmConsecutiveNos}
+        managerId={manager?.repCode} lastDispType={lastDispType}
+        consecutiveYes={calmConsecutiveYes} consecutiveNos={calmConsecutiveNos}
       />
       <BadgeToastContainer toasts={badgeToasts} />
       <PointToastContainer toasts={pointToasts} />
@@ -1706,13 +1607,11 @@ export default function DialerPage() {
           currentUserId={manager?.id || ''} currentUserName={manager?.name || manager?.repCode || 'You'} session={session} />
       )}
 
-      {/* Card entry modal */}
       {cardModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }}>
           <div className="rounded-lg p-5 w-80" style={{ background: '#2a2a2a', border: '1.5px solid rgba(241,196,15,0.5)', boxShadow: '0 8px 32px rgba(0,0,0,0.8)' }}>
             <div className="text-center mb-1 text-sm font-black tracking-widest uppercase" style={{ color: '#f1c40f' }}>💳 Load Magazine</div>
             <div className="text-center text-xs mb-3" style={{ color: '#888', letterSpacing: '1px' }}>{cl.firstName} {cl.lastName}</div>
-
             <div className="mb-2.5">
               <label className="block text-xs uppercase tracking-wider mb-1" style={{ color: '#888', fontWeight: 600, fontSize: 9 }}>Card Number</label>
               <input type="text" value={ccNum} onChange={(e) => { setCcNum(e.target.value); detectCardType(e.target.value); }}
@@ -1725,7 +1624,6 @@ export default function DialerPage() {
                 color: ccType === 'VISA' ? '#5c6bc0' : ccType === 'MC' ? '#e74c3c' : ccType === 'AMEX' ? '#2ecc71' : '#888',
               }}>{ccType || 'Enter card #'}</div>
             </div>
-
             <div className="flex gap-2.5 mb-2.5">
               <div className="flex-1">
                 <label className="block text-xs uppercase tracking-wider mb-1" style={{ color: '#888', fontWeight: 600, fontSize: 9 }}>Expiry</label>
@@ -1738,13 +1636,11 @@ export default function DialerPage() {
                   className="w-full px-2.5 py-2 rounded text-sm font-semibold tracking-wider" style={{ background: '#383838', color: '#fff', border: '1px solid #555' }} />
               </div>
             </div>
-
             <div className="mb-3">
               <label className="block text-xs uppercase tracking-wider mb-1" style={{ color: '#888', fontWeight: 600, fontSize: 9 }}>Amount</label>
               <input value={ccAmt} onChange={(e) => setCcAmt(e.target.value)} placeholder="0.00"
                 className="w-full px-2.5 py-2 rounded text-sm font-semibold tracking-wider" style={{ background: '#383838', color: '#fff', border: '1px solid #555' }} />
             </div>
-
             <div className="flex gap-2.5 pt-2.5" style={{ borderTop: '1px solid #444' }}>
               <button onClick={handleEject} className="flex-1 py-2.5 rounded text-xs font-bold tracking-wider uppercase" style={{ background: '#444', color: '#aaa' }}>Eject</button>
               <button onClick={handleChamber} disabled={cardStaging} className="flex-1 py-2.5 rounded text-xs font-bold tracking-wider uppercase"
@@ -1761,21 +1657,21 @@ export default function DialerPage() {
         </div>
       )}
 
-      {/* Main dialer layout */}
       <div className="relative z-1 flex h-full" style={{ padding: '32px 8px 50px 8px' }}>
 
-        {/* LEFT: Main column */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           <div className="flex items-center justify-between px-2.5 py-1 flex-shrink-0" style={S.topBar}>
             <span className="text-xs uppercase tracking-wider" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 9 }}>{cs.sheetName}</span>
-            <span className="text-xs font-bold tracking-wider" style={{ color: '#00e5ff', fontSize: 9 }}>{cs.currentGroupIndex} / {cs.totalGroups}</span>
+            {/* NET AVAILABLE COUNT — groups remaining after cooldown filter */}
+            <span className="font-black font-mono" style={{ color: '#00e5ff', fontSize: 15, letterSpacing: '1px' }}>
+              {netAvailableCount}
+            </span>
           </div>
 
           <div className="flex justify-between items-baseline gap-3 px-2.5 py-1.5 flex-shrink-0" style={S.clientHeader}>
             <div>
               <div className="flex items-center gap-2">
                 <div className="text-base font-black tracking-wider uppercase text-white">{cl.firstName} {cl.lastName}</div>
-                {/* BC service flags badge */}
                 {cs.serviceFlags && (
                   <span className="text-xs font-black tracking-wider px-1.5 py-0.5 rounded"
                     style={{ background: 'rgba(241,196,15,0.15)', border: '1px solid rgba(241,196,15,0.35)', color: '#f1c40f', fontSize: 9 }}>
@@ -1848,39 +1744,23 @@ export default function DialerPage() {
                 </div>
                 <div className="mb-2"><YesField label="Notes" value={yNotes} onChange={setYNotes} /></div>
 
-                {/* ── BC UPSELL SECTION ── */}
                 {isBCCampaign && (
                   <div className="mb-2 p-2 rounded" style={{ background: 'rgba(241,196,15,0.04)', border: '1px solid rgba(241,196,15,0.15)' }}>
                     <div className="text-xs uppercase tracking-widest font-bold mb-1.5" style={{ color: '#f1c40f', opacity: 0.7, fontSize: 8 }}>⚡ UPSELL</div>
-
-                    {/* Upsell type dropdown */}
                     <div className="flex gap-1.5 mb-1.5">
                       {([
                         { val: 'none' as UpsellType, label: 'No Upsell' },
                         { val: 'dethatch' as UpsellType, label: 'Dethatching' },
                         { val: 'rejuv' as UpsellType, label: 'Lawn Rejuv' },
                       ]).map(({ val, label }) => (
-                        <button
-                          key={val}
-                          onClick={() => {
-                            setYUpsellType(val);
-                            if (val !== 'dethatch') { setYDtPrice(''); setYDtPrepaid(false); setYSkipAeration(false); }
-                            if (val !== 'rejuv') { setYRejuvPrice(''); }
-                          }}
+                        <button key={val}
+                          onClick={() => { setYUpsellType(val); if (val !== 'dethatch') { setYDtPrice(''); setYDtPrepaid(false); setYSkipAeration(false); } if (val !== 'rejuv') { setYRejuvPrice(''); } }}
                           className="flex-1 py-1.5 rounded text-xs font-bold tracking-wider uppercase cursor-pointer transition-all"
-                          style={{
-                            background: yUpsellType === val ? 'rgba(241,196,15,0.15)' : 'rgba(0,10,18,0.6)',
-                            border: `1px solid ${yUpsellType === val ? 'rgba(241,196,15,0.5)' : 'rgba(255,255,255,0.08)'}`,
-                            color: yUpsellType === val ? '#f1c40f' : '#555',
-                            fontSize: 9,
-                          }}
-                        >
+                          style={{ background: yUpsellType === val ? 'rgba(241,196,15,0.15)' : 'rgba(0,10,18,0.6)', border: `1px solid ${yUpsellType === val ? 'rgba(241,196,15,0.5)' : 'rgba(255,255,255,0.08)'}`, color: yUpsellType === val ? '#f1c40f' : '#555', fontSize: 9 }}>
                           {label}
                         </button>
                       ))}
                     </div>
-
-                    {/* Dethatch fields */}
                     {yUpsellType === 'dethatch' && (
                       <div className="flex items-end gap-2">
                         <div style={{ width: 90 }}><YesField label="DT Price" value={yDtPrice} onChange={setYDtPrice} /></div>
@@ -1894,8 +1774,6 @@ export default function DialerPage() {
                         </label>
                       </div>
                     )}
-
-                    {/* Rejuv fields */}
                     {yUpsellType === 'rejuv' && (
                       <div>
                         <div className="flex items-end gap-2">
@@ -1909,24 +1787,19 @@ export default function DialerPage() {
                   </div>
                 )}
 
-                {/* ── ACTION BUTTONS ── */}
                 <div className="flex gap-2">
                   <button onClick={() => setShowYesPanel(false)} className="px-3 py-2 rounded text-xs font-bold cursor-pointer" style={{ background: '#333', color: '#888', border: '1px solid #555' }}>✖ Cancel</button>
-
                   {isDtOnly ? (
-                    /* Dethatch-only: single upsell button */
                     <button onClick={() => doYes('COMPLETE')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer"
                       style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none', letterSpacing: '2px' }}>
                       ⚡ DT Upsell Only
                     </button>
                   ) : isRejuv ? (
-                    /* Rejuv: forced prepay only */
                     <button onClick={() => doYes('PREPAY')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer"
                       style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none', letterSpacing: '2px' }}>
                       💳 Prepay (Rejuv)
                     </button>
                   ) : (
-                    /* Normal: Complete + Prepay */
                     <>
                       <button onClick={() => doYes('COMPLETE')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#2ecc71', color: '#fff', border: 'none', letterSpacing: '2px' }}>✔ Complete</button>
                       <button onClick={() => doYes('PREPAY')} className="flex-1 py-2 rounded text-sm font-bold tracking-wider uppercase cursor-pointer" style={{ background: '#f1c40f', color: '#1a1a1a', border: 'none', letterSpacing: '2px' }}>💳 Prepay</button>
@@ -1965,7 +1838,6 @@ export default function DialerPage() {
           </div>
         </div>
 
-        {/* RIGHT: Side panel */}
         <div className="flex flex-col" style={{ ...S.sidePanel, width: 250, minWidth: 250, maxWidth: 250 }}>
           <div className="p-2 flex-shrink-0">
             <div className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 8 }}>Disposition</div>
@@ -1979,11 +1851,7 @@ export default function DialerPage() {
               onClick={() => setShowYesPanel(true)}
               flashing={flashingKey === 'YES'}
               flashColor="#2ecc71"
-              style={{
-                background: showYesPanel ? 'rgba(0,60,80,0.5)' : 'linear-gradient(135deg, #27ae60, #2ecc71)',
-                color: '#fff',
-                border: showYesPanel ? '2px solid #00e5ff' : 'none',
-              }}
+              style={{ background: showYesPanel ? 'rgba(0,60,80,0.5)' : 'linear-gradient(135deg, #27ae60, #2ecc71)', color: '#fff', border: showYesPanel ? '2px solid #00e5ff' : 'none' }}
             />
           </div>
 

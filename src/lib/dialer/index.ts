@@ -25,6 +25,7 @@ export {
   getActiveMultipliers,
   setResumePosition,
   createFreshSession,
+  getAvailableGroupPhones,
 } from './dialerEngine';
 
 export type {
