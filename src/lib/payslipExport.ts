@@ -194,14 +194,14 @@ export async function generatePayslipsXLSX(
     { key:'A', width: 9.14  },               // A  DATE
     { key:'B', width: 15.14 },               // B  ROUTE MANAGER
     { key:'C', width: 9.14  },               // C  AER STEPS
-    { key:'D', width: 13.0  },               // D  EQUIV
+    { key:'D', width: 9.14  },               // D  EQUIV
     { key:'E', width: 11.0  },               // E  TOTAL PREPAY
     { key:'F', width: 9.14  },               // F  PAYOUT RATE / left summary label
-    { key:'G', width: 13.0  },               // G  AER COMM    / left summary label (merged F:G)
+    { key:'G', width: 9.14  },               // G  AER COMM    / left summary label (merged F:G = 18.28 effective)
     { key:'H', width: 0, hidden: true },     // H  UPSELL COMM (hidden)
     { key:'I', width: 10.0  },               // I  MACH RENT   / left summary value
-    { key:'J', width: 18.0  },               // J  DEDUCTIONS  / right summary label (wide for "Guaranteed Income")
-    { key:'K', width: 13.0  },               // K  DAILY BONUS / right summary label (merged J:K)
+    { key:'J', width: 9.14  },               // J  DEDUCTIONS  / right summary label (merged J:K = 18.28 effective)
+    { key:'K', width: 9.14  },               // K  DAILY BONUS / right summary label (merged J:K)
     { key:'L', width: 13.5  },               // L  TOTAL PAYOUT / right summary value
   ];
 
@@ -399,9 +399,12 @@ export async function generatePayslipsXLSX(
     }
 
     // ── 2 BLANK TRAILING ROWS ─────────────────────────────────────────────────
+    // Must put a value in at least one cell — ExcelJS silently drops all-null rows
     for (let i = 0; i < 2; i++) {
       rn++;
-      ws.addRow(Array(NCOLS).fill(null)).height = H_STD;
+      const blankRow = ws.addRow(['',...Array(NCOLS-1).fill(null)]);
+      blankRow.height = H_STD;
+      (blankRow as any).customHeight = true;
     }
 
     // ── Page break after every N workers ─────────────────────────────────────
