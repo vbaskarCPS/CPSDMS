@@ -1077,8 +1077,8 @@ const SessionCommandCenter: React.FC = () => {
                 </div>
             )}
 
-          </div>
-        )}
+              </>
+            )}
 
           </div>
         )}
