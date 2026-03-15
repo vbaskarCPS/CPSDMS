@@ -73,9 +73,9 @@ const PS = {
 // Summary fill:   D9D9D9 (grey) on cols F–L for all 5 summary rows
 
 const NCOLS   = 12;
-const H_NAME  = 30;
-const H_HDR   = 40;
-const H_STD   = 20;
+const H_NAME  = 40;
+const H_HDR   = 56;
+const H_STD   = 30;
 
 const HDR_FILL: Record<number, string> = {
   1: 'FFCC0000', 2: 'FFCC0000', 3: 'FFB6D7A8',
@@ -202,7 +202,7 @@ export async function generatePayslipsXLSX(
     { key:'I', width: 10.0  },               // I  MACH RENT   / left summary value
     { key:'J', width: 9.14  },               // J  DEDUCTIONS  / right summary label (merged J:K = 18.28 effective)
     { key:'K', width: 9.14  },               // K  DAILY BONUS / right summary label (merged J:K)
-    { key:'L', width: 13.5  },               // L  TOTAL PAYOUT / right summary value
+    { key:'L', width: 16.0  },               // L  TOTAL PAYOUT / right summary value
   ];
 
   const pageBreakRows: number[] = [];
@@ -383,19 +383,21 @@ export async function generatePayslipsXLSX(
 
       const fReg  = { name:'Arial', size:12 } as Partial<ExcelJS.Font>;
       const fBold = { bold:true, name:'Arial', size:12 } as Partial<ExcelJS.Font>;
-      const fFinal= { bold:true, name:'Arial', size:16 } as Partial<ExcelJS.Font>;
+      const fFinal= { bold:true, name:'Arial', size:14 } as Partial<ExcelJS.Font>;
+
+      const aRShrink  = { horizontal: 'right'  as const, vertical: 'middle' as const, shrinkToFit: true };
 
       // Left label (F, merged with G)
       if (left) {
-        style(sumRow.getCell(6), { font:fReg, fill:fill('FFF2F2F2'), align:aR });
+        style(sumRow.getCell(6), { font:fReg, fill:fill('FFF2F2F2'), align:aRShrink });
         // Left value (I)
-        style(sumRow.getCell(9), { font:fBold, fill:fill('FFF2F2F2'), align:aR, fmt:FMT_CURR });
+        style(sumRow.getCell(9), { font:fBold, fill:fill('FFF2F2F2'), align:aRShrink, fmt:FMT_CURR });
       }
 
       // Right label (J, merged with K)
-      style(sumRow.getCell(10), { font:isFinal ? fBold : fReg, fill:summaryFill, align:aR });
+      style(sumRow.getCell(10), { font:isFinal ? fBold : fReg, fill:summaryFill, align:aRShrink });
       // Right value (L)
-      style(sumRow.getCell(12), { font:isFinal ? fFinal : fBold, fill:summaryFill, align:aR, fmt:FMT_CURR });
+      style(sumRow.getCell(12), { font:isFinal ? fFinal : fBold, fill:summaryFill, align:aRShrink, fmt:FMT_CURR });
     }
 
     // ── 2 BLANK TRAILING ROWS ─────────────────────────────────────────────────
@@ -420,7 +422,21 @@ export async function generatePayslipsXLSX(
   }
 
   // ─── Page setup: portrait, scale 70% ─────────────────────────────────────
-  ws.pageSetup = { paperSize:9, orientation:'portrait', scale:70, fitToPage:false };
+  ws.pageSetup = {
+    paperSize:   9,           // Letter
+    orientation: 'portrait',
+    fitToPage:   true,
+    fitToWidth:  1,           // Fit all columns to 1 page wide
+    fitToHeight: 0,           // Let height flow naturally
+  };
+  ws.pageMargins = {
+    left:   0.25,
+    right:  0.25,
+    top:    0.25,
+    bottom: 0.25,
+    header: 0,
+    footer: 0,
+  };
 
   // ─── Download ─────────────────────────────────────────────────────────────
   const buffer = await wb.xlsx.writeBuffer();
