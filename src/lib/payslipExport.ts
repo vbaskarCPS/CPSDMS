@@ -11,7 +11,7 @@ export interface PayslipDayRow {
   totalPrepay: number;
   payoutRate: number;
   aerComm: number;
-  upsellComm: number;
+  upsellComm: number; // kept in data, not shown on payslip
   machRent: number;
   deductions: number;
   dailyBonus: number;
@@ -54,14 +54,14 @@ const PS = {
   manager: 4,
   stepCount: 5,
   totalEQ: 17,
-  totalPrepay: 25,   // upsellPayable → TOTAL PREPAY column on payslip
+  totalPrepay: 25,
   payoutRate: 26,
-  aerComm: 27,       // Production Comm → AER COMM
-  upsellComm: 28,    // Upsell Commission → UPSELL COMM
+  aerComm: 27,
+  upsellComm: 28,
   machRent: 30,
   deductions: 31,
-  dailyBonus: 32,    // Bonuses → DAILY BONUS
-  totalPayout: 33,   // Final Pay → TOTAL PAYOUT
+  dailyBonus: 32,
+  totalPayout: 33,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -71,7 +71,6 @@ function r2(v: number): number {
 }
 
 function formatDate(s: string): string {
-  // "Mar02" → "2-Mar"
   const day = parseInt(s.slice(3), 10);
   return `${day}-${s.slice(0, 3)}`;
 }
@@ -82,6 +81,101 @@ function sortKey(s: string): number {
     Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12,
   };
   return (months[s.slice(0, 3)] || 0) * 100 + parseInt(s.slice(3), 10);
+}
+
+// ─── Style definitions ────────────────────────────────────────────────────────
+// 11 columns (no UPSELL COMM):
+// A=DATE, B=ROUTE MANAGER, C=AER STEPS, D=EQUIV, E=TOTAL PREPAY,
+// F=PAYOUT RATE, G=AER COMM, H=MACH RENT, I=DEDUCTIONS, J=DAILY BONUS, K=TOTAL PAYOUT
+// Summary: col 4(E)=left label, col 6(G)=left value, col 8(I)=right label, col 10(K)=right value
+
+const NCOLS = 11;
+
+const S: Record<string, any> = {
+  workerHeader: {
+    font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 13, name: 'Arial' },
+    fill: { patternType: 'solid', fgColor: { rgb: '1A1A1A' } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+  },
+  colHeader: {
+    font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 9, name: 'Arial' },
+    fill: { patternType: 'solid', fgColor: { rgb: 'C00000' } },
+    alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+  },
+  colHeaderSteps: {
+    font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 9, name: 'Arial' },
+    fill: { patternType: 'solid', fgColor: { rgb: '538135' } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+  },
+  dataText: {
+    font: { name: 'Arial', sz: 10 },
+    alignment: { horizontal: 'left', vertical: 'center' },
+  },
+  dataCenter: {
+    font: { name: 'Arial', sz: 10 },
+    alignment: { horizontal: 'center', vertical: 'center' },
+  },
+  dataCurrency: {
+    font: { name: 'Arial', sz: 10 },
+    alignment: { horizontal: 'right', vertical: 'center' },
+    numFmt: '$#,##0.00',
+  },
+  dataNumber: {
+    font: { name: 'Arial', sz: 10 },
+    alignment: { horizontal: 'right', vertical: 'center' },
+    numFmt: '0.00',
+  },
+  summaryLabel: {
+    font: { name: 'Arial', sz: 10 },
+    fill: { patternType: 'solid', fgColor: { rgb: 'D9D9D9' } },
+    alignment: { horizontal: 'right', vertical: 'center' },
+  },
+  summaryValue: {
+    font: { name: 'Arial', sz: 10 },
+    fill: { patternType: 'solid', fgColor: { rgb: 'D9D9D9' } },
+    alignment: { horizontal: 'right', vertical: 'center' },
+    numFmt: '$#,##0.00',
+  },
+  finalPayLabel: {
+    font: { bold: true, name: 'Arial', sz: 11 },
+    fill: { patternType: 'solid', fgColor: { rgb: 'BFBFBF' } },
+    alignment: { horizontal: 'right', vertical: 'center' },
+  },
+  finalPayValue: {
+    font: { bold: true, name: 'Arial', sz: 12 },
+    fill: { patternType: 'solid', fgColor: { rgb: 'BFBFBF' } },
+    alignment: { horizontal: 'right', vertical: 'center' },
+    numFmt: '$#,##0.00',
+  },
+  leftLabel: {
+    font: { name: 'Arial', sz: 10 },
+    fill: { patternType: 'solid', fgColor: { rgb: 'F2F2F2' } },
+    alignment: { horizontal: 'right', vertical: 'center' },
+    border: {
+      top:    { style: 'thin', color: { rgb: '999999' } },
+      bottom: { style: 'thin', color: { rgb: '999999' } },
+      left:   { style: 'thin', color: { rgb: '999999' } },
+      right:  { style: 'thin', color: { rgb: '999999' } },
+    },
+  },
+  leftValue: {
+    font: { bold: true, name: 'Arial', sz: 10 },
+    fill: { patternType: 'solid', fgColor: { rgb: 'F2F2F2' } },
+    alignment: { horizontal: 'right', vertical: 'center' },
+    numFmt: '$#,##0.00',
+    border: {
+      top:    { style: 'thin', color: { rgb: '999999' } },
+      bottom: { style: 'thin', color: { rgb: '999999' } },
+      left:   { style: 'thin', color: { rgb: '999999' } },
+      right:  { style: 'thin', color: { rgb: '999999' } },
+    },
+  },
+};
+
+function applyStyle(ws: XLSX.WorkSheet, r: number, c: number, style: any) {
+  const addr = XLSX.utils.encode_cell({ r, c });
+  if (!ws[addr]) ws[addr] = { t: 'z', v: undefined };
+  ws[addr].s = style;
 }
 
 // ─── Parse Payout Stats rows ──────────────────────────────────────────────────
@@ -147,56 +241,44 @@ export function generatePayslipsXLSX(
   const aoa: (string | number | null)[][] = [];
   const merges: XLSX.Range[] = [];
   const rowBreaks: number[] = [];
+  const rowHeights: { hpt?: number }[] = [];
 
   let currentRow = 0;
   let pageCount = 0;
 
   workers.forEach(worker => {
-    // ── Summary calculations (summary block only — daily rows are direct from data) ──
+    // ── Summary calculations ──
     const earnedComm = r2(worker.days.reduce((s, d) => s + d.totalPayout, 0));
     const daysWorked = worker.days.length;
     const trainingBump = worker.is120Program ? r2(Math.max(0, daysWorked * 120 - earnedComm)) : 0;
     const gi = worker.is120Program ? r2(Math.max(earnedComm, daysWorked * 120)) : earnedComm;
-    const totalDeductions = r2(
-      worker.hotels + worker.advances + worker.travelPkg +
-      worker.extraDeductions.reduce((s, d) => s + d.amount, 0)
+    const finalPay = r2(
+      gi
+      - worker.hotels
+      - worker.advances
+      - worker.travelPkg
+      - worker.extraDeductions.reduce((s, d) => s + d.amount, 0)
+      + worker.additions.reduce((s, a) => s + a.amount, 0)
     );
-    const totalAdditions = r2(worker.additions.reduce((s, a) => s + a.amount, 0));
-    const finalPay = r2(gi - totalDeductions + totalAdditions);
 
-    // Right-side summary rows
-    const right: { label: string; value: number }[] = [];
-    if (worker.is120Program) {
-      right.push({ label: 'Earned Commission', value: earnedComm });
-      right.push({ label: 'Training Bump', value: trainingBump });
-    }
-    right.push({ label: 'Guaranteed Income', value: gi });
-    right.push({ label: 'Hotels', value: worker.hotels });
-    right.push({ label: 'Advances', value: worker.advances });
-    right.push({ label: 'Travel Pkg', value: worker.travelPkg });
-    // Extra deductions listed on right side after Travel Pkg
-    worker.extraDeductions.forEach(d => right.push({ label: d.label || 'Deduction', value: d.amount }));
-    worker.additions.forEach(a => right.push({ label: a.label || 'Addition', value: -a.amount }));
-    right.push({ label: 'Final Pay:', value: finalPay });
-
-    const summaryRows = right.length;
-
-    // ── Row 1: Worker header (merged A:L) ──
-    const headerRow: (string | number | null)[] = Array(12).fill(null);
-    headerRow[0] = `${worker.contractorId} - ${worker.firstName} ${worker.lastName}`;
-    aoa.push(headerRow);
-    merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: 11 } });
+    // ── ROW 1: Worker name header ──
+    const nameRow: (string | number | null)[] = Array(NCOLS).fill(null);
+    nameRow[0] = `${worker.contractorId} - ${worker.firstName} ${worker.lastName}`;
+    aoa.push(nameRow);
+    merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: NCOLS - 1 } });
+    rowHeights[currentRow] = { hpt: 22 };
     currentRow++;
 
-    // ── Row 2: Column headers ──
+    // ── ROW 2: Column headers (11 cols, no UPSELL COMM) ──
     aoa.push([
       'DATE', 'ROUTE MANAGER', 'AER STEPS', 'EQUIV',
-      'TOTAL PREPAY', 'PAYOUT RATE', 'AER COMM', 'UPSELL COMM',
+      'TOTAL PREPAY', 'PAYOUT RATE', 'AER COMM',
       'MACH RENT', 'DEDUCTIONS', 'DAILY BONUS', 'TOTAL PAYOUT',
     ]);
+    rowHeights[currentRow] = { hpt: 28 };
     currentRow++;
 
-    // ── Data rows (padded to maxDataRows) ──
+    // ── DATA ROWS ──
     for (let i = 0; i < maxDataRows; i++) {
       const d = worker.days[i];
       aoa.push(d ? [
@@ -207,30 +289,56 @@ export function generatePayslipsXLSX(
         d.totalPrepay ? r2(d.totalPrepay) : null,
         d.payoutRate || null,
         d.aerComm ? r2(d.aerComm) : null,
-        d.upsellComm ? r2(d.upsellComm) : null,
         d.machRent || null,
         d.deductions || null,
         d.dailyBonus || null,
         r2(d.totalPayout),
-      ] : Array(12).fill(null));
+      ] : Array(NCOLS).fill(null));
+      rowHeights[currentRow] = { hpt: 16 };
       currentRow++;
     }
 
-    // ── Summary rows (right side only — I=label col, L=value col) ──
-    for (let i = 0; i < summaryRows; i++) {
-      const row: (string | number | null)[] = Array(12).fill(null);
-      row[8] = right[i].label;
-      row[11] = right[i].value;
+    // ── SUMMARY ROWS ──
+    // Right side always: GI, Hotels, Advances, Travel Pkg, [extras], Final Pay
+    // Left side (120 program): Earned Commission (row 0), Training Bump (row 1)
+    const rightRows: { label: string; value: number }[] = [
+      { label: 'Guaranteed Income', value: gi },
+      { label: 'Hotels', value: worker.hotels },
+      { label: 'Advances', value: worker.advances },
+      { label: 'Travel Pkg', value: worker.travelPkg },
+      ...worker.extraDeductions.map(d => ({ label: d.label || 'Deduction', value: d.amount })),
+      ...worker.additions.map(a => ({ label: a.label || 'Addition', value: -a.amount })),
+      { label: 'Final Pay:', value: finalPay },
+    ];
+
+    const leftRows = worker.is120Program
+      ? [
+          { label: 'Earned Commission', value: earnedComm },
+          { label: 'Training Bump', value: trainingBump },
+        ]
+      : [];
+
+    rightRows.forEach((right, i) => {
+      const row: (string | number | null)[] = Array(NCOLS).fill(null);
+      row[8] = right.label;   // col I
+      row[10] = right.value;  // col K
+      if (i < leftRows.length) {
+        row[4] = leftRows[i].label;  // col E
+        row[6] = leftRows[i].value;  // col G
+      }
       aoa.push(row);
+      rowHeights[currentRow] = { hpt: 16 };
       currentRow++;
-    }
+    });
 
-    // ── Page break after every N workers ──
+    // ── Page break ──
     pageCount++;
     if (pageCount % perPage === 0 && pageCount < workers.length) {
       rowBreaks.push(currentRow - 1);
     }
   });
+
+  // ─── Build worksheet ──────────────────────────────────────────────────────
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!merges'] = merges;
@@ -238,17 +346,92 @@ export function generatePayslipsXLSX(
     { wch: 10 }, // A DATE
     { wch: 20 }, // B ROUTE MANAGER
     { wch: 10 }, // C AER STEPS
-    { wch: 10 }, // D EQUIV
-    { wch: 14 }, // E TOTAL PREPAY
-    { wch: 12 }, // F PAYOUT RATE
-    { wch: 13 }, // G AER COMM
-    { wch: 13 }, // H UPSELL COMM
-    { wch: 22 }, // I MACH RENT / right labels
-    { wch: 12 }, // J DEDUCTIONS
-    { wch: 13 }, // K DAILY BONUS
-    { wch: 14 }, // L TOTAL PAYOUT / right values
+    { wch: 9  }, // D EQUIV
+    { wch: 18 }, // E TOTAL PREPAY / left summary label
+    { wch: 10 }, // F PAYOUT RATE
+    { wch: 13 }, // G AER COMM / left summary value
+    { wch: 10 }, // H MACH RENT
+    { wch: 20 }, // I DEDUCTIONS / right summary label
+    { wch: 12 }, // J DAILY BONUS
+    { wch: 14 }, // K TOTAL PAYOUT / right summary value
   ];
-  if (rowBreaks.length > 0) (ws as any)['!rowbreaks'] = rowBreaks;
+  ws['!rows'] = rowHeights;
+  if (rowBreaks.length > 0) {
+    (ws as any)['!rowbreaks'] = rowBreaks.map(r => ({ r }));
+  }
+
+  // ─── Apply styles ──────────────────────────────────────────────────────────
+
+  let sr = 0; // style row counter
+
+  workers.forEach(worker => {
+    const earnedComm = r2(worker.days.reduce((s, d) => s + d.totalPayout, 0));
+    const daysWorked = worker.days.length;
+    const gi = worker.is120Program ? r2(Math.max(earnedComm, daysWorked * 120)) : earnedComm;
+    const finalPay = r2(
+      gi
+      - worker.hotels
+      - worker.advances
+      - worker.travelPkg
+      - worker.extraDeductions.reduce((s, d) => s + d.amount, 0)
+      + worker.additions.reduce((s, a) => s + a.amount, 0)
+    );
+
+    // Worker name header row
+    for (let c = 0; c < NCOLS; c++) applyStyle(ws, sr, c, S.workerHeader);
+    sr++;
+
+    // Column header row
+    for (let c = 0; c < NCOLS; c++) {
+      applyStyle(ws, sr, c, c === 2 ? S.colHeaderSteps : S.colHeader);
+    }
+    sr++;
+
+    // Data rows
+    for (let i = 0; i < maxDataRows; i++) {
+      const d = worker.days[i];
+      if (d) {
+        applyStyle(ws, sr, 0, S.dataText);
+        applyStyle(ws, sr, 1, S.dataText);
+        applyStyle(ws, sr, 2, S.dataCenter);
+        applyStyle(ws, sr, 3, S.dataNumber);
+        if (d.totalPrepay) applyStyle(ws, sr, 4, S.dataCurrency);
+        applyStyle(ws, sr, 5, S.dataCenter);
+        if (d.aerComm)    applyStyle(ws, sr, 6, S.dataCurrency);
+        if (d.machRent)   applyStyle(ws, sr, 7, S.dataCurrency);
+        if (d.deductions) applyStyle(ws, sr, 8, S.dataCurrency);
+        if (d.dailyBonus) applyStyle(ws, sr, 9, S.dataCurrency);
+        applyStyle(ws, sr, 10, S.dataCurrency);
+      }
+      sr++;
+    }
+
+    // Summary rows
+    const rightRows: { label: string }[] = [
+      { label: 'Guaranteed Income' },
+      { label: 'Hotels' },
+      { label: 'Advances' },
+      { label: 'Travel Pkg' },
+      ...worker.extraDeductions.map(d => ({ label: d.label || 'Deduction' })),
+      ...worker.additions.map(a => ({ label: a.label || 'Addition' })),
+      { label: 'Final Pay:' },
+    ];
+
+    const leftCount = worker.is120Program ? 2 : 0;
+
+    rightRows.forEach((right, i) => {
+      const isFinal = right.label === 'Final Pay:';
+      applyStyle(ws, sr, 8,  isFinal ? S.finalPayLabel : S.summaryLabel);
+      applyStyle(ws, sr, 10, isFinal ? S.finalPayValue : S.summaryValue);
+      if (i < leftCount) {
+        applyStyle(ws, sr, 4, S.leftLabel);
+        applyStyle(ws, sr, 6, S.leftValue);
+      }
+      sr++;
+    });
+  });
+
+  // ─── Write file ────────────────────────────────────────────────────────────
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Payslips');
