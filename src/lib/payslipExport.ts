@@ -73,9 +73,9 @@ const PS = {
 // Summary fill:   D9D9D9 (grey) on cols F–L for all 5 summary rows
 
 const NCOLS   = 12;
-const H_NAME  = 23.6;
-const H_HDR   = 25.95;
-const H_STD   = 15.9;
+const H_NAME  = 30;
+const H_HDR   = 40;
+const H_STD   = 20;
 
 const HDR_FILL: Record<number, string> = {
   1: 'FFCC0000', 2: 'FFCC0000', 3: 'FFB6D7A8',
@@ -319,7 +319,7 @@ export async function generatePayslipsXLSX(
     //     last row:         medium bottom on F–L
 
     const rightRows = [
-      { label:'Guaranteed Income', value:gi },
+      { label:'Earned Income',  value:gi },
       { label:'Hotels',            value:worker.hotels },
       { label:'Advances',          value:worker.advances },
       { label:'Travel Pkg',        value:worker.travelPkg },
