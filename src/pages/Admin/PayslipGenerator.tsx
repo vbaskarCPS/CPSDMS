@@ -1,7 +1,7 @@
 // src/pages/Admin/PayslipGenerator.tsx
 import React, { useState, useEffect } from 'react';
 import {
-  ChevronLeft, ChevronRight, ArrowLeft, Download,
+  ChevronLeft, ChevronRight, ChevronDown, ArrowLeft, Download,
   Loader, AlertCircle, Plus, Trash2, CheckCircle,
   Users, FileSpreadsheet,
 } from 'lucide-react';
@@ -78,6 +78,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
   // Workers
   const [workerList, setWorkerList] = useState<WorkerPayslipUI[]>([]);
   const [workerSettings, setWorkerSettings] = useState<Map<string, WorkerSettings>>(new Map());
+  const [expandedWorkers, setExpandedWorkers] = useState<Set<string>>(new Set());
   const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
@@ -137,6 +138,11 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
   const handleLoadWorkers = () => {
     if (!startDate || !endDate) return;
     const workers = parsePayoutStatsRows(allRows, startDate, endDate);
+    // Sort alphabetically by last name, then first name
+    workers.sort((a, b) => {
+      const last = a.lastName.localeCompare(b.lastName);
+      return last !== 0 ? last : a.firstName.localeCompare(b.firstName);
+    });
     setWorkerList(workers);
     const s = new Map<string, WorkerSettings>();
     workers.forEach(w => s.set(w.contractorId, defaultSettings()));
@@ -264,94 +270,184 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
 
   // ─── Worker row ───────────────────────────────────────────────────────────────
 
+  const calcFinalPay = (w: WorkerPayslipUI, s: WorkerSettings): number => {
+    const earnedComm = w.days.reduce((sum, d) => sum + d.totalPayout, 0);
+    const daysWorked = w.days.length;
+    const gi = s.is120Program ? Math.max(earnedComm, daysWorked * 120) : earnedComm;
+    const totalDeductions = s.hotels + s.advances + s.travelPkg +
+      s.extraDeductions.reduce((sum, d) => sum + d.amount, 0);
+    const totalAdditions = s.additions.reduce((sum, a) => sum + a.amount, 0);
+    return Math.round((gi - totalDeductions + totalAdditions) * 100) / 100;
+  };
+
+  const toggleExpanded = (id: string) => {
+    setExpandedWorkers(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
   const renderWorker = (w: WorkerPayslipUI) => {
     const s = workerSettings.get(w.contractorId) || defaultSettings();
+    const isExpanded = expandedWorkers.has(w.contractorId);
+    const finalPay = calcFinalPay(w, s);
+
     return (
-      <div key={w.contractorId} className="bg-gray-800 rounded-xl border border-gray-700 p-4">
-        <div className="flex items-center justify-between mb-3">
+      <div key={w.contractorId} className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+
+        {/* ── Collapsed header (always visible) ── */}
+        <div
+          className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-750 select-none"
+          onClick={() => toggleExpanded(w.contractorId)}
+        >
           <div className="flex items-center gap-3">
+            <ChevronDown
+              size={16}
+              className={`text-gray-400 transition-transform flex-shrink-0 ${isExpanded ? 'rotate-180' : ''}`}
+            />
             <span className="font-bold text-white text-sm">{w.contractorId} — {w.firstName} {w.lastName}</span>
             <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded">{w.days.length} day{w.days.length !== 1 ? 's' : ''}</span>
+            {s.is120Program && (
+              <span className="text-xs bg-green-900/30 text-green-400 border border-green-700/40 px-2 py-0.5 rounded">$120 Program</span>
+            )}
           </div>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input type="checkbox" checked={s.is120Program}
-              onChange={e => updateSetting(w.contractorId, 'is120Program', e.target.checked)}
-              className="w-4 h-4 accent-green-500" />
-            <span className={`text-xs font-medium ${s.is120Program ? 'text-green-400' : 'text-gray-500'}`}>$120 Program</span>
-          </label>
+          <div className="flex items-center gap-3">
+            <span className={`font-bold text-sm ${finalPay >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              ${finalPay.toFixed(2)}
+            </span>
+          </div>
         </div>
 
-        {/* Standard deduction inputs */}
-        <div className="grid grid-cols-3 gap-3 mb-3">
-          {(['hotels', 'advances', 'travelPkg'] as const).map(field => (
-            <div key={field}>
-              <label className="block text-xs text-gray-400 mb-1">
-                {field === 'travelPkg' ? 'Travel Pkg' : field.charAt(0).toUpperCase() + field.slice(1)}
-              </label>
-              <div className="relative">
-                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
-                <input type="number" min="0" step="0.01" placeholder="0" value={s[field] || ''}
-                  onChange={e => updateSetting(w.contractorId, field, parseFloat(e.target.value) || 0)}
-                  className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1.5 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
-              </div>
+        {/* ── Expanded details ── */}
+        {isExpanded && (
+          <div className="border-t border-gray-700 px-4 pt-3 pb-4 space-y-3">
+
+            {/* Days breakdown */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-gray-300">
+                <thead>
+                  <tr className="text-gray-500 border-b border-gray-700">
+                    <th className="text-left py-1 pr-3 font-medium">Date</th>
+                    <th className="text-left py-1 pr-3 font-medium">Manager</th>
+                    <th className="text-right py-1 pr-3 font-medium">Steps</th>
+                    <th className="text-right py-1 pr-3 font-medium">EQ</th>
+                    <th className="text-right py-1 pr-3 font-medium">Prepay</th>
+                    <th className="text-right py-1 pr-3 font-medium">Rate</th>
+                    <th className="text-right py-1 pr-3 font-medium">Comm</th>
+                    <th className="text-right py-1 pr-3 font-medium">Upsell</th>
+                    <th className="text-right py-1 pr-3 font-medium">Mach</th>
+                    <th className="text-right py-1 pr-3 font-medium">Deduct</th>
+                    <th className="text-right py-1 font-medium">Bonus</th>
+                    <th className="text-right py-1 pl-3 font-medium text-white">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {w.days.map((d, i) => (
+                    <tr key={i} className="border-b border-gray-700/50 last:border-0">
+                      <td className="py-1 pr-3">{d.date}</td>
+                      <td className="py-1 pr-3">{d.manager}</td>
+                      <td className="py-1 pr-3 text-right">{d.steps}</td>
+                      <td className="py-1 pr-3 text-right">{d.equiv.toFixed(2)}</td>
+                      <td className="py-1 pr-3 text-right">{d.totalPrepay ? `$${d.totalPrepay.toFixed(2)}` : '—'}</td>
+                      <td className="py-1 pr-3 text-right">${d.payoutRate}</td>
+                      <td className="py-1 pr-3 text-right">${d.aerComm.toFixed(2)}</td>
+                      <td className="py-1 pr-3 text-right">{d.upsellComm ? `$${d.upsellComm.toFixed(2)}` : '—'}</td>
+                      <td className="py-1 pr-3 text-right">{d.machRent ? `$${d.machRent}` : '—'}</td>
+                      <td className="py-1 pr-3 text-right">{d.deductions ? `$${d.deductions}` : '—'}</td>
+                      <td className="py-1 text-right">{d.dailyBonus ? `$${d.dailyBonus}` : '—'}</td>
+                      <td className="py-1 pl-3 text-right font-bold text-white">${d.totalPayout.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))}
-        </div>
 
-        {/* Extra deductions */}
-        {s.extraDeductions.length > 0 && (
-          <div className="mb-2 space-y-1.5">
-            {s.extraDeductions.map(item => (
-              <div key={item.id} className="flex items-center gap-2">
-                <input type="text" placeholder="Deduction label" value={item.label}
-                  onChange={e => updateItem(w.contractorId, 'extraDeductions', item.id, 'label', e.target.value)}
-                  className="flex-1 bg-gray-900 border border-gray-600 rounded-lg py-1 px-2 text-sm text-white focus:ring-1 focus:ring-red-500 focus:outline-none" />
-                <div className="relative w-28">
-                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
-                  <input type="number" min="0" step="0.01" placeholder="0" value={item.amount || ''}
-                    onChange={e => updateItem(w.contractorId, 'extraDeductions', item.id, 'amount', parseFloat(e.target.value) || 0)}
-                    className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-red-500 focus:outline-none" />
+            {/* Settings row */}
+            <div className="flex items-center gap-4 pt-1">
+              <label className="flex items-center gap-2 cursor-pointer select-none mr-2" onClick={e => e.stopPropagation()}>
+                <input type="checkbox" checked={s.is120Program}
+                  onChange={e => updateSetting(w.contractorId, 'is120Program', e.target.checked)}
+                  className="w-4 h-4 accent-green-500" />
+                <span className={`text-xs font-medium ${s.is120Program ? 'text-green-400' : 'text-gray-500'}`}>$120 Program</span>
+              </label>
+            </div>
+
+            {/* Standard deduction inputs */}
+            <div className="grid grid-cols-3 gap-3" onClick={e => e.stopPropagation()}>
+              {(['hotels', 'advances', 'travelPkg'] as const).map(field => (
+                <div key={field}>
+                  <label className="block text-xs text-gray-400 mb-1">
+                    {field === 'travelPkg' ? 'Travel Pkg' : field.charAt(0).toUpperCase() + field.slice(1)}
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
+                    <input type="number" min="0" step="0.01" placeholder="0" value={s[field] || ''}
+                      onChange={e => updateSetting(w.contractorId, field, parseFloat(e.target.value) || 0)}
+                      className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1.5 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
+                  </div>
                 </div>
-                <button onClick={() => removeItem(w.contractorId, 'extraDeductions', item.id)} className="text-red-400 hover:text-red-300 transition-colors">
-                  <Trash2 size={14} />
-                </button>
+              ))}
+            </div>
+
+            {/* Extra deductions */}
+            {s.extraDeductions.length > 0 && (
+              <div className="space-y-1.5" onClick={e => e.stopPropagation()}>
+                {s.extraDeductions.map(item => (
+                  <div key={item.id} className="flex items-center gap-2">
+                    <input type="text" placeholder="Deduction label" value={item.label}
+                      onChange={e => updateItem(w.contractorId, 'extraDeductions', item.id, 'label', e.target.value)}
+                      className="flex-1 bg-gray-900 border border-gray-600 rounded-lg py-1 px-2 text-sm text-white focus:ring-1 focus:ring-red-500 focus:outline-none" />
+                    <div className="relative w-28">
+                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
+                      <input type="number" min="0" step="0.01" placeholder="0" value={item.amount || ''}
+                        onChange={e => updateItem(w.contractorId, 'extraDeductions', item.id, 'amount', parseFloat(e.target.value) || 0)}
+                        className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-red-500 focus:outline-none" />
+                    </div>
+                    <button onClick={() => removeItem(w.contractorId, 'extraDeductions', item.id)} className="text-red-400 hover:text-red-300 transition-colors">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
+
+            {/* Additions */}
+            {s.additions.length > 0 && (
+              <div className="space-y-1.5" onClick={e => e.stopPropagation()}>
+                {s.additions.map(item => (
+                  <div key={item.id} className="flex items-center gap-2">
+                    <input type="text" placeholder="Addition label" value={item.label}
+                      onChange={e => updateItem(w.contractorId, 'additions', item.id, 'label', e.target.value)}
+                      className="flex-1 bg-gray-900 border border-gray-600 rounded-lg py-1 px-2 text-sm text-white focus:ring-1 focus:ring-green-500 focus:outline-none" />
+                    <div className="relative w-28">
+                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
+                      <input type="number" min="0" step="0.01" placeholder="0" value={item.amount || ''}
+                        onChange={e => updateItem(w.contractorId, 'additions', item.id, 'amount', parseFloat(e.target.value) || 0)}
+                        className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-green-500 focus:outline-none" />
+                    </div>
+                    <button onClick={() => removeItem(w.contractorId, 'additions', item.id)} className="text-red-400 hover:text-red-300 transition-colors">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add buttons */}
+            <div className="flex gap-2" onClick={e => e.stopPropagation()}>
+              <button onClick={() => addItem(w.contractorId, 'extraDeductions')}
+                className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 bg-red-900/10 hover:bg-red-900/20 border border-red-800/30 px-2.5 py-1 rounded transition-colors">
+                <Plus size={12} /> Deduction
+              </button>
+              <button onClick={() => addItem(w.contractorId, 'additions')}
+                className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300 bg-green-900/10 hover:bg-green-900/20 border border-green-800/30 px-2.5 py-1 rounded transition-colors">
+                <Plus size={12} /> Addition
+              </button>
+            </div>
+
           </div>
         )}
-
-        {/* Additions */}
-        {s.additions.length > 0 && (
-          <div className="mb-2 space-y-1.5">
-            {s.additions.map(item => (
-              <div key={item.id} className="flex items-center gap-2">
-                <input type="text" placeholder="Addition label" value={item.label}
-                  onChange={e => updateItem(w.contractorId, 'additions', item.id, 'label', e.target.value)}
-                  className="flex-1 bg-gray-900 border border-gray-600 rounded-lg py-1 px-2 text-sm text-white focus:ring-1 focus:ring-green-500 focus:outline-none" />
-                <div className="relative w-28">
-                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
-                  <input type="number" min="0" step="0.01" placeholder="0" value={item.amount || ''}
-                    onChange={e => updateItem(w.contractorId, 'additions', item.id, 'amount', parseFloat(e.target.value) || 0)}
-                    className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-green-500 focus:outline-none" />
-                </div>
-                <button onClick={() => removeItem(w.contractorId, 'additions', item.id)} className="text-red-400 hover:text-red-300 transition-colors">
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="flex gap-2 mt-2">
-          <button onClick={() => addItem(w.contractorId, 'extraDeductions')}
-            className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 bg-red-900/10 hover:bg-red-900/20 border border-red-800/30 px-2.5 py-1 rounded transition-colors">
-            <Plus size={12} /> Deduction
-          </button>
-          <button onClick={() => addItem(w.contractorId, 'additions')}
-            className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300 bg-green-900/10 hover:bg-green-900/20 border border-green-800/30 px-2.5 py-1 rounded transition-colors">
-            <Plus size={12} /> Addition
-          </button>
-        </div>
       </div>
     );
   };
