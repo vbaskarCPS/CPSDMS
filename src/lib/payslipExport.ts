@@ -47,399 +47,377 @@ export interface WorkerPayslipUI {
 // ─── Payout Stats column indices (0-based) ───────────────────────────────────
 
 const PS = {
-  date: 0,
-  contractorId: 1,
-  firstName: 2,
-  lastName: 3,
-  manager: 4,
-  stepCount: 5,
-  totalEQ: 17,
-  totalPrepay: 25,
-  payoutRate: 26,
-  aerComm: 27,
-  upsellComm: 28,
-  machRent: 30,
-  deductions: 31,
-  dailyBonus: 32,
-  totalPayout: 33,
+  date: 0, contractorId: 1, firstName: 2, lastName: 3, manager: 4,
+  stepCount: 5, totalEQ: 17, totalPrepay: 25, payoutRate: 26,
+  aerComm: 27, upsellComm: 28, machRent: 30, deductions: 31,
+  dailyBonus: 32, totalPayout: 33,
 };
 
-// ─── Layout — exact match to template ────────────────────────────────────────
+// ─── Layout ───────────────────────────────────────────────────────────────────
 //
-// 12 columns matching template exactly (col H = UPSELL COMM, hidden, width=0):
+// 12 columns — H hidden (width=0, UPSELL COMM):
 //   A=DATE  B=ROUTE MANAGER  C=AER STEPS  D=EQUIV  E=TOTAL PREPAY
 //   F=PAYOUT RATE  G=AER COMM  H=UPSELL COMM(hidden)  I=MACH RENT
-//   J=DEDUCTIONS  K=DAILY BONUS  L=TOTAL PAYOUT
+//   J=DEDUCTIONS   K=DAILY BONUS  L=TOTAL PAYOUT
 //
-// Summary column positions (exact match to template):
-//   Left label  = F:G merged (cols 6-7)
-//   Left value  = col I (9)
-//   Right label = J:K merged (cols 10-11)
-//   Right value = col L (12)
+// Summary section (cols F–L):
+//   F:G merged  = left label (Earned Commission / Training Bump)
+//   I           = left value
+//   J:K merged  = right label (Guaranteed Income / Hotels / etc.)
+//   L           = right value
 //
-// Block structure: 17 rows
-//   Row 1:      Name header (merged A:L)
-//   Row 2:      Column headers
-//   Rows 3–10:  8 data rows (padded)
-//   Rows 11–15: 5 summary rows
-//   Rows 16–17: 2 blank trailing rows
+// Block = 17 rows: 1 name + 1 headers + 8 data + 5 summary + 2 blank
 //
-// Page breaks: every 51 rows (3×17) for short range, every 34 rows (2×17) for long
+// Outer border:   thick top row 1 A–L, thick left col A rows 1–15, thick right col L rows 1–15
+// Summary border: medium top row 11 F–L, medium left col F rows 11–15, medium bottom row 15 F–L
+// Summary fill:   D9D9D9 (grey) on cols F–L for all 5 summary rows
 
-const NCOLS       = 12;
-const H_NAME      = 23.6;
-const H_HEADER    = 25.95;
-const H_STD       = 15.9;
+const NCOLS   = 12;
+const H_NAME  = 23.6;
+const H_HDR   = 25.95;
+const H_STD   = 15.9;
 
-// Column header fill colors (exact from template)
-const HDR_FILLS: Record<number, string> = {
-  1:  'FFCC0000', // A  DATE            red
-  2:  'FFCC0000', // B  ROUTE MANAGER   red
-  3:  'FFB6D7A8', // C  AER STEPS       light green
-  4:  'FF666666', // D  EQUIV           dark gray
-  5:  'FF666666', // E  TOTAL PREPAY    dark gray
-  6:  'FF666666', // F  PAYOUT RATE     dark gray
-  7:  'FF666666', // G  AER COMM        dark gray
-  8:  'FF666666', // H  UPSELL COMM     dark gray (hidden)
-  9:  'FFCC0000', // I  MACH RENT       red
-  10: 'FFCC0000', // J  DEDUCTIONS      red
-  11: 'FFCC0000', // K  DAILY BONUS     red
-  12: 'FF660000', // L  TOTAL PAYOUT    dark red
+const HDR_FILL: Record<number, string> = {
+  1: 'FFCC0000', 2: 'FFCC0000', 3: 'FFB6D7A8',
+  4: 'FF666666', 5: 'FF666666', 6: 'FF666666',
+  7: 'FF666666', 8: 'FF666666',
+  9: 'FFCC0000', 10: 'FFCC0000', 11: 'FFCC0000', 12: 'FF660000',
 };
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+const FMT_CURR = '$#,##0.00';
+const FMT_NUM  = '0.00';
 
-function r2(v: number): number {
-  return Math.round(v * 100) / 100;
-}
+// ─── Style helpers ────────────────────────────────────────────────────────────
 
-function formatDate(s: string): string {
-  const day = parseInt(s.slice(3), 10);
-  return `${day}-${s.slice(0, 3)}`;
-}
-
-function sortKey(s: string): number {
-  const m: Record<string, number> = {
-    Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,
-    Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12,
-  };
-  return (m[s.slice(0, 3)] || 0) * 100 + parseInt(s.slice(3), 10);
-}
-
-function solidFill(argb: string): ExcelJS.Fill {
+function fill(argb: string): ExcelJS.Fill {
   return { type: 'pattern', pattern: 'solid', fgColor: { argb } };
 }
 
-function sc(
-  cell: ExcelJS.Cell,
-  opts: {
-    font?:      Partial<ExcelJS.Font>;
-    fill?:      ExcelJS.Fill;
-    alignment?: Partial<ExcelJS.Alignment>;
-    numFmt?:    string;
-    border?:    Partial<ExcelJS.Borders>;
-  }
-) {
-  if (opts.font)      cell.font      = opts.font as ExcelJS.Font;
-  if (opts.fill)      cell.fill      = opts.fill;
-  if (opts.alignment) cell.alignment = opts.alignment;
-  if (opts.numFmt)    cell.numFmt    = opts.numFmt;
-  if (opts.border)    cell.border    = opts.border as ExcelJS.Borders;
-}
-
-const FMT_CURRENCY = '$#,##0.00';
-const FMT_NUMBER   = '0.00';
-
-const ALIGN_CENTER      = { horizontal: 'center' as const, vertical: 'middle' as const };
-const ALIGN_CENTER_WRAP = { horizontal: 'center' as const, vertical: 'middle' as const, wrapText: true };
-const ALIGN_RIGHT_WRAP  = { horizontal: 'right'  as const, vertical: 'middle' as const, wrapText: true };
-const ALIGN_LEFT        = { horizontal: 'left'   as const, vertical: 'middle' as const };
-const ALIGN_RIGHT       = { horizontal: 'right'  as const, vertical: 'middle' as const };
-
-const BORDER_THIN: Partial<ExcelJS.Borders> = {
-  top:    { style: 'thin', color: { argb: 'FF999999' } },
-  bottom: { style: 'thin', color: { argb: 'FF999999' } },
-  left:   { style: 'thin', color: { argb: 'FF999999' } },
-  right:  { style: 'thin', color: { argb: 'FF999999' } },
+type CellOpts = {
+  font?: Partial<ExcelJS.Font>;
+  fill?: ExcelJS.Fill;
+  align?: Partial<ExcelJS.Alignment>;
+  fmt?: string;
+  border?: Partial<ExcelJS.Borders>;
 };
 
-// ─── Parse Payout Stats rows ──────────────────────────────────────────────────
+function style(cell: ExcelJS.Cell, o: CellOpts) {
+  if (o.font)   cell.font      = o.font as ExcelJS.Font;
+  if (o.fill)   cell.fill      = o.fill;
+  if (o.align)  cell.alignment = o.align;
+  if (o.fmt)    cell.numFmt    = o.fmt;
+  if (o.border) cell.border    = o.border as ExcelJS.Borders;
+}
+
+const aC  = { horizontal: 'center' as const, vertical: 'middle' as const };
+const aCW = { horizontal: 'center' as const, vertical: 'middle' as const, wrapText: true };
+const aRW = { horizontal: 'right'  as const, vertical: 'middle' as const, wrapText: true };
+const aL  = { horizontal: 'left'   as const, vertical: 'middle' as const };
+const aR  = { horizontal: 'right'  as const, vertical: 'middle' as const };
+
+const THICK: Partial<ExcelJS.Border> = { style: 'thick' };
+const MED:   Partial<ExcelJS.Border> = { style: 'medium' };
+
+// ─── Parse Payout Stats ──────────────────────────────────────────────────────
+
+function sortKey(s: string): number {
+  const m: Record<string,number> = {
+    Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12,
+  };
+  return (m[s.slice(0,3)]||0)*100 + parseInt(s.slice(3),10);
+}
+
+function fmtDate(s: string): string {
+  return `${parseInt(s.slice(3),10)}-${s.slice(0,3)}`;
+}
+
+function r2(v: number): number { return Math.round(v*100)/100; }
 
 export function parsePayoutStatsRows(
-  rows: any[][],
-  startDate: string,
-  endDate: string
+  rows: any[][], startDate: string, endDate: string
 ): WorkerPayslipUI[] {
-  const startKey = sortKey(startDate);
-  const endKey   = sortKey(endDate);
+  const sk = sortKey(startDate), ek = sortKey(endDate);
   const map = new Map<string, WorkerPayslipUI>();
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     if (!row[PS.date] || !row[PS.contractorId]) continue;
-    const dateStr = String(row[PS.date]).trim();
-    const dk = sortKey(dateStr);
-    if (dk < startKey || dk > endKey) continue;
-
+    const ds = String(row[PS.date]).trim();
+    const dk = sortKey(ds);
+    if (dk < sk || dk > ek) continue;
     const id = String(row[PS.contractorId]).trim();
     if (!map.has(id)) {
       map.set(id, {
         contractorId: id,
-        firstName: String(row[PS.firstName] || '').trim(),
-        lastName:  String(row[PS.lastName]  || '').trim(),
+        firstName: String(row[PS.firstName]||'').trim(),
+        lastName:  String(row[PS.lastName] ||'').trim(),
         days: [],
       });
     }
     map.get(id)!.days.push({
-      date:        dateStr,
-      manager:     String(row[PS.manager]    || '').trim(),
-      steps:       Number(row[PS.stepCount]) || 0,
-      equiv:       Number(row[PS.totalEQ])   || 0,
-      totalPrepay: Number(row[PS.totalPrepay])|| 0,
-      payoutRate:  Number(row[PS.payoutRate]) || 0,
-      aerComm:     Number(row[PS.aerComm])   || 0,
-      upsellComm:  Number(row[PS.upsellComm])|| 0,
-      machRent:    Number(row[PS.machRent])  || 0,
-      deductions:  Number(row[PS.deductions])|| 0,
-      dailyBonus:  Number(row[PS.dailyBonus])|| 0,
-      totalPayout: Number(row[PS.totalPayout])|| 0,
+      date:        ds,
+      manager:     String(row[PS.manager]    ||'').trim(),
+      steps:       Number(row[PS.stepCount]  )||0,
+      equiv:       Number(row[PS.totalEQ]    )||0,
+      totalPrepay: Number(row[PS.totalPrepay])||0,
+      payoutRate:  Number(row[PS.payoutRate] )||0,
+      aerComm:     Number(row[PS.aerComm]    )||0,
+      upsellComm:  Number(row[PS.upsellComm] )||0,
+      machRent:    Number(row[PS.machRent]   )||0,
+      deductions:  Number(row[PS.deductions] )||0,
+      dailyBonus:  Number(row[PS.dailyBonus] )||0,
+      totalPayout: Number(row[PS.totalPayout])||0,
     });
   }
 
-  map.forEach(w => w.days.sort((a, b) => sortKey(a.date) - sortKey(b.date)));
-  return Array.from(map.values()).sort((a, b) => a.contractorId.localeCompare(b.contractorId));
+  map.forEach(w => w.days.sort((a,b) => sortKey(a.date)-sortKey(b.date)));
+  return Array.from(map.values()).sort((a,b) => a.contractorId.localeCompare(b.contractorId));
 }
 
 // ─── Excel generation ─────────────────────────────────────────────────────────
 
 export async function generatePayslipsXLSX(
   workers: WorkerPayslipData[],
-  startDate: string,
-  endDate: string,
+  startDate: string, endDate: string,
   ccDisplayName: string,
   totalDaysInRange: number
 ): Promise<void> {
   const isLong      = totalDaysInRange > 7;
-  const maxDataRows = isLong ? 16 : 8;
+  const maxData     = isLong ? 16 : 8;
   const perPage     = isLong ? 2 : 3;
-  // rows per block = 1 (name) + 1 (headers) + maxDataRows + 5 (summary) + 2 (blank)
-  const rowsPerBlock = 1 + 1 + maxDataRows + 5 + 2;
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Payslips');
 
-  // ─── Column definitions — exact match to template ──────────────────────────
+  // Column widths — exact template values
   ws.columns = [
-    { key: 'A', width: 9.14  }, // A  DATE
-    { key: 'B', width: 15.14 }, // B  ROUTE MANAGER
-    { key: 'C', width: 9.14  }, // C  AER STEPS
-    { key: 'D', width: 13.0  }, // D  EQUIV
-    { key: 'E', width: 11.0  }, // E  TOTAL PREPAY
-    { key: 'F', width: 9.14  }, // F  PAYOUT RATE
-    { key: 'G', width: 13.0  }, // G  AER COMM
-    { key: 'H', width: 0,  hidden: true }, // H  UPSELL COMM (hidden like template)
-    { key: 'I', width: 10.0  }, // I  MACH RENT
-    { key: 'J', width: 9.14  }, // J  DEDUCTIONS
-    { key: 'K', width: 13.0  }, // K  DAILY BONUS
-    { key: 'L', width: 13.5  }, // L  TOTAL PAYOUT
+    { key:'A', width: 9.14  },               // A  DATE
+    { key:'B', width: 15.14 },               // B  ROUTE MANAGER
+    { key:'C', width: 9.14  },               // C  AER STEPS
+    { key:'D', width: 13.0  },               // D  EQUIV
+    { key:'E', width: 11.0  },               // E  TOTAL PREPAY
+    { key:'F', width: 9.14  },               // F  PAYOUT RATE / left summary label
+    { key:'G', width: 13.0  },               // G  AER COMM    / left summary label (merged F:G)
+    { key:'H', width: 0, hidden: true },     // H  UPSELL COMM (hidden)
+    { key:'I', width: 10.0  },               // I  MACH RENT   / left summary value
+    { key:'J', width: 18.0  },               // J  DEDUCTIONS  / right summary label (wide for "Guaranteed Income")
+    { key:'K', width: 13.0  },               // K  DAILY BONUS / right summary label (merged J:K)
+    { key:'L', width: 13.5  },               // L  TOTAL PAYOUT / right summary value
   ];
 
   const pageBreakRows: number[] = [];
-  let currentRow = 0;
-  let pageCount  = 0;
+  let rn = 0;      // current row number (1-based, tracks as we go)
+  let pageCount = 0;
 
   workers.forEach(worker => {
-    // ── Calculations ──
-    const earnedComm   = r2(worker.days.reduce((s, d) => s + d.totalPayout, 0));
+    // ── Calculations ──────────────────────────────────────────────────────────
+    const earnedComm   = r2(worker.days.reduce((s,d) => s+d.totalPayout, 0));
     const daysWorked   = worker.days.length;
-    const trainingBump = worker.is120Program ? r2(Math.max(0, daysWorked * 120 - earnedComm)) : 0;
-    const gi           = worker.is120Program ? r2(Math.max(earnedComm, daysWorked * 120)) : earnedComm;
+    const trainingBump = worker.is120Program ? r2(Math.max(0, daysWorked*120 - earnedComm)) : 0;
+    const gi           = worker.is120Program ? r2(Math.max(earnedComm, daysWorked*120)) : earnedComm;
     const finalPay     = r2(
-      gi
-      - worker.hotels
-      - worker.advances
-      - worker.travelPkg
-      - worker.extraDeductions.reduce((s, d) => s + d.amount, 0)
-      + worker.additions.reduce((s, a)       => s + a.amount, 0)
+      gi - worker.hotels - worker.advances - worker.travelPkg
+      - worker.extraDeductions.reduce((s,d) => s+d.amount, 0)
+      + worker.additions.reduce((s,a) => s+a.amount, 0)
     );
 
-    // ── ROW 1: Worker name header (merged A:L) ──
-    currentRow++;
-    const nameRow = ws.addRow([
-      `${worker.contractorId} - ${worker.firstName} ${worker.lastName}`,
-      null, null, null, null, null, null, null, null, null, null, null,
-    ]);
+    // ── ROW 1: Name header ────────────────────────────────────────────────────
+    rn++;
+    const nameRow = ws.addRow(
+      [`${worker.contractorId} - ${worker.firstName} ${worker.lastName}`,
+       ...Array(NCOLS-1).fill(null)]
+    );
     nameRow.height = H_NAME;
-    ws.mergeCells(currentRow, 1, currentRow, NCOLS);
-    // Style every cell in the merge so the fill covers all
+    ws.mergeCells(rn, 1, rn, NCOLS);
     for (let c = 1; c <= NCOLS; c++) {
-      sc(nameRow.getCell(c), {
-        font:      { bold: true, color: { argb: 'FFFFFFFF' }, size: 18, name: 'Arial' },
-        fill:      solidFill('FF1A1A1A'),
-        alignment: ALIGN_CENTER,
+      style(nameRow.getCell(c), {
+        font:  { bold:true, color:{argb:'FFFFFFFF'}, size:18, name:'Arial' },
+        fill:  fill('FF1A1A1A'),
+        align: aC,
+        border: {
+          top:   c===1 ? THICK : { style:'thick' },
+          left:  c===1 ? THICK : undefined,
+          right: c===NCOLS ? THICK : undefined,
+        },
       });
     }
 
-    // ── ROW 2: Column headers ──
-    currentRow++;
+    // ── ROW 2: Column headers ─────────────────────────────────────────────────
+    rn++;
     const hdrRow = ws.addRow([
-      'DATE', 'ROUTE MANAGER', 'AER STEPS', 'EQUIV',
-      'TOTAL PREPAY', 'PAYOUT RATE', 'AER COMM', 'UPSELL COMM',
-      'MACH RENT', 'DEDUCTIONS', 'DAILY BONUS', 'TOTAL PAYOUT',
+      'DATE','ROUTE MANAGER','AER STEPS','EQUIV',
+      'TOTAL PREPAY','PAYOUT RATE','AER COMM','UPSELL COMM',
+      'MACH RENT','DEDUCTIONS','DAILY BONUS','TOTAL PAYOUT',
     ]);
-    hdrRow.height = H_HEADER;
+    hdrRow.height = H_HDR;
     for (let c = 1; c <= NCOLS; c++) {
-      const alignForCol = c === 3 ? ALIGN_RIGHT_WRAP : ALIGN_CENTER_WRAP;
-      sc(hdrRow.getCell(c), {
-        font:      { bold: true, color: { argb: 'FFFFFFFF' }, size: 10, name: 'Arial' },
-        fill:      solidFill(HDR_FILLS[c]),
-        alignment: alignForCol,
+      style(hdrRow.getCell(c), {
+        font:  { bold:true, color:{argb:'FFFFFFFF'}, size:10, name:'Arial' },
+        fill:  fill(HDR_FILL[c]),
+        align: c===3 ? aRW : aCW,
+        border: {
+          left:  c===1 ? THICK : undefined,
+          right: c===NCOLS ? THICK : undefined,
+        },
       });
     }
 
-    // ── DATA ROWS (padded to maxDataRows) ──
-    for (let i = 0; i < maxDataRows; i++) {
-      currentRow++;
+    // ── DATA ROWS ─────────────────────────────────────────────────────────────
+    for (let i = 0; i < maxData; i++) {
+      rn++;
       const d = worker.days[i];
       const dataRow = ws.addRow(d ? [
-        formatDate(d.date),   // A
-        d.manager,            // B
-        d.steps    || null,   // C
-        d.equiv    ? r2(d.equiv)    : null, // D
-        d.totalPrepay ? r2(d.totalPrepay) : null, // E
-        d.payoutRate || null, // F
-        d.aerComm  ? r2(d.aerComm)  : null, // G
-        d.upsellComm ? r2(d.upsellComm) : null, // H (hidden)
-        d.machRent || null,   // I
-        d.deductions || null, // J
-        d.dailyBonus || null, // K
-        r2(d.totalPayout),    // L
+        fmtDate(d.date), d.manager,
+        d.steps      || null,
+        d.equiv      ? r2(d.equiv)      : null,
+        d.totalPrepay? r2(d.totalPrepay): null,
+        d.payoutRate || null,
+        d.aerComm    ? r2(d.aerComm)    : null,
+        d.upsellComm ? r2(d.upsellComm) : null,  // H hidden
+        d.machRent   || null,
+        d.deductions || null,
+        d.dailyBonus || null,
+        r2(d.totalPayout),
       ] : Array(NCOLS).fill(null));
       dataRow.height = H_STD;
 
+      // Left and right outer borders
+      style(dataRow.getCell(1),  { border: { left: THICK } });
+      style(dataRow.getCell(NCOLS), { border: { right: THICK } });
+
       if (d) {
-        const f = { name: 'Arial', size: 10 } as Partial<ExcelJS.Font>;
-        sc(dataRow.getCell(1),  { font: f, alignment: ALIGN_LEFT });
-        sc(dataRow.getCell(2),  { font: f, alignment: ALIGN_LEFT });
-        sc(dataRow.getCell(3),  { font: f, alignment: ALIGN_CENTER });
-        sc(dataRow.getCell(4),  { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_NUMBER });
-        if (d.totalPrepay) sc(dataRow.getCell(5), { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
-        sc(dataRow.getCell(6),  { font: f, alignment: ALIGN_CENTER });
-        if (d.aerComm)     sc(dataRow.getCell(7),  { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
-        // col 8 (H) hidden — no styling needed
-        if (d.machRent)    sc(dataRow.getCell(9),  { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
-        if (d.deductions)  sc(dataRow.getCell(10), { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
-        if (d.dailyBonus)  sc(dataRow.getCell(11), { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
-        sc(dataRow.getCell(12), { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
+        const f = { name:'Arial', size:10 } as Partial<ExcelJS.Font>;
+        style(dataRow.getCell(1),  { font:f, align:aL, border:{ left:THICK } });
+        style(dataRow.getCell(2),  { font:f, align:aL });
+        style(dataRow.getCell(3),  { font:f, align:aC });
+        style(dataRow.getCell(4),  { font:f, align:aR, fmt:FMT_NUM });
+        if (d.totalPrepay) style(dataRow.getCell(5),  { font:f, align:aR, fmt:FMT_CURR });
+        style(dataRow.getCell(6),  { font:f, align:aC });
+        if (d.aerComm)    style(dataRow.getCell(7),  { font:f, align:aR, fmt:FMT_CURR });
+        // col 8 hidden
+        if (d.machRent)   style(dataRow.getCell(9),  { font:f, align:aR, fmt:FMT_CURR });
+        if (d.deductions) style(dataRow.getCell(10), { font:f, align:aR, fmt:FMT_CURR });
+        if (d.dailyBonus) style(dataRow.getCell(11), { font:f, align:aR, fmt:FMT_CURR });
+        style(dataRow.getCell(12), { font:f, align:aR, fmt:FMT_CURR, border:{ right:THICK } });
       }
     }
 
-    // ── SUMMARY ROWS (always exactly 5) ──
+    // ── SUMMARY ROWS (always exactly 5) ───────────────────────────────────────
     //
-    // Template layout:
-    //   Row 1: [F:G]=left label  [I]=left value  [J:K]=right label  [L]=right value
-    //   Row 2: [F:G]=left label  [I]=left value  [J:K]=right label  [L]=right value
-    //   Row 3:                                   [J:K]=right label  [L]=right value
-    //   Row 4:                                   [J:K]=right label  [L]=right value
-    //   Row 5:                                   [J:K]=right label  [L]=right value
+    // Right side (fixed 5 rows): GI, Hotels, Advances, Travel Pkg, Final Pay
+    // Left side (120 Program rows 1–2): Earned Commission, Training Bump
+    // Extra deductions/additions fill left side rows 3+
     //
-    // Right side fixed: GI, Hotels, Advances, Travel Pkg, Final Pay
-    // Left side (120 Program): Earned Commission, Training Bump (rows 1-2)
-    // Extra deductions/additions spill into left side rows 1+ if available
+    // For each row:
+    //   cols F:G merged  → left label   col I → left value
+    //   cols J:K merged  → right label  col L → right value
+    //   fills: grey on cols F–L (all 12 cols except A–E have no fill)
+    //   outer borders: thick left on A, thick right on L
+    //   summary box borders:
+    //     row 1 of summary: medium top on F–L
+    //     all rows:         medium left on F
+    //     last row:         medium bottom on F–L
 
-    const rightFixed = [
-      { label: 'Guaranteed Income', value: gi },
-      { label: 'Hotels',            value: worker.hotels },
-      { label: 'Advances',          value: worker.advances },
-      { label: 'Travel Pkg',        value: worker.travelPkg },
-      { label: 'Final Pay:',        value: finalPay },
+    const rightRows = [
+      { label:'Guaranteed Income', value:gi },
+      { label:'Hotels',            value:worker.hotels },
+      { label:'Advances',          value:worker.advances },
+      { label:'Travel Pkg',        value:worker.travelPkg },
+      { label:'Final Pay:',        value:finalPay },
     ];
 
-    const leftItems: { label: string; value: number }[] = [];
+    const leftItems: { label:string; value:number }[] = [];
     if (worker.is120Program) {
-      leftItems.push({ label: 'Earned Commission', value: earnedComm });
-      leftItems.push({ label: 'Training Bump',     value: trainingBump });
+      leftItems.push({ label:'Earned Commission', value:earnedComm });
+      leftItems.push({ label:'Training Bump',     value:trainingBump });
     }
-    worker.extraDeductions.forEach(d => leftItems.push({ label: d.label || 'Deduction', value: d.amount }));
-    worker.additions.forEach(a       => leftItems.push({ label: a.label || 'Addition',  value: a.amount }));
+    worker.extraDeductions.forEach(d => leftItems.push({ label:d.label||'Deduction', value:d.amount }));
+    worker.additions.forEach(a       => leftItems.push({ label:a.label||'Addition',  value:a.amount }));
 
-    for (let i = 0; i < 5; i++) {
-      currentRow++;
-      const right   = rightFixed[i];
+    const SUMMARY_ROWS = 5;
+
+    for (let i = 0; i < SUMMARY_ROWS; i++) {
+      rn++;
+      const right   = rightRows[i];
       const left    = leftItems[i];
       const isFinal = right.label === 'Final Pay:';
+      const isFirst = i === 0;
+      const isLast  = i === SUMMARY_ROWS - 1;
 
-      const rowData: (string | number | null)[] = Array(NCOLS).fill(null);
+      const rowData: (string|number|null)[] = Array(NCOLS).fill(null);
       if (left) {
-        rowData[5] = left.label;  // col F (1-indexed: 6, but array is 0-indexed)
-        rowData[8] = left.value;  // col I
+        rowData[5] = left.label;  // F (index 5)
+        rowData[8] = left.value;  // I (index 8)
       }
-      rowData[9]  = right.label;  // col J
-      rowData[11] = right.value;  // col L
+      rowData[9]  = right.label;  // J (index 9)
+      rowData[11] = right.value;  // L (index 11)
 
       const sumRow = ws.addRow(rowData);
       sumRow.height = H_STD;
 
-      // Merge F:G for left label (cols 6-7)
-      if (left) {
-        ws.mergeCells(currentRow, 6, currentRow, 7);
-        sc(sumRow.getCell(6), {
-          font:      { name: 'Arial', size: 12 } as Partial<ExcelJS.Font>,
-          alignment: ALIGN_RIGHT,
-          border:    BORDER_THIN,
-        });
-        sc(sumRow.getCell(9), {
-          font:      { bold: true, name: 'Arial', size: 12 } as Partial<ExcelJS.Font>,
-          alignment: ALIGN_RIGHT,
-          numFmt:    FMT_CURRENCY,
-          border:    BORDER_THIN,
-        });
+      const summaryFill = fill(isFinal ? 'FFBFBFBF' : 'FFD9D9D9');
+
+      // Apply grey fill + borders to all cells in summary zone (F=6 to L=12)
+      for (let c = 6; c <= NCOLS; c++) {
+        const b: Partial<ExcelJS.Borders> = {};
+        if (isFirst) b.top    = MED;
+        if (isLast)  b.bottom = MED;
+        if (c === 6) b.left   = MED;
+        if (c === NCOLS) b.right = MED;
+        style(sumRow.getCell(c), { fill: summaryFill, border: b });
       }
 
-      // Merge J:K for right label (cols 10-11)
-      ws.mergeCells(currentRow, 10, currentRow, 11);
-      sc(sumRow.getCell(10), {
-        font:      { bold: isFinal, name: 'Arial', size: 12 } as Partial<ExcelJS.Font>,
-        alignment: ALIGN_RIGHT,
-      });
-      // Right value — col L (12)
-      sc(sumRow.getCell(12), {
-        font:      { bold: true, name: 'Arial', size: isFinal ? 16 : 12 } as Partial<ExcelJS.Font>,
-        alignment: ALIGN_RIGHT,
-        numFmt:    FMT_CURRENCY,
-      });
+      // Outer thick borders on A and L
+      style(sumRow.getCell(1),    { border: { left: THICK } });
+      style(sumRow.getCell(NCOLS),{ fill: summaryFill, border: {
+        right:  MED,
+        top:    isFirst ? MED : undefined,
+        bottom: isLast  ? MED : undefined,
+      }});
+
+      // Merge F:G for left label
+      ws.mergeCells(rn, 6, rn, 7);
+
+      // Merge J:K for right label
+      ws.mergeCells(rn, 10, rn, 11);
+
+      const fReg  = { name:'Arial', size:12 } as Partial<ExcelJS.Font>;
+      const fBold = { bold:true, name:'Arial', size:12 } as Partial<ExcelJS.Font>;
+      const fFinal= { bold:true, name:'Arial', size:16 } as Partial<ExcelJS.Font>;
+
+      // Left label (F, merged with G)
+      if (left) {
+        style(sumRow.getCell(6), { font:fReg, fill:fill('FFF2F2F2'), align:aR });
+        // Left value (I)
+        style(sumRow.getCell(9), { font:fBold, fill:fill('FFF2F2F2'), align:aR, fmt:FMT_CURR });
+      }
+
+      // Right label (J, merged with K)
+      style(sumRow.getCell(10), { font:isFinal ? fBold : fReg, fill:summaryFill, align:aR });
+      // Right value (L)
+      style(sumRow.getCell(12), { font:isFinal ? fFinal : fBold, fill:summaryFill, align:aR, fmt:FMT_CURR });
     }
 
-    // ── 2 BLANK TRAILING ROWS ──
+    // ── 2 BLANK TRAILING ROWS ─────────────────────────────────────────────────
     for (let i = 0; i < 2; i++) {
-      currentRow++;
+      rn++;
       ws.addRow(Array(NCOLS).fill(null)).height = H_STD;
     }
 
-    // ── Page break after every N workers ──
+    // ── Page break after every N workers ─────────────────────────────────────
     pageCount++;
     if (pageCount % perPage === 0 && pageCount < workers.length) {
-      pageBreakRows.push(currentRow);
+      pageBreakRows.push(rn);
     }
   });
 
-  // ─── Page breaks (matching template format exactly) ───────────────────────
+  // ─── Page breaks (exact template format) ─────────────────────────────────
   if (pageBreakRows.length > 0) {
-    (ws as any).rowBreaks = pageBreakRows.map(id => ({
-      id,
-      min: 0,
-      max: 16383,
-      man: true,
-    }));
+    (ws as any).rowBreaks = pageBreakRows.map(id => ({ id, min:0, max:16383, man:true }));
   }
 
-  // ─── Page setup — portrait, scale 70% (matching template) ────────────────
-  ws.pageSetup = {
-    paperSize:   9,          // Letter
-    orientation: 'portrait',
-    scale:       70,
-    fitToPage:   false,
-  };
+  // ─── Page setup: portrait, scale 70% ─────────────────────────────────────
+  ws.pageSetup = { paperSize:9, orientation:'portrait', scale:70, fitToPage:false };
 
   // ─── Download ─────────────────────────────────────────────────────────────
   const buffer = await wb.xlsx.writeBuffer();
