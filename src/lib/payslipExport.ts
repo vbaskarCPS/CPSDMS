@@ -267,16 +267,17 @@ export async function generatePayslipsXLSX(
       rn++;
       const d = worker.days[i];
       const dataRow = ws.addRow(d ? [
-        fmtDate(d.date), d.manager,
-        d.steps      || null,
-        d.equiv      ? r2(d.equiv)      : null,
-        d.totalPrepay? r2(d.totalPrepay): null,
-        d.payoutRate || null,
-        d.aerComm    ? r2(d.aerComm)    : null,
-        d.upsellComm ? r2(d.upsellComm) : null,  // H hidden
-        d.machRent   || null,
-        d.deductions || null,
-        d.dailyBonus || null,
+        fmtDate(d.date),
+        d.manager,
+        d.steps,
+        r2(d.equiv),
+        r2(d.totalPrepay),
+        d.payoutRate,
+        r2(d.aerComm),
+        r2(d.upsellComm),  // H hidden
+        d.machRent,
+        d.deductions,
+        d.dailyBonus,
         r2(d.totalPayout),
       ] : Array(NCOLS).fill(null));
       dataRow.height = H_STD;
@@ -291,13 +292,13 @@ export async function generatePayslipsXLSX(
         style(dataRow.getCell(2),  { font:f, align:aL });
         style(dataRow.getCell(3),  { font:f, align:aC });
         style(dataRow.getCell(4),  { font:f, align:aR, fmt:FMT_NUM });
-        if (d.totalPrepay) style(dataRow.getCell(5),  { font:f, align:aR, fmt:FMT_CURR });
+        style(dataRow.getCell(5),  { font:f, align:aR, fmt:FMT_CURR });
         style(dataRow.getCell(6),  { font:f, align:aC });
-        if (d.aerComm)    style(dataRow.getCell(7),  { font:f, align:aR, fmt:FMT_CURR });
+        style(dataRow.getCell(7),  { font:f, align:aR, fmt:FMT_CURR });
         // col 8 hidden
-        if (d.machRent)   style(dataRow.getCell(9),  { font:f, align:aR, fmt:FMT_CURR });
-        if (d.deductions) style(dataRow.getCell(10), { font:f, align:aR, fmt:FMT_CURR });
-        if (d.dailyBonus) style(dataRow.getCell(11), { font:f, align:aR, fmt:FMT_CURR });
+        style(dataRow.getCell(9),  { font:f, align:aR, fmt:FMT_CURR });
+        style(dataRow.getCell(10), { font:f, align:aR, fmt:FMT_CURR });
+        style(dataRow.getCell(11), { font:f, align:aR, fmt:FMT_CURR });
         style(dataRow.getCell(12), { font:f, align:aR, fmt:FMT_CURR, border:{ right:THICK } });
       }
     }
