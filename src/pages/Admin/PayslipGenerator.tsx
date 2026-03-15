@@ -185,14 +185,14 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
     });
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (!startDate || !endDate || !cc) return;
     setIsExporting(true);
     setError(null);
     try {
       const daysInRange = calendarDays(startDate, endDate);
       const data = workerList.map(w => ({ ...w, ...(workerSettings.get(w.contractorId) || defaultSettings()) }));
-      generatePayslipsXLSX(data, startDate, endDate, cc.displayName, daysInRange);
+      await generatePayslipsXLSX(data, startDate, endDate, cc.displayName, daysInRange);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Export failed.');
     } finally { setIsExporting(false); }
@@ -297,33 +297,117 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
       <div key={w.contractorId} className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
 
         {/* ── Collapsed header (always visible) ── */}
-        <div
-          className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-gray-750 select-none"
-          onClick={() => toggleExpanded(w.contractorId)}
-        >
-          <div className="flex items-center gap-3">
-            <ChevronDown
-              size={16}
-              className={`text-gray-400 transition-transform flex-shrink-0 ${isExpanded ? 'rotate-180' : ''}`}
-            />
-            <span className="font-bold text-white text-sm">{w.contractorId} — {w.firstName} {w.lastName}</span>
-            <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded">{w.days.length} day{w.days.length !== 1 ? 's' : ''}</span>
-            {s.is120Program && (
-              <span className="text-xs bg-green-900/30 text-green-400 border border-green-700/40 px-2 py-0.5 rounded">$120 Program</span>
-            )}
-          </div>
-          <div className="flex items-center gap-3">
+        <div className="px-4 pt-3 pb-3 space-y-3">
+
+          {/* Top row: name + final pay + expand toggle */}
+          <div
+            className="flex items-center justify-between cursor-pointer select-none"
+            onClick={() => toggleExpanded(w.contractorId)}
+          >
+            <div className="flex items-center gap-3">
+              <ChevronDown
+                size={16}
+                className={`text-gray-400 transition-transform flex-shrink-0 ${isExpanded ? 'rotate-180' : ''}`}
+              />
+              <span className="font-bold text-white text-sm">{w.contractorId} — {w.firstName} {w.lastName}</span>
+              <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded">{w.days.length} day{w.days.length !== 1 ? 's' : ''}</span>
+              {s.is120Program && (
+                <span className="text-xs bg-green-900/30 text-green-400 border border-green-700/40 px-2 py-0.5 rounded">$120 Program</span>
+              )}
+            </div>
             <span className={`font-bold text-sm ${finalPay >= 0 ? 'text-green-400' : 'text-red-400'}`}>
               ${finalPay.toFixed(2)}
             </span>
           </div>
+
+          {/* $120 Program toggle */}
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={s.is120Program}
+                onChange={e => updateSetting(w.contractorId, 'is120Program', e.target.checked)}
+                className="w-4 h-4 accent-green-500" />
+              <span className={`text-xs font-medium ${s.is120Program ? 'text-green-400' : 'text-gray-500'}`}>$120 Program</span>
+            </label>
+          </div>
+
+          {/* Standard deduction inputs */}
+          <div className="grid grid-cols-3 gap-3">
+            {(['hotels', 'advances', 'travelPkg'] as const).map(field => (
+              <div key={field}>
+                <label className="block text-xs text-gray-400 mb-1">
+                  {field === 'travelPkg' ? 'Travel Pkg' : field.charAt(0).toUpperCase() + field.slice(1)}
+                </label>
+                <div className="relative">
+                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
+                  <input type="number" min="0" step="0.01" placeholder="0" value={s[field] || ''}
+                    onChange={e => updateSetting(w.contractorId, field, parseFloat(e.target.value) || 0)}
+                    className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1.5 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Extra deductions */}
+          {s.extraDeductions.length > 0 && (
+            <div className="space-y-1.5">
+              {s.extraDeductions.map(item => (
+                <div key={item.id} className="flex items-center gap-2">
+                  <input type="text" placeholder="Deduction label" value={item.label}
+                    onChange={e => updateItem(w.contractorId, 'extraDeductions', item.id, 'label', e.target.value)}
+                    className="flex-1 bg-gray-900 border border-gray-600 rounded-lg py-1 px-2 text-sm text-white focus:ring-1 focus:ring-red-500 focus:outline-none" />
+                  <div className="relative w-28">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
+                    <input type="number" min="0" step="0.01" placeholder="0" value={item.amount || ''}
+                      onChange={e => updateItem(w.contractorId, 'extraDeductions', item.id, 'amount', parseFloat(e.target.value) || 0)}
+                      className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-red-500 focus:outline-none" />
+                  </div>
+                  <button onClick={() => removeItem(w.contractorId, 'extraDeductions', item.id)} className="text-red-400 hover:text-red-300 transition-colors">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Additions */}
+          {s.additions.length > 0 && (
+            <div className="space-y-1.5">
+              {s.additions.map(item => (
+                <div key={item.id} className="flex items-center gap-2">
+                  <input type="text" placeholder="Addition label" value={item.label}
+                    onChange={e => updateItem(w.contractorId, 'additions', item.id, 'label', e.target.value)}
+                    className="flex-1 bg-gray-900 border border-gray-600 rounded-lg py-1 px-2 text-sm text-white focus:ring-1 focus:ring-green-500 focus:outline-none" />
+                  <div className="relative w-28">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
+                    <input type="number" min="0" step="0.01" placeholder="0" value={item.amount || ''}
+                      onChange={e => updateItem(w.contractorId, 'additions', item.id, 'amount', parseFloat(e.target.value) || 0)}
+                      className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-green-500 focus:outline-none" />
+                  </div>
+                  <button onClick={() => removeItem(w.contractorId, 'additions', item.id)} className="text-red-400 hover:text-red-300 transition-colors">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add buttons */}
+          <div className="flex gap-2">
+            <button onClick={() => addItem(w.contractorId, 'extraDeductions')}
+              className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 bg-red-900/10 hover:bg-red-900/20 border border-red-800/30 px-2.5 py-1 rounded transition-colors">
+              <Plus size={12} /> Deduction
+            </button>
+            <button onClick={() => addItem(w.contractorId, 'additions')}
+              className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300 bg-green-900/10 hover:bg-green-900/20 border border-green-800/30 px-2.5 py-1 rounded transition-colors">
+              <Plus size={12} /> Addition
+            </button>
+          </div>
+
         </div>
 
-        {/* ── Expanded details ── */}
+        {/* ── Expanded: daily breakdown table only ── */}
         {isExpanded && (
-          <div className="border-t border-gray-700 px-4 pt-3 pb-4 space-y-3">
-
-            {/* Days breakdown */}
+          <div className="border-t border-gray-700 px-4 pt-3 pb-4">
             <div className="overflow-x-auto">
               <table className="w-full text-xs text-gray-300">
                 <thead>
@@ -362,90 +446,6 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
                 </tbody>
               </table>
             </div>
-
-            {/* Settings row */}
-            <div className="flex items-center gap-4 pt-1">
-              <label className="flex items-center gap-2 cursor-pointer select-none mr-2" onClick={e => e.stopPropagation()}>
-                <input type="checkbox" checked={s.is120Program}
-                  onChange={e => updateSetting(w.contractorId, 'is120Program', e.target.checked)}
-                  className="w-4 h-4 accent-green-500" />
-                <span className={`text-xs font-medium ${s.is120Program ? 'text-green-400' : 'text-gray-500'}`}>$120 Program</span>
-              </label>
-            </div>
-
-            {/* Standard deduction inputs */}
-            <div className="grid grid-cols-3 gap-3" onClick={e => e.stopPropagation()}>
-              {(['hotels', 'advances', 'travelPkg'] as const).map(field => (
-                <div key={field}>
-                  <label className="block text-xs text-gray-400 mb-1">
-                    {field === 'travelPkg' ? 'Travel Pkg' : field.charAt(0).toUpperCase() + field.slice(1)}
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
-                    <input type="number" min="0" step="0.01" placeholder="0" value={s[field] || ''}
-                      onChange={e => updateSetting(w.contractorId, field, parseFloat(e.target.value) || 0)}
-                      className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1.5 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Extra deductions */}
-            {s.extraDeductions.length > 0 && (
-              <div className="space-y-1.5" onClick={e => e.stopPropagation()}>
-                {s.extraDeductions.map(item => (
-                  <div key={item.id} className="flex items-center gap-2">
-                    <input type="text" placeholder="Deduction label" value={item.label}
-                      onChange={e => updateItem(w.contractorId, 'extraDeductions', item.id, 'label', e.target.value)}
-                      className="flex-1 bg-gray-900 border border-gray-600 rounded-lg py-1 px-2 text-sm text-white focus:ring-1 focus:ring-red-500 focus:outline-none" />
-                    <div className="relative w-28">
-                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
-                      <input type="number" min="0" step="0.01" placeholder="0" value={item.amount || ''}
-                        onChange={e => updateItem(w.contractorId, 'extraDeductions', item.id, 'amount', parseFloat(e.target.value) || 0)}
-                        className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-red-500 focus:outline-none" />
-                    </div>
-                    <button onClick={() => removeItem(w.contractorId, 'extraDeductions', item.id)} className="text-red-400 hover:text-red-300 transition-colors">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Additions */}
-            {s.additions.length > 0 && (
-              <div className="space-y-1.5" onClick={e => e.stopPropagation()}>
-                {s.additions.map(item => (
-                  <div key={item.id} className="flex items-center gap-2">
-                    <input type="text" placeholder="Addition label" value={item.label}
-                      onChange={e => updateItem(w.contractorId, 'additions', item.id, 'label', e.target.value)}
-                      className="flex-1 bg-gray-900 border border-gray-600 rounded-lg py-1 px-2 text-sm text-white focus:ring-1 focus:ring-green-500 focus:outline-none" />
-                    <div className="relative w-28">
-                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
-                      <input type="number" min="0" step="0.01" placeholder="0" value={item.amount || ''}
-                        onChange={e => updateItem(w.contractorId, 'additions', item.id, 'amount', parseFloat(e.target.value) || 0)}
-                        className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-green-500 focus:outline-none" />
-                    </div>
-                    <button onClick={() => removeItem(w.contractorId, 'additions', item.id)} className="text-red-400 hover:text-red-300 transition-colors">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Add buttons */}
-            <div className="flex gap-2" onClick={e => e.stopPropagation()}>
-              <button onClick={() => addItem(w.contractorId, 'extraDeductions')}
-                className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 bg-red-900/10 hover:bg-red-900/20 border border-red-800/30 px-2.5 py-1 rounded transition-colors">
-                <Plus size={12} /> Deduction
-              </button>
-              <button onClick={() => addItem(w.contractorId, 'additions')}
-                className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300 bg-green-900/10 hover:bg-green-900/20 border border-green-800/30 px-2.5 py-1 rounded transition-colors">
-                <Plus size={12} /> Addition
-              </button>
-            </div>
-
           </div>
         )}
       </div>

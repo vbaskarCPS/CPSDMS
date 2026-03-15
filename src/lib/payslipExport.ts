@@ -1,5 +1,5 @@
 // src/lib/payslipExport.ts
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -11,7 +11,7 @@ export interface PayslipDayRow {
   totalPrepay: number;
   payoutRate: number;
   aerComm: number;
-  upsellComm: number; // kept in data, not shown on payslip
+  upsellComm: number; // stored but not shown on payslip
   machRent: number;
   deductions: number;
   dailyBonus: number;
@@ -76,106 +76,68 @@ function formatDate(s: string): string {
 }
 
 function sortKey(s: string): number {
-  const months: Record<string, number> = {
+  const m: Record<string, number> = {
     Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,
     Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12,
   };
-  return (months[s.slice(0, 3)] || 0) * 100 + parseInt(s.slice(3), 10);
+  return (m[s.slice(0, 3)] || 0) * 100 + parseInt(s.slice(3), 10);
 }
 
-// ─── Style definitions ────────────────────────────────────────────────────────
+// ─── ExcelJS style helpers ────────────────────────────────────────────────────
+
 // 11 columns (no UPSELL COMM):
 // A=DATE, B=ROUTE MANAGER, C=AER STEPS, D=EQUIV, E=TOTAL PREPAY,
 // F=PAYOUT RATE, G=AER COMM, H=MACH RENT, I=DEDUCTIONS, J=DAILY BONUS, K=TOTAL PAYOUT
-// Summary: col 4(E)=left label, col 6(G)=left value, col 8(I)=right label, col 10(K)=right value
+//
+// Summary layout (matching template positions, shifted -1 for removed UPSELL COMM col):
+//   Left label  = col F (6)    Left value  = col H (8)
+//   Right label = col I (9)    Right value = col K (11)
+// ExcelJS getCell() is 1-indexed
 
 const NCOLS = 11;
 
-const S: Record<string, any> = {
-  workerHeader: {
-    font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 13, name: 'Arial' },
-    fill: { patternType: 'solid', fgColor: { rgb: '1A1A1A' } },
-    alignment: { horizontal: 'center', vertical: 'center' },
-  },
-  colHeader: {
-    font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 9, name: 'Arial' },
-    fill: { patternType: 'solid', fgColor: { rgb: 'C00000' } },
-    alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
-  },
-  colHeaderSteps: {
-    font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 9, name: 'Arial' },
-    fill: { patternType: 'solid', fgColor: { rgb: '538135' } },
-    alignment: { horizontal: 'center', vertical: 'center' },
-  },
-  dataText: {
-    font: { name: 'Arial', sz: 10 },
-    alignment: { horizontal: 'left', vertical: 'center' },
-  },
-  dataCenter: {
-    font: { name: 'Arial', sz: 10 },
-    alignment: { horizontal: 'center', vertical: 'center' },
-  },
-  dataCurrency: {
-    font: { name: 'Arial', sz: 10 },
-    alignment: { horizontal: 'right', vertical: 'center' },
-    numFmt: '$#,##0.00',
-  },
-  dataNumber: {
-    font: { name: 'Arial', sz: 10 },
-    alignment: { horizontal: 'right', vertical: 'center' },
-    numFmt: '0.00',
-  },
-  summaryLabel: {
-    font: { name: 'Arial', sz: 10 },
-    fill: { patternType: 'solid', fgColor: { rgb: 'D9D9D9' } },
-    alignment: { horizontal: 'right', vertical: 'center' },
-  },
-  summaryValue: {
-    font: { name: 'Arial', sz: 10 },
-    fill: { patternType: 'solid', fgColor: { rgb: 'D9D9D9' } },
-    alignment: { horizontal: 'right', vertical: 'center' },
-    numFmt: '$#,##0.00',
-  },
-  finalPayLabel: {
-    font: { bold: true, name: 'Arial', sz: 11 },
-    fill: { patternType: 'solid', fgColor: { rgb: 'BFBFBF' } },
-    alignment: { horizontal: 'right', vertical: 'center' },
-  },
-  finalPayValue: {
-    font: { bold: true, name: 'Arial', sz: 12 },
-    fill: { patternType: 'solid', fgColor: { rgb: 'BFBFBF' } },
-    alignment: { horizontal: 'right', vertical: 'center' },
-    numFmt: '$#,##0.00',
-  },
-  leftLabel: {
-    font: { name: 'Arial', sz: 10 },
-    fill: { patternType: 'solid', fgColor: { rgb: 'F2F2F2' } },
-    alignment: { horizontal: 'right', vertical: 'center' },
-    border: {
-      top:    { style: 'thin', color: { rgb: '999999' } },
-      bottom: { style: 'thin', color: { rgb: '999999' } },
-      left:   { style: 'thin', color: { rgb: '999999' } },
-      right:  { style: 'thin', color: { rgb: '999999' } },
-    },
-  },
-  leftValue: {
-    font: { bold: true, name: 'Arial', sz: 10 },
-    fill: { patternType: 'solid', fgColor: { rgb: 'F2F2F2' } },
-    alignment: { horizontal: 'right', vertical: 'center' },
-    numFmt: '$#,##0.00',
-    border: {
-      top:    { style: 'thin', color: { rgb: '999999' } },
-      bottom: { style: 'thin', color: { rgb: '999999' } },
-      left:   { style: 'thin', color: { rgb: '999999' } },
-      right:  { style: 'thin', color: { rgb: '999999' } },
-    },
-  },
+const FILL = {
+  dark:      (c: string) => ({ type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: c } }),
+  none:      () => ({ type: 'pattern' as const, pattern: 'none' as const }),
 };
 
-function applyStyle(ws: XLSX.WorkSheet, r: number, c: number, style: any) {
-  const addr = XLSX.utils.encode_cell({ r, c });
-  if (!ws[addr]) ws[addr] = { t: 'z', v: undefined };
-  ws[addr].s = style;
+const FONT = {
+  bold:      (argb: string, sz = 10) => ({ bold: true, color: { argb }, size: sz, name: 'Arial' }),
+  regular:   (argb = 'FF000000', sz = 10) => ({ color: { argb }, size: sz, name: 'Arial' }),
+};
+
+const ALIGN = {
+  center:    { horizontal: 'center' as const, vertical: 'middle' as const },
+  left:      { horizontal: 'left' as const,   vertical: 'middle' as const },
+  right:     { horizontal: 'right' as const,  vertical: 'middle' as const },
+  centerWrap:{ horizontal: 'center' as const, vertical: 'middle' as const, wrapText: true },
+};
+
+const BORDER_THIN = {
+  top:    { style: 'thin' as const, color: { argb: 'FF999999' } },
+  bottom: { style: 'thin' as const, color: { argb: 'FF999999' } },
+  left:   { style: 'thin' as const, color: { argb: 'FF999999' } },
+  right:  { style: 'thin' as const, color: { argb: 'FF999999' } },
+};
+
+const FMT_CURRENCY = '$#,##0.00';
+const FMT_NUMBER   = '0.00';
+
+function styleCell(
+  cell: ExcelJS.Cell,
+  opts: {
+    font?: Partial<ExcelJS.Font>;
+    fill?: ExcelJS.Fill;
+    alignment?: Partial<ExcelJS.Alignment>;
+    numFmt?: string;
+    border?: Partial<ExcelJS.Borders>;
+  }
+) {
+  if (opts.font)      cell.font      = opts.font as ExcelJS.Font;
+  if (opts.fill)      cell.fill      = opts.fill;
+  if (opts.alignment) cell.alignment = opts.alignment;
+  if (opts.numFmt)    cell.numFmt    = opts.numFmt;
+  if (opts.border)    cell.border    = opts.border as ExcelJS.Borders;
 }
 
 // ─── Parse Payout Stats rows ──────────────────────────────────────────────────
@@ -186,7 +148,7 @@ export function parsePayoutStatsRows(
   endDate: string
 ): WorkerPayslipUI[] {
   const startKey = sortKey(startDate);
-  const endKey = sortKey(endDate);
+  const endKey   = sortKey(endDate);
   const map = new Map<string, WorkerPayslipUI>();
 
   for (let i = 1; i < rows.length; i++) {
@@ -201,23 +163,23 @@ export function parsePayoutStatsRows(
       map.set(id, {
         contractorId: id,
         firstName: String(row[PS.firstName] || '').trim(),
-        lastName: String(row[PS.lastName] || '').trim(),
+        lastName:  String(row[PS.lastName]  || '').trim(),
         days: [],
       });
     }
     map.get(id)!.days.push({
-      date: dateStr,
-      manager: String(row[PS.manager] || '').trim(),
-      steps: Number(row[PS.stepCount]) || 0,
-      equiv: Number(row[PS.totalEQ]) || 0,
-      totalPrepay: Number(row[PS.totalPrepay]) || 0,
-      payoutRate: Number(row[PS.payoutRate]) || 0,
-      aerComm: Number(row[PS.aerComm]) || 0,
-      upsellComm: Number(row[PS.upsellComm]) || 0,
-      machRent: Number(row[PS.machRent]) || 0,
-      deductions: Number(row[PS.deductions]) || 0,
-      dailyBonus: Number(row[PS.dailyBonus]) || 0,
-      totalPayout: Number(row[PS.totalPayout]) || 0,
+      date:        dateStr,
+      manager:     String(row[PS.manager]   || '').trim(),
+      steps:       Number(row[PS.stepCount]) || 0,
+      equiv:       Number(row[PS.totalEQ])   || 0,
+      totalPrepay: Number(row[PS.totalPrepay])|| 0,
+      payoutRate:  Number(row[PS.payoutRate]) || 0,
+      aerComm:     Number(row[PS.aerComm])   || 0,
+      upsellComm:  Number(row[PS.upsellComm])|| 0,
+      machRent:    Number(row[PS.machRent])  || 0,
+      deductions:  Number(row[PS.deductions])|| 0,
+      dailyBonus:  Number(row[PS.dailyBonus])|| 0,
+      totalPayout: Number(row[PS.totalPayout])|| 0,
     });
   }
 
@@ -227,32 +189,46 @@ export function parsePayoutStatsRows(
 
 // ─── Excel generation ─────────────────────────────────────────────────────────
 
-export function generatePayslipsXLSX(
+export async function generatePayslipsXLSX(
   workers: WorkerPayslipData[],
   startDate: string,
   endDate: string,
   ccDisplayName: string,
   totalDaysInRange: number
-): void {
-  const isLong = totalDaysInRange > 7;
+): Promise<void> {
+  const isLong     = totalDaysInRange > 7;
   const maxDataRows = isLong ? 16 : 8;
-  const perPage = isLong ? 2 : 3;
+  const perPage    = isLong ? 2 : 3;
 
-  const aoa: (string | number | null)[][] = [];
-  const merges: XLSX.Range[] = [];
-  const rowBreaks: number[] = [];
-  const rowHeights: { hpt?: number }[] = [];
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Payslips');
 
-  let currentRow = 0;
+  // Column widths
+  ws.columns = [
+    { width: 10 }, // A DATE
+    { width: 20 }, // B ROUTE MANAGER
+    { width: 10 }, // C AER STEPS
+    { width: 9  }, // D EQUIV
+    { width: 13 }, // E TOTAL PREPAY
+    { width: 10 }, // F PAYOUT RATE
+    { width: 12 }, // G AER COMM
+    { width: 10 }, // H MACH RENT / left summary value
+    { width: 20 }, // I DEDUCTIONS / right summary label
+    { width: 12 }, // J DAILY BONUS
+    { width: 14 }, // K TOTAL PAYOUT / right summary value
+  ];
+
+  const rowBreakIds: number[] = [];
+  let rowNum = 0; // 0-based counter, ExcelJS rows are 1-based so we add 1 when referencing
   let pageCount = 0;
 
   workers.forEach(worker => {
-    // ── Summary calculations ──
-    const earnedComm = r2(worker.days.reduce((s, d) => s + d.totalPayout, 0));
-    const daysWorked = worker.days.length;
+    // ── Calculations ──
+    const earnedComm  = r2(worker.days.reduce((s, d) => s + d.totalPayout, 0));
+    const daysWorked  = worker.days.length;
     const trainingBump = worker.is120Program ? r2(Math.max(0, daysWorked * 120 - earnedComm)) : 0;
-    const gi = worker.is120Program ? r2(Math.max(earnedComm, daysWorked * 120)) : earnedComm;
-    const finalPay = r2(
+    const gi          = worker.is120Program ? r2(Math.max(earnedComm, daysWorked * 120)) : earnedComm;
+    const finalPay    = r2(
       gi
       - worker.hotels
       - worker.advances
@@ -262,178 +238,172 @@ export function generatePayslipsXLSX(
     );
 
     // ── ROW 1: Worker name header ──
-    const nameRow: (string | number | null)[] = Array(NCOLS).fill(null);
-    nameRow[0] = `${worker.contractorId} - ${worker.firstName} ${worker.lastName}`;
-    aoa.push(nameRow);
-    merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow, c: NCOLS - 1 } });
-    rowHeights[currentRow] = { hpt: 22 };
-    currentRow++;
+    rowNum++;
+    const nameRow = ws.addRow([`${worker.contractorId} - ${worker.firstName} ${worker.lastName}`]);
+    nameRow.height = 22;
+    ws.mergeCells(rowNum, 1, rowNum, NCOLS);
+    for (let c = 1; c <= NCOLS; c++) {
+      styleCell(nameRow.getCell(c), {
+        font:      FONT.bold('FFFFFFFF', 13),
+        fill:      FILL.dark('FF1A1A1A'),
+        alignment: ALIGN.center,
+      });
+    }
 
-    // ── ROW 2: Column headers (11 cols, no UPSELL COMM) ──
-    aoa.push([
+    // ── ROW 2: Column headers ──
+    rowNum++;
+    const headerRow = ws.addRow([
       'DATE', 'ROUTE MANAGER', 'AER STEPS', 'EQUIV',
-      'TOTAL PREPAY', 'PAYOUT RATE', 'AER COMM',
-      'MACH RENT', 'DEDUCTIONS', 'DAILY BONUS', 'TOTAL PAYOUT',
+      'TOTAL\nPREPAY', 'PAYOUT\nRATE', 'AER COMM',
+      'MACH RENT', 'DEDUCTIONS', 'DAILY\nBONUS', 'TOTAL PAYOUT',
     ]);
-    rowHeights[currentRow] = { hpt: 28 };
-    currentRow++;
+    headerRow.height = 28;
+    for (let c = 1; c <= NCOLS; c++) {
+      styleCell(headerRow.getCell(c), {
+        font:      FONT.bold('FFFFFFFF', 9),
+        fill:      FILL.dark(c === 3 ? 'FF538135' : 'FFC00000'),
+        alignment: ALIGN.centerWrap,
+      });
+    }
 
     // ── DATA ROWS ──
     for (let i = 0; i < maxDataRows; i++) {
+      rowNum++;
       const d = worker.days[i];
-      aoa.push(d ? [
+      const dataRow = ws.addRow(d ? [
         formatDate(d.date),
         d.manager,
-        d.steps || null,
-        d.equiv ? r2(d.equiv) : null,
+        d.steps   || null,
+        d.equiv   ? r2(d.equiv)   : null,
         d.totalPrepay ? r2(d.totalPrepay) : null,
         d.payoutRate || null,
         d.aerComm ? r2(d.aerComm) : null,
-        d.machRent || null,
+        d.machRent   || null,
         d.deductions || null,
         d.dailyBonus || null,
         r2(d.totalPayout),
       ] : Array(NCOLS).fill(null));
-      rowHeights[currentRow] = { hpt: 16 };
-      currentRow++;
+      dataRow.height = 16;
+
+      if (d) {
+        styleCell(dataRow.getCell(1),  { font: FONT.regular(), alignment: ALIGN.left });
+        styleCell(dataRow.getCell(2),  { font: FONT.regular(), alignment: ALIGN.left });
+        styleCell(dataRow.getCell(3),  { font: FONT.regular(), alignment: ALIGN.center });
+        styleCell(dataRow.getCell(4),  { font: FONT.regular(), alignment: ALIGN.right, numFmt: FMT_NUMBER });
+        if (d.totalPrepay) styleCell(dataRow.getCell(5),  { font: FONT.regular(), alignment: ALIGN.right, numFmt: FMT_CURRENCY });
+        styleCell(dataRow.getCell(6),  { font: FONT.regular(), alignment: ALIGN.center });
+        if (d.aerComm)    styleCell(dataRow.getCell(7),  { font: FONT.regular(), alignment: ALIGN.right, numFmt: FMT_CURRENCY });
+        if (d.machRent)   styleCell(dataRow.getCell(8),  { font: FONT.regular(), alignment: ALIGN.right, numFmt: FMT_CURRENCY });
+        if (d.deductions) styleCell(dataRow.getCell(9),  { font: FONT.regular(), alignment: ALIGN.right, numFmt: FMT_CURRENCY });
+        if (d.dailyBonus) styleCell(dataRow.getCell(10), { font: FONT.regular(), alignment: ALIGN.right, numFmt: FMT_CURRENCY });
+        styleCell(dataRow.getCell(11), { font: FONT.regular(), alignment: ALIGN.right, numFmt: FMT_CURRENCY });
+      }
     }
 
     // ── SUMMARY ROWS ──
-    // Right side always: GI, Hotels, Advances, Travel Pkg, [extras], Final Pay
-    // Left side (120 program): Earned Commission (row 0), Training Bump (row 1)
+    // Right side: GI, Hotels, Advances, Travel Pkg, [extra deductions], [additions], Final Pay
+    // Left side (120 program only): Earned Commission (row 0), Training Bump (row 1)
     const rightRows: { label: string; value: number }[] = [
       { label: 'Guaranteed Income', value: gi },
-      { label: 'Hotels', value: worker.hotels },
-      { label: 'Advances', value: worker.advances },
-      { label: 'Travel Pkg', value: worker.travelPkg },
+      { label: 'Hotels',            value: worker.hotels },
+      { label: 'Advances',          value: worker.advances },
+      { label: 'Travel Pkg',        value: worker.travelPkg },
       ...worker.extraDeductions.map(d => ({ label: d.label || 'Deduction', value: d.amount })),
-      ...worker.additions.map(a => ({ label: a.label || 'Addition', value: -a.amount })),
-      { label: 'Final Pay:', value: finalPay },
+      ...worker.additions.map(a =>       ({ label: a.label || 'Addition',  value: -a.amount })),
+      { label: 'Final Pay:',         value: finalPay },
     ];
 
     const leftRows = worker.is120Program
       ? [
           { label: 'Earned Commission', value: earnedComm },
-          { label: 'Training Bump', value: trainingBump },
+          { label: 'Training Bump',     value: trainingBump },
         ]
       : [];
 
     rightRows.forEach((right, i) => {
-      const row: (string | number | null)[] = Array(NCOLS).fill(null);
-      row[8] = right.label;   // col I
-      row[10] = right.value;  // col K
+      rowNum++;
+      const isFinal = right.label === 'Final Pay:';
+      const summaryRowData: (string | number | null)[] = Array(NCOLS).fill(null);
+
+      // Left summary box cols F(6) and H(8) — only for 120 program rows 0 and 1
       if (i < leftRows.length) {
-        row[4] = leftRows[i].label;  // col E
-        row[6] = leftRows[i].value;  // col G
+        summaryRowData[5] = leftRows[i].label;  // col F (index 5)
+        summaryRowData[7] = leftRows[i].value;  // col H (index 7)
       }
-      aoa.push(row);
-      rowHeights[currentRow] = { hpt: 16 };
-      currentRow++;
+
+      // Right summary cols I(9) and K(11)
+      summaryRowData[8]  = right.label;  // col I (index 8)
+      summaryRowData[10] = right.value;  // col K (index 10)
+
+      const sumRow = ws.addRow(summaryRowData);
+      sumRow.height = 16;
+
+      // Style left box
+      if (i < leftRows.length) {
+        styleCell(sumRow.getCell(6), {
+          font:      FONT.regular(),
+          fill:      FILL.dark('FFF2F2F2'),
+          alignment: ALIGN.right,
+          border:    BORDER_THIN,
+        });
+        styleCell(sumRow.getCell(8), {
+          font:      FONT.bold('FF000000', 10),
+          fill:      FILL.dark('FFF2F2F2'),
+          alignment: ALIGN.right,
+          numFmt:    FMT_CURRENCY,
+          border:    BORDER_THIN,
+        });
+      }
+
+      // Style right box
+      styleCell(sumRow.getCell(9), {
+        font:      isFinal ? FONT.bold('FF000000', 11) : FONT.regular(),
+        fill:      FILL.dark(isFinal ? 'FFBFBFBF' : 'FFD9D9D9'),
+        alignment: ALIGN.right,
+      });
+      styleCell(sumRow.getCell(11), {
+        font:      isFinal ? FONT.bold('FF000000', 12) : FONT.regular(),
+        fill:      FILL.dark(isFinal ? 'FFBFBFBF' : 'FFD9D9D9'),
+        alignment: ALIGN.right,
+        numFmt:    FMT_CURRENCY,
+      });
     });
 
-    // ── Page break ──
+    // ── Page break after every N workers ──
     pageCount++;
     if (pageCount % perPage === 0 && pageCount < workers.length) {
-      rowBreaks.push(currentRow - 1);
+      rowBreakIds.push(rowNum);
     }
   });
 
-  // ─── Build worksheet ──────────────────────────────────────────────────────
-
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!merges'] = merges;
-  ws['!cols'] = [
-    { wch: 10 }, // A DATE
-    { wch: 20 }, // B ROUTE MANAGER
-    { wch: 10 }, // C AER STEPS
-    { wch: 9  }, // D EQUIV
-    { wch: 18 }, // E TOTAL PREPAY / left summary label
-    { wch: 10 }, // F PAYOUT RATE
-    { wch: 13 }, // G AER COMM / left summary value
-    { wch: 10 }, // H MACH RENT
-    { wch: 20 }, // I DEDUCTIONS / right summary label
-    { wch: 12 }, // J DAILY BONUS
-    { wch: 14 }, // K TOTAL PAYOUT / right summary value
-  ];
-  ws['!rows'] = rowHeights;
-  if (rowBreaks.length > 0) {
-    (ws as any)['!rowbreaks'] = rowBreaks.map(r => ({ r }));
+  // Apply page breaks
+  if (rowBreakIds.length > 0) {
+    (ws as any).pageBreaks = {
+      rowBreaks: rowBreakIds.map(id => ({ id })),
+      colBreaks: [],
+    };
   }
 
-  // ─── Apply styles ──────────────────────────────────────────────────────────
+  // Print setup
+  ws.pageSetup = {
+    paperSize: 9, // A4
+    orientation: 'landscape',
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+  };
 
-  let sr = 0; // style row counter
-
-  workers.forEach(worker => {
-    const earnedComm = r2(worker.days.reduce((s, d) => s + d.totalPayout, 0));
-    const daysWorked = worker.days.length;
-    const gi = worker.is120Program ? r2(Math.max(earnedComm, daysWorked * 120)) : earnedComm;
-    const finalPay = r2(
-      gi
-      - worker.hotels
-      - worker.advances
-      - worker.travelPkg
-      - worker.extraDeductions.reduce((s, d) => s + d.amount, 0)
-      + worker.additions.reduce((s, a) => s + a.amount, 0)
-    );
-
-    // Worker name header row
-    for (let c = 0; c < NCOLS; c++) applyStyle(ws, sr, c, S.workerHeader);
-    sr++;
-
-    // Column header row
-    for (let c = 0; c < NCOLS; c++) {
-      applyStyle(ws, sr, c, c === 2 ? S.colHeaderSteps : S.colHeader);
-    }
-    sr++;
-
-    // Data rows
-    for (let i = 0; i < maxDataRows; i++) {
-      const d = worker.days[i];
-      if (d) {
-        applyStyle(ws, sr, 0, S.dataText);
-        applyStyle(ws, sr, 1, S.dataText);
-        applyStyle(ws, sr, 2, S.dataCenter);
-        applyStyle(ws, sr, 3, S.dataNumber);
-        if (d.totalPrepay) applyStyle(ws, sr, 4, S.dataCurrency);
-        applyStyle(ws, sr, 5, S.dataCenter);
-        if (d.aerComm)    applyStyle(ws, sr, 6, S.dataCurrency);
-        if (d.machRent)   applyStyle(ws, sr, 7, S.dataCurrency);
-        if (d.deductions) applyStyle(ws, sr, 8, S.dataCurrency);
-        if (d.dailyBonus) applyStyle(ws, sr, 9, S.dataCurrency);
-        applyStyle(ws, sr, 10, S.dataCurrency);
-      }
-      sr++;
-    }
-
-    // Summary rows
-    const rightRows: { label: string }[] = [
-      { label: 'Guaranteed Income' },
-      { label: 'Hotels' },
-      { label: 'Advances' },
-      { label: 'Travel Pkg' },
-      ...worker.extraDeductions.map(d => ({ label: d.label || 'Deduction' })),
-      ...worker.additions.map(a => ({ label: a.label || 'Addition' })),
-      { label: 'Final Pay:' },
-    ];
-
-    const leftCount = worker.is120Program ? 2 : 0;
-
-    rightRows.forEach((right, i) => {
-      const isFinal = right.label === 'Final Pay:';
-      applyStyle(ws, sr, 8,  isFinal ? S.finalPayLabel : S.summaryLabel);
-      applyStyle(ws, sr, 10, isFinal ? S.finalPayValue : S.summaryValue);
-      if (i < leftCount) {
-        applyStyle(ws, sr, 4, S.leftLabel);
-        applyStyle(ws, sr, 6, S.leftValue);
-      }
-      sr++;
-    });
+  // Download
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
-
-  // ─── Write file ────────────────────────────────────────────────────────────
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Payslips');
-  XLSX.writeFile(wb, `${ccDisplayName} ${startDate} - ${endDate} Payslips.xlsx`);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${ccDisplayName} ${startDate} - ${endDate} Payslips.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }

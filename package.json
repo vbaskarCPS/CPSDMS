@@ -8,6 +8,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.87.1",
     "date-fns": "^3.3.1",
+    "exceljs": "^4.4.0",
     "google-spreadsheet": "^4.1.1",
     "lucide-react": "^0.358.0",
     "papaparse": "^5.4.1",
