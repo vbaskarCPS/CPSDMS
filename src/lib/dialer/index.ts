@@ -20,6 +20,7 @@ export {
   invalidateCache,
   discoverAvailableYears,
   discoverCities,
+  discoverRoutePrefixes,
   formatPhoneDisplay,
   getCurrentRank,
   getActiveMultipliers,
@@ -42,6 +43,7 @@ export type {
   GamificationResult,
   MultiplierSnapshot,
   CityInfo,
+  RoutePrefixInfo,
 } from './dialerEngine';
 
 // --- Sub-modules (for advanced usage) ---

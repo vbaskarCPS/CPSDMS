@@ -4,10 +4,11 @@
 // Stats and Achievements tabs are hidden. The Fireteam panel on the right
 // is also hidden. Everything else is identical for all other users.
 //
-// CITY VIEW: A BY TAB / BY CITY toggle on the Campaigns tab lets the user
-// switch between tab-based cards (default) and city-grouped cards.
+// CITY VIEW: A BY TAB / BY CITY / BY ROUTE toggle on the Campaigns tab lets the user
+// switch between tab-based cards (default), city-grouped cards, and route prefix cards.
 // City cards aggregate stats across all tabs that contain that city.
-// City deploys support Infiltrate and Siege only (no Ambush).
+// Route prefix cards are multi-select: click to toggle, then deploy the bundle.
+// City and route deploys support Infiltrate and Siege only (no Ambush).
 //
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Settings, RefreshCw } from 'lucide-react';
@@ -19,7 +20,7 @@ import { getTodayEST, campaignService } from '../../lib/campaignService';
 import { BADGE_DEFS } from '../../lib/dialer/gamificationDefs';
 import { getBadgeIcon, getBadgeCategoryColor } from './BadgeIcons';
 import type { GamificationSession } from '../../lib/dialer/gamificationDefs';
-import type { CityInfo } from '../../lib/dialer/dialerEngine';
+import type { CityInfo, RoutePrefixInfo } from '../../lib/dialer/dialerEngine';
 
 // =============================================================================
 // CALM MODE CONSTANT
@@ -124,14 +125,18 @@ interface CampaignSelectProps {
   cityCards?: CityInfo[];
   /** Called when user deploys a city card */
   onCityDeploy?: (city: CityInfo) => void;
+  /** Route prefix cards — populated after route scan on connect */
+  routePrefixCards?: RoutePrefixInfo[];
+  /** Called when user deploys selected route prefix cards */
+  onRoutePrefixDeploy?: (prefixes: RoutePrefixInfo[]) => void;
 }
 
 type MainTab = 'campaigns' | 'stats' | 'achievements';
 type AchievementsSubTab = 'today' | 'lifetime';
-type ViewMode = 'tab' | 'city';
+type ViewMode = 'tab' | 'city' | 'route'; // added 'route'
 
 // =============================================================================
-// HELPERS
+// HELPERS  (unchanged from original)
 // =============================================================================
 
 function heatColor(avgAttempts: number): string {
@@ -222,7 +227,7 @@ function gridOverlay(accent: string): string {
 }
 
 // =============================================================================
-// STYLES
+// STYLES  (added route-bar-in and route-bar-sweep keyframes)
 // =============================================================================
 
 const CAMPAIGN_STYLES = `
@@ -296,10 +301,18 @@ const CAMPAIGN_STYLES = `
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
   }
+  @keyframes route-bar-in {
+    0%   { transform: translateY(100%); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes route-bar-sweep {
+    0%   { left: -100%; }
+    100% { left: 200%; }
+  }
 `;
 
 // =============================================================================
-// RESUME BANNER
+// RESUME BANNER  (unchanged from original)
 // =============================================================================
 
 function ResumeBanner({
@@ -485,7 +498,7 @@ function ResumeBanner({
 }
 
 // =============================================================================
-// MAIN TAB BAR
+// MAIN TAB BAR  (unchanged from original)
 // =============================================================================
 
 const GAME_ICON_BASE = 'https://game-icons.net/icons/ffffff/transparent/1x1';
@@ -601,51 +614,53 @@ function MainTabBar({
 }
 
 // =============================================================================
-// VIEW MODE TOGGLE  (BY TAB / BY CITY)
+// VIEW MODE TOGGLE  — extended from BY TAB / BY CITY to include BY ROUTE
 // =============================================================================
 
 function ViewModeToggle({
   mode,
   onChange,
   hasCityCards,
+  hasRouteCards,
 }: {
   mode: ViewMode;
   onChange: (m: ViewMode) => void;
   hasCityCards: boolean;
+  hasRouteCards: boolean;
 }) {
+  const options: { id: ViewMode; label: string; disabled: boolean }[] = [
+    { id: 'tab',   label: '⊞ BY TAB',   disabled: false },
+    { id: 'city',  label: '🏙 BY CITY',  disabled: !hasCityCards },
+    { id: 'route', label: '🗺 BY ROUTE', disabled: !hasRouteCards },
+  ];
+
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 0,
-      padding: '8px 0 4px',
-      marginBottom: 4,
-    }}>
-      {(['tab', 'city'] as ViewMode[]).map((m) => {
-        const isActive = mode === m;
-        const label = m === 'tab' ? '⊞ BY TAB' : '🏙 BY CITY';
+    <div style={{ display: 'flex', alignItems: 'center', gap: 0, padding: '8px 0 4px', marginBottom: 4 }}>
+      {options.map((opt, idx) => {
+        const isActive = mode === opt.id;
+        const borderRadius = idx === 0 ? '6px 0 0 6px' : idx === options.length - 1 ? '0 6px 6px 0' : '0';
         return (
           <button
-            key={m}
-            onClick={() => onChange(m)}
-            disabled={m === 'city' && !hasCityCards}
+            key={opt.id}
+            onClick={() => onChange(opt.id)}
+            disabled={opt.disabled}
             style={{
               padding: '5px 16px',
               border: `1px solid ${isActive ? 'rgba(46,204,113,0.5)' : 'rgba(255,255,255,0.07)'}`,
-              borderRadius: m === 'tab' ? '6px 0 0 6px' : '0 6px 6px 0',
+              borderRadius,
               background: isActive ? 'rgba(46,204,113,0.10)' : 'rgba(255,255,255,0.02)',
-              color: isActive ? '#2ecc71' : (m === 'city' && !hasCityCards ? '#333' : '#555'),
+              color: isActive ? '#2ecc71' : opt.disabled ? '#333' : '#555',
               fontFamily: 'inherit',
               fontSize: 9,
               fontWeight: 800,
               letterSpacing: '1.5px',
               textTransform: 'uppercase',
-              cursor: (m === 'city' && !hasCityCards) ? 'not-allowed' : 'pointer',
+              cursor: opt.disabled ? 'not-allowed' : 'pointer',
               transition: 'all 0.15s ease',
             }}
           >
-            {label}
-            {m === 'city' && !hasCityCards && (
+            {opt.label}
+            {opt.disabled && (
               <span style={{ marginLeft: 6, fontSize: 7, color: '#444', opacity: 0.7 }}>scanning...</span>
             )}
           </button>
@@ -656,7 +671,7 @@ function ViewModeToggle({
 }
 
 // =============================================================================
-// STATS VIEW
+// STATS VIEW  (unchanged from original)
 // =============================================================================
 
 function StatsView({ campaignId, managerId }: { campaignId?: string; managerId?: string }) {
@@ -930,7 +945,7 @@ function BadgeLog({ badges }: { badges: string[] }) {
 }
 
 // =============================================================================
-// ACHIEVEMENTS VIEW
+// ACHIEVEMENTS VIEW  (unchanged from original)
 // =============================================================================
 
 function AchievementsView({
@@ -1189,6 +1204,8 @@ export default function CampaignSelect({
   session,
   cityCards,
   onCityDeploy,
+  routePrefixCards,
+  onRoutePrefixDeploy,
 }: CampaignSelectProps) {
   const isCalm = managerId === CALM_MODE_USER;
 
@@ -1197,6 +1214,9 @@ export default function CampaignSelect({
   const [armedId, setArmedId] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
   const [presence, setPresence] = useState<PresenceRecord[]>([]);
+  // NEW: route prefix multi-select state
+  const [selectedPrefixes, setSelectedPrefixes] = useState<Set<string>>(new Set());
+  const [routeDeploying, setRouteDeploying] = useState(false);
 
   useEffect(() => {
     let unsubscribe: (() => void) | null = null;
@@ -1214,10 +1234,12 @@ export default function CampaignSelect({
     }
   }, [isCalm, activeTab]);
 
-  // Reset armed state when switching view modes
+  // Reset armed/selected state when switching view modes
   useEffect(() => {
     setArmedId(null);
     setDeploying(false);
+    setSelectedPrefixes(new Set());
+    setRouteDeploying(false);
   }, [viewMode]);
 
   // Reset view mode to 'tab' when entering/leaving a book (cityCards goes undefined)
@@ -1240,6 +1262,7 @@ export default function CampaignSelect({
   });
 
   const sortedCities = [...(cityCards ?? [])].sort((a, b) => a.cityName.localeCompare(b.cityName));
+  const sortedPrefixes = [...(routePrefixCards ?? [])].sort((a, b) => a.prefixName.localeCompare(b.prefixName));
 
   const handleArm = useCallback((id: string) => {
     setArmedId(prev => prev === id ? null : id);
@@ -1256,6 +1279,34 @@ export default function CampaignSelect({
     setTimeout(() => { onCityDeploy?.(city); }, 600);
   }, [onCityDeploy]);
 
+  // NEW: toggle a prefix in/out of the selection set
+  const togglePrefix = useCallback((prefixName: string) => {
+    setSelectedPrefixes(prev => {
+      const next = new Set(prev);
+      if (next.has(prefixName)) next.delete(prefixName);
+      else next.add(prefixName);
+      return next;
+    });
+  }, []);
+
+  // NEW: fire the route deploy with all selected prefixes
+  const handleRouteDeploySelected = useCallback(() => {
+    if (!onRoutePrefixDeploy || selectedPrefixes.size === 0) return;
+    const selected = sortedPrefixes.filter(p => selectedPrefixes.has(p.prefixName));
+    setRouteDeploying(true);
+    setTimeout(() => { onRoutePrefixDeploy(selected); }, 600);
+  }, [onRoutePrefixDeploy, selectedPrefixes, sortedPrefixes]);
+
+  const selectedPrefixNames = sortedPrefixes
+    .filter(p => selectedPrefixes.has(p.prefixName))
+    .map(p => p.prefixName);
+
+  const deployBarLabel = selectedPrefixNames.length === 0
+    ? 'Select routes above'
+    : selectedPrefixNames.length <= 5
+      ? `🎯 DEPLOY ${selectedPrefixNames.join(' + ')}`
+      : `🎯 DEPLOY ${selectedPrefixNames.slice(0, 4).join(' + ')} +${selectedPrefixNames.length - 4}`;
+
   const headerTitle =
     activeTab === 'stats' ? 'TEAM STATS' :
     activeTab === 'achievements' ? 'ACHIEVEMENTS' :
@@ -1266,9 +1317,10 @@ export default function CampaignSelect({
     activeTab === 'achievements' ? 'BADGES & RECORDS' :
     'AUTOSNIPER M82 // TACTICAL OPERATIONS';
 
-  const availableCount = viewMode === 'city'
-    ? (cityCards?.length ?? 0)
-    : campaigns.filter(c => !c.locked).length;
+  const availableCount =
+    viewMode === 'city'  ? (cityCards?.length ?? 0) :
+    viewMode === 'route' ? (routePrefixCards?.length ?? 0) :
+    campaigns.filter(c => !c.locked).length;
 
   return (
     <>
@@ -1355,7 +1407,8 @@ export default function CampaignSelect({
                     background: '#2ecc71', display: 'inline-block',
                     animation: 'cs-hot-pulse 2s ease-in-out infinite',
                   }} />
-                  {availableCount} {viewMode === 'city' ? 'CITIES' : 'CAMPAIGNS'} AVAILABLE
+                  {/* CHANGED: now shows CITIES / ROUTES / CAMPAIGNS depending on viewMode */}
+                  {availableCount} {viewMode === 'city' ? 'CITIES' : viewMode === 'route' ? 'ROUTES' : 'CAMPAIGNS'} AVAILABLE
                 </div>
               )}
             </div>
@@ -1388,7 +1441,8 @@ export default function CampaignSelect({
             {activeTab === 'campaigns' && (
               <div style={{
                 flex: 1, overflowY: 'auto',
-                padding: '12px 16px 24px 24px',
+                // Add bottom padding when route deploy bar is visible so content isn't hidden behind it
+                padding: viewMode === 'route' && selectedPrefixes.size > 0 ? '12px 16px 80px 24px' : '12px 16px 24px 24px',
                 display: 'flex', flexDirection: 'column',
               }}>
                 {!resumeLoading && resumeData && onResume && (
@@ -1401,6 +1455,7 @@ export default function CampaignSelect({
                     mode={viewMode}
                     onChange={setViewMode}
                     hasCityCards={!!cityCards && cityCards.length > 0}
+                    hasRouteCards={!!routePrefixCards && routePrefixCards.length > 0}
                   />
                 )}
 
@@ -1465,6 +1520,42 @@ export default function CampaignSelect({
                       </div>
                     )}
                   </div>
+                )}
+
+                {/* NEW: Route View */}
+                {viewMode === 'route' && (
+                  <>
+                    {selectedPrefixes.size === 0 && (
+                      <div style={{ fontSize: 9, color: '#444', fontWeight: 700, letterSpacing: '1px', marginTop: 4, marginBottom: 8 }}>
+                        Click route cards to select them, then deploy the bundle together.
+                      </div>
+                    )}
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                      gap: 10,
+                      alignContent: 'start',
+                      marginTop: 4,
+                    }}>
+                      {sortedPrefixes.map((prefix, idx) => (
+                        <RoutePrefixCard
+                          key={prefix.prefixName}
+                          prefix={prefix}
+                          isSelected={selectedPrefixes.has(prefix.prefixName)}
+                          index={idx}
+                          onToggle={() => togglePrefix(prefix.prefixName)}
+                        />
+                      ))}
+                      {sortedPrefixes.length === 0 && (
+                        <div style={{
+                          gridColumn: '1 / -1', textAlign: 'center', padding: '60px 20px',
+                          color: '#444', fontSize: 12, fontWeight: 700, letterSpacing: '2px',
+                        }}>
+                          NO ROUTE PREFIXES FOUND
+                        </div>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             )}
@@ -1531,13 +1622,82 @@ export default function CampaignSelect({
             </div>
           )}
         </div>
+
+        {/* NEW: ROUTE DEPLOY BAR — sticky bottom, only when routes are selected */}
+        {viewMode === 'route' && selectedPrefixes.size > 0 && activeTab === 'campaigns' && (
+          <div style={{
+            position: 'fixed', bottom: 0, left: 0, right: isCalm ? 0 : 250,
+            zIndex: 50,
+            background: 'rgba(0,8,14,0.97)',
+            borderTop: '1.5px solid rgba(46,204,113,0.40)',
+            padding: '10px 24px',
+            display: 'flex', alignItems: 'center', gap: 16,
+            animation: 'route-bar-in 0.3s ease-out both',
+            boxShadow: '0 -4px 24px rgba(46,204,113,0.12)',
+          }}>
+            {/* Selection summary */}
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: '2px', color: '#2ecc71', opacity: 0.5, textTransform: 'uppercase', flexShrink: 0 }}>
+                SELECTED ROUTES:
+              </span>
+              {selectedPrefixNames.map(name => (
+                <span key={name} style={{
+                  fontSize: 10, fontWeight: 900, color: '#2ecc71',
+                  background: 'rgba(46,204,113,0.12)', border: '1px solid rgba(46,204,113,0.35)',
+                  borderRadius: 4, padding: '2px 8px', fontFamily: 'monospace',
+                }}>{name}</span>
+              ))}
+            </div>
+            {/* Clear button */}
+            <button
+              onClick={() => setSelectedPrefixes(new Set())}
+              style={{
+                padding: '8px 14px', borderRadius: 6,
+                border: '1px solid rgba(255,255,255,0.08)',
+                background: 'transparent', color: '#555',
+                fontSize: 9, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase',
+                cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
+              }}
+            >
+              CLEAR
+            </button>
+            {/* Deploy button */}
+            <button
+              onClick={handleRouteDeploySelected}
+              disabled={routeDeploying}
+              style={{
+                padding: '12px 28px', borderRadius: 7,
+                border: `1.5px solid ${routeDeploying ? '#333' : 'rgba(46,204,113,0.8)'}`,
+                background: routeDeploying ? '#222' : 'linear-gradient(135deg, rgba(46,204,113,0.20) 0%, rgba(46,204,113,0.08) 100%)',
+                color: routeDeploying ? '#555' : '#2ecc71',
+                fontSize: 13, fontWeight: 900, fontFamily: 'inherit',
+                letterSpacing: '3px', textTransform: 'uppercase',
+                cursor: routeDeploying ? 'not-allowed' : 'pointer',
+                position: 'relative', overflow: 'hidden', flexShrink: 0,
+                animation: routeDeploying ? undefined : 'cs-deploy-glow 3s ease-in-out infinite',
+              }}
+            >
+              {!routeDeploying && (
+                <div style={{
+                  position: 'absolute', top: 0, bottom: 0, width: '60%',
+                  background: 'linear-gradient(90deg, transparent, rgba(46,204,113,0.12), transparent)',
+                  animation: 'route-bar-sweep 2.5s ease-in-out infinite',
+                  pointerEvents: 'none',
+                }} />
+              )}
+              <span style={{ position: 'relative', zIndex: 1 }}>
+                {routeDeploying ? '⚡ DEPLOYING...' : deployBarLabel}
+              </span>
+            </button>
+          </div>
+        )}
       </div>
     </>
   );
 }
 
 // =============================================================================
-// CAMPAIGN CARD — now shows BC/STD type badge
+// CAMPAIGN CARD — now shows BC/STD type badge  (unchanged from original)
 // =============================================================================
 
 function CampaignCard({
@@ -1730,7 +1890,7 @@ function CampaignCard({
 }
 
 // =============================================================================
-// CITY CARD
+// CITY CARD  (unchanged from original)
 // =============================================================================
 
 function CityCard({
@@ -1911,7 +2071,109 @@ function CityCard({
 }
 
 // =============================================================================
-// MINI STAT (shared)
+// NEW: ROUTE PREFIX CARD — click to toggle selected
+// =============================================================================
+
+function RoutePrefixCard({
+  prefix,
+  isSelected,
+  index,
+  onToggle,
+}: {
+  prefix: RoutePrefixInfo;
+  isSelected: boolean;
+  index: number;
+  onToggle: () => void;
+}) {
+  const avgAttempts = prefix.avgAttempts ?? 0;
+  const accent = isSelected ? '#2ecc71' : heatColor(avgAttempts);
+  const reach = reachStatus(prefix.reachedPct);
+
+  return (
+    <div
+      onClick={onToggle}
+      style={{
+        position: 'relative', borderRadius: 8,
+        border: `1.5px solid ${isSelected ? 'rgba(46,204,113,0.70)' : `${accent}28`}`,
+        background: isSelected
+          ? 'linear-gradient(135deg, rgba(46,204,113,0.12) 0%, rgba(46,204,113,0.05) 100%)'
+          : heatGradient(avgAttempts),
+        cursor: 'pointer', overflow: 'hidden',
+        transition: 'all 0.15s ease',
+        transform: isSelected ? 'scale(1.02)' : 'scale(1)',
+        boxShadow: isSelected
+          ? '0 0 0 1.5px rgba(46,204,113,0.40), 0 0 20px rgba(46,204,113,0.15)'
+          : '0 2px 8px rgba(0,0,0,0.3)',
+        animation: `cs-card-enter 0.4s ease-out ${index * 0.03}s both`,
+      }}
+    >
+      {/* Selected checkmark */}
+      {isSelected && (
+        <div style={{
+          position: 'absolute', top: 8, right: 8, zIndex: 3,
+          width: 20, height: 20, borderRadius: '50%',
+          background: 'rgba(46,204,113,0.9)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 11, fontWeight: 900, color: '#000',
+        }}>✓</div>
+      )}
+
+      <div style={{ position: 'relative', zIndex: 2, padding: '12px 14px' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+          <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: '2px', color: accent, opacity: 0.6, textTransform: 'uppercase' }}>🗺 ROUTE</span>
+          <span style={{ fontSize: 7, fontWeight: 700, color: '#3498db', background: 'rgba(52,152,219,0.10)', border: '1px solid rgba(52,152,219,0.25)', borderRadius: 3, padding: '1px 5px' }}>
+            {prefix.tabs.length} TAB{prefix.tabs.length !== 1 ? 'S' : ''}
+          </span>
+        </div>
+
+        {/* Prefix name — big monospace */}
+        <h3 style={{
+          fontSize: 22, fontWeight: 900,
+          color: isSelected ? '#2ecc71' : '#fff',
+          margin: '0 0 8px 0', letterSpacing: '2px', lineHeight: 1,
+          textShadow: isSelected ? '0 0 16px rgba(46,204,113,0.5)' : 'none',
+          fontFamily: 'monospace',
+        }}>
+          {prefix.prefixName}
+        </h3>
+
+        {/* Stats */}
+        <div style={{ display: 'flex', gap: 10, marginBottom: 8 }}>
+          <MiniStat label="ROWS"    value={prefix.totalRows.toLocaleString()} color={accent} />
+          <MiniStat label="BOOKS"   value={prefix.bookings}                   color={prefix.bookings > 0 ? '#f1c40f' : '#555'} />
+          <MiniStat label="REACHED" value={`${Math.round(prefix.reachedPct)}%`} color={reach.color} />
+          <MiniStat label="AVG ATT" value={avgAttempts.toFixed(1)}            color={accent} />
+        </div>
+
+        {/* Progress bar */}
+        <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden', marginBottom: 6 }}>
+          <div style={{
+            height: '100%', width: `${Math.min(prefix.reachedPct, 100)}%`, borderRadius: 2,
+            background: `linear-gradient(to right, ${reach.color}80, ${reach.color})`,
+            transition: 'width 0.5s ease',
+          }} />
+        </div>
+
+        <span style={{ fontSize: 7, fontWeight: 700, color: '#444', letterSpacing: '1px' }}>
+          LAST: {formatDate(prefix.lastUsed)}
+        </span>
+      </div>
+
+      {/* Selected glow border bottom */}
+      {isSelected && (
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0, height: 2,
+          background: 'linear-gradient(to right, transparent, rgba(46,204,113,0.8), transparent)',
+          animation: 'cs-arm-border 1.5s ease-in-out infinite',
+        }} />
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// MINI STAT (shared)  (unchanged from original)
 // =============================================================================
 
 function MiniStat({ label, value, color }: { label: string; value: string | number; color: string }) {

@@ -12,6 +12,11 @@
 // CITY column, merges them into a single ordered group list, and dials through
 // that merged list. When exhausted, returns mission complete.
 //
+// Route Prefix mode: when routePrefixes + routeTabs are set in EngineConfig,
+// the engine loads rows from ALL routeTabs, filters to only rows whose
+// ROUTE_CODE starts with any of the selected prefixes, merges them into a
+// single ordered group list, and dials through that merged list.
+//
 
 import { resolveHeaders, findHeaders, applyBCFixedColumns, ColumnIndices } from './dialerHeaders';
 import {
@@ -39,7 +44,7 @@ import {
   DispositionExtra,
 } from './dialerDispositions';
 import { buildCCDRow, detectCardType, StagedCard, CCDWriteData } from './dialerCCD';
-import { normalizePhone, parseHiddenRows, buildStreetKey } from './dialerUtils';
+import { normalizePhone, parseHiddenRows, buildStreetKey, getRoutePrefix } from './dialerUtils';
 import {
   GamificationSession,
   createFreshSession,
@@ -73,6 +78,9 @@ export interface EngineConfig {
   campaignType?: CampaignType;
   cityName?: string;
   cityTabs?: string[];
+  // Route prefix mode
+  routePrefixes?: string[];
+  routeTabs?: string[];
 }
 
 export interface EngineSnapshot {
@@ -146,11 +154,33 @@ interface CachedCityData {
 }
 
 // =============================================================================
+// CACHED ROUTE PREFIX DATA — merged across tabs, filtered by route prefix
+// =============================================================================
+
+interface CachedRoutePrefixData {
+  spreadsheetId: string;
+  prefixKey: string;          // sorted prefixes joined with '|' — used as cache key
+  sniperConfigHash: string;
+  timestamp: number;
+  mergedAll: any[][];
+  mergedCI: ColumnIndices;
+  mergedDataStartRow: number;
+  rowToTab: string[];
+  rowToRealSheetRow: number[];
+  tabSlices: TabSlice[];
+  groups: ClientGroup[];
+  available: ClientGroup[];
+  infiltrateWindowStart: number;
+  siegeIndex: number;
+}
+
+// =============================================================================
 // MODULE STATE
 // =============================================================================
 
 let cachedSheet: CachedSheetData | null = null;
 let cachedCity: CachedCityData | null = null;
+let cachedRoutePrefix: CachedRoutePrefixData | null = null;
 let pendingPrepay: PrepayPending | null = null;
 let highlightedRows: { current: number[]; next: number[] } = { current: [], next: [] };
 let activeSessionRowId: string | null = null;
@@ -175,6 +205,7 @@ export function setResumePosition(tab: string, bookingId: string, firstRow?: num
 export function invalidateCache(): void {
   cachedSheet = null;
   cachedCity = null;
+  cachedRoutePrefix = null;
 }
 
 // =============================================================================
@@ -364,6 +395,118 @@ async function loadCityData(
 }
 
 // =============================================================================
+// ROUTE PREFIX DATA LOADING — merges rows from all tabs filtered by prefix
+// =============================================================================
+
+async function loadRoutePrefixData(
+  spreadsheetId: string,
+  routePrefixes: string[],
+  routeTabs: string[],
+  sniperConfig?: SniperConfig,
+  campaignType?: CampaignType
+): Promise<CachedRoutePrefixData> {
+  const configHash = JSON.stringify(sniperConfig || DEFAULT_SNIPER_CONFIG);
+  const prefixKey = [...routePrefixes].map(p => p.toUpperCase()).sort().join('|');
+
+  if (
+    cachedRoutePrefix &&
+    cachedRoutePrefix.spreadsheetId === spreadsheetId &&
+    cachedRoutePrefix.prefixKey === prefixKey &&
+    cachedRoutePrefix.sniperConfigHash === configHash &&
+    Date.now() - cachedRoutePrefix.timestamp < 30000
+  ) {
+    return cachedRoutePrefix;
+  }
+
+  const config = sniperConfig || DEFAULT_SNIPER_CONFIG;
+  const prefixSet = new Set(routePrefixes.map(p => p.toUpperCase()));
+  const tabSlices: TabSlice[] = [];
+
+  for (const tabName of routeTabs) {
+    try {
+      const rawData = await dialerSheetsService.sheetsGet(spreadsheetId, `'${tabName}'`);
+      if (!rawData || rawData.length < 2) continue;
+
+      const { headerRowIndex, CI } = findHeaders(rawData);
+      if (CI.PHONE < 0) continue;
+
+      if (campaignType === 'bc') {
+        applyBCFixedColumns(CI);
+      }
+
+      const headers = rawData[headerRowIndex];
+      const dataStartRow = headerRowIndex + 2;
+      const all = rawData.slice(headerRowIndex + 1);
+
+      let sheetTabId = 0;
+      try {
+        const tabs = await dialerSheetsService.getSheetTabs(spreadsheetId);
+        const tab = tabs.find((t) => t.title === tabName);
+        if (tab) sheetTabId = tab.sheetId;
+      } catch { /* Non-critical */ }
+
+      tabSlices.push({ tabName, headers, CI, dataStartRow, all, sheetTabId });
+    } catch {
+      // Skip tabs that fail to load
+    }
+  }
+
+  if (tabSlices.length === 0) {
+    throw new Error(`No tabs could be loaded for route prefixes "${routePrefixes.join(', ')}".`);
+  }
+
+  const mergedCI = tabSlices[0].CI;
+  const mergedAll: any[][] = [];
+  const rowToTab: string[] = [];
+  const rowToRealSheetRow: number[] = [];
+  const mergedDataStartRow = 2;
+
+  for (const slice of tabSlices) {
+    for (let r = 0; r < slice.all.length; r++) {
+      const row = slice.all[r];
+      if (slice.CI.ROUTE_CODE >= 0) {
+        const rowRouteCode = String(row[slice.CI.ROUTE_CODE] ?? '').trim();
+        const rowPrefix = getRoutePrefix(rowRouteCode).toUpperCase();
+        if (!prefixSet.has(rowPrefix)) continue;
+      } else {
+        continue;
+      }
+      mergedAll.push(row);
+      rowToTab.push(slice.tabName);
+      rowToRealSheetRow.push(r + slice.dataStartRow);
+    }
+  }
+
+  if (mergedAll.length === 0) {
+    throw new Error(`No rows found for route prefixes "${routePrefixes.join(', ')}".`);
+  }
+
+  const emptyHidden = new Set<number>();
+  const allGroups = buildGroups(mergedAll, mergedCI, emptyHidden, mergedDataStartRow);
+  const sniperFiltered = sniperFilterGroups(allGroups, mergedAll, mergedCI, config);
+  const available = filterAvailable(sniperFiltered, mergedAll, mergedCI);
+
+  cachedRoutePrefix = {
+    spreadsheetId,
+    prefixKey,
+    sniperConfigHash: configHash,
+    timestamp: Date.now(),
+    mergedAll,
+    mergedCI,
+    mergedDataStartRow,
+    rowToTab,
+    rowToRealSheetRow,
+    tabSlices,
+    groups: sniperFiltered,
+    available,
+    infiltrateWindowStart: 0,
+    siegeIndex: 0,
+  };
+
+  return cachedRoutePrefix;
+}
+
+// =============================================================================
 // PHONE HIGHLIGHTING
 // =============================================================================
 
@@ -462,6 +605,40 @@ async function highlightPhonesFromCity(
   }
 }
 
+async function highlightPhonesFromRoutePrefix(
+  routeData: CachedRoutePrefixData,
+  currentMergedRows: number[],
+  nextMergedRows: number[]
+): Promise<void> {
+  if (routeData.mergedCI.PHONE < 0) return;
+
+  const tabBatches = new Map<string, { current: number[]; next: number[] }>();
+
+  for (const mergedRow of currentMergedRows) {
+    const dataIdx = mergedRow - routeData.mergedDataStartRow;
+    if (dataIdx < 0 || dataIdx >= routeData.rowToTab.length) continue;
+    const tabName = routeData.rowToTab[dataIdx];
+    const realRow = routeData.rowToRealSheetRow[dataIdx];
+    if (!tabBatches.has(tabName)) tabBatches.set(tabName, { current: [], next: [] });
+    tabBatches.get(tabName)!.current.push(realRow);
+  }
+
+  for (const mergedRow of nextMergedRows) {
+    const dataIdx = mergedRow - routeData.mergedDataStartRow;
+    if (dataIdx < 0 || dataIdx >= routeData.rowToTab.length) continue;
+    const tabName = routeData.rowToTab[dataIdx];
+    const realRow = routeData.rowToRealSheetRow[dataIdx];
+    if (!tabBatches.has(tabName)) tabBatches.set(tabName, { current: [], next: [] });
+    tabBatches.get(tabName)!.next.push(realRow);
+  }
+
+  for (const [tabName, batch] of tabBatches) {
+    const slice = routeData.tabSlices.find(s => s.tabName === tabName);
+    if (!slice) continue;
+    await highlightPhones(routeData.spreadsheetId, slice.sheetTabId, routeData.mergedCI.PHONE, batch.current, batch.next);
+  }
+}
+
 // =============================================================================
 // INITIALIZE
 // =============================================================================
@@ -470,6 +647,10 @@ export async function initialize(config: EngineConfig): Promise<EngineSnapshot |
 
   if (config.cityName && config.cityTabs && config.cityTabs.length > 0) {
     return initializeCity(config);
+  }
+
+  if (config.routePrefixes && config.routePrefixes.length > 0 && config.routeTabs && config.routeTabs.length > 0) {
+    return initializeRoutePrefix(config);
   }
 
   const sheet = await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig, config.campaignType);
@@ -594,6 +775,54 @@ async function initializeCity(config: EngineConfig): Promise<EngineSnapshot | nu
 }
 
 // =============================================================================
+// INITIALIZE — ROUTE PREFIX MODE
+// =============================================================================
+
+async function initializeRoutePrefix(config: EngineConfig): Promise<EngineSnapshot | null> {
+  const routeData = await loadRoutePrefixData(
+    config.spreadsheetId,
+    config.routePrefixes!,
+    config.routeTabs!,
+    config.sniperConfig,
+    config.campaignType
+  );
+
+  if (routeData.available.length === 0) return null;
+
+  if (config.direction === 'infiltrate') {
+    const startRow = findInfiltrateStart(
+      routeData.available, routeData.mergedAll, routeData.mergedCI, routeData.mergedDataStartRow
+    );
+    routeData.infiltrateWindowStart = startRow;
+    const ordered = applyOrdering(routeData.available, routeData.mergedAll, routeData.mergedCI, 'infiltrate');
+    const group = findNextGroup(ordered, startRow, 'infiltrate');
+    if (!group) return null;
+
+    const session = await loadOrCreateSession(config);
+    return buildSnapshotFromRoutePrefix(routeData, group, config, session);
+  }
+
+  // Siege
+  {
+    routeData.siegeIndex = 0;
+    const ordered = applyOrdering(routeData.available, routeData.mergedAll, routeData.mergedCI, 'siege');
+    const group = findNextGroup(ordered, routeData.mergedDataStartRow, 'siege', 0);
+    if (!group) return null;
+
+    const session = await loadOrCreateSession(config);
+    const storedIndex = (session as any)._siegeIndex;
+    if (typeof storedIndex === 'number' && storedIndex > 0 && storedIndex < ordered.length) {
+      routeData.siegeIndex = storedIndex;
+      const resumedGroup = ordered[storedIndex];
+      if (!resumedGroup) return null;
+      return buildSnapshotFromRoutePrefix(routeData, resumedGroup, config, session);
+    }
+
+    return buildSnapshotFromRoutePrefix(routeData, group, config, session);
+  }
+}
+
+// =============================================================================
 // BUILD SNAPSHOT HELPERS
 // =============================================================================
 
@@ -657,6 +886,37 @@ async function buildSnapshotFromCity(
   };
 }
 
+async function buildSnapshotFromRoutePrefix(
+  routeData: CachedRoutePrefixData,
+  group: ClientGroup,
+  config: EngineConfig,
+  session?: GamificationSession
+): Promise<EngineSnapshot> {
+  let currentGroupIndex = 0;
+  for (let i = 0; i < routeData.groups.length; i++) {
+    if (routeData.groups[i].firstRow === group.firstRow) { currentGroupIndex = i + 1; break; }
+  }
+
+  const displayName = config.sheetName; // "ACE + HM + BS" — set by DialerPage
+
+  const state = buildState(
+    group.rows, routeData.mergedAll, routeData.mergedCI, displayName,
+    currentGroupIndex, routeData.groups.length, routeData.mergedDataStartRow
+  );
+
+  const resolvedSession = session ?? await loadOrCreateSession(config);
+  const prefetchState = getPrefetchStateFromRoutePrefix(routeData, state, config.direction);
+  highlightPhonesFromRoutePrefix(routeData, state.rows, prefetchState?.rows || []);
+
+  return {
+    state,
+    prefetchState,
+    session: resolvedSession,
+    totalGroups: routeData.groups.length,
+    availableGroups: routeData.available.length,
+  };
+}
+
 // =============================================================================
 // NAVIGATION
 // =============================================================================
@@ -668,6 +928,10 @@ export async function getNextState(
 
   if (config.cityName && config.cityTabs) {
     return getNextStateCity(config, afterRow);
+  }
+
+  if (config.routePrefixes && config.routePrefixes.length > 0 && config.routeTabs) {
+    return getNextStateRoutePrefix(config, afterRow);
   }
 
   const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig, config.campaignType);
@@ -734,6 +998,37 @@ async function getNextStateCity(config: EngineConfig, afterRow: number): Promise
 
   const displayName = config.cityName || config.sheetName;
   return buildState(group.rows, city.mergedAll, city.mergedCI, displayName, currentGroupIndex, city.groups.length, city.mergedDataStartRow);
+}
+
+async function getNextStateRoutePrefix(config: EngineConfig, afterRow: number): Promise<DialerStateResult> {
+  const routeData = cachedRoutePrefix || await loadRoutePrefixData(
+    config.spreadsheetId, config.routePrefixes!, config.routeTabs!,
+    config.sniperConfig, config.campaignType
+  );
+  const ordered = applyOrdering(routeData.available, routeData.mergedAll, routeData.mergedCI, config.direction);
+  let group: ClientGroup | null = null;
+
+  if (config.direction === 'siege') {
+    routeData.siegeIndex = routeData.siegeIndex + 1;
+    group = findNextGroup(ordered, afterRow, 'siege', routeData.siegeIndex);
+    if (!group) return { found: false, message: 'All targets neutralized. Mission complete.' };
+  } else {
+    group = findNextGroup(ordered, afterRow, 'infiltrate');
+    if (!group) {
+      const windowRow = routeData.infiltrateWindowStart > 0 ? routeData.infiltrateWindowStart : ordered[0]?.firstRow ?? routeData.mergedDataStartRow;
+      group = findNextGroup(ordered, windowRow, 'infiltrate');
+      if (!group) group = ordered[0] ?? null;
+      if (!group) return { found: false, message: 'No available groups found.' };
+    }
+  }
+
+  let currentGroupIndex = 0;
+  for (let i = 0; i < routeData.groups.length; i++) {
+    if (routeData.groups[i].firstRow === group.firstRow) { currentGroupIndex = i + 1; break; }
+  }
+
+  const displayName = config.sheetName;
+  return buildState(group.rows, routeData.mergedAll, routeData.mergedCI, displayName, currentGroupIndex, routeData.groups.length, routeData.mergedDataStartRow);
 }
 
 export async function findGroupByBookingId(config: EngineConfig, bookingId: string): Promise<DialerStateResult> {
@@ -820,6 +1115,32 @@ function getPrefetchStateFromCity(
   return buildState(group.rows, city.mergedAll, city.mergedCI, displayName, currentGroupIndex, city.groups.length, city.mergedDataStartRow);
 }
 
+function getPrefetchStateFromRoutePrefix(
+  routeData: CachedRoutePrefixData,
+  currentState: DialerState,
+  direction: Direction
+): DialerState | null {
+  const afterRow = nextAfterRow(currentState.rows, direction);
+  const ordered = applyOrdering(routeData.available, routeData.mergedAll, routeData.mergedCI, direction);
+
+  let group: ClientGroup | null = null;
+  if (direction === 'siege') {
+    const peekIndex = routeData.siegeIndex + 1;
+    group = peekIndex < ordered.length ? ordered[peekIndex] : null;
+  } else {
+    group = findNextGroup(ordered, afterRow, direction);
+  }
+  if (!group) return null;
+
+  let currentGroupIndex = 0;
+  for (let i = 0; i < routeData.groups.length; i++) {
+    if (routeData.groups[i].firstRow === group.firstRow) { currentGroupIndex = i + 1; break; }
+  }
+
+  const displayName = currentState.sheetName;
+  return buildState(group.rows, routeData.mergedAll, routeData.mergedCI, displayName, currentGroupIndex, routeData.groups.length, routeData.mergedDataStartRow);
+}
+
 // =============================================================================
 // DISPOSITION
 // =============================================================================
@@ -842,6 +1163,10 @@ export async function applyDisposition(
 
   if (config.cityName && config.cityTabs) {
     return applyDispositionCity(config, state, disposition, phone, session, extra, yesStartTime);
+  }
+
+  if (config.routePrefixes && config.routePrefixes.length > 0 && config.routeTabs) {
+    return applyDispositionRoutePrefix(config, state, disposition, phone, session, extra, yesStartTime);
   }
 
   const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig, config.campaignType);
@@ -1006,6 +1331,100 @@ function columnToLetter(col: number): string {
 }
 
 // =============================================================================
+// DISPOSITION — ROUTE PREFIX MODE
+// =============================================================================
+
+async function applyDispositionRoutePrefix(
+  config: EngineConfig,
+  state: DialerState,
+  disposition: DispositionType,
+  phone: string,
+  session: GamificationSession,
+  extra: DispositionExtra,
+  yesStartTime?: number
+): Promise<DispositionResult> {
+  const routeData = cachedRoutePrefix || await loadRoutePrefixData(
+    config.spreadsheetId, config.routePrefixes!, config.routeTabs!,
+    config.sniperConfig, config.campaignType
+  );
+
+  if (disposition === 'PREPAY') {
+    const firstDataIdx = state.dataIndices[0];
+    const sourceTab = routeData.rowToTab[firstDataIdx] || config.sheetName;
+    const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
+    pendingPrepay = {
+      sheetName: sourceTab,
+      groupDataIndices: state.dataIndices,
+      phone,
+      extra,
+      dataStartRow: routeData.mergedDataStartRow,
+      gamContext: gamCtx,
+      yesStartTime: yesStartTime || 0,
+      sourceTab,
+    };
+    return { nextState: state, gamification: null };
+  }
+
+  const dispResult = buildDispositionUpdates(
+    disposition, routeData.mergedAll, routeData.mergedCI, state.dataIndices,
+    routeData.mergedDataStartRow, phone, config.repCode, extra
+  );
+
+  if (dispResult.updates.length > 0) {
+    const updatesByTab = new Map<string, { range: string; values: any[][] }[]>();
+
+    for (const u of dispResult.updates) {
+      const dataIdx = u.row - routeData.mergedDataStartRow;
+      if (dataIdx < 0 || dataIdx >= routeData.rowToTab.length) continue;
+
+      const tabName = routeData.rowToTab[dataIdx];
+      const realSheetRow = routeData.rowToRealSheetRow[dataIdx];
+
+      const colLetter = columnToLetter(u.col + 1);
+      const range = `'${tabName}'!${colLetter}${realSheetRow}`;
+
+      if (!updatesByTab.has(tabName)) updatesByTab.set(tabName, []);
+      updatesByTab.get(tabName)!.push({ range, values: [[u.value]] });
+
+      routeData.mergedAll[dataIdx][u.col] = u.value;
+    }
+
+    for (const [, sheetsData] of updatesByTab) {
+      await dialerSheetsService.sheetsBatchUpdate(config.spreadsheetId, sheetsData);
+    }
+  }
+
+  if (dispResult.redial) {
+    const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
+    const gamResult = processGamification(session, disposition, gamCtx);
+    await saveSession(session);
+    return {
+      nextState: { found: true, ...state, phone: dispResult.redial.newPhone } as DialerState,
+      gamification: gamResult,
+      redialPhone: dispResult.redial.newPhone,
+    };
+  }
+
+  const gamCtx = buildGamificationContext(state, disposition, extra, yesStartTime);
+  const gamResult = processGamification(session, disposition, gamCtx);
+  await saveSession(session);
+
+  routeData.available = filterAvailable(routeData.groups, routeData.mergedAll, routeData.mergedCI);
+  routeData.timestamp = Date.now();
+
+  const afterRow = nextAfterRow(state.rows, config.direction);
+  const nextStateResult = await getNextStateRoutePrefix(config, afterRow);
+
+  if (nextStateResult.found) {
+    const ns = nextStateResult as DialerState;
+    const prefetch = getPrefetchStateFromRoutePrefix(routeData, ns, config.direction);
+    highlightPhonesFromRoutePrefix(routeData, ns.rows, prefetch?.rows || []);
+  }
+
+  return { nextState: nextStateResult, gamification: gamResult };
+}
+
+// =============================================================================
 // PREPAY FLOW
 // =============================================================================
 
@@ -1030,6 +1449,7 @@ export async function finalizePrepay(
   }
 
   const isCityMode = !!(config.cityName && config.cityTabs);
+  const isRoutePrefixMode = !!(config.routePrefixes && config.routePrefixes.length > 0 && config.routeTabs);
   const pp = pendingPrepay;
 
   if (cardData.amount) pp.extra.price = cardData.amount;
@@ -1045,6 +1465,16 @@ export async function finalizePrepay(
     CI = city.mergedCI;
     dataStartRow = city.mergedDataStartRow;
     const slice = city.tabSlices.find(s => s.tabName === pp.sourceTab) || city.tabSlices[0];
+    headers = slice.headers;
+  } else if (isRoutePrefixMode) {
+    const routeData = cachedRoutePrefix || await loadRoutePrefixData(
+      config.spreadsheetId, config.routePrefixes!, config.routeTabs!,
+      config.sniperConfig, config.campaignType
+    );
+    all = routeData.mergedAll;
+    CI = routeData.mergedCI;
+    dataStartRow = routeData.mergedDataStartRow;
+    const slice = routeData.tabSlices.find(s => s.tabName === pp.sourceTab) || routeData.tabSlices[0];
     headers = slice.headers;
   } else {
     const sheet = cachedSheet || await loadSheetData(config.spreadsheetId, config.sheetName, config.sniperConfig, config.campaignType);
@@ -1070,6 +1500,23 @@ export async function finalizePrepay(
         if (!updatesByTab.has(tabName)) updatesByTab.set(tabName, []);
         updatesByTab.get(tabName)!.push({ range, values: [[u.value]] });
         city.mergedAll[dataIdx][u.col] = u.value;
+      }
+      for (const [, sheetsData] of updatesByTab) {
+        await dialerSheetsService.sheetsBatchUpdate(config.spreadsheetId, sheetsData);
+      }
+    } else if (isRoutePrefixMode) {
+      const routeData = cachedRoutePrefix!;
+      const updatesByTab = new Map<string, { range: string; values: any[][] }[]>();
+      for (const u of dispResult.updates) {
+        const dataIdx = u.row - routeData.mergedDataStartRow;
+        if (dataIdx < 0 || dataIdx >= routeData.rowToTab.length) continue;
+        const tabName = routeData.rowToTab[dataIdx];
+        const realSheetRow = routeData.rowToRealSheetRow[dataIdx];
+        const colLetter = columnToLetter(u.col + 1);
+        const range = `'${tabName}'!${colLetter}${realSheetRow}`;
+        if (!updatesByTab.has(tabName)) updatesByTab.set(tabName, []);
+        updatesByTab.get(tabName)!.push({ range, values: [[u.value]] });
+        routeData.mergedAll[dataIdx][u.col] = u.value;
       }
       for (const [, sheetsData] of updatesByTab) {
         await dialerSheetsService.sheetsBatchUpdate(config.spreadsheetId, sheetsData);
@@ -1133,6 +1580,18 @@ export async function finalizePrepay(
       highlightPhonesFromCity(city, ns.rows, prefetch?.rows || []);
     }
     return { nextState: nextStateResult, gamification: gamResult };
+  } else if (isRoutePrefixMode) {
+    const routeData = cachedRoutePrefix!;
+    routeData.available = filterAvailable(routeData.groups, routeData.mergedAll, routeData.mergedCI);
+    routeData.timestamp = Date.now();
+    const afterRow = nextAfterRow(pp.groupDataIndices.map(r => r + routeData.mergedDataStartRow), config.direction);
+    const nextStateResult = await getNextStateRoutePrefix(config, afterRow);
+    if (nextStateResult.found) {
+      const ns = nextStateResult as DialerState;
+      const prefetch = getPrefetchStateFromRoutePrefix(routeData, ns, config.direction);
+      highlightPhonesFromRoutePrefix(routeData, ns.rows, prefetch?.rows || []);
+    }
+    return { nextState: nextStateResult, gamification: gamResult };
   } else {
     const sheet = cachedSheet!;
     sheet.available = filterAvailable(sheet.groups, sheet.all, sheet.CI);
@@ -1157,10 +1616,11 @@ export function hasPendingPrepay(): boolean { return pendingPrepay !== null; }
 
 export function checkStreetCleared(state: DialerState): { cleared: boolean; visibleGroupCount: number } {
   const isCityMode = !!cachedCity;
+  const isRoutePrefixMode = !!cachedRoutePrefix && !isCityMode;
 
-  const all = isCityMode ? cachedCity!.mergedAll : cachedSheet?.all;
-  const CI = isCityMode ? cachedCity!.mergedCI : cachedSheet?.CI;
-  const groups = isCityMode ? cachedCity!.groups : cachedSheet?.groups;
+  const all = isCityMode ? cachedCity!.mergedAll : isRoutePrefixMode ? cachedRoutePrefix!.mergedAll : cachedSheet?.all;
+  const CI = isCityMode ? cachedCity!.mergedCI : isRoutePrefixMode ? cachedRoutePrefix!.mergedCI : cachedSheet?.CI;
+  const groups = isCityMode ? cachedCity!.groups : isRoutePrefixMode ? cachedRoutePrefix!.groups : cachedSheet?.groups;
 
   if (!all || !CI || !groups) return { cleared: false, visibleGroupCount: 0 };
 
@@ -1331,17 +1791,130 @@ export async function discoverCities(
 }
 
 // =============================================================================
+// ROUTE PREFIX DISCOVERY
+// =============================================================================
+
+export interface RoutePrefixInfo {
+  prefixName: string;
+  tabs: string[];
+  totalRows: number;
+  bookings: number;
+  reachedPct: number;
+  avgAttempts: number;
+  lastUsed: string | null;
+}
+
+export async function discoverRoutePrefixes(
+  spreadsheetId: string,
+  tabNames: string[],
+  onProgress?: (scanned: number, total: number, tabName: string) => void
+): Promise<RoutePrefixInfo[]> {
+  const prefixMap = new Map<string, {
+    tabs: Set<string>;
+    totalRows: number;
+    bookings: number;
+    reachedRows: number;
+    naValues: number[];
+    latestDate: Date | null;
+  }>();
+
+  const hasValue = (v: any) => v !== null && v !== undefined && String(v).trim() !== '';
+  const hasAER = (v: any) => { const s = String(v ?? '').trim().toUpperCase(); return s === 'X' || s === 'AER' || s === 'YES' || s === 'Y'; };
+  const isDisposed = (row: any[], YES: number, NO: number, WN: number, REMOVE: number) =>
+    [YES, NO, WN, REMOVE].some(c => c >= 0 && hasValue(row[c]));
+  const getNA = (row: any[], NA: number) => {
+    if (NA < 0) return 0;
+    const v = parseInt(String(row[NA] ?? '0'), 10);
+    return isNaN(v) ? 0 : Math.max(0, v);
+  };
+  const normalizePhoneLocal = (v: any) => {
+    let s = String(v ?? '').trim();
+    if (s.endsWith('.0')) s = s.slice(0, -2);
+    const d = s.replace(/\D/g, '');
+    const t = d.length > 10 ? d.slice(-10) : d;
+    return t.length === 10 ? t : '';
+  };
+
+  for (let i = 0; i < tabNames.length; i++) {
+    const tabName = tabNames[i];
+    onProgress?.(i, tabNames.length, tabName);
+
+    try {
+      const rawData = await dialerSheetsService.sheetsGet(spreadsheetId, `'${tabName}'`);
+      if (!rawData || rawData.length < 2) continue;
+
+      const { headerRowIndex, CI } = findHeaders(rawData);
+      if (CI.PHONE < 0 || CI.ROUTE_CODE < 0) continue;
+
+      const rows = rawData.slice(headerRowIndex + 1);
+
+      for (const row of rows) {
+        if (!row[0]) continue;
+        if (!normalizePhoneLocal(row[CI.PHONE])) continue;
+
+        const routeCode = String(row[CI.ROUTE_CODE] ?? '').trim();
+        const prefix = getRoutePrefix(routeCode);
+        if (!prefix) continue;
+
+        if (!prefixMap.has(prefix)) {
+          prefixMap.set(prefix, { tabs: new Set(), totalRows: 0, bookings: 0, reachedRows: 0, naValues: [], latestDate: null });
+        }
+        const entry = prefixMap.get(prefix)!;
+        entry.tabs.add(tabName);
+        entry.totalRows++;
+
+        if (CI.AER >= 0 && hasAER(row[CI.AER])) entry.bookings++;
+        if (isDisposed(row, CI.YES, CI.NO, CI.WN, CI.REMOVE)) entry.reachedRows++;
+        else entry.naValues.push(getNA(row, CI.NA));
+
+        if (CI.DATE1 >= 0 && hasValue(row[CI.DATE1])) {
+          try {
+            const d = new Date(row[CI.DATE1]);
+            if (!isNaN(d.getTime()) && (!entry.latestDate || d > entry.latestDate)) entry.latestDate = d;
+          } catch { /* skip */ }
+        }
+      }
+    } catch {
+      // Skip tabs that fail
+    }
+
+    onProgress?.(i + 1, tabNames.length, tabName);
+  }
+
+  const result: RoutePrefixInfo[] = [];
+  for (const [prefix, entry] of prefixMap) {
+    const reachedPct = entry.totalRows > 0 ? Math.round((entry.reachedRows / entry.totalRows) * 100) : 0;
+    const avgAttempts = entry.naValues.length > 0
+      ? Math.round((entry.naValues.reduce((s, n) => s + n, 0) / entry.naValues.length) * 10) / 10
+      : 0;
+    result.push({
+      prefixName: prefix,
+      tabs: Array.from(entry.tabs),
+      totalRows: entry.totalRows,
+      bookings: entry.bookings,
+      reachedPct,
+      avgAttempts,
+      lastUsed: entry.latestDate ? entry.latestDate.toISOString() : null,
+    });
+  }
+
+  result.sort((a, b) => a.prefixName.localeCompare(b.prefixName));
+  return result;
+}
+
+// =============================================================================
 // AVAILABLE GROUP PHONES — for cooldown-aware count
 // =============================================================================
 
 /**
  * Returns an array of phone lists, one per available group.
  * Each phone list contains only non-WN phones for that group.
- * Works for both single-tab and city mode.
+ * Works for single-tab, city mode, and route prefix mode.
  * Used by DialerPage to compute how many groups are not on cooldown.
  */
 export function getAvailableGroupPhones(): string[][] {
   const isCityMode = !!cachedCity;
+  const isRoutePrefixMode = !!cachedRoutePrefix && !isCityMode;
 
   if (isCityMode && cachedCity) {
     return cachedCity.available.map(group => {
@@ -1349,6 +1922,27 @@ export function getAvailableGroupPhones(): string[][] {
       const seenPhones = new Set<string>();
       const CI = cachedCity!.mergedCI;
       const all = cachedCity!.mergedAll;
+
+      for (const r of group.rows) {
+        if (CI.PHONE < 0) continue;
+        const wnVal = CI.WN >= 0 ? String(all[r][CI.WN] ?? '').trim() : '';
+        if (wnVal !== '') continue;
+        const phone = normalizePhone(String(all[r][CI.PHONE] ?? ''));
+        if (phone && !seenPhones.has(phone)) {
+          seenPhones.add(phone);
+          phones.push(phone);
+        }
+      }
+      return phones;
+    });
+  }
+
+  if (isRoutePrefixMode && cachedRoutePrefix) {
+    return cachedRoutePrefix.available.map(group => {
+      const phones: string[] = [];
+      const seenPhones = new Set<string>();
+      const CI = cachedRoutePrefix!.mergedCI;
+      const all = cachedRoutePrefix!.mergedAll;
 
       for (const r of group.rows) {
         if (CI.PHONE < 0) continue;
@@ -1468,7 +2062,7 @@ async function saveSession(session: GamificationSession): Promise<void> {
       _resumeTab: resumeTab || undefined,
       _resumePosition: resumePosition || undefined,
       _resumeBookId: resumeBookId || undefined,
-      _siegeIndex: cachedSheet?.siegeIndex ?? cachedCity?.siegeIndex ?? undefined,
+      _siegeIndex: cachedSheet?.siegeIndex ?? cachedCity?.siegeIndex ?? cachedRoutePrefix?.siegeIndex ?? undefined,
     };
     await campaignService.upsertGamificationState(activeSessionRowId, stateWithResume);
   } catch (err) {

@@ -20,6 +20,7 @@ import {
   getNextState,
   discoverAvailableYears,
   discoverCities,
+  discoverRoutePrefixes,
   formatPhoneDisplay,
   getActiveMultipliers,
   getCurrentRank,
@@ -38,6 +39,7 @@ import type {
   GamificationSession,
   MultiplierSnapshot,
   CityInfo,
+  RoutePrefixInfo,
   UpsellType,
 } from '../../lib/dialer';
 import type { Rank, StagedCard } from '../../lib/dialer';
@@ -197,6 +199,10 @@ export default function DialerPage() {
   const [tabsError, setTabsError] = useState('');
   const [cityCards, setCityCards] = useState<CityInfo[]>([]);
   const [cityProgress, setCityProgress] = useState<{ current: number; total: number; tabName: string } | null>(null);
+  // NEW: route prefix state
+  const [routePrefixCards, setRoutePrefixCards] = useState<RoutePrefixInfo[]>([]);
+  const [routeProgress, setRouteProgress] = useState<{ current: number; total: number; tabName: string } | null>(null);
+  const [pendingRouteDeploy, setPendingRouteDeploy] = useState<RoutePrefixInfo[] | null>(null);
   const [books, setBooks] = useState<CampaignBook[]>([]);
   const [booksLoading, setBooksLoading] = useState(false);
   const [activeBook, setActiveBook] = useState<CampaignBook | null>(null);
@@ -550,22 +556,34 @@ export default function DialerPage() {
             } catch { /* Non-critical */ }
           });
 
+          // NEW: run city scan and route prefix scan in parallel
           if (callbookTabs.length > 0) {
             setCityProgress({ current: 0, total: callbookTabs.length, tabName: callbookTabs[0] });
-            try {
-              const cities = await discoverCities(
+            setRouteProgress({ current: 0, total: callbookTabs.length, tabName: callbookTabs[0] });
+
+            Promise.all([
+              discoverCities(
                 campaign.spreadsheetId,
                 callbookTabs,
                 (scanned: number, total: number, tabName: string) => {
                   setCityProgress({ current: scanned, total, tabName });
                 }
-              );
-              setCityCards(cities);
-            } catch {
-              // City scan failure is non-critical
-            } finally {
-              setCityProgress(null);
-            }
+              ).then(cities => {
+                setCityCards(cities);
+                setCityProgress(null);
+              }).catch(() => { setCityProgress(null); }),
+
+              discoverRoutePrefixes(
+                campaign.spreadsheetId,
+                callbookTabs,
+                (scanned: number, total: number, tabName: string) => {
+                  setRouteProgress({ current: scanned, total, tabName });
+                }
+              ).then(prefixes => {
+                setRoutePrefixCards(prefixes);
+                setRouteProgress(null);
+              }).catch(() => { setRouteProgress(null); }),
+            ]);
           }
 
         } catch (err: any) {
@@ -586,6 +604,7 @@ export default function DialerPage() {
 
   const handleCampaignDeploy = async (cardId: string) => {
     setPendingCityDeploy(null);
+    setPendingRouteDeploy(null); // NEW
     setStartBookingId('');
     setDeployError('');
 
@@ -604,6 +623,7 @@ export default function DialerPage() {
     if (book) {
       setActiveBook(book);
       setCityCards([]);
+      setRoutePrefixCards([]); // NEW
 
       if (!connected) {
         try {
@@ -633,20 +653,30 @@ export default function DialerPage() {
           } catch { /* Non-critical */ }
         });
 
+        // NEW: parallel scan for city + route
         if (bookTabs.length > 0) {
           setCityProgress({ current: 0, total: bookTabs.length, tabName: bookTabs[0] });
-          try {
-            const cities = await discoverCities(
+          setRouteProgress({ current: 0, total: bookTabs.length, tabName: bookTabs[0] });
+
+          Promise.all([
+            discoverCities(
               book.spreadsheetId,
               bookTabs,
               (scanned: number, total: number, tabName: string) => {
                 setCityProgress({ current: scanned, total, tabName });
               }
-            );
-            setCityCards(cities);
-          } catch { /* Non-critical */ } finally {
-            setCityProgress(null);
-          }
+            ).then(cities => { setCityCards(cities); setCityProgress(null); })
+              .catch(() => { setCityProgress(null); }),
+
+            discoverRoutePrefixes(
+              book.spreadsheetId,
+              bookTabs,
+              (scanned: number, total: number, tabName: string) => {
+                setRouteProgress({ current: scanned, total, tabName });
+              }
+            ).then(prefixes => { setRoutePrefixCards(prefixes); setRouteProgress(null); })
+              .catch(() => { setRouteProgress(null); }),
+          ]);
         }
       } catch (err: any) {
         setTabsError('Failed to load tabs: ' + (err.message || ''));
@@ -671,14 +701,31 @@ export default function DialerPage() {
     setActiveBook(null);
     setCampaignCards(booksToCards(books));
     setCityCards([]);
+    setRoutePrefixCards([]); // NEW
     setCityProgress(null);
+    setRouteProgress(null); // NEW
     setTabs([]);
   }, [books]);
 
   const handleCityDeploy = useCallback((city: CityInfo) => {
     setPendingCityDeploy(city);
+    setPendingRouteDeploy(null); // NEW
     setDeployingTab('');
     setSelectedTab(city.cityName);
+    setStartBookingId('');
+    setDeployError('');
+    if (direction === 'ambush') setDirection('infiltrate');
+    setShowDeployConfig(true);
+  }, [direction]);
+
+  // NEW: route prefix deploy handler
+  const handleRoutePrefixDeploy = useCallback((prefixes: RoutePrefixInfo[]) => {
+    if (!prefixes || prefixes.length === 0) return;
+    setPendingRouteDeploy(prefixes);
+    setPendingCityDeploy(null);
+    const displayName = prefixes.map(p => p.prefixName).join(' + ');
+    setDeployingTab('');
+    setSelectedTab(displayName);
     setStartBookingId('');
     setDeployError('');
     if (direction === 'ambush') setDirection('infiltrate');
@@ -691,11 +738,12 @@ export default function DialerPage() {
 
   const handleConfirmDeploy = async () => {
     const isCityMode = pendingCityDeploy !== null;
+    const isRoutePrefixMode = pendingRouteDeploy !== null && pendingRouteDeploy.length > 0; // NEW
 
     if (!campaign) return;
-    if (!isCityMode && !selectedTab) return;
+    if (!isCityMode && !isRoutePrefixMode && !selectedTab) return;
 
-    if (!isCityMode && direction === 'ambush' && !startBookingId.trim()) {
+    if (!isCityMode && !isRoutePrefixMode && direction === 'ambush' && !startBookingId.trim()) {
       setDeployError('AMBUSH requires a Booking ID. Please enter one above.');
       return;
     }
@@ -728,6 +776,25 @@ export default function DialerPage() {
         cityTabs: pendingCityDeploy!.tabs,
         campaignType: deployCampaignType,
       };
+    } else if (isRoutePrefixMode) { // NEW
+      const allTabsSet = new Set<string>();
+      for (const p of pendingRouteDeploy!) {
+        for (const t of p.tabs) allTabsSet.add(t);
+      }
+      const displayName = pendingRouteDeploy!.map(p => p.prefixName).join(' + ');
+      config = {
+        spreadsheetId: deploySpreadsheetId,
+        sheetName: displayName,
+        direction,
+        startRow: 2,
+        repCode: manager?.repCode || '',
+        managerId: manager?.id || '',
+        campaignId: campaign?.id || '',
+        sniperConfig,
+        routePrefixes: pendingRouteDeploy!.map(p => p.prefixName),
+        routeTabs: Array.from(allTabsSet),
+        campaignType: deployCampaignType,
+      };
     } else {
       config = {
         spreadsheetId: deploySpreadsheetId,
@@ -748,9 +815,13 @@ export default function DialerPage() {
     try {
       const snapshot = await initialize(config);
       if (!snapshot) {
-        setEmptyMessage(isCityMode
-          ? `No available groups found in city "${pendingCityDeploy!.cityName}".`
-          : 'No available groups found in this tab.');
+        setEmptyMessage(
+          isRoutePrefixMode
+            ? `No available groups found for routes "${config.sheetName}".`
+            : isCityMode
+              ? `No available groups found in city "${pendingCityDeploy!.cityName}".`
+              : 'No available groups found in this tab.'
+        );
         setMode('dialer');
         setLoading(false);
         return;
@@ -783,12 +854,15 @@ export default function DialerPage() {
       prevOwnMultipliersRef.current = newMults;
       prefillYesForm(firstState);
 
-      const displayTab = isCityMode ? pendingCityDeploy!.cityName : selectedTab;
-      setResumePosition(displayTab, '', firstState.firstRow, activeBook?.id);
+      const displayTab = isRoutePrefixMode
+        ? pendingRouteDeploy!.map(p => p.prefixName).join(' + ')
+        : isCityMode ? pendingCityDeploy!.cityName : selectedTab;
 
+      setResumePosition(displayTab, '', firstState.firstRow, activeBook?.id);
       setActiveDialTab(displayTab);
       setMode('dialer');
       setPendingCityDeploy(null);
+      setPendingRouteDeploy(null); // NEW
       computeNetAvailable();
     } catch (err: any) {
       setShowDeployConfig(true);
@@ -1030,6 +1104,7 @@ export default function DialerPage() {
         setActiveBook(null);
         if (books.length > 0) setCampaignCards(booksToCards(books));
         setCityCards([]);
+        setRoutePrefixCards([]); // NEW
         setMode('campaign-select' as any);
         break;
       case 'reset': {
@@ -1325,6 +1400,8 @@ export default function DialerPage() {
           onDeploy={handleCampaignDeploy}
           cityCards={books.length > 0 && !activeBook ? undefined : cityCards}
           onCityDeploy={books.length > 0 && !activeBook ? undefined : handleCityDeploy}
+          routePrefixCards={books.length > 0 && !activeBook ? undefined : routePrefixCards}
+          onRoutePrefixDeploy={books.length > 0 && !activeBook ? undefined : handleRoutePrefixDeploy}
           onSettingsClick={() => {
             const ssId = activeBook?.spreadsheetId || campaign?.spreadsheetId;
             if (availableYears.length === 0 && ssId && tabs.length > 0) {
@@ -1367,6 +1444,7 @@ export default function DialerPage() {
           session={session}
         />
 
+        {/* City scan progress bar */}
         {cityProgress && (
           <div style={{
             position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
@@ -1390,6 +1468,30 @@ export default function DialerPage() {
           </div>
         )}
 
+        {/* NEW: Route scan progress bar — shown after city scan completes */}
+        {!cityProgress && routeProgress && (
+          <div style={{
+            position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
+            background: 'rgba(0,8,14,0.97)', borderTop: '1px solid rgba(52,152,219,0.25)',
+            padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 16,
+          }}>
+            <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '2px', color: '#3498db', opacity: 0.6, textTransform: 'uppercase', flexShrink: 0 }}>
+              🗺 ROUTE SCAN
+            </span>
+            <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 2,
+                width: `${routeProgress.total > 0 ? Math.round((routeProgress.current / routeProgress.total) * 100) : 0}%`,
+                background: 'linear-gradient(90deg, #3498db, #2980b9)',
+                transition: 'width 0.3s ease',
+              }} />
+            </div>
+            <span style={{ fontSize: 9, fontWeight: 700, color: '#3498db', opacity: 0.5, fontFamily: 'monospace', flexShrink: 0, minWidth: 120, textAlign: 'right' }}>
+              Scanning {routeProgress.current} of {routeProgress.total} tabs...
+            </span>
+          </div>
+        )}
+
         {campaign?.id && (
           <SniperSettings
             open={sniperSettingsOpen}
@@ -1405,7 +1507,7 @@ export default function DialerPage() {
           <div
             className="fixed inset-0 z-50 flex items-center justify-center"
             style={{ background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(4px)' }}
-            onClick={() => { setShowDeployConfig(false); setPendingCityDeploy(null); }}
+            onClick={() => { setShowDeployConfig(false); setPendingCityDeploy(null); setPendingRouteDeploy(null); }}
           >
             <div
               className="rounded-lg p-6 w-full max-w-sm"
@@ -1414,17 +1516,25 @@ export default function DialerPage() {
             >
               <div className="text-center mb-4">
                 <div style={{ fontSize: 8, fontWeight: 800, letterSpacing: '3px', color: '#00e5ff', opacity: 0.5, textTransform: 'uppercase' }}>
-                  {pendingCityDeploy ? '🏙 CITY MISSION PARAMETERS' : 'MISSION PARAMETERS'}
+                  {pendingRouteDeploy ? '🗺 ROUTE MISSION PARAMETERS' : pendingCityDeploy ? '🏙 CITY MISSION PARAMETERS' : 'MISSION PARAMETERS'}
                 </div>
                 <div className="text-base font-black tracking-wider uppercase mt-1" style={{ color: '#fff' }}>
-                  {pendingCityDeploy ? pendingCityDeploy.cityName : deployingTab}
+                  {pendingRouteDeploy
+                    ? pendingRouteDeploy.map(p => p.prefixName).join(' + ')
+                    : pendingCityDeploy ? pendingCityDeploy.cityName : deployingTab}
                 </div>
+                {/* NEW: route prefix subtitle */}
+                {pendingRouteDeploy && (
+                  <div style={{ fontSize: 8, color: '#3498db', opacity: 0.6, marginTop: 4, fontFamily: 'monospace' }}>
+                    {pendingRouteDeploy.length} route{pendingRouteDeploy.length !== 1 ? 's' : ''} · {pendingRouteDeploy.reduce((s, p) => s + p.totalRows, 0).toLocaleString()} rows
+                  </div>
+                )}
                 {pendingCityDeploy && (
                   <div style={{ fontSize: 8, color: '#3498db', opacity: 0.6, marginTop: 4, fontFamily: 'monospace' }}>
                     {pendingCityDeploy.tabs.length} tab{pendingCityDeploy.tabs.length !== 1 ? 's' : ''} · {pendingCityDeploy.totalRows.toLocaleString()} rows
                   </div>
                 )}
-                {activeBook && !pendingCityDeploy && (
+                {activeBook && !pendingCityDeploy && !pendingRouteDeploy && (
                   <div style={{ marginTop: 4 }}>
                     <div style={{ fontSize: 8, color: '#888', marginBottom: 3, fontFamily: 'monospace' }}>{activeBook.displayName}</div>
                     {activeBook.campaignType === 'bc' ? (
@@ -1443,45 +1553,48 @@ export default function DialerPage() {
                     { dir: 'ambush',     label: 'AMBUSH',     icon: 'lorc/hidden',       bg: '#0f3460', tip: 'Start at a specific Booking ID and call down. Wraps back to the top and completes a full loop.' },
                     { dir: 'infiltrate', label: 'INFILTRATE', icon: 'lorc/deadly-strike', bg: '#533483', tip: 'Scans the sheet in 20-row windows and strikes the zone with the lowest NA count.' },
                     { dir: 'siege',      label: 'SIEGE',      icon: 'lorc/tower-fall',   bg: '#7b1a1a', tip: 'Works every group in NA order — blanks first, then 1s, then 2s. No wrap. Mission complete when exhausted.' },
-                  ] as const).filter(({ dir }) => !(pendingCityDeploy && dir === 'ambush')).map(({ dir, label, icon, bg, tip }) => {
-                    const isSelected = direction === dir;
-                    return (
-                      <div key={dir} className="flex-1 relative group">
-                        <button
-                          onClick={() => { setDirection(dir as Direction); setDeployError(''); if (dir !== 'ambush') setStartBookingId(''); }}
-                          className="w-full rounded transition-all"
-                          style={{
-                            position: 'relative', overflow: 'hidden', padding: '10px 4px 8px',
-                            background: isSelected ? bg : '#1a2e1a', color: isSelected ? '#fff' : '#666',
-                            border: isSelected ? `1.5px solid ${bg}` : '1.5px solid rgba(0,229,255,0.15)',
-                            fontFamily: 'inherit', minHeight: 64, display: 'flex', flexDirection: 'column',
-                            alignItems: 'center', justifyContent: 'flex-end', gap: 4, cursor: 'pointer',
-                          }}
-                        >
-                          <img src={`https://game-icons.net/icons/ffffff/transparent/1x1/${icon}.svg`} alt=""
-                            style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-                              width: 52, height: 52, opacity: isSelected ? 0.18 : 0.07, pointerEvents: 'none',
-                              filter: isSelected ? 'none' : 'grayscale(100%)', transition: 'opacity 0.2s ease' }} />
-                          <span style={{ position: 'relative', zIndex: 1, fontSize: 9, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase' }}>{label}</span>
-                        </button>
-                        <div className="absolute left-1/2 z-50 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150"
-                          style={{ bottom: 'calc(100% + 8px)', transform: 'translateX(-50%)', width: 180,
-                            background: 'rgba(0,8,14,0.97)', border: '1px solid rgba(0,229,255,0.25)', borderRadius: 6,
-                            padding: '8px 10px', boxShadow: '0 4px 20px rgba(0,0,0,0.8)', color: '#aaa',
-                            fontSize: 10, lineHeight: 1.5, fontWeight: 400, letterSpacing: '0.3px', textAlign: 'left' }}>
-                          <div style={{ color: '#00e5ff', fontWeight: 800, fontSize: 9, letterSpacing: '1.5px', marginBottom: 4, textTransform: 'uppercase' }}>{label}</div>
-                          {tip}
-                          <div style={{ position: 'absolute', bottom: -5, left: '50%', transform: 'translateX(-50%) rotate(45deg)',
-                            width: 8, height: 8, background: 'rgba(0,8,14,0.97)', border: '1px solid rgba(0,229,255,0.25)',
-                            borderTop: 'none', borderLeft: 'none' }} />
+                  ] as const)
+                    // NEW: filter out Ambush for city and route modes
+                    .filter(({ dir }) => !((pendingCityDeploy || pendingRouteDeploy) && dir === 'ambush'))
+                    .map(({ dir, label, icon, bg, tip }) => {
+                      const isSelected = direction === dir;
+                      return (
+                        <div key={dir} className="flex-1 relative group">
+                          <button
+                            onClick={() => { setDirection(dir as Direction); setDeployError(''); if (dir !== 'ambush') setStartBookingId(''); }}
+                            className="w-full rounded transition-all"
+                            style={{
+                              position: 'relative', overflow: 'hidden', padding: '10px 4px 8px',
+                              background: isSelected ? bg : '#1a2e1a', color: isSelected ? '#fff' : '#666',
+                              border: isSelected ? `1.5px solid ${bg}` : '1.5px solid rgba(0,229,255,0.15)',
+                              fontFamily: 'inherit', minHeight: 64, display: 'flex', flexDirection: 'column',
+                              alignItems: 'center', justifyContent: 'flex-end', gap: 4, cursor: 'pointer',
+                            }}
+                          >
+                            <img src={`https://game-icons.net/icons/ffffff/transparent/1x1/${icon}.svg`} alt=""
+                              style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                                width: 52, height: 52, opacity: isSelected ? 0.18 : 0.07, pointerEvents: 'none',
+                                filter: isSelected ? 'none' : 'grayscale(100%)', transition: 'opacity 0.2s ease' }} />
+                            <span style={{ position: 'relative', zIndex: 1, fontSize: 9, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase' }}>{label}</span>
+                          </button>
+                          <div className="absolute left-1/2 z-50 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+                            style={{ bottom: 'calc(100% + 8px)', transform: 'translateX(-50%)', width: 180,
+                              background: 'rgba(0,8,14,0.97)', border: '1px solid rgba(0,229,255,0.25)', borderRadius: 6,
+                              padding: '8px 10px', boxShadow: '0 4px 20px rgba(0,0,0,0.8)', color: '#aaa',
+                              fontSize: 10, lineHeight: 1.5, fontWeight: 400, letterSpacing: '0.3px', textAlign: 'left' }}>
+                            <div style={{ color: '#00e5ff', fontWeight: 800, fontSize: 9, letterSpacing: '1.5px', marginBottom: 4, textTransform: 'uppercase' }}>{label}</div>
+                            {tip}
+                            <div style={{ position: 'absolute', bottom: -5, left: '50%', transform: 'translateX(-50%) rotate(45deg)',
+                              width: 8, height: 8, background: 'rgba(0,8,14,0.97)', border: '1px solid rgba(0,229,255,0.25)',
+                              borderTop: 'none', borderLeft: 'none' }} />
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
                 </div>
               </div>
 
-              {!pendingCityDeploy && direction === 'ambush' && (
+              {!pendingCityDeploy && !pendingRouteDeploy && direction === 'ambush' && (
                 <div className="mb-4">
                   <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '2px', color: '#00e5ff', opacity: 0.4, textTransform: 'uppercase', marginBottom: 6 }}>
                     STARTING BOOKING ID <span style={{ color: '#e74c3c', opacity: 0.9 }}>REQUIRED</span>
@@ -1520,7 +1633,8 @@ export default function DialerPage() {
               )}
 
               <div className="flex gap-3">
-                <button onClick={() => { setShowDeployConfig(false); setPendingCityDeploy(null); }}
+                <button
+                  onClick={() => { setShowDeployConfig(false); setPendingCityDeploy(null); setPendingRouteDeploy(null); }}
                   className="flex-shrink-0 px-4 py-3 rounded text-xs font-bold tracking-wider uppercase"
                   style={{ background: '#222', color: '#666', border: '1px solid #333', fontFamily: 'inherit' }}>
                   ABORT
@@ -1567,7 +1681,14 @@ export default function DialerPage() {
             <div className="text-sm font-black tracking-widest uppercase" style={{ color: '#555' }}>Mission Complete</div>
             <div className="text-xs mt-2" style={{ color: '#444', maxWidth: 300 }}>{emptyMessage}</div>
             <button
-              onClick={() => { setMode('campaign-select'); setActiveBook(null); if (books.length > 0) setCampaignCards(booksToCards(books)); setCityCards([]); invalidateCache(); }}
+              onClick={() => {
+                setMode('campaign-select');
+                setActiveBook(null);
+                if (books.length > 0) setCampaignCards(booksToCards(books));
+                setCityCards([]);
+                setRoutePrefixCards([]); // NEW
+                invalidateCache();
+              }}
               className="mt-4 px-4 py-2 rounded text-xs font-bold tracking-wider uppercase"
               style={{ background: 'rgba(0,20,30,0.8)', color: '#00e5ff', border: '1px solid rgba(0,229,255,0.20)' }}
             >
