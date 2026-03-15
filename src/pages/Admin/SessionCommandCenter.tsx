@@ -25,6 +25,7 @@ import {
   Package,
   UserPlus,
   GraduationCap,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
@@ -37,6 +38,7 @@ import { DailySessionData, SortOption, LogsheetSession, SeasonType, SEASON_CONFI
 import PayoutToday from '../Management/PayoutToday';
 import JobFairManager from './JobFairManager';
 import TrainingsTab from './TrainingsTab';
+import PayslipGenerator from './PayslipGenerator';
 
 const SessionCommandCenter: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -51,6 +53,9 @@ const SessionCommandCenter: React.FC = () => {
 
   // Sub-tab within Onboarding
   const [onboardingSubTab, setOnboardingSubTab] = useState<'jobfairs' | 'trainings'>('jobfairs');
+
+  // Payslip generator visibility
+  const [showPayslipGenerator, setShowPayslipGenerator] = useState(false);
 
   // --- COMMAND CENTER CONTEXT (stored in state to avoid infinite loops) ---
   const [currentCC, setCurrentCC] = useState(() => commandCenterService.getCurrentCommandCenter());
@@ -609,7 +614,22 @@ const SessionCommandCenter: React.FC = () => {
         {/* --- VIEW 1: SESSION CYCLE (Start -> Monitor -> End) --- */}
         {activeTab === 'lifecycle' && (
           <div className="space-y-8 animate-fade-in">
-            
+
+            {showPayslipGenerator ? (
+              <PayslipGenerator onBack={() => setShowPayslipGenerator(false)} />
+            ) : (
+              <>
+                {/* Generate Payslips button */}
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => setShowPayslipGenerator(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-700 transition-colors text-sm font-medium"
+                  >
+                    <FileSpreadsheet size={16} className="text-green-400" />
+                    Generate Payslips
+                  </button>
+                </div>
+
             {/* 1. UPLOAD SECTION (Only if no session) */}
             {!currentSession && (
                 <div className="bg-gray-800 rounded-xl p-8 border border-gray-700 shadow-lg">
@@ -1056,6 +1076,9 @@ const SessionCommandCenter: React.FC = () => {
                     </div>
                 </div>
             )}
+
+          </div>
+        )}
 
           </div>
         )}

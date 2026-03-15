@@ -1,0 +1,481 @@
+// src/pages/Admin/PayslipGenerator.tsx
+import React, { useState, useEffect } from 'react';
+import {
+  ChevronLeft, ChevronRight, ArrowLeft, Download,
+  Loader, AlertCircle, Plus, Trash2, CheckCircle,
+  Users, FileSpreadsheet,
+} from 'lucide-react';
+import { googleSheetsService } from '../../lib/googleSheetsService';
+import { commandCenterService } from '../../lib/commandCenterService';
+import {
+  generatePayslipsXLSX,
+  parsePayoutStatsRows,
+  WorkerPayslipUI,
+  ExtraItem,
+} from '../../lib/payslipExport';
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface WorkerSettings {
+  is120Program: boolean;
+  hotels: number;
+  advances: number;
+  travelPkg: number;
+  extraDeductions: ExtraItem[];
+  additions: ExtraItem[];
+}
+
+// ─── Date helpers ─────────────────────────────────────────────────────────────
+
+const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+function sortKey(s: string): number {
+  const months: Record<string, number> = {
+    Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,
+    Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12,
+  };
+  return (months[s.slice(0, 3)] || 0) * 100 + parseInt(s.slice(3), 10);
+}
+
+function mmmdd(month: number, day: number): string {
+  return `${MONTH_ABBR[month]}${String(day).padStart(2, '0')}`;
+}
+
+function calendarDays(start: string, end: string): number {
+  const year = new Date().getFullYear();
+  const sm = MONTH_ABBR.indexOf(start.slice(0, 3));
+  const em = MONTH_ABBR.indexOf(end.slice(0, 3));
+  const a = new Date(year, sm, parseInt(start.slice(3), 10));
+  const b = new Date(year, em, parseInt(end.slice(3), 10));
+  return Math.round((b.getTime() - a.getTime()) / 86400000) + 1;
+}
+
+function defaultSettings(): WorkerSettings {
+  return { is120Program: false, hotels: 0, advances: 0, travelPkg: 0, extraDeductions: [], additions: [] };
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
+interface Props { onBack: () => void; }
+
+const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
+  const cc = commandCenterService.getCurrentCommandCenter();
+
+  const [step, setStep] = useState<'setup' | 'workers'>('setup');
+  const [isGoogleConnected, setIsGoogleConnected] = useState(() => googleSheetsService.isAuthenticated());
+  const [sheetsLoading, setSheetsLoading] = useState(false);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [allRows, setAllRows] = useState<any[][]>([]);
+  const [availableDates, setAvailableDates] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+
+  // Calendar
+  const [viewMonth, setViewMonth] = useState(new Date().getMonth());
+  const [startDate, setStartDate] = useState<string | null>(null);
+  const [endDate, setEndDate] = useState<string | null>(null);
+
+  // Workers
+  const [workerList, setWorkerList] = useState<WorkerPayslipUI[]>([]);
+  const [workerSettings, setWorkerSettings] = useState<Map<string, WorkerSettings>>(new Map());
+  const [isExporting, setIsExporting] = useState(false);
+
+  useEffect(() => {
+    if (isGoogleConnected && allRows.length === 0) loadPayoutStats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isGoogleConnected]);
+
+  const handleConnectGoogle = async () => {
+    setSheetsLoading(true);
+    setError(null);
+    try {
+      const ok = await googleSheetsService.authenticate();
+      setIsGoogleConnected(ok);
+      if (!ok) setError('Failed to connect to Google.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Connection failed.');
+    } finally { setSheetsLoading(false); }
+  };
+
+  const loadPayoutStats = async () => {
+    setStatsLoading(true);
+    setError(null);
+    try {
+      const rows = await googleSheetsService.readWorkerbookRange("'Payout Stats'!A:AH");
+      setAllRows(rows);
+      const dates = new Set<string>();
+      for (let i = 1; i < rows.length; i++) {
+        const v = rows[i]?.[0];
+        if (v) {
+          const d = String(v).trim();
+          if (/^[A-Z][a-z]{2}\d{2}$/.test(d)) dates.add(d);
+        }
+      }
+      setAvailableDates(dates);
+      if (dates.size > 0) {
+        const sorted = Array.from(dates).sort((a, b) => sortKey(a) - sortKey(b));
+        const m = MONTH_ABBR.indexOf(sorted[0].slice(0, 3));
+        if (m >= 0) setViewMonth(m);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load Payout Stats.');
+    } finally { setStatsLoading(false); }
+  };
+
+  const handleDateClick = (d: string) => {
+    if (!availableDates.has(d)) return;
+    if (!startDate || (startDate && endDate)) {
+      setStartDate(d); setEndDate(null);
+    } else {
+      const dk = sortKey(d);
+      const sk = sortKey(startDate);
+      if (dk < sk) { setEndDate(startDate); setStartDate(d); }
+      else { setEndDate(d); }
+    }
+  };
+
+  const handleLoadWorkers = () => {
+    if (!startDate || !endDate) return;
+    const workers = parsePayoutStatsRows(allRows, startDate, endDate);
+    setWorkerList(workers);
+    const s = new Map<string, WorkerSettings>();
+    workers.forEach(w => s.set(w.contractorId, defaultSettings()));
+    setWorkerSettings(s);
+    setStep('workers');
+  };
+
+  const updateSetting = <K extends keyof WorkerSettings>(id: string, field: K, value: WorkerSettings[K]) => {
+    setWorkerSettings(prev => {
+      const next = new Map(prev);
+      next.set(id, { ...(next.get(id) || defaultSettings()), [field]: value });
+      return next;
+    });
+  };
+
+  const addItem = (id: string, type: 'extraDeductions' | 'additions') => {
+    setWorkerSettings(prev => {
+      const next = new Map(prev);
+      const cur = next.get(id) || defaultSettings();
+      next.set(id, { ...cur, [type]: [...cur[type], { id: `${Date.now()}`, label: '', amount: 0 }] });
+      return next;
+    });
+  };
+
+  const updateItem = (id: string, type: 'extraDeductions' | 'additions', itemId: string, field: 'label' | 'amount', value: string | number) => {
+    setWorkerSettings(prev => {
+      const next = new Map(prev);
+      const cur = next.get(id) || defaultSettings();
+      next.set(id, { ...cur, [type]: cur[type].map(x => x.id === itemId ? { ...x, [field]: value } : x) });
+      return next;
+    });
+  };
+
+  const removeItem = (id: string, type: 'extraDeductions' | 'additions', itemId: string) => {
+    setWorkerSettings(prev => {
+      const next = new Map(prev);
+      const cur = next.get(id) || defaultSettings();
+      next.set(id, { ...cur, [type]: cur[type].filter(x => x.id !== itemId) });
+      return next;
+    });
+  };
+
+  const handleExport = () => {
+    if (!startDate || !endDate || !cc) return;
+    setIsExporting(true);
+    setError(null);
+    try {
+      const daysInRange = calendarDays(startDate, endDate);
+      const data = workerList.map(w => ({ ...w, ...(workerSettings.get(w.contractorId) || defaultSettings()) }));
+      generatePayslipsXLSX(data, startDate, endDate, cc.displayName, daysInRange);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Export failed.');
+    } finally { setIsExporting(false); }
+  };
+
+  // ─── Calendar ────────────────────────────────────────────────────────────────
+
+  const renderCalendar = () => {
+    const year = new Date().getFullYear();
+    const daysInMonth = new Date(year, viewMonth + 1, 0).getDate();
+    const firstDow = new Date(year, viewMonth, 1).getDay();
+    const sk = startDate ? sortKey(startDate) : null;
+    const ek = endDate ? sortKey(endDate) : null;
+
+    const cells: React.ReactNode[] = [];
+    for (let i = 0; i < firstDow; i++) cells.push(<div key={`e${i}`} />);
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const ds = mmmdd(viewMonth, day);
+      const has = availableDates.has(ds);
+      const dk = sortKey(ds);
+      const isStart = startDate === ds;
+      const isEnd = endDate === ds;
+      const inRange = sk !== null && ek !== null && dk >= sk && dk <= ek;
+
+      let cls = 'flex items-center justify-center h-8 w-8 text-sm select-none transition-colors rounded ';
+      if (!has) cls += 'text-gray-600 cursor-default';
+      else if (isStart || isEnd) cls += 'bg-green-600 text-white font-bold cursor-pointer rounded-full';
+      else if (inRange) cls += 'bg-green-900/40 text-green-300 cursor-pointer';
+      else cls += 'text-white hover:bg-gray-700 cursor-pointer';
+
+      cells.push(
+        <div key={day} onClick={() => has && handleDateClick(ds)} className={cls}>{day}</div>
+      );
+    }
+
+    return (
+      <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 w-full max-w-sm mx-auto">
+        <div className="flex items-center justify-between mb-4">
+          <button onClick={() => setViewMonth(m => m === 0 ? 11 : m - 1)} className="p-1.5 hover:bg-gray-700 rounded transition-colors">
+            <ChevronLeft size={18} className="text-gray-400" />
+          </button>
+          <span className="font-bold text-white text-sm">{MONTH_NAMES[viewMonth]} {year}</span>
+          <button onClick={() => setViewMonth(m => m === 11 ? 0 : m + 1)} className="p-1.5 hover:bg-gray-700 rounded transition-colors">
+            <ChevronRight size={18} className="text-gray-400" />
+          </button>
+        </div>
+        <div className="grid grid-cols-7 gap-1 mb-2">
+          {['Su','Mo','Tu','We','Th','Fr','Sa'].map(d => (
+            <div key={d} className="text-center text-xs text-gray-500 font-medium">{d}</div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-1">{cells}</div>
+        <div className="mt-3 flex gap-4 text-xs text-gray-500">
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-600 inline-block" />Has data</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-gray-600 inline-block" />No data</span>
+        </div>
+        <div className="mt-3 p-2.5 bg-gray-900/60 rounded-lg min-h-[36px] text-center text-xs">
+          {startDate && endDate ? (
+            <span className="text-green-400 font-medium">
+              {startDate} → {endDate}
+              <span className="text-gray-400 ml-2">
+                ({calendarDays(startDate, endDate)} days · {calendarDays(startDate, endDate) > 7 ? '16-row / 2 per page' : '8-row / 3 per page'})
+              </span>
+            </span>
+          ) : startDate ? (
+            <span className="text-yellow-400">Click end date to complete range</span>
+          ) : (
+            <span className="text-gray-500">Click a date to start selection</span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ─── Worker row ───────────────────────────────────────────────────────────────
+
+  const renderWorker = (w: WorkerPayslipUI) => {
+    const s = workerSettings.get(w.contractorId) || defaultSettings();
+    return (
+      <div key={w.contractorId} className="bg-gray-800 rounded-xl border border-gray-700 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <span className="font-bold text-white text-sm">{w.contractorId} — {w.firstName} {w.lastName}</span>
+            <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded">{w.days.length} day{w.days.length !== 1 ? 's' : ''}</span>
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" checked={s.is120Program}
+              onChange={e => updateSetting(w.contractorId, 'is120Program', e.target.checked)}
+              className="w-4 h-4 accent-green-500" />
+            <span className={`text-xs font-medium ${s.is120Program ? 'text-green-400' : 'text-gray-500'}`}>$120 Program</span>
+          </label>
+        </div>
+
+        {/* Standard deduction inputs */}
+        <div className="grid grid-cols-3 gap-3 mb-3">
+          {(['hotels', 'advances', 'travelPkg'] as const).map(field => (
+            <div key={field}>
+              <label className="block text-xs text-gray-400 mb-1">
+                {field === 'travelPkg' ? 'Travel Pkg' : field.charAt(0).toUpperCase() + field.slice(1)}
+              </label>
+              <div className="relative">
+                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
+                <input type="number" min="0" step="0.01" placeholder="0" value={s[field] || ''}
+                  onChange={e => updateSetting(w.contractorId, field, parseFloat(e.target.value) || 0)}
+                  className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1.5 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Extra deductions */}
+        {s.extraDeductions.length > 0 && (
+          <div className="mb-2 space-y-1.5">
+            {s.extraDeductions.map(item => (
+              <div key={item.id} className="flex items-center gap-2">
+                <input type="text" placeholder="Deduction label" value={item.label}
+                  onChange={e => updateItem(w.contractorId, 'extraDeductions', item.id, 'label', e.target.value)}
+                  className="flex-1 bg-gray-900 border border-gray-600 rounded-lg py-1 px-2 text-sm text-white focus:ring-1 focus:ring-red-500 focus:outline-none" />
+                <div className="relative w-28">
+                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
+                  <input type="number" min="0" step="0.01" placeholder="0" value={item.amount || ''}
+                    onChange={e => updateItem(w.contractorId, 'extraDeductions', item.id, 'amount', parseFloat(e.target.value) || 0)}
+                    className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-red-500 focus:outline-none" />
+                </div>
+                <button onClick={() => removeItem(w.contractorId, 'extraDeductions', item.id)} className="text-red-400 hover:text-red-300 transition-colors">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Additions */}
+        {s.additions.length > 0 && (
+          <div className="mb-2 space-y-1.5">
+            {s.additions.map(item => (
+              <div key={item.id} className="flex items-center gap-2">
+                <input type="text" placeholder="Addition label" value={item.label}
+                  onChange={e => updateItem(w.contractorId, 'additions', item.id, 'label', e.target.value)}
+                  className="flex-1 bg-gray-900 border border-gray-600 rounded-lg py-1 px-2 text-sm text-white focus:ring-1 focus:ring-green-500 focus:outline-none" />
+                <div className="relative w-28">
+                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">$</span>
+                  <input type="number" min="0" step="0.01" placeholder="0" value={item.amount || ''}
+                    onChange={e => updateItem(w.contractorId, 'additions', item.id, 'amount', parseFloat(e.target.value) || 0)}
+                    className="w-full bg-gray-900 border border-gray-600 rounded-lg py-1 pl-5 pr-2 text-sm text-white focus:ring-1 focus:ring-green-500 focus:outline-none" />
+                </div>
+                <button onClick={() => removeItem(w.contractorId, 'additions', item.id)} className="text-red-400 hover:text-red-300 transition-colors">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex gap-2 mt-2">
+          <button onClick={() => addItem(w.contractorId, 'extraDeductions')}
+            className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 bg-red-900/10 hover:bg-red-900/20 border border-red-800/30 px-2.5 py-1 rounded transition-colors">
+            <Plus size={12} /> Deduction
+          </button>
+          <button onClick={() => addItem(w.contractorId, 'additions')}
+            className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300 bg-green-900/10 hover:bg-green-900/20 border border-green-800/30 px-2.5 py-1 rounded transition-colors">
+            <Plus size={12} /> Addition
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ─── Render ───────────────────────────────────────────────────────────────────
+
+  return (
+    <div className="space-y-4 animate-fade-in">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <button onClick={step === 'workers' ? () => setStep('setup') : onBack}
+          className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors text-sm">
+          <ArrowLeft size={16} />
+          {step === 'workers' ? 'Back to Calendar' : 'Back to Session'}
+        </button>
+        <div className="flex items-center gap-2">
+          <FileSpreadsheet size={18} className="text-green-400" />
+          <span className="font-bold text-white">Generate Payslips</span>
+          {startDate && endDate && (
+            <span className="text-xs bg-green-900/30 text-green-400 border border-green-700/50 px-2 py-0.5 rounded ml-1">
+              {startDate} → {endDate}
+            </span>
+          )}
+        </div>
+        {step === 'workers' ? (
+          <button onClick={handleExport} disabled={isExporting || workerList.length === 0}
+            className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors">
+            {isExporting ? <Loader size={16} className="animate-spin" /> : <Download size={16} />}
+            Export XLSX
+          </button>
+        ) : <div className="w-28" />}
+      </div>
+
+      {error && (
+        <div className="flex items-center gap-2 bg-red-900/20 border border-red-700/50 rounded-lg p-3 text-red-400 text-sm">
+          <AlertCircle size={16} className="flex-shrink-0" />{error}
+        </div>
+      )}
+
+      {/* ── STEP 1: SETUP ── */}
+      {step === 'setup' && (
+        <div className="space-y-6">
+          {!isGoogleConnected ? (
+            <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 max-w-sm mx-auto text-center">
+              <p className="text-gray-400 text-sm mb-4">Connect to Google Sheets to load Payout Stats data.</p>
+              <button onClick={handleConnectGoogle} disabled={sheetsLoading}
+                className="w-full bg-white hover:bg-gray-100 text-gray-800 py-3 px-4 rounded-lg font-medium flex items-center justify-center gap-3 transition-colors disabled:opacity-50">
+                {sheetsLoading ? <Loader className="animate-spin" size={20} /> : (
+                  <>
+                    <svg width="20" height="20" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                    </svg>
+                    Connect to Google
+                  </>
+                )}
+              </button>
+            </div>
+          ) : statsLoading ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-3 text-gray-400">
+              <Loader className="animate-spin" size={28} />
+              <span className="text-sm">Loading Payout Stats…</span>
+            </div>
+          ) : availableDates.size === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-3 text-gray-400">
+              <AlertCircle size={28} className="opacity-40" />
+              <span className="text-sm">No data found in Payout Stats.</span>
+              <button onClick={loadPayoutStats} className="text-xs text-blue-400 hover:text-blue-300 underline">Retry</button>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-center gap-2 text-green-400 text-xs">
+                <CheckCircle size={14} />
+                <span>Connected · {availableDates.size} dates loaded from Payout Stats</span>
+              </div>
+              {renderCalendar()}
+              <div className="flex justify-center">
+                <button onClick={handleLoadWorkers} disabled={!startDate || !endDate}
+                  className="bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-8 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors">
+                  <Users size={18} /> Load Workers
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── STEP 2: WORKERS ── */}
+      {step === 'workers' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between bg-gray-800 rounded-lg border border-gray-700 px-4 py-2.5">
+            <span className="text-sm text-gray-400">
+              <span className="text-white font-bold">{workerList.length}</span> workers ·{' '}
+              {startDate && endDate && (calendarDays(startDate, endDate) > 7 ? '16-row blocks · 2 per page' : '8-row blocks · 3 per page')}
+            </span>
+            <span className="text-xs text-gray-500 truncate ml-4">
+              {cc?.displayName} {startDate} - {endDate} Payslips.xlsx
+            </span>
+          </div>
+
+          {workerList.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-gray-500 gap-2">
+              <AlertCircle size={32} className="opacity-30" />
+              <p className="text-sm">No workers found for this date range.</p>
+            </div>
+          ) : (
+            workerList.map(w => renderWorker(w))
+          )}
+
+          {workerList.length > 0 && (
+            <div className="flex justify-center pt-2 pb-4">
+              <button onClick={handleExport} disabled={isExporting}
+                className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white px-8 py-3 rounded-lg font-bold transition-colors">
+                {isExporting ? <Loader size={18} className="animate-spin" /> : <Download size={18} />}
+                Export XLSX
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default PayslipGenerator;
