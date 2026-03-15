@@ -11,7 +11,7 @@ export interface PayslipDayRow {
   totalPrepay: number;
   payoutRate: number;
   aerComm: number;
-  upsellComm: number; // stored but not shown on payslip
+  upsellComm: number;
   machRent: number;
   deductions: number;
   dailyBonus: number;
@@ -64,35 +64,48 @@ const PS = {
   totalPayout: 33,
 };
 
-// ─── Layout constants (matching template exactly) ────────────────────────────
+// ─── Layout — exact match to template ────────────────────────────────────────
 //
-// 11 columns (UPSELL COMM removed):
+// 12 columns matching template exactly (col H = UPSELL COMM, hidden, width=0):
 //   A=DATE  B=ROUTE MANAGER  C=AER STEPS  D=EQUIV  E=TOTAL PREPAY
-//   F=PAYOUT RATE  G=AER COMM  H=MACH RENT  I=DEDUCTIONS  J=DAILY BONUS  K=TOTAL PAYOUT
+//   F=PAYOUT RATE  G=AER COMM  H=UPSELL COMM(hidden)  I=MACH RENT
+//   J=DEDUCTIONS  K=DAILY BONUS  L=TOTAL PAYOUT
 //
-// Summary column positions (shifted -1 vs template due to removed col H):
-//   Left label  = col F (6)    Left value  = col H (8)
-//   Right label = col I (9)    Right value = col K (11)
+// Summary column positions (exact match to template):
+//   Left label  = F:G merged (cols 6-7)
+//   Left value  = col I (9)
+//   Right label = J:K merged (cols 10-11)
+//   Right value = col L (12)
 //
-// Block structure per payslip = 17 rows:
-//   Row 1:        Name header
-//   Row 2:        Column headers
-//   Rows 3–10:    Up to 8 data rows (padded with blanks)
-//   Rows 11–15:   5 summary rows (GI, Hotels, Advances, Travel Pkg, Final Pay)
-//                 + Earned Comm / Training Bump on left if 120 Program
-//   Rows 16–17:   2 blank trailing rows (spacing between payslips)
+// Block structure: 17 rows
+//   Row 1:      Name header (merged A:L)
+//   Row 2:      Column headers
+//   Rows 3–10:  8 data rows (padded)
+//   Rows 11–15: 5 summary rows
+//   Rows 16–17: 2 blank trailing rows
 //
-// Page breaks (3 per page, short range) every 51 rows = 3 × 17
-// Page breaks (2 per page, long range)  every 34 rows = 2 × 17
-//
-// Row heights: name=23.6, headers=25.95, all others=15.9
-// Page setup:  portrait, scale=70
+// Page breaks: every 51 rows (3×17) for short range, every 34 rows (2×17) for long
 
-const NCOLS       = 11;
-const ROWS_PER_BLOCK = 17; // always fixed: 1+1+8+5+2 (with padding/blank rows)
+const NCOLS       = 12;
 const H_NAME      = 23.6;
 const H_HEADER    = 25.95;
 const H_STD       = 15.9;
+
+// Column header fill colors (exact from template)
+const HDR_FILLS: Record<number, string> = {
+  1:  'FFCC0000', // A  DATE            red
+  2:  'FFCC0000', // B  ROUTE MANAGER   red
+  3:  'FFB6D7A8', // C  AER STEPS       light green
+  4:  'FF666666', // D  EQUIV           dark gray
+  5:  'FF666666', // E  TOTAL PREPAY    dark gray
+  6:  'FF666666', // F  PAYOUT RATE     dark gray
+  7:  'FF666666', // G  AER COMM        dark gray
+  8:  'FF666666', // H  UPSELL COMM     dark gray (hidden)
+  9:  'FFCC0000', // I  MACH RENT       red
+  10: 'FFCC0000', // J  DEDUCTIONS      red
+  11: 'FFCC0000', // K  DAILY BONUS     red
+  12: 'FF660000', // L  TOTAL PAYOUT    dark red
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -113,10 +126,9 @@ function sortKey(s: string): number {
   return (m[s.slice(0, 3)] || 0) * 100 + parseInt(s.slice(3), 10);
 }
 
-// ─── Style helpers ────────────────────────────────────────────────────────────
-
-const FMT_CURRENCY = '$#,##0.00';
-const FMT_NUMBER   = '0.00';
+function solidFill(argb: string): ExcelJS.Fill {
+  return { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+}
 
 function sc(
   cell: ExcelJS.Cell,
@@ -135,14 +147,14 @@ function sc(
   if (opts.border)    cell.border    = opts.border as ExcelJS.Borders;
 }
 
-function solidFill(argb: string): ExcelJS.Fill {
-  return { type: 'pattern', pattern: 'solid', fgColor: { argb } };
-}
+const FMT_CURRENCY = '$#,##0.00';
+const FMT_NUMBER   = '0.00';
 
-const ALIGN_CENTER = { horizontal: 'center' as const, vertical: 'middle' as const };
-const ALIGN_LEFT   = { horizontal: 'left'   as const, vertical: 'middle' as const };
-const ALIGN_RIGHT  = { horizontal: 'right'  as const, vertical: 'middle' as const };
+const ALIGN_CENTER      = { horizontal: 'center' as const, vertical: 'middle' as const };
 const ALIGN_CENTER_WRAP = { horizontal: 'center' as const, vertical: 'middle' as const, wrapText: true };
+const ALIGN_RIGHT_WRAP  = { horizontal: 'right'  as const, vertical: 'middle' as const, wrapText: true };
+const ALIGN_LEFT        = { horizontal: 'left'   as const, vertical: 'middle' as const };
+const ALIGN_RIGHT       = { horizontal: 'right'  as const, vertical: 'middle' as const };
 
 const BORDER_THIN: Partial<ExcelJS.Borders> = {
   top:    { style: 'thin', color: { argb: 'FF999999' } },
@@ -207,37 +219,33 @@ export async function generatePayslipsXLSX(
   ccDisplayName: string,
   totalDaysInRange: number
 ): Promise<void> {
-  const isLong  = totalDaysInRange > 7;
-  const perPage = isLong ? 2 : 3;
-
-  // For long ranges we use 16 data rows; for short 8.
-  // But block height is always 17 rows (the fixed summary+blank padding never changes).
-  // Only the data section changes; we still pad/blank to fill the 8 or 16 slots.
+  const isLong      = totalDaysInRange > 7;
   const maxDataRows = isLong ? 16 : 8;
-  // Long range: 1+1+16+5+2 = 25 rows per block, 2 per page → break every 50
-  // Short range: 1+1+8+5+2  = 17 rows per block, 3 per page → break every 51
+  const perPage     = isLong ? 2 : 3;
+  // rows per block = 1 (name) + 1 (headers) + maxDataRows + 5 (summary) + 2 (blank)
   const rowsPerBlock = 1 + 1 + maxDataRows + 5 + 2;
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Payslips');
 
-  // Column widths — matched to template (adjusted for removed UPSELL COMM col)
+  // ─── Column definitions — exact match to template ──────────────────────────
   ws.columns = [
-    { key: 'A', width: 9.14  }, // A DATE
-    { key: 'B', width: 15.14 }, // B ROUTE MANAGER
-    { key: 'C', width: 9.14  }, // C AER STEPS
-    { key: 'D', width: 9.14  }, // D EQUIV
-    { key: 'E', width: 11.0  }, // E TOTAL PREPAY
-    { key: 'F', width: 9.14  }, // F PAYOUT RATE / left summary label
-    { key: 'G', width: 9.14  }, // G AER COMM
-    { key: 'H', width: 10.0  }, // H MACH RENT / left summary value
-    { key: 'I', width: 9.14  }, // I DEDUCTIONS / right summary label
-    { key: 'J', width: 13.0  }, // J DAILY BONUS
-    { key: 'K', width: 13.5  }, // K TOTAL PAYOUT / right summary value
+    { key: 'A', width: 9.14  }, // A  DATE
+    { key: 'B', width: 15.14 }, // B  ROUTE MANAGER
+    { key: 'C', width: 9.14  }, // C  AER STEPS
+    { key: 'D', width: 13.0  }, // D  EQUIV
+    { key: 'E', width: 11.0  }, // E  TOTAL PREPAY
+    { key: 'F', width: 9.14  }, // F  PAYOUT RATE
+    { key: 'G', width: 13.0  }, // G  AER COMM
+    { key: 'H', width: 0,  hidden: true }, // H  UPSELL COMM (hidden like template)
+    { key: 'I', width: 10.0  }, // I  MACH RENT
+    { key: 'J', width: 9.14  }, // J  DEDUCTIONS
+    { key: 'K', width: 13.0  }, // K  DAILY BONUS
+    { key: 'L', width: 13.5  }, // L  TOTAL PAYOUT
   ];
 
   const pageBreakRows: number[] = [];
-  let currentRow = 0; // 0-based; ExcelJS rows are 1-based so we use currentRow+1
+  let currentRow = 0;
   let pageCount  = 0;
 
   workers.forEach(worker => {
@@ -255,14 +263,18 @@ export async function generatePayslipsXLSX(
       + worker.additions.reduce((s, a)       => s + a.amount, 0)
     );
 
-    // ── ROW 1: Worker name header (merged A:K) ──
+    // ── ROW 1: Worker name header (merged A:L) ──
     currentRow++;
-    const nameRow = ws.addRow([`${worker.contractorId} - ${worker.firstName} ${worker.lastName}`]);
+    const nameRow = ws.addRow([
+      `${worker.contractorId} - ${worker.firstName} ${worker.lastName}`,
+      null, null, null, null, null, null, null, null, null, null, null,
+    ]);
     nameRow.height = H_NAME;
     ws.mergeCells(currentRow, 1, currentRow, NCOLS);
+    // Style every cell in the merge so the fill covers all
     for (let c = 1; c <= NCOLS; c++) {
       sc(nameRow.getCell(c), {
-        font:      { bold: true, color: { argb: 'FFFFFFFF' }, size: 13, name: 'Arial' },
+        font:      { bold: true, color: { argb: 'FFFFFFFF' }, size: 18, name: 'Arial' },
         fill:      solidFill('FF1A1A1A'),
         alignment: ALIGN_CENTER,
       });
@@ -271,16 +283,17 @@ export async function generatePayslipsXLSX(
     // ── ROW 2: Column headers ──
     currentRow++;
     const hdrRow = ws.addRow([
-      'DATE', 'ROUTE\nMANAGER', 'AER\nSTEPS', 'EQUIV',
-      'TOTAL\nPREPAY', 'PAYOUT\nRATE', 'AER COMM',
-      'MACH\nRENT', 'DEDUCTIONS', 'DAILY\nBONUS', 'TOTAL\nPAYOUT',
+      'DATE', 'ROUTE MANAGER', 'AER STEPS', 'EQUIV',
+      'TOTAL PREPAY', 'PAYOUT RATE', 'AER COMM', 'UPSELL COMM',
+      'MACH RENT', 'DEDUCTIONS', 'DAILY BONUS', 'TOTAL PAYOUT',
     ]);
     hdrRow.height = H_HEADER;
     for (let c = 1; c <= NCOLS; c++) {
+      const alignForCol = c === 3 ? ALIGN_RIGHT_WRAP : ALIGN_CENTER_WRAP;
       sc(hdrRow.getCell(c), {
-        font:      { bold: true, color: { argb: 'FFFFFFFF' }, size: 9, name: 'Arial' },
-        fill:      solidFill(c === 3 ? 'FF538135' : 'FFC00000'),
-        alignment: ALIGN_CENTER_WRAP,
+        font:      { bold: true, color: { argb: 'FFFFFFFF' }, size: 10, name: 'Arial' },
+        fill:      solidFill(HDR_FILLS[c]),
+        alignment: alignForCol,
       });
     }
 
@@ -289,17 +302,18 @@ export async function generatePayslipsXLSX(
       currentRow++;
       const d = worker.days[i];
       const dataRow = ws.addRow(d ? [
-        formatDate(d.date),
-        d.manager,
-        d.steps      || null,
-        d.equiv      ? r2(d.equiv)      : null,
-        d.totalPrepay? r2(d.totalPrepay): null,
-        d.payoutRate || null,
-        d.aerComm    ? r2(d.aerComm)    : null,
-        d.machRent   || null,
-        d.deductions || null,
-        d.dailyBonus || null,
-        r2(d.totalPayout),
+        formatDate(d.date),   // A
+        d.manager,            // B
+        d.steps    || null,   // C
+        d.equiv    ? r2(d.equiv)    : null, // D
+        d.totalPrepay ? r2(d.totalPrepay) : null, // E
+        d.payoutRate || null, // F
+        d.aerComm  ? r2(d.aerComm)  : null, // G
+        d.upsellComm ? r2(d.upsellComm) : null, // H (hidden)
+        d.machRent || null,   // I
+        d.deductions || null, // J
+        d.dailyBonus || null, // K
+        r2(d.totalPayout),    // L
       ] : Array(NCOLS).fill(null));
       dataRow.height = H_STD;
 
@@ -311,18 +325,28 @@ export async function generatePayslipsXLSX(
         sc(dataRow.getCell(4),  { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_NUMBER });
         if (d.totalPrepay) sc(dataRow.getCell(5), { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
         sc(dataRow.getCell(6),  { font: f, alignment: ALIGN_CENTER });
-        if (d.aerComm)    sc(dataRow.getCell(7),  { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
-        if (d.machRent)   sc(dataRow.getCell(8),  { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
-        if (d.deductions) sc(dataRow.getCell(9),  { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
-        if (d.dailyBonus) sc(dataRow.getCell(10), { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
-        sc(dataRow.getCell(11), { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
+        if (d.aerComm)     sc(dataRow.getCell(7),  { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
+        // col 8 (H) hidden — no styling needed
+        if (d.machRent)    sc(dataRow.getCell(9),  { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
+        if (d.deductions)  sc(dataRow.getCell(10), { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
+        if (d.dailyBonus)  sc(dataRow.getCell(11), { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
+        sc(dataRow.getCell(12), { font: f, alignment: ALIGN_RIGHT, numFmt: FMT_CURRENCY });
       }
     }
 
-    // ── SUMMARY ROWS (always exactly 5 to keep block height fixed) ──
-    // Right side: GI, Hotels, Advances, Travel Pkg, Final Pay (fixed 5 rows)
-    // Left side (120 program only): Earned Comm (row 0), Training Bump (row 1)
-    // Extra deductions/additions overflow onto left side cols to avoid expanding block height
+    // ── SUMMARY ROWS (always exactly 5) ──
+    //
+    // Template layout:
+    //   Row 1: [F:G]=left label  [I]=left value  [J:K]=right label  [L]=right value
+    //   Row 2: [F:G]=left label  [I]=left value  [J:K]=right label  [L]=right value
+    //   Row 3:                                   [J:K]=right label  [L]=right value
+    //   Row 4:                                   [J:K]=right label  [L]=right value
+    //   Row 5:                                   [J:K]=right label  [L]=right value
+    //
+    // Right side fixed: GI, Hotels, Advances, Travel Pkg, Final Pay
+    // Left side (120 Program): Earned Commission, Training Bump (rows 1-2)
+    // Extra deductions/additions spill into left side rows 1+ if available
+
     const rightFixed = [
       { label: 'Guaranteed Income', value: gi },
       { label: 'Hotels',            value: worker.hotels },
@@ -331,72 +355,65 @@ export async function generatePayslipsXLSX(
       { label: 'Final Pay:',        value: finalPay },
     ];
 
-    // Build left side items
     const leftItems: { label: string; value: number }[] = [];
     if (worker.is120Program) {
       leftItems.push({ label: 'Earned Commission', value: earnedComm });
       leftItems.push({ label: 'Training Bump',     value: trainingBump });
     }
-    // Extra deductions and additions go into left side overflow rows
     worker.extraDeductions.forEach(d => leftItems.push({ label: d.label || 'Deduction', value: d.amount }));
     worker.additions.forEach(a       => leftItems.push({ label: a.label || 'Addition',  value: a.amount }));
 
     for (let i = 0; i < 5; i++) {
       currentRow++;
-      const right = rightFixed[i];
-      const left  = leftItems[i];
+      const right   = rightFixed[i];
+      const left    = leftItems[i];
       const isFinal = right.label === 'Final Pay:';
 
       const rowData: (string | number | null)[] = Array(NCOLS).fill(null);
       if (left) {
-        rowData[5] = left.label;  // col F
-        rowData[7] = left.value;  // col H
+        rowData[5] = left.label;  // col F (1-indexed: 6, but array is 0-indexed)
+        rowData[8] = left.value;  // col I
       }
-      rowData[8]  = right.label;  // col I
-      rowData[10] = right.value;  // col K
+      rowData[9]  = right.label;  // col J
+      rowData[11] = right.value;  // col L
 
       const sumRow = ws.addRow(rowData);
       sumRow.height = H_STD;
 
-      const fReg  = { name: 'Arial', size: 10 } as Partial<ExcelJS.Font>;
-      const fBold = { bold: true, name: 'Arial', size: isFinal ? 12 : 10 } as Partial<ExcelJS.Font>;
-
-      // Left box (only when content present)
+      // Merge F:G for left label (cols 6-7)
       if (left) {
+        ws.mergeCells(currentRow, 6, currentRow, 7);
         sc(sumRow.getCell(6), {
-          font:      fReg,
-          fill:      solidFill('FFF2F2F2'),
+          font:      { name: 'Arial', size: 12 } as Partial<ExcelJS.Font>,
           alignment: ALIGN_RIGHT,
           border:    BORDER_THIN,
         });
-        sc(sumRow.getCell(8), {
-          font:      { bold: true, name: 'Arial', size: 10 } as Partial<ExcelJS.Font>,
-          fill:      solidFill('FFF2F2F2'),
+        sc(sumRow.getCell(9), {
+          font:      { bold: true, name: 'Arial', size: 12 } as Partial<ExcelJS.Font>,
           alignment: ALIGN_RIGHT,
           numFmt:    FMT_CURRENCY,
           border:    BORDER_THIN,
         });
       }
 
-      // Right box
-      sc(sumRow.getCell(9), {
-        font:      isFinal ? { bold: true, name: 'Arial', size: 11 } as Partial<ExcelJS.Font> : fReg,
-        fill:      solidFill(isFinal ? 'FFBFBFBF' : 'FFD9D9D9'),
+      // Merge J:K for right label (cols 10-11)
+      ws.mergeCells(currentRow, 10, currentRow, 11);
+      sc(sumRow.getCell(10), {
+        font:      { bold: isFinal, name: 'Arial', size: 12 } as Partial<ExcelJS.Font>,
         alignment: ALIGN_RIGHT,
       });
-      sc(sumRow.getCell(11), {
-        font:      fBold,
-        fill:      solidFill(isFinal ? 'FFBFBFBF' : 'FFD9D9D9'),
+      // Right value — col L (12)
+      sc(sumRow.getCell(12), {
+        font:      { bold: true, name: 'Arial', size: isFinal ? 16 : 12 } as Partial<ExcelJS.Font>,
         alignment: ALIGN_RIGHT,
         numFmt:    FMT_CURRENCY,
       });
     }
 
-    // ── 2 BLANK TRAILING ROWS (spacing between payslips) ──
+    // ── 2 BLANK TRAILING ROWS ──
     for (let i = 0; i < 2; i++) {
       currentRow++;
-      const blankRow = ws.addRow(Array(NCOLS).fill(null));
-      blankRow.height = H_STD;
+      ws.addRow(Array(NCOLS).fill(null)).height = H_STD;
     }
 
     // ── Page break after every N workers ──
@@ -406,7 +423,7 @@ export async function generatePayslipsXLSX(
     }
   });
 
-  // ─── Page breaks ──────────────────────────────────────────────────────────
+  // ─── Page breaks (matching template format exactly) ───────────────────────
   if (pageBreakRows.length > 0) {
     (ws as any).rowBreaks = pageBreakRows.map(id => ({
       id,
@@ -416,12 +433,12 @@ export async function generatePayslipsXLSX(
     }));
   }
 
-  // ─── Page setup (portrait, 70% scale — matching template) ────────────────
+  // ─── Page setup — portrait, scale 70% (matching template) ────────────────
   ws.pageSetup = {
-    paperSize:    9,          // Letter
-    orientation:  'portrait',
-    scale:        70,
-    fitToPage:    false,
+    paperSize:   9,          // Letter
+    orientation: 'portrait',
+    scale:       70,
+    fitToPage:   false,
   };
 
   // ─── Download ─────────────────────────────────────────────────────────────
