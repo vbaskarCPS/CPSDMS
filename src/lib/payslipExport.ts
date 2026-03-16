@@ -54,23 +54,6 @@ const PS = {
 };
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
-//
-// 12 columns — H hidden (width=0, UPSELL COMM):
-//   A=DATE  B=ROUTE MANAGER  C=AER STEPS  D=EQUIV  E=TOTAL PREPAY
-//   F=PAYOUT RATE  G=AER COMM  H=UPSELL COMM(hidden)  I=MACH RENT
-//   J=DEDUCTIONS   K=DAILY BONUS  L=TOTAL PAYOUT
-//
-// Summary section (cols F–L):
-//   F:G merged  = left label (Earned Commission / Training Bump)
-//   I           = left value
-//   J:K merged  = right label (Guaranteed Income / Hotels / etc.)
-//   L           = right value
-//
-// Block = 17 rows: 1 name + 1 headers + 8 data + 5 summary + 2 blank
-//
-// Outer border:   thick top row 1 A–L, thick left col A rows 1–15, thick right col L rows 1–15
-// Summary border: medium top row 11 F–L, medium left col F rows 11–15, medium bottom row 15 F–L
-// Summary fill:   D9D9D9 (grey) on cols F–L for all 5 summary rows
 
 const NCOLS   = 12;
 const H_NAME  = 40;
@@ -180,37 +163,36 @@ export async function generatePayslipsXLSX(
   workers: WorkerPayslipData[],
   startDate: string, endDate: string,
   ccDisplayName: string,
-  totalDaysInRange: number
+  totalDaysInRange: number,
+  batchName?: string,           // optional — prefixes the filename when provided
 ): Promise<void> {
-  const isLong      = totalDaysInRange > 7;
-  const maxData     = isLong ? 16 : 8;
-  const perPage     = isLong ? 2 : 3;
+  const isLong  = totalDaysInRange > 7;
+  const maxData = isLong ? 16 : 8;
+  const perPage = isLong ? 2 : 3;
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Payslips');
 
-  // Column widths — exact template values
   ws.columns = [
-    { key:'A', width: 9.14  },               // A  DATE
-    { key:'B', width: 15.14 },               // B  ROUTE MANAGER
-    { key:'C', width: 9.14  },               // C  AER STEPS
-    { key:'D', width: 9.14  },               // D  EQUIV
-    { key:'E', width: 11.0  },               // E  TOTAL PREPAY
-    { key:'F', width: 9.14  },               // F  PAYOUT RATE / left summary label
-    { key:'G', width: 9.14  },               // G  AER COMM    / left summary label (merged F:G = 18.28 effective)
-    { key:'H', width: 0, hidden: true },     // H  UPSELL COMM (hidden)
-    { key:'I', width: 10.0  },               // I  MACH RENT   / left summary value
-    { key:'J', width: 9.14  },               // J  DEDUCTIONS  / right summary label (merged J:K = 18.28 effective)
-    { key:'K', width: 9.14  },               // K  DAILY BONUS / right summary label (merged J:K)
-    { key:'L', width: 16.0  },               // L  TOTAL PAYOUT / right summary value
+    { key:'A', width: 9.14  },
+    { key:'B', width: 15.14 },
+    { key:'C', width: 9.14  },
+    { key:'D', width: 9.14  },
+    { key:'E', width: 11.0  },
+    { key:'F', width: 9.14  },
+    { key:'G', width: 9.14  },
+    { key:'H', width: 0, hidden: true },
+    { key:'I', width: 10.0  },
+    { key:'J', width: 9.14  },
+    { key:'K', width: 9.14  },
+    { key:'L', width: 16.0  },
   ];
 
   const pageBreakRows: number[] = [];
-  let rn = 0;      // current row number (1-based, tracks as we go)
+  let rn = 0;
   let pageCount = 0;
 
   workers.forEach(worker => {
-    // ── Calculations ──────────────────────────────────────────────────────────
     const earnedComm   = r2(worker.days.reduce((s,d) => s+d.totalPayout, 0));
     const daysWorked   = worker.days.length;
     const trainingBump = worker.is120Program ? r2(Math.max(0, daysWorked*120 - earnedComm)) : 0;
@@ -221,7 +203,7 @@ export async function generatePayslipsXLSX(
       + worker.additions.reduce((s,a) => s+a.amount, 0)
     );
 
-    // ── ROW 1: Name header ────────────────────────────────────────────────────
+    // ROW 1: Name header
     rn++;
     const nameRow = ws.addRow(
       [`${worker.contractorId} - ${worker.firstName} ${worker.lastName}`,
@@ -242,7 +224,7 @@ export async function generatePayslipsXLSX(
       });
     }
 
-    // ── ROW 2: Column headers ─────────────────────────────────────────────────
+    // ROW 2: Column headers
     rn++;
     const hdrRow = ws.addRow([
       'DATE','ROUTE MANAGER','AER STEPS','EQUIV',
@@ -262,28 +244,18 @@ export async function generatePayslipsXLSX(
       });
     }
 
-    // ── DATA ROWS ─────────────────────────────────────────────────────────────
+    // DATA ROWS
     for (let i = 0; i < maxData; i++) {
       rn++;
       const d = worker.days[i];
       const dataRow = ws.addRow(d ? [
-        fmtDate(d.date),
-        d.manager,
-        d.steps,
-        r2(d.equiv),
-        r2(d.totalPrepay),
-        d.payoutRate,
-        r2(d.aerComm),
-        r2(d.upsellComm),  // H hidden
-        d.machRent,
-        d.deductions,
-        d.dailyBonus,
-        r2(d.totalPayout),
+        fmtDate(d.date), d.manager, d.steps, r2(d.equiv),
+        r2(d.totalPrepay), d.payoutRate, r2(d.aerComm), r2(d.upsellComm),
+        d.machRent, d.deductions, d.dailyBonus, r2(d.totalPayout),
       ] : Array(NCOLS).fill(null));
       dataRow.height = H_STD;
 
-      // Left and right outer borders
-      style(dataRow.getCell(1),  { border: { left: THICK } });
+      style(dataRow.getCell(1),     { border: { left: THICK } });
       style(dataRow.getCell(NCOLS), { border: { right: THICK } });
 
       if (d) {
@@ -295,7 +267,6 @@ export async function generatePayslipsXLSX(
         style(dataRow.getCell(5),  { font:f, align:aR, fmt:FMT_CURR });
         style(dataRow.getCell(6),  { font:f, align:aC });
         style(dataRow.getCell(7),  { font:f, align:aR, fmt:FMT_CURR });
-        // col 8 hidden
         style(dataRow.getCell(9),  { font:f, align:aR, fmt:FMT_CURR });
         style(dataRow.getCell(10), { font:f, align:aR, fmt:FMT_CURR });
         style(dataRow.getCell(11), { font:f, align:aR, fmt:FMT_CURR });
@@ -303,28 +274,13 @@ export async function generatePayslipsXLSX(
       }
     }
 
-    // ── SUMMARY ROWS (always exactly 5) ───────────────────────────────────────
-    //
-    // Right side (fixed 5 rows): GI, Hotels, Advances, Travel Pkg, Final Pay
-    // Left side (120 Program rows 1–2): Earned Commission, Training Bump
-    // Extra deductions/additions fill left side rows 3+
-    //
-    // For each row:
-    //   cols F:G merged  → left label   col I → left value
-    //   cols J:K merged  → right label  col L → right value
-    //   fills: grey on cols F–L (all 12 cols except A–E have no fill)
-    //   outer borders: thick left on A, thick right on L
-    //   summary box borders:
-    //     row 1 of summary: medium top on F–L
-    //     all rows:         medium left on F
-    //     last row:         medium bottom on F–L
-
+    // SUMMARY ROWS
     const rightRows = [
-      { label:'Earned Income',  value:gi },
-      { label:'Hotels',            value:worker.hotels },
-      { label:'Advances',          value:worker.advances },
-      { label:'Travel Pkg',        value:worker.travelPkg },
-      { label:'Final Pay:',        value:finalPay },
+      { label:'Earned Income', value:gi },
+      { label:'Hotels',        value:worker.hotels },
+      { label:'Advances',      value:worker.advances },
+      { label:'Travel Pkg',    value:worker.travelPkg },
+      { label:'Final Pay:',    value:finalPay },
     ];
 
     const leftItems: { label:string; value:number }[] = [];
@@ -346,19 +302,15 @@ export async function generatePayslipsXLSX(
       const isLast  = i === SUMMARY_ROWS - 1;
 
       const rowData: (string|number|null)[] = Array(NCOLS).fill(null);
-      if (left) {
-        rowData[5] = left.label;  // F (index 5)
-        rowData[8] = left.value;  // I (index 8)
-      }
-      rowData[9]  = right.label;  // J (index 9)
-      rowData[11] = right.value;  // L (index 11)
+      if (left) { rowData[5] = left.label; rowData[8] = left.value; }
+      rowData[9]  = right.label;
+      rowData[11] = right.value;
 
       const sumRow = ws.addRow(rowData);
       sumRow.height = H_STD;
 
       const summaryFill = fill(isFinal ? 'FFBFBFBF' : 'FFD9D9D9');
 
-      // Apply grey fill + borders to all cells in summary zone (F=6 to L=12)
       for (let c = 6; c <= NCOLS; c++) {
         const b: Partial<ExcelJS.Borders> = {};
         if (isFirst) b.top    = MED;
@@ -368,7 +320,6 @@ export async function generatePayslipsXLSX(
         style(sumRow.getCell(c), { fill: summaryFill, border: b });
       }
 
-      // Outer thick borders on A and L
       style(sumRow.getCell(1),    { border: { left: THICK } });
       style(sumRow.getCell(NCOLS),{ fill: summaryFill, border: {
         right:  MED,
@@ -376,33 +327,23 @@ export async function generatePayslipsXLSX(
         bottom: isLast  ? MED : undefined,
       }});
 
-      // Merge F:G for left label
       ws.mergeCells(rn, 6, rn, 7);
-
-      // Merge J:K for right label
       ws.mergeCells(rn, 10, rn, 11);
 
-      const fReg  = { name:'Arial', size:12 } as Partial<ExcelJS.Font>;
-      const fBold = { bold:true, name:'Arial', size:12 } as Partial<ExcelJS.Font>;
-      const fFinal= { bold:true, name:'Arial', size:14 } as Partial<ExcelJS.Font>;
+      const fReg   = { name:'Arial', size:12 } as Partial<ExcelJS.Font>;
+      const fBold  = { bold:true, name:'Arial', size:12 } as Partial<ExcelJS.Font>;
+      const fFinal = { bold:true, name:'Arial', size:14 } as Partial<ExcelJS.Font>;
+      const aRShrink = { horizontal: 'right' as const, vertical: 'middle' as const, shrinkToFit: true };
 
-      const aRShrink  = { horizontal: 'right'  as const, vertical: 'middle' as const, shrinkToFit: true };
-
-      // Left label (F, merged with G)
       if (left) {
-        style(sumRow.getCell(6), { font:fReg, fill:fill('FFF2F2F2'), align:aRShrink });
-        // Left value (I)
+        style(sumRow.getCell(6), { font:fReg,  fill:fill('FFF2F2F2'), align:aRShrink });
         style(sumRow.getCell(9), { font:fBold, fill:fill('FFF2F2F2'), align:aRShrink, fmt:FMT_CURR });
       }
-
-      // Right label (J, merged with K)
-      style(sumRow.getCell(10), { font:isFinal ? fBold : fReg, fill:summaryFill, align:aRShrink });
-      // Right value (L)
+      style(sumRow.getCell(10), { font:isFinal ? fBold  : fReg,  fill:summaryFill, align:aRShrink });
       style(sumRow.getCell(12), { font:isFinal ? fFinal : fBold, fill:summaryFill, align:aRShrink, fmt:FMT_CURR });
     }
 
-    // ── 2 BLANK TRAILING ROWS ─────────────────────────────────────────────────
-    // Must put a value in at least one cell — ExcelJS silently drops all-null rows
+    // 2 BLANK TRAILING ROWS
     for (let i = 0; i < 2; i++) {
       rn++;
       const blankRow = ws.addRow(['',...Array(NCOLS-1).fill(null)]);
@@ -410,36 +351,29 @@ export async function generatePayslipsXLSX(
       (blankRow as any).customHeight = true;
     }
 
-    // ── Page break after every N workers ─────────────────────────────────────
     pageCount++;
     if (pageCount % perPage === 0 && pageCount < workers.length) {
       pageBreakRows.push(rn);
     }
   });
 
-  // ─── Page breaks (exact template format) ─────────────────────────────────
   if (pageBreakRows.length > 0) {
     (ws as any).rowBreaks = pageBreakRows.map(id => ({ id, min:0, max:16383, man:true }));
   }
 
-  // ─── Page setup: portrait, scale 70% ─────────────────────────────────────
   ws.pageSetup = {
-    paperSize:   9,           // Letter
+    paperSize:   9,
     orientation: 'portrait',
     fitToPage:   true,
-    fitToWidth:  1,           // Fit all columns to 1 page wide
-    fitToHeight: 0,           // Let height flow naturally
+    fitToWidth:  1,
+    fitToHeight: 0,
   };
   ws.pageMargins = {
-    left:   0.25,
-    right:  0.25,
-    top:    0.25,
-    bottom: 0.25,
-    header: 0,
-    footer: 0,
+    left: 0.25, right: 0.25, top: 0.25, bottom: 0.25, header: 0, footer: 0,
   };
 
-  // ─── Download ─────────────────────────────────────────────────────────────
+  // Prefix filename with batch name if provided
+  const filePrefix = batchName ? `${batchName}_` : '';
   const buffer = await wb.xlsx.writeBuffer();
   const blob   = new Blob([buffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -447,7 +381,7 @@ export async function generatePayslipsXLSX(
   const url = URL.createObjectURL(blob);
   const a   = document.createElement('a');
   a.href     = url;
-  a.download = `${ccDisplayName} ${startDate} - ${endDate} Payslips.xlsx`;
+  a.download = `${filePrefix}${ccDisplayName} ${startDate} - ${endDate} Payslips.xlsx`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

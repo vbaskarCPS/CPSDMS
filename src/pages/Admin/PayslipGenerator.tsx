@@ -23,11 +23,17 @@ interface WorkerSettings {
   travelPkg: number;
   extraDeductions: ExtraItem[];
   additions: ExtraItem[];
+  batchId: string;   // empty string = unassigned
+}
+
+interface Batch {
+  id: string;
+  name: string;
 }
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
-const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTH_ABBR  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 function sortKey(s: string): number {
@@ -52,7 +58,11 @@ function calendarDays(start: string, end: string): number {
 }
 
 function defaultSettings(): WorkerSettings {
-  return { is120Program: false, hotels: 0, advances: 0, travelPkg: 0, extraDeductions: [], additions: [] };
+  return { is120Program: false, hotels: 0, advances: 0, travelPkg: 0, extraDeductions: [], additions: [], batchId: '' };
+}
+
+function makeBatchId(): string {
+  return `batch_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -81,14 +91,48 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
   const [expandedWorkers, setExpandedWorkers] = useState<Set<string>>(new Set());
   const [isExporting, setIsExporting] = useState(false);
 
-  // Global defaults — prefill all workers but individually editable
+  // Global defaults
   const [stdHotels, setStdHotels] = useState<number>(0);
   const [stdAdvances, setStdAdvances] = useState<number>(0);
+
+  // Batches — start with 2
+  const [batches, setBatches] = useState<Batch[]>([
+    { id: makeBatchId(), name: 'Batch 1' },
+    { id: makeBatchId(), name: 'Batch 2' },
+  ]);
 
   useEffect(() => {
     if (isGoogleConnected && allRows.length === 0) loadPayoutStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isGoogleConnected]);
+
+  // ─── Batch helpers ────────────────────────────────────────────────────────
+
+  const addBatch = () => {
+    setBatches(prev => [...prev, { id: makeBatchId(), name: `Batch ${prev.length + 1}` }]);
+  };
+
+  const removeBatch = (id: string) => {
+    setBatches(prev => prev.filter(b => b.id !== id));
+    // Unassign any worker that was in this batch
+    setWorkerSettings(prev => {
+      const next = new Map(prev);
+      next.forEach((s, wid) => {
+        if (s.batchId === id) next.set(wid, { ...s, batchId: '' });
+      });
+      return next;
+    });
+  };
+
+  const renameBatch = (id: string, name: string) => {
+    setBatches(prev => prev.map(b => b.id === id ? { ...b, name } : b));
+  };
+
+  // Workers with no batchId assigned
+  const unassignedCount = workerList.filter(w => !(workerSettings.get(w.contractorId)?.batchId)).length;
+  const canExport = unassignedCount === 0 && workerList.length > 0;
+
+  // ─── Google / data loading ────────────────────────────────────────────────
 
   const handleConnectGoogle = async () => {
     setSheetsLoading(true);
@@ -142,7 +186,6 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
   const handleLoadWorkers = () => {
     if (!startDate || !endDate) return;
     const workers = parsePayoutStatsRows(allRows, startDate, endDate);
-    // Sort alphabetically by last name, then first name
     workers.sort((a, b) => {
       const last = a.lastName.localeCompare(b.lastName);
       return last !== 0 ? last : a.firstName.localeCompare(b.firstName);
@@ -157,6 +200,8 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
     setWorkerSettings(s);
     setStep('workers');
   };
+
+  // ─── Worker settings helpers ──────────────────────────────────────────────
 
   const updateSetting = <K extends keyof WorkerSettings>(id: string, field: K, value: WorkerSettings[K]) => {
     setWorkerSettings(prev => {
@@ -193,20 +238,38 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
     });
   };
 
+  // ─── Export ───────────────────────────────────────────────────────────────
+
   const handleExport = async () => {
-    if (!startDate || !endDate || !cc) return;
+    if (!startDate || !endDate || !cc || !canExport) return;
     setIsExporting(true);
     setError(null);
     try {
       const daysInRange = calendarDays(startDate, endDate);
-      const data = workerList.map(w => ({ ...w, ...(workerSettings.get(w.contractorId) || defaultSettings()) }));
-      await generatePayslipsXLSX(data, startDate, endDate, cc.displayName, daysInRange);
+
+      // Fire one XLSX download per batch
+      for (const batch of batches) {
+        const batchWorkers = workerList
+          .filter(w => workerSettings.get(w.contractorId)?.batchId === batch.id)
+          .map(w => ({ ...w, ...(workerSettings.get(w.contractorId) || defaultSettings()) }));
+
+        if (batchWorkers.length === 0) continue;
+
+        await generatePayslipsXLSX(
+          batchWorkers,
+          startDate,
+          endDate,
+          cc.displayName,
+          daysInRange,
+          batch.name,
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Export failed.');
     } finally { setIsExporting(false); }
   };
 
-  // ─── Calendar ────────────────────────────────────────────────────────────────
+  // ─── Calendar ────────────────────────────────────────────────────────────
 
   const renderCalendar = () => {
     const year = new Date().getFullYear();
@@ -276,7 +339,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
     );
   };
 
-  // ─── Worker row ───────────────────────────────────────────────────────────────
+  // ─── Worker row ───────────────────────────────────────────────────────────
 
   const calcFinalPay = (w: WorkerPayslipUI, s: WorkerSettings): number => {
     const earnedComm = w.days.reduce((sum, d) => sum + d.totalPayout, 0);
@@ -300,23 +363,26 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
     const s = workerSettings.get(w.contractorId) || defaultSettings();
     const isExpanded = expandedWorkers.has(w.contractorId);
     const finalPay = calcFinalPay(w, s);
+    const totalEquiv = w.days.reduce((sum, d) => sum + d.equiv, 0);
+    const isUnassigned = !s.batchId;
     const iCls = "bg-gray-900 border border-gray-600 rounded py-0.5 pl-4 pr-1 text-xs text-white w-16 focus:ring-1 focus:ring-blue-500 focus:outline-none";
     const $ = "absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-500 text-xs pointer-events-none";
 
     return (
-      <div key={w.contractorId} className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+      <div key={w.contractorId} className={`rounded-lg border overflow-hidden ${isUnassigned ? 'bg-gray-800 border-red-700/60' : 'bg-gray-800 border-gray-700'}`}>
 
-        {/* LINE 1: Name + days + final pay — clickable to expand */}
+        {/* LINE 1: Name + days + EQ + final pay */}
         <div className="flex items-center gap-2 px-3 py-1.5 cursor-pointer select-none"
           onClick={() => toggleExpanded(w.contractorId)}>
           <ChevronDown size={13} className={`text-gray-400 transition-transform flex-shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
           <span className="font-bold text-white text-xs">{w.contractorId} — {w.firstName} {w.lastName}</span>
           <span className="text-xs text-gray-500 bg-gray-700/60 px-1.5 rounded flex-shrink-0">{w.days.length}d</span>
           {s.is120Program && <span className="text-xs text-green-400 bg-green-900/20 border border-green-700/40 px-1.5 rounded flex-shrink-0">$120</span>}
-          <span className={`ml-auto font-bold text-sm flex-shrink-0 ${finalPay >= 0 ? 'text-green-400' : 'text-red-400'}`}>${finalPay.toFixed(2)}</span>
+          <span className="ml-auto text-xs text-gray-400 flex-shrink-0">{totalEquiv.toFixed(2)}EQ</span>
+          <span className={`font-bold text-sm flex-shrink-0 ${finalPay >= 0 ? 'text-green-400' : 'text-red-400'}`}>${finalPay.toFixed(2)}</span>
         </div>
 
-        {/* LINE 2: All inputs in one compact row */}
+        {/* LINE 2: All inputs + batch dropdown */}
         <div className="flex items-center gap-2 px-3 pb-1.5 flex-wrap">
           {/* $120 checkbox */}
           <label className="flex items-center gap-1 cursor-pointer select-none flex-shrink-0">
@@ -340,6 +406,22 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
           <div className="flex items-center gap-1 flex-shrink-0">
             <span className="text-xs text-gray-500">Travel</span>
             <div className="relative"><span className={$}>$</span><input type="number" min="0" placeholder="0" value={s.travelPkg||''} onChange={e=>updateSetting(w.contractorId,'travelPkg',parseFloat(e.target.value)||0)} className={iCls}/></div>
+          </div>
+          {/* Batch dropdown */}
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <span className="text-xs text-gray-500">Batch</span>
+            <select
+              value={s.batchId}
+              onChange={e => updateSetting(w.contractorId, 'batchId', e.target.value)}
+              className={`bg-gray-900 border rounded py-0.5 px-1.5 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none ${
+                isUnassigned ? 'border-red-600 text-red-400' : 'border-gray-600 text-white'
+              }`}
+            >
+              <option value="">— Assign —</option>
+              {batches.map(b => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
           </div>
           {/* Extra deductions inline */}
           {s.extraDeductions.map(item => (
@@ -408,7 +490,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
     );
   };
 
-  // ─── Render ───────────────────────────────────────────────────────────────────
+  // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -429,7 +511,10 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
           )}
         </div>
         {step === 'workers' ? (
-          <button onClick={handleExport} disabled={isExporting || workerList.length === 0}
+          <button
+            onClick={handleExport}
+            disabled={isExporting || !canExport}
+            title={!canExport ? `${unassignedCount} worker(s) not yet assigned to a batch` : ''}
             className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors">
             {isExporting ? <Loader size={16} className="animate-spin" /> : <Download size={16} />}
             Export XLSX
@@ -496,6 +581,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
       {/* ── STEP 2: WORKERS ── */}
       {step === 'workers' && (
         <div className="space-y-2">
+
           {/* Summary bar */}
           <div className="flex items-center justify-between bg-gray-800 rounded-lg border border-gray-700 px-4 py-2.5">
             <span className="text-sm text-gray-400">
@@ -547,6 +633,43 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
             <span className="text-xs text-gray-600 ml-1">— updates all workers instantly</span>
           </div>
 
+          {/* Batch setup bar */}
+          <div className="flex items-center gap-3 bg-gray-800/60 border border-gray-700 rounded-lg px-4 py-2 flex-wrap">
+            <span className="text-xs text-gray-400 font-medium flex-shrink-0">Batches:</span>
+            {batches.map((batch, idx) => (
+              <div key={batch.id} className="flex items-center gap-1 flex-shrink-0">
+                <input
+                  type="text"
+                  value={batch.name}
+                  onChange={e => renameBatch(batch.id, e.target.value)}
+                  className="w-24 bg-gray-900 border border-gray-600 rounded py-0.5 px-2 text-xs text-white focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                  placeholder={`Batch ${idx + 1}`}
+                />
+                {batches.length > 1 && (
+                  <button onClick={() => removeBatch(batch.id)} className="text-gray-600 hover:text-red-400 transition-colors">
+                    <Trash2 size={11} />
+                  </button>
+                )}
+              </div>
+            ))}
+            <button
+              onClick={addBatch}
+              className="flex items-center gap-0.5 text-xs text-blue-400 hover:text-blue-300 flex-shrink-0 transition-colors">
+              <Plus size={11} /> Add Batch
+            </button>
+            <span className="text-xs text-gray-600 ml-1">— one file exported per batch</span>
+          </div>
+
+          {/* Unassigned warning banner */}
+          {workerList.length > 0 && unassignedCount > 0 && (
+            <div className="flex items-center gap-2 bg-red-900/20 border border-red-700/50 rounded-lg px-4 py-2.5 text-red-400 text-xs">
+              <AlertCircle size={14} className="flex-shrink-0" />
+              <span>
+                <span className="font-bold">{unassignedCount} worker{unassignedCount !== 1 ? 's' : ''}</span> not assigned to a batch — assign all workers before exporting.
+              </span>
+            </div>
+          )}
+
           {workerList.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-gray-500 gap-2">
               <AlertCircle size={32} className="opacity-30" />
@@ -558,8 +681,11 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
 
           {workerList.length > 0 && (
             <div className="flex justify-center pt-2 pb-4">
-              <button onClick={handleExport} disabled={isExporting}
-                className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white px-8 py-3 rounded-lg font-bold transition-colors">
+              <button
+                onClick={handleExport}
+                disabled={isExporting || !canExport}
+                title={!canExport ? `${unassignedCount} worker(s) not yet assigned to a batch` : ''}
+                className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-8 py-3 rounded-lg font-bold transition-colors">
                 {isExporting ? <Loader size={18} className="animate-spin" /> : <Download size={18} />}
                 Export XLSX
               </button>
