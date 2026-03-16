@@ -180,6 +180,44 @@ function formatLastSeen(isoTimestamp: string | null): string {
 }
 
 // =============================================================================
+// HELPER — run city scan, then route scan sequentially to avoid API quota errors
+// =============================================================================
+
+function runScansSequentially(
+  spreadsheetId: string,
+  tabs: string[],
+  setCityProgress: (p: { current: number; total: number; tabName: string } | null) => void,
+  setCityCards: (c: CityInfo[]) => void,
+  setRouteProgress: (p: { current: number; total: number; tabName: string } | null) => void,
+  setRoutePrefixCards: (r: RoutePrefixInfo[]) => void,
+): void {
+  if (tabs.length === 0) return;
+
+  setCityProgress({ current: 0, total: tabs.length, tabName: tabs[0] });
+
+  discoverCities(
+    spreadsheetId,
+    tabs,
+    (scanned, total, tabName) => setCityProgress({ current: scanned, total, tabName })
+  )
+    .then(cities => { setCityCards(cities); })
+    .catch(() => { /* non-critical */ })
+    .finally(() => {
+      setCityProgress(null);
+      // Only start route scan after city scan fully completes — avoids flooding the quota
+      setRouteProgress({ current: 0, total: tabs.length, tabName: tabs[0] });
+      discoverRoutePrefixes(
+        spreadsheetId,
+        tabs,
+        (scanned, total, tabName) => setRouteProgress({ current: scanned, total, tabName })
+      )
+        .then(prefixes => { setRoutePrefixCards(prefixes); })
+        .catch(() => { /* non-critical */ })
+        .finally(() => { setRouteProgress(null); });
+    });
+}
+
+// =============================================================================
 // COMPONENT
 // =============================================================================
 
@@ -199,7 +237,7 @@ export default function DialerPage() {
   const [tabsError, setTabsError] = useState('');
   const [cityCards, setCityCards] = useState<CityInfo[]>([]);
   const [cityProgress, setCityProgress] = useState<{ current: number; total: number; tabName: string } | null>(null);
-  // NEW: route prefix state
+  // Route prefix state
   const [routePrefixCards, setRoutePrefixCards] = useState<RoutePrefixInfo[]>([]);
   const [routeProgress, setRouteProgress] = useState<{ current: number; total: number; tabName: string } | null>(null);
   const [pendingRouteDeploy, setPendingRouteDeploy] = useState<RoutePrefixInfo[] | null>(null);
@@ -556,34 +594,13 @@ export default function DialerPage() {
             } catch { /* Non-critical */ }
           });
 
-          // NEW: run city scan and route prefix scan in parallel
+          // City scan first, then route scan — sequential to avoid flooding the Sheets API quota
           if (callbookTabs.length > 0) {
-            setCityProgress({ current: 0, total: callbookTabs.length, tabName: callbookTabs[0] });
-            setRouteProgress({ current: 0, total: callbookTabs.length, tabName: callbookTabs[0] });
-
-            Promise.all([
-              discoverCities(
-                campaign.spreadsheetId,
-                callbookTabs,
-                (scanned: number, total: number, tabName: string) => {
-                  setCityProgress({ current: scanned, total, tabName });
-                }
-              ).then(cities => {
-                setCityCards(cities);
-                setCityProgress(null);
-              }).catch(() => { setCityProgress(null); }),
-
-              discoverRoutePrefixes(
-                campaign.spreadsheetId,
-                callbookTabs,
-                (scanned: number, total: number, tabName: string) => {
-                  setRouteProgress({ current: scanned, total, tabName });
-                }
-              ).then(prefixes => {
-                setRoutePrefixCards(prefixes);
-                setRouteProgress(null);
-              }).catch(() => { setRouteProgress(null); }),
-            ]);
+            runScansSequentially(
+              campaign.spreadsheetId, callbookTabs,
+              setCityProgress, setCityCards,
+              setRouteProgress, setRoutePrefixCards,
+            );
           }
 
         } catch (err: any) {
@@ -604,7 +621,7 @@ export default function DialerPage() {
 
   const handleCampaignDeploy = async (cardId: string) => {
     setPendingCityDeploy(null);
-    setPendingRouteDeploy(null); // NEW
+    setPendingRouteDeploy(null);
     setStartBookingId('');
     setDeployError('');
 
@@ -623,7 +640,7 @@ export default function DialerPage() {
     if (book) {
       setActiveBook(book);
       setCityCards([]);
-      setRoutePrefixCards([]); // NEW
+      setRoutePrefixCards([]);
 
       if (!connected) {
         try {
@@ -653,30 +670,13 @@ export default function DialerPage() {
           } catch { /* Non-critical */ }
         });
 
-        // NEW: parallel scan for city + route
+        // City scan first, then route scan — sequential to avoid flooding the Sheets API quota
         if (bookTabs.length > 0) {
-          setCityProgress({ current: 0, total: bookTabs.length, tabName: bookTabs[0] });
-          setRouteProgress({ current: 0, total: bookTabs.length, tabName: bookTabs[0] });
-
-          Promise.all([
-            discoverCities(
-              book.spreadsheetId,
-              bookTabs,
-              (scanned: number, total: number, tabName: string) => {
-                setCityProgress({ current: scanned, total, tabName });
-              }
-            ).then(cities => { setCityCards(cities); setCityProgress(null); })
-              .catch(() => { setCityProgress(null); }),
-
-            discoverRoutePrefixes(
-              book.spreadsheetId,
-              bookTabs,
-              (scanned: number, total: number, tabName: string) => {
-                setRouteProgress({ current: scanned, total, tabName });
-              }
-            ).then(prefixes => { setRoutePrefixCards(prefixes); setRouteProgress(null); })
-              .catch(() => { setRouteProgress(null); }),
-          ]);
+          runScansSequentially(
+            book.spreadsheetId, bookTabs,
+            setCityProgress, setCityCards,
+            setRouteProgress, setRoutePrefixCards,
+          );
         }
       } catch (err: any) {
         setTabsError('Failed to load tabs: ' + (err.message || ''));
@@ -701,15 +701,15 @@ export default function DialerPage() {
     setActiveBook(null);
     setCampaignCards(booksToCards(books));
     setCityCards([]);
-    setRoutePrefixCards([]); // NEW
+    setRoutePrefixCards([]);
     setCityProgress(null);
-    setRouteProgress(null); // NEW
+    setRouteProgress(null);
     setTabs([]);
   }, [books]);
 
   const handleCityDeploy = useCallback((city: CityInfo) => {
     setPendingCityDeploy(city);
-    setPendingRouteDeploy(null); // NEW
+    setPendingRouteDeploy(null);
     setDeployingTab('');
     setSelectedTab(city.cityName);
     setStartBookingId('');
@@ -718,7 +718,6 @@ export default function DialerPage() {
     setShowDeployConfig(true);
   }, [direction]);
 
-  // NEW: route prefix deploy handler
   const handleRoutePrefixDeploy = useCallback((prefixes: RoutePrefixInfo[]) => {
     if (!prefixes || prefixes.length === 0) return;
     setPendingRouteDeploy(prefixes);
@@ -738,7 +737,7 @@ export default function DialerPage() {
 
   const handleConfirmDeploy = async () => {
     const isCityMode = pendingCityDeploy !== null;
-    const isRoutePrefixMode = pendingRouteDeploy !== null && pendingRouteDeploy.length > 0; // NEW
+    const isRoutePrefixMode = pendingRouteDeploy !== null && pendingRouteDeploy.length > 0;
 
     if (!campaign) return;
     if (!isCityMode && !isRoutePrefixMode && !selectedTab) return;
@@ -776,7 +775,7 @@ export default function DialerPage() {
         cityTabs: pendingCityDeploy!.tabs,
         campaignType: deployCampaignType,
       };
-    } else if (isRoutePrefixMode) { // NEW
+    } else if (isRoutePrefixMode) {
       const allTabsSet = new Set<string>();
       for (const p of pendingRouteDeploy!) {
         for (const t of p.tabs) allTabsSet.add(t);
@@ -862,7 +861,7 @@ export default function DialerPage() {
       setActiveDialTab(displayTab);
       setMode('dialer');
       setPendingCityDeploy(null);
-      setPendingRouteDeploy(null); // NEW
+      setPendingRouteDeploy(null);
       computeNetAvailable();
     } catch (err: any) {
       setShowDeployConfig(true);
@@ -1104,7 +1103,7 @@ export default function DialerPage() {
         setActiveBook(null);
         if (books.length > 0) setCampaignCards(booksToCards(books));
         setCityCards([]);
-        setRoutePrefixCards([]); // NEW
+        setRoutePrefixCards([]);
         setMode('campaign-select' as any);
         break;
       case 'reset': {
@@ -1468,7 +1467,7 @@ export default function DialerPage() {
           </div>
         )}
 
-        {/* NEW: Route scan progress bar — shown after city scan completes */}
+        {/* Route scan progress bar — only shown after city scan completes */}
         {!cityProgress && routeProgress && (
           <div style={{
             position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 200,
@@ -1523,7 +1522,6 @@ export default function DialerPage() {
                     ? pendingRouteDeploy.map(p => p.prefixName).join(' + ')
                     : pendingCityDeploy ? pendingCityDeploy.cityName : deployingTab}
                 </div>
-                {/* NEW: route prefix subtitle */}
                 {pendingRouteDeploy && (
                   <div style={{ fontSize: 8, color: '#3498db', opacity: 0.6, marginTop: 4, fontFamily: 'monospace' }}>
                     {pendingRouteDeploy.length} route{pendingRouteDeploy.length !== 1 ? 's' : ''} · {pendingRouteDeploy.reduce((s, p) => s + p.totalRows, 0).toLocaleString()} rows
@@ -1553,44 +1551,41 @@ export default function DialerPage() {
                     { dir: 'ambush',     label: 'AMBUSH',     icon: 'lorc/hidden',       bg: '#0f3460', tip: 'Start at a specific Booking ID and call down. Wraps back to the top and completes a full loop.' },
                     { dir: 'infiltrate', label: 'INFILTRATE', icon: 'lorc/deadly-strike', bg: '#533483', tip: 'Scans the sheet in 20-row windows and strikes the zone with the lowest NA count.' },
                     { dir: 'siege',      label: 'SIEGE',      icon: 'lorc/tower-fall',   bg: '#7b1a1a', tip: 'Works every group in NA order — blanks first, then 1s, then 2s. No wrap. Mission complete when exhausted.' },
-                  ] as const)
-                    // NEW: filter out Ambush for city and route modes
-                    .filter(({ dir }) => !((pendingCityDeploy || pendingRouteDeploy) && dir === 'ambush'))
-                    .map(({ dir, label, icon, bg, tip }) => {
-                      const isSelected = direction === dir;
-                      return (
-                        <div key={dir} className="flex-1 relative group">
-                          <button
-                            onClick={() => { setDirection(dir as Direction); setDeployError(''); if (dir !== 'ambush') setStartBookingId(''); }}
-                            className="w-full rounded transition-all"
-                            style={{
-                              position: 'relative', overflow: 'hidden', padding: '10px 4px 8px',
-                              background: isSelected ? bg : '#1a2e1a', color: isSelected ? '#fff' : '#666',
-                              border: isSelected ? `1.5px solid ${bg}` : '1.5px solid rgba(0,229,255,0.15)',
-                              fontFamily: 'inherit', minHeight: 64, display: 'flex', flexDirection: 'column',
-                              alignItems: 'center', justifyContent: 'flex-end', gap: 4, cursor: 'pointer',
-                            }}
-                          >
-                            <img src={`https://game-icons.net/icons/ffffff/transparent/1x1/${icon}.svg`} alt=""
-                              style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-                                width: 52, height: 52, opacity: isSelected ? 0.18 : 0.07, pointerEvents: 'none',
-                                filter: isSelected ? 'none' : 'grayscale(100%)', transition: 'opacity 0.2s ease' }} />
-                            <span style={{ position: 'relative', zIndex: 1, fontSize: 9, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase' }}>{label}</span>
-                          </button>
-                          <div className="absolute left-1/2 z-50 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150"
-                            style={{ bottom: 'calc(100% + 8px)', transform: 'translateX(-50%)', width: 180,
-                              background: 'rgba(0,8,14,0.97)', border: '1px solid rgba(0,229,255,0.25)', borderRadius: 6,
-                              padding: '8px 10px', boxShadow: '0 4px 20px rgba(0,0,0,0.8)', color: '#aaa',
-                              fontSize: 10, lineHeight: 1.5, fontWeight: 400, letterSpacing: '0.3px', textAlign: 'left' }}>
-                            <div style={{ color: '#00e5ff', fontWeight: 800, fontSize: 9, letterSpacing: '1.5px', marginBottom: 4, textTransform: 'uppercase' }}>{label}</div>
-                            {tip}
-                            <div style={{ position: 'absolute', bottom: -5, left: '50%', transform: 'translateX(-50%) rotate(45deg)',
-                              width: 8, height: 8, background: 'rgba(0,8,14,0.97)', border: '1px solid rgba(0,229,255,0.25)',
-                              borderTop: 'none', borderLeft: 'none' }} />
-                          </div>
+                  ] as const).filter(({ dir }) => !((pendingCityDeploy || pendingRouteDeploy) && dir === 'ambush')).map(({ dir, label, icon, bg, tip }) => {
+                    const isSelected = direction === dir;
+                    return (
+                      <div key={dir} className="flex-1 relative group">
+                        <button
+                          onClick={() => { setDirection(dir as Direction); setDeployError(''); if (dir !== 'ambush') setStartBookingId(''); }}
+                          className="w-full rounded transition-all"
+                          style={{
+                            position: 'relative', overflow: 'hidden', padding: '10px 4px 8px',
+                            background: isSelected ? bg : '#1a2e1a', color: isSelected ? '#fff' : '#666',
+                            border: isSelected ? `1.5px solid ${bg}` : '1.5px solid rgba(0,229,255,0.15)',
+                            fontFamily: 'inherit', minHeight: 64, display: 'flex', flexDirection: 'column',
+                            alignItems: 'center', justifyContent: 'flex-end', gap: 4, cursor: 'pointer',
+                          }}
+                        >
+                          <img src={`https://game-icons.net/icons/ffffff/transparent/1x1/${icon}.svg`} alt=""
+                            style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                              width: 52, height: 52, opacity: isSelected ? 0.18 : 0.07, pointerEvents: 'none',
+                              filter: isSelected ? 'none' : 'grayscale(100%)', transition: 'opacity 0.2s ease' }} />
+                          <span style={{ position: 'relative', zIndex: 1, fontSize: 9, fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase' }}>{label}</span>
+                        </button>
+                        <div className="absolute left-1/2 z-50 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+                          style={{ bottom: 'calc(100% + 8px)', transform: 'translateX(-50%)', width: 180,
+                            background: 'rgba(0,8,14,0.97)', border: '1px solid rgba(0,229,255,0.25)', borderRadius: 6,
+                            padding: '8px 10px', boxShadow: '0 4px 20px rgba(0,0,0,0.8)', color: '#aaa',
+                            fontSize: 10, lineHeight: 1.5, fontWeight: 400, letterSpacing: '0.3px', textAlign: 'left' }}>
+                          <div style={{ color: '#00e5ff', fontWeight: 800, fontSize: 9, letterSpacing: '1.5px', marginBottom: 4, textTransform: 'uppercase' }}>{label}</div>
+                          {tip}
+                          <div style={{ position: 'absolute', bottom: -5, left: '50%', transform: 'translateX(-50%) rotate(45deg)',
+                            width: 8, height: 8, background: 'rgba(0,8,14,0.97)', border: '1px solid rgba(0,229,255,0.25)',
+                            borderTop: 'none', borderLeft: 'none' }} />
                         </div>
-                      );
-                    })}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1686,7 +1681,7 @@ export default function DialerPage() {
                 setActiveBook(null);
                 if (books.length > 0) setCampaignCards(booksToCards(books));
                 setCityCards([]);
-                setRoutePrefixCards([]); // NEW
+                setRoutePrefixCards([]);
                 invalidateCache();
               }}
               className="mt-4 px-4 py-2 rounded text-xs font-bold tracking-wider uppercase"
@@ -1783,7 +1778,6 @@ export default function DialerPage() {
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           <div className="flex items-center justify-between px-2.5 py-1 flex-shrink-0" style={S.topBar}>
             <span className="text-xs uppercase tracking-wider" style={{ color: '#00e5ff', opacity: 0.5, fontSize: 9 }}>{cs.sheetName}</span>
-            {/* NET AVAILABLE COUNT — groups remaining after cooldown filter */}
             <span className="font-black font-mono" style={{ color: '#00e5ff', fontSize: 15, letterSpacing: '1px' }}>
               {netAvailableCount}
             </span>
