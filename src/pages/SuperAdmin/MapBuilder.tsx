@@ -116,7 +116,7 @@ const MapBuilder: React.FC = () => {
   const [thumbnails, setThumbnails] = useState<Thumbnail[]>([]);
   const [uploadingPdf, setUploadingPdf] = useState(false);
 
-  // Strip visibility — shown by default, hidden when editing
+  // Strip visibility
   const [showStrip, setShowStrip] = useState(true);
 
   // Area / Page State
@@ -235,13 +235,11 @@ const MapBuilder: React.FC = () => {
     []
   );
 
-  // Render first batch when PDF loads
   useEffect(() => {
     if (!pdfDoc) return;
     renderThumbnailBatch(pdfDoc, 1, 12);
   }, [pdfDoc]);
 
-  // Lazy-load more thumbnails on scroll
   const handleThumbnailScroll = () => {
     if (!thumbnailStripRef.current || !pdfDoc) return;
     const strip = thumbnailStripRef.current;
@@ -406,10 +404,12 @@ route_count = the highest route number shown in the table at the top of the page
     setActiveRouteNum(1);
     setAllWays([]);
     setPointA(null);
-    setShowStrip(false); // Hide strip when editing starts
+    setShowStrip(false);
+    // Give DOM time to update then resize map
+    setTimeout(() => mapRef.current?.resize(), 100);
   };
 
-  // ─── Init Mapbox ───
+  // ─── Init Mapbox — always mounts, never unmounts ───
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
@@ -497,18 +497,13 @@ route_count = the highest route number shown in the table at the top of the page
     map.on('mouseleave', 'roads-selected', handleLeave);
 
     mapRef.current = map;
-    return () => {
-      map.remove();
-      mapRef.current = null;
-      setMapLoaded(false);
-    };
+
+    // No cleanup — map stays mounted for lifetime of page
   }, []);
 
-  // Resize map when strip visibility changes
+  // Resize map when strip toggles
   useEffect(() => {
-    setTimeout(() => {
-      mapRef.current?.resize();
-    }, 50);
+    setTimeout(() => mapRef.current?.resize(), 50);
   }, [showStrip]);
 
   // ─── Click handler ───
@@ -527,7 +522,6 @@ route_count = the highest route number shown in the table at the top of the page
       const isSelected = features[0].properties?.selected as boolean;
 
       if (isSelected) {
-        // REMOVE — click any highlighted segment = remove entire street from route
         setRoutes(prev =>
           prev.map(r => {
             if (r.num !== activeRouteNum) return r;
@@ -542,7 +536,6 @@ route_count = the highest route number shown in the table at the top of the page
         );
         setPointA(null);
       } else {
-        // ADD — two-point selection
         if (!pointA) {
           setPointA({ wayId, streetName: wayName });
         } else {
@@ -589,15 +582,12 @@ route_count = the highest route number shown in the table at the top of the page
     (map.getSource('roads') as mapboxgl.GeoJSONSource).setData(geojson);
   }, [routes, activeRouteNum, mapLoaded, allWays, pointA]);
 
-  // ─── Load roads via Nominatim + Overpass ───
+  // ─── Load roads ───
   const loadRoads = useCallback(async (area: AreaPrefix) => {
     setLoadingRoads(true);
     setError(null);
     try {
-      const searchName = area.area_name
-        .toLowerCase()
-        .replace(/#\d+/g, '')
-        .trim();
+      const searchName = area.area_name.toLowerCase().replace(/#\d+/g, '').trim();
       const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
         searchName + ', Hamilton, Ontario, Canada'
       )}&format=json&limit=1`;
@@ -651,14 +641,13 @@ route_count = the highest route number shown in the table at the top of the page
     }
   }, [currentArea, mapLoaded]);
 
-  // ─── AI Extraction using real PDF page ───
+  // ─── AI Extraction ───
   const handleExtract = async () => {
     if (!activeRoute || !pdfDoc || !currentArea || !selectedPage) return;
     setExtracting(true);
     setError(null);
     try {
       const base64 = await renderPageToBase64(pdfDoc, selectedPage, 2.0);
-
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -701,7 +690,6 @@ Respond ONLY with this exact JSON — no other text:
 
       const data = await response.json();
       const text = data.content[0].text;
-
       let parsed: { streets: string[]; confidence: number; notes: string };
       try {
         parsed = JSON.parse(text);
@@ -714,7 +702,6 @@ Respond ONLY with this exact JSON — no other text:
 
       const matchedIds = new Set<number>();
       const matchedNames: string[] = [];
-
       parsed.streets.forEach((streetName: string) => {
         const matching = allWays.filter(
           w =>
@@ -729,15 +716,13 @@ Respond ONLY with this exact JSON — no other text:
 
       setRoutes(prev =>
         prev.map(r =>
-          r.num !== activeRouteNum
-            ? r
-            : {
-                ...r,
-                selectedWayIds: matchedIds,
-                streetNames: matchedNames,
-                aiNotes: parsed.notes,
-                confidence: parsed.confidence,
-              }
+          r.num !== activeRouteNum ? r : {
+            ...r,
+            selectedWayIds: matchedIds,
+            streetNames: matchedNames,
+            aiNotes: parsed.notes,
+            confidence: parsed.confidence,
+          }
         )
       );
     } catch {
@@ -750,9 +735,7 @@ Respond ONLY with this exact JSON — no other text:
   const handleAddStreet = () => {
     const name = addStreetInput.trim();
     if (!name) return;
-    const matching = allWays.filter(w =>
-      w.name.toLowerCase().includes(name.toLowerCase())
-    );
+    const matching = allWays.filter(w => w.name.toLowerCase().includes(name.toLowerCase()));
     if (matching.length === 0) {
       setError(`No roads found matching "${name}" in this area`);
       return;
@@ -788,9 +771,7 @@ Respond ONLY with this exact JSON — no other text:
 
   const handleApprove = () => {
     setRoutes(prev =>
-      prev.map(r =>
-        r.num === activeRouteNum ? { ...r, status: 'approved' as const } : r
-      )
+      prev.map(r => r.num === activeRouteNum ? { ...r, status: 'approved' as const } : r)
     );
     const next = routes.find(r => r.num > activeRouteNum && r.status === 'pending');
     if (next) setActiveRouteNum(next.num);
@@ -798,9 +779,7 @@ Respond ONLY with this exact JSON — no other text:
 
   const handleFlag = () => {
     setRoutes(prev =>
-      prev.map(r =>
-        r.num === activeRouteNum ? { ...r, status: 'flagged' as const } : r
-      )
+      prev.map(r => r.num === activeRouteNum ? { ...r, status: 'flagged' as const } : r)
     );
     const next = routes.find(r => r.num > activeRouteNum && r.status === 'pending');
     if (next) setActiveRouteNum(next.num);
@@ -811,9 +790,7 @@ Respond ONLY with this exact JSON — no other text:
     setSaving(true);
     setError(null);
     try {
-      const approved = routes.filter(
-        r => r.status === 'approved' && r.selectedWayIds.size > 0
-      );
+      const approved = routes.filter(r => r.status === 'approved' && r.selectedWayIds.size > 0);
       for (const route of approved) {
         const segments = allWays
           .filter(w => route.selectedWayIds.has(w.id))
@@ -864,8 +841,6 @@ Respond ONLY with this exact JSON — no other text:
           </div>
         </div>
         <div className="flex items-center gap-3">
-
-          {/* Switch Area button — only shown when editing */}
           {currentArea && (
             <button
               onClick={() => setShowStrip(s => !s)}
@@ -879,7 +854,6 @@ Respond ONLY with this exact JSON — no other text:
               {showStrip ? 'Hide Pages' : 'Switch Area'}
             </button>
           )}
-
           <label
             className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm cursor-pointer border transition-colors ${
               pdfDoc
@@ -897,7 +871,6 @@ Respond ONLY with this exact JSON — no other text:
               disabled={uploadingPdf}
             />
           </label>
-
           {currentArea && (
             <button
               onClick={handleSaveAll}
@@ -920,7 +893,7 @@ Respond ONLY with this exact JSON — no other text:
         </div>
       )}
 
-      {/* Thumbnail Strip — hidden when editing a map */}
+      {/* Thumbnail Strip — only shown when showStrip is true */}
       {showStrip && (
         pdfDoc ? (
           <div
@@ -979,11 +952,14 @@ Respond ONLY with this exact JSON — no other text:
         )
       )}
 
-      {/* Main Editor */}
-      {currentArea ? (
-        <div className="flex flex-1 overflow-hidden">
+      {/* ── MAIN CONTENT AREA ──
+          The map container is ALWAYS in the DOM so Mapbox stays initialized.
+          We use flex layout — left panel and right panel only show when currentArea is set.
+          The map itself is always rendered but gets full width when no area is selected. */}
+      <div className="flex flex-1 overflow-hidden">
 
-          {/* LEFT: Route list */}
+        {/* LEFT: Route list — only visible when editing */}
+        {currentArea && (
           <div className="w-48 bg-gray-800 border-r border-gray-700 flex flex-col overflow-hidden flex-shrink-0">
             <div className="px-3 py-2 border-b border-gray-700 flex justify-between items-center">
               <span className="text-xs text-gray-400 uppercase tracking-wider font-medium">Routes</span>
@@ -1026,41 +1002,60 @@ Respond ONLY with this exact JSON — no other text:
               </div>
             </div>
           </div>
+        )}
 
-          {/* CENTER: Map */}
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
-              <div
-                ref={mapContainerRef}
-                style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, width: '100%', height: '100%' }}
-              />
-              {loadingRoads && (
-                <div className="absolute inset-0 bg-gray-900/60 flex items-center justify-center z-10">
-                  <div className="bg-gray-800 rounded-lg px-4 py-3 flex items-center gap-3 text-sm border border-gray-700">
-                    <Loader size={16} className="animate-spin text-blue-400" />
-                    Loading roads from OpenStreetMap...
-                  </div>
-                </div>
-              )}
-              {hoveredWayName && (
-                <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-gray-900/90 border border-gray-700 rounded px-3 py-1.5 text-sm z-10 pointer-events-none">
-                  {hoveredWayName}
-                </div>
-              )}
-              {pointA && (
-                <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-blue-950/95 border border-blue-600 rounded-lg px-3 py-2 text-xs z-10 text-blue-300 flex items-center gap-2 shadow-lg">
-                  <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse flex-shrink-0" />
-                  <span>
-                    Point A set on <strong className="text-blue-200">{pointA.streetName}</strong> — click a second point on the same street
-                  </span>
-                  <button onClick={() => setPointA(null)} className="text-blue-400 hover:text-white ml-2 flex-shrink-0">
-                    <X size={12} />
-                  </button>
-                </div>
-              )}
-            </div>
+        {/* CENTER: Map — always in DOM */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
 
-            {/* Action bar */}
+            {/* Map container — always rendered */}
+            <div
+              ref={mapContainerRef}
+              style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, width: '100%', height: '100%' }}
+            />
+
+            {/* No area selected overlay */}
+            {!currentArea && (
+              <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+                <div className="text-center bg-gray-900/80 rounded-xl px-8 py-6 border border-gray-700">
+                  <MapIcon size={48} className="mx-auto mb-3 text-gray-600 opacity-50" />
+                  <p className="text-sm text-gray-500">
+                    {pdfDoc ? 'Click a page thumbnail above to start mapping' : 'Upload your master maps PDF to begin'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {loadingRoads && (
+              <div className="absolute inset-0 bg-gray-900/60 flex items-center justify-center z-10">
+                <div className="bg-gray-800 rounded-lg px-4 py-3 flex items-center gap-3 text-sm border border-gray-700">
+                  <Loader size={16} className="animate-spin text-blue-400" />
+                  Loading roads from OpenStreetMap...
+                </div>
+              </div>
+            )}
+
+            {hoveredWayName && currentArea && (
+              <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-gray-900/90 border border-gray-700 rounded px-3 py-1.5 text-sm z-10 pointer-events-none">
+                {hoveredWayName}
+              </div>
+            )}
+
+            {pointA && (
+              <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-blue-950/95 border border-blue-600 rounded-lg px-3 py-2 text-xs z-10 text-blue-300 flex items-center gap-2 shadow-lg">
+                <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse flex-shrink-0" />
+                <span>
+                  Point A set on <strong className="text-blue-200">{pointA.streetName}</strong> — click a second point on the same street
+                </span>
+                <button onClick={() => setPointA(null)} className="text-blue-400 hover:text-white ml-2 flex-shrink-0">
+                  <X size={12} />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Action bar — only shown when editing */}
+          {currentArea && (
             <div className="bg-gray-800 border-t border-gray-700 px-4 py-2 flex items-center gap-3 flex-shrink-0">
               {activeRoute && (
                 <div className="flex items-center gap-2 mr-2">
@@ -1106,9 +1101,11 @@ Respond ONLY with this exact JSON — no other text:
                   : 'Click unlit street to add · Click lit street to remove whole street'}
               </div>
             </div>
-          </div>
+          )}
+        </div>
 
-          {/* RIGHT: Streets panel */}
+        {/* RIGHT: Streets panel — only visible when editing */}
+        {currentArea && (
           <div className="w-64 bg-gray-800 border-l border-gray-700 flex flex-col overflow-hidden flex-shrink-0">
             <div className="px-3 py-2 border-b border-gray-700">
               <div className="text-xs text-gray-400 uppercase tracking-wider font-medium mb-1">Selected Streets</div>
@@ -1159,17 +1156,8 @@ Respond ONLY with this exact JSON — no other text:
               <div className="text-[9px] text-gray-600 mt-1">Adds all segments of that street name</div>
             </div>
           </div>
-        </div>
-      ) : (
-        <div className="flex-1 flex items-center justify-center text-gray-600">
-          <div className="text-center">
-            <MapIcon size={48} className="mx-auto mb-3 opacity-20" />
-            <p className="text-sm">
-              {pdfDoc ? 'Click a page thumbnail above to start mapping' : 'Upload your master maps PDF to begin'}
-            </p>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* PREFIX + REGION MODAL */}
       {showPrefixModal && (
@@ -1205,7 +1193,6 @@ Respond ONLY with this exact JSON — no other text:
                     />
                     <div className="text-[10px] text-gray-500 mt-1">Auto-detected by AI — edit if incorrect</div>
                   </div>
-
                   <div>
                     <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Route Count</label>
                     <input
@@ -1216,7 +1203,6 @@ Respond ONLY with this exact JSON — no other text:
                     />
                     <div className="text-[10px] text-gray-500 mt-1">Auto-detected by AI — edit if incorrect</div>
                   </div>
-
                   <div>
                     <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Route Prefix</label>
                     <input
@@ -1232,7 +1218,6 @@ Respond ONLY with this exact JSON — no other text:
                       </div>
                     )}
                   </div>
-
                   <div>
                     <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Region</label>
                     <div className="grid grid-cols-3 gap-2">
