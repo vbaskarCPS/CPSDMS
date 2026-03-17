@@ -3,41 +3,40 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import * as pdfjsLib from 'pdfjs-dist';
 import {
   ArrowLeft, Loader, Check, X, AlertCircle,
-  Zap, Plus, Map as MapIcon
+  Zap, Plus, Map as MapIcon, Upload,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
-mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
+// PDF.js worker — loaded from CDN for reliability in Vite
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
-const AREAS = [
-  { name: 'Aldershot', center: [-79.870, 43.320] as [number,number], zoom: 13, bbox: '43.295,-79.920,43.345,-79.820', routeCount: 21 },
-  { name: 'Ancaster East', center: [-79.957, 43.230] as [number,number], zoom: 13, bbox: '43.205,-79.985,43.255,-79.930', routeCount: 16 },
-  { name: 'Ancaster Meadows', center: [-79.990, 43.195] as [number,number], zoom: 13, bbox: '43.170,-80.020,43.220,-79.960', routeCount: 18 },
-  { name: 'Ancaster West', center: [-80.030, 43.200] as [number,number], zoom: 13, bbox: '43.170,-80.060,43.230,-80.000', routeCount: 17 },
-  { name: 'Binbrook', center: [-79.820, 43.115] as [number,number], zoom: 14, bbox: '43.090,-79.850,43.140,-79.790', routeCount: 9 },
-  { name: 'Brant Hills', center: [-79.845, 43.370] as [number,number], zoom: 13, bbox: '43.345,-79.870,43.395,-79.820', routeCount: 15 },
-  { name: 'Chedoke', center: [-79.900, 43.245] as [number,number], zoom: 13, bbox: '43.220,-79.930,43.270,-79.870', routeCount: 21 },
-  { name: 'Dundas', center: [-79.955, 43.265] as [number,number], zoom: 13, bbox: '43.240,-79.985,43.290,-79.925', routeCount: 11 },
-  { name: 'Hampton Heights', center: [-79.835, 43.230] as [number,number], zoom: 13, bbox: '43.205,-79.865,43.255,-79.805', routeCount: 29 },
-  { name: 'Hill Park', center: [-79.850, 43.225] as [number,number], zoom: 13, bbox: '43.200,-79.880,43.250,-79.820', routeCount: 23 },
-  { name: 'Mohawk', center: [-79.870, 43.235] as [number,number], zoom: 13, bbox: '43.210,-79.900,43.260,-79.840', routeCount: 20 },
-  { name: 'Red Hill', center: [-79.790, 43.230] as [number,number], zoom: 13, bbox: '43.205,-79.820,43.255,-79.760', routeCount: 23 },
-  { name: 'Rosedale', center: [-79.855, 43.205] as [number,number], zoom: 13, bbox: '43.180,-79.885,43.230,-79.825', routeCount: 17 },
-  { name: 'Rushdale', center: [-79.820, 43.215] as [number,number], zoom: 13, bbox: '43.190,-79.850,43.240,-79.790', routeCount: 24 },
-  { name: 'Ryckmans', center: [-79.870, 43.195] as [number,number], zoom: 13, bbox: '43.170,-79.900,43.220,-79.840', routeCount: 30 },
-  { name: 'Stoney Creek', center: [-79.740, 43.225] as [number,number], zoom: 13, bbox: '43.200,-79.770,43.250,-79.710', routeCount: 24 },
-  { name: 'Waterdown', center: [-79.890, 43.340] as [number,number], zoom: 13, bbox: '43.315,-79.920,43.365,-79.860', routeCount: 16 },
-  { name: 'Westdale', center: [-79.910, 43.265] as [number,number], zoom: 13, bbox: '43.240,-79.940,43.290,-79.880', routeCount: 16 },
-];
+mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
 const ROUTE_COLORS = [
   '#ef4444','#22c55e','#06b6d4','#3b82f6','#f97316',
   '#60a5fa','#eab308','#ec4899','#a855f7','#dc2626',
   '#16a34a','#d97706','#0d9488','#f472b6','#84cc16',
   '#db2777','#7c3aed','#2563eb','#15803d','#0891b2','#6d28d9',
+  '#854d0e','#166534','#1e40af','#6b21a8','#9f1239',
+  '#134e4a','#78350f','#1e3a5f','#4a044e','#7f1d1d',
+  '#14532d','#1a365d','#553c9a','#97266d','#c05621',
+  '#2d3748','#276749','#2a4365','#6b2737','#285e61',
+  '#744210','#2c5282','#702459','#1a202c','#4a5568',
 ];
+
+type Region = 'West' | 'Central' | 'East';
+
+interface AreaPrefix {
+  area_name: string;
+  prefix: string;
+  region: Region;
+  pdf_page: number;
+  route_count: number;
+}
 
 interface RouteData {
   num: number;
@@ -55,7 +54,23 @@ interface OsmWay {
   geometry: [number, number][];
 }
 
-function buildGeoJSON(ways: OsmWay[], selectedIds: Set<number>, color: string): GeoJSON.FeatureCollection {
+interface Thumbnail {
+  pageNum: number;
+  dataUrl: string | null;
+  loading: boolean;
+}
+
+interface PointA {
+  wayId: number;
+  streetName: string;
+}
+
+function buildGeoJSON(
+  ways: OsmWay[],
+  selectedIds: Set<number>,
+  color: string,
+  pointAWayId?: number | null
+): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
     features: ways.map(w => ({
@@ -66,10 +81,26 @@ function buildGeoJSON(ways: OsmWay[], selectedIds: Set<number>, color: string): 
         name: w.name,
         selected: selectedIds.has(w.id),
         color,
+        isPointA: w.id === pointAWayId,
       },
       geometry: { type: 'LineString', coordinates: w.geometry },
     })),
   };
+}
+
+async function renderPageToBase64(
+  pdfDoc: pdfjsLib.PDFDocumentProxy,
+  pageNum: number,
+  scale: number = 1.5
+): Promise<string> {
+  const page = await pdfDoc.getPage(pageNum);
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d')!;
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  return canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
 }
 
 const MapBuilder: React.FC = () => {
@@ -77,8 +108,30 @@ const MapBuilder: React.FC = () => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const thumbnailStripRef = useRef<HTMLDivElement>(null);
+  const renderedUpTo = useRef<number>(0);
 
-  const [selectedArea, setSelectedArea] = useState(AREAS[0]);
+  // PDF State
+  const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
+  const [totalPages, setTotalPages] = useState(0);
+  const [thumbnails, setThumbnails] = useState<Thumbnail[]>([]);
+  const [uploadingPdf, setUploadingPdf] = useState(false);
+
+  // Area / Page State
+  const [selectedPage, setSelectedPage] = useState<number | null>(null);
+  const [areaInfoMap, setAreaInfoMap] = useState<Map<number, AreaPrefix>>(new Map());
+  const [currentArea, setCurrentArea] = useState<AreaPrefix | null>(null);
+
+  // Prefix Modal State
+  const [showPrefixModal, setShowPrefixModal] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scannedAreaName, setScannedAreaName] = useState('');
+  const [scannedRouteCount, setScannedRouteCount] = useState(0);
+  const [prefixInput, setPrefixInput] = useState('');
+  const [regionInput, setRegionInput] = useState<Region>('West');
+  const [pendingPage, setPendingPage] = useState<number | null>(null);
+
+  // Map / Route State
   const [routes, setRoutes] = useState<RouteData[]>([]);
   const [activeRouteNum, setActiveRouteNum] = useState(1);
   const [allWays, setAllWays] = useState<OsmWay[]>([]);
@@ -89,10 +142,255 @@ const MapBuilder: React.FC = () => {
   const [addStreetInput, setAddStreetInput] = useState('');
   const [hoveredWayName, setHoveredWayName] = useState<string | null>(null);
 
-  // Init routes when area changes
+  // Two-point selection
+  const [pointA, setPointA] = useState<PointA | null>(null);
+
+  const activeRoute = routes.find(r => r.num === activeRouteNum);
+  const approvedCount = routes.filter(r => r.status === 'approved').length;
+  const flaggedCount = routes.filter(r => r.status === 'flagged').length;
+  const pendingCount = routes.filter(r => r.status === 'pending').length;
+
+  // ─── Load existing PDF and area prefixes on mount ───
   useEffect(() => {
+    loadExistingPdf();
+    loadAreaPrefixes();
+  }, []);
+
+  const loadAreaPrefixes = async () => {
+    const { data } = await supabase.from('area_prefixes').select('*');
+    if (data) {
+      const map = new Map<number, AreaPrefix>();
+      data.forEach((a: AreaPrefix) => {
+        if (a.pdf_page) map.set(a.pdf_page, a);
+      });
+      setAreaInfoMap(map);
+    }
+  };
+
+  const loadExistingPdf = async () => {
+    try {
+      const { data } = await supabase.storage.from('master-maps').list('');
+      if (data && data.length > 0) {
+        const pdfFile = data.find(f => f.name.endsWith('.pdf'));
+        if (pdfFile) {
+          const { data: urlData } = supabase.storage
+            .from('master-maps')
+            .getPublicUrl(pdfFile.name);
+          await loadPdfFromUrl(urlData.publicUrl);
+        }
+      }
+    } catch {
+      // No PDF yet — fine
+    }
+  };
+
+  const loadPdfFromUrl = async (url: string) => {
+    try {
+      const pdf = await pdfjsLib.getDocument({ url, withCredentials: false }).promise;
+      setPdfDoc(pdf);
+      setTotalPages(pdf.numPages);
+      renderedUpTo.current = 0;
+      setThumbnails(
+        Array.from({ length: pdf.numPages }, (_, i) => ({
+          pageNum: i + 1,
+          dataUrl: null,
+          loading: false,
+        }))
+      );
+    } catch {
+      setError('Failed to load PDF. Please try uploading again.');
+    }
+  };
+
+  // ─── Render thumbnails in batches ───
+  const renderThumbnailBatch = useCallback(
+    async (pdf: pdfjsLib.PDFDocumentProxy, start: number, count: number) => {
+      const end = Math.min(start + count - 1, pdf.numPages);
+      for (let i = start; i <= end; i++) {
+        setThumbnails(prev =>
+          prev.map(t => (t.pageNum === i ? { ...t, loading: true } : t))
+        );
+        try {
+          const page = await pdf.getPage(i);
+          const viewport = page.getViewport({ scale: 0.18 });
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          const ctx = canvas.getContext('2d')!;
+          await page.render({ canvasContext: ctx, viewport }).promise;
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
+          setThumbnails(prev =>
+            prev.map(t => (t.pageNum === i ? { ...t, dataUrl, loading: false } : t))
+          );
+        } catch {
+          setThumbnails(prev =>
+            prev.map(t => (t.pageNum === i ? { ...t, loading: false } : t))
+          );
+        }
+      }
+      renderedUpTo.current = end;
+    },
+    []
+  );
+
+  // Render first batch when PDF loads
+  useEffect(() => {
+    if (!pdfDoc) return;
+    renderThumbnailBatch(pdfDoc, 1, 12);
+  }, [pdfDoc]);
+
+  // Lazy-load more thumbnails on scroll
+  const handleThumbnailScroll = () => {
+    if (!thumbnailStripRef.current || !pdfDoc) return;
+    const strip = thumbnailStripRef.current;
+    const scrollRight = strip.scrollLeft + strip.clientWidth;
+    const pctScrolled = scrollRight / strip.scrollWidth;
+    const pagesVisible = Math.ceil(pctScrolled * totalPages);
+    if (pagesVisible >= renderedUpTo.current - 3 && renderedUpTo.current < totalPages) {
+      renderThumbnailBatch(pdfDoc, renderedUpTo.current + 1, 10);
+    }
+  };
+
+  // ─── Upload PDF ───
+  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingPdf(true);
+    setError(null);
+    try {
+      const { data: existing } = await supabase.storage.from('master-maps').list('');
+      if (existing) {
+        const old = existing.filter(f => f.name.endsWith('.pdf'));
+        if (old.length > 0) {
+          await supabase.storage.from('master-maps').remove(old.map(p => p.name));
+        }
+      }
+      const fileName = `master-maps-${Date.now()}.pdf`;
+      const { error: uploadError } = await supabase.storage
+        .from('master-maps')
+        .upload(fileName, file);
+      if (uploadError) throw uploadError;
+      const { data: urlData } = supabase.storage
+        .from('master-maps')
+        .getPublicUrl(fileName);
+      await loadPdfFromUrl(urlData.publicUrl);
+    } catch {
+      setError('Failed to upload PDF. Please try again.');
+    } finally {
+      setUploadingPdf(false);
+    }
+  };
+
+  // ─── Click thumbnail ───
+  const handleThumbnailClick = async (pageNum: number) => {
+    const existing = areaInfoMap.get(pageNum);
+    if (existing) {
+      setCurrentArea(existing);
+      setSelectedPage(pageNum);
+      initRoutesForArea(existing);
+    } else {
+      setPendingPage(pageNum);
+      setShowPrefixModal(true);
+      await scanPageWithClaude(pageNum);
+    }
+  };
+
+  // ─── Scan page with Claude ───
+  const scanPageWithClaude = async (pageNum: number) => {
+    if (!pdfDoc) return;
+    setScanning(true);
+    try {
+      const base64 = await renderPageToBase64(pdfDoc, pageNum, 1.0);
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 300,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'image',
+                  source: { type: 'base64', media_type: 'image/jpeg', data: base64 },
+                },
+                {
+                  type: 'text',
+                  text: `This is a page from a master route map book for Hamilton, Ontario.
+
+Look at the bold title at the top (e.g. "Master Map – ALDERSHOT") and the route number table below it.
+
+Respond ONLY with this exact JSON — no other text:
+{
+  "area_name": "ALDERSHOT",
+  "route_count": 21
+}
+
+area_name = the area name from the title in ALL CAPS.
+route_count = the highest route number shown in the table at the top of the page.`,
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      const data = await response.json();
+      const text = data.content[0].text;
+      let parsed: { area_name: string; route_count: number };
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        const match = text.match(/\{[\s\S]*\}/);
+        parsed = match
+          ? JSON.parse(match[0])
+          : { area_name: `Area ${pageNum}`, route_count: 10 };
+      }
+      setScannedAreaName(parsed.area_name);
+      setScannedRouteCount(parsed.route_count);
+    } catch {
+      setScannedAreaName(`Area ${pageNum}`);
+      setScannedRouteCount(10);
+      setError('Could not auto-read area name — you can edit it manually.');
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  // ─── Confirm prefix modal ───
+  const handlePrefixConfirm = async () => {
+    if (!prefixInput.trim() || !pendingPage) return;
+    const areaInfo: AreaPrefix = {
+      area_name: scannedAreaName,
+      prefix: prefixInput.toUpperCase(),
+      region: regionInput,
+      pdf_page: pendingPage,
+      route_count: scannedRouteCount,
+    };
+    await supabase
+      .from('area_prefixes')
+      .upsert(areaInfo, { onConflict: 'area_name' });
+    const newMap = new Map(areaInfoMap);
+    newMap.set(pendingPage, areaInfo);
+    setAreaInfoMap(newMap);
+    setCurrentArea(areaInfo);
+    setSelectedPage(pendingPage);
+    initRoutesForArea(areaInfo);
+    setShowPrefixModal(false);
+    setPrefixInput('');
+    setPendingPage(null);
+    setScannedAreaName('');
+    setScannedRouteCount(0);
+  };
+
+  const initRoutesForArea = (area: AreaPrefix) => {
     setRoutes(
-      Array.from({ length: selectedArea.routeCount }, (_, i) => ({
+      Array.from({ length: area.route_count }, (_, i) => ({
         num: i + 1,
         color: ROUTE_COLORS[i] || '#888888',
         status: 'pending' as const,
@@ -104,25 +402,23 @@ const MapBuilder: React.FC = () => {
     );
     setActiveRouteNum(1);
     setAllWays([]);
-  }, [selectedArea]);
+    setPointA(null);
+  };
 
-  const activeRoute = routes.find(r => r.num === activeRouteNum);
-
-  // Init Mapbox
+  // ─── Init Mapbox ───
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
       style: 'mapbox://styles/mapbox/dark-v11',
-      center: selectedArea.center,
-      zoom: selectedArea.zoom,
+      center: [-79.870, 43.320],
+      zoom: 13,
     });
 
     map.addControl(new mapboxgl.NavigationControl(), 'top-right');
 
     map.on('load', () => {
-      // Force Mapbox to remeasure the container after load
       map.resize();
 
       map.addSource('roads', {
@@ -161,10 +457,21 @@ const MapBuilder: React.FC = () => {
         layout: { 'line-cap': 'round', 'line-join': 'round' },
       });
 
+      map.addLayer({
+        id: 'roads-point-a',
+        type: 'line',
+        source: 'roads',
+        filter: ['==', ['get', 'isPointA'], true],
+        paint: { 'line-color': '#60a5fa', 'line-width': 8, 'line-opacity': 1 },
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+      });
+
       setMapLoaded(true);
     });
 
-    const handleHover = (e: mapboxgl.MapMouseEvent & { features?: mapboxgl.MapboxGeoJSONFeature[] }) => {
+    const handleHover = (
+      e: mapboxgl.MapMouseEvent & { features?: mapboxgl.MapboxGeoJSONFeature[] }
+    ) => {
       if (e.features?.[0]) {
         const id = e.features[0].properties?.id;
         const name = e.features[0].properties?.name;
@@ -186,64 +493,126 @@ const MapBuilder: React.FC = () => {
     map.on('mouseleave', 'roads-selected', handleLeave);
 
     mapRef.current = map;
-    return () => { map.remove(); mapRef.current = null; setMapLoaded(false); };
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      setMapLoaded(false);
+    };
   }, []);
 
-  // Click handler
+  // ─── Click handler ───
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
     const handleClick = (e: mapboxgl.MapMouseEvent) => {
       const features = map.queryRenderedFeatures(e.point, {
-        layers: ['roads-base', 'roads-selected'],
+        layers: ['roads-base', 'roads-selected', 'roads-point-a'],
       });
       if (!features.length) return;
 
       const wayId = features[0].properties?.id as number;
       const wayName = features[0].properties?.name as string;
+      const isSelected = features[0].properties?.selected as boolean;
 
-      setRoutes(prev => prev.map(r => {
-        if (r.num !== activeRouteNum) return r;
-        const newIds = new Set(r.selectedWayIds);
-        const newNames = [...r.streetNames];
-
-        if (newIds.has(wayId)) {
-          newIds.delete(wayId);
-          const stillHasName = allWays.some(w => w.name === wayName && newIds.has(w.id));
-          if (!stillHasName) {
-            const idx = newNames.indexOf(wayName);
-            if (idx > -1) newNames.splice(idx, 1);
-          }
+      if (isSelected) {
+        // REMOVE — click any highlighted segment = remove entire street from route
+        setRoutes(prev =>
+          prev.map(r => {
+            if (r.num !== activeRouteNum) return r;
+            const newIds = new Set(r.selectedWayIds);
+            allWays.filter(w => w.name === wayName).forEach(w => newIds.delete(w.id));
+            return {
+              ...r,
+              selectedWayIds: newIds,
+              streetNames: r.streetNames.filter(n => n !== wayName),
+            };
+          })
+        );
+        setPointA(null);
+      } else {
+        // ADD — two-point selection
+        if (!pointA) {
+          setPointA({ wayId, streetName: wayName });
         } else {
-          newIds.add(wayId);
-          if (wayName && !newNames.includes(wayName)) newNames.push(wayName);
+          if (wayName !== pointA.streetName) {
+            setPointA({ wayId, streetName: wayName });
+            setError(`Different street selected — starting new selection on ${wayName}.`);
+            setTimeout(() => setError(null), 3000);
+          } else {
+            const streetWays = allWays.filter(w => w.name === wayName);
+            const idxA = streetWays.findIndex(w => w.id === pointA.wayId);
+            const idxB = streetWays.findIndex(w => w.id === wayId);
+            if (idxA === -1 || idxB === -1) return;
+            const start = Math.min(idxA, idxB);
+            const end = Math.max(idxA, idxB);
+            const waysToAdd = streetWays.slice(start, end + 1);
+            setRoutes(prev =>
+              prev.map(r => {
+                if (r.num !== activeRouteNum) return r;
+                const newIds = new Set(r.selectedWayIds);
+                waysToAdd.forEach(w => newIds.add(w.id));
+                const newNames = r.streetNames.includes(wayName)
+                  ? r.streetNames
+                  : [...r.streetNames, wayName];
+                return { ...r, selectedWayIds: newIds, streetNames: newNames };
+              })
+            );
+            setPointA(null);
+          }
         }
-
-        return { ...r, selectedWayIds: newIds, streetNames: newNames };
-      }));
+      }
     };
 
     map.on('click', handleClick);
     return () => { map.off('click', handleClick); };
-  }, [mapLoaded, activeRouteNum, allWays]);
+  }, [mapLoaded, activeRouteNum, allWays, pointA]);
 
-  // Update map data when selection changes
+  // ─── Update map GeoJSON ───
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded || allWays.length === 0) return;
     const route = routes.find(r => r.num === activeRouteNum);
     if (!route) return;
-    const geojson = buildGeoJSON(allWays, route.selectedWayIds, route.color);
+    const geojson = buildGeoJSON(allWays, route.selectedWayIds, route.color, pointA?.wayId);
     (map.getSource('roads') as mapboxgl.GeoJSONSource).setData(geojson);
-  }, [routes, activeRouteNum, mapLoaded, allWays]);
+  }, [routes, activeRouteNum, mapLoaded, allWays, pointA]);
 
-  // Load roads from Overpass
-  const loadRoads = useCallback(async () => {
+  // ─── Load roads via Nominatim + Overpass ───
+  const loadRoads = useCallback(async (area: AreaPrefix) => {
     setLoadingRoads(true);
     setError(null);
     try {
-      const query = `[out:json][timeout:30];way["highway"]["name"](${selectedArea.bbox});out geom;`;
+      const searchName = area.area_name
+        .toLowerCase()
+        .replace(/#\d+/g, '')
+        .trim();
+      const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+        searchName + ', Hamilton, Ontario, Canada'
+      )}&format=json&limit=1`;
+      const nominatimResp = await fetch(nominatimUrl, {
+        headers: { 'User-Agent': 'CPSDMS-MapBuilder/1.0' },
+      });
+      const nominatimData = await nominatimResp.json();
+
+      let bbox: string;
+      let center: [number, number];
+
+      if (nominatimData.length > 0) {
+        const b = nominatimData[0].boundingbox; // [south, north, west, east]
+        bbox = `${b[0]},${b[2]},${b[1]},${b[3]}`;
+        center = [
+          (parseFloat(b[2]) + parseFloat(b[3])) / 2,
+          (parseFloat(b[0]) + parseFloat(b[1])) / 2,
+        ];
+      } else {
+        bbox = '43.200,-79.950,43.350,-79.750';
+        center = [-79.870, 43.270];
+      }
+
+      mapRef.current?.flyTo({ center, zoom: 13 });
+
+      const query = `[out:json][timeout:30];way["highway"]["name"](${bbox});out geom;`;
       const resp = await fetch('https://overpass-api.de/api/interpreter', {
         method: 'POST',
         body: `data=${encodeURIComponent(query)}`,
@@ -259,39 +628,25 @@ const MapBuilder: React.FC = () => {
         }));
       setAllWays(ways);
     } catch {
-      setError('Failed to load roads from OpenStreetMap. Check your connection.');
+      setError('Failed to load roads from OpenStreetMap. Please check your connection.');
     } finally {
       setLoadingRoads(false);
     }
-  }, [selectedArea]);
+  }, []);
 
   useEffect(() => {
-    if (mapLoaded) {
-      loadRoads();
-      mapRef.current?.flyTo({ center: selectedArea.center, zoom: selectedArea.zoom });
+    if (mapLoaded && currentArea) {
+      loadRoads(currentArea);
     }
-  }, [selectedArea, mapLoaded]);
+  }, [currentArea, mapLoaded]);
 
-  // AI extraction
+  // ─── AI Extraction using real PDF page ───
   const handleExtract = async () => {
-    if (!activeRoute) return;
+    if (!activeRoute || !pdfDoc || !currentArea || !selectedPage) return;
     setExtracting(true);
     setError(null);
     try {
-      const prompt = `You are an expert on Hamilton, Ontario, Canada street layouts.
-
-I need to know which streets are covered by Route ${activeRoute.num} in the ${selectedArea.name} area of Hamilton.
-
-Based on your knowledge of ${selectedArea.name} neighborhood in Hamilton, Ontario, what streets would typically make up a residential door-to-door service route numbered ${activeRoute.num} out of ${selectedArea.routeCount} total routes in that area?
-
-The routes divide the neighborhood into roughly equal sections. Route ${activeRoute.num} is one of ${selectedArea.routeCount} routes covering ${selectedArea.name}.
-
-Respond ONLY with this exact JSON format, no other text:
-{
-  "streets": ["Street Name 1", "Street Name 2", "Street Name 3"],
-  "confidence": 60,
-  "notes": "Brief observation about this route area"
-}`;
+      const base64 = await renderPageToBase64(pdfDoc, selectedPage, 2.0);
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -304,7 +659,32 @@ Respond ONLY with this exact JSON format, no other text:
         body: JSON.stringify({
           model: 'claude-sonnet-4-6',
           max_tokens: 1000,
-          messages: [{ role: 'user', content: prompt }],
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'image',
+                  source: { type: 'base64', media_type: 'image/jpeg', data: base64 },
+                },
+                {
+                  type: 'text',
+                  text: `This is the master route map for ${currentArea.area_name}.
+
+Find Route ${activeRoute.num} on this map. It is drawn in the color ${activeRoute.color} and the number "${activeRoute.num}" is written on the map in that same color.
+
+List every street name that has a line segment drawn in that color as part of Route ${activeRoute.num}.
+
+Respond ONLY with this exact JSON — no other text:
+{
+  "streets": ["Street Name 1", "Street Name 2", "Street Name 3"],
+  "confidence": 75,
+  "notes": "Brief note about what you found or any uncertainty"
+}`,
+                },
+              ],
+            },
+          ],
         }),
       });
 
@@ -316,16 +696,19 @@ Respond ONLY with this exact JSON format, no other text:
         parsed = JSON.parse(text);
       } catch {
         const match = text.match(/\{[\s\S]*\}/);
-        parsed = match ? JSON.parse(match[0]) : { streets: [], confidence: 0, notes: 'Could not parse response' };
+        parsed = match
+          ? JSON.parse(match[0])
+          : { streets: [], confidence: 0, notes: 'Could not parse response' };
       }
 
       const matchedIds = new Set<number>();
       const matchedNames: string[] = [];
 
       parsed.streets.forEach((streetName: string) => {
-        const matching = allWays.filter(w =>
-          w.name.toLowerCase().includes(streetName.toLowerCase()) ||
-          streetName.toLowerCase().includes(w.name.toLowerCase())
+        const matching = allWays.filter(
+          w =>
+            w.name.toLowerCase().includes(streetName.toLowerCase()) ||
+            streetName.toLowerCase().includes(w.name.toLowerCase())
         );
         matching.forEach(w => matchedIds.add(w.id));
         if (matching.length > 0 && !matchedNames.includes(streetName)) {
@@ -333,17 +716,21 @@ Respond ONLY with this exact JSON format, no other text:
         }
       });
 
-      setRoutes(prev => prev.map(r =>
-        r.num !== activeRouteNum ? r : {
-          ...r,
-          selectedWayIds: matchedIds,
-          streetNames: matchedNames,
-          aiNotes: parsed.notes,
-          confidence: parsed.confidence,
-        }
-      ));
+      setRoutes(prev =>
+        prev.map(r =>
+          r.num !== activeRouteNum
+            ? r
+            : {
+                ...r,
+                selectedWayIds: matchedIds,
+                streetNames: matchedNames,
+                aiNotes: parsed.notes,
+                confidence: parsed.confidence,
+              }
+        )
+      );
     } catch {
-      setError('AI extraction failed. Check your Anthropic API key in .env');
+      setError('AI extraction failed. Check your Anthropic API key.');
     } finally {
       setExtracting(false);
     }
@@ -352,65 +739,92 @@ Respond ONLY with this exact JSON format, no other text:
   const handleAddStreet = () => {
     const name = addStreetInput.trim();
     if (!name) return;
-    const matching = allWays.filter(w => w.name.toLowerCase().includes(name.toLowerCase()));
+    const matching = allWays.filter(w =>
+      w.name.toLowerCase().includes(name.toLowerCase())
+    );
     if (matching.length === 0) {
       setError(`No roads found matching "${name}" in this area`);
       return;
     }
-    setRoutes(prev => prev.map(r => {
-      if (r.num !== activeRouteNum) return r;
-      const newIds = new Set(r.selectedWayIds);
-      matching.forEach(w => newIds.add(w.id));
-      const newNames = r.streetNames.includes(name) ? r.streetNames : [...r.streetNames, matching[0].name];
-      return { ...r, selectedWayIds: newIds, streetNames: newNames };
-    }));
+    setRoutes(prev =>
+      prev.map(r => {
+        if (r.num !== activeRouteNum) return r;
+        const newIds = new Set(r.selectedWayIds);
+        matching.forEach(w => newIds.add(w.id));
+        const newNames = r.streetNames.includes(matching[0].name)
+          ? r.streetNames
+          : [...r.streetNames, matching[0].name];
+        return { ...r, selectedWayIds: newIds, streetNames: newNames };
+      })
+    );
     setAddStreetInput('');
   };
 
   const handleRemoveStreet = (streetName: string) => {
-    setRoutes(prev => prev.map(r => {
-      if (r.num !== activeRouteNum) return r;
-      const newIds = new Set(r.selectedWayIds);
-      allWays.filter(w => w.name === streetName).forEach(w => newIds.delete(w.id));
-      return { ...r, selectedWayIds: newIds, streetNames: r.streetNames.filter(n => n !== streetName) };
-    }));
+    setRoutes(prev =>
+      prev.map(r => {
+        if (r.num !== activeRouteNum) return r;
+        const newIds = new Set(r.selectedWayIds);
+        allWays.filter(w => w.name === streetName).forEach(w => newIds.delete(w.id));
+        return {
+          ...r,
+          selectedWayIds: newIds,
+          streetNames: r.streetNames.filter(n => n !== streetName),
+        };
+      })
+    );
   };
 
   const handleApprove = () => {
-    setRoutes(prev => prev.map(r => r.num === activeRouteNum ? { ...r, status: 'approved' as const } : r));
+    setRoutes(prev =>
+      prev.map(r =>
+        r.num === activeRouteNum ? { ...r, status: 'approved' as const } : r
+      )
+    );
     const next = routes.find(r => r.num > activeRouteNum && r.status === 'pending');
     if (next) setActiveRouteNum(next.num);
   };
 
   const handleFlag = () => {
-    setRoutes(prev => prev.map(r => r.num === activeRouteNum ? { ...r, status: 'flagged' as const } : r));
+    setRoutes(prev =>
+      prev.map(r =>
+        r.num === activeRouteNum ? { ...r, status: 'flagged' as const } : r
+      )
+    );
     const next = routes.find(r => r.num > activeRouteNum && r.status === 'pending');
     if (next) setActiveRouteNum(next.num);
   };
 
   const handleSaveAll = async () => {
+    if (!currentArea) return;
     setSaving(true);
     setError(null);
     try {
-      const approved = routes.filter(r => r.status === 'approved' && r.selectedWayIds.size > 0);
+      const approved = routes.filter(
+        r => r.status === 'approved' && r.selectedWayIds.size > 0
+      );
       for (const route of approved) {
         const segments = allWays
           .filter(w => route.selectedWayIds.has(w.id))
           .map(w => ({ osmId: w.id, name: w.name, coordinates: w.geometry }));
-        await supabase.from('route_maps').upsert({
-          area_name: selectedArea.name,
-          route_number: route.num,
-          route_code: `${selectedArea.name.replace(/\s+/g, '_').toUpperCase()}_${route.num}`,
-          route_color: route.color,
-          segments,
-          status: 'approved',
-          ai_confidence: route.confidence,
-          ai_notes: route.aiNotes,
-          approved_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'area_name,route_number' });
+        const routeCode = `${currentArea.prefix}${String(route.num).padStart(2, '0')}`;
+        await supabase.from('route_maps').upsert(
+          {
+            area_name: currentArea.area_name,
+            route_number: route.num,
+            route_code: routeCode,
+            route_color: route.color,
+            segments,
+            status: 'approved',
+            ai_confidence: route.confidence,
+            ai_notes: route.aiNotes,
+            approved_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'area_name,route_number' }
+        );
       }
-      alert(`Saved ${approved.length} routes for ${selectedArea.name}`);
+      alert(`Saved ${approved.length} routes for ${currentArea.area_name}`);
     } catch {
       setError('Failed to save to database');
     } finally {
@@ -418,12 +832,10 @@ Respond ONLY with this exact JSON format, no other text:
     }
   };
 
-  const approvedCount = routes.filter(r => r.status === 'approved').length;
-  const flaggedCount = routes.filter(r => r.status === 'flagged').length;
-  const pendingCount = routes.filter(r => r.status === 'pending').length;
-
+  // ─── RENDER ───
   return (
     <div className="h-screen bg-gray-900 text-white flex flex-col overflow-hidden">
+
       {/* Header */}
       <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-3">
@@ -433,30 +845,45 @@ Respond ONLY with this exact JSON format, no other text:
           <MapIcon size={20} className="text-purple-400" />
           <div>
             <h1 className="text-sm font-bold">Map Builder</h1>
-            <p className="text-xs text-gray-400">Digital route mapping · {selectedArea.name}</p>
+            <p className="text-xs text-gray-400">
+              {currentArea
+                ? `${currentArea.area_name} · ${currentArea.prefix} · ${currentArea.region}`
+                : 'Select a page from the strip below'}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <select
-            value={selectedArea.name}
-            onChange={e => setSelectedArea(AREAS.find(a => a.name === e.target.value) || AREAS[0])}
-            className="bg-gray-900 border border-gray-600 text-white text-sm rounded px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-purple-500"
+          <label
+            className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm cursor-pointer border transition-colors ${
+              pdfDoc
+                ? 'bg-green-900/30 border-green-700 text-green-400'
+                : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+            }`}
           >
-            {AREAS.map(a => (
-              <option key={a.name} value={a.name}>{a.name} ({a.routeCount} routes)</option>
-            ))}
-          </select>
-          <button
-            onClick={handleSaveAll}
-            disabled={saving || approvedCount === 0}
-            className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-2"
-          >
-            {saving ? <Loader size={14} className="animate-spin" /> : <Check size={14} />}
-            Save {approvedCount} Approved
-          </button>
+            {uploadingPdf ? <Loader size={14} className="animate-spin" /> : <Upload size={14} />}
+            {pdfDoc ? 'PDF Loaded ✓' : 'Upload PDF'}
+            <input
+              type="file"
+              accept=".pdf"
+              className="hidden"
+              onChange={handlePdfUpload}
+              disabled={uploadingPdf}
+            />
+          </label>
+          {currentArea && (
+            <button
+              onClick={handleSaveAll}
+              disabled={saving || approvedCount === 0}
+              className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-2"
+            >
+              {saving ? <Loader size={14} className="animate-spin" /> : <Check size={14} />}
+              Save {approvedCount} Approved
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Error bar */}
       {error && (
         <div className="bg-red-900/30 border-b border-red-700 px-4 py-2 text-sm text-red-300 flex items-center gap-2 flex-shrink-0">
           <AlertCircle size={14} />
@@ -465,173 +892,362 @@ Respond ONLY with this exact JSON format, no other text:
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* LEFT: Route list */}
-        <div className="w-48 bg-gray-800 border-r border-gray-700 flex flex-col overflow-hidden flex-shrink-0">
-          <div className="px-3 py-2 border-b border-gray-700 flex justify-between items-center">
-            <span className="text-xs text-gray-400 uppercase tracking-wider font-medium">Routes</span>
-            <span className="text-xs text-green-400">{approvedCount}/{selectedArea.routeCount}</span>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {routes.map(r => (
-              <button
-                key={r.num}
-                onClick={() => setActiveRouteNum(r.num)}
-                className={`w-full flex items-center gap-2 px-3 py-2 text-left border-b border-gray-700/40 hover:bg-gray-700 transition-colors ${
-                  r.num === activeRouteNum ? 'bg-gray-700 border-l-2 border-l-blue-400' : ''
-                }`}
-              >
-                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: r.color }} />
-                <span className="text-xs text-gray-300 flex-1">Route {String(r.num).padStart(2,'0')}</span>
-                <span className={`text-[10px] font-bold ${
-                  r.status === 'approved' ? 'text-green-400' :
-                  r.status === 'flagged' ? 'text-red-400' :
-                  r.selectedWayIds.size > 0 ? 'text-blue-400' : 'text-gray-600'
-                }`}>
-                  {r.status === 'approved' ? '✓' : r.status === 'flagged' ? '!' : r.selectedWayIds.size > 0 ? '●' : '○'}
-                </span>
-              </button>
-            ))}
-          </div>
-          <div className="p-2 border-t border-gray-700">
-            <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden mb-1">
+      {/* Thumbnail Strip */}
+      {pdfDoc ? (
+        <div
+          ref={thumbnailStripRef}
+          onScroll={handleThumbnailScroll}
+          className="flex gap-2 px-3 py-2 bg-gray-950 border-b border-gray-700 overflow-x-auto flex-shrink-0"
+          style={{ height: '108px' }}
+        >
+          {thumbnails.map(thumb => {
+            const areaInfo = areaInfoMap.get(thumb.pageNum);
+            const isActive = selectedPage === thumb.pageNum;
+            return (
               <div
-                className="h-full bg-green-500 rounded-full transition-all"
-                style={{ width: `${(approvedCount / selectedArea.routeCount) * 100}%` }}
-              />
-            </div>
-            <div className="flex justify-between text-[9px]">
-              <span className="text-green-400">{approvedCount} ok</span>
-              <span className="text-red-400">{flaggedCount} !</span>
-              <span className="text-yellow-400">{pendingCount} left</span>
-            </div>
-          </div>
-        </div>
-
-        {/* CENTER: Map */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* FIX: explicit height so Mapbox can measure the container */}
-          <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
-            <div
-              ref={mapContainerRef}
-              style={{
-                position: 'absolute',
-                top: 0,
-                bottom: 0,
-                left: 0,
-                right: 0,
-                width: '100%',
-                height: '100%',
-              }}
-            />
-            {loadingRoads && (
-              <div className="absolute inset-0 bg-gray-900/60 flex items-center justify-center z-10">
-                <div className="bg-gray-800 rounded-lg px-4 py-3 flex items-center gap-3 text-sm border border-gray-700">
-                  <Loader size={16} className="animate-spin text-blue-400" />
-                  Loading roads from OpenStreetMap...
+                key={thumb.pageNum}
+                onClick={() => handleThumbnailClick(thumb.pageNum)}
+                title={areaInfo ? `${areaInfo.area_name} (${areaInfo.prefix})` : `Page ${thumb.pageNum} — click to set up`}
+                className={`flex-shrink-0 cursor-pointer rounded overflow-hidden border-2 transition-all relative ${
+                  isActive
+                    ? 'border-blue-500 ring-1 ring-blue-400'
+                    : areaInfo
+                    ? 'border-green-600 hover:border-green-400'
+                    : 'border-gray-700 hover:border-gray-500'
+                }`}
+                style={{ width: '68px', height: '88px' }}
+              >
+                {thumb.loading ? (
+                  <div className="w-full h-full bg-gray-800 flex items-center justify-center">
+                    <Loader size={10} className="animate-spin text-gray-500" />
+                  </div>
+                ) : thumb.dataUrl ? (
+                  <img src={thumb.dataUrl} alt={`Page ${thumb.pageNum}`} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full bg-gray-800 flex items-center justify-center text-[10px] text-gray-500">
+                    {thumb.pageNum}
+                  </div>
+                )}
+                <div className="absolute bottom-0 left-0 right-0 bg-black/75 px-1 py-0.5">
+                  <div className="text-[8px] text-gray-300 truncate font-mono">
+                    {areaInfo ? areaInfo.prefix : `p${thumb.pageNum}`}
+                  </div>
                 </div>
-              </div>
-            )}
-            {hoveredWayName && (
-              <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-gray-900/90 border border-gray-700 rounded px-3 py-1.5 text-sm z-10 pointer-events-none">
-                {hoveredWayName}
-              </div>
-            )}
-          </div>
-
-          {/* Action bar */}
-          <div className="bg-gray-800 border-t border-gray-700 px-4 py-2 flex items-center gap-3 flex-shrink-0">
-            {activeRoute && (
-              <div className="flex items-center gap-2 mr-2">
-                <div className="w-3 h-3 rounded-full" style={{ background: activeRoute.color }} />
-                <span className="text-sm font-medium">Route {String(activeRouteNum).padStart(2,'0')}</span>
-                {activeRoute.confidence > 0 && (
-                  <span className={`text-xs px-2 py-0.5 rounded ${
-                    activeRoute.confidence >= 80 ? 'bg-green-900/30 text-green-400' :
-                    activeRoute.confidence >= 60 ? 'bg-yellow-900/30 text-yellow-400' :
-                    'bg-red-900/30 text-red-400'
-                  }`}>
-                    {activeRoute.confidence}% confidence
-                  </span>
+                {areaInfo && (
+                  <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full" />
                 )}
               </div>
-            )}
-            <button
-              onClick={handleExtract}
-              disabled={extracting || allWays.length === 0}
-              className="bg-purple-700 hover:bg-purple-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm flex items-center gap-2"
-            >
-              {extracting ? <Loader size={14} className="animate-spin" /> : <Zap size={14} />}
-              Extract with AI
-            </button>
-            <button
-              onClick={handleApprove}
-              disabled={!activeRoute || activeRoute.selectedWayIds.size === 0}
-              className="bg-green-800/50 hover:bg-green-700/50 disabled:opacity-50 text-green-400 border border-green-700/50 px-3 py-1.5 rounded text-sm flex items-center gap-2"
-            >
-              <Check size={14} /> Approve
-            </button>
-            <button
-              onClick={handleFlag}
-              className="bg-red-900/30 hover:bg-red-900/50 text-red-400 border border-red-800/50 px-3 py-1.5 rounded text-sm flex items-center gap-2"
-            >
-              <X size={14} /> Flag
-            </button>
-            <div className="ml-auto text-xs text-gray-500">
-              {activeRoute?.selectedWayIds.size || 0} segments selected · click streets to toggle
+            );
+          })}
+        </div>
+      ) : (
+        <div className="flex-shrink-0 bg-gray-950 border-b border-gray-700 px-4 py-5 flex items-center justify-center">
+          <div className="text-center">
+            <Upload size={28} className="mx-auto text-gray-600 mb-1" />
+            <p className="text-xs text-gray-500">Upload your master maps PDF to see all pages here</p>
+          </div>
+        </div>
+      )}
+
+      {/* Main Editor */}
+      {currentArea ? (
+        <div className="flex flex-1 overflow-hidden">
+
+          {/* LEFT: Route list */}
+          <div className="w-48 bg-gray-800 border-r border-gray-700 flex flex-col overflow-hidden flex-shrink-0">
+            <div className="px-3 py-2 border-b border-gray-700 flex justify-between items-center">
+              <span className="text-xs text-gray-400 uppercase tracking-wider font-medium">Routes</span>
+              <span className="text-xs text-green-400">{approvedCount}/{currentArea.route_count}</span>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {routes.map(r => (
+                <button
+                  key={r.num}
+                  onClick={() => { setActiveRouteNum(r.num); setPointA(null); }}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-left border-b border-gray-700/40 hover:bg-gray-700 transition-colors ${
+                    r.num === activeRouteNum ? 'bg-gray-700 border-l-2 border-l-blue-400' : ''
+                  }`}
+                >
+                  <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: r.color }} />
+                  <span className="text-xs text-gray-300 flex-1 font-mono">
+                    {currentArea.prefix}{String(r.num).padStart(2, '0')}
+                  </span>
+                  <span className={`text-[10px] font-bold ${
+                    r.status === 'approved' ? 'text-green-400' :
+                    r.status === 'flagged' ? 'text-red-400' :
+                    r.selectedWayIds.size > 0 ? 'text-blue-400' : 'text-gray-600'
+                  }`}>
+                    {r.status === 'approved' ? '✓' : r.status === 'flagged' ? '!' : r.selectedWayIds.size > 0 ? '●' : '○'}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="p-2 border-t border-gray-700">
+              <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden mb-1">
+                <div
+                  className="h-full bg-green-500 rounded-full transition-all"
+                  style={{ width: `${(approvedCount / currentArea.route_count) * 100}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[9px]">
+                <span className="text-green-400">{approvedCount} ok</span>
+                <span className="text-red-400">{flaggedCount} !</span>
+                <span className="text-yellow-400">{pendingCount} left</span>
+              </div>
+            </div>
+          </div>
+
+          {/* CENTER: Map */}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+              <div
+                ref={mapContainerRef}
+                style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, width: '100%', height: '100%' }}
+              />
+              {loadingRoads && (
+                <div className="absolute inset-0 bg-gray-900/60 flex items-center justify-center z-10">
+                  <div className="bg-gray-800 rounded-lg px-4 py-3 flex items-center gap-3 text-sm border border-gray-700">
+                    <Loader size={16} className="animate-spin text-blue-400" />
+                    Loading roads from OpenStreetMap...
+                  </div>
+                </div>
+              )}
+              {hoveredWayName && (
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-gray-900/90 border border-gray-700 rounded px-3 py-1.5 text-sm z-10 pointer-events-none">
+                  {hoveredWayName}
+                </div>
+              )}
+              {pointA && (
+                <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-blue-950/95 border border-blue-600 rounded-lg px-3 py-2 text-xs z-10 text-blue-300 flex items-center gap-2 shadow-lg">
+                  <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse flex-shrink-0" />
+                  <span>
+                    Point A set on <strong className="text-blue-200">{pointA.streetName}</strong> — click a second point on the same street
+                  </span>
+                  <button onClick={() => setPointA(null)} className="text-blue-400 hover:text-white ml-2 flex-shrink-0">
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Action bar */}
+            <div className="bg-gray-800 border-t border-gray-700 px-4 py-2 flex items-center gap-3 flex-shrink-0">
+              {activeRoute && (
+                <div className="flex items-center gap-2 mr-2">
+                  <div className="w-3 h-3 rounded-full" style={{ background: activeRoute.color }} />
+                  <span className="text-sm font-medium font-mono">
+                    {currentArea.prefix}{String(activeRouteNum).padStart(2, '0')}
+                  </span>
+                  {activeRoute.confidence > 0 && (
+                    <span className={`text-xs px-2 py-0.5 rounded ${
+                      activeRoute.confidence >= 80 ? 'bg-green-900/30 text-green-400' :
+                      activeRoute.confidence >= 60 ? 'bg-yellow-900/30 text-yellow-400' :
+                      'bg-red-900/30 text-red-400'
+                    }`}>
+                      {activeRoute.confidence}% AI confidence
+                    </span>
+                  )}
+                </div>
+              )}
+              <button
+                onClick={handleExtract}
+                disabled={extracting || allWays.length === 0 || !pdfDoc}
+                className="bg-purple-700 hover:bg-purple-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm flex items-center gap-2"
+              >
+                {extracting ? <Loader size={14} className="animate-spin" /> : <Zap size={14} />}
+                Extract with AI
+              </button>
+              <button
+                onClick={handleApprove}
+                disabled={!activeRoute || activeRoute.selectedWayIds.size === 0}
+                className="bg-green-800/50 hover:bg-green-700/50 disabled:opacity-50 text-green-400 border border-green-700/50 px-3 py-1.5 rounded text-sm flex items-center gap-2"
+              >
+                <Check size={14} /> Approve
+              </button>
+              <button
+                onClick={handleFlag}
+                className="bg-red-900/30 hover:bg-red-900/50 text-red-400 border border-red-800/50 px-3 py-1.5 rounded text-sm flex items-center gap-2"
+              >
+                <X size={14} /> Flag
+              </button>
+              <div className="ml-auto text-xs text-gray-500">
+                {pointA
+                  ? `Point A set — click second point on ${pointA.streetName}`
+                  : 'Click unlit street to add · Click lit street to remove whole street'}
+              </div>
+            </div>
+          </div>
+
+          {/* RIGHT: Streets panel */}
+          <div className="w-64 bg-gray-800 border-l border-gray-700 flex flex-col overflow-hidden flex-shrink-0">
+            <div className="px-3 py-2 border-b border-gray-700">
+              <div className="text-xs text-gray-400 uppercase tracking-wider font-medium mb-1">Selected Streets</div>
+              {activeRoute?.aiNotes && (
+                <div className="text-[10px] text-purple-300 italic bg-purple-900/20 rounded px-2 py-1 mt-1">
+                  {activeRoute.aiNotes}
+                </div>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              {!activeRoute?.streetNames.length ? (
+                <div className="text-xs text-gray-600 italic text-center mt-6 px-2">
+                  No streets selected yet.<br /><br />
+                  Click streets on the map to add them, use two-point selection for a section, or hit "Extract with AI".
+                </div>
+              ) : (
+                activeRoute.streetNames.map(name => {
+                  const segCount = allWays.filter(
+                    w => w.name === name && activeRoute.selectedWayIds.has(w.id)
+                  ).length;
+                  return (
+                    <div key={name} className="flex items-center justify-between px-2 py-1.5 bg-gray-900 rounded mb-1 border border-gray-700">
+                      <div>
+                        <div className="text-xs text-gray-200 font-mono">{name}</div>
+                        <div className="text-[9px] text-gray-500">{segCount} segment{segCount !== 1 ? 's' : ''}</div>
+                      </div>
+                      <button onClick={() => handleRemoveStreet(name)} className="text-red-500 hover:text-red-400 p-0.5 flex-shrink-0">
+                        <X size={12} />
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div className="p-2 border-t border-gray-700">
+              <div className="flex gap-1">
+                <input
+                  value={addStreetInput}
+                  onChange={e => setAddStreetInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddStreet()}
+                  placeholder="Add entire street..."
+                  className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                />
+                <button onClick={handleAddStreet} className="bg-blue-700 hover:bg-blue-600 text-white px-2 py-1.5 rounded">
+                  <Plus size={12} />
+                </button>
+              </div>
+              <div className="text-[9px] text-gray-600 mt-1">Adds all segments of that street name</div>
             </div>
           </div>
         </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-gray-600">
+          <div className="text-center">
+            <MapIcon size={48} className="mx-auto mb-3 opacity-20" />
+            <p className="text-sm">
+              {pdfDoc ? 'Click a page thumbnail above to start mapping' : 'Upload your master maps PDF to begin'}
+            </p>
+          </div>
+        </div>
+      )}
 
-        {/* RIGHT: Streets panel */}
-        <div className="w-64 bg-gray-800 border-l border-gray-700 flex flex-col overflow-hidden flex-shrink-0">
-          <div className="px-3 py-2 border-b border-gray-700">
-            <div className="text-xs text-gray-400 uppercase tracking-wider font-medium mb-1">Selected Streets</div>
-            {activeRoute?.aiNotes && (
-              <div className="text-[10px] text-purple-300 italic bg-purple-900/20 rounded px-2 py-1 mt-1">
-                {activeRoute.aiNotes}
-              </div>
-            )}
-          </div>
-          <div className="flex-1 overflow-y-auto p-2">
-            {!activeRoute?.streetNames.length ? (
-              <div className="text-xs text-gray-600 italic text-center mt-6 px-2">
-                No streets selected yet.<br /><br />
-                Click streets on the map, or use "Extract with AI" to auto-populate.
-              </div>
-            ) : (
-              activeRoute.streetNames.map(name => {
-                const segCount = allWays.filter(w => w.name === name && activeRoute.selectedWayIds.has(w.id)).length;
-                return (
-                  <div key={name} className="flex items-center justify-between px-2 py-1.5 bg-gray-900 rounded mb-1 border border-gray-700">
-                    <div>
-                      <div className="text-xs text-gray-200 font-mono">{name}</div>
-                      <div className="text-[9px] text-gray-500">{segCount} segment{segCount !== 1 ? 's' : ''}</div>
-                    </div>
-                    <button onClick={() => handleRemoveStreet(name)} className="text-red-500 hover:text-red-400 p-0.5 flex-shrink-0">
-                      <X size={12} />
-                    </button>
-                  </div>
-                );
-              })
-            )}
-          </div>
-          <div className="p-2 border-t border-gray-700">
-            <div className="flex gap-1">
-              <input
-                value={addStreetInput}
-                onChange={e => setAddStreetInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleAddStreet()}
-                placeholder="Add street manually..."
-                className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
-              />
-              <button onClick={handleAddStreet} className="bg-blue-700 hover:bg-blue-600 text-white px-2 py-1.5 rounded">
-                <Plus size={12} />
+      {/* PREFIX + REGION MODAL */}
+      {showPrefixModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-gray-900 rounded-xl border border-gray-700 w-full max-w-md shadow-2xl">
+            <div className="p-4 border-b border-gray-700 flex items-center justify-between">
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <MapIcon size={16} className="text-purple-400" />
+                Set Up Area
+              </h2>
+              <button
+                onClick={() => { setShowPrefixModal(false); setPendingPage(null); }}
+                className="text-gray-400 hover:text-white"
+              >
+                <X size={18} />
               </button>
             </div>
+
+            <div className="p-5 space-y-4">
+              {scanning ? (
+                <div className="flex flex-col items-center gap-3 text-sm text-gray-400 py-6">
+                  <Loader size={24} className="animate-spin text-purple-400" />
+                  <span>Claude is reading this map page...</span>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Area Name</label>
+                    <input
+                      value={scannedAreaName}
+                      onChange={e => setScannedAreaName(e.target.value)}
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
+                    />
+                    <div className="text-[10px] text-gray-500 mt-1">Auto-detected by AI — edit if incorrect</div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Route Count</label>
+                    <input
+                      type="number"
+                      value={scannedRouteCount}
+                      onChange={e => setScannedRouteCount(parseInt(e.target.value) || 0)}
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
+                    />
+                    <div className="text-[10px] text-gray-500 mt-1">Auto-detected by AI — edit if incorrect</div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Route Prefix</label>
+                    <input
+                      value={prefixInput}
+                      onChange={e => setPrefixInput(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+                      placeholder="e.g. ALD"
+                      maxLength={6}
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono uppercase focus:outline-none focus:border-purple-500"
+                    />
+                    {prefixInput && (
+                      <div className="text-[10px] text-gray-400 mt-1 font-mono">
+                        Routes will be: {prefixInput}01 · {prefixInput}02 · {prefixInput}03...
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Region</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['West', 'Central', 'East'] as Region[]).map(r => (
+                        <button
+                          key={r}
+                          onClick={() => setRegionInput(r)}
+                          className={`py-2 rounded border text-sm font-medium transition-colors ${
+                            regionInput === r
+                              ? r === 'West' ? 'bg-blue-900/50 border-blue-500 text-blue-300'
+                              : r === 'Central' ? 'bg-green-900/50 border-green-500 text-green-300'
+                              : 'bg-orange-900/50 border-orange-500 text-orange-300'
+                              : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
+                          }`}
+                        >
+                          {r}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {!scanning && (
+              <div className="p-4 border-t border-gray-700 flex justify-end gap-3">
+                <button
+                  onClick={() => { setShowPrefixModal(false); setPendingPage(null); }}
+                  className="px-4 py-2 text-gray-400 hover:text-white text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handlePrefixConfirm}
+                  disabled={!prefixInput.trim() || !scannedAreaName.trim() || scannedRouteCount === 0}
+                  className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white px-5 py-2 rounded font-medium text-sm flex items-center gap-2"
+                >
+                  <Check size={14} />
+                  Confirm & Start Mapping
+                </button>
+              </div>
+            )}
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
