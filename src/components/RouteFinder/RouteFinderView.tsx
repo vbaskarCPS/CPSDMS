@@ -55,6 +55,8 @@ const COLOR_CONFIG: Record<MatchColor, { label: string; border: string; badge: s
   },
 };
 
+const PAGE_SIZE = 100;
+
 // ─── COMPONENT ────────────────────────────────────────────────────────────────
 
 const RouteFinderView: React.FC<Props> = ({ onBack }) => {
@@ -65,6 +67,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
   const [listingsData, setListingsData]   = useState<ListingsData | null>(null);
   const [sheets, setSheets]               = useState<CallBookSheet[]>([]);
   const [queue, setQueue]                 = useState<RouteFinderRow[]>([]);
+  const [visibleCount, setVisibleCount]   = useState(PAGE_SIZE);
   const [scanProgress, setScanProgress]   = useState({ current: 0, total: 0, sheet: '' });
   const [editedValues, setEditedValues]   = useState<Record<string, { routeCode: string; streetName: string }>>({});
   const [selectedCandidates, setSelectedCandidates] = useState<Record<string, number>>({});
@@ -144,7 +147,6 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
       const learnedStreets        = existingSession?.learnedStreets || {};
       const learnedStreetsOriginal = existingSession?.learnedStreetsOriginal || {};
-
       const allQueueRows: RouteFinderRow[] = [];
       let totalScannedCount = 0;
 
@@ -174,7 +176,6 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       let activeSession: RouteFinderSession;
 
       if (existingSession) {
-        // Resume: subtract already-fixed rows from fix_log (no pending IDs stored)
         const fixedSet = new Set(existingSession.fixLog.map(e => e.rowId));
         finalQueue = allQueueRows.filter(r => !fixedSet.has(r.id));
         activeSession = existingSession;
@@ -183,8 +184,13 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         activeSession = await routeFinderSessionService.createSession(resolvedId, allQueueRows, totalScannedCount);
       }
 
+      // Yield again before handing 10k rows to React
+      await new Promise(resolve => setTimeout(resolve, 50));
+
       setQueue(finalQueue);
       setSession(activeSession);
+      setVisibleCount(PAGE_SIZE);
+
       if (finalQueue.length === 0) setPhase('complete');
       else setPhase('working');
 
@@ -416,30 +422,35 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
   );
 
   const renderWorking = () => {
-    const fixedTotal = session?.fixedRows || 0;
-    const grandTotal = session?.totalRows || 0;
-    const pct = grandTotal > 0 ? Math.round((fixedTotal / grandTotal) * 100) : 0;
+    const fixedTotal  = session?.fixedRows || 0;
+    const grandTotal  = session?.totalRows || 0;
+    const pct         = grandTotal > 0 ? Math.round((fixedTotal / grandTotal) * 100) : 0;
+    const visibleRows = filteredQueue.slice(0, visibleCount);
+    const remaining   = filteredQueue.length - visibleCount;
 
     return (
       <div className="flex h-full gap-0">
         {/* Table 80% */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+
           {/* Filter bar */}
           <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-700 bg-gray-800/50 flex-wrap">
             <div className="relative flex-shrink-0">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" size={14} />
               <input type="text" placeholder="Search booking, street, route..."
-                value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                value={searchTerm}
+                onChange={e => { setSearchTerm(e.target.value); setVisibleCount(PAGE_SIZE); }}
                 className="bg-gray-900 border border-gray-600 rounded-lg py-1.5 pl-8 pr-3 text-sm text-white focus:ring-1 focus:ring-blue-500 focus:outline-none w-52" />
             </div>
             {(['all', 'phone_group', 'orange', 'yellow', 'red'] as ColorFilter[]).map(f => {
-              const label = f === 'all' ? `All (${counters.total})`
-                : f === 'phone_group' ? `🟢 ${counters.phone_group}`
-                : f === 'orange'      ? `🟠 ${counters.orange}`
-                : f === 'yellow'      ? `🟡 ${counters.yellow}`
-                :                       `🔴 ${counters.red}`;
+              const label = f === 'all'         ? `All (${counters.total})`
+                : f === 'phone_group'           ? `🟢 ${counters.phone_group}`
+                : f === 'orange'                ? `🟠 ${counters.orange}`
+                : f === 'yellow'                ? `🟡 ${counters.yellow}`
+                :                                 `🔴 ${counters.red}`;
               return (
-                <button key={f} onClick={() => setColorFilter(f)}
+                <button key={f}
+                  onClick={() => { setColorFilter(f); setVisibleCount(PAGE_SIZE); }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${colorFilter === f ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>
                   {label}
                 </button>
@@ -447,7 +458,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
             })}
           </div>
 
-          {/* Headers */}
+          {/* Column headers */}
           <div className="grid text-xs text-gray-500 font-medium uppercase tracking-wider px-4 py-2 border-b border-gray-700 bg-gray-900/30"
             style={{ gridTemplateColumns: '5px 80px 90px 1fr auto 1fr 180px 100px' }}>
             <div /><div>Sheet</div><div>Booking</div><div>Current</div>
@@ -455,27 +466,44 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
             <div className="text-right">Actions</div>
           </div>
 
-          {/* Rows */}
+          {/* Rows — only renders visibleCount at a time */}
           <div className="flex-1 overflow-y-auto">
             {filteredQueue.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-40 text-gray-500 gap-2">
                 <Layers size={32} className="opacity-30" />
                 <p className="text-sm">No rows match the current filter</p>
               </div>
-            ) : filteredQueue.map(row => (
-              <RouteRow key={row.id} row={row}
-                editValues={getEditValues(row)}
-                selectedCandidateIdx={selectedCandidates[row.id] ?? 0}
-                isExpanded={expandedCandidates.has(row.id)}
-                isApplying={applying.has(row.id)}
-                onRouteCodeChange={v => setEditedValues(p => ({ ...p, [row.id]: { ...getEditValues(row), routeCode: v } }))}
-                onStreetNameChange={v => setEditedValues(p => ({ ...p, [row.id]: { ...getEditValues(row), streetName: v } }))}
-                onCandidateSelect={(idx, c) => handleCandidateSelect(row.id, idx, c)}
-                onToggleExpand={() => setExpandedCandidates(prev => { const n = new Set(prev); n.has(row.id) ? n.delete(row.id) : n.add(row.id); return n; })}
-                onAccept={() => handleAccept(row)}
-                onSkip={() => handleSkip(row)}
-              />
-            ))}
+            ) : (
+              <>
+                {visibleRows.map(row => (
+                  <RouteRow key={row.id} row={row}
+                    editValues={getEditValues(row)}
+                    selectedCandidateIdx={selectedCandidates[row.id] ?? 0}
+                    isExpanded={expandedCandidates.has(row.id)}
+                    isApplying={applying.has(row.id)}
+                    onRouteCodeChange={v => setEditedValues(p => ({ ...p, [row.id]: { ...getEditValues(row), routeCode: v } }))}
+                    onStreetNameChange={v => setEditedValues(p => ({ ...p, [row.id]: { ...getEditValues(row), streetName: v } }))}
+                    onCandidateSelect={(idx, c) => handleCandidateSelect(row.id, idx, c)}
+                    onToggleExpand={() => setExpandedCandidates(prev => { const n = new Set(prev); n.has(row.id) ? n.delete(row.id) : n.add(row.id); return n; })}
+                    onAccept={() => handleAccept(row)}
+                    onSkip={() => handleSkip(row)}
+                  />
+                ))}
+
+                {/* Load more */}
+                {remaining > 0 && (
+                  <div className="flex justify-center py-5">
+                    <button
+                      onClick={() => setVisibleCount(prev => prev + PAGE_SIZE)}
+                      className="px-5 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors"
+                    >
+                      Show {Math.min(PAGE_SIZE, remaining)} more
+                      <span className="ml-2 text-gray-500">({remaining} remaining)</span>
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
 
@@ -491,14 +519,17 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
           </div>
 
           <div className="space-y-2">
-            {([['phone_group','🟢',counters.phone_group,'emerald'],['orange','🟠',counters.orange,'orange'],['yellow','🟡',counters.yellow,'yellow'],['red','🔴',counters.red,'red']] as const).map(
-              ([color, emoji, count, hue]) => (
-                <div key={color} className="flex items-center justify-between">
-                  <span className="text-xs text-gray-400">{emoji} {COLOR_CONFIG[color].label}</span>
-                  <span className={`text-sm font-bold text-${hue}-400`}>{count}</span>
-                </div>
-              )
-            )}
+            {([
+              ['phone_group', '🟢', counters.phone_group, 'emerald'],
+              ['orange',      '🟠', counters.orange,      'orange'],
+              ['yellow',      '🟡', counters.yellow,      'yellow'],
+              ['red',         '🔴', counters.red,         'red'],
+            ] as const).map(([color, emoji, count, hue]) => (
+              <div key={color} className="flex items-center justify-between">
+                <span className="text-xs text-gray-400">{emoji} {COLOR_CONFIG[color].label}</span>
+                <span className={`text-sm font-bold text-${hue}-400`}>{count}</span>
+              </div>
+            ))}
           </div>
 
           <div className="space-y-2 pt-2 border-t border-gray-700">
@@ -521,7 +552,13 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
             {session?.updatedAt && (
               <p className="text-xs text-gray-500">Last saved: {new Date(session.updatedAt).toLocaleTimeString()}</p>
             )}
-            <button onClick={() => { if (window.confirm('Re-scan from scratch? This will reset all progress.')) { routeFinderSessionService.resetSession(spreadsheetId); setPhase('setup'); } }}
+            <button
+              onClick={() => {
+                if (window.confirm('Re-scan from scratch? This will reset all progress.')) {
+                  routeFinderSessionService.resetSession(spreadsheetId);
+                  setPhase('setup');
+                }
+              }}
               className="text-xs text-gray-600 hover:text-red-400 transition-colors flex items-center gap-1 mt-2">
               <RefreshCw size={11} /> Reset &amp; re-scan
             </button>
@@ -537,6 +574,8 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       </div>
     );
   };
+
+  // ─── MAIN RENDER ───────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col h-full bg-gray-900 text-white relative">
@@ -595,8 +634,8 @@ const RouteRow: React.FC<RouteRowProps> = ({
   row, editValues, selectedCandidateIdx, isExpanded, isApplying,
   onRouteCodeChange, onStreetNameChange, onCandidateSelect, onToggleExpand, onAccept, onSkip,
 }) => {
-  const cc   = COLOR_CONFIG[row.color];
-  const top3 = row.candidates.slice(0, 3);
+  const cc      = COLOR_CONFIG[row.color];
+  const top3    = row.candidates.slice(0, 3);
   const hasMore = row.candidates.length > 3;
 
   return (
