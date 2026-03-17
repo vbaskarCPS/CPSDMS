@@ -26,6 +26,7 @@ import {
   UserPlus,
   GraduationCap,
   FileSpreadsheet,
+  MapPin,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
@@ -39,6 +40,7 @@ import PayoutToday from '../Management/PayoutToday';
 import JobFairManager from './JobFairManager';
 import TrainingsTab from './TrainingsTab';
 import PayslipGenerator from './PayslipGenerator';
+import RouteFinderView from '../../components/RouteFinder/RouteFinderView';
 
 const SessionCommandCenter: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -56,6 +58,9 @@ const SessionCommandCenter: React.FC = () => {
 
   // Payslip generator visibility
   const [showPayslipGenerator, setShowPayslipGenerator] = useState(false);
+
+  // Route Finder visibility
+  const [showRouteFinder, setShowRouteFinder] = useState(false);
 
   // --- COMMAND CENTER CONTEXT (stored in state to avoid infinite loops) ---
   const [currentCC, setCurrentCC] = useState(() => commandCenterService.getCurrentCommandCenter());
@@ -617,10 +622,19 @@ const SessionCommandCenter: React.FC = () => {
 
             {showPayslipGenerator ? (
               <PayslipGenerator onBack={() => setShowPayslipGenerator(false)} />
+            ) : showRouteFinder ? (
+              <RouteFinderView onBack={() => setShowRouteFinder(false)} />
             ) : (
               <>
-                {/* Generate Payslips button */}
-                <div className="flex justify-end">
+                {/* Generate Payslips + Route Finder buttons */}
+                <div className="flex justify-end gap-2">
+                  <button
+                    onClick={() => setShowRouteFinder(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-700 transition-colors text-sm font-medium"
+                  >
+                    <MapPin size={16} className="text-blue-400" />
+                    Route Finder
+                  </button>
                   <button
                     onClick={() => setShowPayslipGenerator(true)}
                     className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-700 transition-colors text-sm font-medium"
