@@ -64,6 +64,14 @@ interface PointA {
   streetName: string;
 }
 
+interface BoxState {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+  mode: 'add' | 'remove';
+}
+
 function buildGeoJSON(
   ways: OsmWay[],
   selectedIds: Set<number>,
@@ -115,8 +123,6 @@ const MapBuilder: React.FC = () => {
   const [totalPages, setTotalPages] = useState(0);
   const [thumbnails, setThumbnails] = useState<Thumbnail[]>([]);
   const [uploadingPdf, setUploadingPdf] = useState(false);
-
-  // Strip visibility
   const [showStrip, setShowStrip] = useState(true);
 
   // Area / Page State
@@ -147,12 +153,27 @@ const MapBuilder: React.FC = () => {
   // Two-point selection
   const [pointA, setPointA] = useState<PointA | null>(null);
 
+  // Box selection state
+  const [boxState, setBoxState] = useState<BoxState | null>(null);
+  const boxStateRef = useRef<BoxState | null>(null);
+  const isDraggingRef = useRef(false);
+  const activeRouteNumRef = useRef(activeRouteNum);
+
+  // Keep refs in sync
+  useEffect(() => {
+    activeRouteNumRef.current = activeRouteNum;
+  }, [activeRouteNum]);
+
+  useEffect(() => {
+    boxStateRef.current = boxState;
+  }, [boxState]);
+
   const activeRoute = routes.find(r => r.num === activeRouteNum);
   const approvedCount = routes.filter(r => r.status === 'approved').length;
   const flaggedCount = routes.filter(r => r.status === 'flagged').length;
   const pendingCount = routes.filter(r => r.status === 'pending').length;
 
-  // ─── Load existing PDF and area prefixes on mount ───
+  // ─── Load on mount ───
   useEffect(() => {
     loadExistingPdf();
     loadAreaPrefixes();
@@ -181,9 +202,7 @@ const MapBuilder: React.FC = () => {
           await loadPdfFromUrl(urlData.publicUrl);
         }
       }
-    } catch {
-      // No PDF yet — fine
-    }
+    } catch { /* No PDF yet */ }
   };
 
   const loadPdfFromUrl = async (url: string) => {
@@ -194,9 +213,7 @@ const MapBuilder: React.FC = () => {
       renderedUpTo.current = 0;
       setThumbnails(
         Array.from({ length: pdf.numPages }, (_, i) => ({
-          pageNum: i + 1,
-          dataUrl: null,
-          loading: false,
+          pageNum: i + 1, dataUrl: null, loading: false,
         }))
       );
     } catch {
@@ -204,35 +221,27 @@ const MapBuilder: React.FC = () => {
     }
   };
 
-  // ─── Render thumbnails in batches ───
+  // ─── Thumbnails ───
   const renderThumbnailBatch = useCallback(
     async (pdf: pdfjsLib.PDFDocumentProxy, start: number, count: number) => {
       const end = Math.min(start + count - 1, pdf.numPages);
       for (let i = start; i <= end; i++) {
-        setThumbnails(prev =>
-          prev.map(t => (t.pageNum === i ? { ...t, loading: true } : t))
-        );
+        setThumbnails(prev => prev.map(t => t.pageNum === i ? { ...t, loading: true } : t));
         try {
           const page = await pdf.getPage(i);
           const viewport = page.getViewport({ scale: 0.18 });
           const canvas = document.createElement('canvas');
           canvas.width = viewport.width;
           canvas.height = viewport.height;
-          const ctx = canvas.getContext('2d')!;
-          await page.render({ canvasContext: ctx, viewport }).promise;
+          await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise;
           const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
-          setThumbnails(prev =>
-            prev.map(t => (t.pageNum === i ? { ...t, dataUrl, loading: false } : t))
-          );
+          setThumbnails(prev => prev.map(t => t.pageNum === i ? { ...t, dataUrl, loading: false } : t));
         } catch {
-          setThumbnails(prev =>
-            prev.map(t => (t.pageNum === i ? { ...t, loading: false } : t))
-          );
+          setThumbnails(prev => prev.map(t => t.pageNum === i ? { ...t, loading: false } : t));
         }
       }
       renderedUpTo.current = end;
-    },
-    []
+    }, []
   );
 
   useEffect(() => {
@@ -243,8 +252,7 @@ const MapBuilder: React.FC = () => {
   const handleThumbnailScroll = () => {
     if (!thumbnailStripRef.current || !pdfDoc) return;
     const strip = thumbnailStripRef.current;
-    const scrollRight = strip.scrollLeft + strip.clientWidth;
-    const pctScrolled = scrollRight / strip.scrollWidth;
+    const pctScrolled = (strip.scrollLeft + strip.clientWidth) / strip.scrollWidth;
     const pagesVisible = Math.ceil(pctScrolled * totalPages);
     if (pagesVisible >= renderedUpTo.current - 3 && renderedUpTo.current < totalPages) {
       renderThumbnailBatch(pdfDoc, renderedUpTo.current + 1, 10);
@@ -261,18 +269,12 @@ const MapBuilder: React.FC = () => {
       const { data: existing } = await supabase.storage.from('master-maps').list('');
       if (existing) {
         const old = existing.filter(f => f.name.endsWith('.pdf'));
-        if (old.length > 0) {
-          await supabase.storage.from('master-maps').remove(old.map(p => p.name));
-        }
+        if (old.length > 0) await supabase.storage.from('master-maps').remove(old.map(p => p.name));
       }
       const fileName = `master-maps-${Date.now()}.pdf`;
-      const { error: uploadError } = await supabase.storage
-        .from('master-maps')
-        .upload(fileName, file);
+      const { error: uploadError } = await supabase.storage.from('master-maps').upload(fileName, file);
       if (uploadError) throw uploadError;
-      const { data: urlData } = supabase.storage
-        .from('master-maps')
-        .getPublicUrl(fileName);
+      const { data: urlData } = supabase.storage.from('master-maps').getPublicUrl(fileName);
       await loadPdfFromUrl(urlData.publicUrl);
       setShowStrip(true);
     } catch {
@@ -282,7 +284,7 @@ const MapBuilder: React.FC = () => {
     }
   };
 
-  // ─── Click thumbnail ───
+  // ─── Thumbnail click ───
   const handleThumbnailClick = async (pageNum: number) => {
     const existing = areaInfoMap.get(pageNum);
     if (existing) {
@@ -296,7 +298,7 @@ const MapBuilder: React.FC = () => {
     }
   };
 
-  // ─── Scan page with Claude ───
+  // ─── Scan page ───
   const scanPageWithClaude = async (pageNum: number) => {
     if (!pdfDoc) return;
     setScanning(true);
@@ -313,44 +315,22 @@ const MapBuilder: React.FC = () => {
         body: JSON.stringify({
           model: 'claude-sonnet-4-6',
           max_tokens: 300,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'image',
-                  source: { type: 'base64', media_type: 'image/jpeg', data: base64 },
-                },
-                {
-                  type: 'text',
-                  text: `This is a page from a master route map book for Hamilton, Ontario.
-
-Look at the bold title at the top (e.g. "Master Map – ALDERSHOT") and the route number table below it.
-
-Respond ONLY with this exact JSON — no other text:
-{
-  "area_name": "ALDERSHOT",
-  "route_count": 21
-}
-
-area_name = the area name from the title in ALL CAPS.
-route_count = the highest route number shown in the table at the top of the page.`,
-                },
-              ],
-            },
-          ],
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+              { type: 'text', text: `This is a page from a master route map book for Hamilton, Ontario.\n\nLook at the bold title at the top (e.g. "Master Map – ALDERSHOT") and the route number table below it.\n\nRespond ONLY with this exact JSON — no other text:\n{\n  "area_name": "ALDERSHOT",\n  "route_count": 21\n}\n\narea_name = the area name from the title in ALL CAPS.\nroute_count = the highest route number shown in the table at the top of the page.` },
+            ],
+          }],
         }),
       });
       const data = await response.json();
       const text = data.content[0].text;
       let parsed: { area_name: string; route_count: number };
-      try {
-        parsed = JSON.parse(text);
-      } catch {
+      try { parsed = JSON.parse(text); }
+      catch {
         const match = text.match(/\{[\s\S]*\}/);
-        parsed = match
-          ? JSON.parse(match[0])
-          : { area_name: `Area ${pageNum}`, route_count: 10 };
+        parsed = match ? JSON.parse(match[0]) : { area_name: `Area ${pageNum}`, route_count: 10 };
       }
       setScannedAreaName(parsed.area_name);
       setScannedRouteCount(parsed.route_count);
@@ -363,7 +343,7 @@ route_count = the highest route number shown in the table at the top of the page
     }
   };
 
-  // ─── Confirm prefix modal ───
+  // ─── Prefix confirm ───
   const handlePrefixConfirm = async () => {
     if (!prefixInput.trim() || !pendingPage) return;
     const areaInfo: AreaPrefix = {
@@ -373,9 +353,7 @@ route_count = the highest route number shown in the table at the top of the page
       pdf_page: pendingPage,
       route_count: scannedRouteCount,
     };
-    await supabase
-      .from('area_prefixes')
-      .upsert(areaInfo, { onConflict: 'area_name' });
+    await supabase.from('area_prefixes').upsert(areaInfo, { onConflict: 'area_name' });
     const newMap = new Map(areaInfoMap);
     newMap.set(pendingPage, areaInfo);
     setAreaInfoMap(newMap);
@@ -405,11 +383,10 @@ route_count = the highest route number shown in the table at the top of the page
     setAllWays([]);
     setPointA(null);
     setShowStrip(false);
-    // Give DOM time to update then resize map
     setTimeout(() => mapRef.current?.resize(), 100);
   };
 
-  // ─── Init Mapbox — always mounts, never unmounts ───
+  // ─── Init Mapbox — always mounted ───
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
@@ -419,6 +396,9 @@ route_count = the highest route number shown in the table at the top of the page
       center: [-79.870, 43.320],
       zoom: 13,
     });
+
+    // Disable built-in boxZoom so Shift+drag is ours
+    map.boxZoom.disable();
 
     map.addControl(new mapboxgl.NavigationControl(), 'top-right');
 
@@ -473,18 +453,13 @@ route_count = the highest route number shown in the table at the top of the page
       setMapLoaded(true);
     });
 
-    const handleHover = (
-      e: mapboxgl.MapMouseEvent & { features?: mapboxgl.MapboxGeoJSONFeature[] }
-    ) => {
+    const handleHover = (e: mapboxgl.MapMouseEvent & { features?: mapboxgl.MapboxGeoJSONFeature[] }) => {
       if (e.features?.[0]) {
-        const id = e.features[0].properties?.id;
-        const name = e.features[0].properties?.name;
-        map.setFilter('roads-hover', ['==', ['get', 'id'], id]);
-        setHoveredWayName(name || null);
+        map.setFilter('roads-hover', ['==', ['get', 'id'], e.features[0].properties?.id]);
+        setHoveredWayName(e.features[0].properties?.name || null);
         map.getCanvas().style.cursor = 'pointer';
       }
     };
-
     const handleLeave = () => {
       map.setFilter('roads-hover', ['==', ['get', 'id'], -1]);
       setHoveredWayName(null);
@@ -497,8 +472,6 @@ route_count = the highest route number shown in the table at the top of the page
     map.on('mouseleave', 'roads-selected', handleLeave);
 
     mapRef.current = map;
-
-    // No cleanup — map stays mounted for lifetime of page
   }, []);
 
   // Resize map when strip toggles
@@ -506,12 +479,132 @@ route_count = the highest route number shown in the table at the top of the page
     setTimeout(() => mapRef.current?.resize(), 50);
   }, [showStrip]);
 
+  // ─── Box selection mouse handlers ───
+  useEffect(() => {
+    const canvas = mapRef.current?.getCanvas();
+    if (!canvas) return;
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (!e.shiftKey && !e.altKey) return;
+      if (!currentArea) return;
+      e.preventDefault();
+      e.stopPropagation();
+      isDraggingRef.current = true;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const mode = e.shiftKey ? 'add' : 'remove';
+      const newBox = { startX: x, startY: y, currentX: x, currentY: y, mode };
+      boxStateRef.current = newBox;
+      setBoxState(newBox);
+      // Disable map panning while drawing box
+      mapRef.current?.dragPan.disable();
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDraggingRef.current || !boxStateRef.current) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const updated = { ...boxStateRef.current, currentX: x, currentY: y };
+      boxStateRef.current = updated;
+      setBoxState({ ...updated });
+    };
+
+    const onMouseUp = (e: MouseEvent) => {
+      if (!isDraggingRef.current || !boxStateRef.current) return;
+      isDraggingRef.current = false;
+      mapRef.current?.dragPan.enable();
+
+      const box = boxStateRef.current;
+      const minX = Math.min(box.startX, box.currentX);
+      const minY = Math.min(box.startY, box.currentY);
+      const maxX = Math.max(box.startX, box.currentX);
+      const maxY = Math.max(box.startY, box.currentY);
+
+      // Only apply if box is big enough to be intentional
+      if (maxX - minX > 5 && maxY - minY > 5) {
+        const map = mapRef.current;
+        if (map) {
+          const features = map.queryRenderedFeatures(
+            [{ x: minX, y: minY }, { x: maxX, y: maxY }],
+            { layers: ['roads-base', 'roads-selected'] }
+          );
+
+          const hitIds = new Set<number>(
+            features.map(f => f.properties?.id as number).filter(Boolean)
+          );
+          const hitNames = new Set<string>(
+            features.map(f => f.properties?.name as string).filter(Boolean)
+          );
+
+          const routeNum = activeRouteNumRef.current;
+          const mode = box.mode;
+
+          setRoutes(prev => prev.map(r => {
+            if (r.num !== routeNum) return r;
+            const newIds = new Set(r.selectedWayIds);
+            let newNames = [...r.streetNames];
+
+            if (mode === 'add') {
+              hitIds.forEach(id => newIds.add(id));
+              hitNames.forEach(name => {
+                if (!newNames.includes(name)) newNames.push(name);
+              });
+            } else {
+              // Remove mode — remove all ways in box from this route
+              hitIds.forEach(id => newIds.delete(id));
+              // Remove street names that no longer have any selected segments
+              newNames = newNames.filter(name => {
+                // Check if this street still has any selected segments outside the box
+                // A street stays if at least one of its way IDs is still selected
+                // We need allWays here but it's in closure scope below
+                return true; // will clean up via the street name check below
+              });
+            }
+
+            return { ...r, selectedWayIds: newIds, streetNames: newNames };
+          }));
+
+          // Clean up street names that have no remaining selected segments
+          // We do this in a second pass using allWays from the outer scope
+          if (mode === 'remove') {
+            setRoutes(prev => prev.map(r => {
+              if (r.num !== routeNum) return r;
+              const cleanedNames = r.streetNames.filter(name => {
+                // Keep name only if at least one of its segments is still selected
+                return allWays.some(w => w.name === name && r.selectedWayIds.has(w.id));
+              });
+              return { ...r, streetNames: cleanedNames };
+            }));
+          }
+        }
+      }
+
+      boxStateRef.current = null;
+      setBoxState(null);
+    };
+
+    canvas.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+
+    return () => {
+      canvas.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [mapLoaded, currentArea, allWays]);
+
   // ─── Click handler ───
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
     const handleClick = (e: mapboxgl.MapMouseEvent) => {
+      // Don't fire click if we just finished a box drag
+      if (isDraggingRef.current) return;
+
       const features = map.queryRenderedFeatures(e.point, {
         layers: ['roads-base', 'roads-selected', 'roads-point-a'],
       });
@@ -522,26 +615,22 @@ route_count = the highest route number shown in the table at the top of the page
       const isSelected = features[0].properties?.selected as boolean;
 
       if (isSelected) {
-        setRoutes(prev =>
-          prev.map(r => {
-            if (r.num !== activeRouteNum) return r;
-            const newIds = new Set(r.selectedWayIds);
-            allWays.filter(w => w.name === wayName).forEach(w => newIds.delete(w.id));
-            return {
-              ...r,
-              selectedWayIds: newIds,
-              streetNames: r.streetNames.filter(n => n !== wayName),
-            };
-          })
-        );
+        // Remove entire street name
+        setRoutes(prev => prev.map(r => {
+          if (r.num !== activeRouteNum) return r;
+          const newIds = new Set(r.selectedWayIds);
+          allWays.filter(w => w.name === wayName).forEach(w => newIds.delete(w.id));
+          return { ...r, selectedWayIds: newIds, streetNames: r.streetNames.filter(n => n !== wayName) };
+        }));
         setPointA(null);
       } else {
+        // Two-point add
         if (!pointA) {
           setPointA({ wayId, streetName: wayName });
         } else {
           if (wayName !== pointA.streetName) {
             setPointA({ wayId, streetName: wayName });
-            setError(`Different street selected — starting new selection on ${wayName}.`);
+            setError(`Different street — starting new selection on ${wayName}.`);
             setTimeout(() => setError(null), 3000);
           } else {
             const streetWays = allWays.filter(w => w.name === wayName);
@@ -551,17 +640,13 @@ route_count = the highest route number shown in the table at the top of the page
             const start = Math.min(idxA, idxB);
             const end = Math.max(idxA, idxB);
             const waysToAdd = streetWays.slice(start, end + 1);
-            setRoutes(prev =>
-              prev.map(r => {
-                if (r.num !== activeRouteNum) return r;
-                const newIds = new Set(r.selectedWayIds);
-                waysToAdd.forEach(w => newIds.add(w.id));
-                const newNames = r.streetNames.includes(wayName)
-                  ? r.streetNames
-                  : [...r.streetNames, wayName];
-                return { ...r, selectedWayIds: newIds, streetNames: newNames };
-              })
-            );
+            setRoutes(prev => prev.map(r => {
+              if (r.num !== activeRouteNum) return r;
+              const newIds = new Set(r.selectedWayIds);
+              waysToAdd.forEach(w => newIds.add(w.id));
+              const newNames = r.streetNames.includes(wayName) ? r.streetNames : [...r.streetNames, wayName];
+              return { ...r, selectedWayIds: newIds, streetNames: newNames };
+            }));
             setPointA(null);
           }
         }
@@ -588,12 +673,10 @@ route_count = the highest route number shown in the table at the top of the page
     setError(null);
     try {
       const searchName = area.area_name.toLowerCase().replace(/#\d+/g, '').trim();
-      const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
-        searchName + ', Hamilton, Ontario, Canada'
-      )}&format=json&limit=1`;
-      const nominatimResp = await fetch(nominatimUrl, {
-        headers: { 'User-Agent': 'CPSDMS-MapBuilder/1.0' },
-      });
+      const nominatimResp = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchName + ', Hamilton, Ontario, Canada')}&format=json&limit=1`,
+        { headers: { 'User-Agent': 'CPSDMS-MapBuilder/1.0' } }
+      );
       const nominatimData = await nominatimResp.json();
 
       let bbox: string;
@@ -602,10 +685,7 @@ route_count = the highest route number shown in the table at the top of the page
       if (nominatimData.length > 0) {
         const b = nominatimData[0].boundingbox;
         bbox = `${b[0]},${b[2]},${b[1]},${b[3]}`;
-        center = [
-          (parseFloat(b[2]) + parseFloat(b[3])) / 2,
-          (parseFloat(b[0]) + parseFloat(b[1])) / 2,
-        ];
+        center = [(parseFloat(b[2]) + parseFloat(b[3])) / 2, (parseFloat(b[0]) + parseFloat(b[1])) / 2];
       } else {
         bbox = '43.200,-79.950,43.350,-79.750';
         center = [-79.870, 43.270];
@@ -613,10 +693,9 @@ route_count = the highest route number shown in the table at the top of the page
 
       mapRef.current?.flyTo({ center, zoom: 13 });
 
-      const query = `[out:json][timeout:30];way["highway"]["name"](${bbox});out geom;`;
       const resp = await fetch('https://overpass-api.de/api/interpreter', {
         method: 'POST',
-        body: `data=${encodeURIComponent(query)}`,
+        body: `data=${encodeURIComponent(`[out:json][timeout:30];way["highway"]["name"](${bbox});out geom;`)}`,
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       });
       const data = await resp.json();
@@ -636,9 +715,7 @@ route_count = the highest route number shown in the table at the top of the page
   }, []);
 
   useEffect(() => {
-    if (mapLoaded && currentArea) {
-      loadRoads(currentArea);
-    }
+    if (mapLoaded && currentArea) loadRoads(currentArea);
   }, [currentArea, mapLoaded]);
 
   // ─── AI Extraction ───
@@ -659,72 +736,37 @@ route_count = the highest route number shown in the table at the top of the page
         body: JSON.stringify({
           model: 'claude-sonnet-4-6',
           max_tokens: 1000,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'image',
-                  source: { type: 'base64', media_type: 'image/jpeg', data: base64 },
-                },
-                {
-                  type: 'text',
-                  text: `This is the master route map for ${currentArea.area_name}.
-
-Find Route ${activeRoute.num} on this map. It is drawn in the color ${activeRoute.color} and the number "${activeRoute.num}" is written on the map in that same color.
-
-List every street name that has a line segment drawn in that color as part of Route ${activeRoute.num}.
-
-Respond ONLY with this exact JSON — no other text:
-{
-  "streets": ["Street Name 1", "Street Name 2", "Street Name 3"],
-  "confidence": 75,
-  "notes": "Brief note about what you found or any uncertainty"
-}`,
-                },
-              ],
-            },
-          ],
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+              { type: 'text', text: `This is the master route map for ${currentArea.area_name}.\n\nFind Route ${activeRoute.num} on this map. It is drawn in the color ${activeRoute.color} and the number "${activeRoute.num}" is written on the map in that same color.\n\nList every street name that has a line segment drawn in that color as part of Route ${activeRoute.num}.\n\nRespond ONLY with this exact JSON — no other text:\n{\n  "streets": ["Street Name 1", "Street Name 2", "Street Name 3"],\n  "confidence": 75,\n  "notes": "Brief note about what you found or any uncertainty"\n}` },
+            ],
+          }],
         }),
       });
-
       const data = await response.json();
       const text = data.content[0].text;
       let parsed: { streets: string[]; confidence: number; notes: string };
-      try {
-        parsed = JSON.parse(text);
-      } catch {
+      try { parsed = JSON.parse(text); }
+      catch {
         const match = text.match(/\{[\s\S]*\}/);
-        parsed = match
-          ? JSON.parse(match[0])
-          : { streets: [], confidence: 0, notes: 'Could not parse response' };
+        parsed = match ? JSON.parse(match[0]) : { streets: [], confidence: 0, notes: 'Could not parse response' };
       }
-
       const matchedIds = new Set<number>();
       const matchedNames: string[] = [];
       parsed.streets.forEach((streetName: string) => {
-        const matching = allWays.filter(
-          w =>
-            w.name.toLowerCase().includes(streetName.toLowerCase()) ||
-            streetName.toLowerCase().includes(w.name.toLowerCase())
+        const matching = allWays.filter(w =>
+          w.name.toLowerCase().includes(streetName.toLowerCase()) ||
+          streetName.toLowerCase().includes(w.name.toLowerCase())
         );
         matching.forEach(w => matchedIds.add(w.id));
-        if (matching.length > 0 && !matchedNames.includes(streetName)) {
-          matchedNames.push(streetName);
-        }
+        if (matching.length > 0 && !matchedNames.includes(streetName)) matchedNames.push(streetName);
       });
-
-      setRoutes(prev =>
-        prev.map(r =>
-          r.num !== activeRouteNum ? r : {
-            ...r,
-            selectedWayIds: matchedIds,
-            streetNames: matchedNames,
-            aiNotes: parsed.notes,
-            confidence: parsed.confidence,
-          }
-        )
-      );
+      setRoutes(prev => prev.map(r => r.num !== activeRouteNum ? r : {
+        ...r, selectedWayIds: matchedIds, streetNames: matchedNames,
+        aiNotes: parsed.notes, confidence: parsed.confidence,
+      }));
     } catch {
       setError('AI extraction failed. Check your Anthropic API key.');
     } finally {
@@ -736,51 +778,34 @@ Respond ONLY with this exact JSON — no other text:
     const name = addStreetInput.trim();
     if (!name) return;
     const matching = allWays.filter(w => w.name.toLowerCase().includes(name.toLowerCase()));
-    if (matching.length === 0) {
-      setError(`No roads found matching "${name}" in this area`);
-      return;
-    }
-    setRoutes(prev =>
-      prev.map(r => {
-        if (r.num !== activeRouteNum) return r;
-        const newIds = new Set(r.selectedWayIds);
-        matching.forEach(w => newIds.add(w.id));
-        const newNames = r.streetNames.includes(matching[0].name)
-          ? r.streetNames
-          : [...r.streetNames, matching[0].name];
-        return { ...r, selectedWayIds: newIds, streetNames: newNames };
-      })
-    );
+    if (matching.length === 0) { setError(`No roads found matching "${name}" in this area`); return; }
+    setRoutes(prev => prev.map(r => {
+      if (r.num !== activeRouteNum) return r;
+      const newIds = new Set(r.selectedWayIds);
+      matching.forEach(w => newIds.add(w.id));
+      const newNames = r.streetNames.includes(matching[0].name) ? r.streetNames : [...r.streetNames, matching[0].name];
+      return { ...r, selectedWayIds: newIds, streetNames: newNames };
+    }));
     setAddStreetInput('');
   };
 
   const handleRemoveStreet = (streetName: string) => {
-    setRoutes(prev =>
-      prev.map(r => {
-        if (r.num !== activeRouteNum) return r;
-        const newIds = new Set(r.selectedWayIds);
-        allWays.filter(w => w.name === streetName).forEach(w => newIds.delete(w.id));
-        return {
-          ...r,
-          selectedWayIds: newIds,
-          streetNames: r.streetNames.filter(n => n !== streetName),
-        };
-      })
-    );
+    setRoutes(prev => prev.map(r => {
+      if (r.num !== activeRouteNum) return r;
+      const newIds = new Set(r.selectedWayIds);
+      allWays.filter(w => w.name === streetName).forEach(w => newIds.delete(w.id));
+      return { ...r, selectedWayIds: newIds, streetNames: r.streetNames.filter(n => n !== streetName) };
+    }));
   };
 
   const handleApprove = () => {
-    setRoutes(prev =>
-      prev.map(r => r.num === activeRouteNum ? { ...r, status: 'approved' as const } : r)
-    );
+    setRoutes(prev => prev.map(r => r.num === activeRouteNum ? { ...r, status: 'approved' as const } : r));
     const next = routes.find(r => r.num > activeRouteNum && r.status === 'pending');
     if (next) setActiveRouteNum(next.num);
   };
 
   const handleFlag = () => {
-    setRoutes(prev =>
-      prev.map(r => r.num === activeRouteNum ? { ...r, status: 'flagged' as const } : r)
-    );
+    setRoutes(prev => prev.map(r => r.num === activeRouteNum ? { ...r, status: 'flagged' as const } : r));
     const next = routes.find(r => r.num > activeRouteNum && r.status === 'pending');
     if (next) setActiveRouteNum(next.num);
   };
@@ -792,25 +817,21 @@ Respond ONLY with this exact JSON — no other text:
     try {
       const approved = routes.filter(r => r.status === 'approved' && r.selectedWayIds.size > 0);
       for (const route of approved) {
-        const segments = allWays
-          .filter(w => route.selectedWayIds.has(w.id))
+        const segments = allWays.filter(w => route.selectedWayIds.has(w.id))
           .map(w => ({ osmId: w.id, name: w.name, coordinates: w.geometry }));
         const routeCode = `${currentArea.prefix}${String(route.num).padStart(2, '0')}`;
-        await supabase.from('route_maps').upsert(
-          {
-            area_name: currentArea.area_name,
-            route_number: route.num,
-            route_code: routeCode,
-            route_color: route.color,
-            segments,
-            status: 'approved',
-            ai_confidence: route.confidence,
-            ai_notes: route.aiNotes,
-            approved_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'area_name,route_number' }
-        );
+        await supabase.from('route_maps').upsert({
+          area_name: currentArea.area_name,
+          route_number: route.num,
+          route_code: routeCode,
+          route_color: route.color,
+          segments,
+          status: 'approved',
+          ai_confidence: route.confidence,
+          ai_notes: route.aiNotes,
+          approved_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'area_name,route_number' });
       }
       alert(`Saved ${approved.length} routes for ${currentArea.area_name}`);
     } catch {
@@ -819,6 +840,15 @@ Respond ONLY with this exact JSON — no other text:
       setSaving(false);
     }
   };
+
+  // ─── Box rectangle dimensions for rendering ───
+  const boxRect = boxState ? {
+    left: Math.min(boxState.startX, boxState.currentX),
+    top: Math.min(boxState.startY, boxState.currentY),
+    width: Math.abs(boxState.currentX - boxState.startX),
+    height: Math.abs(boxState.currentY - boxState.startY),
+    mode: boxState.mode,
+  } : null;
 
   // ─── RENDER ───
   return (
@@ -845,31 +875,19 @@ Respond ONLY with this exact JSON — no other text:
             <button
               onClick={() => setShowStrip(s => !s)}
               className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm border transition-colors ${
-                showStrip
-                  ? 'bg-blue-900/30 border-blue-600 text-blue-300'
-                  : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+                showStrip ? 'bg-blue-900/30 border-blue-600 text-blue-300' : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
               }`}
             >
               <MapIcon size={14} />
               {showStrip ? 'Hide Pages' : 'Switch Area'}
             </button>
           )}
-          <label
-            className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm cursor-pointer border transition-colors ${
-              pdfDoc
-                ? 'bg-green-900/30 border-green-700 text-green-400'
-                : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
-            }`}
-          >
+          <label className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm cursor-pointer border transition-colors ${
+            pdfDoc ? 'bg-green-900/30 border-green-700 text-green-400' : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+          }`}>
             {uploadingPdf ? <Loader size={14} className="animate-spin" /> : <Upload size={14} />}
             {pdfDoc ? 'PDF Loaded ✓' : 'Upload PDF'}
-            <input
-              type="file"
-              accept=".pdf"
-              className="hidden"
-              onChange={handlePdfUpload}
-              disabled={uploadingPdf}
-            />
+            <input type="file" accept=".pdf" className="hidden" onChange={handlePdfUpload} disabled={uploadingPdf} />
           </label>
           {currentArea && (
             <button
@@ -893,7 +911,7 @@ Respond ONLY with this exact JSON — no other text:
         </div>
       )}
 
-      {/* Thumbnail Strip — only shown when showStrip is true */}
+      {/* Thumbnail Strip */}
       {showStrip && (
         pdfDoc ? (
           <div
@@ -911,11 +929,8 @@ Respond ONLY with this exact JSON — no other text:
                   onClick={() => handleThumbnailClick(thumb.pageNum)}
                   title={areaInfo ? `${areaInfo.area_name} (${areaInfo.prefix})` : `Page ${thumb.pageNum} — click to set up`}
                   className={`flex-shrink-0 cursor-pointer rounded overflow-hidden border-2 transition-all relative ${
-                    isActive
-                      ? 'border-blue-500 ring-1 ring-blue-400'
-                      : areaInfo
-                      ? 'border-green-600 hover:border-green-400'
-                      : 'border-gray-700 hover:border-gray-500'
+                    isActive ? 'border-blue-500 ring-1 ring-blue-400' :
+                    areaInfo ? 'border-green-600 hover:border-green-400' : 'border-gray-700 hover:border-gray-500'
                   }`}
                   style={{ width: '68px', height: '88px' }}
                 >
@@ -935,9 +950,7 @@ Respond ONLY with this exact JSON — no other text:
                       {areaInfo ? areaInfo.prefix : `p${thumb.pageNum}`}
                     </div>
                   </div>
-                  {areaInfo && (
-                    <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full" />
-                  )}
+                  {areaInfo && <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full" />}
                 </div>
               );
             })}
@@ -952,13 +965,10 @@ Respond ONLY with this exact JSON — no other text:
         )
       )}
 
-      {/* ── MAIN CONTENT AREA ──
-          The map container is ALWAYS in the DOM so Mapbox stays initialized.
-          We use flex layout — left panel and right panel only show when currentArea is set.
-          The map itself is always rendered but gets full width when no area is selected. */}
+      {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
 
-        {/* LEFT: Route list — only visible when editing */}
+        {/* LEFT: Route list */}
         {currentArea && (
           <div className="w-48 bg-gray-800 border-r border-gray-700 flex flex-col overflow-hidden flex-shrink-0">
             <div className="px-3 py-2 border-b border-gray-700 flex justify-between items-center">
@@ -990,10 +1000,8 @@ Respond ONLY with this exact JSON — no other text:
             </div>
             <div className="p-2 border-t border-gray-700">
               <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden mb-1">
-                <div
-                  className="h-full bg-green-500 rounded-full transition-all"
-                  style={{ width: `${(approvedCount / currentArea.route_count) * 100}%` }}
-                />
+                <div className="h-full bg-green-500 rounded-full transition-all"
+                  style={{ width: `${(approvedCount / currentArea.route_count) * 100}%` }} />
               </div>
               <div className="flex justify-between text-[9px]">
                 <span className="text-green-400">{approvedCount} ok</span>
@@ -1008,13 +1016,30 @@ Respond ONLY with this exact JSON — no other text:
         <div className="flex-1 flex flex-col overflow-hidden">
           <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
 
-            {/* Map container — always rendered */}
+            {/* Map container */}
             <div
               ref={mapContainerRef}
               style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, width: '100%', height: '100%' }}
             />
 
-            {/* No area selected overlay */}
+            {/* Box selection rectangle overlay */}
+            {boxRect && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: boxRect.left,
+                  top: boxRect.top,
+                  width: boxRect.width,
+                  height: boxRect.height,
+                  border: `2px dashed ${boxRect.mode === 'add' ? '#60a5fa' : '#f87171'}`,
+                  background: boxRect.mode === 'add' ? 'rgba(96,165,250,0.08)' : 'rgba(248,113,113,0.08)',
+                  pointerEvents: 'none',
+                  zIndex: 20,
+                }}
+              />
+            )}
+
+            {/* No area overlay */}
             {!currentArea && (
               <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
                 <div className="text-center bg-gray-900/80 rounded-xl px-8 py-6 border border-gray-700">
@@ -1044,17 +1069,26 @@ Respond ONLY with this exact JSON — no other text:
             {pointA && (
               <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-blue-950/95 border border-blue-600 rounded-lg px-3 py-2 text-xs z-10 text-blue-300 flex items-center gap-2 shadow-lg">
                 <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse flex-shrink-0" />
-                <span>
-                  Point A set on <strong className="text-blue-200">{pointA.streetName}</strong> — click a second point on the same street
-                </span>
+                <span>Point A set on <strong className="text-blue-200">{pointA.streetName}</strong> — click a second point on the same street</span>
                 <button onClick={() => setPointA(null)} className="text-blue-400 hover:text-white ml-2 flex-shrink-0">
                   <X size={12} />
                 </button>
               </div>
             )}
+
+            {/* Controls hint */}
+            {currentArea && !loadingRoads && (
+              <div className="absolute bottom-3 left-3 bg-gray-900/80 border border-gray-700 rounded px-2 py-1.5 text-[10px] text-gray-500 z-10 pointer-events-none space-y-0.5">
+                <div><span className="text-blue-400 font-mono">Shift+drag</span> — box select add</div>
+                <div><span className="text-red-400 font-mono">Alt+drag</span> — box select remove</div>
+                <div><span className="text-gray-400 font-mono">Click lit</span> — remove whole street</div>
+                <div><span className="text-gray-400 font-mono">Click unlit</span> — two-point add</div>
+                <div><span className="text-gray-400 font-mono">Right-drag</span> — rotate map</div>
+              </div>
+            )}
           </div>
 
-          {/* Action bar — only shown when editing */}
+          {/* Action bar */}
           {currentArea && (
             <div className="bg-gray-800 border-t border-gray-700 px-4 py-2 flex items-center gap-3 flex-shrink-0">
               {activeRoute && (
@@ -1096,15 +1130,13 @@ Respond ONLY with this exact JSON — no other text:
                 <X size={14} /> Flag
               </button>
               <div className="ml-auto text-xs text-gray-500">
-                {pointA
-                  ? `Point A set — click second point on ${pointA.streetName}`
-                  : 'Click unlit street to add · Click lit street to remove whole street'}
+                {activeRoute?.selectedWayIds.size || 0} segments selected
               </div>
             </div>
           )}
         </div>
 
-        {/* RIGHT: Streets panel — only visible when editing */}
+        {/* RIGHT: Streets panel */}
         {currentArea && (
           <div className="w-64 bg-gray-800 border-l border-gray-700 flex flex-col overflow-hidden flex-shrink-0">
             <div className="px-3 py-2 border-b border-gray-700">
@@ -1119,13 +1151,11 @@ Respond ONLY with this exact JSON — no other text:
               {!activeRoute?.streetNames.length ? (
                 <div className="text-xs text-gray-600 italic text-center mt-6 px-2">
                   No streets selected yet.<br /><br />
-                  Click streets on the map to add them, use two-point selection for a section, or hit "Extract with AI".
+                  Use Shift+drag to box-select streets, click to add individually, or hit "Extract with AI".
                 </div>
               ) : (
                 activeRoute.streetNames.map(name => {
-                  const segCount = allWays.filter(
-                    w => w.name === name && activeRoute.selectedWayIds.has(w.id)
-                  ).length;
+                  const segCount = allWays.filter(w => w.name === name && activeRoute.selectedWayIds.has(w.id)).length;
                   return (
                     <div key={name} className="flex items-center justify-between px-2 py-1.5 bg-gray-900 rounded mb-1 border border-gray-700">
                       <div>
@@ -1168,14 +1198,10 @@ Respond ONLY with this exact JSON — no other text:
                 <MapIcon size={16} className="text-purple-400" />
                 Set Up Area
               </h2>
-              <button
-                onClick={() => { setShowPrefixModal(false); setPendingPage(null); }}
-                className="text-gray-400 hover:text-white"
-              >
+              <button onClick={() => { setShowPrefixModal(false); setPendingPage(null); }} className="text-gray-400 hover:text-white">
                 <X size={18} />
               </button>
             </div>
-
             <div className="p-5 space-y-4">
               {scanning ? (
                 <div className="flex flex-col items-center gap-3 text-sm text-gray-400 py-6">
@@ -1186,32 +1212,22 @@ Respond ONLY with this exact JSON — no other text:
                 <>
                   <div>
                     <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Area Name</label>
-                    <input
-                      value={scannedAreaName}
-                      onChange={e => setScannedAreaName(e.target.value)}
-                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
-                    />
+                    <input value={scannedAreaName} onChange={e => setScannedAreaName(e.target.value)}
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500" />
                     <div className="text-[10px] text-gray-500 mt-1">Auto-detected by AI — edit if incorrect</div>
                   </div>
                   <div>
                     <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Route Count</label>
-                    <input
-                      type="number"
-                      value={scannedRouteCount}
-                      onChange={e => setScannedRouteCount(parseInt(e.target.value) || 0)}
-                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
-                    />
+                    <input type="number" value={scannedRouteCount} onChange={e => setScannedRouteCount(parseInt(e.target.value) || 0)}
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500" />
                     <div className="text-[10px] text-gray-500 mt-1">Auto-detected by AI — edit if incorrect</div>
                   </div>
                   <div>
                     <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Route Prefix</label>
-                    <input
-                      value={prefixInput}
+                    <input value={prefixInput}
                       onChange={e => setPrefixInput(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
-                      placeholder="e.g. ALD"
-                      maxLength={6}
-                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono uppercase focus:outline-none focus:border-purple-500"
-                    />
+                      placeholder="e.g. ALD" maxLength={6}
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono uppercase focus:outline-none focus:border-purple-500" />
                     {prefixInput && (
                       <div className="text-[10px] text-gray-400 mt-1 font-mono">
                         Routes will be: {prefixInput}01 · {prefixInput}02 · {prefixInput}03...
@@ -1222,9 +1238,7 @@ Respond ONLY with this exact JSON — no other text:
                     <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Region</label>
                     <div className="grid grid-cols-3 gap-2">
                       {(['West', 'Central', 'East'] as Region[]).map(r => (
-                        <button
-                          key={r}
-                          onClick={() => setRegionInput(r)}
+                        <button key={r} onClick={() => setRegionInput(r)}
                           className={`py-2 rounded border text-sm font-medium transition-colors ${
                             regionInput === r
                               ? r === 'West' ? 'bg-blue-900/50 border-blue-500 text-blue-300'
@@ -1241,20 +1255,13 @@ Respond ONLY with this exact JSON — no other text:
                 </>
               )}
             </div>
-
             {!scanning && (
               <div className="p-4 border-t border-gray-700 flex justify-end gap-3">
-                <button
-                  onClick={() => { setShowPrefixModal(false); setPendingPage(null); }}
-                  className="px-4 py-2 text-gray-400 hover:text-white text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handlePrefixConfirm}
+                <button onClick={() => { setShowPrefixModal(false); setPendingPage(null); }}
+                  className="px-4 py-2 text-gray-400 hover:text-white text-sm">Cancel</button>
+                <button onClick={handlePrefixConfirm}
                   disabled={!prefixInput.trim() || !scannedAreaName.trim() || scannedRouteCount === 0}
-                  className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white px-5 py-2 rounded font-medium text-sm flex items-center gap-2"
-                >
+                  className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white px-5 py-2 rounded font-medium text-sm flex items-center gap-2">
                   <Check size={14} />
                   Confirm & Start Mapping
                 </button>
