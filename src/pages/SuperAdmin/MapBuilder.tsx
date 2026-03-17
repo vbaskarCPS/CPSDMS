@@ -10,7 +10,6 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
-// PDF.js worker — loaded from CDN for reliability in Vite
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
@@ -116,6 +115,9 @@ const MapBuilder: React.FC = () => {
   const [totalPages, setTotalPages] = useState(0);
   const [thumbnails, setThumbnails] = useState<Thumbnail[]>([]);
   const [uploadingPdf, setUploadingPdf] = useState(false);
+
+  // Strip visibility — shown by default, hidden when editing
+  const [showStrip, setShowStrip] = useState(true);
 
   // Area / Page State
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
@@ -274,6 +276,7 @@ const MapBuilder: React.FC = () => {
         .from('master-maps')
         .getPublicUrl(fileName);
       await loadPdfFromUrl(urlData.publicUrl);
+      setShowStrip(true);
     } catch {
       setError('Failed to upload PDF. Please try again.');
     } finally {
@@ -403,6 +406,7 @@ route_count = the highest route number shown in the table at the top of the page
     setActiveRouteNum(1);
     setAllWays([]);
     setPointA(null);
+    setShowStrip(false); // Hide strip when editing starts
   };
 
   // ─── Init Mapbox ───
@@ -499,6 +503,13 @@ route_count = the highest route number shown in the table at the top of the page
       setMapLoaded(false);
     };
   }, []);
+
+  // Resize map when strip visibility changes
+  useEffect(() => {
+    setTimeout(() => {
+      mapRef.current?.resize();
+    }, 50);
+  }, [showStrip]);
 
   // ─── Click handler ───
   useEffect(() => {
@@ -599,7 +610,7 @@ route_count = the highest route number shown in the table at the top of the page
       let center: [number, number];
 
       if (nominatimData.length > 0) {
-        const b = nominatimData[0].boundingbox; // [south, north, west, east]
+        const b = nominatimData[0].boundingbox;
         bbox = `${b[0]},${b[2]},${b[1]},${b[3]}`;
         center = [
           (parseFloat(b[2]) + parseFloat(b[3])) / 2,
@@ -853,6 +864,22 @@ Respond ONLY with this exact JSON — no other text:
           </div>
         </div>
         <div className="flex items-center gap-3">
+
+          {/* Switch Area button — only shown when editing */}
+          {currentArea && (
+            <button
+              onClick={() => setShowStrip(s => !s)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm border transition-colors ${
+                showStrip
+                  ? 'bg-blue-900/30 border-blue-600 text-blue-300'
+                  : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              <MapIcon size={14} />
+              {showStrip ? 'Hide Pages' : 'Switch Area'}
+            </button>
+          )}
+
           <label
             className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm cursor-pointer border transition-colors ${
               pdfDoc
@@ -870,6 +897,7 @@ Respond ONLY with this exact JSON — no other text:
               disabled={uploadingPdf}
             />
           </label>
+
           {currentArea && (
             <button
               onClick={handleSaveAll}
@@ -892,61 +920,63 @@ Respond ONLY with this exact JSON — no other text:
         </div>
       )}
 
-      {/* Thumbnail Strip */}
-      {pdfDoc ? (
-        <div
-          ref={thumbnailStripRef}
-          onScroll={handleThumbnailScroll}
-          className="flex gap-2 px-3 py-2 bg-gray-950 border-b border-gray-700 overflow-x-auto flex-shrink-0"
-          style={{ height: '108px' }}
-        >
-          {thumbnails.map(thumb => {
-            const areaInfo = areaInfoMap.get(thumb.pageNum);
-            const isActive = selectedPage === thumb.pageNum;
-            return (
-              <div
-                key={thumb.pageNum}
-                onClick={() => handleThumbnailClick(thumb.pageNum)}
-                title={areaInfo ? `${areaInfo.area_name} (${areaInfo.prefix})` : `Page ${thumb.pageNum} — click to set up`}
-                className={`flex-shrink-0 cursor-pointer rounded overflow-hidden border-2 transition-all relative ${
-                  isActive
-                    ? 'border-blue-500 ring-1 ring-blue-400'
-                    : areaInfo
-                    ? 'border-green-600 hover:border-green-400'
-                    : 'border-gray-700 hover:border-gray-500'
-                }`}
-                style={{ width: '68px', height: '88px' }}
-              >
-                {thumb.loading ? (
-                  <div className="w-full h-full bg-gray-800 flex items-center justify-center">
-                    <Loader size={10} className="animate-spin text-gray-500" />
+      {/* Thumbnail Strip — hidden when editing a map */}
+      {showStrip && (
+        pdfDoc ? (
+          <div
+            ref={thumbnailStripRef}
+            onScroll={handleThumbnailScroll}
+            className="flex gap-2 px-3 py-2 bg-gray-950 border-b border-gray-700 overflow-x-auto flex-shrink-0"
+            style={{ height: '108px' }}
+          >
+            {thumbnails.map(thumb => {
+              const areaInfo = areaInfoMap.get(thumb.pageNum);
+              const isActive = selectedPage === thumb.pageNum;
+              return (
+                <div
+                  key={thumb.pageNum}
+                  onClick={() => handleThumbnailClick(thumb.pageNum)}
+                  title={areaInfo ? `${areaInfo.area_name} (${areaInfo.prefix})` : `Page ${thumb.pageNum} — click to set up`}
+                  className={`flex-shrink-0 cursor-pointer rounded overflow-hidden border-2 transition-all relative ${
+                    isActive
+                      ? 'border-blue-500 ring-1 ring-blue-400'
+                      : areaInfo
+                      ? 'border-green-600 hover:border-green-400'
+                      : 'border-gray-700 hover:border-gray-500'
+                  }`}
+                  style={{ width: '68px', height: '88px' }}
+                >
+                  {thumb.loading ? (
+                    <div className="w-full h-full bg-gray-800 flex items-center justify-center">
+                      <Loader size={10} className="animate-spin text-gray-500" />
+                    </div>
+                  ) : thumb.dataUrl ? (
+                    <img src={thumb.dataUrl} alt={`Page ${thumb.pageNum}`} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full bg-gray-800 flex items-center justify-center text-[10px] text-gray-500">
+                      {thumb.pageNum}
+                    </div>
+                  )}
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/75 px-1 py-0.5">
+                    <div className="text-[8px] text-gray-300 truncate font-mono">
+                      {areaInfo ? areaInfo.prefix : `p${thumb.pageNum}`}
+                    </div>
                   </div>
-                ) : thumb.dataUrl ? (
-                  <img src={thumb.dataUrl} alt={`Page ${thumb.pageNum}`} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full bg-gray-800 flex items-center justify-center text-[10px] text-gray-500">
-                    {thumb.pageNum}
-                  </div>
-                )}
-                <div className="absolute bottom-0 left-0 right-0 bg-black/75 px-1 py-0.5">
-                  <div className="text-[8px] text-gray-300 truncate font-mono">
-                    {areaInfo ? areaInfo.prefix : `p${thumb.pageNum}`}
-                  </div>
+                  {areaInfo && (
+                    <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full" />
+                  )}
                 </div>
-                {areaInfo && (
-                  <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full" />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="flex-shrink-0 bg-gray-950 border-b border-gray-700 px-4 py-5 flex items-center justify-center">
-          <div className="text-center">
-            <Upload size={28} className="mx-auto text-gray-600 mb-1" />
-            <p className="text-xs text-gray-500">Upload your master maps PDF to see all pages here</p>
+              );
+            })}
           </div>
-        </div>
+        ) : (
+          <div className="flex-shrink-0 bg-gray-950 border-b border-gray-700 px-4 py-5 flex items-center justify-center">
+            <div className="text-center">
+              <Upload size={28} className="mx-auto text-gray-600 mb-1" />
+              <p className="text-xs text-gray-500">Upload your master maps PDF to see all pages here</p>
+            </div>
+          </div>
+        )
       )}
 
       {/* Main Editor */}
