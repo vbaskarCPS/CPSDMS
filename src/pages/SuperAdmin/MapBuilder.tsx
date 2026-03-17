@@ -122,6 +122,9 @@ const MapBuilder: React.FC = () => {
     map.addControl(new mapboxgl.NavigationControl(), 'top-right');
 
     map.on('load', () => {
+      // Force Mapbox to remeasure the container after load
+      map.resize();
+
       map.addSource('roads', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -507,8 +510,20 @@ Respond ONLY with this exact JSON format, no other text:
 
         {/* CENTER: Map */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 relative">
-            <div ref={mapContainerRef} className="absolute inset-0" />
+          {/* FIX: explicit height so Mapbox can measure the container */}
+          <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+            <div
+              ref={mapContainerRef}
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: 0,
+                right: 0,
+                width: '100%',
+                height: '100%',
+              }}
+            />
             {loadingRoads && (
               <div className="absolute inset-0 bg-gray-900/60 flex items-center justify-center z-10">
                 <div className="bg-gray-800 rounded-lg px-4 py-3 flex items-center gap-3 text-sm border border-gray-700">
