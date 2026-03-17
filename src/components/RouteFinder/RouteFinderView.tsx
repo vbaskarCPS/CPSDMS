@@ -416,22 +416,40 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         listingsData.routeMapOriginal.get(rc)?.push(row.currentStreetName);
       }
 
+      // Run cascade — other rows with same street+route now match and should drop
+      const cascadeIds = cascadeCheck(
+        row.currentRouteCode, row.currentStreetName, queue, listingsData, result.learned
+      );
+      const resolvedSet = new Set([row.id, ...cascadeIds]);
+
       const entry: FixLogEntry = {
         rowId: row.id, bookingId: row.bookingId, sheetName: row.sheetName,
         oldRouteCode: row.currentRouteCode, newRouteCode: row.currentRouteCode,
         oldStreetName: row.currentStreetName, newStreetName: row.currentStreetName,
-        cascadeCount: 0, timestamp: new Date().toISOString(), type: 'accept_as_is',
+        cascadeCount: cascadeIds.length, timestamp: new Date().toISOString(), type: 'accept_as_is',
       };
+
+      // Build log entries for cascade-resolved rows too
+      const cascadeEntries: FixLogEntry[] = cascadeIds.map(cId => ({
+        ...entry, rowId: cId, bookingId: cId, cascadeCount: 0,
+        timestamp: new Date().toISOString(),
+      }));
+
       const { newFixedRows } = await routeFinderSessionService.markRowsDismissed({
-        sessionId: session.id, entries: [entry], currentFixedRows: session.fixedRows,
+        sessionId: session.id, entries: [entry, ...cascadeEntries], currentFixedRows: session.fixedRows,
       });
-      setQueue(prev => prev.filter(r => r.id !== row.id));
+      setQueue(prev => prev.filter(r => !resolvedSet.has(r.id)));
       setSession(prev => prev ? {
         ...prev, fixedRows: newFixedRows,
         learnedStreets: result.learned, learnedStreetsOriginal: result.learnedOriginal,
-        fixLog: [...prev.fixLog, entry],
+        fixLog: [...prev.fixLog, entry, ...cascadeEntries],
       } : null);
-      showToast('Accepted as-is — learned into Listings.');
+
+      const total = resolvedSet.size;
+      showToast(total > 1
+        ? `Accepted as-is — learned into Listings. ${total - 1} other row${total === 2 ? '' : 's'} auto-resolved.`
+        : 'Accepted as-is — learned into Listings.'
+      );
     } catch (e: any) { setError(`Accept as-is failed: ${e?.message}`); }
     finally { setApplying(prev => { const n = new Set(prev); n.delete(row.id); return n; }); }
   }, [session, listingsData, spreadsheetId, showToast]);
