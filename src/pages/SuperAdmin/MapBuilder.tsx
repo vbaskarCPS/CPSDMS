@@ -12,7 +12,7 @@ import { supabase } from '../../lib/supabase';
 
 // PDF.js worker — loaded from CDN for reliability in Vite
 pdfjsLib.GlobalWorkerOptions.workerSrc =
-  `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+  `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
