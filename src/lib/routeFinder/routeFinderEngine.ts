@@ -784,6 +784,50 @@ export function runMatchEngine(input: EngineInput): EngineResult {
   return { queue, totalScanned, greenCount };
 }
 
+// ─── ASYNC PER-SHEET ENGINE (yields every 50 rows to keep browser alive) ─────
+
+export async function runMatchEngineForSheet(
+  params: {
+    sheet: CallBookSheet;
+    listingsData: ListingsData;
+    learnedStreets: LearnedStreets;
+    learnedStreetsOriginal: LearnedStreetsOriginal;
+  },
+  onRowProgress?: (pct: number) => void
+): Promise<{ rows: RouteFinderRow[]; scanned: number }> {
+  const { sheet, listingsData, learnedStreets, learnedStreetsOriginal } = params;
+  const { sheetName, CI, rows } = sheet;
+  if (!rows || rows.length === 0) return { rows: [], scanned: 0 };
+
+  const phoneGroups = buildPhoneGroups(rows, CI);
+  const clusters    = buildContractorClusters(rows, CI, listingsData);
+  const results: RouteFinderRow[] = [];
+  let scanned = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    // Yield to browser every 50 rows so the UI stays alive
+    if (i % 50 === 0) {
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      onRowProgress?.(rows.length > 0 ? i / rows.length : 1);
+    }
+
+    const row = rows[i];
+    if (!row || !row[0]) continue;
+    const bookingId = CI.bookingId >= 0 ? String(row[CI.bookingId] ?? '').trim() : '';
+    if (!bookingId) continue;
+
+    scanned++;
+    const result = matchRow(
+      row, i, CI, sheetName,
+      phoneGroups, rows, clusters,
+      listingsData, learnedStreets, learnedStreetsOriginal
+    );
+    if (result !== null) results.push(result);
+  }
+
+  return { rows: results, scanned };
+}
+
 // ─── CASCADE CHECK ────────────────────────────────────────────────────────────
 
 export function cascadeCheck(

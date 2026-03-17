@@ -15,7 +15,7 @@ import {
 import { routeFinderSheetsService } from '../../lib/routeFinder/routeFinderSheetsService';
 import { routeFinderSessionService, RouteFinderSession, FixLogEntry } from '../../lib/routeFinder/routeFinderSessionService';
 import {
-  runMatchEngine, cascadeCheck, normalizeStreetForMatch,
+  runMatchEngineForSheet, cascadeCheck, normalizeStreetForMatch,
   RouteFinderRow, MatchColor, ListingsData, CallBookSheet, CandidateRoute,
 } from '../../lib/routeFinder/routeFinderEngine';
 
@@ -166,13 +166,33 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       );
       setSheets(loadedSheets);
 
-      // Run engine
-      setScanProgress({ current: tabNames.length, total: tabNames.length, sheet: 'Analysing…' });
-
+      // Run engine sheet-by-sheet with inner row-level progress
       const learnedStreets         = existingSession?.learnedStreets || {};
       const learnedStreetsOriginal  = existingSession?.learnedStreetsOriginal || {};
 
-      const result = runMatchEngine({ listingsData: listings, sheets: loadedSheets, learnedStreets, learnedStreetsOriginal });
+      const allQueueRows: RouteFinderRow[] = [];
+      let totalScannedCount = 0;
+
+      for (let i = 0; i < loadedSheets.length; i++) {
+        const sheet = loadedSheets[i];
+        const { rows: sheetRows, scanned } = await runMatchEngineForSheet(
+          { sheet, listingsData: listings, learnedStreets, learnedStreetsOriginal },
+          (pct) => setScanProgress({
+            current: i + pct,
+            total: loadedSheets.length,
+            sheet: `Analysing ${sheet.sheetName}... (${Math.round(pct * 100)}%)`,
+          })
+        );
+        allQueueRows.push(...sheetRows);
+        totalScannedCount += scanned;
+        setScanProgress({ current: i + 1, total: loadedSheets.length, sheet: `Done: ${sheet.sheetName}` });
+      }
+
+      const result = {
+        queue: allQueueRows,
+        totalScanned: totalScannedCount,
+        greenCount: totalScannedCount - allQueueRows.length,
+      };
 
       let finalQueue: RouteFinderRow[];
       let activeSession: RouteFinderSession;
