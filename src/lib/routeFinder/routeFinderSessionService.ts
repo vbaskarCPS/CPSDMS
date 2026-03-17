@@ -1,15 +1,31 @@
 // src/lib/routeFinder/routeFinderSessionService.ts
 //
 // Supabase persistence for the Route Finder work session.
-// Stores: fix log + learned streets only.
-// pending_row_ids is intentionally never stored — 10k IDs would exceed Supabase limits.
-// Resume works by re-scanning and subtracting already-fixed row IDs from fix_log.
+// fix_log entry types:
+//   'fix'            — row was corrected and written to sheet
+//   'leave'          — permanently dismissed, no change, never resurfaces
+//   'accept_as_is'   — current values learned into Listings, no sheet write
 //
 
 import { supabase } from '../supabase';
 import { RouteFinderRow, normalizeStreetForMatch } from './routeFinderEngine';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
+
+export type FixLogEntryType = 'fix' | 'leave' | 'accept_as_is';
+
+export interface FixLogEntry {
+  rowId: string;
+  bookingId: string;
+  sheetName: string;
+  oldRouteCode: string;
+  newRouteCode: string;
+  oldStreetName: string;
+  newStreetName: string;
+  cascadeCount: number;
+  timestamp: string;
+  type: FixLogEntryType;
+}
 
 export interface RouteFinderSession {
   id: string;
@@ -22,18 +38,6 @@ export interface RouteFinderSession {
   fixLog: FixLogEntry[];
   createdAt: string;
   updatedAt: string;
-}
-
-export interface FixLogEntry {
-  rowId: string;
-  bookingId: string;
-  sheetName: string;
-  oldRouteCode: string;
-  newRouteCode: string;
-  oldStreetName: string;
-  newStreetName: string;
-  cascadeCount: number;
-  timestamp: string;
 }
 
 const TABLE = 'route_finder_sessions';
@@ -52,8 +56,6 @@ export const routeFinderSessionService = {
     return mapRow(data);
   },
 
-  // Never stores pending_row_ids — too large for Supabase with 10k+ rows.
-  // Resume uses fix_log to subtract already-fixed rows from a fresh scan.
   async createSession(
     spreadsheetId: string,
     _queue: RouteFinderRow[],
@@ -79,6 +81,8 @@ export const routeFinderSessionService = {
     return mapRow(data);
   },
 
+  // ── Fix one or many rows (written to sheet) ───────────────────────────────
+
   async markRowFixed(params: {
     sessionId: string;
     rowId: string;
@@ -91,19 +95,13 @@ export const routeFinderSessionService = {
     const newFixedRows = currentFixedRows + 1 + cascadeResolvedIds.length;
 
     const { data: current } = await supabase
-      .from(TABLE)
-      .select('fix_log')
-      .eq('id', sessionId)
-      .single();
+      .from(TABLE).select('fix_log').eq('id', sessionId).single();
 
     const currentLog = (current?.fix_log as FixLogEntry[]) || [];
 
     const cascadeEntries: FixLogEntry[] = cascadeResolvedIds.map(cId => ({
-      ...logEntry,
-      rowId: cId,
-      bookingId: cId,
-      cascadeCount: 0,
-      timestamp: new Date().toISOString(),
+      ...logEntry, rowId: cId, bookingId: cId, cascadeCount: 0,
+      timestamp: new Date().toISOString(), type: 'fix' as FixLogEntryType,
     }));
 
     const { error } = await supabase
@@ -118,6 +116,37 @@ export const routeFinderSessionService = {
     if (error) console.error('RF: error marking row fixed:', error);
     return { newFixedRows };
   },
+
+  // ── Dismiss rows permanently (leave or accept-as-is) ─────────────────────
+
+  async markRowsDismissed(params: {
+    sessionId: string;
+    entries: FixLogEntry[];
+    currentFixedRows: number;
+  }): Promise<{ newFixedRows: number }> {
+    const { sessionId, entries, currentFixedRows } = params;
+
+    const newFixedRows = currentFixedRows + entries.length;
+
+    const { data: current } = await supabase
+      .from(TABLE).select('fix_log').eq('id', sessionId).single();
+
+    const currentLog = (current?.fix_log as FixLogEntry[]) || [];
+
+    const { error } = await supabase
+      .from(TABLE)
+      .update({
+        fixed_rows: newFixedRows,
+        fix_log:    [...currentLog, ...entries],
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', sessionId);
+
+    if (error) console.error('RF: error dismissing rows:', error);
+    return { newFixedRows };
+  },
+
+  // ── Learn a street ────────────────────────────────────────────────────────
 
   async addLearnedStreet(params: {
     sessionId: string;

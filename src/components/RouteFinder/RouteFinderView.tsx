@@ -1,22 +1,28 @@
 // src/components/RouteFinder/RouteFinderView.tsx
 //
 // Main Route Finder UI.
-// Mounted inside SessionCommandCenter when showRouteFinder === true.
-// Phases: auth -> setup -> scanning -> working -> complete
+// Features:
+//   - Group fix popup: same contractor+date+route+street batched into one confirm
+//   - Signal popup: click signal to see all rows for that contractor+date
+//   - Leave: permanent dismissal, no sheet write, never resurfaces
+//   - Accept as-is: learns current values into Listings, no sheet write
 //
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   ArrowLeft, MapPin, CheckCircle, SkipForward,
   Loader, ChevronDown, ChevronUp, RefreshCw,
-  Layers, Zap, Users, Search,
+  Layers, Zap, Users, Search, X, BookOpen,
 } from 'lucide-react';
 
 import { routeFinderSheetsService } from '../../lib/routeFinder/routeFinderSheetsService';
-import { routeFinderSessionService, RouteFinderSession, FixLogEntry } from '../../lib/routeFinder/routeFinderSessionService';
+import {
+  routeFinderSessionService, RouteFinderSession, FixLogEntry, FixLogEntryType,
+} from '../../lib/routeFinder/routeFinderSessionService';
 import {
   runMatchEngineForSheet, cascadeCheck, normalizeStreetForMatch,
   RouteFinderRow, MatchColor, ListingsData, CallBookSheet, CandidateRoute,
+  resolveSheetColumns, findHeaderRow,
 } from '../../lib/routeFinder/routeFinderEngine';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -24,35 +30,34 @@ import {
 type Phase = 'auth' | 'setup' | 'scanning' | 'working' | 'complete';
 type ColorFilter = 'all' | 'phone_group' | 'orange' | 'yellow' | 'red';
 
-interface Props {
-  onBack: () => void;
+interface Props { onBack: () => void; }
+
+interface GroupFixPopupState {
+  triggerRow: RouteFinderRow;
+  matches: RouteFinderRow[];
+  finalRoute: string;
+  finalStreet: string;
+}
+
+interface SignalPopupRow {
+  bookingId: string;
+  houseNum: string;
+  streetName: string;
+  routeCode: string;
+  isFlagged: boolean;
+}
+
+interface SignalPopupState {
+  contractorName: string;
+  serviceDate: string;
+  rows: SignalPopupRow[];
 }
 
 const COLOR_CONFIG: Record<MatchColor, { label: string; border: string; badge: string; bg: string }> = {
-  phone_group: {
-    label: 'Phone Match',
-    border: 'border-l-4 border-l-emerald-500',
-    badge: 'bg-emerald-900/40 text-emerald-300 border-emerald-700',
-    bg: 'hover:bg-emerald-950/20',
-  },
-  orange: {
-    label: 'Typo',
-    border: 'border-l-4 border-l-orange-500',
-    badge: 'bg-orange-900/40 text-orange-300 border-orange-700',
-    bg: 'hover:bg-orange-950/20',
-  },
-  yellow: {
-    label: 'Wrong Route',
-    border: 'border-l-4 border-l-yellow-500',
-    badge: 'bg-yellow-900/40 text-yellow-300 border-yellow-700',
-    bg: 'hover:bg-yellow-950/20',
-  },
-  red: {
-    label: 'No Match',
-    border: 'border-l-4 border-l-red-500',
-    badge: 'bg-red-900/40 text-red-300 border-red-700',
-    bg: 'hover:bg-red-950/20',
-  },
+  phone_group: { label: 'Phone Match', border: 'border-l-4 border-l-emerald-500', badge: 'bg-emerald-900/40 text-emerald-300 border-emerald-700', bg: 'hover:bg-emerald-950/20' },
+  orange:      { label: 'Typo',        border: 'border-l-4 border-l-orange-500',  badge: 'bg-orange-900/40 text-orange-300 border-orange-700',   bg: 'hover:bg-orange-950/20' },
+  yellow:      { label: 'Wrong Route', border: 'border-l-4 border-l-yellow-500',  badge: 'bg-yellow-900/40 text-yellow-300 border-yellow-700',   bg: 'hover:bg-yellow-950/20' },
+  red:         { label: 'No Match',    border: 'border-l-4 border-l-red-500',     badge: 'bg-red-900/40 text-red-300 border-red-700',            bg: 'hover:bg-red-950/20' },
 };
 
 const PAGE_SIZE = 100;
@@ -79,6 +84,8 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [bulkApplying, setBulkApplying]   = useState(false);
   const [searchTerm, setSearchTerm]       = useState('');
+  const [groupFixPopup, setGroupFixPopup] = useState<GroupFixPopupState | null>(null);
+  const [signalPopup, setSignalPopup]     = useState<SignalPopupState | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
@@ -92,6 +99,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
     toastTimer.current = setTimeout(() => setToast(null), 4000);
   }, []);
 
+  // ── Connect Google ─────────────────────────────────────────────────────────
   const handleConnect = async () => {
     setIsAuthenticating(true);
     setError(null);
@@ -99,13 +107,11 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       const ok = await routeFinderSheetsService.authenticate();
       if (ok) setPhase('setup');
       else setError('Failed to connect. Please try again.');
-    } catch (e: any) {
-      setError(e?.message || 'Auth failed.');
-    } finally {
-      setIsAuthenticating(false);
-    }
+    } catch (e: any) { setError(e?.message || 'Auth failed.'); }
+    finally { setIsAuthenticating(false); }
   };
 
+  // ── Scan ───────────────────────────────────────────────────────────────────
   const handleStartScan = async () => {
     const rawId = spreadsheetInput.trim();
     const idMatch = rawId.match(/\/d\/([a-zA-Z0-9-_]+)/);
@@ -121,10 +127,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       if (!validation.valid) { setError(validation.error || 'Cannot access spreadsheet.'); setPhase('setup'); return; }
 
       const hasListings = await routeFinderSheetsService.hasListingsTab(resolvedId);
-      if (!hasListings) {
-        setError('No "Listings" tab found. Please add the East Listings CSV as a tab named "Listings" first.');
-        setPhase('setup'); return;
-      }
+      if (!hasListings) { setError('No "Listings" tab found.'); setPhase('setup'); return; }
 
       routeFinderSessionService.saveSpreadsheetId(resolvedId);
       setSpreadsheetId(resolvedId);
@@ -154,29 +157,22 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         const sheet = loadedSheets[i];
         const { rows: sheetRows, scanned } = await runMatchEngineForSheet(
           { sheet, listingsData: listings, learnedStreets, learnedStreetsOriginal },
-          (pct) => setScanProgress({
-            current: i + pct,
-            total: loadedSheets.length,
-            sheet: `Analysing ${sheet.sheetName}... (${Math.round(pct * 100)}%)`,
-          })
+          (pct) => setScanProgress({ current: i + pct, total: loadedSheets.length, sheet: `Analysing ${sheet.sheetName}... (${Math.round(pct * 100)}%)` })
         );
         allQueueRows.push(...sheetRows);
         totalScannedCount += scanned;
         setScanProgress({ current: i + 1, total: loadedSheets.length, sheet: `Done: ${sheet.sheetName}` });
       }
 
-      setScanProgress({
-        current: loadedSheets.length, total: loadedSheets.length,
-        sheet: `Found ${allQueueRows.length} rows to review. Saving session...`,
-      });
+      setScanProgress({ current: loadedSheets.length, total: loadedSheets.length, sheet: `Found ${allQueueRows.length} rows to review. Saving session...` });
       await new Promise(resolve => setTimeout(resolve, 50));
 
       let finalQueue: RouteFinderRow[];
       let activeSession: RouteFinderSession;
 
       if (existingSession) {
-        const fixedSet = new Set(existingSession.fixLog.map(e => e.rowId));
-        finalQueue = allQueueRows.filter(r => !fixedSet.has(r.id));
+        const dismissedSet = new Set(existingSession.fixLog.map(e => e.rowId));
+        finalQueue = allQueueRows.filter(r => !dismissedSet.has(r.id));
         activeSession = existingSession;
       } else {
         finalQueue = allQueueRows;
@@ -184,11 +180,9 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       }
 
       await new Promise(resolve => setTimeout(resolve, 50));
-
       setQueue(finalQueue);
       setSession(activeSession);
       setVisibleCount(PAGE_SIZE);
-
       if (finalQueue.length === 0) setPhase('complete');
       else setPhase('working');
 
@@ -199,6 +193,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
     }
   };
 
+  // ── Edit values ────────────────────────────────────────────────────────────
   const getEditValues = (row: RouteFinderRow) => {
     const edited = editedValues[row.id];
     const candidateIdx = selectedCandidates[row.id] ?? 0;
@@ -209,93 +204,265 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
     };
   };
 
+  // ── Core write logic (used by both single and group fix) ───────────────────
+  const executefix = useCallback(async (
+    row: RouteFinderRow,
+    finalRoute: string,
+    finalStreet: string,
+    currentQueue: RouteFinderRow[],
+    currentSession: RouteFinderSession,
+    currentListings: ListingsData,
+    extraRowIds: string[] = []   // additional rows to mark fixed (group fix)
+  ): Promise<{ resolvedIds: Set<string>; newFixedRows: number; updatedLearned: Record<string, string[]>; updatedLearnedOriginal: Record<string, string[]> }> => {
+    const sheet = sheets.find(s => s.sheetName === row.sheetName);
+    if (!sheet) throw new Error(`Sheet "${row.sheetName}" not found.`);
+
+    // Write primary row to sheet
+    await routeFinderSheetsService.applyFix(
+      spreadsheetId, row.sheetName, row.sheetRowNumber,
+      sheet.CI.routeCode, sheet.CI.streetName, finalRoute, finalStreet
+    );
+
+    // Write extra group rows to sheet
+    for (const extraId of extraRowIds) {
+      const extraRow = currentQueue.find(r => r.id === extraId);
+      if (!extraRow) continue;
+      const extraSheet = sheets.find(s => s.sheetName === extraRow.sheetName);
+      if (!extraSheet) continue;
+      await routeFinderSheetsService.applyFix(
+        spreadsheetId, extraRow.sheetName, extraRow.sheetRowNumber,
+        extraSheet.CI.routeCode, extraSheet.CI.streetName, finalRoute, finalStreet
+      );
+    }
+
+    // Learn if new street
+    let updatedLearned         = currentSession.learnedStreets;
+    let updatedLearnedOriginal = currentSession.learnedStreetsOriginal;
+
+    const isNewStreet =
+      !currentSession.learnedStreets[finalRoute.toUpperCase()]?.includes(normalizeStreetForMatch(finalStreet)) &&
+      !currentListings.routeMap.get(finalRoute.toUpperCase())?.includes(normalizeStreetForMatch(finalStreet));
+
+    if (isNewStreet && finalStreet && finalRoute) {
+      await routeFinderSheetsService.appendLearnedStreet(spreadsheetId, finalRoute, finalStreet);
+      const result = await routeFinderSessionService.addLearnedStreet({
+        sessionId: currentSession.id, routeCode: finalRoute, originalStreet: finalStreet,
+        currentLearned: updatedLearned, currentLearnedOriginal: updatedLearnedOriginal,
+      });
+      updatedLearned         = result.learned;
+      updatedLearnedOriginal = result.learnedOriginal;
+
+      const rc   = finalRoute.toUpperCase();
+      const norm = normalizeStreetForMatch(finalStreet);
+      if (!currentListings.routeMap.has(rc)) currentListings.routeMap.set(rc, []);
+      if (!currentListings.routeMap.get(rc)!.includes(norm)) {
+        currentListings.routeMap.get(rc)!.push(norm);
+        currentListings.routeMapOriginal.get(rc)?.push(finalStreet);
+      }
+    }
+
+    // Cascade check
+    const cascadeIds = cascadeCheck(finalRoute, finalStreet, currentQueue, currentListings, updatedLearned);
+    const allGroupIds = [...extraRowIds];
+    const allResolvedIds = new Set([row.id, ...allGroupIds, ...cascadeIds]);
+
+    const logEntry: FixLogEntry = {
+      rowId: row.id, bookingId: row.bookingId, sheetName: row.sheetName,
+      oldRouteCode: row.currentRouteCode, newRouteCode: finalRoute,
+      oldStreetName: row.currentStreetName, newStreetName: finalStreet,
+      cascadeCount: cascadeIds.length + allGroupIds.length,
+      timestamp: new Date().toISOString(), type: 'fix',
+    };
+
+    const { newFixedRows } = await routeFinderSessionService.markRowFixed({
+      sessionId: currentSession.id, rowId: row.id, logEntry,
+      currentFixedRows: currentSession.fixedRows,
+      cascadeResolvedIds: [...allGroupIds, ...cascadeIds],
+    });
+
+    return { resolvedIds: allResolvedIds, newFixedRows, updatedLearned, updatedLearnedOriginal };
+  }, [sheets, spreadsheetId]);
+
+  // ── Accept — checks for group matches first ────────────────────────────────
   const handleAccept = useCallback(async (row: RouteFinderRow) => {
     if (!session || !listingsData) return;
     const { routeCode: finalRoute, streetName: finalStreet } = getEditValues(row);
 
+    // Find group matches: same contractor + date + current route + current street
+    const groupMatches = queue.filter(r =>
+      r.id !== row.id &&
+      r.contractorName === row.contractorName &&
+      r.serviceDate === row.serviceDate &&
+      r.currentRouteCode === row.currentRouteCode &&
+      r.currentStreetName === row.currentStreetName
+    );
+
+    if (groupMatches.length > 0) {
+      // Show group fix popup instead of writing immediately
+      setGroupFixPopup({ triggerRow: row, matches: groupMatches, finalRoute, finalStreet });
+      return;
+    }
+
+    // No group — proceed directly
+    await commitFix(row, finalRoute, finalStreet, []);
+  }, [session, listingsData, queue, editedValues, selectedCandidates]);
+
+  // ── Commit a fix (single or group) ────────────────────────────────────────
+  const commitFix = useCallback(async (
+    row: RouteFinderRow,
+    finalRoute: string,
+    finalStreet: string,
+    extraRowIds: string[]
+  ) => {
+    if (!session || !listingsData) return;
+
     setApplying(prev => new Set(prev).add(row.id));
     setError(null);
+    setGroupFixPopup(null);
 
     try {
-      const sheet = sheets.find(s => s.sheetName === row.sheetName);
-      if (!sheet) throw new Error(`Sheet "${row.sheetName}" not found in cache.`);
+      const { resolvedIds, newFixedRows, updatedLearned, updatedLearnedOriginal } =
+        await executefix(row, finalRoute, finalStreet, queue, session, listingsData, extraRowIds);
 
-      await routeFinderSheetsService.applyFix(
-        spreadsheetId, row.sheetName, row.sheetRowNumber,
-        sheet.CI.routeCode, sheet.CI.streetName, finalRoute, finalStreet
-      );
-
-      const isNewStreet =
-        !session.learnedStreets[finalRoute.toUpperCase()]?.includes(normalizeStreetForMatch(finalStreet)) &&
-        !listingsData.routeMap.get(finalRoute.toUpperCase())?.includes(normalizeStreetForMatch(finalStreet));
-
-      let updatedLearned         = session.learnedStreets;
-      let updatedLearnedOriginal = session.learnedStreetsOriginal;
-
-      if (isNewStreet && finalStreet && finalRoute) {
-        await routeFinderSheetsService.appendLearnedStreet(spreadsheetId, finalRoute, finalStreet);
-        const result = await routeFinderSessionService.addLearnedStreet({
-          sessionId: session.id, routeCode: finalRoute, originalStreet: finalStreet,
-          currentLearned: updatedLearned, currentLearnedOriginal: updatedLearnedOriginal,
-        });
-        updatedLearned         = result.learned;
-        updatedLearnedOriginal = result.learnedOriginal;
-
-        const rc   = finalRoute.toUpperCase();
-        const norm = normalizeStreetForMatch(finalStreet);
-        if (!listingsData.routeMap.has(rc)) listingsData.routeMap.set(rc, []);
-        if (!listingsData.routeMap.get(rc)!.includes(norm)) {
-          listingsData.routeMap.get(rc)!.push(norm);
-          listingsData.routeMapOriginal.get(rc)?.push(finalStreet);
-        }
-      }
-
-      const cascadeIds = cascadeCheck(finalRoute, finalStreet, queue, listingsData, updatedLearned);
-
-      const logEntry: FixLogEntry = {
-        rowId: row.id, bookingId: row.bookingId, sheetName: row.sheetName,
-        oldRouteCode: row.currentRouteCode, newRouteCode: finalRoute,
-        oldStreetName: row.currentStreetName, newStreetName: finalStreet,
-        cascadeCount: cascadeIds.length, timestamp: new Date().toISOString(),
-      };
-
-      const { newFixedRows } = await routeFinderSessionService.markRowFixed({
-        sessionId: session.id, rowId: row.id, logEntry,
-        currentFixedRows: session.fixedRows, cascadeResolvedIds: cascadeIds,
-      });
-
-      const resolvedSet = new Set([row.id, ...cascadeIds]);
-      setQueue(prev => prev.filter(r => !resolvedSet.has(r.id)));
+      setQueue(prev => prev.filter(r => !resolvedIds.has(r.id)));
       setSession(prev => prev ? {
         ...prev, fixedRows: newFixedRows,
         learnedStreets: updatedLearned, learnedStreetsOriginal: updatedLearnedOriginal,
-        fixLog: [...prev.fixLog, logEntry],
+        fixLog: [...prev.fixLog, {
+          rowId: row.id, bookingId: row.bookingId, sheetName: row.sheetName,
+          oldRouteCode: row.currentRouteCode, newRouteCode: finalRoute,
+          oldStreetName: row.currentStreetName, newStreetName: finalStreet,
+          cascadeCount: resolvedIds.size - 1, timestamp: new Date().toISOString(), type: 'fix',
+        }],
       } : null);
 
-      if (cascadeIds.length > 0)
-        showToast(`Fixed. ${cascadeIds.length} other row${cascadeIds.length === 1 ? '' : 's'} auto-resolved.`);
-      else
-        showToast('Fixed');
-
-      if (queue.filter(r => !resolvedSet.has(r.id)).length === 0) setPhase('complete');
+      const total = resolvedIds.size;
+      showToast(total > 1 ? `Fixed ${total} rows.` : 'Fixed.');
+      if (queue.filter(r => !resolvedIds.has(r.id)).length === 0) setPhase('complete');
 
     } catch (e: any) {
       setError(`Fix failed: ${e?.message || 'Unknown error'}`);
     } finally {
       setApplying(prev => { const n = new Set(prev); n.delete(row.id); return n; });
     }
-  }, [session, listingsData, sheets, queue, spreadsheetId, editedValues, selectedCandidates, showToast]);
+  }, [session, listingsData, queue, executefix, showToast]);
 
+  // ── Leave (permanent dismissal, no changes) ────────────────────────────────
+  const handleLeave = useCallback(async (row: RouteFinderRow) => {
+    if (!session) return;
+    setApplying(prev => new Set(prev).add(row.id));
+    try {
+      const entry: FixLogEntry = {
+        rowId: row.id, bookingId: row.bookingId, sheetName: row.sheetName,
+        oldRouteCode: row.currentRouteCode, newRouteCode: row.currentRouteCode,
+        oldStreetName: row.currentStreetName, newStreetName: row.currentStreetName,
+        cascadeCount: 0, timestamp: new Date().toISOString(), type: 'leave',
+      };
+      const { newFixedRows } = await routeFinderSessionService.markRowsDismissed({
+        sessionId: session.id, entries: [entry], currentFixedRows: session.fixedRows,
+      });
+      setQueue(prev => prev.filter(r => r.id !== row.id));
+      setSession(prev => prev ? { ...prev, fixedRows: newFixedRows, fixLog: [...prev.fixLog, entry] } : null);
+      showToast('Left — will not resurface.');
+    } catch (e: any) {
+      setError(`Leave failed: ${e?.message}`);
+    } finally {
+      setApplying(prev => { const n = new Set(prev); n.delete(row.id); return n; });
+    }
+  }, [session, showToast]);
+
+  // ── Accept as-is (learn current values, no sheet write) ───────────────────
+  const handleAcceptAsIs = useCallback(async (row: RouteFinderRow) => {
+    if (!session || !listingsData) return;
+    setApplying(prev => new Set(prev).add(row.id));
+    try {
+      // Append current street+route to Listings
+      await routeFinderSheetsService.appendLearnedStreet(spreadsheetId, row.currentRouteCode, row.currentStreetName);
+      const result = await routeFinderSessionService.addLearnedStreet({
+        sessionId: session.id, routeCode: row.currentRouteCode, originalStreet: row.currentStreetName,
+        currentLearned: session.learnedStreets, currentLearnedOriginal: session.learnedStreetsOriginal,
+      });
+
+      // Update in-memory listings
+      const rc   = row.currentRouteCode.toUpperCase();
+      const norm = normalizeStreetForMatch(row.currentStreetName);
+      if (!listingsData.routeMap.has(rc)) listingsData.routeMap.set(rc, []);
+      if (!listingsData.routeMap.get(rc)!.includes(norm)) {
+        listingsData.routeMap.get(rc)!.push(norm);
+        listingsData.routeMapOriginal.get(rc)?.push(row.currentStreetName);
+      }
+
+      const entry: FixLogEntry = {
+        rowId: row.id, bookingId: row.bookingId, sheetName: row.sheetName,
+        oldRouteCode: row.currentRouteCode, newRouteCode: row.currentRouteCode,
+        oldStreetName: row.currentStreetName, newStreetName: row.currentStreetName,
+        cascadeCount: 0, timestamp: new Date().toISOString(), type: 'accept_as_is',
+      };
+      const { newFixedRows } = await routeFinderSessionService.markRowsDismissed({
+        sessionId: session.id, entries: [entry], currentFixedRows: session.fixedRows,
+      });
+
+      setQueue(prev => prev.filter(r => r.id !== row.id));
+      setSession(prev => prev ? {
+        ...prev, fixedRows: newFixedRows,
+        learnedStreets: result.learned, learnedStreetsOriginal: result.learnedOriginal,
+        fixLog: [...prev.fixLog, entry],
+      } : null);
+      showToast('Accepted as-is — learned into Listings.');
+    } catch (e: any) {
+      setError(`Accept as-is failed: ${e?.message}`);
+    } finally {
+      setApplying(prev => { const n = new Set(prev); n.delete(row.id); return n; });
+    }
+  }, [session, listingsData, spreadsheetId, showToast]);
+
+  // ── Skip (session-only, move to end) ──────────────────────────────────────
   const handleSkip = useCallback((row: RouteFinderRow) => {
     setQueue(prev => [...prev.filter(r => r.id !== row.id), row]);
   }, []);
 
+  // ── Signal popup ───────────────────────────────────────────────────────────
+  const handleSignalClick = useCallback((row: RouteFinderRow) => {
+    if (!row.contractorName || !row.serviceDate) return;
+
+    const flaggedIds = new Set(queue.map(r => r.id));
+
+    // Search raw sheet data for all rows by this contractor on this date
+    const results: SignalPopupRow[] = [];
+    for (const sheet of sheets) {
+      const { CI, rows } = sheet;
+      if (CI.contractorName < 0 || CI.date < 0) continue;
+      for (const rawRow of rows) {
+        if (!rawRow || !rawRow[0]) continue;
+        const contractor = String(rawRow[CI.contractorName] ?? '').trim();
+        const date       = String(rawRow[CI.date] ?? '').trim();
+        if (contractor !== row.contractorName || date !== row.serviceDate) continue;
+
+        const bookingId  = CI.bookingId >= 0  ? String(rawRow[CI.bookingId] ?? '').trim()  : '—';
+        const houseNum   = CI.houseNum >= 0   ? String(rawRow[CI.houseNum] ?? '').trim()   : '—';
+        const streetName = CI.streetName >= 0 ? String(rawRow[CI.streetName] ?? '').trim() : '—';
+        const routeCode  = CI.routeCode >= 0  ? String(rawRow[CI.routeCode] ?? '').trim()  : '—';
+        if (!bookingId) continue;
+
+        const rowId = `${sheet.sheetName}:${bookingId}`;
+        results.push({ bookingId, houseNum, streetName, routeCode, isFlagged: flaggedIds.has(rowId) });
+      }
+    }
+
+    setSignalPopup({
+      contractorName: row.contractorName,
+      serviceDate: row.serviceDate,
+      rows: results,
+    });
+  }, [queue, sheets]);
+
+  // ── Bulk actions ───────────────────────────────────────────────────────────
   const handleBulkAcceptOrange = async () => {
     const rows = filteredQueue.filter(r => r.color === 'orange');
     if (!rows.length) return;
     if (!window.confirm(`Accept all ${rows.length} orange (typo) rows?`)) return;
     setBulkApplying(true);
-    for (const row of rows) await handleAccept(row);
+    for (const row of rows) await commitFix(row, getEditValues(row).routeCode, getEditValues(row).streetName, []);
     setBulkApplying(false);
   };
 
@@ -304,7 +471,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
     if (!rows.length) return;
     if (!window.confirm(`Accept all ${rows.length} cluster-confirmed rows?`)) return;
     setBulkApplying(true);
-    for (const row of rows) await handleAccept(row);
+    for (const row of rows) await commitFix(row, getEditValues(row).routeCode, getEditValues(row).streetName, []);
     setBulkApplying(false);
   };
 
@@ -431,7 +598,6 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       <div className="flex h-full gap-0">
         {/* Table 80% */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-
           {/* Filter bar */}
           <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-700 bg-gray-800/50 flex-wrap">
             <div className="relative flex-shrink-0">
@@ -442,14 +608,9 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
                 className="bg-gray-900 border border-gray-600 rounded-lg py-1.5 pl-8 pr-3 text-sm text-white focus:ring-1 focus:ring-blue-500 focus:outline-none w-52" />
             </div>
             {(['all', 'phone_group', 'orange', 'yellow', 'red'] as ColorFilter[]).map(f => {
-              const label = f === 'all'        ? `All (${counters.total})`
-                : f === 'phone_group'          ? `🟢 ${counters.phone_group}`
-                : f === 'orange'               ? `🟠 ${counters.orange}`
-                : f === 'yellow'               ? `🟡 ${counters.yellow}`
-                :                                `🔴 ${counters.red}`;
+              const label = f === 'all' ? `All (${counters.total})` : f === 'phone_group' ? `🟢 ${counters.phone_group}` : f === 'orange' ? `🟠 ${counters.orange}` : f === 'yellow' ? `🟡 ${counters.yellow}` : `🔴 ${counters.red}`;
               return (
-                <button key={f}
-                  onClick={() => { setColorFilter(f); setVisibleCount(PAGE_SIZE); }}
+                <button key={f} onClick={() => { setColorFilter(f); setVisibleCount(PAGE_SIZE); }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${colorFilter === f ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>
                   {label}
                 </button>
@@ -457,11 +618,11 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
             })}
           </div>
 
-          {/* Column headers */}
+          {/* Headers */}
           <div className="grid text-xs text-gray-500 font-medium uppercase tracking-wider px-4 py-2 border-b border-gray-700 bg-gray-900/30"
-            style={{ gridTemplateColumns: '5px 80px 90px 1fr auto 1fr 180px 100px' }}>
+            style={{ gridTemplateColumns: '5px 75px 85px 1fr auto 1fr 160px 160px' }}>
             <div /><div>Sheet</div><div>Booking</div><div>Current</div>
-            <div className="px-3" /><div>Suggested</div><div>Signal</div>
+            <div className="px-2" /><div>Suggested</div><div>Signal</div>
             <div className="text-right">Actions</div>
           </div>
 
@@ -485,7 +646,10 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
                     onCandidateSelect={(idx, c) => handleCandidateSelect(row.id, idx, c)}
                     onToggleExpand={() => setExpandedCandidates(prev => { const n = new Set(prev); n.has(row.id) ? n.delete(row.id) : n.add(row.id); return n; })}
                     onAccept={() => handleAccept(row)}
+                    onLeave={() => handleLeave(row)}
+                    onAcceptAsIs={() => handleAcceptAsIs(row)}
                     onSkip={() => handleSkip(row)}
+                    onSignalClick={() => handleSignalClick(row)}
                   />
                 ))}
                 {remaining > 0 && (
@@ -514,17 +678,14 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
           </div>
 
           <div className="space-y-2">
-            {([
-              ['phone_group', '🟢', counters.phone_group, 'emerald'],
-              ['orange',      '🟠', counters.orange,      'orange'],
-              ['yellow',      '🟡', counters.yellow,      'yellow'],
-              ['red',         '🔴', counters.red,         'red'],
-            ] as const).map(([color, emoji, count, hue]) => (
-              <div key={color} className="flex items-center justify-between">
-                <span className="text-xs text-gray-400">{emoji} {COLOR_CONFIG[color].label}</span>
-                <span className={`text-sm font-bold text-${hue}-400`}>{count}</span>
-              </div>
-            ))}
+            {([['phone_group','🟢',counters.phone_group,'emerald'],['orange','🟠',counters.orange,'orange'],['yellow','🟡',counters.yellow,'yellow'],['red','🔴',counters.red,'red']] as const).map(
+              ([color, emoji, count, hue]) => (
+                <div key={color} className="flex items-center justify-between">
+                  <span className="text-xs text-gray-400">{emoji} {COLOR_CONFIG[color].label}</span>
+                  <span className={`text-sm font-bold text-${hue}-400`}>{count}</span>
+                </div>
+              )
+            )}
           </div>
 
           <div className="space-y-2 pt-2 border-t border-gray-700">
@@ -547,8 +708,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
             {session?.updatedAt && (
               <p className="text-xs text-gray-500">Last saved: {new Date(session.updatedAt).toLocaleTimeString()}</p>
             )}
-            <button
-              onClick={() => { if (window.confirm('Re-scan from scratch? This will reset all progress.')) { routeFinderSessionService.resetSession(spreadsheetId); setPhase('setup'); } }}
+            <button onClick={() => { if (window.confirm('Re-scan from scratch? This will reset all progress.')) { routeFinderSessionService.resetSession(spreadsheetId); setPhase('setup'); } }}
               className="text-xs text-gray-600 hover:text-red-400 transition-colors flex items-center gap-1 mt-2">
               <RefreshCw size={11} /> Reset &amp; re-scan
             </button>
@@ -569,6 +729,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
   return (
     <div className="flex flex-col h-full bg-gray-900 text-white relative">
+      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 bg-gray-800/50 flex-shrink-0">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors text-sm">
@@ -586,6 +747,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         )}
       </div>
 
+      {/* Content */}
       <div className="flex-1 overflow-hidden">
         {phase === 'auth'     && <div className="p-8">{renderAuth()}</div>}
         {phase === 'setup'    && <div className="p-8">{renderSetup()}</div>}
@@ -594,6 +756,104 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         {phase === 'complete' && <div className="p-8">{renderComplete()}</div>}
       </div>
 
+      {/* ── Group Fix Popup ───────────────────────────────────────────────── */}
+      {groupFixPopup && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 border border-gray-600 rounded-xl shadow-2xl max-w-lg w-full">
+            <div className="flex items-center justify-between p-5 border-b border-gray-700">
+              <h3 className="font-bold text-white text-lg">Group Fix Detected</h3>
+              <button onClick={() => setGroupFixPopup(null)} className="text-gray-500 hover:text-white"><X size={18} /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              {/* Fix summary */}
+              <div className="bg-gray-900/60 rounded-lg p-3 text-sm space-y-1">
+                <div className="text-gray-400 text-xs uppercase tracking-wider mb-2">Applying fix</div>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-orange-300 bg-orange-900/30 px-2 py-0.5 rounded text-xs">{groupFixPopup.triggerRow.currentRouteCode}</span>
+                  <span className="text-gray-500 text-xs">{groupFixPopup.triggerRow.currentStreetName}</span>
+                  <span className="text-gray-600">→</span>
+                  <span className="font-mono text-emerald-300 bg-emerald-900/30 px-2 py-0.5 rounded text-xs">{groupFixPopup.finalRoute}</span>
+                  <span className="text-gray-300 text-xs">{groupFixPopup.finalStreet}</span>
+                </div>
+              </div>
+
+              {/* Matching rows */}
+              <div>
+                <div className="text-xs text-gray-400 mb-2">
+                  {groupFixPopup.matches.length + 1} rows match — same contractor, date, route, and street:
+                </div>
+                <div className="bg-gray-900/40 rounded-lg divide-y divide-gray-700/50 max-h-48 overflow-y-auto">
+                  {/* Trigger row */}
+                  <div className="flex items-center gap-3 px-3 py-2 text-xs">
+                    <span className="text-blue-400 font-medium w-16 truncate">{groupFixPopup.triggerRow.bookingId}</span>
+                    <span className="text-gray-400 truncate flex-1">{groupFixPopup.triggerRow.sheetName}</span>
+                    <span className="text-gray-300">{groupFixPopup.triggerRow.houseNum}</span>
+                    <span className="text-xs bg-blue-900/40 text-blue-300 px-1.5 rounded">this row</span>
+                  </div>
+                  {groupFixPopup.matches.map(m => (
+                    <div key={m.id} className="flex items-center gap-3 px-3 py-2 text-xs">
+                      <span className="text-gray-300 font-medium w-16 truncate">{m.bookingId}</span>
+                      <span className="text-gray-400 truncate flex-1">{m.sheetName}</span>
+                      <span className="text-gray-300">{m.houseNum}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-3 p-5 border-t border-gray-700">
+              <button
+                onClick={() => commitFix(groupFixPopup.triggerRow, groupFixPopup.finalRoute, groupFixPopup.finalStreet, groupFixPopup.matches.map(m => m.id))}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-lg font-bold text-sm transition-colors">
+                Fix all {groupFixPopup.matches.length + 1} rows
+              </button>
+              <button
+                onClick={() => commitFix(groupFixPopup.triggerRow, groupFixPopup.finalRoute, groupFixPopup.finalStreet, [])}
+                className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 py-2.5 rounded-lg font-medium text-sm transition-colors">
+                Fix this row only
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Signal Popup ─────────────────────────────────────────────────── */}
+      {signalPopup && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 border border-gray-600 rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b border-gray-700 flex-shrink-0">
+              <div>
+                <h3 className="font-bold text-white">{signalPopup.contractorName}</h3>
+                <p className="text-xs text-gray-400 mt-0.5">{signalPopup.serviceDate} · {signalPopup.rows.length} rows</p>
+              </div>
+              <button onClick={() => setSignalPopup(null)} className="text-gray-500 hover:text-white"><X size={18} /></button>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              {/* Headers */}
+              <div className="grid text-xs text-gray-500 font-medium uppercase tracking-wider px-4 py-2 border-b border-gray-700 bg-gray-900/30 sticky top-0"
+                style={{ gridTemplateColumns: '90px 60px 1fr 80px 70px' }}>
+                <div>Booking</div><div>House #</div><div>Street</div><div>Route</div><div>Status</div>
+              </div>
+              {signalPopup.rows.length === 0 ? (
+                <div className="text-center text-gray-500 text-sm py-8">No rows found for this contractor on this date.</div>
+              ) : signalPopup.rows.map((r, i) => (
+                <div key={i}
+                  className={`grid items-center px-4 py-2 text-xs border-b border-gray-700/50 gap-2 ${r.isFlagged ? 'bg-yellow-900/10' : 'opacity-50'}`}
+                  style={{ gridTemplateColumns: '90px 60px 1fr 80px 70px' }}>
+                  <span className="font-mono text-gray-300 truncate">{r.bookingId}</span>
+                  <span className="text-gray-400">{r.houseNum}</span>
+                  <span className="text-gray-300 truncate">{r.streetName}</span>
+                  <span className="font-mono text-gray-300">{r.routeCode}</span>
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${r.isFlagged ? 'bg-yellow-900/40 text-yellow-400' : 'bg-gray-700 text-gray-500'}`}>
+                    {r.isFlagged ? 'Flagged' : 'Clean'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
       {toast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-800 border border-gray-600 text-white text-sm px-5 py-2.5 rounded-full shadow-xl flex items-center gap-2 z-50">
           <CheckCircle size={16} className="text-emerald-400 flex-shrink-0" />
@@ -617,21 +877,26 @@ interface RouteRowProps {
   onCandidateSelect: (idx: number, c: CandidateRoute) => void;
   onToggleExpand: () => void;
   onAccept: () => void;
+  onLeave: () => void;
+  onAcceptAsIs: () => void;
   onSkip: () => void;
+  onSignalClick: () => void;
 }
 
 const RouteRow: React.FC<RouteRowProps> = ({
   row, editValues, selectedCandidateIdx, isExpanded, isApplying,
-  onRouteCodeChange, onStreetNameChange, onCandidateSelect, onToggleExpand, onAccept, onSkip,
+  onRouteCodeChange, onStreetNameChange, onCandidateSelect, onToggleExpand,
+  onAccept, onLeave, onAcceptAsIs, onSkip, onSignalClick,
 }) => {
   const cc      = COLOR_CONFIG[row.color];
   const top3    = row.candidates.slice(0, 3);
   const hasMore = row.candidates.length > 3;
+  const hasSignal = !!(row.clusterSignal || row.phoneGroupSignal);
 
   return (
     <div className={`${cc.border} ${cc.bg} border-b border-gray-800/60 transition-colors`}>
       <div className="grid items-start px-4 py-2.5 gap-2 text-sm"
-        style={{ gridTemplateColumns: '5px 80px 90px 1fr auto 1fr 180px 100px' }}>
+        style={{ gridTemplateColumns: '5px 75px 85px 1fr auto 1fr 160px 160px' }}>
         <div />
 
         {/* Sheet */}
@@ -639,7 +904,7 @@ const RouteRow: React.FC<RouteRowProps> = ({
           {row.sheetName.replace(/\s*\(.*?\)/, '').trim()}
         </div>
 
-        {/* Booking ID */}
+        {/* Booking */}
         <div className="text-gray-300 text-xs font-mono truncate pt-1">{row.bookingId}</div>
 
         {/* Current */}
@@ -654,18 +919,13 @@ const RouteRow: React.FC<RouteRowProps> = ({
         {/* Arrow */}
         <div className="text-gray-600 text-base px-1 pt-1">→</div>
 
-        {/* Suggested — candidates as quick-fill buttons, always-visible text inputs below */}
+        {/* Suggested */}
         <div className="min-w-0 space-y-1">
-          {/* Candidate quick-fill buttons (only when multiple options) */}
           {row.candidates.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {top3.map((c, idx) => (
                 <button key={`${c.routeCode}-${idx}`} onClick={() => onCandidateSelect(idx, c)}
-                  className={`text-xs px-2 py-0.5 rounded border font-mono transition-colors ${
-                    selectedCandidateIdx === idx
-                    ? 'bg-blue-700 border-blue-500 text-white'
-                    : 'bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-400'
-                  }`}>
+                  className={`text-xs px-2 py-0.5 rounded border font-mono transition-colors ${selectedCandidateIdx === idx ? 'bg-blue-700 border-blue-500 text-white' : 'bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-400'}`}>
                   {c.isClusterPrimary && <span className="mr-1">⚡</span>}{c.routeCode}
                 </button>
               ))}
@@ -676,14 +936,12 @@ const RouteRow: React.FC<RouteRowProps> = ({
               )}
             </div>
           )}
-          {/* Overflow candidates */}
           {isExpanded && row.candidates.slice(3).map((c, i) => (
             <button key={`extra-${i}`} onClick={() => onCandidateSelect(i + 3, c)}
               className="text-xs px-2 py-0.5 rounded border font-mono bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-400 mr-1">
               {c.routeCode}
             </button>
           ))}
-          {/* Always-visible editable inputs — type anything to override */}
           <input type="text" value={editValues.routeCode} onChange={e => onRouteCodeChange(e.target.value)}
             placeholder="Route code"
             className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-0.5 text-xs font-mono text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
@@ -692,23 +950,47 @@ const RouteRow: React.FC<RouteRowProps> = ({
             className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-0.5 text-xs text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
         </div>
 
-        {/* Signal */}
-        <div className="text-xs text-gray-500 truncate space-y-0.5 pt-1" title={row.clusterSignal || row.phoneGroupSignal}>
-          {row.phoneGroupSignal && <div className="truncate text-emerald-500/80">{row.phoneGroupSignal}</div>}
-          {row.clusterSignal    && <div className="truncate text-blue-500/80">{row.clusterSignal}</div>}
-          {!row.phoneGroupSignal && !row.clusterSignal && <span className="text-gray-600">—</span>}
+        {/* Signal — clickable */}
+        <div className="text-xs text-gray-500 space-y-0.5 pt-1 min-w-0">
+          {row.phoneGroupSignal && (
+            <button onClick={onSignalClick} className="truncate text-emerald-500/80 hover:text-emerald-400 text-left w-full transition-colors" title={row.phoneGroupSignal}>
+              {row.phoneGroupSignal}
+            </button>
+          )}
+          {row.clusterSignal && (
+            <button onClick={onSignalClick} className="truncate text-blue-500/80 hover:text-blue-400 text-left w-full transition-colors" title={row.clusterSignal}>
+              {row.clusterSignal}
+            </button>
+          )}
+          {!hasSignal && <span className="text-gray-600">—</span>}
         </div>
 
         {/* Actions */}
-        <div className="flex items-start justify-end gap-1.5 pt-0.5">
-          <button onClick={onAccept} disabled={isApplying}
-            className="flex items-center gap-1 px-2.5 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs font-medium transition-colors disabled:opacity-50">
-            {isApplying ? <Loader size={12} className="animate-spin" /> : <CheckCircle size={12} />} Accept
-          </button>
-          <button onClick={onSkip} disabled={isApplying}
-            className="p-1 text-gray-500 hover:text-gray-300 transition-colors rounded" title="Skip for now">
-            <SkipForward size={14} />
-          </button>
+        <div className="flex flex-col gap-1 items-end pt-0.5">
+          {/* Row 1: Accept + Skip */}
+          <div className="flex items-center gap-1">
+            <button onClick={onAccept} disabled={isApplying}
+              className="flex items-center gap-1 px-2 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs font-medium transition-colors disabled:opacity-50">
+              {isApplying ? <Loader size={11} className="animate-spin" /> : <CheckCircle size={11} />} Accept
+            </button>
+            <button onClick={onSkip} disabled={isApplying}
+              className="p-1 text-gray-500 hover:text-gray-300 transition-colors rounded" title="Skip">
+              <SkipForward size={13} />
+            </button>
+          </div>
+          {/* Row 2: Leave + Accept as-is */}
+          <div className="flex items-center gap-1">
+            <button onClick={onLeave} disabled={isApplying}
+              className="px-2 py-0.5 bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white rounded text-xs transition-colors disabled:opacity-50"
+              title="Permanently dismiss — no changes, never resurfaces">
+              Leave
+            </button>
+            <button onClick={onAcceptAsIs} disabled={isApplying}
+              className="px-2 py-0.5 bg-gray-700 hover:bg-blue-800 text-gray-400 hover:text-blue-300 rounded text-xs transition-colors disabled:opacity-50"
+              title="Accept current values as correct — learns into Listings, no sheet write">
+              As-is
+            </button>
+          </div>
         </div>
       </div>
     </div>
