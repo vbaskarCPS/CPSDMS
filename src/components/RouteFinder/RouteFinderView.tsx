@@ -662,9 +662,9 @@ const RouteRow: React.FC<RouteRowProps> = ({
               {top3.map((c, idx) => (
                 <button key={`${c.routeCode}-${idx}`} onClick={() => onCandidateSelect(idx, c)}
                   className={`text-xs px-2 py-0.5 rounded border font-mono transition-colors ${
-                    selectedCandidateIdx === idx && !editedValues?.[row.id]
-                      ? 'bg-blue-700 border-blue-500 text-white'
-                      : 'bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-400'
+                    selectedCandidateIdx === idx
+                    ? 'bg-blue-700 border-blue-500 text-white'
+                    : 'bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-400'
                   }`}>
                   {c.isClusterPrimary && <span className="mr-1">⚡</span>}{c.routeCode}
                 </button>
