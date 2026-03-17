@@ -1,23 +1,9 @@
 // src/lib/routeFinder/routeFinderSessionService.ts
 //
 // Supabase persistence for the Route Finder work session.
-// Stores: queue progress, learned streets, fix log.
-// Session survives across days — resumes exactly where you left off.
-//
-// Required Supabase table (run once in SQL editor):
-//
-//   create table route_finder_sessions (
-//     id uuid primary key default gen_random_uuid(),
-//     spreadsheet_id text not null unique,
-//     created_at timestamptz default now(),
-//     updated_at timestamptz default now(),
-//     total_rows integer default 0,
-//     fixed_rows integer default 0,
-//     pending_row_ids jsonb default '[]',
-//     learned_streets jsonb default '{}',
-//     learned_streets_original jsonb default '{}',
-//     fix_log jsonb default '[]'
-//   );
+// Stores: fix log + learned streets only.
+// pending_row_ids is intentionally never stored — 10k IDs would exceed Supabase limits.
+// Resume works by re-scanning and subtracting already-fixed row IDs from fix_log.
 //
 
 import { supabase } from '../supabase';
@@ -30,9 +16,9 @@ export interface RouteFinderSession {
   spreadsheetId: string;
   totalRows: number;
   fixedRows: number;
-  pendingRowIds: string[];
-  learnedStreets: Record<string, string[]>;         // routeCode → normalized streets
-  learnedStreetsOriginal: Record<string, string[]>; // routeCode → original streets (display)
+  pendingRowIds: string[];                          // never persisted — always [] in DB
+  learnedStreets: Record<string, string[]>;
+  learnedStreetsOriginal: Record<string, string[]>;
   fixLog: FixLogEntry[];
   createdAt: string;
   updatedAt: string;
@@ -52,11 +38,7 @@ export interface FixLogEntry {
 
 const TABLE = 'route_finder_sessions';
 
-// ─── SESSION SERVICE ──────────────────────────────────────────────────────────
-
 export const routeFinderSessionService = {
-
-  // ── Load existing session by spreadsheet ID ───────────────────────────────
 
   async loadSession(spreadsheetId: string): Promise<RouteFinderSession | null> {
     const { data, error } = await supabase
@@ -65,23 +47,18 @@ export const routeFinderSessionService = {
       .eq('spreadsheet_id', spreadsheetId)
       .maybeSingle();
 
-    if (error) {
-      console.error('RF: error loading session:', error);
-      return null;
-    }
+    if (error) { console.error('RF: error loading session:', error); return null; }
     if (!data) return null;
-
     return mapRow(data);
   },
 
-  // ── Create a brand-new session ────────────────────────────────────────────
-
+  // Never stores pending_row_ids — too large for Supabase with 10k+ rows.
+  // Resume uses fix_log to subtract already-fixed rows from a fresh scan.
   async createSession(
     spreadsheetId: string,
-    queue: RouteFinderRow[],
+    _queue: RouteFinderRow[],
     totalScanned: number
   ): Promise<RouteFinderSession> {
-    // Delete any stale session for this spreadsheet first
     await supabase.from(TABLE).delete().eq('spreadsheet_id', spreadsheetId);
 
     const { data, error } = await supabase
@@ -90,7 +67,7 @@ export const routeFinderSessionService = {
         spreadsheet_id:           spreadsheetId,
         total_rows:               totalScanned,
         fixed_rows:               0,
-        pending_row_ids:          queue.map(r => r.id),
+        pending_row_ids:          [],
         learned_streets:          {},
         learned_streets_original: {},
         fix_log:                  [],
@@ -102,23 +79,17 @@ export const routeFinderSessionService = {
     return mapRow(data);
   },
 
-  // ── Mark a row (and any cascade-resolved rows) as fixed ──────────────────
-
   async markRowFixed(params: {
     sessionId: string;
     rowId: string;
     logEntry: FixLogEntry;
-    currentPendingIds: string[];
     currentFixedRows: number;
     cascadeResolvedIds: string[];
-  }): Promise<{ newPendingIds: string[]; newFixedRows: number }> {
-    const { sessionId, rowId, logEntry, currentPendingIds, currentFixedRows, cascadeResolvedIds } = params;
+  }): Promise<{ newFixedRows: number }> {
+    const { sessionId, rowId, logEntry, currentFixedRows, cascadeResolvedIds } = params;
 
-    const resolvedSet  = new Set([rowId, ...cascadeResolvedIds]);
-    const newPendingIds = currentPendingIds.filter(id => !resolvedSet.has(id));
-    const newFixedRows  = currentFixedRows + resolvedSet.size;
+    const newFixedRows = currentFixedRows + 1 + cascadeResolvedIds.length;
 
-    // Fetch current log to append
     const { data: current } = await supabase
       .from(TABLE)
       .select('fix_log')
@@ -127,40 +98,26 @@ export const routeFinderSessionService = {
 
     const currentLog = (current?.fix_log as FixLogEntry[]) || [];
 
+    const cascadeEntries: FixLogEntry[] = cascadeResolvedIds.map(cId => ({
+      ...logEntry,
+      rowId: cId,
+      bookingId: cId,
+      cascadeCount: 0,
+      timestamp: new Date().toISOString(),
+    }));
+
     const { error } = await supabase
       .from(TABLE)
       .update({
-        pending_row_ids: newPendingIds,
-        fixed_rows:      newFixedRows,
-        fix_log:         [...currentLog, { ...logEntry, cascadeCount: cascadeResolvedIds.length }],
-        updated_at:      new Date().toISOString(),
+        fixed_rows: newFixedRows,
+        fix_log:    [...currentLog, { ...logEntry, cascadeCount: cascadeResolvedIds.length }, ...cascadeEntries],
+        updated_at: new Date().toISOString(),
       })
       .eq('id', sessionId);
 
     if (error) console.error('RF: error marking row fixed:', error);
-
-    return { newPendingIds, newFixedRows };
+    return { newFixedRows };
   },
-
-  // ── Move a row to the back of the pending queue (skip) ───────────────────
-
-  async skipRow(
-    sessionId: string,
-    rowId: string,
-    currentPendingIds: string[]
-  ): Promise<string[]> {
-    const withoutRow   = currentPendingIds.filter(id => id !== rowId);
-    const newPendingIds = [...withoutRow, rowId]; // append to end
-
-    await supabase
-      .from(TABLE)
-      .update({ pending_row_ids: newPendingIds, updated_at: new Date().toISOString() })
-      .eq('id', sessionId);
-
-    return newPendingIds;
-  },
-
-  // ── Add a learned street (updates both normalized and original maps) ───────
 
   async addLearnedStreet(params: {
     sessionId: string;
@@ -171,7 +128,7 @@ export const routeFinderSessionService = {
   }): Promise<{ learned: Record<string, string[]>; learnedOriginal: Record<string, string[]> }> {
     const { sessionId, routeCode, originalStreet, currentLearned, currentLearnedOriginal } = params;
 
-    const rc             = routeCode.toUpperCase();
+    const rc               = routeCode.toUpperCase();
     const normalizedStreet = normalizeStreetForMatch(originalStreet);
 
     const newLearned         = { ...currentLearned };
@@ -180,7 +137,6 @@ export const routeFinderSessionService = {
     if (!newLearned[rc]) newLearned[rc] = [];
     if (!newLearnedOriginal[rc]) newLearnedOriginal[rc] = [];
 
-    // Avoid duplicates
     if (!newLearned[rc].includes(normalizedStreet)) {
       newLearned[rc]         = [...newLearned[rc], normalizedStreet];
       newLearnedOriginal[rc] = [...newLearnedOriginal[rc], originalStreet];
@@ -196,17 +152,12 @@ export const routeFinderSessionService = {
       .eq('id', sessionId);
 
     if (error) console.error('RF: error saving learned street:', error);
-
     return { learned: newLearned, learnedOriginal: newLearnedOriginal };
   },
-
-  // ── Wipe a session (for re-scan) ─────────────────────────────────────────
 
   async resetSession(spreadsheetId: string): Promise<void> {
     await supabase.from(TABLE).delete().eq('spreadsheet_id', spreadsheetId);
   },
-
-  // ── Spreadsheet ID persistence (localStorage) ─────────────────────────────
 
   getSavedSpreadsheetId(): string {
     try { return localStorage.getItem('rf_spreadsheet_id') || ''; }
@@ -219,19 +170,17 @@ export const routeFinderSessionService = {
   },
 };
 
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
-
 function mapRow(data: any): RouteFinderSession {
   return {
-    id:                   data.id,
-    spreadsheetId:        data.spreadsheet_id,
-    totalRows:            data.total_rows || 0,
-    fixedRows:            data.fixed_rows || 0,
-    pendingRowIds:        data.pending_row_ids || [],
-    learnedStreets:       data.learned_streets || {},
+    id:                     data.id,
+    spreadsheetId:          data.spreadsheet_id,
+    totalRows:              data.total_rows || 0,
+    fixedRows:              data.fixed_rows || 0,
+    pendingRowIds:          [],
+    learnedStreets:         data.learned_streets || {},
     learnedStreetsOriginal: data.learned_streets_original || {},
-    fixLog:               data.fix_log || [],
-    createdAt:            data.created_at,
-    updatedAt:            data.updated_at,
+    fixLog:                 data.fix_log || [],
+    createdAt:              data.created_at,
+    updatedAt:              data.updated_at,
   };
 }
