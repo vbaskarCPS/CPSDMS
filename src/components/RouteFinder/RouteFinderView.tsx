@@ -194,6 +194,10 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         greenCount: totalScannedCount - allQueueRows.length,
       };
 
+      // Yield + update UI before hitting Supabase
+      setScanProgress({ current: loadedSheets.length, total: loadedSheets.length, sheet: `Found ${allQueueRows.length} rows to review. Saving session...` });
+      await new Promise(resolve => setTimeout(resolve, 50));
+
       let finalQueue: RouteFinderRow[];
       let activeSession: RouteFinderSession;
 
