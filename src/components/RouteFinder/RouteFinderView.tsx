@@ -165,7 +165,6 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         setScanProgress({ current: i + 1, total: loadedSheets.length, sheet: `Done: ${sheet.sheetName}` });
       }
 
-      // Yield to browser before Supabase write
       setScanProgress({
         current: loadedSheets.length, total: loadedSheets.length,
         sheet: `Found ${allQueueRows.length} rows to review. Saving session...`,
@@ -184,7 +183,6 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         activeSession = await routeFinderSessionService.createSession(resolvedId, allQueueRows, totalScannedCount);
       }
 
-      // Yield again before handing 10k rows to React
       await new Promise(resolve => setTimeout(resolve, 50));
 
       setQueue(finalQueue);
@@ -227,8 +225,9 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         sheet.CI.routeCode, sheet.CI.streetName, finalRoute, finalStreet
       );
 
-      const isNewStreet = !session.learnedStreets[finalRoute.toUpperCase()]?.includes(normalizeStreetForMatch(finalStreet))
-        && !listingsData.routeMap.get(finalRoute.toUpperCase())?.includes(normalizeStreetForMatch(finalStreet));
+      const isNewStreet =
+        !session.learnedStreets[finalRoute.toUpperCase()]?.includes(normalizeStreetForMatch(finalStreet)) &&
+        !listingsData.routeMap.get(finalRoute.toUpperCase())?.includes(normalizeStreetForMatch(finalStreet));
 
       let updatedLearned         = session.learnedStreets;
       let updatedLearnedOriginal = session.learnedStreetsOriginal;
@@ -443,11 +442,11 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
                 className="bg-gray-900 border border-gray-600 rounded-lg py-1.5 pl-8 pr-3 text-sm text-white focus:ring-1 focus:ring-blue-500 focus:outline-none w-52" />
             </div>
             {(['all', 'phone_group', 'orange', 'yellow', 'red'] as ColorFilter[]).map(f => {
-              const label = f === 'all'         ? `All (${counters.total})`
-                : f === 'phone_group'           ? `🟢 ${counters.phone_group}`
-                : f === 'orange'                ? `🟠 ${counters.orange}`
-                : f === 'yellow'                ? `🟡 ${counters.yellow}`
-                :                                 `🔴 ${counters.red}`;
+              const label = f === 'all'        ? `All (${counters.total})`
+                : f === 'phone_group'          ? `🟢 ${counters.phone_group}`
+                : f === 'orange'               ? `🟠 ${counters.orange}`
+                : f === 'yellow'               ? `🟡 ${counters.yellow}`
+                :                                `🔴 ${counters.red}`;
               return (
                 <button key={f}
                   onClick={() => { setColorFilter(f); setVisibleCount(PAGE_SIZE); }}
@@ -466,7 +465,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
             <div className="text-right">Actions</div>
           </div>
 
-          {/* Rows — only renders visibleCount at a time */}
+          {/* Rows */}
           <div className="flex-1 overflow-y-auto">
             {filteredQueue.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-40 text-gray-500 gap-2">
@@ -489,14 +488,10 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
                     onSkip={() => handleSkip(row)}
                   />
                 ))}
-
-                {/* Load more */}
                 {remaining > 0 && (
                   <div className="flex justify-center py-5">
-                    <button
-                      onClick={() => setVisibleCount(prev => prev + PAGE_SIZE)}
-                      className="px-5 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors"
-                    >
+                    <button onClick={() => setVisibleCount(prev => prev + PAGE_SIZE)}
+                      className="px-5 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors">
                       Show {Math.min(PAGE_SIZE, remaining)} more
                       <span className="ml-2 text-gray-500">({remaining} remaining)</span>
                     </button>
@@ -553,12 +548,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
               <p className="text-xs text-gray-500">Last saved: {new Date(session.updatedAt).toLocaleTimeString()}</p>
             )}
             <button
-              onClick={() => {
-                if (window.confirm('Re-scan from scratch? This will reset all progress.')) {
-                  routeFinderSessionService.resetSession(spreadsheetId);
-                  setPhase('setup');
-                }
-              }}
+              onClick={() => { if (window.confirm('Re-scan from scratch? This will reset all progress.')) { routeFinderSessionService.resetSession(spreadsheetId); setPhase('setup'); } }}
               className="text-xs text-gray-600 hover:text-red-400 transition-colors flex items-center gap-1 mt-2">
               <RefreshCw size={11} /> Reset &amp; re-scan
             </button>
@@ -640,17 +630,20 @@ const RouteRow: React.FC<RouteRowProps> = ({
 
   return (
     <div className={`${cc.border} ${cc.bg} border-b border-gray-800/60 transition-colors`}>
-      <div className="grid items-center px-4 py-2.5 gap-2 text-sm"
+      <div className="grid items-start px-4 py-2.5 gap-2 text-sm"
         style={{ gridTemplateColumns: '5px 80px 90px 1fr auto 1fr 180px 100px' }}>
         <div />
 
-        <div className="text-gray-400 text-xs truncate" title={row.sheetName}>
+        {/* Sheet */}
+        <div className="text-gray-400 text-xs truncate pt-1" title={row.sheetName}>
           {row.sheetName.replace(/\s*\(.*?\)/, '').trim()}
         </div>
 
-        <div className="text-gray-300 text-xs font-mono truncate">{row.bookingId}</div>
+        {/* Booking ID */}
+        <div className="text-gray-300 text-xs font-mono truncate pt-1">{row.bookingId}</div>
 
-        <div className="min-w-0">
+        {/* Current */}
+        <div className="min-w-0 pt-0.5">
           <div className="flex items-center gap-1">
             <span className={`text-xs px-1.5 py-0.5 rounded border font-mono ${cc.badge}`}>{row.currentRouteCode || '—'}</span>
             {row.isORSuffix && <span className="text-xs bg-purple-900/30 text-purple-400 border border-purple-700 px-1 rounded">OR</span>}
@@ -658,46 +651,56 @@ const RouteRow: React.FC<RouteRowProps> = ({
           <div className="text-gray-300 text-xs truncate mt-0.5" title={row.currentStreetName}>{row.currentStreetName || '—'}</div>
         </div>
 
-        <div className="text-gray-600 text-base px-1">→</div>
+        {/* Arrow */}
+        <div className="text-gray-600 text-base px-1 pt-1">→</div>
 
+        {/* Suggested — candidates as quick-fill buttons, always-visible text inputs below */}
         <div className="min-w-0 space-y-1">
-          {row.candidates.length > 1 ? (
-            <div>
-              <div className="flex flex-wrap gap-1">
-                {top3.map((c, idx) => (
-                  <button key={`${c.routeCode}-${idx}`} onClick={() => onCandidateSelect(idx, c)}
-                    className={`text-xs px-2 py-0.5 rounded border font-mono transition-colors ${selectedCandidateIdx === idx ? 'bg-blue-700 border-blue-500 text-white' : 'bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-400'}`}>
-                    {c.isClusterPrimary && <span className="mr-1">⚡</span>}{c.routeCode}
-                  </button>
-                ))}
-                {hasMore && (
-                  <button onClick={onToggleExpand} className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-0.5">
-                    {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}+{row.candidates.length - 3}
-                  </button>
-                )}
-              </div>
-              {isExpanded && row.candidates.slice(3).map((c, i) => (
-                <button key={`extra-${i}`} onClick={() => onCandidateSelect(i + 3, c)}
-                  className="text-xs px-2 py-0.5 rounded border font-mono bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-400 mt-1 mr-1">
-                  {c.routeCode}
+          {/* Candidate quick-fill buttons (only when multiple options) */}
+          {row.candidates.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {top3.map((c, idx) => (
+                <button key={`${c.routeCode}-${idx}`} onClick={() => onCandidateSelect(idx, c)}
+                  className={`text-xs px-2 py-0.5 rounded border font-mono transition-colors ${
+                    selectedCandidateIdx === idx && !editedValues?.[row.id]
+                      ? 'bg-blue-700 border-blue-500 text-white'
+                      : 'bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-400'
+                  }`}>
+                  {c.isClusterPrimary && <span className="mr-1">⚡</span>}{c.routeCode}
                 </button>
               ))}
+              {hasMore && (
+                <button onClick={onToggleExpand} className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-0.5">
+                  {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}+{row.candidates.length - 3}
+                </button>
+              )}
             </div>
-          ) : (
-            <input type="text" value={editValues.routeCode} onChange={e => onRouteCodeChange(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-0.5 text-xs font-mono text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
           )}
+          {/* Overflow candidates */}
+          {isExpanded && row.candidates.slice(3).map((c, i) => (
+            <button key={`extra-${i}`} onClick={() => onCandidateSelect(i + 3, c)}
+              className="text-xs px-2 py-0.5 rounded border font-mono bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-400 mr-1">
+              {c.routeCode}
+            </button>
+          ))}
+          {/* Always-visible editable inputs — type anything to override */}
+          <input type="text" value={editValues.routeCode} onChange={e => onRouteCodeChange(e.target.value)}
+            placeholder="Route code"
+            className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-0.5 text-xs font-mono text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
           <input type="text" value={editValues.streetName} onChange={e => onStreetNameChange(e.target.value)}
+            placeholder="Street name"
             className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-0.5 text-xs text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
         </div>
 
-        <div className="text-xs text-gray-500 truncate space-y-0.5" title={row.clusterSignal || row.phoneGroupSignal}>
+        {/* Signal */}
+        <div className="text-xs text-gray-500 truncate space-y-0.5 pt-1" title={row.clusterSignal || row.phoneGroupSignal}>
           {row.phoneGroupSignal && <div className="truncate text-emerald-500/80">{row.phoneGroupSignal}</div>}
           {row.clusterSignal    && <div className="truncate text-blue-500/80">{row.clusterSignal}</div>}
           {!row.phoneGroupSignal && !row.clusterSignal && <span className="text-gray-600">—</span>}
         </div>
 
-        <div className="flex items-center justify-end gap-1.5">
+        {/* Actions */}
+        <div className="flex items-start justify-end gap-1.5 pt-0.5">
           <button onClick={onAccept} disabled={isApplying}
             className="flex items-center gap-1 px-2.5 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs font-medium transition-colors disabled:opacity-50">
             {isApplying ? <Loader size={12} className="animate-spin" /> : <CheckCircle size={12} />} Accept
