@@ -21,6 +21,7 @@ import {
   UserPlus,
   ExternalLink,
   Crosshair,
+  Map as MapIcon,
 } from 'lucide-react';
 import {
   commandCenterService,
@@ -537,6 +538,14 @@ const CommandCenterCreator: React.FC = () => {
           >
             <Crosshair size={20} />
             Manage Campaigns
+          </button>
+
+          <button
+            onClick={() => navigate('/super-admin/maps')}
+            className="bg-blue-700 hover:bg-blue-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
+          >
+            <MapIcon size={20} />
+            Map Builder
           </button>
         </div>
 

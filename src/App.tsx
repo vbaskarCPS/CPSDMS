@@ -29,6 +29,9 @@ const DialerPage = React.lazy(() => import('./pages/Dialer/DialerPage'));
 const TrainingPortal = React.lazy(() => import('./pages/Training/TrainingPortal'));
 const TrainingModulePage = React.lazy(() => import('./pages/Training/TrainingModulePage'));
 
+// Map Builder
+const MapBuilder = React.lazy(() => import('./pages/SuperAdmin/MapBuilder'));
+
 // Loading fallback
 const LoadingFallback = () => (
   <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -47,9 +50,10 @@ function App() {
         {/* Public Job Fair Application Form */}
         <Route path="/:slug" element={<ApplicantForm />} />
 
-        {/* Super Admin Route */}
+        {/* Super Admin Routes */}
         <Route path="/super-admin" element={<CommandCenterCreator />} />
         <Route path="/super-admin/campaigns" element={<CampaignCreator />} />
+        <Route path="/super-admin/maps" element={<MapBuilder />} />
 
         {/* Command Center Admin Routes */}
         <Route path="/admin" element={<SessionCommandCenter />} />
