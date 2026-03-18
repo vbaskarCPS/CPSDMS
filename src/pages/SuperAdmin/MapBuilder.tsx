@@ -643,48 +643,56 @@ const MapBuilder: React.FC = () => {
   }, [routes, activeRouteNum, mapLoaded, effectiveWays]);
 
   // ─── Load roads ───
+  // Strategy: use Nominatim to find the area centre, fly the map there at zoom 14,
+  // then query Overpass using the actual map viewport bounds so we always get
+  // exactly the roads that are visible — no guessing at bbox size.
   const loadRoads = useCallback(async (area: AreaPrefix) => {
     setLoadingRoads(true); setError(null);
     try {
       const fullName = area.area_name.toLowerCase().replace(/#\d+/g, '').trim();
-      // Try progressively broader searches until Nominatim returns a result
+
+      // Try to get a centre point from Nominatim (just for flying, not for bbox)
+      let center: [number, number] = [-79.870, 43.270]; // Hamilton default
       const searchCandidates = [
         fullName,
-        fullName.split(' ')[0], // first word only e.g. "ancaster" from "ancaster meadows"
-        fullName.split(' ').slice(0, 2).join(' '), // first two words
-      ].filter((v, i, a) => a.indexOf(v) === i); // dedupe
-
-      let bbox: string = '43.200,-79.950,43.350,-79.750';
-      let center: [number, number] = [-79.870, 43.270];
-      let found = false;
+        fullName.split(' ')[0],
+        fullName.split(' ').slice(0, 2).join(' '),
+      ].filter((v, i, a) => a.indexOf(v) === i);
 
       for (const candidate of searchCandidates) {
         try {
-          const nominatimResp = await fetch(
-            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(candidate + ', Hamilton, Ontario, Canada')}&format=json&limit=3`,
+          const resp = await fetch(
+            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(candidate + ', Hamilton, Ontario, Canada')}&format=json&limit=1`,
             { headers: { 'User-Agent': 'CPSDMS-MapBuilder/1.0' } }
           );
-          const nominatimData = await nominatimResp.json();
-          if (nominatimData.length > 0) {
-            const b = nominatimData[0].boundingbox; // [south, north, west, east]
-            const south = parseFloat(b[0]), north = parseFloat(b[1]);
-            const west = parseFloat(b[2]), east = parseFloat(b[3]);
-            // Expand bbox by ~15% so we don't clip streets on the edges
-            const latPad = (north - south) * 0.15;
-            const lngPad = (east - west) * 0.15;
-            bbox = `${south - latPad},${west - lngPad},${north + latPad},${east + lngPad}`;
-            center = [(west + east) / 2, (south + north) / 2];
-            found = true;
+          const data = await resp.json();
+          if (data.length > 0) {
+            center = [parseFloat(data[0].lon), parseFloat(data[0].lat)];
             break;
           }
-        } catch { /* try next candidate */ }
+        } catch { /* try next */ }
       }
 
-      if (!found) {
-        console.warn(`Nominatim could not find "${fullName}" — using full Hamilton bbox`);
-      }
+      // Fly to area centre and wait for animation to finish
+      await new Promise<void>(resolve => {
+        const map = mapRef.current;
+        if (!map) { resolve(); return; }
+        map.once('moveend', () => resolve());
+        map.flyTo({ center, zoom: 14 });
+      });
 
-      mapRef.current?.flyTo({ center, zoom: 13 });
+      // Now query Overpass using the actual visible map bounds
+      const map = mapRef.current;
+      if (!map) throw new Error('Map not available');
+      const b = map.getBounds();
+      // Add 10% padding around viewport so roads at edges load fully
+      const latPad = (b.getNorth() - b.getSouth()) * 0.1;
+      const lngPad = (b.getEast() - b.getWest()) * 0.1;
+      const south = b.getSouth() - latPad;
+      const north = b.getNorth() + latPad;
+      const west = b.getWest() - lngPad;
+      const east = b.getEast() + lngPad;
+      const bbox = `${south},${west},${north},${east}`;
 
       const overpassEndpoints = [
         'https://overpass-api.de/api/interpreter',
