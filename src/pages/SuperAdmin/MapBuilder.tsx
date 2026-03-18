@@ -698,7 +698,9 @@ const MapBuilder: React.FC = () => {
       const overpassEndpoints = [
         'https://overpass-api.de/api/interpreter',
         'https://overpass.kumi.systems/api/interpreter',
-        'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+        'https://overpass.openstreetmap.ru/api/interpreter',
+        'https://overpass.osm.ch/api/interpreter',
+        'https://overpass-api.de/api/interpreter',
       ];
       const query = `data=${encodeURIComponent(`[out:json][timeout:60];way["highway"]["name"](${bbox});out geom;`)}`;
 
@@ -730,6 +732,57 @@ const MapBuilder: React.FC = () => {
 
   useEffect(() => { if (mapLoaded && currentArea) loadRoads(currentArea); }, [currentArea, mapLoaded]);
 
+  // ─── Restore previously saved routes once roads are loaded ───
+  useEffect(() => {
+    if (!currentArea || allWays.length === 0) return;
+
+    const restore = async () => {
+      try {
+        const { data, error: dbErr } = await supabase
+          .from('route_maps')
+          .select('*')
+          .eq('area_name', currentArea.area_name);
+        if (dbErr || !data || data.length === 0) return;
+
+        // Build a lookup: osmId → way id (Overpass id)
+        // Saved segments store osmId (the original OSM way id)
+        const osmIdToWay = new Map<number, OsmWay>();
+        allWays.forEach(w => osmIdToWay.set(w.id, w));
+
+        setRoutes(prev => prev.map(route => {
+          const saved = data.find((d: any) => d.route_number === route.num);
+          if (!saved) return route;
+
+          // Match saved segment osmIds to loaded way ids
+          const selectedWayIds = new Set<number>();
+          const streetNames: string[] = [];
+
+          (saved.segments || []).forEach((seg: any) => {
+            const osmId = seg.osmId;
+            const way = osmIdToWay.get(osmId);
+            if (way) {
+              selectedWayIds.add(way.id);
+              if (seg.name && !streetNames.includes(seg.name)) {
+                streetNames.push(seg.name);
+              }
+            }
+          });
+
+          return {
+            ...route,
+            selectedWayIds,
+            streetNames,
+            status: saved.status as 'pending' | 'approved' | 'flagged',
+            aiNotes: saved.ai_notes || '',
+            confidence: saved.ai_confidence || 0,
+          };
+        }));
+      } catch { /* silent — restore is best-effort */ }
+    };
+
+    restore();
+  }, [allWays, currentArea]);
+
   // ─── Load more roads from current viewport ───
   const loadRoadsFromViewport = useCallback(async () => {
     const map = mapRef.current;
@@ -741,9 +794,10 @@ const MapBuilder: React.FC = () => {
       const lngPad = (b.getEast() - b.getWest()) * 0.1;
       const bbox = `${b.getSouth() - latPad},${b.getWest() - lngPad},${b.getNorth() + latPad},${b.getEast() + lngPad}`;
       const overpassEndpoints = [
-        'https://overpass-api.de/api/interpreter',
         'https://overpass.kumi.systems/api/interpreter',
-        'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+        'https://overpass.openstreetmap.ru/api/interpreter',
+        'https://overpass.osm.ch/api/interpreter',
+        'https://overpass-api.de/api/interpreter',
       ];
       const query = `data=${encodeURIComponent(`[out:json][timeout:60];way["highway"]["name"](${bbox});out geom;`)}`;
       const fetchWithTimeout = (url: string, options: RequestInit, ms: number): Promise<Response> => {
