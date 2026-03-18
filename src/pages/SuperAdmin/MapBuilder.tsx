@@ -673,11 +673,12 @@ const MapBuilder: React.FC = () => {
         } catch { /* try next */ }
       }
 
-      // Fly to area centre and wait for animation to finish
+      // Fly to area centre and wait for animation to finish (max 3s)
       await new Promise<void>(resolve => {
         const map = mapRef.current;
         if (!map) { resolve(); return; }
-        map.once('moveend', () => resolve());
+        const timer = setTimeout(resolve, 3000);
+        map.once('moveend', () => { clearTimeout(timer); resolve(); });
         map.flyTo({ center, zoom: 14 });
       });
 
@@ -701,14 +702,22 @@ const MapBuilder: React.FC = () => {
       ];
       const query = `data=${encodeURIComponent(`[out:json][timeout:60];way["highway"]["name"](${bbox});out geom;`)}`;
 
+      // Helper: fetch with a per-endpoint timeout so we don't wait forever
+      const fetchWithTimeout = (url: string, options: RequestInit, ms: number): Promise<Response> => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), ms);
+        return fetch(url, { ...options, signal: controller.signal })
+          .finally(() => clearTimeout(timer));
+      };
+
       let resp: Response | null = null;
       for (const endpoint of overpassEndpoints) {
         try {
-          const r = await fetch(endpoint, {
+          const r = await fetchWithTimeout(endpoint, {
             method: 'POST',
             body: query,
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          });
+          }, 15000); // 15s per endpoint before trying next
           if (r.ok) { resp = r; break; }
         } catch { /* try next endpoint */ }
       }
