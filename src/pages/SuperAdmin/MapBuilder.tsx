@@ -1027,9 +1027,8 @@ const MapBuilder: React.FC = () => {
         </div>
       )}
 
-      {/* ── MAP VIEW ── */}
-      {view === 'map' && (
-        <div className="flex flex-1 overflow-hidden">
+      {/* ── MAP VIEW ── always rendered so Mapbox can initialise on mount */}
+      <div className="flex flex-1 overflow-hidden" style={{ display: view === 'map' ? 'flex' : 'none' }}>
 
           {/* LEFT: Route list */}
           {currentArea && (
@@ -1230,8 +1229,6 @@ const MapBuilder: React.FC = () => {
             </div>
           )}
         </div>
-      )}
-
       {/* ── AREA MODAL (add / edit) ── */}
       {modal.open && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
