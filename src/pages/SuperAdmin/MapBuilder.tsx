@@ -135,7 +135,7 @@ function buildGeoJSON(ways: OsmWay[], selectedIds: Set<number>, color: string): 
     features: ways.map(w => ({
       type: 'Feature',
       id: w.id,
-      properties: { id: w.id, name: w.name, unnamed: w.unnamed ?? false, selected: selectedIds.has(w.id), color },
+      properties: { id: w.id, name: w.name, unnamed: w.unnamed ? 1 : 0, selected: selectedIds.has(w.id) ? 1 : 0, color },
       geometry: { type: 'LineString', coordinates: w.geometry },
     })),
   };
@@ -540,13 +540,13 @@ const MapBuilder: React.FC = () => {
       map.addSource('roads', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
 
       // Named roads — unselected, named
-      map.addLayer({ id: 'roads-base', type: 'line', source: 'roads', filter: ['all', ['!', ['get', 'selected']], ['!', ['get', 'unnamed']]], paint: { 'line-color': 'rgba(255,255,255,0.18)', 'line-width': 2 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+      map.addLayer({ id: 'roads-base', type: 'line', source: 'roads', filter: ['all', ['==', ['get', 'selected'], 0], ['==', ['get', 'unnamed'], 0]], paint: { 'line-color': 'rgba(255,255,255,0.18)', 'line-width': 2 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
       // Unnamed connectors — unselected, unnamed, dashed dim
-      map.addLayer({ id: 'roads-unnamed', type: 'line', source: 'roads', filter: ['all', ['!', ['get', 'selected']], ['get', 'unnamed']], paint: { 'line-color': 'rgba(255,255,255,0.09)', 'line-width': 2, 'line-dasharray': [2, 3] }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+      map.addLayer({ id: 'roads-unnamed', type: 'line', source: 'roads', filter: ['all', ['==', ['get', 'selected'], 0], ['==', ['get', 'unnamed'], 1]], paint: { 'line-color': 'rgba(255,255,255,0.09)', 'line-width': 2, 'line-dasharray': [2, 3] }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
       // Hover highlight
       map.addLayer({ id: 'roads-hover', type: 'line', source: 'roads', filter: ['==', ['get', 'id'], -1], paint: { 'line-color': '#60a5fa', 'line-width': 6, 'line-opacity': 0.85 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
       // Selected roads (named or unnamed)
-      map.addLayer({ id: 'roads-selected', type: 'line', source: 'roads', filter: ['get', 'selected'], paint: { 'line-color': ['get', 'color'], 'line-width': 5, 'line-opacity': 0.9 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+      map.addLayer({ id: 'roads-selected', type: 'line', source: 'roads', filter: ['==', ['get', 'selected'], 1], paint: { 'line-color': ['get', 'color'], 'line-width': 5, 'line-opacity': 0.9 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
 
       const ALL_ROAD_LAYERS = ['roads-base', 'roads-unnamed', 'roads-selected'];
 
@@ -554,7 +554,7 @@ const MapBuilder: React.FC = () => {
         if (e.features?.[0]) {
           map.setFilter('roads-hover', ['==', ['get', 'id'], e.features[0].properties?.id]);
           const name = e.features[0].properties?.name as string;
-          const isUnnamed = e.features[0].properties?.unnamed as boolean;
+          const isUnnamed = e.features[0].properties?.unnamed === 1 || e.features[0].properties?.unnamed === '1';
           setHoveredWayName(name || (isUnnamed ? '(unnamed — right-click to name)' : null));
           if (!xKeyHeldRef.current) map.getCanvas().style.cursor = 'pointer';
         }
@@ -700,7 +700,7 @@ const MapBuilder: React.FC = () => {
       if (!features.length) return;
       const wayId = features[0].properties?.id as number;
       const wayName = features[0].properties?.name as string;
-      const isSelected = features[0].properties?.selected as boolean;
+      const isSelected = features[0].properties?.selected === 1 || features[0].properties?.selected === '1';
 
       if (xKeyHeldRef.current) {
         const way = effectiveWays.find(w => w.id === wayId);
