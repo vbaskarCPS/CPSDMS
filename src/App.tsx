@@ -29,8 +29,9 @@ const DialerPage = React.lazy(() => import('./pages/Dialer/DialerPage'));
 const TrainingPortal = React.lazy(() => import('./pages/Training/TrainingPortal'));
 const TrainingModulePage = React.lazy(() => import('./pages/Training/TrainingModulePage'));
 
-// Map Builder
+// Map pages
 const MapBuilder = React.lazy(() => import('./pages/SuperAdmin/MapBuilder'));
+const MapViewer = React.lazy(() => import('./pages/SuperAdmin/MapViewer'));
 
 // Loading fallback
 const LoadingFallback = () => (
@@ -54,6 +55,7 @@ function App() {
         <Route path="/super-admin" element={<CommandCenterCreator />} />
         <Route path="/super-admin/campaigns" element={<CampaignCreator />} />
         <Route path="/super-admin/maps" element={<MapBuilder />} />
+        <Route path="/super-admin/map-viewer" element={<MapViewer />} />
 
         {/* Command Center Admin Routes */}
         <Route path="/admin" element={<SessionCommandCenter />} />

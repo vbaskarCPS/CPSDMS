@@ -22,6 +22,7 @@ import {
   ExternalLink,
   Crosshair,
   Map as MapIcon,
+  Eye,
 } from 'lucide-react';
 import {
   commandCenterService,
@@ -523,7 +524,7 @@ const CommandCenterCreator: React.FC = () => {
           </div>
         )}
 
-        <div className="mb-6 flex items-center gap-4">
+        <div className="mb-6 flex items-center gap-4 flex-wrap">
           <button
             onClick={openCreateModal}
             className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
@@ -546,6 +547,14 @@ const CommandCenterCreator: React.FC = () => {
           >
             <MapIcon size={20} />
             Map Builder
+          </button>
+
+          <button
+            onClick={() => navigate('/super-admin/map-viewer')}
+            className="bg-teal-700 hover:bg-teal-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
+          >
+            <Eye size={20} />
+            Map Viewer
           </button>
         </div>
 
@@ -605,9 +614,7 @@ const CommandCenterCreator: React.FC = () => {
 
             <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Display Name
-                </label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Display Name</label>
                 <input
                   type="text"
                   value={formData.displayName}
@@ -617,15 +624,11 @@ const CommandCenterCreator: React.FC = () => {
                     formErrors.displayName ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-purple-500'
                   }`}
                 />
-                {formErrors.displayName && (
-                  <p className="text-red-400 text-xs mt-1">{formErrors.displayName}</p>
-                )}
+                {formErrors.displayName && <p className="text-red-400 text-xs mt-1">{formErrors.displayName}</p>}
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Username
-                </label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Username</label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                   <input
@@ -638,9 +641,7 @@ const CommandCenterCreator: React.FC = () => {
                     }`}
                   />
                 </div>
-                {formErrors.username && (
-                  <p className="text-red-400 text-xs mt-1">{formErrors.username}</p>
-                )}
+                {formErrors.username && <p className="text-red-400 text-xs mt-1">{formErrors.username}</p>}
               </div>
 
               <div>
@@ -659,15 +660,11 @@ const CommandCenterCreator: React.FC = () => {
                     }`}
                   />
                 </div>
-                {formErrors.password && (
-                  <p className="text-red-400 text-xs mt-1">{formErrors.password}</p>
-                )}
+                {formErrors.password && <p className="text-red-400 text-xs mt-1">{formErrors.password}</p>}
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Region
-                </label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Region</label>
                 <div className="grid grid-cols-3 gap-2">
                   {REGIONS.map((region) => (
                     <button
@@ -689,9 +686,7 @@ const CommandCenterCreator: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Workerbook Google Sheet URL
-                </label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Workerbook Google Sheet URL</label>
                 <div className="relative">
                   <Sheet className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                   <input
@@ -704,21 +699,16 @@ const CommandCenterCreator: React.FC = () => {
                     }`}
                   />
                 </div>
-                {formErrors.workerbookUrl && (
-                  <p className="text-red-400 text-xs mt-1">{formErrors.workerbookUrl}</p>
-                )}
+                {formErrors.workerbookUrl && <p className="text-red-400 text-xs mt-1">{formErrors.workerbookUrl}</p>}
                 {workerbookIdPreview && (
                   <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
-                    <Check size={12} />
-                    <span>{workerbookIdPreview}</span>
+                    <Check size={12} /><span>{workerbookIdPreview}</span>
                   </p>
                 )}
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Masterbookings Google Sheet URL
-                </label>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Masterbookings Google Sheet URL</label>
                 <div className="relative">
                   <Sheet className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                   <input
@@ -731,13 +721,10 @@ const CommandCenterCreator: React.FC = () => {
                     }`}
                   />
                 </div>
-                {formErrors.masterbookingsUrl && (
-                  <p className="text-red-400 text-xs mt-1">{formErrors.masterbookingsUrl}</p>
-                )}
+                {formErrors.masterbookingsUrl && <p className="text-red-400 text-xs mt-1">{formErrors.masterbookingsUrl}</p>}
                 {masterbookingsIdPreview && (
                   <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
-                    <Check size={12} />
-                    <span>{masterbookingsIdPreview}</span>
+                    <Check size={12} /><span>{masterbookingsIdPreview}</span>
                   </p>
                 )}
               </div>
@@ -746,58 +733,38 @@ const CommandCenterCreator: React.FC = () => {
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <UserPlus className="text-purple-400" size={18} />
-                    <label className="text-sm font-medium text-gray-300">
-                      Enable Job Fairs
-                    </label>
+                    <label className="text-sm font-medium text-gray-300">Enable Job Fairs</label>
                   </div>
-                  
                   <button
                     type="button"
                     onClick={() => setFormData({ ...formData, jobFairsEnabled: !formData.jobFairsEnabled })}
-                    className={`relative w-12 h-6 rounded-full transition-colors ${
-                      formData.jobFairsEnabled ? 'bg-purple-600' : 'bg-gray-600'
-                    }`}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${formData.jobFairsEnabled ? 'bg-purple-600' : 'bg-gray-600'}`}
                   >
-                    <span
-                      className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                        formData.jobFairsEnabled ? 'translate-x-7' : 'translate-x-1'
-                      }`}
-                    />
+                    <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${formData.jobFairsEnabled ? 'translate-x-7' : 'translate-x-1'}`} />
                   </button>
                 </div>
 
                 {formData.jobFairsEnabled && (
                   <div className="space-y-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-1">
-                        Job Fair URL Slug
-                      </label>
+                      <label className="block text-sm font-medium text-gray-300 mb-1">Job Fair URL Slug</label>
                       <div className="flex items-center gap-2">
                         <span className="text-gray-500 text-sm whitespace-nowrap">{formBaseUrlDisplay}</span>
                         <input
                           type="text"
                           value={formData.jobFairsSlug}
-                          onChange={(e) => setFormData({ 
-                            ...formData, 
-                            jobFairsSlug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') 
-                          })}
+                          onChange={(e) => setFormData({ ...formData, jobFairsSlug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })}
                           placeholder="hamilton"
                           className={`flex-1 bg-gray-900 border rounded-lg py-2 px-3 text-white focus:ring-2 focus:outline-none text-sm ${
                             formErrors.jobFairsSlug ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-purple-500'
                           }`}
                         />
                       </div>
-                      {formErrors.jobFairsSlug && (
-                        <p className="text-red-400 text-xs mt-1">{formErrors.jobFairsSlug}</p>
-                      )}
+                      {formErrors.jobFairsSlug && <p className="text-red-400 text-xs mt-1">{formErrors.jobFairsSlug}</p>}
                       {formData.jobFairsSlug && !formErrors.jobFairsSlug && !getJobFairSlugError(formData.jobFairsSlug) && (
-                        <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
-                          <Check size={12} />
-                          <span>Valid slug</span>
-                        </p>
+                        <p className="text-green-400 text-xs mt-1 flex items-center gap-1"><Check size={12} /><span>Valid slug</span></p>
                       )}
                     </div>
-
                     {formData.jobFairsSlug && !getJobFairSlugError(formData.jobFairsSlug) && (
                       <div className="bg-gray-900/50 rounded-lg p-3 border border-gray-700">
                         <p className="text-xs text-gray-400 mb-1">Public application URL:</p>
@@ -807,32 +774,20 @@ const CommandCenterCreator: React.FC = () => {
                         </p>
                       </div>
                     )}
-
-                    <p className="text-xs text-gray-500">
-                      Applicants will use this URL to submit their applications during job fairs.
-                    </p>
+                    <p className="text-xs text-gray-500">Applicants will use this URL to submit their applications during job fairs.</p>
                   </div>
                 )}
               </div>
             </div>
 
             <div className="p-4 border-t border-gray-700 flex justify-end gap-3">
-              <button
-                onClick={closeModal}
-                className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
+              <button onClick={closeModal} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">Cancel</button>
               <button
                 onClick={handleSave}
                 disabled={saving}
                 className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
               >
-                {saving ? (
-                  <Loader className="animate-spin" size={16} />
-                ) : (
-                  <Check size={16} />
-                )}
+                {saving ? <Loader className="animate-spin" size={16} /> : <Check size={16} />}
                 {editingCC ? 'Save Changes' : 'Create'}
               </button>
             </div>
@@ -851,16 +806,13 @@ const CommandCenterCreator: React.FC = () => {
                 <h2 className="text-lg font-bold text-red-400">Universal Wipe</h2>
                 <p className="text-xs text-gray-500">This action cannot be undone</p>
               </div>
-              <button onClick={closeWipeModal} className="ml-auto text-gray-500 hover:text-white">
-                <X size={20} />
-              </button>
+              <button onClick={closeWipeModal} className="ml-auto text-gray-500 hover:text-white"><X size={20} /></button>
             </div>
 
             <div className="p-6">
               <div className="bg-red-950/50 border border-red-900/50 rounded-lg p-4 mb-6">
                 <h3 className="text-sm font-bold text-red-300 mb-2 flex items-center gap-2">
-                  <AlertTriangle size={16} />
-                  This will permanently delete:
+                  <AlertTriangle size={16} />This will permanently delete:
                 </h3>
                 <ul className="text-sm text-gray-400 space-y-1 ml-6">
                   <li>{ccCountText}</li>
@@ -891,26 +843,15 @@ const CommandCenterCreator: React.FC = () => {
             </div>
 
             <div className="p-4 border-t border-gray-800 flex justify-end gap-3">
-              <button
-                onClick={closeWipeModal}
-                className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
+              <button onClick={closeWipeModal} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">Cancel</button>
               <button
                 onClick={handleUniversalWipe}
                 disabled={!isWipeConfirmed || wiping}
                 className={`px-6 py-2 rounded-lg font-bold flex items-center gap-2 transition-all ${
-                  isWipeConfirmed
-                    ? 'bg-red-600 hover:bg-red-500 text-white cursor-pointer'
-                    : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                  isWipeConfirmed ? 'bg-red-600 hover:bg-red-500 text-white cursor-pointer' : 'bg-gray-700 text-gray-500 cursor-not-allowed'
                 }`}
               >
-                {wiping ? (
-                  <Loader className="animate-spin" size={16} />
-                ) : (
-                  <Trash2 size={16} />
-                )}
+                {wiping ? <Loader className="animate-spin" size={16} /> : <Trash2 size={16} />}
                 Wipe Everything
               </button>
             </div>
