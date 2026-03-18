@@ -6,7 +6,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import * as pdfjsLib from 'pdfjs-dist';
 import {
   ArrowLeft, Loader, Check, X, AlertCircle,
-  Zap, Plus, Map as MapIcon, Upload, Scissors,
+  Zap, Plus, Map as MapIcon, Upload, Scissors, RefreshCw,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
@@ -730,6 +730,49 @@ const MapBuilder: React.FC = () => {
 
   useEffect(() => { if (mapLoaded && currentArea) loadRoads(currentArea); }, [currentArea, mapLoaded]);
 
+  // ─── Load more roads from current viewport ───
+  const loadRoadsFromViewport = useCallback(async () => {
+    const map = mapRef.current;
+    if (!map || loadingRoads) return;
+    setLoadingRoads(true); setError(null);
+    try {
+      const b = map.getBounds();
+      const latPad = (b.getNorth() - b.getSouth()) * 0.1;
+      const lngPad = (b.getEast() - b.getWest()) * 0.1;
+      const bbox = `${b.getSouth() - latPad},${b.getWest() - lngPad},${b.getNorth() + latPad},${b.getEast() + lngPad}`;
+      const overpassEndpoints = [
+        'https://overpass-api.de/api/interpreter',
+        'https://overpass.kumi.systems/api/interpreter',
+        'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+      ];
+      const query = `data=${encodeURIComponent(`[out:json][timeout:60];way["highway"]["name"](${bbox});out geom;`)}`;
+      const fetchWithTimeout = (url: string, options: RequestInit, ms: number): Promise<Response> => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), ms);
+        return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+      };
+      let resp: Response | null = null;
+      for (const endpoint of overpassEndpoints) {
+        try {
+          const r = await fetchWithTimeout(endpoint, { method: 'POST', body: query, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, 15000);
+          if (r.ok) { resp = r; break; }
+        } catch { /* try next */ }
+      }
+      if (!resp || !resp.ok) throw new Error('All Overpass endpoints failed');
+      const data = await resp.json();
+      const newWays: OsmWay[] = data.elements
+        .filter((el: any) => el.type === 'way' && el.geometry && el.tags?.name)
+        .map((el: any) => ({ id: el.id, name: el.tags.name, geometry: el.geometry.map((pt: any) => [pt.lon, pt.lat] as [number, number]) }));
+      // Merge with existing ways — dedupe by id
+      setAllWays(prev => {
+        const existingIds = new Set(prev.map(w => w.id));
+        const toAdd = newWays.filter(w => !existingIds.has(w.id));
+        return [...prev, ...toAdd];
+      });
+    } catch { setError('Failed to load roads from OpenStreetMap.'); }
+    finally { setLoadingRoads(false); }
+  }, [loadingRoads]);
+
   // ─── AI Extraction ───
   const handleExtract = async () => {
     if (!activeRoute || !pdfDoc || !currentArea || !selectedPage) return;
@@ -991,6 +1034,9 @@ const MapBuilder: React.FC = () => {
               )}
               <button onClick={handleExtract} disabled={extracting || effectiveWays.length === 0 || !pdfDoc} className="bg-purple-700 hover:bg-purple-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm flex items-center gap-2">
                 {extracting ? <Loader size={14} className="animate-spin" /> : <Zap size={14} />}Extract with AI
+              </button>
+              <button onClick={loadRoadsFromViewport} disabled={loadingRoads} className="bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-300 border border-gray-600 px-3 py-1.5 rounded text-sm flex items-center gap-2" title="Load roads from current map view">
+                {loadingRoads ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}Load More Roads
               </button>
               <button onClick={handleApprove} disabled={!activeRoute || activeRoute.selectedWayIds.size === 0} className="bg-green-800/50 hover:bg-green-700/50 disabled:opacity-50 text-green-400 border border-green-700/50 px-3 py-1.5 rounded text-sm flex items-center gap-2">
                 <Check size={14} />Approve
