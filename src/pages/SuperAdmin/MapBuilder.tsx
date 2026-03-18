@@ -153,12 +153,11 @@ async function renderPageToBase64(pdfDoc: pdfjsLib.PDFDocumentProxy, pageNum: nu
 
 // ─── Overpass fetch ─────────────────────────────────────────────────────────
 // Mirrors ordered by reliability — de endpoint last since it 504s most often
+// Only CORS-safe endpoints — others will silently fail in browser context
 const OVERPASS_ENDPOINTS = [
-  'https://overpass.kumi.systems/api/interpreter',
-  'https://overpass.openstreetmap.ru/api/interpreter',
-  'https://overpass.osm.ch/api/interpreter',
-  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.osm.ch/api/interpreter',
 ];
 
 async function fetchOverpass(bbox: string): Promise<OsmWay[]> {
@@ -570,6 +569,12 @@ const MapBuilder: React.FC = () => {
     });
 
     mapRef.current = map;
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      setMapLoaded(false);
+    };
   }, []);
 
   useEffect(() => { setTimeout(() => mapRef.current?.resize(), 50); }, [showStrip]);
@@ -733,10 +738,14 @@ const MapBuilder: React.FC = () => {
   // ─── Update map GeoJSON ───
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapLoaded || effectiveWays.length === 0) return;
+    if (!map || !mapLoaded) return;
+    const source = map.getSource('roads') as mapboxgl.GeoJSONSource;
+    if (!source) return;
     const route = routes.find(r => r.num === activeRouteNum);
-    if (!route) return;
-    (map.getSource('roads') as mapboxgl.GeoJSONSource).setData(buildGeoJSON(effectiveWays, route.selectedWayIds, route.color));
+    const selectedIds = route?.selectedWayIds ?? new Set<number>();
+    const color = route?.color ?? '#888888';
+    // Always update — even empty features clears stale data from a previous area
+    source.setData(buildGeoJSON(effectiveWays, selectedIds, color));
   }, [routes, activeRouteNum, mapLoaded, effectiveWays]);
 
   // ─── Load roads (initial) ───
@@ -1149,6 +1158,7 @@ const MapBuilder: React.FC = () => {
                 <X size={14} />Flag
               </button>
               <div className="ml-auto text-xs text-gray-500">
+                {effectiveWays.length > 0 ? <span className="text-gray-600 mr-2">{effectiveWays.length} roads</span> : <span className="text-red-500 mr-2">no roads loaded</span>}
                 {activeRoute?.selectedWayIds.size || 0} segments · {activeRoute?.streetNames.length || 0} streets
                 {splitUndoStack.length > 0 && <span className="ml-2 text-yellow-600">{splitUndoStack.length} split{splitUndoStack.length !== 1 ? 's' : ''}</span>}
               </div>
