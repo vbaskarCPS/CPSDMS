@@ -646,15 +646,44 @@ const MapBuilder: React.FC = () => {
   const loadRoads = useCallback(async (area: AreaPrefix) => {
     setLoadingRoads(true); setError(null);
     try {
-      const searchName = area.area_name.toLowerCase().replace(/#\d+/g, '').trim();
-      const nominatimResp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchName + ', Hamilton, Ontario, Canada')}&format=json&limit=1`, { headers: { 'User-Agent': 'CPSDMS-MapBuilder/1.0' } });
-      const nominatimData = await nominatimResp.json();
-      let bbox: string, center: [number, number];
-      if (nominatimData.length > 0) {
-        const b = nominatimData[0].boundingbox;
-        bbox = `${b[0]},${b[2]},${b[1]},${b[3]}`;
-        center = [(parseFloat(b[2]) + parseFloat(b[3])) / 2, (parseFloat(b[0]) + parseFloat(b[1])) / 2];
-      } else { bbox = '43.200,-79.950,43.350,-79.750'; center = [-79.870, 43.270]; }
+      const fullName = area.area_name.toLowerCase().replace(/#\d+/g, '').trim();
+      // Try progressively broader searches until Nominatim returns a result
+      const searchCandidates = [
+        fullName,
+        fullName.split(' ')[0], // first word only e.g. "ancaster" from "ancaster meadows"
+        fullName.split(' ').slice(0, 2).join(' '), // first two words
+      ].filter((v, i, a) => a.indexOf(v) === i); // dedupe
+
+      let bbox: string = '43.200,-79.950,43.350,-79.750';
+      let center: [number, number] = [-79.870, 43.270];
+      let found = false;
+
+      for (const candidate of searchCandidates) {
+        try {
+          const nominatimResp = await fetch(
+            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(candidate + ', Hamilton, Ontario, Canada')}&format=json&limit=3`,
+            { headers: { 'User-Agent': 'CPSDMS-MapBuilder/1.0' } }
+          );
+          const nominatimData = await nominatimResp.json();
+          if (nominatimData.length > 0) {
+            const b = nominatimData[0].boundingbox; // [south, north, west, east]
+            const south = parseFloat(b[0]), north = parseFloat(b[1]);
+            const west = parseFloat(b[2]), east = parseFloat(b[3]);
+            // Expand bbox by ~15% so we don't clip streets on the edges
+            const latPad = (north - south) * 0.15;
+            const lngPad = (east - west) * 0.15;
+            bbox = `${south - latPad},${west - lngPad},${north + latPad},${east + lngPad}`;
+            center = [(west + east) / 2, (south + north) / 2];
+            found = true;
+            break;
+          }
+        } catch { /* try next candidate */ }
+      }
+
+      if (!found) {
+        console.warn(`Nominatim could not find "${fullName}" — using full Hamilton bbox`);
+      }
+
       mapRef.current?.flyTo({ center, zoom: 13 });
 
       const overpassEndpoints = [
