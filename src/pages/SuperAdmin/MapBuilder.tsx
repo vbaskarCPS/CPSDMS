@@ -59,11 +59,6 @@ interface Thumbnail {
   loading: boolean;
 }
 
-interface PointA {
-  wayId: number;
-  streetName: string;
-}
-
 interface BoxState {
   startX: number;
   startY: number;
@@ -76,7 +71,6 @@ function buildGeoJSON(
   ways: OsmWay[],
   selectedIds: Set<number>,
   color: string,
-  pointAWayId?: number | null
 ): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
@@ -88,7 +82,6 @@ function buildGeoJSON(
         name: w.name,
         selected: selectedIds.has(w.id),
         color,
-        isPointA: w.id === pointAWayId,
       },
       geometry: { type: 'LineString', coordinates: w.geometry },
     })),
@@ -150,23 +143,17 @@ const MapBuilder: React.FC = () => {
   const [addStreetInput, setAddStreetInput] = useState('');
   const [hoveredWayName, setHoveredWayName] = useState<string | null>(null);
 
-  // Two-point selection
-  const [pointA, setPointA] = useState<PointA | null>(null);
-
   // Box selection state
   const [boxState, setBoxState] = useState<BoxState | null>(null);
   const boxStateRef = useRef<BoxState | null>(null);
   const isDraggingRef = useRef(false);
   const activeRouteNumRef = useRef(activeRouteNum);
+  const allWaysRef = useRef<OsmWay[]>([]);
 
   // Keep refs in sync
-  useEffect(() => {
-    activeRouteNumRef.current = activeRouteNum;
-  }, [activeRouteNum]);
-
-  useEffect(() => {
-    boxStateRef.current = boxState;
-  }, [boxState]);
+  useEffect(() => { activeRouteNumRef.current = activeRouteNum; }, [activeRouteNum]);
+  useEffect(() => { allWaysRef.current = allWays; }, [allWays]);
+  useEffect(() => { boxStateRef.current = boxState; }, [boxState]);
 
   const activeRoute = routes.find(r => r.num === activeRouteNum);
   const approvedCount = routes.filter(r => r.status === 'approved').length;
@@ -183,9 +170,7 @@ const MapBuilder: React.FC = () => {
     const { data } = await supabase.from('area_prefixes').select('*');
     if (data) {
       const map = new Map<number, AreaPrefix>();
-      data.forEach((a: AreaPrefix) => {
-        if (a.pdf_page) map.set(a.pdf_page, a);
-      });
+      data.forEach((a: AreaPrefix) => { if (a.pdf_page) map.set(a.pdf_page, a); });
       setAreaInfoMap(map);
     }
   };
@@ -196,9 +181,7 @@ const MapBuilder: React.FC = () => {
       if (data && data.length > 0) {
         const pdfFile = data.find(f => f.name.endsWith('.pdf'));
         if (pdfFile) {
-          const { data: urlData } = supabase.storage
-            .from('master-maps')
-            .getPublicUrl(pdfFile.name);
+          const { data: urlData } = supabase.storage.from('master-maps').getPublicUrl(pdfFile.name);
           await loadPdfFromUrl(urlData.publicUrl);
         }
       }
@@ -211,43 +194,38 @@ const MapBuilder: React.FC = () => {
       setPdfDoc(pdf);
       setTotalPages(pdf.numPages);
       renderedUpTo.current = 0;
-      setThumbnails(
-        Array.from({ length: pdf.numPages }, (_, i) => ({
-          pageNum: i + 1, dataUrl: null, loading: false,
-        }))
-      );
+      setThumbnails(Array.from({ length: pdf.numPages }, (_, i) => ({
+        pageNum: i + 1, dataUrl: null, loading: false,
+      })));
     } catch {
       setError('Failed to load PDF. Please try uploading again.');
     }
   };
 
   // ─── Thumbnails ───
-  const renderThumbnailBatch = useCallback(
-    async (pdf: pdfjsLib.PDFDocumentProxy, start: number, count: number) => {
-      const end = Math.min(start + count - 1, pdf.numPages);
-      for (let i = start; i <= end; i++) {
-        setThumbnails(prev => prev.map(t => t.pageNum === i ? { ...t, loading: true } : t));
-        try {
-          const page = await pdf.getPage(i);
-          const viewport = page.getViewport({ scale: 0.18 });
-          const canvas = document.createElement('canvas');
-          canvas.width = viewport.width;
-          canvas.height = viewport.height;
-          await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise;
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
-          setThumbnails(prev => prev.map(t => t.pageNum === i ? { ...t, dataUrl, loading: false } : t));
-        } catch {
-          setThumbnails(prev => prev.map(t => t.pageNum === i ? { ...t, loading: false } : t));
-        }
+  const renderThumbnailBatch = useCallback(async (
+    pdf: pdfjsLib.PDFDocumentProxy, start: number, count: number
+  ) => {
+    const end = Math.min(start + count - 1, pdf.numPages);
+    for (let i = start; i <= end; i++) {
+      setThumbnails(prev => prev.map(t => t.pageNum === i ? { ...t, loading: true } : t));
+      try {
+        const page = await pdf.getPage(i);
+        const viewport = page.getViewport({ scale: 0.18 });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise;
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
+        setThumbnails(prev => prev.map(t => t.pageNum === i ? { ...t, dataUrl, loading: false } : t));
+      } catch {
+        setThumbnails(prev => prev.map(t => t.pageNum === i ? { ...t, loading: false } : t));
       }
-      renderedUpTo.current = end;
-    }, []
-  );
+    }
+    renderedUpTo.current = end;
+  }, []);
 
-  useEffect(() => {
-    if (!pdfDoc) return;
-    renderThumbnailBatch(pdfDoc, 1, 12);
-  }, [pdfDoc]);
+  useEffect(() => { if (pdfDoc) renderThumbnailBatch(pdfDoc, 1, 12); }, [pdfDoc]);
 
   const handleThumbnailScroll = () => {
     if (!thumbnailStripRef.current || !pdfDoc) return;
@@ -381,7 +359,6 @@ const MapBuilder: React.FC = () => {
     );
     setActiveRouteNum(1);
     setAllWays([]);
-    setPointA(null);
     setShowStrip(false);
     setTimeout(() => mapRef.current?.resize(), 100);
   };
@@ -397,7 +374,7 @@ const MapBuilder: React.FC = () => {
       zoom: 13,
     });
 
-    // Disable built-in boxZoom so Shift+drag is ours
+    // Disable built-in box zoom so Shift+drag is ours
     map.boxZoom.disable();
 
     map.addControl(new mapboxgl.NavigationControl(), 'top-right');
@@ -441,15 +418,6 @@ const MapBuilder: React.FC = () => {
         layout: { 'line-cap': 'round', 'line-join': 'round' },
       });
 
-      map.addLayer({
-        id: 'roads-point-a',
-        type: 'line',
-        source: 'roads',
-        filter: ['==', ['get', 'isPointA'], true],
-        paint: { 'line-color': '#60a5fa', 'line-width': 8, 'line-opacity': 1 },
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-      });
-
       setMapLoaded(true);
     });
 
@@ -474,10 +442,8 @@ const MapBuilder: React.FC = () => {
     mapRef.current = map;
   }, []);
 
-  // Resize map when strip toggles
-  useEffect(() => {
-    setTimeout(() => mapRef.current?.resize(), 50);
-  }, [showStrip]);
+  // Resize when strip toggles
+  useEffect(() => { setTimeout(() => mapRef.current?.resize(), 50); }, [showStrip]);
 
   // ─── Box selection mouse handlers ───
   useEffect(() => {
@@ -494,24 +460,25 @@ const MapBuilder: React.FC = () => {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const mode = e.shiftKey ? 'add' : 'remove';
-      const newBox = { startX: x, startY: y, currentX: x, currentY: y, mode };
+      const newBox: BoxState = { startX: x, startY: y, currentX: x, currentY: y, mode };
       boxStateRef.current = newBox;
       setBoxState(newBox);
-      // Disable map panning while drawing box
       mapRef.current?.dragPan.disable();
     };
 
     const onMouseMove = (e: MouseEvent) => {
       if (!isDraggingRef.current || !boxStateRef.current) return;
       const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const updated = { ...boxStateRef.current, currentX: x, currentY: y };
+      const updated = {
+        ...boxStateRef.current,
+        currentX: e.clientX - rect.left,
+        currentY: e.clientY - rect.top,
+      };
       boxStateRef.current = updated;
       setBoxState({ ...updated });
     };
 
-    const onMouseUp = (e: MouseEvent) => {
+    const onMouseUp = () => {
       if (!isDraggingRef.current || !boxStateRef.current) return;
       isDraggingRef.current = false;
       mapRef.current?.dragPan.enable();
@@ -522,7 +489,6 @@ const MapBuilder: React.FC = () => {
       const maxX = Math.max(box.startX, box.currentX);
       const maxY = Math.max(box.startY, box.currentY);
 
-      // Only apply if box is big enough to be intentional
       if (maxX - minX > 5 && maxY - minY > 5) {
         const map = mapRef.current;
         if (map) {
@@ -540,6 +506,7 @@ const MapBuilder: React.FC = () => {
 
           const routeNum = activeRouteNumRef.current;
           const mode = box.mode;
+          const ways = allWaysRef.current;
 
           setRoutes(prev => prev.map(r => {
             if (r.num !== routeNum) return r;
@@ -548,36 +515,17 @@ const MapBuilder: React.FC = () => {
 
             if (mode === 'add') {
               hitIds.forEach(id => newIds.add(id));
-              hitNames.forEach(name => {
-                if (!newNames.includes(name)) newNames.push(name);
-              });
+              hitNames.forEach(name => { if (!newNames.includes(name)) newNames.push(name); });
             } else {
-              // Remove mode — remove all ways in box from this route
               hitIds.forEach(id => newIds.delete(id));
-              // Remove street names that no longer have any selected segments
-              newNames = newNames.filter(name => {
-                // Check if this street still has any selected segments outside the box
-                // A street stays if at least one of its way IDs is still selected
-                // We need allWays here but it's in closure scope below
-                return true; // will clean up via the street name check below
-              });
+              // Clean up names with no remaining segments
+              newNames = newNames.filter(name =>
+                ways.some(w => w.name === name && newIds.has(w.id))
+              );
             }
 
             return { ...r, selectedWayIds: newIds, streetNames: newNames };
           }));
-
-          // Clean up street names that have no remaining selected segments
-          // We do this in a second pass using allWays from the outer scope
-          if (mode === 'remove') {
-            setRoutes(prev => prev.map(r => {
-              if (r.num !== routeNum) return r;
-              const cleanedNames = r.streetNames.filter(name => {
-                // Keep name only if at least one of its segments is still selected
-                return allWays.some(w => w.name === name && r.selectedWayIds.has(w.id));
-              });
-              return { ...r, streetNames: cleanedNames };
-            }));
-          }
         }
       }
 
@@ -594,19 +542,19 @@ const MapBuilder: React.FC = () => {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
     };
-  }, [mapLoaded, currentArea, allWays]);
+  }, [mapLoaded, currentArea]);
 
-  // ─── Click handler ───
+  // ─── Click handler — toggle individual segment ───
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
     const handleClick = (e: mapboxgl.MapMouseEvent) => {
-      // Don't fire click if we just finished a box drag
+      // Skip if we just finished a box drag
       if (isDraggingRef.current) return;
 
       const features = map.queryRenderedFeatures(e.point, {
-        layers: ['roads-base', 'roads-selected', 'roads-point-a'],
+        layers: ['roads-base', 'roads-selected'],
       });
       if (!features.length) return;
 
@@ -614,48 +562,34 @@ const MapBuilder: React.FC = () => {
       const wayName = features[0].properties?.name as string;
       const isSelected = features[0].properties?.selected as boolean;
 
-      if (isSelected) {
-        // Remove entire street name
-        setRoutes(prev => prev.map(r => {
-          if (r.num !== activeRouteNum) return r;
-          const newIds = new Set(r.selectedWayIds);
-          allWays.filter(w => w.name === wayName).forEach(w => newIds.delete(w.id));
-          return { ...r, selectedWayIds: newIds, streetNames: r.streetNames.filter(n => n !== wayName) };
-        }));
-        setPointA(null);
-      } else {
-        // Two-point add
-        if (!pointA) {
-          setPointA({ wayId, streetName: wayName });
+      setRoutes(prev => prev.map(r => {
+        if (r.num !== activeRouteNum) return r;
+        const newIds = new Set(r.selectedWayIds);
+        let newNames = [...r.streetNames];
+
+        if (isSelected) {
+          // Remove just this one segment
+          newIds.delete(wayId);
+          // Remove street name if no segments remain for it
+          const stillHasSegments = allWays.some(w => w.name === wayName && newIds.has(w.id));
+          if (!stillHasSegments) {
+            newNames = newNames.filter(n => n !== wayName);
+          }
         } else {
-          if (wayName !== pointA.streetName) {
-            setPointA({ wayId, streetName: wayName });
-            setError(`Different street — starting new selection on ${wayName}.`);
-            setTimeout(() => setError(null), 3000);
-          } else {
-            const streetWays = allWays.filter(w => w.name === wayName);
-            const idxA = streetWays.findIndex(w => w.id === pointA.wayId);
-            const idxB = streetWays.findIndex(w => w.id === wayId);
-            if (idxA === -1 || idxB === -1) return;
-            const start = Math.min(idxA, idxB);
-            const end = Math.max(idxA, idxB);
-            const waysToAdd = streetWays.slice(start, end + 1);
-            setRoutes(prev => prev.map(r => {
-              if (r.num !== activeRouteNum) return r;
-              const newIds = new Set(r.selectedWayIds);
-              waysToAdd.forEach(w => newIds.add(w.id));
-              const newNames = r.streetNames.includes(wayName) ? r.streetNames : [...r.streetNames, wayName];
-              return { ...r, selectedWayIds: newIds, streetNames: newNames };
-            }));
-            setPointA(null);
+          // Add just this one segment
+          newIds.add(wayId);
+          if (wayName && !newNames.includes(wayName)) {
+            newNames.push(wayName);
           }
         }
-      }
+
+        return { ...r, selectedWayIds: newIds, streetNames: newNames };
+      }));
     };
 
     map.on('click', handleClick);
     return () => { map.off('click', handleClick); };
-  }, [mapLoaded, activeRouteNum, allWays, pointA]);
+  }, [mapLoaded, activeRouteNum, allWays]);
 
   // ─── Update map GeoJSON ───
   useEffect(() => {
@@ -663,9 +597,9 @@ const MapBuilder: React.FC = () => {
     if (!map || !mapLoaded || allWays.length === 0) return;
     const route = routes.find(r => r.num === activeRouteNum);
     if (!route) return;
-    const geojson = buildGeoJSON(allWays, route.selectedWayIds, route.color, pointA?.wayId);
+    const geojson = buildGeoJSON(allWays, route.selectedWayIds, route.color);
     (map.getSource('roads') as mapboxgl.GeoJSONSource).setData(geojson);
-  }, [routes, activeRouteNum, mapLoaded, allWays, pointA]);
+  }, [routes, activeRouteNum, mapLoaded, allWays]);
 
   // ─── Load roads ───
   const loadRoads = useCallback(async (area: AreaPrefix) => {
@@ -714,9 +648,7 @@ const MapBuilder: React.FC = () => {
     }
   }, []);
 
-  useEffect(() => {
-    if (mapLoaded && currentArea) loadRoads(currentArea);
-  }, [currentArea, mapLoaded]);
+  useEffect(() => { if (mapLoaded && currentArea) loadRoads(currentArea); }, [currentArea, mapLoaded]);
 
   // ─── AI Extraction ───
   const handleExtract = async () => {
@@ -783,7 +715,8 @@ const MapBuilder: React.FC = () => {
       if (r.num !== activeRouteNum) return r;
       const newIds = new Set(r.selectedWayIds);
       matching.forEach(w => newIds.add(w.id));
-      const newNames = r.streetNames.includes(matching[0].name) ? r.streetNames : [...r.streetNames, matching[0].name];
+      const newNames = r.streetNames.includes(matching[0].name)
+        ? r.streetNames : [...r.streetNames, matching[0].name];
       return { ...r, selectedWayIds: newIds, streetNames: newNames };
     }));
     setAddStreetInput('');
@@ -841,7 +774,7 @@ const MapBuilder: React.FC = () => {
     }
   };
 
-  // ─── Box rectangle dimensions for rendering ───
+  // Box rectangle for rendering
   const boxRect = boxState ? {
     left: Math.min(boxState.startX, boxState.currentX),
     top: Math.min(boxState.startY, boxState.currentY),
@@ -875,7 +808,9 @@ const MapBuilder: React.FC = () => {
             <button
               onClick={() => setShowStrip(s => !s)}
               className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm border transition-colors ${
-                showStrip ? 'bg-blue-900/30 border-blue-600 text-blue-300' : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+                showStrip
+                  ? 'bg-blue-900/30 border-blue-600 text-blue-300'
+                  : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
               }`}
             >
               <MapIcon size={14} />
@@ -883,7 +818,9 @@ const MapBuilder: React.FC = () => {
             </button>
           )}
           <label className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm cursor-pointer border transition-colors ${
-            pdfDoc ? 'bg-green-900/30 border-green-700 text-green-400' : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+            pdfDoc
+              ? 'bg-green-900/30 border-green-700 text-green-400'
+              : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
           }`}>
             {uploadingPdf ? <Loader size={14} className="animate-spin" /> : <Upload size={14} />}
             {pdfDoc ? 'PDF Loaded ✓' : 'Upload PDF'}
@@ -930,7 +867,8 @@ const MapBuilder: React.FC = () => {
                   title={areaInfo ? `${areaInfo.area_name} (${areaInfo.prefix})` : `Page ${thumb.pageNum} — click to set up`}
                   className={`flex-shrink-0 cursor-pointer rounded overflow-hidden border-2 transition-all relative ${
                     isActive ? 'border-blue-500 ring-1 ring-blue-400' :
-                    areaInfo ? 'border-green-600 hover:border-green-400' : 'border-gray-700 hover:border-gray-500'
+                    areaInfo ? 'border-green-600 hover:border-green-400' :
+                    'border-gray-700 hover:border-gray-500'
                   }`}
                   style={{ width: '68px', height: '88px' }}
                 >
@@ -979,7 +917,7 @@ const MapBuilder: React.FC = () => {
               {routes.map(r => (
                 <button
                   key={r.num}
-                  onClick={() => { setActiveRouteNum(r.num); setPointA(null); }}
+                  onClick={() => setActiveRouteNum(r.num)}
                   className={`w-full flex items-center gap-2 px-3 py-2 text-left border-b border-gray-700/40 hover:bg-gray-700 transition-colors ${
                     r.num === activeRouteNum ? 'bg-gray-700 border-l-2 border-l-blue-400' : ''
                   }`}
@@ -1022,21 +960,19 @@ const MapBuilder: React.FC = () => {
               style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, width: '100%', height: '100%' }}
             />
 
-            {/* Box selection rectangle overlay */}
+            {/* Box selection rectangle */}
             {boxRect && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: boxRect.left,
-                  top: boxRect.top,
-                  width: boxRect.width,
-                  height: boxRect.height,
-                  border: `2px dashed ${boxRect.mode === 'add' ? '#60a5fa' : '#f87171'}`,
-                  background: boxRect.mode === 'add' ? 'rgba(96,165,250,0.08)' : 'rgba(248,113,113,0.08)',
-                  pointerEvents: 'none',
-                  zIndex: 20,
-                }}
-              />
+              <div style={{
+                position: 'absolute',
+                left: boxRect.left,
+                top: boxRect.top,
+                width: boxRect.width,
+                height: boxRect.height,
+                border: `2px dashed ${boxRect.mode === 'add' ? '#60a5fa' : '#f87171'}`,
+                background: boxRect.mode === 'add' ? 'rgba(96,165,250,0.08)' : 'rgba(248,113,113,0.08)',
+                pointerEvents: 'none',
+                zIndex: 20,
+              }} />
             )}
 
             {/* No area overlay */}
@@ -1066,23 +1002,12 @@ const MapBuilder: React.FC = () => {
               </div>
             )}
 
-            {pointA && (
-              <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-blue-950/95 border border-blue-600 rounded-lg px-3 py-2 text-xs z-10 text-blue-300 flex items-center gap-2 shadow-lg">
-                <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse flex-shrink-0" />
-                <span>Point A set on <strong className="text-blue-200">{pointA.streetName}</strong> — click a second point on the same street</span>
-                <button onClick={() => setPointA(null)} className="text-blue-400 hover:text-white ml-2 flex-shrink-0">
-                  <X size={12} />
-                </button>
-              </div>
-            )}
-
             {/* Controls hint */}
             {currentArea && !loadingRoads && (
               <div className="absolute bottom-3 left-3 bg-gray-900/80 border border-gray-700 rounded px-2 py-1.5 text-[10px] text-gray-500 z-10 pointer-events-none space-y-0.5">
-                <div><span className="text-blue-400 font-mono">Shift+drag</span> — box select add</div>
-                <div><span className="text-red-400 font-mono">Alt+drag</span> — box select remove</div>
-                <div><span className="text-gray-400 font-mono">Click lit</span> — remove whole street</div>
-                <div><span className="text-gray-400 font-mono">Click unlit</span> — two-point add</div>
+                <div><span className="text-blue-400 font-mono">Shift+drag</span> — box add segments</div>
+                <div><span className="text-red-400 font-mono">Alt+drag</span> — box remove segments</div>
+                <div><span className="text-gray-400 font-mono">Click</span> — toggle single segment</div>
                 <div><span className="text-gray-400 font-mono">Right-drag</span> — rotate map</div>
               </div>
             )}
@@ -1130,7 +1055,7 @@ const MapBuilder: React.FC = () => {
                 <X size={14} /> Flag
               </button>
               <div className="ml-auto text-xs text-gray-500">
-                {activeRoute?.selectedWayIds.size || 0} segments selected
+                {activeRoute?.selectedWayIds.size || 0} segments · {activeRoute?.streetNames.length || 0} streets
               </div>
             </div>
           )}
@@ -1151,18 +1076,27 @@ const MapBuilder: React.FC = () => {
               {!activeRoute?.streetNames.length ? (
                 <div className="text-xs text-gray-600 italic text-center mt-6 px-2">
                   No streets selected yet.<br /><br />
-                  Use Shift+drag to box-select streets, click to add individually, or hit "Extract with AI".
+                  Use Shift+drag to box-select, or click individual segments to toggle them.
                 </div>
               ) : (
                 activeRoute.streetNames.map(name => {
-                  const segCount = allWays.filter(w => w.name === name && activeRoute.selectedWayIds.has(w.id)).length;
+                  const segCount = allWays.filter(
+                    w => w.name === name && activeRoute.selectedWayIds.has(w.id)
+                  ).length;
+                  const totalSegs = allWays.filter(w => w.name === name).length;
                   return (
                     <div key={name} className="flex items-center justify-between px-2 py-1.5 bg-gray-900 rounded mb-1 border border-gray-700">
                       <div>
                         <div className="text-xs text-gray-200 font-mono">{name}</div>
-                        <div className="text-[9px] text-gray-500">{segCount} segment{segCount !== 1 ? 's' : ''}</div>
+                        <div className="text-[9px] text-gray-500">
+                          {segCount} of {totalSegs} segment{totalSegs !== 1 ? 's' : ''}
+                        </div>
                       </div>
-                      <button onClick={() => handleRemoveStreet(name)} className="text-red-500 hover:text-red-400 p-0.5 flex-shrink-0">
+                      <button
+                        onClick={() => handleRemoveStreet(name)}
+                        className="text-red-500 hover:text-red-400 p-0.5 flex-shrink-0"
+                        title="Remove all segments of this street"
+                      >
                         <X size={12} />
                       </button>
                     </div>
@@ -1183,7 +1117,7 @@ const MapBuilder: React.FC = () => {
                   <Plus size={12} />
                 </button>
               </div>
-              <div className="text-[9px] text-gray-600 mt-1">Adds all segments of that street name</div>
+              <div className="text-[9px] text-gray-600 mt-1">Adds all segments of that street</div>
             </div>
           </div>
         )}
@@ -1246,9 +1180,7 @@ const MapBuilder: React.FC = () => {
                               : 'bg-orange-900/50 border-orange-500 text-orange-300'
                               : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
                           }`}
-                        >
-                          {r}
-                        </button>
+                        >{r}</button>
                       ))}
                     </div>
                   </div>
