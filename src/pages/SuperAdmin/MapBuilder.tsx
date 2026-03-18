@@ -380,6 +380,8 @@ const MapBuilder: React.FC = () => {
     setWayOverrides(new Map());
     setSplitUndoStack([]);
     setShowStrip(false);
+    isDraggingRef.current = false;
+    mapRef.current?.dragPan.enable();
     setTimeout(() => mapRef.current?.resize(), 100);
   };
 
@@ -577,7 +579,13 @@ const MapBuilder: React.FC = () => {
     canvas.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
-    return () => { canvas.removeEventListener('mousedown', onMouseDown); window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); };
+    return () => {
+      mapRef.current?.dragPan.enable();
+      isDraggingRef.current = false;
+      canvas.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
   }, [mapLoaded, currentArea]);
 
   // ─── Click handler ───
