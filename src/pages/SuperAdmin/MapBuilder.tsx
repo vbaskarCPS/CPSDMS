@@ -49,7 +49,7 @@ interface RouteData {
 
 interface OsmWay {
   id: number;
-  rootId?: number; // original OSM id for sub-segments
+  rootId?: number;
   name: string;
   geometry: [number, number][];
 }
@@ -68,13 +68,7 @@ interface BoxState {
   mode: 'add' | 'remove';
 }
 
-interface SplitPoint {
-  wayId: number;
-  lngLat: [number, number];
-  segIndex: number;
-  splitCoord: [number, number];
-}
-
+// Undo entry: what was split and what it became
 interface SplitUndoEntry {
   originalWay: OsmWay;
   subWayIds: number[];
@@ -87,19 +81,23 @@ function closestPointOnSegment(
   ax: number, ay: number,
   bx: number, by: number
 ): { x: number; y: number; t: number } {
-  const dx = bx - ax;
-  const dy = by - ay;
+  const dx = bx - ax, dy = by - ay;
   const lenSq = dx * dx + dy * dy;
   if (lenSq === 0) return { x: ax, y: ay, t: 0 };
   const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
   return { x: ax + t * dx, y: ay + t * dy, t };
 }
 
-function findSplitPosition(
+/**
+ * Split a polyline at the point on it closest to (clickLng, clickLat).
+ * Returns [firstHalf, secondHalf]. Returns null if click is too far or
+ * the split would produce a degenerate segment.
+ */
+function splitGeometryAtPoint(
   geometry: [number, number][],
   clickLng: number,
   clickLat: number
-): { segIndex: number; splitCoord: [number, number] } {
+): [[number, number][], [number, number][]] | null {
   let bestDist = Infinity;
   let bestSegIndex = 0;
   let bestCoord: [number, number] = geometry[0];
@@ -115,46 +113,25 @@ function findSplitPosition(
       bestCoord = [x, y];
     }
   }
-  return { segIndex: bestSegIndex, splitCoord: bestCoord };
-}
 
-function splitGeometryAtTwoPoints(
-  geometry: [number, number][],
-  posA: { segIndex: number; splitCoord: [number, number] },
-  posB: { segIndex: number; splitCoord: [number, number] }
-): Array<[number, number][]> {
-  // Sort so first comes before second along the polyline
-  let first = posA.segIndex <= posB.segIndex ? posA : posB;
-  let second = posA.segIndex <= posB.segIndex ? posB : posA;
-
-  const seg1: [number, number][] = [
-    ...geometry.slice(0, first.segIndex + 1),
-    first.splitCoord,
+  const firstHalf: [number, number][] = [
+    ...geometry.slice(0, bestSegIndex + 1),
+    bestCoord,
+  ];
+  const secondHalf: [number, number][] = [
+    bestCoord,
+    ...geometry.slice(bestSegIndex + 1),
   ];
 
-  let seg2: [number, number][];
-  if (first.segIndex === second.segIndex) {
-    seg2 = [first.splitCoord, second.splitCoord];
-  } else {
-    seg2 = [
-      first.splitCoord,
-      ...geometry.slice(first.segIndex + 1, second.segIndex + 1),
-      second.splitCoord,
-    ];
-  }
-
-  const seg3: [number, number][] = [
-    second.splitCoord,
-    ...geometry.slice(second.segIndex + 1),
-  ];
-
-  // Filter out degenerate sub-segments (need at least 2 distinct coords)
-  return [seg1, seg2, seg3].filter(seg => {
+  // Must each have at least 2 coords and not be a zero-length line
+  const valid = (seg: [number, number][]) => {
     if (seg.length < 2) return false;
-    // Check not all same point
     const [fx, fy] = seg[0];
     return seg.some(([x, y]) => x !== fx || y !== fy);
-  });
+  };
+
+  if (!valid(firstHalf) || !valid(secondHalf)) return null;
+  return [firstHalf, secondHalf];
 }
 
 function buildGeoJSON(
@@ -230,9 +207,10 @@ const MapBuilder: React.FC = () => {
   const [hoveredWayName, setHoveredWayName] = useState<string | null>(null);
 
   // Split state
+  // wayOverrides: maps an OsmWay id → its sub-ways (if split)
+  // This is recursive: sub-ways can themselves be in wayOverrides
   const [wayOverrides, setWayOverrides] = useState<Map<number, OsmWay[]>>(new Map());
   const [splitUndoStack, setSplitUndoStack] = useState<SplitUndoEntry[]>([]);
-  const [splitPointA, setSplitPointA] = useState<SplitPoint | null>(null);
   const [xKeyHeld, setXKeyHeld] = useState(false);
   const xKeyHeldRef = useRef(false);
   const splitCounterRef = useRef(2_000_000);
@@ -241,19 +219,25 @@ const MapBuilder: React.FC = () => {
   const [boxState, setBoxState] = useState<BoxState | null>(null);
   const boxStateRef = useRef<BoxState | null>(null);
   const isDraggingRef = useRef(false);
+
+  // Stable refs
   const activeRouteNumRef = useRef(activeRouteNum);
   const allWaysRef = useRef<OsmWay[]>([]);
   const wayOverridesRef = useRef<Map<number, OsmWay[]>>(new Map());
 
-  // Sync refs
   useEffect(() => { activeRouteNumRef.current = activeRouteNum; }, [activeRouteNum]);
   useEffect(() => { allWaysRef.current = allWays; }, [allWays]);
-  useEffect(() => { boxStateRef.current = boxState; }, [boxState]);
   useEffect(() => { wayOverridesRef.current = wayOverrides; }, [wayOverrides]);
+  useEffect(() => { boxStateRef.current = boxState; }, [boxState]);
 
-  // ─── Effective ways = allWays with overrides applied ───
+  // effectiveWays: allWays with splits applied recursively
   const effectiveWays = useMemo<OsmWay[]>(() => {
-    return allWays.flatMap(w => wayOverrides.get(w.id) ?? [w]);
+    const expand = (way: OsmWay): OsmWay[] => {
+      const subs = wayOverrides.get(way.id);
+      if (!subs) return [way];
+      return subs.flatMap(expand);
+    };
+    return allWays.flatMap(expand);
   }, [allWays, wayOverrides]);
 
   const activeRoute = routes.find(r => r.num === activeRouteNum);
@@ -277,13 +261,13 @@ const MapBuilder: React.FC = () => {
     try {
       const { data } = await supabase.storage.from('master-maps').list('');
       if (data?.length) {
-        const pdfFile = data.find(f => f.name.endsWith('.pdf'));
-        if (pdfFile) {
-          const { data: urlData } = supabase.storage.from('master-maps').getPublicUrl(pdfFile.name);
-          await loadPdfFromUrl(urlData.publicUrl);
+        const f = data.find(f => f.name.endsWith('.pdf'));
+        if (f) {
+          const { data: u } = supabase.storage.from('master-maps').getPublicUrl(f.name);
+          await loadPdfFromUrl(u.publicUrl);
         }
       }
-    } catch { /* No PDF yet */ }
+    } catch { /* no PDF yet */ }
   };
 
   const loadPdfFromUrl = async (url: string) => {
@@ -303,11 +287,10 @@ const MapBuilder: React.FC = () => {
       setThumbnails(prev => prev.map(t => t.pageNum === i ? { ...t, loading: true } : t));
       try {
         const page = await pdf.getPage(i);
-        const viewport = page.getViewport({ scale: 0.18 });
+        const vp = page.getViewport({ scale: 0.18 });
         const canvas = document.createElement('canvas');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise;
+        canvas.width = vp.width; canvas.height = vp.height;
+        await page.render({ canvasContext: canvas.getContext('2d')!, viewport: vp }).promise;
         const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
         setThumbnails(prev => prev.map(t => t.pageNum === i ? { ...t, dataUrl, loading: false } : t));
       } catch { setThumbnails(prev => prev.map(t => t.pageNum === i ? { ...t, loading: false } : t)); }
@@ -319,8 +302,8 @@ const MapBuilder: React.FC = () => {
 
   const handleThumbnailScroll = () => {
     if (!thumbnailStripRef.current || !pdfDoc) return;
-    const strip = thumbnailStripRef.current;
-    const pct = (strip.scrollLeft + strip.clientWidth) / strip.scrollWidth;
+    const s = thumbnailStripRef.current;
+    const pct = (s.scrollLeft + s.clientWidth) / s.scrollWidth;
     if (Math.ceil(pct * totalPages) >= renderedUpTo.current - 3 && renderedUpTo.current < totalPages)
       renderThumbnailBatch(pdfDoc, renderedUpTo.current + 1, 10);
   };
@@ -329,11 +312,10 @@ const MapBuilder: React.FC = () => {
   const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setUploadingPdf(true);
-    setError(null);
+    setUploadingPdf(true); setError(null);
     try {
       const { data: existing } = await supabase.storage.from('master-maps').list('');
-      if (existing) {
+      if (existing?.length) {
         const old = existing.filter(f => f.name.endsWith('.pdf'));
         if (old.length) await supabase.storage.from('master-maps').remove(old.map(p => p.name));
       }
@@ -359,19 +341,19 @@ const MapBuilder: React.FC = () => {
     setScanning(true);
     try {
       const base64 = await renderPageToBase64(pdfDoc, pageNum, 1.0);
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 300, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } }, { type: 'text', text: `This is a page from a master route map book for Hamilton, Ontario.\n\nLook at the bold title at the top (e.g. "Master Map – ALDERSHOT") and the route number table below it.\n\nRespond ONLY with this exact JSON — no other text:\n{\n  "area_name": "ALDERSHOT",\n  "route_count": 21\n}\n\narea_name = the area name from the title in ALL CAPS.\nroute_count = the highest route number shown in the table at the top of the page.` }] }] }),
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 300, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } }, { type: 'text', text: `This is a page from a master route map book for Hamilton, Ontario.\n\nRespond ONLY with this exact JSON:\n{\n  "area_name": "ALDERSHOT",\n  "route_count": 21\n}\n\narea_name = title in ALL CAPS. route_count = highest route number in the table.` }] }] }),
       });
-      const data = await response.json();
+      const data = await resp.json();
       const text = data.content[0].text;
       let parsed: { area_name: string; route_count: number };
       try { parsed = JSON.parse(text); }
       catch { const m = text.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : { area_name: `Area ${pageNum}`, route_count: 10 }; }
       setScannedAreaName(parsed.area_name);
       setScannedRouteCount(parsed.route_count);
-    } catch { setScannedAreaName(`Area ${pageNum}`); setScannedRouteCount(10); setError('Could not auto-read area name — edit manually.'); }
+    } catch { setScannedAreaName(`Area ${pageNum}`); setScannedRouteCount(10); setError('Could not auto-read — edit manually.'); }
     finally { setScanning(false); }
   };
 
@@ -397,7 +379,6 @@ const MapBuilder: React.FC = () => {
     setAllWays([]);
     setWayOverrides(new Map());
     setSplitUndoStack([]);
-    setSplitPointA(null);
     setShowStrip(false);
     setTimeout(() => mapRef.current?.resize(), 100);
   };
@@ -405,14 +386,12 @@ const MapBuilder: React.FC = () => {
   // ─── X key tracking ───
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (document.activeElement?.tagName === 'INPUT') return;
       if (e.key === 'x' || e.key === 'X') {
-        // Don't trigger if user is typing in an input
-        if (document.activeElement?.tagName === 'INPUT') return;
         xKeyHeldRef.current = true;
         setXKeyHeld(true);
         if (mapRef.current) mapRef.current.getCanvas().style.cursor = 'crosshair';
       }
-      // Ctrl+Z undo
       if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         handleSplitUndo();
@@ -423,73 +402,62 @@ const MapBuilder: React.FC = () => {
         xKeyHeldRef.current = false;
         setXKeyHeld(false);
         if (mapRef.current) mapRef.current.getCanvas().style.cursor = '';
-        setSplitPointA(null);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     return () => { window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); };
-  }, [splitUndoStack, wayOverrides]);
+  }, [splitUndoStack]);
 
   // ─── Split undo ───
   const handleSplitUndo = useCallback(() => {
     setSplitUndoStack(prev => {
       if (!prev.length) return prev;
       const last = prev[prev.length - 1];
-      // Remove sub-ways from wayOverrides
       setWayOverrides(overrides => {
         const next = new Map(overrides);
         next.delete(last.originalWay.id);
         return next;
       });
-      // Remove sub-way IDs from all routes' selectedWayIds
+      // Remove sub-way IDs from all routes
       setRoutes(routes => routes.map(r => {
         const newIds = new Set(r.selectedWayIds);
         last.subWayIds.forEach(id => newIds.delete(id));
         return { ...r, selectedWayIds: newIds };
       }));
-      setSplitPointA(null);
       return prev.slice(0, -1);
     });
   }, []);
 
-  // ─── Execute split ───
-  const executeSplit = useCallback((way: OsmWay, posA: { segIndex: number; splitCoord: [number, number] }, posB: { segIndex: number; splitCoord: [number, number] }) => {
-    const subGeometries = splitGeometryAtTwoPoints(way.geometry, posA, posB);
-    if (subGeometries.length < 2) { setError('Could not split — points too close together.'); return; }
+  // ─── Execute single-point split ───
+  const executeSplit = useCallback((way: OsmWay, clickLng: number, clickLat: number) => {
+    const result = splitGeometryAtPoint(way.geometry, clickLng, clickLat);
+    if (!result) { setError('Could not split here — click closer to the centre of a segment.'); return; }
 
+    const [geomA, geomB] = result;
     const rootId = way.rootId ?? way.id;
-    const subWays: OsmWay[] = subGeometries.map(geom => ({
-      id: splitCounterRef.current++,
-      rootId,
-      name: way.name,
-      geometry: geom,
-    }));
+    const subA: OsmWay = { id: splitCounterRef.current++, rootId, name: way.name, geometry: geomA };
+    const subB: OsmWay = { id: splitCounterRef.current++, rootId, name: way.name, geometry: geomB };
 
-    const subWayIds = subWays.map(s => s.id);
-
-    // Store for undo — key by the way's own ID (which may itself be a sub-way)
-    setSplitUndoStack(prev => [...prev, { originalWay: way, subWayIds }]);
-
-    // Apply override
-    setWayOverrides(prev => {
-      const next = new Map(prev);
-      // Find the original root in existing overrides or use way.id directly
-      // We store the override under the rootId so we always know the chain
-      // But actually we need to replace the way.id entry (which may already be a sub-way)
-      // So we store under way.id
-      next.set(way.id, subWays);
-      return next;
-    });
-
-    // Remove the original way from all routes' selectedWayIds
+    // Was the original way selected in any route? If so, select both halves instead
+    const wasSelectedInRoutes: number[] = [];
     setRoutes(prev => prev.map(r => {
+      if (!r.selectedWayIds.has(way.id)) return r;
+      wasSelectedInRoutes.push(r.num);
       const newIds = new Set(r.selectedWayIds);
       newIds.delete(way.id);
+      newIds.add(subA.id);
+      newIds.add(subB.id);
       return { ...r, selectedWayIds: newIds };
     }));
 
-    setSplitPointA(null);
+    setSplitUndoStack(prev => [...prev, { originalWay: way, subWayIds: [subA.id, subB.id] }]);
+
+    setWayOverrides(prev => {
+      const next = new Map(prev);
+      next.set(way.id, [subA, subB]);
+      return next;
+    });
   }, []);
 
   // ─── Init Mapbox ───
@@ -510,25 +478,10 @@ const MapBuilder: React.FC = () => {
       map.resize();
 
       map.addSource('roads', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-      map.addSource('split-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
 
       map.addLayer({ id: 'roads-base', type: 'line', source: 'roads', filter: ['==', ['get', 'selected'], false], paint: { 'line-color': 'rgba(255,255,255,0.18)', 'line-width': 2 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
       map.addLayer({ id: 'roads-hover', type: 'line', source: 'roads', filter: ['==', ['get', 'id'], -1], paint: { 'line-color': '#60a5fa', 'line-width': 6, 'line-opacity': 0.85 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
       map.addLayer({ id: 'roads-selected', type: 'line', source: 'roads', filter: ['==', ['get', 'selected'], true], paint: { 'line-color': ['get', 'color'], 'line-width': 5, 'line-opacity': 0.9 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
-
-      // Split point A marker
-      map.addLayer({
-        id: 'split-markers-layer',
-        type: 'circle',
-        source: 'split-markers',
-        paint: {
-          'circle-radius': 8,
-          'circle-color': '#60a5fa',
-          'circle-stroke-width': 2,
-          'circle-stroke-color': '#ffffff',
-          'circle-opacity': 0.95,
-        },
-      });
 
       const handleHover = (e: mapboxgl.MapMouseEvent & { features?: mapboxgl.MapboxGeoJSONFeature[] }) => {
         if (e.features?.[0]) {
@@ -542,7 +495,6 @@ const MapBuilder: React.FC = () => {
         setHoveredWayName(null);
         if (!xKeyHeldRef.current) map.getCanvas().style.cursor = '';
       };
-
       map.on('mousemove', 'roads-base', handleHover);
       map.on('mousemove', 'roads-selected', handleHover);
       map.on('mouseleave', 'roads-base', handleLeave);
@@ -555,26 +507,6 @@ const MapBuilder: React.FC = () => {
   }, []);
 
   useEffect(() => { setTimeout(() => mapRef.current?.resize(), 50); }, [showStrip]);
-
-  // ─── Update split marker on map ───
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !mapLoaded) return;
-    const src = map.getSource('split-markers') as mapboxgl.GeoJSONSource | undefined;
-    if (!src) return;
-    if (splitPointA) {
-      src.setData({
-        type: 'FeatureCollection',
-        features: [{
-          type: 'Feature',
-          properties: {},
-          geometry: { type: 'Point', coordinates: splitPointA.splitCoord },
-        }],
-      });
-    } else {
-      src.setData({ type: 'FeatureCollection', features: [] });
-    }
-  }, [splitPointA, mapLoaded]);
 
   // ─── Box selection ───
   useEffect(() => {
@@ -618,9 +550,11 @@ const MapBuilder: React.FC = () => {
           const hitNames = new Set<string>(features.map(f => f.properties?.name as string).filter(Boolean));
           const routeNum = activeRouteNumRef.current;
           const mode = box.mode;
-          const ways = allWaysRef.current;
           const overrides = wayOverridesRef.current;
-          const effectiveW = ways.flatMap(w => overrides.get(w.id) ?? [w]);
+          const effWays = allWaysRef.current.flatMap(w => {
+            const expand = (way: OsmWay): OsmWay[] => { const s = overrides.get(way.id); return s ? s.flatMap(expand) : [way]; };
+            return expand(w);
+          });
           setRoutes(prev => prev.map(r => {
             if (r.num !== routeNum) return r;
             const newIds = new Set(r.selectedWayIds);
@@ -630,7 +564,7 @@ const MapBuilder: React.FC = () => {
               hitNames.forEach(name => { if (!newNames.includes(name)) newNames.push(name); });
             } else {
               hitIds.forEach(id => newIds.delete(id));
-              newNames = newNames.filter(name => effectiveW.some(w => w.name === name && newIds.has(w.id)));
+              newNames = newNames.filter(name => effWays.some(w => w.name === name && newIds.has(w.id)));
             }
             return { ...r, selectedWayIds: newIds, streetNames: newNames };
           }));
@@ -661,42 +595,24 @@ const MapBuilder: React.FC = () => {
       const wayName = features[0].properties?.name as string;
       const isSelected = features[0].properties?.selected as boolean;
 
-      // ── X held = split mode ──
+      // ── Split mode ──
       if (xKeyHeldRef.current) {
-        // Find the actual way object (may be a sub-way from effectiveWays)
         const way = effectiveWays.find(w => w.id === wayId);
         if (!way) return;
-
-        if (!splitPointA) {
-          // Place Point A
-          const lngLat = map.unproject(e.point);
-          const { segIndex, splitCoord } = findSplitPosition(way.geometry, lngLat.lng, lngLat.lat);
-          setSplitPointA({ wayId, lngLat: [lngLat.lng, lngLat.lat], segIndex, splitCoord });
-        } else if (splitPointA.wayId === wayId) {
-          // Same segment — place Point B and execute split
-          const lngLat = map.unproject(e.point);
-          const { segIndex, splitCoord } = findSplitPosition(way.geometry, lngLat.lng, lngLat.lat);
-          executeSplit(way, { segIndex: splitPointA.segIndex, splitCoord: splitPointA.splitCoord }, { segIndex, splitCoord });
-        } else {
-          // Different segment — reset to this one as new Point A
-          const lngLat = map.unproject(e.point);
-          const { segIndex, splitCoord } = findSplitPosition(way.geometry, lngLat.lng, lngLat.lat);
-          setSplitPointA({ wayId, lngLat: [lngLat.lng, lngLat.lat], segIndex, splitCoord });
-          setError('Different segment — Point A reset to new segment.');
-          setTimeout(() => setError(null), 2500);
-        }
+        const lngLat = map.unproject(e.point);
+        executeSplit(way, lngLat.lng, lngLat.lat);
         return;
       }
 
-      // ── Normal mode = toggle single segment ──
+      // ── Toggle single segment ──
       setRoutes(prev => prev.map(r => {
         if (r.num !== activeRouteNum) return r;
         const newIds = new Set(r.selectedWayIds);
         let newNames = [...r.streetNames];
         if (isSelected) {
           newIds.delete(wayId);
-          const stillHas = effectiveWays.some(w => w.name === wayName && newIds.has(w.id));
-          if (!stillHas) newNames = newNames.filter(n => n !== wayName);
+          if (!effectiveWays.some(w => w.name === wayName && newIds.has(w.id)))
+            newNames = newNames.filter(n => n !== wayName);
         } else {
           newIds.add(wayId);
           if (wayName && !newNames.includes(wayName)) newNames.push(wayName);
@@ -707,7 +623,7 @@ const MapBuilder: React.FC = () => {
 
     map.on('click', handleClick);
     return () => { map.off('click', handleClick); };
-  }, [mapLoaded, activeRouteNum, effectiveWays, splitPointA, executeSplit]);
+  }, [mapLoaded, activeRouteNum, effectiveWays, executeSplit]);
 
   // ─── Update map GeoJSON ───
   useEffect(() => {
@@ -715,8 +631,7 @@ const MapBuilder: React.FC = () => {
     if (!map || !mapLoaded || effectiveWays.length === 0) return;
     const route = routes.find(r => r.num === activeRouteNum);
     if (!route) return;
-    const geojson = buildGeoJSON(effectiveWays, route.selectedWayIds, route.color);
-    (map.getSource('roads') as mapboxgl.GeoJSONSource).setData(geojson);
+    (map.getSource('roads') as mapboxgl.GeoJSONSource).setData(buildGeoJSON(effectiveWays, route.selectedWayIds, route.color));
   }, [routes, activeRouteNum, mapLoaded, effectiveWays]);
 
   // ─── Load roads ───
@@ -735,8 +650,7 @@ const MapBuilder: React.FC = () => {
       mapRef.current?.flyTo({ center, zoom: 13 });
       const resp = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: `data=${encodeURIComponent(`[out:json][timeout:30];way["highway"]["name"](${bbox});out geom;`)}`, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
       const data = await resp.json();
-      const ways: OsmWay[] = data.elements.filter((el: any) => el.type === 'way' && el.geometry && el.tags?.name).map((el: any) => ({ id: el.id, name: el.tags.name, geometry: el.geometry.map((pt: any) => [pt.lon, pt.lat] as [number, number]) }));
-      setAllWays(ways);
+      setAllWays(data.elements.filter((el: any) => el.type === 'way' && el.geometry && el.tags?.name).map((el: any) => ({ id: el.id, name: el.tags.name, geometry: el.geometry.map((pt: any) => [pt.lon, pt.lat] as [number, number]) })));
     } catch { setError('Failed to load roads from OpenStreetMap.'); }
     finally { setLoadingRoads(false); }
   }, []);
@@ -749,8 +663,8 @@ const MapBuilder: React.FC = () => {
     setExtracting(true); setError(null);
     try {
       const base64 = await renderPageToBase64(pdfDoc, selectedPage, 2.0);
-      const response = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } }, { type: 'text', text: `This is the master route map for ${currentArea.area_name}.\n\nFind Route ${activeRoute.num}. It is drawn in the color ${activeRoute.color}.\n\nList every street name for that route.\n\nRespond ONLY with this JSON:\n{\n  "streets": ["Street Name 1"],\n  "confidence": 75,\n  "notes": ""\n}` }] }] }) });
-      const data = await response.json();
+      const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } }, { type: 'text', text: `Master route map for ${currentArea.area_name}. Find Route ${activeRoute.num} (color: ${activeRoute.color}). List all street names for that route.\n\nRespond ONLY with:\n{\n  "streets": ["Street Name 1"],\n  "confidence": 75,\n  "notes": ""\n}` }] }] }) });
+      const data = await resp.json();
       const text = data.content[0].text;
       let parsed: { streets: string[]; confidence: number; notes: string };
       try { parsed = JSON.parse(text); }
@@ -760,7 +674,7 @@ const MapBuilder: React.FC = () => {
       parsed.streets.forEach((sn: string) => {
         const matching = effectiveWays.filter(w => w.name.toLowerCase().includes(sn.toLowerCase()) || sn.toLowerCase().includes(w.name.toLowerCase()));
         matching.forEach(w => matchedIds.add(w.id));
-        if (matching.length > 0 && !matchedNames.includes(sn)) matchedNames.push(sn);
+        if (matching.length && !matchedNames.includes(sn)) matchedNames.push(sn);
       });
       setRoutes(prev => prev.map(r => r.num !== activeRouteNum ? r : { ...r, selectedWayIds: matchedIds, streetNames: matchedNames, aiNotes: parsed.notes, confidence: parsed.confidence }));
     } catch { setError('AI extraction failed.'); }
@@ -814,7 +728,7 @@ const MapBuilder: React.FC = () => {
         await supabase.from('route_maps').upsert({ area_name: currentArea.area_name, route_number: route.num, route_code: routeCode, route_color: route.color, segments, status: 'approved', ai_confidence: route.confidence, ai_notes: route.aiNotes, approved_at: new Date().toISOString(), updated_at: new Date().toISOString() }, { onConflict: 'area_name,route_number' });
       }
       alert(`Saved ${approved.length} routes for ${currentArea.area_name}`);
-    } catch { setError('Failed to save to database'); }
+    } catch { setError('Failed to save.'); }
     finally { setSaving(false); }
   };
 
@@ -872,14 +786,12 @@ const MapBuilder: React.FC = () => {
         </div>
       )}
 
-      {/* X key split mode banner */}
+      {/* Split mode banner */}
       {xKeyHeld && currentArea && (
         <div className="bg-yellow-900/40 border-b border-yellow-700 px-4 py-2 text-sm text-yellow-300 flex items-center gap-3 flex-shrink-0">
           <Scissors size={14} className="flex-shrink-0" />
-          {splitPointA
-            ? <span>Point A set — click a <strong>second point on the same segment</strong> to split there · Click a different segment to reset Point A</span>
-            : <span>Split mode — click on any segment to place <strong>Point A</strong></span>}
-          <span className="ml-auto text-xs text-yellow-500">Release X to exit · Ctrl+Z to undo splits</span>
+          <span>Split mode — click anywhere on a segment to split it in two at that point</span>
+          <span className="ml-auto text-xs text-yellow-500">Release X to exit · Ctrl+Z to undo</span>
         </div>
       )}
 
@@ -891,7 +803,8 @@ const MapBuilder: React.FC = () => {
               const areaInfo = areaInfoMap.get(thumb.pageNum);
               const isActive = selectedPage === thumb.pageNum;
               return (
-                <div key={thumb.pageNum} onClick={() => handleThumbnailClick(thumb.pageNum)} title={areaInfo ? `${areaInfo.area_name} (${areaInfo.prefix})` : `Page ${thumb.pageNum}`}
+                <div key={thumb.pageNum} onClick={() => handleThumbnailClick(thumb.pageNum)}
+                  title={areaInfo ? `${areaInfo.area_name} (${areaInfo.prefix})` : `Page ${thumb.pageNum}`}
                   className={`flex-shrink-0 cursor-pointer rounded overflow-hidden border-2 transition-all relative ${isActive ? 'border-blue-500 ring-1 ring-blue-400' : areaInfo ? 'border-green-600 hover:border-green-400' : 'border-gray-700 hover:border-gray-500'}`}
                   style={{ width: '68px', height: '88px' }}>
                   {thumb.loading ? <div className="w-full h-full bg-gray-800 flex items-center justify-center"><Loader size={10} className="animate-spin text-gray-500" /></div>
@@ -947,17 +860,15 @@ const MapBuilder: React.FC = () => {
           </div>
         )}
 
-        {/* CENTER: Map — always in DOM */}
+        {/* CENTER: Map */}
         <div className="flex-1 flex flex-col overflow-hidden">
           <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
             <div ref={mapContainerRef} style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, width: '100%', height: '100%' }} />
 
-            {/* Box selection rectangle */}
             {boxRect && (
               <div style={{ position: 'absolute', left: boxRect.left, top: boxRect.top, width: boxRect.width, height: boxRect.height, border: `2px dashed ${boxRect.mode === 'add' ? '#60a5fa' : '#f87171'}`, background: boxRect.mode === 'add' ? 'rgba(96,165,250,0.08)' : 'rgba(248,113,113,0.08)', pointerEvents: 'none', zIndex: 20 }} />
             )}
 
-            {/* No area overlay */}
             {!currentArea && (
               <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
                 <div className="text-center bg-gray-900/80 rounded-xl px-8 py-6 border border-gray-700">
@@ -970,7 +881,7 @@ const MapBuilder: React.FC = () => {
             {loadingRoads && (
               <div className="absolute inset-0 bg-gray-900/60 flex items-center justify-center z-10">
                 <div className="bg-gray-800 rounded-lg px-4 py-3 flex items-center gap-3 text-sm border border-gray-700">
-                  <Loader size={16} className="animate-spin text-blue-400" />Loading roads from OpenStreetMap...
+                  <Loader size={16} className="animate-spin text-blue-400" />Loading roads...
                 </div>
               </div>
             )}
@@ -979,13 +890,12 @@ const MapBuilder: React.FC = () => {
               <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-gray-900/90 border border-gray-700 rounded px-3 py-1.5 text-sm z-10 pointer-events-none">{hoveredWayName}</div>
             )}
 
-            {/* Controls hint */}
             {currentArea && !loadingRoads && (
               <div className="absolute bottom-3 left-3 bg-gray-900/80 border border-gray-700 rounded px-2 py-1.5 text-[10px] text-gray-500 z-10 pointer-events-none space-y-0.5">
                 <div><span className="text-blue-400 font-mono">Shift+drag</span> — box add</div>
                 <div><span className="text-red-400 font-mono">Alt+drag</span> — box remove</div>
                 <div><span className="text-gray-400 font-mono">Click</span> — toggle segment</div>
-                <div><span className="text-yellow-400 font-mono">Hold X</span> — split mode</div>
+                <div><span className="text-yellow-400 font-mono">Hold X + click</span> — split segment</div>
                 <div><span className="text-gray-400 font-mono">Ctrl+Z</span> — undo split</div>
                 <div><span className="text-gray-400 font-mono">Right-drag</span> — rotate</div>
               </div>
@@ -1034,7 +944,7 @@ const MapBuilder: React.FC = () => {
               {!activeRoute?.streetNames.length ? (
                 <div className="text-xs text-gray-600 italic text-center mt-6 px-2">
                   No streets selected yet.<br /><br />
-                  Use Shift+drag to box-select, click to toggle segments, or hold X to split long segments.
+                  Shift+drag to box-select, click to toggle segments, hold X+click to split a long segment.
                 </div>
               ) : (
                 activeRoute.streetNames.map(name => {
@@ -1046,7 +956,7 @@ const MapBuilder: React.FC = () => {
                         <div className="text-xs text-gray-200 font-mono">{name}</div>
                         <div className="text-[9px] text-gray-500">{segs} of {total} segments</div>
                       </div>
-                      <button onClick={() => handleRemoveStreet(name)} className="text-red-500 hover:text-red-400 p-0.5 flex-shrink-0" title="Remove all segments"><X size={12} /></button>
+                      <button onClick={() => handleRemoveStreet(name)} className="text-red-500 hover:text-red-400 p-0.5 flex-shrink-0" title="Remove all"><X size={12} /></button>
                     </div>
                   );
                 })
