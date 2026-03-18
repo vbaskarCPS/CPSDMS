@@ -6,7 +6,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import * as pdfjsLib from 'pdfjs-dist';
 import {
   ArrowLeft, Loader, Check, X, AlertCircle,
-  Zap, Plus, Map as MapIcon, Upload, Scissors, RefreshCw,
+  Zap, Plus, Map as MapIcon, Upload, Scissors, RefreshCw, Pencil,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
@@ -51,6 +51,7 @@ interface OsmWay {
   id: number;
   rootId?: number;
   name: string;
+  unnamed?: boolean;
   geometry: [number, number][];
 }
 
@@ -68,10 +69,16 @@ interface BoxState {
   mode: 'add' | 'remove';
 }
 
-// Undo entry: what was split and what it became
 interface SplitUndoEntry {
   originalWay: OsmWay;
   subWayIds: number[];
+}
+
+interface ContextMenu {
+  x: number;
+  y: number;
+  wayId: number;
+  currentName: string;
 }
 
 // ─── Geometry helpers ───────────────────────────────────────────────────────
@@ -88,11 +95,6 @@ function closestPointOnSegment(
   return { x: ax + t * dx, y: ay + t * dy, t };
 }
 
-/**
- * Split a polyline at the point on it closest to (clickLng, clickLat).
- * Returns [firstHalf, secondHalf]. Returns null if click is too far or
- * the split would produce a degenerate segment.
- */
 function splitGeometryAtPoint(
   geometry: [number, number][],
   clickLng: number,
@@ -114,16 +116,9 @@ function splitGeometryAtPoint(
     }
   }
 
-  const firstHalf: [number, number][] = [
-    ...geometry.slice(0, bestSegIndex + 1),
-    bestCoord,
-  ];
-  const secondHalf: [number, number][] = [
-    bestCoord,
-    ...geometry.slice(bestSegIndex + 1),
-  ];
+  const firstHalf: [number, number][] = [...geometry.slice(0, bestSegIndex + 1), bestCoord];
+  const secondHalf: [number, number][] = [bestCoord, ...geometry.slice(bestSegIndex + 1)];
 
-  // Must each have at least 2 coords and not be a zero-length line
   const valid = (seg: [number, number][]) => {
     if (seg.length < 2) return false;
     const [fx, fy] = seg[0];
@@ -134,27 +129,19 @@ function splitGeometryAtPoint(
   return [firstHalf, secondHalf];
 }
 
-function buildGeoJSON(
-  ways: OsmWay[],
-  selectedIds: Set<number>,
-  color: string,
-): GeoJSON.FeatureCollection {
+function buildGeoJSON(ways: OsmWay[], selectedIds: Set<number>, color: string): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
     features: ways.map(w => ({
       type: 'Feature',
       id: w.id,
-      properties: { id: w.id, name: w.name, selected: selectedIds.has(w.id), color },
+      properties: { id: w.id, name: w.name, unnamed: w.unnamed ?? false, selected: selectedIds.has(w.id), color },
       geometry: { type: 'LineString', coordinates: w.geometry },
     })),
   };
 }
 
-async function renderPageToBase64(
-  pdfDoc: pdfjsLib.PDFDocumentProxy,
-  pageNum: number,
-  scale = 1.5
-): Promise<string> {
+async function renderPageToBase64(pdfDoc: pdfjsLib.PDFDocumentProxy, pageNum: number, scale = 1.5): Promise<string> {
   const page = await pdfDoc.getPage(pageNum);
   const viewport = page.getViewport({ scale });
   const canvas = document.createElement('canvas');
@@ -162,6 +149,51 @@ async function renderPageToBase64(
   canvas.height = viewport.height;
   await page.render({ canvasContext: canvas.getContext('2d')!, viewport }).promise;
   return canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+}
+
+// ─── Overpass fetch ─────────────────────────────────────────────────────────
+// Mirrors ordered by reliability — de endpoint last since it 504s most often
+const OVERPASS_ENDPOINTS = [
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.openstreetmap.ru/api/interpreter',
+  'https://overpass.osm.ch/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+];
+
+async function fetchOverpass(bbox: string): Promise<OsmWay[]> {
+  const query = `data=${encodeURIComponent(
+    `[out:json][timeout:60];(way["highway"]["name"](${bbox});way["highway"]["highway"~"residential|service|unclassified|living_street"][!"name"](${bbox}););out geom;`
+  )}`;
+
+  const tryEndpoint = (url: string): Promise<Response> => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 18000);
+    return fetch(url, {
+      method: 'POST',
+      body: query,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      signal: ctrl.signal,
+    }).finally(() => clearTimeout(t));
+  };
+
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    try {
+      const r = await tryEndpoint(endpoint);
+      if (r.ok) {
+        const data = await r.json();
+        return data.elements
+          .filter((el: any) => el.type === 'way' && el.geometry)
+          .map((el: any) => ({
+            id: el.id,
+            name: el.tags?.name || '',
+            unnamed: !el.tags?.name,
+            geometry: el.geometry.map((pt: any) => [pt.lon, pt.lat] as [number, number]),
+          }));
+      }
+    } catch { /* try next mirror */ }
+  }
+  throw new Error('All Overpass mirrors failed — try again in a moment');
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -206,14 +238,19 @@ const MapBuilder: React.FC = () => {
   const [addStreetInput, setAddStreetInput] = useState('');
   const [hoveredWayName, setHoveredWayName] = useState<string | null>(null);
 
-  // Split state
-  // wayOverrides: maps an OsmWay id → its sub-ways (if split)
-  // This is recursive: sub-ways can themselves be in wayOverrides
+  // Split
   const [wayOverrides, setWayOverrides] = useState<Map<number, OsmWay[]>>(new Map());
   const [splitUndoStack, setSplitUndoStack] = useState<SplitUndoEntry[]>([]);
   const [xKeyHeld, setXKeyHeld] = useState(false);
   const xKeyHeldRef = useRef(false);
   const splitCounterRef = useRef(2_000_000);
+
+  // Road rename
+  const [wayNameOverrides, setWayNameOverrides] = useState<Map<number, string>>(new Map());
+  const wayNameOverridesRef = useRef<Map<number, string>>(new Map());
+  const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const [contextMenuInput, setContextMenuInput] = useState('');
+  const contextMenuInputRef = useRef<HTMLInputElement>(null);
 
   // Box selection
   const [boxState, setBoxState] = useState<BoxState | null>(null);
@@ -228,17 +265,22 @@ const MapBuilder: React.FC = () => {
   useEffect(() => { activeRouteNumRef.current = activeRouteNum; }, [activeRouteNum]);
   useEffect(() => { allWaysRef.current = allWays; }, [allWays]);
   useEffect(() => { wayOverridesRef.current = wayOverrides; }, [wayOverrides]);
+  useEffect(() => { wayNameOverridesRef.current = wayNameOverrides; }, [wayNameOverrides]);
   useEffect(() => { boxStateRef.current = boxState; }, [boxState]);
 
-  // effectiveWays: allWays with splits applied recursively
+  // effectiveWays: allWays with splits + name overrides applied recursively
   const effectiveWays = useMemo<OsmWay[]>(() => {
     const expand = (way: OsmWay): OsmWay[] => {
       const subs = wayOverrides.get(way.id);
-      if (!subs) return [way];
+      if (!subs) {
+        const nameOverride = wayNameOverrides.get(way.id);
+        if (nameOverride) return [{ ...way, name: nameOverride, unnamed: false }];
+        return [way];
+      }
       return subs.flatMap(expand);
     };
     return allWays.flatMap(expand);
-  }, [allWays, wayOverrides]);
+  }, [allWays, wayOverrides, wayNameOverrides]);
 
   const activeRoute = routes.find(r => r.num === activeRouteNum);
   const approvedCount = routes.filter(r => r.status === 'approved').length;
@@ -378,8 +420,10 @@ const MapBuilder: React.FC = () => {
     setActiveRouteNum(1);
     setAllWays([]);
     setWayOverrides(new Map());
+    setWayNameOverrides(new Map());
     setSplitUndoStack([]);
     setShowStrip(false);
+    setContextMenu(null);
     isDraggingRef.current = false;
     mapRef.current?.dragPan.enable();
     setTimeout(() => mapRef.current?.resize(), 100);
@@ -390,19 +434,15 @@ const MapBuilder: React.FC = () => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (document.activeElement?.tagName === 'INPUT') return;
       if (e.key === 'x' || e.key === 'X') {
-        xKeyHeldRef.current = true;
-        setXKeyHeld(true);
+        xKeyHeldRef.current = true; setXKeyHeld(true);
         if (mapRef.current) mapRef.current.getCanvas().style.cursor = 'crosshair';
       }
-      if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        handleSplitUndo();
-      }
+      if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleSplitUndo(); }
+      if (e.key === 'Escape') setContextMenu(null);
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'x' || e.key === 'X') {
-        xKeyHeldRef.current = false;
-        setXKeyHeld(false);
+        xKeyHeldRef.current = false; setXKeyHeld(false);
         if (mapRef.current) mapRef.current.getCanvas().style.cursor = '';
       }
     };
@@ -416,13 +456,8 @@ const MapBuilder: React.FC = () => {
     setSplitUndoStack(prev => {
       if (!prev.length) return prev;
       const last = prev[prev.length - 1];
-      setWayOverrides(overrides => {
-        const next = new Map(overrides);
-        next.delete(last.originalWay.id);
-        return next;
-      });
-      // Remove sub-way IDs from all routes
-      setRoutes(routes => routes.map(r => {
+      setWayOverrides(o => { const n = new Map(o); n.delete(last.originalWay.id); return n; });
+      setRoutes(rs => rs.map(r => {
         const newIds = new Set(r.selectedWayIds);
         last.subWayIds.forEach(id => newIds.delete(id));
         return { ...r, selectedWayIds: newIds };
@@ -431,36 +466,60 @@ const MapBuilder: React.FC = () => {
     });
   }, []);
 
-  // ─── Execute single-point split ───
+  // ─── Execute split ───
   const executeSplit = useCallback((way: OsmWay, clickLng: number, clickLat: number) => {
     const result = splitGeometryAtPoint(way.geometry, clickLng, clickLat);
     if (!result) { setError('Could not split here — click closer to the centre of a segment.'); return; }
-
     const [geomA, geomB] = result;
     const rootId = way.rootId ?? way.id;
-    const subA: OsmWay = { id: splitCounterRef.current++, rootId, name: way.name, geometry: geomA };
-    const subB: OsmWay = { id: splitCounterRef.current++, rootId, name: way.name, geometry: geomB };
+    const subA: OsmWay = { id: splitCounterRef.current++, rootId, name: way.name, unnamed: way.unnamed, geometry: geomA };
+    const subB: OsmWay = { id: splitCounterRef.current++, rootId, name: way.name, unnamed: way.unnamed, geometry: geomB };
 
-    // Was the original way selected in any route? If so, select both halves instead
-    const wasSelectedInRoutes: number[] = [];
+    // Propagate name override to both halves
+    const existingNameOverride = wayNameOverridesRef.current.get(way.id);
+    if (existingNameOverride) {
+      setWayNameOverrides(prev => {
+        const next = new Map(prev);
+        next.set(subA.id, existingNameOverride);
+        next.set(subB.id, existingNameOverride);
+        return next;
+      });
+    }
+
     setRoutes(prev => prev.map(r => {
       if (!r.selectedWayIds.has(way.id)) return r;
-      wasSelectedInRoutes.push(r.num);
       const newIds = new Set(r.selectedWayIds);
-      newIds.delete(way.id);
-      newIds.add(subA.id);
-      newIds.add(subB.id);
+      newIds.delete(way.id); newIds.add(subA.id); newIds.add(subB.id);
       return { ...r, selectedWayIds: newIds };
     }));
-
     setSplitUndoStack(prev => [...prev, { originalWay: way, subWayIds: [subA.id, subB.id] }]);
-
-    setWayOverrides(prev => {
-      const next = new Map(prev);
-      next.set(way.id, [subA, subB]);
-      return next;
-    });
+    setWayOverrides(prev => { const next = new Map(prev); next.set(way.id, [subA, subB]); return next; });
   }, []);
+
+  // ─── Rename confirm ───
+  const handleRenameConfirm = useCallback(() => {
+    if (!contextMenu) return;
+    const name = contextMenuInput.trim();
+    if (!name) { setContextMenu(null); return; }
+
+    setWayNameOverrides(prev => { const next = new Map(prev); next.set(contextMenu.wayId, name); return next; });
+
+    // Update streetNames in any route that has this way selected
+    setRoutes(prev => prev.map(r => {
+      if (!r.selectedWayIds.has(contextMenu.wayId)) return r;
+      const newNames = [...r.streetNames];
+      const oldName = contextMenu.currentName;
+      if (oldName && newNames.includes(oldName)) {
+        newNames.splice(newNames.indexOf(oldName), 1, name);
+      } else if (!newNames.includes(name)) {
+        newNames.push(name);
+      }
+      return { ...r, streetNames: newNames };
+    }));
+
+    setContextMenu(null);
+    setContextMenuInput('');
+  }, [contextMenu, contextMenuInput]);
 
   // ─── Init Mapbox ───
   useEffect(() => {
@@ -478,17 +537,25 @@ const MapBuilder: React.FC = () => {
 
     map.on('load', () => {
       map.resize();
-
       map.addSource('roads', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
 
-      map.addLayer({ id: 'roads-base', type: 'line', source: 'roads', filter: ['==', ['get', 'selected'], false], paint: { 'line-color': 'rgba(255,255,255,0.18)', 'line-width': 2 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+      // Named roads — normal style
+      map.addLayer({ id: 'roads-base', type: 'line', source: 'roads', filter: ['all', ['==', ['get', 'selected'], false], ['==', ['get', 'unnamed'], false]], paint: { 'line-color': 'rgba(255,255,255,0.18)', 'line-width': 2 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+      // Unnamed connectors — dashed dim
+      map.addLayer({ id: 'roads-unnamed', type: 'line', source: 'roads', filter: ['all', ['==', ['get', 'selected'], false], ['==', ['get', 'unnamed'], true]], paint: { 'line-color': 'rgba(255,255,255,0.09)', 'line-width': 2, 'line-dasharray': [2, 3] }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+      // Hover highlight
       map.addLayer({ id: 'roads-hover', type: 'line', source: 'roads', filter: ['==', ['get', 'id'], -1], paint: { 'line-color': '#60a5fa', 'line-width': 6, 'line-opacity': 0.85 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+      // Selected roads
       map.addLayer({ id: 'roads-selected', type: 'line', source: 'roads', filter: ['==', ['get', 'selected'], true], paint: { 'line-color': ['get', 'color'], 'line-width': 5, 'line-opacity': 0.9 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+
+      const ALL_ROAD_LAYERS = ['roads-base', 'roads-unnamed', 'roads-selected'];
 
       const handleHover = (e: mapboxgl.MapMouseEvent & { features?: mapboxgl.MapboxGeoJSONFeature[] }) => {
         if (e.features?.[0]) {
           map.setFilter('roads-hover', ['==', ['get', 'id'], e.features[0].properties?.id]);
-          setHoveredWayName(e.features[0].properties?.name || null);
+          const name = e.features[0].properties?.name as string;
+          const isUnnamed = e.features[0].properties?.unnamed as boolean;
+          setHoveredWayName(name || (isUnnamed ? '(unnamed — right-click to name)' : null));
           if (!xKeyHeldRef.current) map.getCanvas().style.cursor = 'pointer';
         }
       };
@@ -497,10 +564,7 @@ const MapBuilder: React.FC = () => {
         setHoveredWayName(null);
         if (!xKeyHeldRef.current) map.getCanvas().style.cursor = '';
       };
-      map.on('mousemove', 'roads-base', handleHover);
-      map.on('mousemove', 'roads-selected', handleHover);
-      map.on('mouseleave', 'roads-base', handleLeave);
-      map.on('mouseleave', 'roads-selected', handleLeave);
+      ALL_ROAD_LAYERS.forEach(layer => { map.on('mousemove', layer, handleHover); map.on('mouseleave', layer, handleLeave); });
 
       setMapLoaded(true);
     });
@@ -510,6 +574,40 @@ const MapBuilder: React.FC = () => {
 
   useEffect(() => { setTimeout(() => mapRef.current?.resize(), 50); }, [showStrip]);
 
+  // ─── Right-click context menu ───
+  useEffect(() => {
+    const canvas = mapRef.current?.getCanvas();
+    if (!canvas || !mapLoaded) return;
+
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      const map = mapRef.current;
+      if (!map || !currentArea) return;
+      const rect = canvas.getBoundingClientRect();
+      const features = map.queryRenderedFeatures(
+        { x: e.clientX - rect.left, y: e.clientY - rect.top },
+        { layers: ['roads-base', 'roads-unnamed', 'roads-selected'] },
+      );
+      if (!features.length) return;
+      const wayId = features[0].properties?.id as number;
+      const currentName = features[0].properties?.name as string || '';
+      const menuX = Math.min(e.clientX, window.innerWidth - 264);
+      const menuY = Math.min(e.clientY, window.innerHeight - 130);
+      setContextMenu({ x: menuX, y: menuY, wayId, currentName });
+      setContextMenuInput(currentName);
+    };
+
+    canvas.addEventListener('contextmenu', onContextMenu);
+    return () => canvas.removeEventListener('contextmenu', onContextMenu);
+  }, [mapLoaded, currentArea]);
+
+  // Auto-focus rename input
+  useEffect(() => {
+    if (contextMenu && contextMenuInputRef.current) {
+      setTimeout(() => { contextMenuInputRef.current?.focus(); contextMenuInputRef.current?.select(); }, 30);
+    }
+  }, [contextMenu]);
+
   // ─── Box selection ───
   useEffect(() => {
     const canvas = mapRef.current?.getCanvas();
@@ -518,14 +616,14 @@ const MapBuilder: React.FC = () => {
     const onMouseDown = (e: MouseEvent) => {
       if (!e.shiftKey && !e.altKey) return;
       if (!currentArea) return;
+      setContextMenu(null);
       e.preventDefault(); e.stopPropagation();
       isDraggingRef.current = true;
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left, y = e.clientY - rect.top;
       const mode = e.shiftKey ? 'add' : 'remove';
       const newBox: BoxState = { startX: x, startY: y, currentX: x, currentY: y, mode };
-      boxStateRef.current = newBox;
-      setBoxState(newBox);
+      boxStateRef.current = newBox; setBoxState(newBox);
       mapRef.current?.dragPan.disable();
     };
 
@@ -533,8 +631,7 @@ const MapBuilder: React.FC = () => {
       if (!isDraggingRef.current || !boxStateRef.current) return;
       const rect = canvas.getBoundingClientRect();
       const updated = { ...boxStateRef.current, currentX: e.clientX - rect.left, currentY: e.clientY - rect.top };
-      boxStateRef.current = updated;
-      setBoxState({ ...updated });
+      boxStateRef.current = updated; setBoxState({ ...updated });
     };
 
     const onMouseUp = () => {
@@ -547,14 +644,19 @@ const MapBuilder: React.FC = () => {
       if (maxX - minX > 5 && maxY - minY > 5) {
         const map = mapRef.current;
         if (map) {
-          const features = map.queryRenderedFeatures([{ x: minX, y: minY }, { x: maxX, y: maxY }], { layers: ['roads-base', 'roads-selected'] });
+          const features = map.queryRenderedFeatures([{ x: minX, y: minY }, { x: maxX, y: maxY }], { layers: ['roads-base', 'roads-unnamed', 'roads-selected'] });
           const hitIds = new Set<number>(features.map(f => f.properties?.id as number).filter(Boolean));
           const hitNames = new Set<string>(features.map(f => f.properties?.name as string).filter(Boolean));
           const routeNum = activeRouteNumRef.current;
           const mode = box.mode;
           const overrides = wayOverridesRef.current;
+          const nameOverrides = wayNameOverridesRef.current;
           const effWays = allWaysRef.current.flatMap(w => {
-            const expand = (way: OsmWay): OsmWay[] => { const s = overrides.get(way.id); return s ? s.flatMap(expand) : [way]; };
+            const expand = (way: OsmWay): OsmWay[] => {
+              const s = overrides.get(way.id);
+              if (!s) { const no = nameOverrides.get(way.id); return [no ? { ...way, name: no, unnamed: false } : way]; }
+              return s.flatMap(expand);
+            };
             return expand(w);
           });
           setRoutes(prev => prev.map(r => {
@@ -563,7 +665,7 @@ const MapBuilder: React.FC = () => {
             let newNames = [...r.streetNames];
             if (mode === 'add') {
               hitIds.forEach(id => newIds.add(id));
-              hitNames.forEach(name => { if (!newNames.includes(name)) newNames.push(name); });
+              hitNames.forEach(name => { if (name && !newNames.includes(name)) newNames.push(name); });
             } else {
               hitIds.forEach(id => newIds.delete(id));
               newNames = newNames.filter(name => effWays.some(w => w.name === name && newIds.has(w.id)));
@@ -572,16 +674,14 @@ const MapBuilder: React.FC = () => {
           }));
         }
       }
-      boxStateRef.current = null;
-      setBoxState(null);
+      boxStateRef.current = null; setBoxState(null);
     };
 
     canvas.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
     return () => {
-      mapRef.current?.dragPan.enable();
-      isDraggingRef.current = false;
+      mapRef.current?.dragPan.enable(); isDraggingRef.current = false;
       canvas.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
@@ -595,15 +695,13 @@ const MapBuilder: React.FC = () => {
 
     const handleClick = (e: mapboxgl.MapMouseEvent) => {
       if (isDraggingRef.current) return;
-
-      const features = map.queryRenderedFeatures(e.point, { layers: ['roads-base', 'roads-selected'] });
+      setContextMenu(null);
+      const features = map.queryRenderedFeatures(e.point, { layers: ['roads-base', 'roads-unnamed', 'roads-selected'] });
       if (!features.length) return;
-
       const wayId = features[0].properties?.id as number;
       const wayName = features[0].properties?.name as string;
       const isSelected = features[0].properties?.selected as boolean;
 
-      // ── Split mode ──
       if (xKeyHeldRef.current) {
         const way = effectiveWays.find(w => w.id === wayId);
         if (!way) return;
@@ -612,7 +710,6 @@ const MapBuilder: React.FC = () => {
         return;
       }
 
-      // ── Toggle single segment ──
       setRoutes(prev => prev.map(r => {
         if (r.num !== activeRouteNum) return r;
         const newIds = new Set(r.selectedWayIds);
@@ -642,38 +739,22 @@ const MapBuilder: React.FC = () => {
     (map.getSource('roads') as mapboxgl.GeoJSONSource).setData(buildGeoJSON(effectiveWays, route.selectedWayIds, route.color));
   }, [routes, activeRouteNum, mapLoaded, effectiveWays]);
 
-  // ─── Load roads ───
-  // Strategy: use Nominatim to find the area centre, fly the map there at zoom 14,
-  // then query Overpass using the actual map viewport bounds so we always get
-  // exactly the roads that are visible — no guessing at bbox size.
+  // ─── Load roads (initial) ───
   const loadRoads = useCallback(async (area: AreaPrefix) => {
     setLoadingRoads(true); setError(null);
     try {
       const fullName = area.area_name.toLowerCase().replace(/#\d+/g, '').trim();
-
-      // Try to get a centre point from Nominatim (just for flying, not for bbox)
-      let center: [number, number] = [-79.870, 43.270]; // Hamilton default
-      const searchCandidates = [
-        fullName,
-        fullName.split(' ')[0],
-        fullName.split(' ').slice(0, 2).join(' '),
-      ].filter((v, i, a) => a.indexOf(v) === i);
+      let center: [number, number] = [-79.870, 43.270];
+      const searchCandidates = [fullName, fullName.split(' ')[0], fullName.split(' ').slice(0, 2).join(' ')].filter((v, i, a) => a.indexOf(v) === i);
 
       for (const candidate of searchCandidates) {
         try {
-          const resp = await fetch(
-            `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(candidate + ', Hamilton, Ontario, Canada')}&format=json&limit=1`,
-            { headers: { 'User-Agent': 'CPSDMS-MapBuilder/1.0' } }
-          );
+          const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(candidate + ', Hamilton, Ontario, Canada')}&format=json&limit=1`, { headers: { 'User-Agent': 'CPSDMS-MapBuilder/1.0' } });
           const data = await resp.json();
-          if (data.length > 0) {
-            center = [parseFloat(data[0].lon), parseFloat(data[0].lat)];
-            break;
-          }
+          if (data.length > 0) { center = [parseFloat(data[0].lon), parseFloat(data[0].lat)]; break; }
         } catch { /* try next */ }
       }
 
-      // Fly to area centre and wait for animation to finish (max 3s)
       await new Promise<void>(resolve => {
         const map = mapRef.current;
         if (!map) { resolve(); return; }
@@ -682,91 +763,53 @@ const MapBuilder: React.FC = () => {
         map.flyTo({ center, zoom: 14 });
       });
 
-      // Now query Overpass using the actual visible map bounds
       const map = mapRef.current;
       if (!map) throw new Error('Map not available');
       const b = map.getBounds();
-      // Add 10% padding around viewport so roads at edges load fully
       const latPad = (b.getNorth() - b.getSouth()) * 0.1;
       const lngPad = (b.getEast() - b.getWest()) * 0.1;
-      const south = b.getSouth() - latPad;
-      const north = b.getNorth() + latPad;
-      const west = b.getWest() - lngPad;
-      const east = b.getEast() + lngPad;
-      const bbox = `${south},${west},${north},${east}`;
-
-      const overpassEndpoints = [
-        'https://overpass-api.de/api/interpreter',
-        'https://overpass.kumi.systems/api/interpreter',
-        'https://overpass.openstreetmap.ru/api/interpreter',
-        'https://overpass.osm.ch/api/interpreter',
-        'https://overpass-api.de/api/interpreter',
-      ];
-      const query = `data=${encodeURIComponent(`[out:json][timeout:60];way["highway"]["name"](${bbox});out geom;`)}`;
-
-      // Helper: fetch with a per-endpoint timeout so we don't wait forever
-      const fetchWithTimeout = (url: string, options: RequestInit, ms: number): Promise<Response> => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), ms);
-        return fetch(url, { ...options, signal: controller.signal })
-          .finally(() => clearTimeout(timer));
-      };
-
-      let resp: Response | null = null;
-      for (const endpoint of overpassEndpoints) {
-        try {
-          const r = await fetchWithTimeout(endpoint, {
-            method: 'POST',
-            body: query,
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          }, 15000); // 15s per endpoint before trying next
-          if (r.ok) { resp = r; break; }
-        } catch { /* try next endpoint */ }
-      }
-      if (!resp || !resp.ok) throw new Error('All Overpass endpoints failed');
-      const data = await resp.json();
-      setAllWays(data.elements.filter((el: any) => el.type === 'way' && el.geometry && el.tags?.name).map((el: any) => ({ id: el.id, name: el.tags.name, geometry: el.geometry.map((pt: any) => [pt.lon, pt.lat] as [number, number]) })));
-    } catch { setError('Failed to load roads from OpenStreetMap.'); }
+      const bbox = `${b.getSouth() - latPad},${b.getWest() - lngPad},${b.getNorth() + latPad},${b.getEast() + lngPad}`;
+      const ways = await fetchOverpass(bbox);
+      setAllWays(ways);
+    } catch { setError('Failed to load roads — click "Load More Roads" to retry.'); }
     finally { setLoadingRoads(false); }
   }, []);
 
   useEffect(() => { if (mapLoaded && currentArea) loadRoads(currentArea); }, [currentArea, mapLoaded]);
 
-  // ─── Restore previously saved routes once roads are loaded ───
+  // ─── Restore saved routes once roads load ───
+  // Runs on every allWays change so partial/retry loads also trigger restore
   useEffect(() => {
     if (!currentArea || allWays.length === 0) return;
 
     const restore = async () => {
       try {
-        const { data, error: dbErr } = await supabase
-          .from('route_maps')
-          .select('*')
-          .eq('area_name', currentArea.area_name);
+        const { data, error: dbErr } = await supabase.from('route_maps').select('*').eq('area_name', currentArea.area_name);
         if (dbErr || !data || data.length === 0) return;
 
-        // Build a lookup: osmId → way id (Overpass id)
-        // Saved segments store osmId (the original OSM way id)
         const osmIdToWay = new Map<number, OsmWay>();
         allWays.forEach(w => osmIdToWay.set(w.id, w));
 
         setRoutes(prev => prev.map(route => {
+          // Don't overwrite routes that were already restored or have user edits
+          if (route.selectedWayIds.size > 0 || route.status !== 'pending') return route;
+
           const saved = data.find((d: any) => d.route_number === route.num);
           if (!saved) return route;
 
-          // Match saved segment osmIds to loaded way ids
           const selectedWayIds = new Set<number>();
           const streetNames: string[] = [];
 
           (saved.segments || []).forEach((seg: any) => {
-            const osmId = seg.osmId;
-            const way = osmIdToWay.get(osmId);
+            const way = osmIdToWay.get(seg.osmId);
             if (way) {
               selectedWayIds.add(way.id);
-              if (seg.name && !streetNames.includes(seg.name)) {
-                streetNames.push(seg.name);
-              }
+              if (seg.name && !streetNames.includes(seg.name)) streetNames.push(seg.name);
             }
           });
+
+          // Only apply if we actually matched something
+          if (selectedWayIds.size === 0) return route;
 
           return {
             ...route,
@@ -777,13 +820,13 @@ const MapBuilder: React.FC = () => {
             confidence: saved.ai_confidence || 0,
           };
         }));
-      } catch { /* silent — restore is best-effort */ }
+      } catch { /* silent — best effort */ }
     };
 
     restore();
   }, [allWays, currentArea]);
 
-  // ─── Load more roads from current viewport ───
+  // ─── Load more roads from viewport ───
   const loadRoadsFromViewport = useCallback(async () => {
     const map = mapRef.current;
     if (!map || loadingRoads) return;
@@ -793,37 +836,12 @@ const MapBuilder: React.FC = () => {
       const latPad = (b.getNorth() - b.getSouth()) * 0.1;
       const lngPad = (b.getEast() - b.getWest()) * 0.1;
       const bbox = `${b.getSouth() - latPad},${b.getWest() - lngPad},${b.getNorth() + latPad},${b.getEast() + lngPad}`;
-      const overpassEndpoints = [
-        'https://overpass.kumi.systems/api/interpreter',
-        'https://overpass.openstreetmap.ru/api/interpreter',
-        'https://overpass.osm.ch/api/interpreter',
-        'https://overpass-api.de/api/interpreter',
-      ];
-      const query = `data=${encodeURIComponent(`[out:json][timeout:60];way["highway"]["name"](${bbox});out geom;`)}`;
-      const fetchWithTimeout = (url: string, options: RequestInit, ms: number): Promise<Response> => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), ms);
-        return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
-      };
-      let resp: Response | null = null;
-      for (const endpoint of overpassEndpoints) {
-        try {
-          const r = await fetchWithTimeout(endpoint, { method: 'POST', body: query, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, 15000);
-          if (r.ok) { resp = r; break; }
-        } catch { /* try next */ }
-      }
-      if (!resp || !resp.ok) throw new Error('All Overpass endpoints failed');
-      const data = await resp.json();
-      const newWays: OsmWay[] = data.elements
-        .filter((el: any) => el.type === 'way' && el.geometry && el.tags?.name)
-        .map((el: any) => ({ id: el.id, name: el.tags.name, geometry: el.geometry.map((pt: any) => [pt.lon, pt.lat] as [number, number]) }));
-      // Merge with existing ways — dedupe by id
+      const newWays = await fetchOverpass(bbox);
       setAllWays(prev => {
         const existingIds = new Set(prev.map(w => w.id));
-        const toAdd = newWays.filter(w => !existingIds.has(w.id));
-        return [...prev, ...toAdd];
+        return [...prev, ...newWays.filter(w => !existingIds.has(w.id))];
       });
-    } catch { setError('Failed to load roads from OpenStreetMap.'); }
+    } catch { setError('All Overpass mirrors are unavailable — please try again in a moment.'); }
     finally { setLoadingRoads(false); }
   }, [loadingRoads]);
 
@@ -960,7 +978,7 @@ const MapBuilder: React.FC = () => {
       {xKeyHeld && currentArea && (
         <div className="bg-yellow-900/40 border-b border-yellow-700 px-4 py-2 text-sm text-yellow-300 flex items-center gap-3 flex-shrink-0">
           <Scissors size={14} className="flex-shrink-0" />
-          <span>Split mode — click anywhere on a segment to split it in two at that point</span>
+          <span>Split mode — click anywhere on a segment to split it in two</span>
           <span className="ml-auto text-xs text-yellow-500">Release X to exit · Ctrl+Z to undo</span>
         </div>
       )}
@@ -1035,8 +1053,39 @@ const MapBuilder: React.FC = () => {
           <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
             <div ref={mapContainerRef} style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, width: '100%', height: '100%' }} />
 
+            {/* Box selection overlay */}
             {boxRect && (
               <div style={{ position: 'absolute', left: boxRect.left, top: boxRect.top, width: boxRect.width, height: boxRect.height, border: `2px dashed ${boxRect.mode === 'add' ? '#60a5fa' : '#f87171'}`, background: boxRect.mode === 'add' ? 'rgba(96,165,250,0.08)' : 'rgba(248,113,113,0.08)', pointerEvents: 'none', zIndex: 20 }} />
+            )}
+
+            {/* Right-click rename popover */}
+            {contextMenu && (
+              <div
+                style={{ position: 'fixed', left: contextMenu.x, top: contextMenu.y, zIndex: 50 }}
+                className="bg-gray-900 border border-gray-600 rounded-lg shadow-2xl p-3 w-56"
+                onMouseDown={e => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <Pencil size={12} className="text-blue-400 flex-shrink-0" />
+                  <span className="text-xs text-gray-300 font-medium">Name this road</span>
+                  <button onClick={() => setContextMenu(null)} className="ml-auto text-gray-500 hover:text-white"><X size={12} /></button>
+                </div>
+                <input
+                  ref={contextMenuInputRef}
+                  value={contextMenuInput}
+                  onChange={e => setContextMenuInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleRenameConfirm(); if (e.key === 'Escape') setContextMenu(null); }}
+                  placeholder="e.g. Private Road"
+                  className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 mb-2"
+                />
+                <div className="flex gap-1.5">
+                  <button onClick={handleRenameConfirm} disabled={!contextMenuInput.trim()} className="flex-1 bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white text-xs py-1.5 rounded flex items-center justify-center gap-1">
+                    <Check size={11} />Apply
+                  </button>
+                  <button onClick={() => setContextMenu(null)} className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs py-1.5 rounded">Cancel</button>
+                </div>
+                <div className="text-[9px] text-gray-600 mt-1.5 text-center">Local alias · won't change OpenStreetMap</div>
+              </div>
             )}
 
             {!currentArea && (
@@ -1051,7 +1100,7 @@ const MapBuilder: React.FC = () => {
             {loadingRoads && (
               <div className="absolute inset-0 bg-gray-900/60 flex items-center justify-center z-10">
                 <div className="bg-gray-800 rounded-lg px-4 py-3 flex items-center gap-3 text-sm border border-gray-700">
-                  <Loader size={16} className="animate-spin text-blue-400" />Loading roads...
+                  <Loader size={16} className="animate-spin text-blue-400" />Loading roads…
                 </div>
               </div>
             )}
@@ -1066,8 +1115,9 @@ const MapBuilder: React.FC = () => {
                 <div><span className="text-red-400 font-mono">Alt+drag</span> — box remove</div>
                 <div><span className="text-gray-400 font-mono">Click</span> — toggle segment</div>
                 <div><span className="text-yellow-400 font-mono">Hold X + click</span> — split segment</div>
+                <div><span className="text-gray-400 font-mono">Right-click</span> — name a road</div>
                 <div><span className="text-gray-400 font-mono">Ctrl+Z</span> — undo split</div>
-                <div><span className="text-gray-400 font-mono">Right-drag</span> — rotate</div>
+                <div className="mt-1 pt-1 border-t border-gray-700/50 text-gray-600">Dashed = unnamed connector</div>
               </div>
             )}
           </div>
@@ -1117,7 +1167,7 @@ const MapBuilder: React.FC = () => {
               {!activeRoute?.streetNames.length ? (
                 <div className="text-xs text-gray-600 italic text-center mt-6 px-2">
                   No streets selected yet.<br /><br />
-                  Shift+drag to box-select, click to toggle segments, hold X+click to split a long segment.
+                  Shift+drag to box-select, click to toggle, right-click any segment to name it.
                 </div>
               ) : (
                 activeRoute.streetNames.map(name => {
@@ -1157,7 +1207,7 @@ const MapBuilder: React.FC = () => {
             <div className="p-5 space-y-4">
               {scanning ? (
                 <div className="flex flex-col items-center gap-3 text-sm text-gray-400 py-6">
-                  <Loader size={24} className="animate-spin text-purple-400" /><span>Claude is reading this map page...</span>
+                  <Loader size={24} className="animate-spin text-purple-400" /><span>Claude is reading this map page…</span>
                 </div>
               ) : (
                 <>
@@ -1174,7 +1224,7 @@ const MapBuilder: React.FC = () => {
                   <div>
                     <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Route Prefix</label>
                     <input value={prefixInput} onChange={e => setPrefixInput(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} placeholder="e.g. ALD" maxLength={6} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono uppercase focus:outline-none focus:border-purple-500" />
-                    {prefixInput && <div className="text-[10px] text-gray-400 mt-1 font-mono">Routes will be: {prefixInput}01 · {prefixInput}02 · {prefixInput}03...</div>}
+                    {prefixInput && <div className="text-[10px] text-gray-400 mt-1 font-mono">Routes will be: {prefixInput}01 · {prefixInput}02 · {prefixInput}03…</div>}
                   </div>
                   <div>
                     <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Region</label>
