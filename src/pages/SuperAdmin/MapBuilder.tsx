@@ -656,7 +656,26 @@ const MapBuilder: React.FC = () => {
         center = [(parseFloat(b[2]) + parseFloat(b[3])) / 2, (parseFloat(b[0]) + parseFloat(b[1])) / 2];
       } else { bbox = '43.200,-79.950,43.350,-79.750'; center = [-79.870, 43.270]; }
       mapRef.current?.flyTo({ center, zoom: 13 });
-      const resp = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: `data=${encodeURIComponent(`[out:json][timeout:30];way["highway"]["name"](${bbox});out geom;`)}`, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+
+      const overpassEndpoints = [
+        'https://overpass-api.de/api/interpreter',
+        'https://overpass.kumi.systems/api/interpreter',
+        'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+      ];
+      const query = `data=${encodeURIComponent(`[out:json][timeout:60];way["highway"]["name"](${bbox});out geom;`)}`;
+
+      let resp: Response | null = null;
+      for (const endpoint of overpassEndpoints) {
+        try {
+          const r = await fetch(endpoint, {
+            method: 'POST',
+            body: query,
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          });
+          if (r.ok) { resp = r; break; }
+        } catch { /* try next endpoint */ }
+      }
+      if (!resp || !resp.ok) throw new Error('All Overpass endpoints failed');
       const data = await resp.json();
       setAllWays(data.elements.filter((el: any) => el.type === 'way' && el.geometry && el.tags?.name).map((el: any) => ({ id: el.id, name: el.tags.name, geometry: el.geometry.map((pt: any) => [pt.lon, pt.lat] as [number, number]) })));
     } catch { setError('Failed to load roads from OpenStreetMap.'); }
