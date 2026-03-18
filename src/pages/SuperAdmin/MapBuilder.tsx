@@ -539,14 +539,14 @@ const MapBuilder: React.FC = () => {
       map.resize();
       map.addSource('roads', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
 
-      // Named roads — normal style
-      map.addLayer({ id: 'roads-base', type: 'line', source: 'roads', filter: ['all', ['==', ['get', 'selected'], false], ['==', ['get', 'unnamed'], false]], paint: { 'line-color': 'rgba(255,255,255,0.18)', 'line-width': 2 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
-      // Unnamed connectors — dashed dim
-      map.addLayer({ id: 'roads-unnamed', type: 'line', source: 'roads', filter: ['all', ['==', ['get', 'selected'], false], ['==', ['get', 'unnamed'], true]], paint: { 'line-color': 'rgba(255,255,255,0.09)', 'line-width': 2, 'line-dasharray': [2, 3] }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+      // Named roads — unselected, named
+      map.addLayer({ id: 'roads-base', type: 'line', source: 'roads', filter: ['all', ['!', ['get', 'selected']], ['!', ['get', 'unnamed']]], paint: { 'line-color': 'rgba(255,255,255,0.18)', 'line-width': 2 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+      // Unnamed connectors — unselected, unnamed, dashed dim
+      map.addLayer({ id: 'roads-unnamed', type: 'line', source: 'roads', filter: ['all', ['!', ['get', 'selected']], ['get', 'unnamed']], paint: { 'line-color': 'rgba(255,255,255,0.09)', 'line-width': 2, 'line-dasharray': [2, 3] }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
       // Hover highlight
       map.addLayer({ id: 'roads-hover', type: 'line', source: 'roads', filter: ['==', ['get', 'id'], -1], paint: { 'line-color': '#60a5fa', 'line-width': 6, 'line-opacity': 0.85 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
-      // Selected roads
-      map.addLayer({ id: 'roads-selected', type: 'line', source: 'roads', filter: ['==', ['get', 'selected'], true], paint: { 'line-color': ['get', 'color'], 'line-width': 5, 'line-opacity': 0.9 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+      // Selected roads (named or unnamed)
+      map.addLayer({ id: 'roads-selected', type: 'line', source: 'roads', filter: ['get', 'selected'], paint: { 'line-color': ['get', 'color'], 'line-width': 5, 'line-opacity': 0.9 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
 
       const ALL_ROAD_LAYERS = ['roads-base', 'roads-unnamed', 'roads-selected'];
 
