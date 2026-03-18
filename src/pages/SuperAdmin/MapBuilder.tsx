@@ -83,7 +83,7 @@ interface ContextMenu {
 }
 
 // ─── Route code formatter ────────────────────────────────────────────────────
-// Always pads to 2 digits minimum: 1 → "01", 22 → "22", 100 → "100"
+// Pads to 2 digits minimum: 1 → "01", 22 → "22", 100 → "100"
 function formatRouteCode(prefix: string, num: number): string {
   return `${prefix}${String(num).padStart(2, '0')}`;
 }
@@ -255,7 +255,7 @@ const MapBuilder: React.FC = () => {
   const [scanning, setScanning] = useState(false);
   const [scannedAreaName, setScannedAreaName] = useState('');
   const [scannedRouteCount, setScannedRouteCount] = useState(0);
-  const [scannedRouteStart, setScannedRouteStart] = useState(1); // ← new
+  const [scannedRouteStart, setScannedRouteStart] = useState(1);
   const [prefixInput, setPrefixInput] = useState('');
   const [regionInput, setRegionInput] = useState<Region>('West');
   const [pendingPage, setPendingPage] = useState<number | null>(null);
@@ -421,7 +421,12 @@ const MapBuilder: React.FC = () => {
       const base64 = await renderPageToBase64(pdfDoc, pageNum, 1.0);
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
         body: JSON.stringify({
           model: 'claude-sonnet-4-6',
           max_tokens: 300,
@@ -441,8 +446,8 @@ Respond ONLY with this exact JSON:
 }
 
 area_name = title in ALL CAPS (e.g. "BURLINGTON SOUTH 2" if it says that).
-route_count = total number of routes on THIS page (count of rows in the table).
-route_start = the FIRST (lowest) route number shown in the table on this page. Usually 1, but for continuation pages it will be higher (e.g. 22).`,
+route_count = total number of routes listed on THIS page only.
+route_start = the FIRST (lowest) route number shown in the table on this page. Usually 1, but for continuation pages (e.g. Burlington South 2) it will be higher such as 22.`,
               },
             ],
           }],
@@ -476,7 +481,7 @@ route_start = the FIRST (lowest) route number shown in the table on this page. U
       region: regionInput,
       pdf_page: pendingPage,
       route_count: scannedRouteCount,
-      route_start: scannedRouteStart, // ← saved to DB
+      route_start: scannedRouteStart,
     };
     await supabase.from('area_prefixes').upsert(areaInfo, { onConflict: 'area_name' });
     const newMap = new Map(areaInfoMap);
@@ -490,16 +495,15 @@ route_start = the FIRST (lowest) route number shown in the table on this page. U
     setPendingPage(null);
     setScannedAreaName('');
     setScannedRouteCount(0);
-    setScannedRouteStart(1); // ← reset
+    setScannedRouteStart(1);
   };
 
-  // ─── Init routes for area ───
-  // Uses route_start so page 2 of Burlington South starts at e.g. 22 not 1.
-  // Route numbers: route_start, route_start+1, … route_start+route_count-1
-  // Route codes formatted with padStart(2,'0') so:
-  //   num=1  → "BS01"
-  //   num=22 → "BS22"
-  //   num=100 → "BS100"
+  // ─── Init routes for area ────────────────────────────────────────────────
+  // route_start controls where numbering begins.
+  // Examples:
+  //   Burlington South 1: route_start=1,  route_count=21 → BS01…BS21
+  //   Burlington South 2: route_start=22, route_count=18 → BS22…BS39
+  // formatRouteCode always pads to 2 digits minimum so BS01, BS22, BS100 all work.
   const initRoutesForArea = (area: AreaPrefix) => {
     const start = area.route_start ?? 1;
     setRoutes(Array.from({ length: area.route_count }, (_, i) => ({
@@ -544,12 +548,7 @@ route_start = the FIRST (lowest) route number shown in the table on this page. U
     setRoutes(prev => {
       const newRouteNum = afterRouteNum + 1;
       const totalRoutes = prev.length + 1;
-
-      const shifted = prev.map(r => {
-        if (r.num <= afterRouteNum) return r;
-        return { ...r, num: r.num + 1 };
-      });
-
+      const shifted = prev.map(r => r.num <= afterRouteNum ? r : { ...r, num: r.num + 1 });
       const newRoute: RouteData = {
         num: newRouteNum,
         color: ROUTE_COLORS[(totalRoutes - 1) % ROUTE_COLORS.length],
@@ -559,11 +558,9 @@ route_start = the FIRST (lowest) route number shown in the table on this page. U
         aiNotes: '',
         confidence: 0,
       };
-
       return [...shifted, newRoute].sort((a, b) => a.num - b.num);
     });
 
-    setCurrentArea(prev => prev ? { ...prev, route_count: prev.route_count + 1 } : prev);
     setActiveRouteNum(afterRouteNum + 1);
   }, [currentArea]);
 
@@ -677,7 +674,7 @@ route_start = the FIRST (lowest) route number shown in the table on this page. U
       map.addSource('roads', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addSource('roads-ghost', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
 
-      // Ghost layer — drawn first so it sits underneath active route
+      // Ghost layer — underneath active route
       map.addLayer({
         id: 'roads-ghost-layer',
         type: 'line',
@@ -1127,7 +1124,7 @@ route_start = the FIRST (lowest) route number shown in the table on this page. U
             <h1 className="text-sm font-bold">Map Builder</h1>
             <p className="text-xs text-gray-400">
               {currentArea
-                ? `${currentArea.area_name} · ${currentArea.prefix} · ${currentArea.region} · Routes ${formatRouteCode(currentArea.prefix, currentArea.route_start ?? 1)}–${formatRouteCode(currentArea.prefix, (currentArea.route_start ?? 1) + currentArea.route_count - 1)}`
+                ? `${currentArea.area_name} · ${currentArea.prefix} · ${currentArea.region} · ${formatRouteCode(currentArea.prefix, currentArea.route_start ?? 1)}–${formatRouteCode(currentArea.prefix, routes[routes.length - 1]?.num ?? (currentArea.route_start ?? 1))}`
                 : 'Select a page from the strip below'}
             </p>
           </div>
@@ -1182,7 +1179,7 @@ route_start = the FIRST (lowest) route number shown in the table on this page. U
               const isActive = selectedPage === thumb.pageNum;
               return (
                 <div key={thumb.pageNum} onClick={() => handleThumbnailClick(thumb.pageNum)}
-                  title={areaInfo ? `${areaInfo.area_name} (${areaInfo.prefix} · starts at ${formatRouteCode(areaInfo.prefix, areaInfo.route_start ?? 1)})` : `Page ${thumb.pageNum}`}
+                  title={areaInfo ? `${areaInfo.area_name} · ${formatRouteCode(areaInfo.prefix, areaInfo.route_start ?? 1)}–${formatRouteCode(areaInfo.prefix, (areaInfo.route_start ?? 1) + areaInfo.route_count - 1)}` : `Page ${thumb.pageNum}`}
                   className={`flex-shrink-0 cursor-pointer rounded overflow-hidden border-2 transition-all relative ${isActive ? 'border-blue-500 ring-1 ring-blue-400' : areaInfo ? 'border-green-600 hover:border-green-400' : 'border-gray-700 hover:border-gray-500'}`}
                   style={{ width: '68px', height: '88px' }}>
                   {thumb.loading
@@ -1215,7 +1212,7 @@ route_start = the FIRST (lowest) route number shown in the table on this page. U
           <div className="w-48 bg-gray-800 border-r border-gray-700 flex flex-col overflow-hidden flex-shrink-0">
             <div className="px-3 py-2 border-b border-gray-700 flex justify-between items-center">
               <span className="text-xs text-gray-400 uppercase tracking-wider font-medium">Routes</span>
-              <span className="text-xs text-green-400">{approvedCount}/{currentArea.route_count}</span>
+              <span className="text-xs text-green-400">{approvedCount}/{routes.length}</span>
             </div>
             <div className="flex-1 overflow-y-auto">
               {routes.map((r) => (
@@ -1246,10 +1243,23 @@ route_start = the FIRST (lowest) route number shown in the table on this page. U
                   </div>
                 </React.Fragment>
               ))}
+              {/* Insert button after the very last route */}
+              {routes.length > 0 && (
+                <div className="group relative flex items-center justify-center h-0 overflow-visible z-10">
+                  <button
+                    onClick={() => handleInsertRoute(routes[routes.length - 1].num)}
+                    title={`Add new route after ${formatRouteCode(currentArea.prefix, routes[routes.length - 1].num)}`}
+                    className="absolute opacity-0 group-hover:opacity-100 transition-opacity bg-blue-700 hover:bg-blue-500 text-white rounded-full w-4 h-4 flex items-center justify-center shadow-lg border border-blue-500"
+                    style={{ top: '-8px' }}
+                  >
+                    <Plus size={9} />
+                  </button>
+                </div>
+              )}
             </div>
             <div className="p-2 border-t border-gray-700">
               <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden mb-1">
-                <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${(approvedCount / currentArea.route_count) * 100}%` }} />
+                <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${routes.length > 0 ? (approvedCount / routes.length) * 100 : 0}%` }} />
               </div>
               <div className="flex justify-between text-[9px]">
                 <span className="text-green-400">{approvedCount} ok</span>
@@ -1443,26 +1453,36 @@ route_start = the FIRST (lowest) route number shown in the table on this page. U
                     <div className="text-[10px] text-gray-500 mt-1">Auto-detected by AI — edit if incorrect</div>
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Route Count <span className="text-gray-600 normal-case">(routes on this page only)</span></label>
-                    <input type="number" value={scannedRouteCount} onChange={e => setScannedRouteCount(parseInt(e.target.value) || 0)} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500" />
-                    <div className="text-[10px] text-gray-500 mt-1">Auto-detected by AI — edit if incorrect</div>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Starting Route Number <span className="text-gray-600 normal-case">(first route on this page)</span></label>
+                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">
+                      Starting Route Number <span className="text-gray-600 normal-case">(first route on this page)</span>
+                    </label>
                     <input
                       type="number"
                       min={1}
                       value={scannedRouteStart}
-                      onChange={e => setScannedRouteStart(parseInt(e.target.value) || 1)}
+                      onChange={e => setScannedRouteStart(Math.max(1, parseInt(e.target.value) || 1))}
                       className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
                     />
                     <div className="text-[10px] text-gray-500 mt-1">
-                      Usually 1. For continuation pages (e.g. Burlington South 2) set to the first route number shown on this page.
+                      Usually 1. For continuation pages (e.g. Burlington South 2), set this to the first route number shown on this page.
                     </div>
                   </div>
                   <div>
+                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">
+                      Route Count <span className="text-gray-600 normal-case">(routes on this page only)</span>
+                    </label>
+                    <input type="number" value={scannedRouteCount} onChange={e => setScannedRouteCount(parseInt(e.target.value) || 0)} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500" />
+                    <div className="text-[10px] text-gray-500 mt-1">Auto-detected by AI — edit if incorrect</div>
+                  </div>
+                  <div>
                     <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Route Prefix</label>
-                    <input value={prefixInput} onChange={e => setPrefixInput(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} placeholder="e.g. BS" maxLength={6} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono uppercase focus:outline-none focus:border-purple-500" />
+                    <input
+                      value={prefixInput}
+                      onChange={e => setPrefixInput(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+                      placeholder="e.g. BS"
+                      maxLength={6}
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono uppercase focus:outline-none focus:border-purple-500"
+                    />
                     {prefixInput && scannedRouteStart > 0 && scannedRouteCount > 0 && (
                       <div className="text-[10px] text-gray-400 mt-1 font-mono">
                         Routes will be: {formatRouteCode(prefixInput, scannedRouteStart)} · {formatRouteCode(prefixInput, scannedRouteStart + 1)} · … · {formatRouteCode(prefixInput, scannedRouteStart + scannedRouteCount - 1)}
