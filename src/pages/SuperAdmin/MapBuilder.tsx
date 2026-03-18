@@ -6,7 +6,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import * as pdfjsLib from 'pdfjs-dist';
 import {
   ArrowLeft, Loader, Check, X, AlertCircle,
-  Zap, Plus, Map as MapIcon, Upload, Scissors, RefreshCw, Pencil,
+  Zap, Plus, Map as MapIcon, Upload, Scissors, RefreshCw, Pencil, Eye, EyeOff,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
@@ -35,6 +35,7 @@ interface AreaPrefix {
   region: Region;
   pdf_page: number;
   route_count: number;
+  route_start: number; // first route number on this page (e.g. 22 for Burlington South 2)
 }
 
 interface RouteData {
@@ -81,7 +82,13 @@ interface ContextMenu {
   currentName: string;
 }
 
-// ─── Geometry helpers ───────────────────────────────────────────────────────
+// ─── Route code formatter ────────────────────────────────────────────────────
+// Always pads to 2 digits minimum: 1 → "01", 22 → "22", 100 → "100"
+function formatRouteCode(prefix: string, num: number): string {
+  return `${prefix}${String(num).padStart(2, '0')}`;
+}
+
+// ─── Geometry helpers ────────────────────────────────────────────────────────
 
 function closestPointOnSegment(
   px: number, py: number,
@@ -141,6 +148,34 @@ function buildGeoJSON(ways: OsmWay[], selectedIds: Set<number>, color: string): 
   };
 }
 
+// ─── Ghost GeoJSON builder ───────────────────────────────────────────────────
+function buildGhostGeoJSON(
+  ways: OsmWay[],
+  routes: RouteData[],
+  activeRouteNum: number
+): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  const wayMap = new Map<number, OsmWay>();
+  ways.forEach(w => wayMap.set(w.id, w));
+
+  routes.forEach(route => {
+    if (route.num === activeRouteNum) return;
+    if (route.selectedWayIds.size === 0) return;
+    route.selectedWayIds.forEach(wayId => {
+      const way = wayMap.get(wayId);
+      if (!way) return;
+      features.push({
+        type: 'Feature',
+        id: wayId,
+        properties: { id: wayId, color: route.color, routeNum: route.num },
+        geometry: { type: 'LineString', coordinates: way.geometry },
+      });
+    });
+  });
+
+  return { type: 'FeatureCollection', features };
+}
+
 async function renderPageToBase64(pdfDoc: pdfjsLib.PDFDocumentProxy, pageNum: number, scale = 1.5): Promise<string> {
   const page = await pdfDoc.getPage(pageNum);
   const viewport = page.getViewport({ scale });
@@ -151,9 +186,7 @@ async function renderPageToBase64(pdfDoc: pdfjsLib.PDFDocumentProxy, pageNum: nu
   return canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
 }
 
-// ─── Overpass fetch ─────────────────────────────────────────────────────────
-// Mirrors ordered by reliability — de endpoint last since it 504s most often
-// Only CORS-safe endpoints — others will silently fail in browser context
+// ─── Overpass fetch ──────────────────────────────────────────────────────────
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
@@ -195,7 +228,7 @@ async function fetchOverpass(bbox: string): Promise<OsmWay[]> {
   throw new Error('All Overpass mirrors failed — try again in a moment');
 }
 
-// ─── Component ──────────────────────────────────────────────────────────────
+// ─── Component ───────────────────────────────────────────────────────────────
 
 const MapBuilder: React.FC = () => {
   const navigate = useNavigate();
@@ -222,6 +255,7 @@ const MapBuilder: React.FC = () => {
   const [scanning, setScanning] = useState(false);
   const [scannedAreaName, setScannedAreaName] = useState('');
   const [scannedRouteCount, setScannedRouteCount] = useState(0);
+  const [scannedRouteStart, setScannedRouteStart] = useState(1); // ← new
   const [prefixInput, setPrefixInput] = useState('');
   const [regionInput, setRegionInput] = useState<Region>('West');
   const [pendingPage, setPendingPage] = useState<number | null>(null);
@@ -236,6 +270,9 @@ const MapBuilder: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [addStreetInput, setAddStreetInput] = useState('');
   const [hoveredWayName, setHoveredWayName] = useState<string | null>(null);
+
+  // Ghost routes toggle
+  const [showGhostRoutes, setShowGhostRoutes] = useState(false);
 
   // Split
   const [wayOverrides, setWayOverrides] = useState<Map<number, OsmWay[]>>(new Map());
@@ -385,22 +422,62 @@ const MapBuilder: React.FC = () => {
       const resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 300, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } }, { type: 'text', text: `This is a page from a master route map book for Hamilton, Ontario.\n\nRespond ONLY with this exact JSON:\n{\n  "area_name": "ALDERSHOT",\n  "route_count": 21\n}\n\narea_name = title in ALL CAPS. route_count = highest route number in the table.` }] }] }),
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 300,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+              {
+                type: 'text',
+                text: `This is a page from a master route map book for Hamilton, Ontario.
+
+Respond ONLY with this exact JSON:
+{
+  "area_name": "ALDERSHOT",
+  "route_count": 21,
+  "route_start": 1
+}
+
+area_name = title in ALL CAPS (e.g. "BURLINGTON SOUTH 2" if it says that).
+route_count = total number of routes on THIS page (count of rows in the table).
+route_start = the FIRST (lowest) route number shown in the table on this page. Usually 1, but for continuation pages it will be higher (e.g. 22).`,
+              },
+            ],
+          }],
+        }),
       });
       const data = await resp.json();
       const text = data.content[0].text;
-      let parsed: { area_name: string; route_count: number };
+      let parsed: { area_name: string; route_count: number; route_start: number };
       try { parsed = JSON.parse(text); }
-      catch { const m = text.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : { area_name: `Area ${pageNum}`, route_count: 10 }; }
+      catch {
+        const m = text.match(/\{[\s\S]*\}/);
+        parsed = m ? JSON.parse(m[0]) : { area_name: `Area ${pageNum}`, route_count: 10, route_start: 1 };
+      }
       setScannedAreaName(parsed.area_name);
       setScannedRouteCount(parsed.route_count);
-    } catch { setScannedAreaName(`Area ${pageNum}`); setScannedRouteCount(10); setError('Could not auto-read — edit manually.'); }
+      setScannedRouteStart(parsed.route_start ?? 1);
+    } catch {
+      setScannedAreaName(`Area ${pageNum}`);
+      setScannedRouteCount(10);
+      setScannedRouteStart(1);
+      setError('Could not auto-read — edit manually.');
+    }
     finally { setScanning(false); }
   };
 
   const handlePrefixConfirm = async () => {
     if (!prefixInput.trim() || !pendingPage) return;
-    const areaInfo: AreaPrefix = { area_name: scannedAreaName, prefix: prefixInput.toUpperCase(), region: regionInput, pdf_page: pendingPage, route_count: scannedRouteCount };
+    const areaInfo: AreaPrefix = {
+      area_name: scannedAreaName,
+      prefix: prefixInput.toUpperCase(),
+      region: regionInput,
+      pdf_page: pendingPage,
+      route_count: scannedRouteCount,
+      route_start: scannedRouteStart, // ← saved to DB
+    };
     await supabase.from('area_prefixes').upsert(areaInfo, { onConflict: 'area_name' });
     const newMap = new Map(areaInfoMap);
     newMap.set(pendingPage, areaInfo);
@@ -408,15 +485,33 @@ const MapBuilder: React.FC = () => {
     setCurrentArea(areaInfo);
     setSelectedPage(pendingPage);
     initRoutesForArea(areaInfo);
-    setShowPrefixModal(false); setPrefixInput(''); setPendingPage(null); setScannedAreaName(''); setScannedRouteCount(0);
+    setShowPrefixModal(false);
+    setPrefixInput('');
+    setPendingPage(null);
+    setScannedAreaName('');
+    setScannedRouteCount(0);
+    setScannedRouteStart(1); // ← reset
   };
 
+  // ─── Init routes for area ───
+  // Uses route_start so page 2 of Burlington South starts at e.g. 22 not 1.
+  // Route numbers: route_start, route_start+1, … route_start+route_count-1
+  // Route codes formatted with padStart(2,'0') so:
+  //   num=1  → "BS01"
+  //   num=22 → "BS22"
+  //   num=100 → "BS100"
   const initRoutesForArea = (area: AreaPrefix) => {
+    const start = area.route_start ?? 1;
     setRoutes(Array.from({ length: area.route_count }, (_, i) => ({
-      num: i + 1, color: ROUTE_COLORS[i] || '#888888', status: 'pending' as const,
-      selectedWayIds: new Set<number>(), streetNames: [], aiNotes: '', confidence: 0,
+      num: start + i,
+      color: ROUTE_COLORS[i % ROUTE_COLORS.length],
+      status: 'pending' as const,
+      selectedWayIds: new Set<number>(),
+      streetNames: [],
+      aiNotes: '',
+      confidence: 0,
     })));
-    setActiveRouteNum(1);
+    setActiveRouteNum(start);
     setAllWays([]);
     setWayOverrides(new Map());
     setWayNameOverrides(new Map());
@@ -427,6 +522,50 @@ const MapBuilder: React.FC = () => {
     mapRef.current?.dragPan.enable();
     setTimeout(() => mapRef.current?.resize(), 100);
   };
+
+  // ─── Insert Route ────────────────────────────────────────────────────────
+  const handleInsertRoute = useCallback(async (afterRouteNum: number) => {
+    if (!currentArea) return;
+
+    const { data: saved } = await supabase
+      .from('route_maps')
+      .select('route_number')
+      .eq('area_name', currentArea.area_name)
+      .limit(1);
+
+    if (saved && saved.length > 0) {
+      setError(
+        'Cannot insert a route — routes for this area are already saved to the database. ' +
+        'Inserting would renumber saved routes and corrupt existing data.'
+      );
+      return;
+    }
+
+    setRoutes(prev => {
+      const newRouteNum = afterRouteNum + 1;
+      const totalRoutes = prev.length + 1;
+
+      const shifted = prev.map(r => {
+        if (r.num <= afterRouteNum) return r;
+        return { ...r, num: r.num + 1 };
+      });
+
+      const newRoute: RouteData = {
+        num: newRouteNum,
+        color: ROUTE_COLORS[(totalRoutes - 1) % ROUTE_COLORS.length],
+        status: 'pending',
+        selectedWayIds: new Set<number>(),
+        streetNames: [],
+        aiNotes: '',
+        confidence: 0,
+      };
+
+      return [...shifted, newRoute].sort((a, b) => a.num - b.num);
+    });
+
+    setCurrentArea(prev => prev ? { ...prev, route_count: prev.route_count + 1 } : prev);
+    setActiveRouteNum(afterRouteNum + 1);
+  }, [currentArea]);
 
   // ─── X key tracking ───
   useEffect(() => {
@@ -474,7 +613,6 @@ const MapBuilder: React.FC = () => {
     const subA: OsmWay = { id: splitCounterRef.current++, rootId, name: way.name, unnamed: way.unnamed, geometry: geomA };
     const subB: OsmWay = { id: splitCounterRef.current++, rootId, name: way.name, unnamed: way.unnamed, geometry: geomB };
 
-    // Propagate name override to both halves
     const existingNameOverride = wayNameOverridesRef.current.get(way.id);
     if (existingNameOverride) {
       setWayNameOverrides(prev => {
@@ -503,7 +641,6 @@ const MapBuilder: React.FC = () => {
 
     setWayNameOverrides(prev => { const next = new Map(prev); next.set(contextMenu.wayId, name); return next; });
 
-    // Update streetNames in any route that has this way selected
     setRoutes(prev => prev.map(r => {
       if (!r.selectedWayIds.has(contextMenu.wayId)) return r;
       const newNames = [...r.streetNames];
@@ -536,15 +673,22 @@ const MapBuilder: React.FC = () => {
 
     map.on('load', () => {
       map.resize();
-      map.addSource('roads', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
 
-      // Named roads — unselected, named
+      map.addSource('roads', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addSource('roads-ghost', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+
+      // Ghost layer — drawn first so it sits underneath active route
+      map.addLayer({
+        id: 'roads-ghost-layer',
+        type: 'line',
+        source: 'roads-ghost',
+        paint: { 'line-color': ['get', 'color'], 'line-width': 4, 'line-opacity': 0 },
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+      });
+
       map.addLayer({ id: 'roads-base', type: 'line', source: 'roads', filter: ['all', ['==', ['get', 'selected'], 0], ['==', ['get', 'unnamed'], 0]], paint: { 'line-color': 'rgba(255,255,255,0.18)', 'line-width': 2 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
-      // Unnamed connectors — unselected, unnamed, dashed dim
       map.addLayer({ id: 'roads-unnamed', type: 'line', source: 'roads', filter: ['all', ['==', ['get', 'selected'], 0], ['==', ['get', 'unnamed'], 1]], paint: { 'line-color': 'rgba(255,255,255,0.09)', 'line-width': 2, 'line-dasharray': [2, 3] }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
-      // Hover highlight
       map.addLayer({ id: 'roads-hover', type: 'line', source: 'roads', filter: ['==', ['get', 'id'], -1], paint: { 'line-color': '#60a5fa', 'line-width': 6, 'line-opacity': 0.85 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
-      // Selected roads (named or unnamed)
       map.addLayer({ id: 'roads-selected', type: 'line', source: 'roads', filter: ['==', ['get', 'selected'], 1], paint: { 'line-color': ['get', 'color'], 'line-width': 5, 'line-opacity': 0.9 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
 
       const ALL_ROAD_LAYERS = ['roads-base', 'roads-unnamed', 'roads-selected'];
@@ -606,7 +750,6 @@ const MapBuilder: React.FC = () => {
     return () => canvas.removeEventListener('contextmenu', onContextMenu);
   }, [mapLoaded, currentArea]);
 
-  // Auto-focus rename input
   useEffect(() => {
     if (contextMenu && contextMenuInputRef.current) {
       setTimeout(() => { contextMenuInputRef.current?.focus(); contextMenuInputRef.current?.select(); }, 30);
@@ -735,7 +878,7 @@ const MapBuilder: React.FC = () => {
     return () => { map.off('click', handleClick); };
   }, [mapLoaded, activeRouteNum, effectiveWays, executeSplit]);
 
-  // ─── Update map GeoJSON ───
+  // ─── Update main roads GeoJSON ───
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
@@ -744,9 +887,19 @@ const MapBuilder: React.FC = () => {
     const route = routes.find(r => r.num === activeRouteNum);
     const selectedIds = route?.selectedWayIds ?? new Set<number>();
     const color = route?.color ?? '#888888';
-    // Always update — even empty features clears stale data from a previous area
     source.setData(buildGeoJSON(effectiveWays, selectedIds, color));
   }, [routes, activeRouteNum, mapLoaded, effectiveWays]);
+
+  // ─── Update ghost routes GeoJSON + opacity ───
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const ghostSource = map.getSource('roads-ghost') as mapboxgl.GeoJSONSource;
+    if (ghostSource) ghostSource.setData(buildGhostGeoJSON(effectiveWays, routes, activeRouteNum));
+    if (map.getLayer('roads-ghost-layer')) {
+      map.setPaintProperty('roads-ghost-layer', 'line-opacity', showGhostRoutes ? 0.28 : 0);
+    }
+  }, [routes, activeRouteNum, mapLoaded, effectiveWays, showGhostRoutes]);
 
   // ─── Load roads (initial) ───
   const loadRoads = useCallback(async (area: AreaPrefix) => {
@@ -787,7 +940,6 @@ const MapBuilder: React.FC = () => {
   useEffect(() => { if (mapLoaded && currentArea) loadRoads(currentArea); }, [currentArea, mapLoaded]);
 
   // ─── Restore saved routes once roads load ───
-  // Runs on every allWays change so partial/retry loads also trigger restore
   useEffect(() => {
     if (!currentArea || allWays.length === 0) return;
 
@@ -800,7 +952,6 @@ const MapBuilder: React.FC = () => {
         allWays.forEach(w => osmIdToWay.set(w.id, w));
 
         setRoutes(prev => prev.map(route => {
-          // Don't overwrite routes that were already restored or have user edits
           if (route.selectedWayIds.size > 0 || route.status !== 'pending') return route;
 
           const saved = data.find((d: any) => d.route_number === route.num);
@@ -817,7 +968,6 @@ const MapBuilder: React.FC = () => {
             }
           });
 
-          // Only apply if we actually matched something
           if (selectedWayIds.size === 0) return route;
 
           return {
@@ -860,7 +1010,21 @@ const MapBuilder: React.FC = () => {
     setExtracting(true); setError(null);
     try {
       const base64 = await renderPageToBase64(pdfDoc, selectedPage, 2.0);
-      const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } }, { type: 'text', text: `Master route map for ${currentArea.area_name}. Find Route ${activeRoute.num} (color: ${activeRoute.color}). List all street names for that route.\n\nRespond ONLY with:\n{\n  "streets": ["Street Name 1"],\n  "confidence": 75,\n  "notes": ""\n}` }] }] }) });
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1000,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+              { type: 'text', text: `Master route map for ${currentArea.area_name}. Find Route ${activeRoute.num} (color: ${activeRoute.color}). List all street names for that route.\n\nRespond ONLY with:\n{\n  "streets": ["Street Name 1"],\n  "confidence": 75,\n  "notes": ""\n}` },
+            ],
+          }],
+        }),
+      });
       const data = await resp.json();
       const text = data.content[0].text;
       let parsed: { streets: string[]; confidence: number; notes: string };
@@ -920,9 +1084,22 @@ const MapBuilder: React.FC = () => {
     try {
       const approved = routes.filter(r => r.status === 'approved' && r.selectedWayIds.size > 0);
       for (const route of approved) {
-        const segments = effectiveWays.filter(w => route.selectedWayIds.has(w.id)).map(w => ({ osmId: w.rootId ?? w.id, name: w.name, coordinates: w.geometry }));
-        const routeCode = `${currentArea.prefix}${String(route.num).padStart(2, '0')}`;
-        await supabase.from('route_maps').upsert({ area_name: currentArea.area_name, route_number: route.num, route_code: routeCode, route_color: route.color, segments, status: 'approved', ai_confidence: route.confidence, ai_notes: route.aiNotes, approved_at: new Date().toISOString(), updated_at: new Date().toISOString() }, { onConflict: 'area_name,route_number' });
+        const segments = effectiveWays
+          .filter(w => route.selectedWayIds.has(w.id))
+          .map(w => ({ osmId: w.rootId ?? w.id, name: w.name, coordinates: w.geometry }));
+        const routeCode = formatRouteCode(currentArea.prefix, route.num);
+        await supabase.from('route_maps').upsert({
+          area_name: currentArea.area_name,
+          route_number: route.num,
+          route_code: routeCode,
+          route_color: route.color,
+          segments,
+          status: 'approved',
+          ai_confidence: route.confidence,
+          ai_notes: route.aiNotes,
+          approved_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'area_name,route_number' });
       }
       alert(`Saved ${approved.length} routes for ${currentArea.area_name}`);
     } catch { setError('Failed to save.'); }
@@ -937,7 +1114,7 @@ const MapBuilder: React.FC = () => {
     mode: boxState.mode,
   } : null;
 
-  // ─── RENDER ───
+  // ─── RENDER ───────────────────────────────────────────────────────────────
   return (
     <div className="h-screen bg-gray-900 text-white flex flex-col overflow-hidden">
 
@@ -948,7 +1125,11 @@ const MapBuilder: React.FC = () => {
           <MapIcon size={20} className="text-purple-400" />
           <div>
             <h1 className="text-sm font-bold">Map Builder</h1>
-            <p className="text-xs text-gray-400">{currentArea ? `${currentArea.area_name} · ${currentArea.prefix} · ${currentArea.region}` : 'Select a page from the strip below'}</p>
+            <p className="text-xs text-gray-400">
+              {currentArea
+                ? `${currentArea.area_name} · ${currentArea.prefix} · ${currentArea.region} · Routes ${formatRouteCode(currentArea.prefix, currentArea.route_start ?? 1)}–${formatRouteCode(currentArea.prefix, (currentArea.route_start ?? 1) + currentArea.route_count - 1)}`
+                : 'Select a page from the strip below'}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -1001,14 +1182,18 @@ const MapBuilder: React.FC = () => {
               const isActive = selectedPage === thumb.pageNum;
               return (
                 <div key={thumb.pageNum} onClick={() => handleThumbnailClick(thumb.pageNum)}
-                  title={areaInfo ? `${areaInfo.area_name} (${areaInfo.prefix})` : `Page ${thumb.pageNum}`}
+                  title={areaInfo ? `${areaInfo.area_name} (${areaInfo.prefix} · starts at ${formatRouteCode(areaInfo.prefix, areaInfo.route_start ?? 1)})` : `Page ${thumb.pageNum}`}
                   className={`flex-shrink-0 cursor-pointer rounded overflow-hidden border-2 transition-all relative ${isActive ? 'border-blue-500 ring-1 ring-blue-400' : areaInfo ? 'border-green-600 hover:border-green-400' : 'border-gray-700 hover:border-gray-500'}`}
                   style={{ width: '68px', height: '88px' }}>
-                  {thumb.loading ? <div className="w-full h-full bg-gray-800 flex items-center justify-center"><Loader size={10} className="animate-spin text-gray-500" /></div>
-                    : thumb.dataUrl ? <img src={thumb.dataUrl} alt={`Page ${thumb.pageNum}`} className="w-full h-full object-cover" />
-                    : <div className="w-full h-full bg-gray-800 flex items-center justify-center text-[10px] text-gray-500">{thumb.pageNum}</div>}
+                  {thumb.loading
+                    ? <div className="w-full h-full bg-gray-800 flex items-center justify-center"><Loader size={10} className="animate-spin text-gray-500" /></div>
+                    : thumb.dataUrl
+                      ? <img src={thumb.dataUrl} alt={`Page ${thumb.pageNum}`} className="w-full h-full object-cover" />
+                      : <div className="w-full h-full bg-gray-800 flex items-center justify-center text-[10px] text-gray-500">{thumb.pageNum}</div>}
                   <div className="absolute bottom-0 left-0 right-0 bg-black/75 px-1 py-0.5">
-                    <div className="text-[8px] text-gray-300 truncate font-mono">{areaInfo ? areaInfo.prefix : `p${thumb.pageNum}`}</div>
+                    <div className="text-[8px] text-gray-300 truncate font-mono">
+                      {areaInfo ? `${areaInfo.prefix}${String(areaInfo.route_start ?? 1).padStart(2, '0')}+` : `p${thumb.pageNum}`}
+                    </div>
                   </div>
                   {areaInfo && <div className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full" />}
                 </div>
@@ -1033,15 +1218,33 @@ const MapBuilder: React.FC = () => {
               <span className="text-xs text-green-400">{approvedCount}/{currentArea.route_count}</span>
             </div>
             <div className="flex-1 overflow-y-auto">
-              {routes.map(r => (
-                <button key={r.num} onClick={() => setActiveRouteNum(r.num)}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-left border-b border-gray-700/40 hover:bg-gray-700 transition-colors ${r.num === activeRouteNum ? 'bg-gray-700 border-l-2 border-l-blue-400' : ''}`}>
-                  <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: r.color }} />
-                  <span className="text-xs text-gray-300 flex-1 font-mono">{currentArea.prefix}{String(r.num).padStart(2, '0')}</span>
-                  <span className={`text-[10px] font-bold ${r.status === 'approved' ? 'text-green-400' : r.status === 'flagged' ? 'text-red-400' : r.selectedWayIds.size > 0 ? 'text-blue-400' : 'text-gray-600'}`}>
-                    {r.status === 'approved' ? '✓' : r.status === 'flagged' ? '!' : r.selectedWayIds.size > 0 ? '●' : '○'}
-                  </span>
-                </button>
+              {routes.map((r) => (
+                <React.Fragment key={r.num}>
+                  <button
+                    onClick={() => setActiveRouteNum(r.num)}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-left border-b border-gray-700/40 hover:bg-gray-700 transition-colors ${r.num === activeRouteNum ? 'bg-gray-700 border-l-2 border-l-blue-400' : ''}`}
+                  >
+                    <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: r.color }} />
+                    <span className="text-xs text-gray-300 flex-1 font-mono">
+                      {formatRouteCode(currentArea.prefix, r.num)}
+                    </span>
+                    <span className={`text-[10px] font-bold ${r.status === 'approved' ? 'text-green-400' : r.status === 'flagged' ? 'text-red-400' : r.selectedWayIds.size > 0 ? 'text-blue-400' : 'text-gray-600'}`}>
+                      {r.status === 'approved' ? '✓' : r.status === 'flagged' ? '!' : r.selectedWayIds.size > 0 ? '●' : '○'}
+                    </span>
+                  </button>
+
+                  {/* Insert route button — appears between each route row on hover */}
+                  <div className="group relative flex items-center justify-center h-0 overflow-visible z-10">
+                    <button
+                      onClick={() => handleInsertRoute(r.num)}
+                      title={`Insert new route after ${formatRouteCode(currentArea.prefix, r.num)}`}
+                      className="absolute opacity-0 group-hover:opacity-100 transition-opacity bg-blue-700 hover:bg-blue-500 text-white rounded-full w-4 h-4 flex items-center justify-center shadow-lg border border-blue-500"
+                      style={{ top: '-8px' }}
+                    >
+                      <Plus size={9} />
+                    </button>
+                  </div>
+                </React.Fragment>
               ))}
             </div>
             <div className="p-2 border-t border-gray-700">
@@ -1137,7 +1340,9 @@ const MapBuilder: React.FC = () => {
               {activeRoute && (
                 <div className="flex items-center gap-2 mr-2">
                   <div className="w-3 h-3 rounded-full" style={{ background: activeRoute.color }} />
-                  <span className="text-sm font-medium font-mono">{currentArea.prefix}{String(activeRouteNum).padStart(2, '0')}</span>
+                  <span className="text-sm font-medium font-mono">
+                    {formatRouteCode(currentArea.prefix, activeRouteNum)}
+                  </span>
                   {activeRoute.confidence > 0 && (
                     <span className={`text-xs px-2 py-0.5 rounded ${activeRoute.confidence >= 80 ? 'bg-green-900/30 text-green-400' : activeRoute.confidence >= 60 ? 'bg-yellow-900/30 text-yellow-400' : 'bg-red-900/30 text-red-400'}`}>
                       {activeRoute.confidence}% AI
@@ -1151,6 +1356,17 @@ const MapBuilder: React.FC = () => {
               <button onClick={loadRoadsFromViewport} disabled={loadingRoads} className="bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-300 border border-gray-600 px-3 py-1.5 rounded text-sm flex items-center gap-2" title="Load roads from current map view">
                 {loadingRoads ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}Load More Roads
               </button>
+
+              {/* Ghost routes toggle */}
+              <button
+                onClick={() => setShowGhostRoutes(v => !v)}
+                title={showGhostRoutes ? 'Hide other routes' : 'Show other routes (dimmed)'}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm border transition-colors ${showGhostRoutes ? 'bg-indigo-900/40 border-indigo-500 text-indigo-300' : 'bg-gray-700 border-gray-600 text-gray-400 hover:bg-gray-600'}`}
+              >
+                {showGhostRoutes ? <Eye size={14} /> : <EyeOff size={14} />}
+                {showGhostRoutes ? 'Routes On' : 'Routes Off'}
+              </button>
+
               <button onClick={handleApprove} disabled={!activeRoute || activeRoute.selectedWayIds.size === 0} className="bg-green-800/50 hover:bg-green-700/50 disabled:opacity-50 text-green-400 border border-green-700/50 px-3 py-1.5 rounded text-sm flex items-center gap-2">
                 <Check size={14} />Approve
               </button>
@@ -1227,14 +1443,31 @@ const MapBuilder: React.FC = () => {
                     <div className="text-[10px] text-gray-500 mt-1">Auto-detected by AI — edit if incorrect</div>
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Route Count</label>
+                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Route Count <span className="text-gray-600 normal-case">(routes on this page only)</span></label>
                     <input type="number" value={scannedRouteCount} onChange={e => setScannedRouteCount(parseInt(e.target.value) || 0)} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500" />
                     <div className="text-[10px] text-gray-500 mt-1">Auto-detected by AI — edit if incorrect</div>
                   </div>
                   <div>
+                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Starting Route Number <span className="text-gray-600 normal-case">(first route on this page)</span></label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={scannedRouteStart}
+                      onChange={e => setScannedRouteStart(parseInt(e.target.value) || 1)}
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
+                    />
+                    <div className="text-[10px] text-gray-500 mt-1">
+                      Usually 1. For continuation pages (e.g. Burlington South 2) set to the first route number shown on this page.
+                    </div>
+                  </div>
+                  <div>
                     <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Route Prefix</label>
-                    <input value={prefixInput} onChange={e => setPrefixInput(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} placeholder="e.g. ALD" maxLength={6} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono uppercase focus:outline-none focus:border-purple-500" />
-                    {prefixInput && <div className="text-[10px] text-gray-400 mt-1 font-mono">Routes will be: {prefixInput}01 · {prefixInput}02 · {prefixInput}03…</div>}
+                    <input value={prefixInput} onChange={e => setPrefixInput(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} placeholder="e.g. BS" maxLength={6} className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono uppercase focus:outline-none focus:border-purple-500" />
+                    {prefixInput && scannedRouteStart > 0 && scannedRouteCount > 0 && (
+                      <div className="text-[10px] text-gray-400 mt-1 font-mono">
+                        Routes will be: {formatRouteCode(prefixInput, scannedRouteStart)} · {formatRouteCode(prefixInput, scannedRouteStart + 1)} · … · {formatRouteCode(prefixInput, scannedRouteStart + scannedRouteCount - 1)}
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">Region</label>
@@ -1250,7 +1483,11 @@ const MapBuilder: React.FC = () => {
             {!scanning && (
               <div className="p-4 border-t border-gray-700 flex justify-end gap-3">
                 <button onClick={() => { setShowPrefixModal(false); setPendingPage(null); }} className="px-4 py-2 text-gray-400 hover:text-white text-sm">Cancel</button>
-                <button onClick={handlePrefixConfirm} disabled={!prefixInput.trim() || !scannedAreaName.trim() || scannedRouteCount === 0} className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white px-5 py-2 rounded font-medium text-sm flex items-center gap-2">
+                <button
+                  onClick={handlePrefixConfirm}
+                  disabled={!prefixInput.trim() || !scannedAreaName.trim() || scannedRouteCount === 0}
+                  className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white px-5 py-2 rounded font-medium text-sm flex items-center gap-2"
+                >
                   <Check size={14} />Confirm & Start Mapping
                 </button>
               </div>
