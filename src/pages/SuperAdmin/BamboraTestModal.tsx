@@ -21,8 +21,10 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
 
   const merchantId = import.meta.env.VITE_BAMBORA_MERCHANT_ID || '117586112';
 
+  // Wait for first render so the Bambora divs are in the DOM before we mount into them
   useEffect(() => {
-    loadBamboraScript();
+    const timer = setTimeout(loadBamboraScript, 50);
+    return () => clearTimeout(timer);
   }, []);
 
   const loadBamboraScript = () => {
@@ -189,7 +191,7 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
           <p className="text-amber-300 text-xs">This is a LIVE charge against a real card.</p>
         </div>
 
-        {/* ── LOADING ── */}
+        {/* ── LOADING SPINNER — shown on top while fields initialize ── */}
         {status === 'loading' && (
           <div className="flex flex-col items-center justify-center py-12 gap-3">
             <Loader className="animate-spin text-purple-400" size={32} />
@@ -197,89 +199,87 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
           </div>
         )}
 
-        {/* ── READY / PROCESSING ── */}
-        {(status === 'ready' || status === 'processing') && (
-          <>
-            {/* Amount */}
-            <div className="mb-4">
-              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
-                Amount (CAD)
-              </label>
-              <div className="relative">
-                <DollarSign
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
-                  size={16}
-                />
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  placeholder="0.00"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  disabled={status === 'processing'}
-                  className="w-full bg-gray-700 border border-gray-600 rounded-lg py-3 pl-9 pr-4 text-white focus:ring-2 focus:ring-purple-500 outline-none font-mono disabled:opacity-50"
-                />
-              </div>
+        {/* ── CARD FORM — always in DOM so Bambora can mount, visibility controlled by CSS ── */}
+        <div style={{ display: (status === 'ready' || status === 'processing') ? 'block' : 'none' }}>
+          {/* Amount */}
+          <div className="mb-4">
+            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
+              Amount (CAD)
+            </label>
+            <div className="relative">
+              <DollarSign
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
+                size={16}
+              />
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                placeholder="0.00"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                disabled={status === 'processing'}
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg py-3 pl-9 pr-4 text-white focus:ring-2 focus:ring-purple-500 outline-none font-mono disabled:opacity-50"
+              />
             </div>
+          </div>
 
-            {/* Card Number — Bambora iframe mounts here */}
-            <div className="mb-4">
+          {/* Card Number — Bambora iframe mounts here */}
+          <div className="mb-4">
+            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
+              Card Number
+            </label>
+            <div
+              id="bambora-card-number"
+              className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 min-h-[48px] flex items-center"
+            />
+          </div>
+
+          {/* Expiry + CVV */}
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <div>
               <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
-                Card Number
+                Expiry
               </label>
               <div
-                id="bambora-card-number"
+                id="bambora-expiry"
                 className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 min-h-[48px] flex items-center"
               />
             </div>
-
-            {/* Expiry + CVV */}
-            <div className="grid grid-cols-2 gap-4 mb-6">
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
-                  Expiry
-                </label>
-                <div
-                  id="bambora-expiry"
-                  className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 min-h-[48px] flex items-center"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
-                  CVV
-                </label>
-                <div
-                  id="bambora-cvv"
-                  className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 min-h-[48px] flex items-center"
-                />
-              </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
+                CVV
+              </label>
+              <div
+                id="bambora-cvv"
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 min-h-[48px] flex items-center"
+              />
             </div>
+          </div>
 
-            {/* Inline error message */}
-            {message && (
-              <p className="text-red-400 text-sm mb-4 text-center">{message}</p>
+          {/* Inline error message */}
+          {message && (
+            <p className="text-red-400 text-sm mb-4 text-center">{message}</p>
+          )}
+
+          <button
+            onClick={handleCharge}
+            disabled={status === 'processing' || !amount}
+            className="w-full py-4 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-bold text-lg shadow-lg flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {status === 'processing' ? (
+              <>
+                <Loader className="animate-spin" size={20} />
+                Processing...
+              </>
+            ) : (
+              <>
+                Process Charge
+                <CreditCard size={20} />
+              </>
             )}
-
-            <button
-              onClick={handleCharge}
-              disabled={status === 'processing' || !amount}
-              className="w-full py-4 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-bold text-lg shadow-lg flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {status === 'processing' ? (
-                <>
-                  <Loader className="animate-spin" size={20} />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  Process Charge
-                  <CreditCard size={20} />
-                </>
-              )}
-            </button>
-          </>
-        )}
+          </button>
+        </div>
 
         {/* ── APPROVED ── */}
         {status === 'approved' && (
