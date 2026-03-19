@@ -23,6 +23,7 @@ import {
   Crosshair,
   Map as MapIcon,
   Eye,
+  CreditCard,
 } from 'lucide-react';
 import {
   commandCenterService,
@@ -33,6 +34,7 @@ import {
 } from '../../lib/commandCenterService';
 import { supabase } from '../../lib/supabase';
 import { removeStorageItem } from '../../lib/localStorage';
+import BamboraTestModal from './BamboraTestModal';
 
 const REGIONS: Region[] = ['West', 'Central', 'East'];
 
@@ -46,6 +48,9 @@ const CommandCenterCreator: React.FC = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingCC, setEditingCC] = useState<CommandCenter | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // ── NEW: Bambora test modal state ──
+  const [showBamboraTest, setShowBamboraTest] = useState(false);
   
   const [formData, setFormData] = useState({
     displayName: '',
@@ -515,7 +520,7 @@ const CommandCenterCreator: React.FC = () => {
 
       <div className="max-w-6xl mx-auto p-6">
         {error && (
-          <div className="mb-6 p-4 bg-red-900/30 border border-red-700 rounded-lg flex items-center gap-3 text-red-300">
+          <div className="mb-6 p4 bg-red-900/30 border border-red-700 rounded-lg flex items-center gap-3 text-red-300">
             <AlertCircle size={20} />
             <span>{error}</span>
             <button onClick={() => setError(null)} className="ml-auto">
@@ -524,6 +529,7 @@ const CommandCenterCreator: React.FC = () => {
           </div>
         )}
 
+        {/* ── Button row — Live Card Testing added here ── */}
         <div className="mb-6 flex items-center gap-4 flex-wrap">
           <button
             onClick={openCreateModal}
@@ -555,6 +561,15 @@ const CommandCenterCreator: React.FC = () => {
           >
             <Eye size={20} />
             Map Viewer
+          </button>
+
+          {/* ── NEW: Live Card Testing button ── */}
+          <button
+            onClick={() => setShowBamboraTest(true)}
+            className="bg-amber-600 hover:bg-amber-500 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
+          >
+            <CreditCard size={20} />
+            Live Card Testing
           </button>
         </div>
 
@@ -600,6 +615,7 @@ const CommandCenterCreator: React.FC = () => {
         </div>
       </div>
 
+      {/* Existing create/edit modal — unchanged */}
       {showModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
           <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -795,6 +811,7 @@ const CommandCenterCreator: React.FC = () => {
         </div>
       )}
 
+      {/* Existing wipe modal — unchanged */}
       {showWipeModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-gray-900 rounded-xl border border-red-900 w-full max-w-md">
@@ -854,9 +871,15 @@ const CommandCenterCreator: React.FC = () => {
                 {wiping ? <Loader className="animate-spin" size={16} /> : <Trash2 size={16} />}
                 Wipe Everything
               </button>
+     
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── NEW: Bambora test modal ── */}
+      {showBamboraTest && (
+        <BamboraTestModal onClose={() => setShowBamboraTest(false)} />
       )}
     </div>
   );
