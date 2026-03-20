@@ -124,9 +124,8 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       .finally(() => setPrefixesLoading(false));
   }, [phase]);
 
-  // ─── Initialize Mapbox when entering working phase ───────────────────────
+  // ─── Initialize Mapbox once on mount ─────────────────────────────────────
   useEffect(() => {
-    if (phase !== 'working') return;
     if (!mapContainerRef.current || mapRef.current) return;
 
     const map = new mapboxgl.Map({
@@ -165,7 +164,6 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
     mapRef.current = map;
 
-    // Only destroy on full component unmount
     return () => {
       if (mapRef.current) {
         mapRef.current.remove();
@@ -173,7 +171,17 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         setMapLoaded(false);
       }
     };
-  }, [phase]); // re-check whenever phase changes — initializes map when working phase renders
+  }, []); // runs once on mount — container is always in DOM
+
+  // ─── Resize map whenever working phase becomes visible ───────────────────
+  useEffect(() => {
+    if (phase !== 'working') return;
+    // Small delay lets the display:flex paint before resize
+    const t = setTimeout(() => {
+      if (mapRef.current) mapRef.current.resize();
+    }, 50);
+    return () => clearTimeout(t);
+  }, [phase]);
 
   // ─── Draw all approved route lines once map is loaded ────────────────────
   useEffect(() => {
