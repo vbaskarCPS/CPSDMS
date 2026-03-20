@@ -950,12 +950,8 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
   // ─── PHASE: WORKING (MAP) ─────────────────────────────────────────────────
   const renderWorking = () => (
     <div className="flex overflow-hidden" style={{ height: 'calc(100vh - 57px)' }}>
-      {/* ── Map ── */}
+      {/* ── Map area — actual canvas rendered at top level, this is just overlays ── */}
       <div className="relative" style={{ flex: 1, height: '100%' }}>
-        <div
-          ref={mapContainerRef}
-          style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0 }}
-        />
 
         {/* Loading overlay */}
         {!mapLoaded && (
@@ -1063,19 +1059,30 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         )}
       </div>
 
-      <div className="flex-1 overflow-hidden flex flex-col">
-        {phase === 'auth'     && <div className="p-8 flex-1">{renderAuth()}</div>}
-        {phase === 'setup'    && <div className="p-8 flex-1">{renderSetup()}</div>}
-        {phase === 'scanning' && <div className="p-8 flex-1">{renderScanning()}</div>}
-        {phase === 'complete' && <div className="p-8 flex-1">{renderComplete()}</div>}
-
-        {/* Map view — always mounted so Mapbox never re-initializes, just hidden */}
+      <div className="flex-1 overflow-hidden flex flex-col relative">
+        {/* ── Map canvas — always in DOM at full size so Mapbox always has real dimensions ── */}
         <div
-          className="flex flex-1 overflow-hidden"
-          style={{ display: phase === 'working' ? 'flex' : 'none' }}
-        >
-          {renderWorking()}
-        </div>
+          ref={mapContainerRef}
+          style={{
+            position: 'absolute',
+            top: 0, bottom: 0, left: 0, right: 0,
+            zIndex: phase === 'working' ? 0 : -1,
+            visibility: phase === 'working' ? 'visible' : 'hidden',
+          }}
+        />
+
+        {/* ── Non-map phases overlay on top ── */}
+        {phase === 'auth'     && <div className="relative z-10 p-8 flex-1">{renderAuth()}</div>}
+        {phase === 'setup'    && <div className="relative z-10 p-8 flex-1">{renderSetup()}</div>}
+        {phase === 'scanning' && <div className="relative z-10 p-8 flex-1">{renderScanning()}</div>}
+        {phase === 'complete' && <div className="relative z-10 p-8 flex-1">{renderComplete()}</div>}
+
+        {/* ── Working phase overlays (legend, sidebar, detail panel) ── */}
+        {phase === 'working' && (
+          <div className="relative z-10 flex flex-1 overflow-hidden">
+            {renderWorking()}
+          </div>
+        )}
       </div>
 
       {/* Toast */}
