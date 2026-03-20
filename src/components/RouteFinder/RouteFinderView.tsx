@@ -123,9 +123,8 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       .finally(() => setPrefixesLoading(false));
   }, [phase]);
 
-  // ─── Initialize Mapbox when entering working phase ────────────────────────
+  // ─── Initialize Mapbox once on mount — stays alive for the component lifetime ─
   useEffect(() => {
-    if (phase !== 'working') return;
     if (!mapContainerRef.current || mapRef.current) return;
 
     const map = new mapboxgl.Map({
@@ -144,7 +143,6 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       if (!e.features || e.features.length === 0) return;
       const props = e.features[0].properties;
       if (!props) return;
-      // Only orange pins are interactive
       if (props.pinColor !== 'orange') return;
       setSelectedCustomerId(props.id);
     });
@@ -162,6 +160,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
     mapRef.current = map;
 
+    // Only destroy on full component unmount
     return () => {
       if (mapRef.current) {
         mapRef.current.remove();
@@ -169,7 +168,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         setMapLoaded(false);
       }
     };
-  }, [phase]);
+  }, []); // empty deps — runs once on mount
 
   // ─── Draw all approved route lines once map is loaded ────────────────────
   useEffect(() => {
@@ -181,8 +180,10 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
       const sourceId = `rf-route-src-${route.id}`;
       const lineId   = `rf-route-line-${route.id}`;
+      const labelId  = `rf-route-label-${route.id}`;
 
       // Remove if already drawn (e.g. re-entering working phase)
+      if (map.getLayer(labelId)) map.removeLayer(labelId);
       if (map.getLayer(lineId)) map.removeLayer(lineId);
       if (map.getSource(sourceId)) map.removeSource(sourceId);
 
@@ -212,6 +213,26 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         layout: {
           'line-cap': 'round',
           'line-join': 'round',
+        },
+      });
+
+      // Route code label placed along the line
+      map.addLayer({
+        id: labelId,
+        type: 'symbol',
+        source: sourceId,
+        layout: {
+          'symbol-placement': 'line',
+          'symbol-spacing': 200,
+          'text-field': route.route_code,
+          'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
+          'text-size': 11,
+          'text-keep-upright': true,
+        },
+        paint: {
+          'text-color': route.route_color,
+          'text-halo-color': '#000000',
+          'text-halo-width': 1.5,
         },
       });
     });
@@ -277,22 +298,53 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         },
       });
 
-      // Fit map to orange pins on first load
-      const orangePins = features.filter(f => f.properties?.pinColor === 'orange');
-      if (orangePins.length > 0) {
-        const coords = orangePins.map(f => (f.geometry as GeoJSON.Point).coordinates as [number, number]);
-        const bounds = coords.reduce(
-          (b, c) => b.extend(c),
-          new mapboxgl.LngLatBounds(coords[0], coords[0])
+      // Fit map to the densest cluster of pins on first load.
+      // For each pin, count neighbours within 0.015 degrees (~1.5km).
+      // The pin with the most neighbours is the cluster centre.
+      // We then fitBounds to only the pins within 0.025 degrees of that centre
+      // so the map opens tight on the action rather than zoomed out to fit everything.
+      const allCoords = features.map(
+        f => (f.geometry as GeoJSON.Point).coordinates as [number, number]
+      );
+
+      if (allCoords.length > 0) {
+        const NEIGHBOUR_RADIUS = 0.015;
+        const FIT_RADIUS       = 0.025;
+
+        let bestIdx = 0;
+        let bestCount = 0;
+
+        for (let i = 0; i < allCoords.length; i++) {
+          const [lngA, latA] = allCoords[i];
+          let count = 0;
+          for (let j = 0; j < allCoords.length; j++) {
+            if (i === j) continue;
+            const [lngB, latB] = allCoords[j];
+            if (
+              Math.abs(lngA - lngB) < NEIGHBOUR_RADIUS &&
+              Math.abs(latA - latB) < NEIGHBOUR_RADIUS
+            ) count++;
+          }
+          if (count > bestCount) { bestCount = count; bestIdx = i; }
+        }
+
+        const [cLng, cLat] = allCoords[bestIdx];
+
+        // Collect all pins near that centre for the bounds fit
+        const clusterCoords = allCoords.filter(([lng, lat]) =>
+          Math.abs(lng - cLng) < FIT_RADIUS &&
+          Math.abs(lat - cLat) < FIT_RADIUS
         );
-        map.fitBounds(bounds, { padding: 80, maxZoom: 14 });
-      } else if (features.length > 0) {
-        const coords = features.map(f => (f.geometry as GeoJSON.Point).coordinates as [number, number]);
-        const bounds = coords.reduce(
-          (b, c) => b.extend(c),
-          new mapboxgl.LngLatBounds(coords[0], coords[0])
+
+        const boundsCoords = clusterCoords.length > 0 ? clusterCoords : allCoords;
+        const bounds = boundsCoords.reduce(
+          (b, c) => b.extend(c as mapboxgl.LngLatLike),
+          new mapboxgl.LngLatBounds(
+            boundsCoords[0] as mapboxgl.LngLatLike,
+            boundsCoords[0] as mapboxgl.LngLatLike
+          )
         );
-        map.fitBounds(bounds, { padding: 80, maxZoom: 14 });
+        map.fitBounds(bounds, { padding: 80, maxZoom: 15 });
       }
     }
   }, [mapLoaded, customers]);
@@ -918,8 +970,15 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         {phase === 'auth'     && <div className="p-8 flex-1">{renderAuth()}</div>}
         {phase === 'setup'    && <div className="p-8 flex-1">{renderSetup()}</div>}
         {phase === 'scanning' && <div className="p-8 flex-1">{renderScanning()}</div>}
-        {phase === 'working'  && renderWorking()}
         {phase === 'complete' && <div className="p-8 flex-1">{renderComplete()}</div>}
+
+        {/* Map view — always mounted so Mapbox never re-initializes, just hidden */}
+        <div
+          className="flex flex-1 overflow-hidden"
+          style={{ display: phase === 'working' ? 'flex' : 'none' }}
+        >
+          {renderWorking()}
+        </div>
       </div>
 
       {/* Toast */}
