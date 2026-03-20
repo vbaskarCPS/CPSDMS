@@ -60,6 +60,7 @@ const PIN_COLORS = {
   grey:   '#6B7280',
   orange: '#F97316',
   green:  '#22C55E',
+  red:    '#EF4444',
 };
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
@@ -123,8 +124,9 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       .finally(() => setPrefixesLoading(false));
   }, [phase]);
 
-  // ─── Initialize Mapbox once on mount — stays alive for the component lifetime ─
+  // ─── Initialize Mapbox when entering working phase ───────────────────────
   useEffect(() => {
+    if (phase !== 'working') return;
     if (!mapContainerRef.current || mapRef.current) return;
 
     const map = new mapboxgl.Map({
@@ -136,7 +138,10 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
     map.addControl(new mapboxgl.NavigationControl(), 'top-right');
 
-    map.on('load', () => setMapLoaded(true));
+    map.on('load', () => {
+      map.resize();
+      setMapLoaded(true);
+    });
 
     // Click on orange customer pin → open detail panel
     map.on('click', 'customer-pins', e => {
@@ -168,7 +173,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         setMapLoaded(false);
       }
     };
-  }, []); // empty deps — runs once on mount
+  }, [phase]); // re-check whenever phase changes — initializes map when working phase renders
 
   // ─── Draw all approved route lines once map is loaded ────────────────────
   useEffect(() => {
@@ -244,15 +249,15 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
     if (!map || !mapLoaded) return;
 
     const features: GeoJSON.Feature[] = customers
-      .filter(c => c.lat !== null && c.lng !== null && !c.noRouteFound && !c.geocodeFailed)
+      .filter(c => c.lat !== null && c.lng !== null && !c.geocodeFailed)
       .map(c => ({
         type: 'Feature',
         properties: {
-          id:       c.id,
-          pinColor: c.pinColor,
-          color:    PIN_COLORS[c.pinColor],
-          name:     [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unknown',
-          route:    c.currentRouteCode,
+          id:        c.id,
+          pinColor:  c.pinColor,
+          color:     PIN_COLORS[c.pinColor] ?? PIN_COLORS.grey,
+          name:      [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unknown',
+          route:     c.currentRouteCode,
           suggested: c.suggestedRouteCode,
         },
         geometry: {
@@ -572,8 +577,9 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
               }
             }
           } else {
-            // No drawn route close enough to match
+            // No drawn route close enough to match — plot red
             customer.noRouteFound = true;
+            customer.pinColor = 'red';
           }
         } else {
           customer.geocodeFailed = true;
@@ -677,6 +683,85 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
     setSelectedCustomerId(null);
   }, []);
 
+  // ─── FIX ALL — applies suggested route to every orange customer ──────────
+  const handleFixAll = useCallback(async () => {
+    if (!session || !spreadsheetId) return;
+
+    const toFix = customers.filter(
+      c => c.pinColor === 'orange' && !c.noRouteFound && !c.geocodeFailed
+    );
+    if (toFix.length === 0) return;
+
+    if (!window.confirm(
+      `Fix all ${toFix.length} flagged customers using their suggested routes?\n\nThis will update every year of service history for each customer.`
+    )) return;
+
+    setApplying(true);
+    setError(null);
+    setSelectedCustomerId(null);
+
+    let fixedCount = 0;
+    let currentFixedRows = session.fixedRows;
+
+    for (const customer of toFix) {
+      try {
+        for (const row of customer.rows) {
+          await routeFinderSheetsService.applyFix(
+            spreadsheetId,
+            row.sheetName,
+            row.sheetRowNumber,
+            row.routeCodeCol,
+            row.streetNameCol,
+            customer.suggestedRouteCode,
+            customer.suggestedSegmentName || customer.streetName,
+          );
+        }
+
+        const logEntry: FixLogEntry = {
+          rowId:         customer.id,
+          bookingId:     customer.rows[0]?.bookingId || customer.id,
+          sheetName:     customer.rows[0]?.sheetName || '',
+          oldRouteCode:  customer.currentRouteCode,
+          newRouteCode:  customer.suggestedRouteCode,
+          oldStreetName: customer.streetName,
+          newStreetName: customer.suggestedSegmentName || customer.streetName,
+          cascadeCount:  customer.rows.length - 1,
+          timestamp:     new Date().toISOString(),
+          type:          'fix',
+        };
+
+        const result = await routeFinderSessionService.markRowFixed({
+          sessionId:          session.id,
+          rowId:              customer.id,
+          logEntry,
+          currentFixedRows,
+          cascadeResolvedIds: [],
+        });
+
+        currentFixedRows = result.newFixedRows;
+        fixedCount++;
+
+        setCustomers(prev => prev.map(c =>
+          c.id === customer.id
+            ? { ...c, pinColor: 'green', currentRouteCode: customer.suggestedRouteCode }
+            : c
+        ));
+
+      } catch (e: any) {
+        console.error('Fix All failed on customer', customer.id, e);
+      }
+    }
+
+    setSession(prev => prev ? { ...prev, fixedRows: currentFixedRows } : null);
+    setApplying(false);
+    showToast(`Fixed ${fixedCount} customer${fixedCount === 1 ? '' : 's'}.`);
+
+    const remaining = customers.filter(
+      c => c.pinColor === 'orange' && !toFix.find(f => f.id === c.id)
+    );
+    if (remaining.length === 0) setTimeout(() => setPhase('complete'), 800);
+  }, [session, spreadsheetId, customers, showToast]);
+
   // ─── DERIVED VALUES ───────────────────────────────────────────────────────
   const selectedCustomer = selectedCustomerId
     ? customers.find(c => c.id === selectedCustomerId) ?? null
@@ -686,6 +771,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
   const orangeCount = customers.filter(c => c.pinColor === 'orange').length;
   const greyCount   = customers.filter(c => c.pinColor === 'grey').length;
   const greenCount  = customers.filter(c => c.pinColor === 'green').length;
+  const redCount    = customers.filter(c => c.pinColor === 'red').length;
 
   // ─── PHASE: AUTH ─────────────────────────────────────────────────────────
   const renderAuth = () => (
@@ -855,9 +941,9 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
   // ─── PHASE: WORKING (MAP) ─────────────────────────────────────────────────
   const renderWorking = () => (
-    <div className="flex flex-1 overflow-hidden">
+    <div className="flex overflow-hidden" style={{ height: 'calc(100vh - 57px)' }}>
       {/* ── Map ── */}
-      <div className="flex-1 relative">
+      <div className="relative" style={{ flex: 1, height: '100%' }}>
         <div
           ref={mapContainerRef}
           style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0 }}
@@ -889,10 +975,10 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
               <span className="text-gray-300">{greenCount} fixed</span>
             </div>
           )}
-          {unresolvableCustomers.length > 0 && (
+          {redCount > 0 && (
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-red-600" />
-              <span className="text-gray-400">{unresolvableCustomers.length} unresolvable</span>
+              <div className="w-3 h-3 rounded-full" style={{ background: PIN_COLORS.red }} />
+              <span className="text-gray-300">{redCount} no route found</span>
             </div>
           )}
         </div>
@@ -922,8 +1008,11 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
             orangeCount={orangeCount}
             greyCount={greyCount}
             greenCount={greenCount}
+            redCount={redCount}
             unresolvables={unresolvableCustomers}
             session={session}
+            applying={applying}
+            onFixAll={handleFixAll}
             onReset={() => {
               if (window.confirm('Re-scan from scratch? This will reset all session progress.')) {
                 routeFinderSessionService.resetSession(spreadsheetId);
@@ -940,7 +1029,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
   // ─── RENDER ───────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full bg-gray-900 text-white relative">
+    <div className="fixed inset-0 z-50 flex flex-col bg-gray-900 text-white">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700 bg-gray-800/50 flex-shrink-0">
         <div className="flex items-center gap-3">
@@ -1164,13 +1253,17 @@ interface SidebarPanelProps {
   orangeCount: number;
   greyCount: number;
   greenCount: number;
+  redCount: number;
   unresolvables: GeoCustomer[];
   session: RouteFinderSession | null;
+  applying: boolean;
+  onFixAll: () => void;
   onReset: () => void;
 }
 
 const SidebarPanel: React.FC<SidebarPanelProps> = ({
-  prefix, orangeCount, greyCount, greenCount, unresolvables, session, onReset,
+  prefix, orangeCount, greyCount, greenCount, redCount, unresolvables, session,
+  applying, onFixAll, onReset,
 }) => {
   return (
     <div className="flex flex-col h-full">
@@ -1203,17 +1296,34 @@ const SidebarPanel: React.FC<SidebarPanelProps> = ({
               <span className="text-green-400 font-bold">{greenCount}</span>
             </div>
           )}
-          {unresolvables.length > 0 && (
+          {redCount > 0 && (
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-red-600" />
-                <span className="text-xs text-gray-300">Unresolvable</span>
+                <div className="w-3 h-3 rounded-full bg-red-500" />
+                <span className="text-xs text-gray-300">No Route Found</span>
               </div>
-              <span className="text-red-400 font-bold">{unresolvables.length}</span>
+              <span className="text-red-400 font-bold">{redCount}</span>
             </div>
           )}
         </div>
+
+        {/* Fix All button */}
         {orangeCount > 0 && (
+          <button
+            onClick={onFixAll}
+            disabled={applying}
+            className="w-full mt-4 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-2"
+          >
+            {applying ? (
+              <Loader size={14} className="animate-spin" />
+            ) : (
+              <CheckCircle size={14} />
+            )}
+            {applying ? 'Fixing...' : `Fix All ${orangeCount}`}
+          </button>
+        )}
+
+        {orangeCount === 0 && (
           <p className="text-xs text-gray-600 mt-3">← Click an orange pin on the map</p>
         )}
       </div>

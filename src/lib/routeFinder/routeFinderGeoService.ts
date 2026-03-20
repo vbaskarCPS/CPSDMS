@@ -59,7 +59,7 @@ export interface GeoCustomer {
   lng: number | null;
   geocodeFailed: boolean;
   // Proximity match result
-  pinColor: 'grey' | 'orange' | 'green';
+  pinColor: 'grey' | 'orange' | 'green' | 'red';
   suggestedRouteCode: string;
   suggestedSegmentName: string;
   distanceDeg: number;      // Euclidean distance in degrees to closest segment
