@@ -996,7 +996,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       </div>
 
       {/* ── Right Panel ── */}
-      <div className="w-80 border-l border-gray-700 bg-gray-800 flex flex-col overflow-hidden flex-shrink-0">
+      <div className="w-80 border-l border-gray-700 bg-gray-800 flex flex-col overflow-hidden flex-shrink-0 pointer-events-auto">
         {selectedCustomer && selectedCustomer.pinColor === 'orange' ? (
           <CustomerDetailPanel
             key={selectedCustomer.id}
@@ -1079,7 +1079,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
         {/* ── Working phase overlays (legend, sidebar, detail panel) ── */}
         {phase === 'working' && (
-          <div className="relative z-10 flex flex-1 overflow-hidden">
+          <div className="relative z-10 flex flex-1 overflow-hidden pointer-events-none">
             {renderWorking()}
           </div>
         )}
