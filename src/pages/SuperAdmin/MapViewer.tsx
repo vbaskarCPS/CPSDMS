@@ -30,18 +30,27 @@ const MapViewer: React.FC = () => {
   const [showLabels, setShowLabels] = useState(false);
   const [hoveredRoute, setHoveredRoute] = useState<string | null>(null);
 
-  // ─── Load routes from Supabase ───
+  // ─── Load routes from Supabase (batched to bypass 1000-row server cap) ───
   useEffect(() => {
     const loadRoutes = async () => {
       setLoading(true);
       try {
-        const { data, error: dbError } = await supabase
-          .from('route_maps')
-          .select('*')
-          .eq('status', 'approved')
-          .limit(3000);
-        if (dbError) throw dbError;
-        setRoutes(data || []);
+        const BATCH_SIZE = 1000;
+        let all: SavedRoute[] = [];
+        let from = 0;
+        while (true) {
+          const { data, error: dbError } = await supabase
+            .from('route_maps')
+            .select('*')
+            .eq('status', 'approved')
+            .range(from, from + BATCH_SIZE - 1);
+          if (dbError) throw dbError;
+          if (!data || data.length === 0) break;
+          all = [...all, ...data];
+          if (data.length < BATCH_SIZE) break;
+          from += BATCH_SIZE;
+        }
+        setRoutes(all);
       } catch (e) {
         setError('Failed to load routes from database.');
       } finally {
