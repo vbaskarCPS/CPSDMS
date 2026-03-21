@@ -246,13 +246,14 @@ interface PCLRow {
   contractor: string;
   date: string;
   year: string;
+  sourceType: 'standard' | 'bc' | 'sealing';
 }
 
 // =============================================================================
 // ROW EXTRACTORS
 // =============================================================================
 
-function extractStandardRows(rawData: any[][], headerRowIndex: number, CI: StandardColumnIndices): PCLRow[] {
+function extractStandardRows(rawData: any[][], headerRowIndex: number, CI: StandardColumnIndices, sourceType: 'standard' | 'bc'): PCLRow[] {
   const rows: PCLRow[] = [];
   const dataRows = rawData.slice(headerRowIndex + 1);
 
@@ -272,6 +273,7 @@ function extractStandardRows(rawData: any[][], headerRowIndex: number, CI: Stand
       contractor: cell(row, CI.CONTRACTOR),
       date: formatDate(cell(row, CI.DATE)),
       year: cell(row, CI.YEAR),
+      sourceType,
     });
   }
 
@@ -298,6 +300,7 @@ function extractSealingRows(rawData: any[][], headerRowIndex: number, CI: Sealin
       contractor: cell(row, CI.CONTRACTOR),
       date: formatDate(cell(row, CI.DATE)),
       year: cell(row, CI.YEAR),
+      sourceType: 'sealing',
     });
   }
 
@@ -385,7 +388,8 @@ export async function generatePCL(
       } else {
         const CI = resolveStandardHeaders(rawData[headerRowIndex]);
         if (CI.PHONE < 0) continue;
-        const rows = extractStandardRows(rawData, headerRowIndex, CI);
+        const stdType = book.campaignType === 'bc' ? 'bc' as const : 'standard' as const;
+        const rows = extractStandardRows(rawData, headerRowIndex, CI, stdType);
         allRows.push(...rows);
       }
     }
@@ -407,6 +411,11 @@ export async function generatePCL(
     const rcB = b.routeCode || '\uffff';
     if (rcA !== rcB) return rcA.localeCompare(rcB);
 
+    // City sort within route code — splits same RC across different cities
+    const cityA = a.city.toLowerCase();
+    const cityB = b.city.toLowerCase();
+    if (cityA !== cityB) return cityA.localeCompare(cityB);
+
     const stA = a.streetName.toLowerCase();
     const stB = b.streetName.toLowerCase();
     if (stA !== stB) return stA.localeCompare(stB);
@@ -420,27 +429,29 @@ export async function generatePCL(
     return yrA - yrB;
   });
 
-  // --- Group by Route Code ---
-  onProgress?.({ phase: 'Grouping', detail: `Grouping ${allRows.length.toLocaleString()} rows by route code...`, percent: 68 });
+  // --- Group by Route Code + City (page break when either changes) ---
+  onProgress?.({ phase: 'Grouping', detail: `Grouping ${allRows.length.toLocaleString()} rows by route code + city...`, percent: 68 });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   const routeGroups: { routeCode: string; rows: PCLRow[] }[] = [];
-  let currentRC = '';
+  let currentGroupKey = '';
   let currentGroup: PCLRow[] = [];
 
   for (const row of allRows) {
     const rc = row.routeCode || '(No Route)';
-    if (rc !== currentRC) {
+    const city = row.city || '';
+    const groupKey = rc + '|' + city;
+    if (groupKey !== currentGroupKey) {
       if (currentGroup.length > 0) {
-        routeGroups.push({ routeCode: currentRC, rows: currentGroup });
+        routeGroups.push({ routeCode: currentGroupKey.split('|')[0], rows: currentGroup });
       }
-      currentRC = rc;
+      currentGroupKey = groupKey;
       currentGroup = [];
     }
     currentGroup.push(row);
   }
   if (currentGroup.length > 0) {
-    routeGroups.push({ routeCode: currentRC, rows: currentGroup });
+    routeGroups.push({ routeCode: currentGroupKey.split('|')[0], rows: currentGroup });
   }
 
   // --- Generate PDF ---
@@ -482,6 +493,9 @@ export async function generatePCL(
       r.year,
     ]);
 
+    // Track which rows are sealing for background coloring
+    const rowIsSealing = group.rows.map((r) => r.sourceType === 'sealing');
+
     autoTable(doc, {
       head: [headerLabels],
       body: tableRows,
@@ -491,7 +505,7 @@ export async function generatePCL(
       styles: {
         fontSize: 7,
         cellPadding: 3,
-        overflow: 'linebreak',
+        overflow: 'hidden',
         lineColor: [200, 200, 200],
         lineWidth: 0.5,
         valign: 'middle',
@@ -502,9 +516,6 @@ export async function generatePCL(
         fontStyle: 'bold',
         fontSize: 7,
         halign: 'left',
-      },
-      alternateRowStyles: {
-        fillColor: [245, 245, 245],
       },
       bodyStyles: {
         textColor: [30, 30, 30],
@@ -519,17 +530,28 @@ export async function generatePCL(
         6: { cellWidth: colWidths[6] },
         7: { cellWidth: colWidths[7], halign: 'center' },
         8: { cellWidth: colWidths[8], halign: 'right' },
-        9: { cellWidth: colWidths[9], overflow: 'linebreak' },
+        9: { cellWidth: colWidths[9], overflow: 'hidden' },
         10: { cellWidth: colWidths[10] },
         11: { cellWidth: colWidths[11], halign: 'center' },
       },
       didParseCell: function (data: any) {
+        if (data.section !== 'body') return;
+
+        // Background color: grey for sealing rows, white for standard/bc
+        const rowIdx = data.row.index;
+        if (rowIdx >= 0 && rowIdx < rowIsSealing.length && rowIsSealing[rowIdx]) {
+          data.cell.styles.fillColor = [230, 230, 230];
+        } else {
+          data.cell.styles.fillColor = [255, 255, 255];
+        }
+
+        // Shrink-to-fit: reduce font size if text is too wide for column
         const cellText = String(data.cell.text?.join?.('') || data.cell.text || '');
         const colW = colWidths[data.column.index] || 60;
         const estimatedWidth = cellText.length * 3.5;
-        if (estimatedWidth > colW && data.section === 'body') {
+        if (estimatedWidth > colW) {
           const ratio = colW / estimatedWidth;
-          const newSize = Math.max(5, Math.round(7 * ratio * 10) / 10);
+          const newSize = Math.max(4, Math.round(7 * ratio * 10) / 10);
           data.cell.styles.fontSize = newSize;
         }
       },
