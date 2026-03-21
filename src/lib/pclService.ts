@@ -399,7 +399,8 @@ export async function generatePCL(
   }
 
   // --- Sort rows ---
-  onProgress?.({ phase: 'Sorting', detail: 'Organizing data...', percent: 65 });
+  onProgress?.({ phase: 'Sorting', detail: `Organizing ${allRows.length.toLocaleString()} rows...`, percent: 65 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
   allRows.sort((a, b) => {
     const rcA = a.routeCode || '\uffff';
@@ -420,6 +421,9 @@ export async function generatePCL(
   });
 
   // --- Group by Route Code ---
+  onProgress?.({ phase: 'Grouping', detail: `Grouping ${allRows.length.toLocaleString()} rows by route code...`, percent: 68 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
   const routeGroups: { routeCode: string; rows: PCLRow[] }[] = [];
   let currentRC = '';
   let currentGroup: PCLRow[] = [];
@@ -457,6 +461,11 @@ export async function generatePCL(
 
     const pct = 70 + Math.round(((g + 1) / routeGroups.length) * 25);
     onProgress?.({ phase: 'Generating', detail: `Route ${group.routeCode} (${g + 1}/${routeGroups.length})...`, percent: pct });
+
+    // Yield to browser every 5 groups so UI stays responsive with large datasets
+    if (g % 5 === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
 
     const tableRows = group.rows.map((r) => [
       r.routeCode,
@@ -529,6 +538,7 @@ export async function generatePCL(
 
   // --- Download ---
   onProgress?.({ phase: 'Downloading', detail: 'Saving PDF...', percent: 97 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
   const today = new Date();
   const dateStr = today.getFullYear() + '-' +
