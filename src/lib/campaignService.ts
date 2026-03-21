@@ -70,6 +70,8 @@ export interface CampaignBook {
   appsScriptUrl?: string;
   campaignType: CampaignType;
   createdAt?: string;
+  masterSpreadsheetUrl?: string;
+  masterSpreadsheetId?: string;
 }
 
 export interface CampaignManager {
@@ -348,6 +350,8 @@ class CampaignService {
     spreadsheetUrl?: string;
     appsScriptUrl?: string;
     campaignType?: CampaignType;
+    masterSpreadsheetUrl?: string;
+    masterSpreadsheetId?: string;
   }): Promise<CampaignBook> {
     const { data, error } = await supabase
       .from('campaign_books')
@@ -358,6 +362,8 @@ class CampaignService {
         spreadsheet_url: book.spreadsheetUrl,
         apps_script_url: book.appsScriptUrl,
         campaign_type: book.campaignType || 'standard',
+        master_spreadsheet_url: book.masterSpreadsheetUrl || null,
+        master_spreadsheet_id: book.masterSpreadsheetId || null,
       })
       .select()
       .single();
@@ -374,6 +380,8 @@ class CampaignService {
       spreadsheetUrl: string;
       appsScriptUrl: string;
       campaignType: CampaignType;
+      masterSpreadsheetUrl: string;
+      masterSpreadsheetId: string;
     }>
   ): Promise<CampaignBook> {
     const dbUpdates: any = {};
@@ -382,6 +390,8 @@ class CampaignService {
     if (updates.spreadsheetUrl !== undefined) dbUpdates.spreadsheet_url = updates.spreadsheetUrl;
     if (updates.appsScriptUrl !== undefined) dbUpdates.apps_script_url = updates.appsScriptUrl;
     if (updates.campaignType !== undefined) dbUpdates.campaign_type = updates.campaignType;
+    if (updates.masterSpreadsheetUrl !== undefined) dbUpdates.master_spreadsheet_url = updates.masterSpreadsheetUrl || null;
+    if (updates.masterSpreadsheetId !== undefined) dbUpdates.master_spreadsheet_id = updates.masterSpreadsheetId || null;
 
     const { data, error } = await supabase
       .from('campaign_books')
@@ -734,6 +744,57 @@ class CampaignService {
     return !data || data.length === 0;
   }
 
+  // =============================================================================
+  // CUT BOOKINGS — dedup tracking
+  // =============================================================================
+
+  /**
+   * Get the set of Booking IDs that have already been cut for a given book.
+   */
+  public async getCutBookingIds(bookId: string): Promise<Set<string>> {
+    const ids = new Set<string>();
+    try {
+      const { data, error } = await supabase
+        .from('cut_bookings')
+        .select('booking_id')
+        .eq('book_id', bookId);
+
+      if (error || !data) return ids;
+      for (const row of data) {
+        ids.add(row.booking_id);
+      }
+    } catch {
+      // Return empty set on failure — safe fallback (will re-cut, but UNIQUE constraint protects DB)
+    }
+    return ids;
+  }
+
+  /**
+   * Record newly cut Booking IDs into the cut_bookings table.
+   * Uses upsert with onConflict to gracefully handle any duplicates.
+   */
+  public async recordCutBookings(bookId: string, bookingIds: string[]): Promise<void> {
+    if (bookingIds.length === 0) return;
+
+    const rows = bookingIds.map((bid) => ({
+      book_id: bookId,
+      booking_id: bid,
+    }));
+
+    // Insert in batches of 500 to avoid payload limits
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      const batch = rows.slice(i, i + BATCH_SIZE);
+      const { error } = await supabase
+        .from('cut_bookings')
+        .upsert(batch, { onConflict: 'book_id,booking_id' });
+
+      if (error) {
+        console.warn('recordCutBookings batch failed:', error.message);
+      }
+    }
+  }
+
   // --- MAPPERS ---
 
   private mapDbToCampaign(data: any): Campaign {
@@ -777,6 +838,8 @@ class CampaignService {
       appsScriptUrl: data.apps_script_url,
       campaignType,
       createdAt: data.created_at,
+      masterSpreadsheetUrl: data.master_spreadsheet_url || undefined,
+      masterSpreadsheetId: data.master_spreadsheet_id || undefined,
     };
   }
 

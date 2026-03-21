@@ -20,6 +20,7 @@ import {
   ChevronDown,
   ChevronUp,
   BookOpen,
+  Scissors,
 } from 'lucide-react';
 import {
   campaignService,
@@ -29,6 +30,7 @@ import {
   extractSheetId,
 } from '../../lib/campaignService';
 import type { CampaignType } from '../../lib/campaignService';
+import { executeCut, CutProgress, CutResult } from '../../lib/cutService';
 
 const CAMPAIGN_TYPE_OPTIONS: { value: CampaignType; label: string; desc: string }[] = [
   { value: 'standard', label: 'Standard', desc: 'Standard aeration callbook' },
@@ -77,10 +79,16 @@ const CampaignCreator: React.FC = () => {
     spreadsheetUrl: '',
     appsScriptUrl: '',
     campaignType: 'standard' as CampaignType,
+    masterSpreadsheetUrl: '',
   });
   const [bookFormErrors, setBookFormErrors] = useState<Record<string, string>>({});
   const [savingBook, setSavingBook] = useState(false);
   const [bookCampaignId, setBookCampaignId] = useState<string | null>(null);
+
+  // CUT state
+  const [cuttingBookId, setCuttingBookId] = useState<string | null>(null);
+  const [cutProgress, setCutProgress] = useState<CutProgress | null>(null);
+  const [cutResult, setCutResult] = useState<CutResult | null>(null);
 
   useEffect(() => {
     loadCampaigns();
@@ -221,7 +229,7 @@ const CampaignCreator: React.FC = () => {
   const openAddBookModal = (campaignId: string) => {
     setBookCampaignId(campaignId);
     setEditingBook(null);
-    setBookForm({ displayName: '', spreadsheetUrl: '', appsScriptUrl: '', campaignType: 'standard' });
+    setBookForm({ displayName: '', spreadsheetUrl: '', appsScriptUrl: '', campaignType: 'standard', masterSpreadsheetUrl: '' });
     setBookFormErrors({});
     setShowBookModal(true);
   };
@@ -234,6 +242,7 @@ const CampaignCreator: React.FC = () => {
       spreadsheetUrl: book.spreadsheetUrl || ('https://docs.google.com/spreadsheets/d/' + book.spreadsheetId + '/edit'),
       appsScriptUrl: book.appsScriptUrl || '',
       campaignType: book.campaignType || 'standard',
+      masterSpreadsheetUrl: book.masterSpreadsheetUrl || '',
     });
     setBookFormErrors({});
     setShowBookModal(true);
@@ -250,6 +259,11 @@ const CampaignCreator: React.FC = () => {
     if (!bookForm.displayName.trim()) errors.displayName = 'Book name is required';
     const sheetId = extractSheetId(bookForm.spreadsheetUrl);
     if (!sheetId) errors.spreadsheetUrl = 'Invalid Google Sheets URL or ID';
+    // Master URL is optional, but if provided it must be valid
+    if (bookForm.masterSpreadsheetUrl.trim()) {
+      const masterId = extractSheetId(bookForm.masterSpreadsheetUrl);
+      if (!masterId) errors.masterSpreadsheetUrl = 'Invalid Google Sheets URL or ID';
+    }
     setBookFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -261,6 +275,10 @@ const CampaignCreator: React.FC = () => {
 
     try {
       const spreadsheetId = extractSheetId(bookForm.spreadsheetUrl)!;
+      const masterSpreadsheetId = bookForm.masterSpreadsheetUrl.trim()
+        ? extractSheetId(bookForm.masterSpreadsheetUrl) || undefined
+        : undefined;
+
       if (editingBook) {
         await campaignService.updateBook(editingBook.id, {
           displayName: bookForm.displayName,
@@ -268,6 +286,8 @@ const CampaignCreator: React.FC = () => {
           spreadsheetUrl: bookForm.spreadsheetUrl,
           appsScriptUrl: bookForm.appsScriptUrl || undefined,
           campaignType: bookForm.campaignType,
+          masterSpreadsheetUrl: bookForm.masterSpreadsheetUrl || '',
+          masterSpreadsheetId: masterSpreadsheetId || '',
         });
       } else {
         await campaignService.createBook({
@@ -277,6 +297,8 @@ const CampaignCreator: React.FC = () => {
           spreadsheetUrl: bookForm.spreadsheetUrl,
           appsScriptUrl: bookForm.appsScriptUrl || undefined,
           campaignType: bookForm.campaignType,
+          masterSpreadsheetUrl: bookForm.masterSpreadsheetUrl || undefined,
+          masterSpreadsheetId: masterSpreadsheetId,
         });
       }
       await loadBooks(bookCampaignId);
@@ -295,6 +317,55 @@ const CampaignCreator: React.FC = () => {
       if (expandedId) await loadBooks(expandedId);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete book');
+    }
+  };
+
+  // --- CUT ---
+
+  const handleCutBook = async (book: CampaignBook) => {
+    if (!book.masterSpreadsheetId) {
+      setError('No master bookings URL set for "' + book.displayName + '". Edit the book and add one first.');
+      return;
+    }
+
+    const msg = '✂️ CUT Bookings from "' + book.displayName + '"?\n\nThis will scan all tabs for AER bookings and append new ones to the master bookings spreadsheet.\n\nAlready-cut bookings will be skipped (no duplicates).';
+    if (!window.confirm(msg)) return;
+
+    setCuttingBookId(book.id);
+    setCutProgress({ phase: 'Starting', detail: 'Initializing...', percent: 0 });
+    setCutResult(null);
+    setError(null);
+
+    try {
+      const result = await executeCut(book, (progress) => {
+        setCutProgress(progress);
+      });
+
+      setCutResult(result);
+
+      if (result.success) {
+        if (result.newBookings > 0) {
+          setSuccessMsg(
+            '✂️ CUT complete: ' + result.newBookings + ' new booking' + (result.newBookings !== 1 ? 's' : '') +
+            ' added to master' +
+            (result.skippedBookings > 0 ? ' (' + result.skippedBookings + ' already cut, skipped)' : '') +
+            ' — scanned ' + result.tabsScanned + ' tab' + (result.tabsScanned !== 1 ? 's' : '')
+          );
+        } else {
+          setSuccessMsg(
+            '✂️ CUT complete: No new bookings to add.' +
+            (result.skippedBookings > 0 ? ' All ' + result.skippedBookings + ' booking' + (result.skippedBookings !== 1 ? 's' : '') + ' were already cut.' : ' No AER bookings found.') +
+            ' Scanned ' + result.tabsScanned + ' tab' + (result.tabsScanned !== 1 ? 's' : '') + '.'
+          );
+        }
+      } else {
+        setError('CUT failed: ' + (result.errorMessage || 'Unknown error'));
+      }
+    } catch (err) {
+      setError('CUT failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+    } finally {
+      setCuttingBookId(null);
+      setCutProgress(null);
     }
   };
 
@@ -378,6 +449,7 @@ const CampaignCreator: React.FC = () => {
   };
 
   const bookSheetIdPreview = getSheetIdPreview(bookForm.spreadsheetUrl);
+  const masterSheetIdPreview = getSheetIdPreview(bookForm.masterSpreadsheetUrl);
 
   const getTypeBadge = (type: CampaignType) => {
     if (type === 'bc') {
@@ -492,49 +564,100 @@ const CampaignCreator: React.FC = () => {
                   </p>
                 ) : (
                   <div className="space-y-2">
-                    {books.map((book) => (
-                      <div
-                        key={book.id}
-                        className="flex items-center justify-between bg-gray-900 rounded-lg px-4 py-3 border border-gray-700"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-800 flex items-center justify-center">
-                            <Sheet size={14} className="text-blue-400" />
-                          </div>
-                          <div>
+                    {books.map((book) => {
+                      const isCutting = cuttingBookId === book.id;
+                      const hasMaster = !!book.masterSpreadsheetId;
+
+                      return (
+                        <div
+                          key={book.id}
+                          className="bg-gray-900 rounded-lg px-4 py-3 border border-gray-700"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-800 flex items-center justify-center">
+                                <Sheet size={14} className="text-blue-400" />
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-white text-sm font-medium">{book.displayName}</span>
+                                  {getTypeBadge(book.campaignType)}
+                                </div>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <code className="text-gray-500 text-xs">{book.spreadsheetId.substring(0, 20)}...</code>
+                                  {book.appsScriptUrl && (
+                                    <span className="flex items-center gap-1 text-xs text-blue-400">
+                                      <Link size={8} />
+                                      Bridge
+                                    </span>
+                                  )}
+                                  {hasMaster && (
+                                    <span className="flex items-center gap-1 text-xs text-purple-400">
+                                      <Scissors size={8} />
+                                      Master
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
                             <div className="flex items-center gap-2">
-                              <span className="text-white text-sm font-medium">{book.displayName}</span>
-                              {getTypeBadge(book.campaignType)}
-                            </div>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <code className="text-gray-500 text-xs">{book.spreadsheetId.substring(0, 20)}...</code>
-                              {book.appsScriptUrl && (
-                                <span className="flex items-center gap-1 text-xs text-blue-400">
-                                  <Link size={8} />
-                                  Bridge
-                                </span>
-                              )}
+                              {/* CUT Button */}
+                              <button
+                                onClick={() => handleCutBook(book)}
+                                disabled={isCutting}
+                                className={
+                                  'px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors border ' +
+                                  (isCutting
+                                    ? 'bg-purple-900/30 border-purple-700 text-purple-400 opacity-70 cursor-not-allowed'
+                                    : hasMaster
+                                      ? 'bg-purple-900/30 hover:bg-purple-900/60 border-purple-700 text-purple-400'
+                                      : 'bg-gray-800 border-gray-600 text-gray-500 hover:text-gray-300 hover:border-gray-500')
+                                }
+                                title={hasMaster ? 'Cut bookings to master' : 'Set master bookings URL first'}
+                              >
+                                {isCutting ? (
+                                  <Loader className="animate-spin" size={12} />
+                                ) : (
+                                  <Scissors size={12} />
+                                )}
+                                CUT
+                              </button>
+                              <button
+                                onClick={() => openEditBookModal(book)}
+                                className="text-gray-500 hover:text-white p-1 transition-colors"
+                                title="Edit Book"
+                              >
+                                <Edit2 size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteBook(book)}
+                                className="text-gray-500 hover:text-red-400 p-1 transition-colors"
+                                title="Delete Book"
+                              >
+                                <Trash2 size={14} />
+                              </button>
                             </div>
                           </div>
+
+                          {/* CUT Progress Bar */}
+                          {isCutting && cutProgress && (
+                            <div className="mt-3 pt-3 border-t border-gray-700">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs text-purple-400 font-medium">{cutProgress.phase}</span>
+                                <span className="text-xs text-gray-500">{cutProgress.percent}%</span>
+                              </div>
+                              <div className="w-full bg-gray-800 rounded-full h-1.5">
+                                <div
+                                  className="bg-purple-500 h-1.5 rounded-full transition-all duration-300"
+                                  style={{ width: cutProgress.percent + '%' }}
+                                />
+                              </div>
+                              <p className="text-xs text-gray-500 mt-1">{cutProgress.detail}</p>
+                            </div>
+                          )}
                         </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => openEditBookModal(book)}
-                            className="text-gray-500 hover:text-white p-1 transition-colors"
-                            title="Edit Book"
-                          >
-                            <Edit2 size={14} />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteBook(book)}
-                            className="text-gray-500 hover:text-red-400 p-1 transition-colors"
-                            title="Delete Book"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -793,6 +916,32 @@ const CampaignCreator: React.FC = () => {
                     <span>{bookSheetIdPreview}</span>
                   </p>
                 )}
+              </div>
+
+              {/* Master Bookings URL */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">
+                  Master Bookings URL <span className="text-gray-500">(for CUT)</span>
+                </label>
+                <div className="relative">
+                  <Scissors className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+                  <input
+                    type="text"
+                    value={bookForm.masterSpreadsheetUrl}
+                    onChange={(e) => setBookForm({ ...bookForm, masterSpreadsheetUrl: e.target.value })}
+                    placeholder="https://docs.google.com/spreadsheets/d/..."
+                    className={'w-full bg-gray-900 border rounded-lg py-2 pl-10 pr-3 text-white focus:ring-2 focus:outline-none text-sm ' +
+                      (bookFormErrors.masterSpreadsheetUrl ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-purple-500')}
+                  />
+                </div>
+                {bookFormErrors.masterSpreadsheetUrl && <p className="text-red-400 text-xs mt-1">{bookFormErrors.masterSpreadsheetUrl}</p>}
+                {masterSheetIdPreview && (
+                  <p className="text-purple-400 text-xs mt-1 flex items-center gap-1">
+                    <Check size={12} />
+                    <span>{masterSheetIdPreview}</span>
+                  </p>
+                )}
+                <p className="text-gray-500 text-xs mt-1">The spreadsheet where CUT will paste bookings into the "Bookings" tab.</p>
               </div>
 
               {/* Apps Script Bridge URL */}
