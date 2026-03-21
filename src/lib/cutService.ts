@@ -251,6 +251,27 @@ export async function executeCut(
     };
   }
 
+  // --- Ensure Google Sheets authentication ---
+  if (!dialerSheetsService.isAuthenticated()) {
+    onProgress?.({ phase: 'Authenticating', detail: 'Connecting to Google Sheets...', percent: 2 });
+    try {
+      const authed = await dialerSheetsService.authenticate();
+      if (!authed) {
+        return {
+          success: false, newBookings: 0, skippedBookings: 0,
+          totalScanned: 0, tabsScanned: 0,
+          errorMessage: 'Google Sheets authentication was cancelled or failed. Please try again.',
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false, newBookings: 0, skippedBookings: 0,
+        totalScanned: 0, tabsScanned: 0,
+        errorMessage: 'Google Sheets authentication failed: ' + (err.message || 'Unknown error'),
+      };
+    }
+  }
+
   const callbookId = book.spreadsheetId;
   const masterId = book.masterSpreadsheetId;
 
