@@ -75,7 +75,7 @@ interface ContextMenu {
 // ─── Area modal state ────────────────────────────────────────────────────────
 interface AreaModalState {
   open: boolean;
-  editing: AreaPrefix | null; // null = new area
+  editing: AreaPrefix | null;
   areaName: string;
   prefix: string;
   region: Region;
@@ -264,8 +264,8 @@ const MapBuilder: React.FC = () => {
   const [addStreetInput, setAddStreetInput] = useState('');
   const [hoveredWayName, setHoveredWayName] = useState<string | null>(null);
 
-  // Ghost routes toggle
-  const [showGhostRoutes, setShowGhostRoutes] = useState(false);
+  // Ghost routes — ON by default so all approved routes are visible immediately
+  const [showGhostRoutes, setShowGhostRoutes] = useState(true);
 
   // Split
   const [wayOverrides, setWayOverrides] = useState<Map<number, OsmWay[]>>(new Map());
@@ -285,6 +285,10 @@ const MapBuilder: React.FC = () => {
   const [boxState, setBoxState] = useState<BoxState | null>(null);
   const boxStateRef = useRef<BoxState | null>(null);
   const isDraggingRef = useRef(false);
+
+  // Restore guard — tracks which area has already been restored so we don't
+  // run the restore twice when synthetic roads get added to allWays
+  const restoredAreaRef = useRef<string | null>(null);
 
   // Stable refs
   const activeRouteNumRef = useRef(activeRouteNum);
@@ -332,7 +336,7 @@ const MapBuilder: React.FC = () => {
 
   // ─── Open area modal (edit) ───
   const openEditAreaModal = (area: AreaPrefix, e: React.MouseEvent) => {
-    e.stopPropagation(); // don't open the map
+    e.stopPropagation();
     setModal({
       open: true,
       editing: area,
@@ -376,6 +380,7 @@ const MapBuilder: React.FC = () => {
 
   // ─── Back to grid ───
   const handleBackToGrid = () => {
+    restoredAreaRef.current = null;
     setView('grid');
     setCurrentArea(null);
     setTimeout(() => mapRef.current?.resize(), 100);
@@ -383,6 +388,8 @@ const MapBuilder: React.FC = () => {
 
   // ─── Init routes ───
   const initRoutesForArea = (area: AreaPrefix) => {
+    // Reset the restore guard so the new area restores fresh
+    restoredAreaRef.current = null;
     const start = area.route_start ?? 1;
     setRoutes(Array.from({ length: area.route_count }, (_, i) => ({
       num: start + i,
@@ -806,29 +813,103 @@ const MapBuilder: React.FC = () => {
   useEffect(() => { if (mapLoaded && currentArea && view === 'map') loadRoads(currentArea); }, [currentArea, mapLoaded, view]);
 
   // ─── Restore saved routes ───
+  // Handles three cases per segment:
+  //   1. Normal road   — OSM ID found in fresh data and geometry matches → use real way directly
+  //   2. Split road    — OSM ID found but geometry is a sub-piece → build synthetic from saved coords
+  //   3. Missing road  — OSM ID not in fresh download at all → build synthetic from saved coords
+  // Synthetic ways are appended to allWays so they appear on the map and are fully interactive.
+  // restoredAreaRef guards against re-running when allWays grows from synthetic additions.
   useEffect(() => {
     if (!currentArea || allWays.length === 0) return;
+    if (restoredAreaRef.current === currentArea.area_name) return;
+    restoredAreaRef.current = currentArea.area_name;
+
     const restore = async () => {
       try {
-        const { data, error: dbErr } = await supabase.from('route_maps').select('*').eq('area_name', currentArea.area_name);
+        const { data, error: dbErr } = await supabase
+          .from('route_maps')
+          .select('*')
+          .eq('area_name', currentArea.area_name);
         if (dbErr || !data || data.length === 0) return;
+
         const osmIdToWay = new Map<number, OsmWay>();
         allWays.forEach(w => osmIdToWay.set(w.id, w));
-        setRoutes(prev => prev.map(route => {
-          if (route.selectedWayIds.size > 0 || route.status !== 'pending') return route;
-          const saved = data.find((d: any) => d.route_number === route.num);
-          if (!saved) return route;
+
+        // Collect synthetic ways we need to inject into allWays
+        const syntheticWaysToAdd: OsmWay[] = [];
+
+        // Build the full picture of what each route should look like
+        const routeUpdates = new Map<number, {
+          selectedWayIds: Set<number>;
+          streetNames: string[];
+          status: 'pending' | 'approved' | 'flagged';
+          aiNotes: string;
+          confidence: number;
+        }>();
+
+        for (const saved of data) {
           const selectedWayIds = new Set<number>();
           const streetNames: string[] = [];
-          (saved.segments || []).forEach((seg: any) => {
-            const way = osmIdToWay.get(seg.osmId);
-            if (way) { selectedWayIds.add(way.id); if (seg.name && !streetNames.includes(seg.name)) streetNames.push(seg.name); }
-          });
-          if (selectedWayIds.size === 0) return route;
-          return { ...route, selectedWayIds, streetNames, status: saved.status as 'pending' | 'approved' | 'flagged', aiNotes: saved.ai_notes || '', confidence: saved.ai_confidence || 0 };
+
+          for (const seg of (saved.segments || [])) {
+            const savedCoords: [number, number][] = seg.coordinates;
+            const realWay = osmIdToWay.get(seg.osmId);
+
+            let wayId: number;
+
+            if (
+              realWay &&
+              realWay.geometry.length === savedCoords.length &&
+              Math.abs(realWay.geometry[0][0] - savedCoords[0][0]) < 0.000001 &&
+              Math.abs(realWay.geometry[0][1] - savedCoords[0][1]) < 0.000001 &&
+              Math.abs(realWay.geometry[realWay.geometry.length - 1][0] - savedCoords[savedCoords.length - 1][0]) < 0.000001 &&
+              Math.abs(realWay.geometry[realWay.geometry.length - 1][1] - savedCoords[savedCoords.length - 1][1]) < 0.000001
+            ) {
+              // Perfect match — use the real OSM way as-is
+              wayId = realWay.id;
+            } else {
+              // Split piece or road not in fresh download — rebuild from saved coordinates
+              const synthetic: OsmWay = {
+                id: splitCounterRef.current++,
+                rootId: seg.osmId,
+                name: seg.name || '',
+                unnamed: !seg.name,
+                geometry: savedCoords,
+              };
+              syntheticWaysToAdd.push(synthetic);
+              wayId = synthetic.id;
+            }
+
+            selectedWayIds.add(wayId);
+            if (seg.name && !streetNames.includes(seg.name)) streetNames.push(seg.name);
+          }
+
+          if (selectedWayIds.size > 0) {
+            routeUpdates.set(saved.route_number, {
+              selectedWayIds,
+              streetNames,
+              status: saved.status as 'pending' | 'approved' | 'flagged',
+              aiNotes: saved.ai_notes || '',
+              confidence: saved.ai_confidence || 0,
+            });
+          }
+        }
+
+        // Apply route updates
+        setRoutes(prev => prev.map(route => {
+          const update = routeUpdates.get(route.num);
+          if (!update) return route;
+          return { ...route, ...update };
         }));
+
+        // Inject synthetic ways into allWays so they appear on the map
+        // The restoredAreaRef guard above prevents the restore from re-firing
+        if (syntheticWaysToAdd.length > 0) {
+          setAllWays(prev => [...prev, ...syntheticWaysToAdd]);
+        }
       } catch { /* silent */ }
     };
+
     restore();
   }, [allWays, currentArea]);
 
@@ -884,17 +965,39 @@ const MapBuilder: React.FC = () => {
     if (next) setActiveRouteNum(next.num);
   };
 
+  // ─── Save all approved routes ───
+  // Deletes all existing rows for this area first, then inserts fresh approved ones.
+  // This avoids the duplicate-row bug caused by the missing unique constraint on
+  // area_name + route_number in the database.
   const handleSaveAll = async () => {
     if (!currentArea) return;
     setSaving(true); setError(null);
     try {
       const approved = routes.filter(r => r.status === 'approved' && r.selectedWayIds.size > 0);
+
+      // Wipe all existing rows for this area so we start clean
+      await supabase.from('route_maps').delete().eq('area_name', currentArea.area_name);
+
+      // Insert each approved route fresh
       for (const route of approved) {
-        const segments = effectiveWays.filter(w => route.selectedWayIds.has(w.id)).map(w => ({ osmId: w.rootId ?? w.id, name: w.name, coordinates: w.geometry }));
+        const segments = effectiveWays
+          .filter(w => route.selectedWayIds.has(w.id))
+          .map(w => ({ osmId: w.rootId ?? w.id, name: w.name, coordinates: w.geometry }));
         const routeCode = formatRouteCode(currentArea.prefix, route.num);
-        await supabase.from('route_maps').upsert({ area_name: currentArea.area_name, route_number: route.num, route_code: routeCode, route_color: route.color, segments, status: 'approved', ai_confidence: route.confidence, ai_notes: route.aiNotes, approved_at: new Date().toISOString(), updated_at: new Date().toISOString() }, { onConflict: 'area_name,route_number' });
+        await supabase.from('route_maps').insert({
+          area_name: currentArea.area_name,
+          route_number: route.num,
+          route_code: routeCode,
+          route_color: route.color,
+          segments,
+          status: 'approved',
+          ai_confidence: route.confidence,
+          ai_notes: route.aiNotes,
+          approved_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
       }
-      alert(`Saved ${approved.length} routes for ${currentArea.area_name}`);
+      alert(`Saved ${approved.length} approved routes for ${currentArea.area_name}`);
     } catch { setError('Failed to save.'); }
     finally { setSaving(false); }
   };
@@ -1049,6 +1152,19 @@ const MapBuilder: React.FC = () => {
                       <span className={`text-[10px] font-bold ${r.status === 'approved' ? 'text-green-400' : r.status === 'flagged' ? 'text-red-400' : r.selectedWayIds.size > 0 ? 'text-blue-400' : 'text-gray-600'}`}>
                         {r.status === 'approved' ? '✓' : r.status === 'flagged' ? '!' : r.selectedWayIds.size > 0 ? '●' : '○'}
                       </span>
+                      {/* Unlock button — shown only on the active route when it's approved or flagged */}
+                      {r.status !== 'pending' && r.num === activeRouteNum && (
+                        <button
+                          onClick={e => {
+                            e.stopPropagation();
+                            setRoutes(prev => prev.map(rt => rt.num === r.num ? { ...rt, status: 'pending' } : rt));
+                          }}
+                          title="Unlock for editing"
+                          className="text-gray-500 hover:text-yellow-400 transition-colors flex-shrink-0 ml-1"
+                        >
+                          <Pencil size={9} />
+                        </button>
+                      )}
                     </button>
 
                     {/* Insert between rows */}
@@ -1229,6 +1345,7 @@ const MapBuilder: React.FC = () => {
             </div>
           )}
         </div>
+
       {/* ── AREA MODAL (add / edit) ── */}
       {modal.open && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
