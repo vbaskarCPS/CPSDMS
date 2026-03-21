@@ -38,7 +38,8 @@ const MapViewer: React.FC = () => {
         const { data, error: dbError } = await supabase
           .from('route_maps')
           .select('*')
-          .eq('status', 'approved');
+          .eq('status', 'approved')
+          .limit(3000);
         if (dbError) throw dbError;
         setRoutes(data || []);
       } catch (e) {
