@@ -356,14 +356,39 @@ export async function executeCut(
     }
   }
 
-  // --- Step 4: Append new rows to master bookings ---
+  // --- Step 4: Write new rows into master bookings (row 3+ to preserve formatting) ---
   if (newRows.length > 0) {
-    onProgress?.({ phase: 'Writing', detail: `Appending ${newRows.length} bookings to master...`, percent: 80 });
+    onProgress?.({ phase: 'Writing', detail: `Writing ${newRows.length} bookings to master...`, percent: 75 });
 
-    const rowsToAppend = newRows.map((r) => r.masterRow);
+    // Find the next empty row in the Bookings tab.
+    // Row 1 = summary formula, Row 2 = headers, data starts at Row 3.
+    let nextRow = 3;
+    try {
+      const existingData = await dialerSheetsService.sheetsGet(masterId, "'Bookings'!A:A");
+      if (existingData && existingData.length >= 3) {
+        // Find the last row that has data in column A (starting from row 3 = index 2)
+        for (let r = existingData.length - 1; r >= 2; r--) {
+          const val = String(existingData[r]?.[0] ?? '').trim();
+          if (val !== '') {
+            nextRow = r + 2; // +1 for 1-based, +1 for next empty row
+            break;
+          }
+        }
+        // If we didn't find any data rows, start at row 3
+        if (nextRow < 3) nextRow = 3;
+      }
+    } catch {
+      // If reading fails, default to row 3 (may overwrite but safe fallback)
+      nextRow = 3;
+    }
+
+    onProgress?.({ phase: 'Writing', detail: `Pasting ${newRows.length} bookings starting at row ${nextRow}...`, percent: 80 });
+
+    const rowsToWrite = newRows.map((r) => r.masterRow);
+    const writeRange = `'Bookings'!A${nextRow}:P${nextRow + rowsToWrite.length - 1}`;
 
     try {
-      await dialerSheetsService.sheetsAppend(masterId, "'Bookings'!A1", rowsToAppend);
+      await dialerSheetsService.sheetsUpdate(masterId, writeRange, rowsToWrite);
     } catch (err: any) {
       return {
         success: false, newBookings: 0, skippedBookings: skippedCount,
