@@ -343,6 +343,18 @@ const CampaignCreator: React.FC = () => {
 
       setCutResult(result);
 
+      // Diagnostic: log per-tab breakdown to console
+      if (result.tabCounts) {
+        console.log('✂️ CUT — Per-tab AER counts:');
+        for (const [tab, count] of Object.entries(result.tabCounts)) {
+          if (count === -1) console.log(`  ${tab}: FAILED TO LOAD`);
+          else if (count === -2) console.log(`  ${tab}: NO DATA`);
+          else if (count === -3) console.log(`  ${tab}: NO HEADERS FOUND`);
+          else if (count === -4) console.log(`  ${tab}: MISSING AER/BOOKING_ID COLUMN`);
+          else console.log(`  ${tab}: ${count} bookings`);
+        }
+        console.log(`  TOTAL SCANNED: ${result.totalScanned} | NEW: ${result.newBookings} | SKIPPED: ${result.skippedBookings}`);
+      }
       if (result.success) {
         if (result.newBookings > 0) {
           setSuccessMsg(

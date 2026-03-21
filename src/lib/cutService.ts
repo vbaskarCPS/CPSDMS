@@ -47,6 +47,8 @@ export interface CutResult {
   totalScanned: number;
   tabsScanned: number;
   errorMessage?: string;
+  /** Per-tab breakdown: tab name → number of AER rows found */
+  tabCounts?: Record<string, number>;
 }
 
 // =============================================================================
@@ -306,6 +308,7 @@ export async function executeCut(
   const newRows: { bookingId: string; masterRow: any[] }[] = [];
   let totalScanned = 0;
   let skippedCount = 0;
+  const tabCounts: Record<string, number> = {};
 
   for (let t = 0; t < tabs.length; t++) {
     const tabName = tabs[t];
@@ -317,20 +320,31 @@ export async function executeCut(
       rawData = await dialerSheetsService.sheetsGet(callbookId, `'${tabName}'`);
     } catch {
       // Skip tabs that fail to load
+      tabCounts[tabName] = -1; // -1 indicates load failure
       continue;
     }
 
-    if (!rawData || rawData.length < 2) continue;
+    if (!rawData || rawData.length < 2) {
+      tabCounts[tabName] = -2; // -2 indicates no data
+      continue;
+    }
 
     const headerResult = findHeaderRow(rawData);
-    if (!headerResult) continue;
+    if (!headerResult) {
+      tabCounts[tabName] = -3; // -3 indicates no headers found
+      continue;
+    }
 
     const { headerRowIndex, CI } = headerResult;
 
     // Must have AER and BOOKING_ID columns
-    if (CI.AER < 0 || CI.BOOKING_ID < 0) continue;
+    if (CI.AER < 0 || CI.BOOKING_ID < 0) {
+      tabCounts[tabName] = -4; // -4 indicates missing AER or BOOKING_ID column
+      continue;
+    }
 
     const dataRows = rawData.slice(headerRowIndex + 1);
+    let tabAerCount = 0;
 
     for (const row of dataRows) {
       // Skip empty rows
@@ -339,6 +353,7 @@ export async function executeCut(
       // Only rows where AER = x
       if (!hasAER(row, CI.AER)) continue;
 
+      tabAerCount++;
       totalScanned++;
 
       const bookingId = cell(row, CI.BOOKING_ID);
@@ -354,6 +369,8 @@ export async function executeCut(
       const masterRow = mapRowToMaster(row, CI);
       newRows.push({ bookingId, masterRow });
     }
+
+    tabCounts[tabName] = tabAerCount;
   }
 
   // --- Step 4: Write new rows into master bookings (row 3+ to preserve formatting) ---
@@ -429,5 +446,6 @@ export async function executeCut(
     skippedBookings: skippedCount,
     totalScanned,
     tabsScanned: tabs.length,
+    tabCounts,
   };
 }
