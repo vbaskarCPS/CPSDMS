@@ -1,9 +1,13 @@
 // src/lib/pclService.ts
 //
 // PCL (Previous Client List) PDF Generator.
-// Reads all tabs from a callbook spreadsheet, collects every row,
+// Reads all tabs from one or more callbook spreadsheets, collects every row,
 // sorts by Route Code → Street → House # → Year, and generates
 // a downloadable PDF with page breaks between route codes.
+//
+// Supports multiple campaign types:
+//   standard/bc — FIRST NAME, LAST NAME, STREET NAME, PHONE, FO→FO/BO/FP, Previous Price
+//   sealing     — FIRST, LAST, STREET, AREA+PHONE combined, SERVICE (SS/SSP/RAMP, blank→SSP), PRICE
 //
 // Uses jsPDF + jspdf-autotable for client-side PDF generation.
 //
@@ -28,14 +32,15 @@ export interface PCLResult {
   totalRows: number;
   routeCodes: number;
   tabsScanned: number;
+  booksScanned: number;
   errorMessage?: string;
 }
 
 // =============================================================================
-// HEADER RESOLUTION (lightweight — only what PCL needs)
+// STANDARD/BC HEADER RESOLUTION
 // =============================================================================
 
-interface PCLColumnIndices {
+interface StandardColumnIndices {
   ROUTE_CODE: number;
   FIRST_NAME: number;
   LAST_NAME: number;
@@ -50,8 +55,8 @@ interface PCLColumnIndices {
   YEAR: number;
 }
 
-function resolvePCLHeaders(headers: any[]): PCLColumnIndices {
-  const CI: PCLColumnIndices = {
+function resolveStandardHeaders(headers: any[]): StandardColumnIndices {
+  const CI: StandardColumnIndices = {
     ROUTE_CODE: -1, FIRST_NAME: -1, LAST_NAME: -1, HOUSE_NUM: -1,
     STREET_NAME: -1, PHONE: -1, CITY: -1, FO: -1, PRICE: -1,
     CONTRACTOR: -1, DATE: -1, YEAR: -1,
@@ -78,12 +83,65 @@ function resolvePCLHeaders(headers: any[]): PCLColumnIndices {
   return CI;
 }
 
-function findPCLHeaderRow(rawData: any[][]): { headerRowIndex: number; CI: PCLColumnIndices } | null {
+// =============================================================================
+// SEALING HEADER RESOLUTION
+// =============================================================================
+
+interface SealingColumnIndices {
+  ROUTE_CODE: number;
+  FIRST: number;
+  LAST: number;
+  HOUSE_NUM: number;
+  STREET: number;
+  AREA: number;
+  PHONE: number;
+  CITY: number;
+  SERVICE: number;
+  PRICE: number;
+  CONTRACTOR: number;
+  DATE: number;
+  YEAR: number;
+}
+
+function resolveSealingHeaders(headers: any[]): SealingColumnIndices {
+  const CI: SealingColumnIndices = {
+    ROUTE_CODE: -1, FIRST: -1, LAST: -1, HOUSE_NUM: -1,
+    STREET: -1, AREA: -1, PHONE: -1, CITY: -1, SERVICE: -1,
+    PRICE: -1, CONTRACTOR: -1, DATE: -1, YEAR: -1,
+  };
+
+  for (let i = 0; i < headers.length; i++) {
+    const h = String(headers[i] ?? '').trim().toUpperCase();
+    if (!h) continue;
+
+    if ((h === 'ROUTE CODE' || h === 'ROUTE_CODE' || h === 'ROUTECODE') && CI.ROUTE_CODE < 0) CI.ROUTE_CODE = i;
+    else if ((h === 'FIRST' || h === 'FIRST NAME' || h === 'FIRSTNAME' || h === 'FIRST_NAME') && CI.FIRST < 0) CI.FIRST = i;
+    else if ((h === 'LAST' || h === 'LAST NAME' || h === 'LASTNAME' || h === 'LAST_NAME') && CI.LAST < 0) CI.LAST = i;
+    else if ((h === 'HOUSE #' || h === 'HOUSE#' || h === 'HOUSE NUM' || h === 'HOUSE') && CI.HOUSE_NUM < 0) CI.HOUSE_NUM = i;
+    else if ((h === 'STREET' || h === 'STREET NAME' || h === 'STREET_NAME') && CI.STREET < 0) CI.STREET = i;
+    else if ((h === 'AREA' || h === 'AC' || h === 'AREA CODE') && CI.AREA < 0) CI.AREA = i;
+    else if (h === 'PHONE' && CI.PHONE < 0) CI.PHONE = i;
+    else if (h === 'CITY' && CI.CITY < 0) CI.CITY = i;
+    else if (h === 'SERVICE' && CI.SERVICE < 0) CI.SERVICE = i;
+    else if (h === 'PRICE' && CI.PRICE < 0) CI.PRICE = i;
+    else if ((h === 'CONTRACTOR' || h === 'CONTRACTOR NAME' || h === 'CONTRACTOR_NAME') && CI.CONTRACTOR < 0) CI.CONTRACTOR = i;
+    else if (h === 'DATE' && CI.DATE < 0) CI.DATE = i;
+    else if (h === 'YEAR' && CI.YEAR < 0) CI.YEAR = i;
+  }
+
+  return CI;
+}
+
+// =============================================================================
+// FIND HEADER ROW (shared — looks for PHONE column)
+// =============================================================================
+
+function findHeaderRow(rawData: any[][]): number | null {
   const scanLimit = Math.min(10, rawData.length);
   for (let r = 0; r < scanLimit; r++) {
-    const CI = resolvePCLHeaders(rawData[r]);
-    if (CI.PHONE >= 0) {
-      return { headerRowIndex: r, CI };
+    for (let c = 0; c < (rawData[r]?.length || 0); c++) {
+      const h = String(rawData[r][c] ?? '').trim().toUpperCase();
+      if (h === 'PHONE') return r;
     }
   }
   return null;
@@ -102,31 +160,48 @@ function cell(row: any[], col: number): string {
   return s;
 }
 
-/** Format a raw phone value as "000 000 0000". */
-function formatPhone(raw: string): string {
-  let s = raw;
-  if (s.endsWith('.0') && s.length > 2) s = s.slice(0, -2);
-  const d = s.replace(/\D/g, '');
-  const digits = d.length > 10 ? d.slice(-10) : d;
+function formatPhone10(digits: string): string {
   if (digits.length === 10) {
     return digits.slice(0, 3) + ' ' + digits.slice(3, 6) + ' ' + digits.slice(6);
   }
-  // If not 10 digits, return cleaned version as-is
-  return digits || raw;
+  return digits;
 }
 
-/** Interpret the FO column into service type. */
-function interpretService(row: any[], foCol: number): string {
+function cleanPhoneDigits(raw: string): string {
+  let s = raw;
+  if (s.endsWith('.0') && s.length > 2) s = s.slice(0, -2);
+  const d = s.replace(/\D/g, '');
+  return d.length > 10 ? d.slice(-10) : d;
+}
+
+function formatPhoneStandard(raw: string): string {
+  return formatPhone10(cleanPhoneDigits(raw));
+}
+
+function formatPhoneSealing(area: string, phone: string): string {
+  const areaDigits = cleanPhoneDigits(area);
+  const phoneDigits = cleanPhoneDigits(phone);
+  const combined = areaDigits + phoneDigits;
+  const final = combined.length > 10 ? combined.slice(-10) : combined;
+  return formatPhone10(final);
+}
+
+function interpretFOService(row: any[], foCol: number): string {
   const v = cell(row, foCol).toUpperCase();
   if (v === 'X' || v === 'FO') return 'FO';
   if (v === 'BO') return 'BO';
   return 'FP';
 }
 
-/** Format a date value for display. */
+function interpretSealingService(row: any[], serviceCol: number): string {
+  const v = cell(row, serviceCol).toUpperCase();
+  if (v === 'SS' || v === 'SSP' || v === 'RAMP') return v;
+  if (v) return v;
+  return 'SSP';
+}
+
 function formatDate(raw: string): string {
   if (!raw) return '';
-  // If it looks like an ISO date (2025-04-13 00:00:00), format it short
   const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (isoMatch) {
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -137,19 +212,16 @@ function formatDate(raw: string): string {
   return raw;
 }
 
-/** Parse a year value. */
 function parseYear(val: string): number {
   const n = parseInt(val, 10);
   return !isNaN(n) && n >= 2000 && n <= 2100 ? n : 0;
 }
 
-/** Parse a house number for numeric sorting. */
 function parseHouseNum(val: string): number {
   const n = parseInt(val.replace(/\D/g, ''), 10);
   return isNaN(n) ? 0 : n;
 }
 
-/** Format price for display. */
 function formatPrice(raw: string): string {
   if (!raw) return '';
   const n = parseFloat(raw.replace(/[,$]/g, ''));
@@ -177,13 +249,76 @@ interface PCLRow {
 }
 
 // =============================================================================
+// ROW EXTRACTORS
+// =============================================================================
+
+function extractStandardRows(rawData: any[][], headerRowIndex: number, CI: StandardColumnIndices): PCLRow[] {
+  const rows: PCLRow[] = [];
+  const dataRows = rawData.slice(headerRowIndex + 1);
+
+  for (const row of dataRows) {
+    if (!row[0]) continue;
+
+    rows.push({
+      routeCode: cell(row, CI.ROUTE_CODE),
+      firstName: cell(row, CI.FIRST_NAME),
+      lastName: cell(row, CI.LAST_NAME),
+      houseNum: cell(row, CI.HOUSE_NUM),
+      streetName: cell(row, CI.STREET_NAME),
+      phone: formatPhoneStandard(cell(row, CI.PHONE)),
+      city: cell(row, CI.CITY),
+      service: interpretFOService(row, CI.FO),
+      price: formatPrice(cell(row, CI.PRICE)),
+      contractor: cell(row, CI.CONTRACTOR),
+      date: formatDate(cell(row, CI.DATE)),
+      year: cell(row, CI.YEAR),
+    });
+  }
+
+  return rows;
+}
+
+function extractSealingRows(rawData: any[][], headerRowIndex: number, CI: SealingColumnIndices): PCLRow[] {
+  const rows: PCLRow[] = [];
+  const dataRows = rawData.slice(headerRowIndex + 1);
+
+  for (const row of dataRows) {
+    if (!row[0]) continue;
+
+    rows.push({
+      routeCode: cell(row, CI.ROUTE_CODE),
+      firstName: cell(row, CI.FIRST),
+      lastName: cell(row, CI.LAST),
+      houseNum: cell(row, CI.HOUSE_NUM),
+      streetName: cell(row, CI.STREET),
+      phone: formatPhoneSealing(cell(row, CI.AREA), cell(row, CI.PHONE)),
+      city: cell(row, CI.CITY),
+      service: interpretSealingService(row, CI.SERVICE),
+      price: formatPrice(cell(row, CI.PRICE)),
+      contractor: cell(row, CI.CONTRACTOR),
+      date: formatDate(cell(row, CI.DATE)),
+      year: cell(row, CI.YEAR),
+    });
+  }
+
+  return rows;
+}
+
+// =============================================================================
 // MAIN PCL FUNCTION
 // =============================================================================
 
 export async function generatePCL(
-  book: CampaignBook,
+  books: CampaignBook[],
   onProgress?: (progress: PCLProgress) => void
 ): Promise<PCLResult> {
+  if (books.length === 0) {
+    return {
+      success: false, totalRows: 0, routeCodes: 0, tabsScanned: 0, booksScanned: 0,
+      errorMessage: 'No books selected.',
+    };
+  }
+
   // --- Ensure Google Sheets authentication ---
   if (!dialerSheetsService.isAuthenticated()) {
     onProgress?.({ phase: 'Authenticating', detail: 'Connecting to Google Sheets...', percent: 2 });
@@ -191,123 +326,100 @@ export async function generatePCL(
       const authed = await dialerSheetsService.authenticate();
       if (!authed) {
         return {
-          success: false, totalRows: 0, routeCodes: 0, tabsScanned: 0,
+          success: false, totalRows: 0, routeCodes: 0, tabsScanned: 0, booksScanned: 0,
           errorMessage: 'Google Sheets authentication was cancelled or failed. Please try again.',
         };
       }
     } catch (err: any) {
       return {
-        success: false, totalRows: 0, routeCodes: 0, tabsScanned: 0,
+        success: false, totalRows: 0, routeCodes: 0, tabsScanned: 0, booksScanned: 0,
         errorMessage: 'Google Sheets authentication failed: ' + (err.message || 'Unknown error'),
       };
     }
   }
 
-  const callbookId = book.spreadsheetId;
-
-  // --- Step 1: Get tab list ---
-  onProgress?.({ phase: 'Loading', detail: 'Fetching tab list...', percent: 5 });
-
-  let tabs: string[];
-  try {
-    tabs = await dialerSheetsService.getCallbookTabs(callbookId);
-  } catch (err: any) {
-    return {
-      success: false, totalRows: 0, routeCodes: 0, tabsScanned: 0,
-      errorMessage: 'Failed to read callbook tabs: ' + (err.message || 'Unknown error'),
-    };
-  }
-
-  if (tabs.length === 0) {
-    return {
-      success: false, totalRows: 0, routeCodes: 0, tabsScanned: 0,
-      errorMessage: 'No data tabs found in the callbook spreadsheet.',
-    };
-  }
-
-  // --- Step 2: Scan all tabs and collect rows ---
+  // --- Process each book ---
   const allRows: PCLRow[] = [];
+  let totalTabsScanned = 0;
 
-  for (let t = 0; t < tabs.length; t++) {
-    const tabName = tabs[t];
-    const pct = 10 + Math.round((t / tabs.length) * 50);
-    onProgress?.({ phase: 'Scanning', detail: `Reading "${tabName}"...`, percent: pct });
+  for (let b = 0; b < books.length; b++) {
+    const book = books[b];
+    const isSealing = book.campaignType === 'sealing';
+    const bookPctStart = 5 + Math.round((b / books.length) * 55);
 
-    let rawData: any[][];
+    onProgress?.({ phase: 'Loading', detail: `Book "${book.displayName}" — fetching tabs...`, percent: bookPctStart });
+
+    let tabs: string[];
     try {
-      rawData = await dialerSheetsService.sheetsGet(callbookId, `'${tabName}'`);
+      tabs = await dialerSheetsService.getCallbookTabs(book.spreadsheetId);
     } catch {
       continue;
     }
 
-    if (!rawData || rawData.length < 2) continue;
+    if (tabs.length === 0) continue;
 
-    const headerResult = findPCLHeaderRow(rawData);
-    if (!headerResult) continue;
+    for (let t = 0; t < tabs.length; t++) {
+      const tabName = tabs[t];
+      const pct = bookPctStart + Math.round(((t + 1) / tabs.length) * (55 / books.length));
+      onProgress?.({ phase: 'Scanning', detail: `"${book.displayName}" → "${tabName}"`, percent: pct });
 
-    const { headerRowIndex, CI } = headerResult;
-    const dataRows = rawData.slice(headerRowIndex + 1);
+      let rawData: any[][];
+      try {
+        rawData = await dialerSheetsService.sheetsGet(book.spreadsheetId, `'${tabName}'`);
+      } catch {
+        continue;
+      }
 
-    for (const row of dataRows) {
-      // Skip truly empty rows (no data in first cell)
-      if (!row[0]) continue;
+      if (!rawData || rawData.length < 2) continue;
 
-      const phone = cell(row, CI.PHONE);
-      // Must have some identifying data to be worth including
-      const firstName = cell(row, CI.FIRST_NAME);
-      const lastName = cell(row, CI.LAST_NAME);
-      const streetName = cell(row, CI.STREET_NAME);
+      const headerRowIndex = findHeaderRow(rawData);
+      if (headerRowIndex === null) continue;
 
-      allRows.push({
-        routeCode: cell(row, CI.ROUTE_CODE),
-        firstName,
-        lastName,
-        houseNum: cell(row, CI.HOUSE_NUM),
-        streetName,
-        phone: formatPhone(phone),
-        city: cell(row, CI.CITY),
-        service: interpretService(row, CI.FO),
-        price: formatPrice(cell(row, CI.PRICE)),
-        contractor: cell(row, CI.CONTRACTOR),
-        date: formatDate(cell(row, CI.DATE)),
-        year: cell(row, CI.YEAR),
-      });
+      totalTabsScanned++;
+
+      if (isSealing) {
+        const CI = resolveSealingHeaders(rawData[headerRowIndex]);
+        if (CI.PHONE < 0) continue;
+        const rows = extractSealingRows(rawData, headerRowIndex, CI);
+        allRows.push(...rows);
+      } else {
+        const CI = resolveStandardHeaders(rawData[headerRowIndex]);
+        if (CI.PHONE < 0) continue;
+        const rows = extractStandardRows(rawData, headerRowIndex, CI);
+        allRows.push(...rows);
+      }
     }
   }
 
   if (allRows.length === 0) {
     return {
-      success: false, totalRows: 0, routeCodes: 0, tabsScanned: tabs.length,
-      errorMessage: 'No data rows found across all tabs.',
+      success: false, totalRows: 0, routeCodes: 0, tabsScanned: totalTabsScanned, booksScanned: books.length,
+      errorMessage: 'No data rows found across all books/tabs.',
     };
   }
 
-  // --- Step 3: Sort rows ---
+  // --- Sort rows ---
   onProgress?.({ phase: 'Sorting', detail: 'Organizing data...', percent: 65 });
 
   allRows.sort((a, b) => {
-    // 1. Route Code — empty routes go to the end
     const rcA = a.routeCode || '\uffff';
     const rcB = b.routeCode || '\uffff';
     if (rcA !== rcB) return rcA.localeCompare(rcB);
 
-    // 2. Street Name
     const stA = a.streetName.toLowerCase();
     const stB = b.streetName.toLowerCase();
     if (stA !== stB) return stA.localeCompare(stB);
 
-    // 3. House # (numeric)
     const hnA = parseHouseNum(a.houseNum);
     const hnB = parseHouseNum(b.houseNum);
     if (hnA !== hnB) return hnA - hnB;
 
-    // 4. Year
     const yrA = parseYear(a.year);
     const yrB = parseYear(b.year);
     return yrA - yrB;
   });
 
-  // --- Step 4: Group by Route Code ---
+  // --- Group by Route Code ---
   const routeGroups: { routeCode: string; rows: PCLRow[] }[] = [];
   let currentRC = '';
   let currentGroup: PCLRow[] = [];
@@ -327,14 +439,13 @@ export async function generatePCL(
     routeGroups.push({ routeCode: currentRC, rows: currentGroup });
   }
 
-  // --- Step 5: Generate PDF ---
+  // --- Generate PDF ---
   onProgress?.({ phase: 'Generating', detail: 'Building PDF...', percent: 70 });
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
 
   const headerLabels = ['RC', 'FIRSTNAME', 'LASTNAME', 'HOUSE #', 'STREET NAME', 'PHONE #', 'City', 'Service', 'Price', 'Contractor', 'Date', 'Year'];
 
-  // Column widths (proportional — landscape letter = ~792pt usable)
   const colWidths = [42, 68, 68, 42, 90, 78, 58, 40, 52, 110, 48, 36];
 
   for (let g = 0; g < routeGroups.length; g++) {
@@ -404,11 +515,9 @@ export async function generatePCL(
         11: { cellWidth: colWidths[11], halign: 'center' },
       },
       didParseCell: function (data: any) {
-        // Shrink-to-fit: if content is too long, reduce font size
         const cellText = String(data.cell.text?.join?.('') || data.cell.text || '');
         const colW = colWidths[data.column.index] || 60;
-        // Rough heuristic: if text width exceeds cell, shrink
-        const estimatedWidth = cellText.length * 3.5; // ~3.5pt per char at 7pt font
+        const estimatedWidth = cellText.length * 3.5;
         if (estimatedWidth > colW && data.section === 'body') {
           const ratio = colW / estimatedWidth;
           const newSize = Math.max(5, Math.round(7 * ratio * 10) / 10);
@@ -418,15 +527,22 @@ export async function generatePCL(
     });
   }
 
-  // --- Step 6: Download ---
+  // --- Download ---
   onProgress?.({ phase: 'Downloading', detail: 'Saving PDF...', percent: 97 });
 
   const today = new Date();
   const dateStr = today.getFullYear() + '-' +
     String(today.getMonth() + 1).padStart(2, '0') + '-' +
     String(today.getDate()).padStart(2, '0');
-  const safeName = book.displayName.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const filename = `PCL_${safeName}_${dateStr}.pdf`;
+
+  let fileLabel: string;
+  if (books.length === 1) {
+    fileLabel = books[0].displayName.replace(/[^a-zA-Z0-9_-]/g, '_');
+  } else {
+    fileLabel = books.map(b => b.displayName.replace(/[^a-zA-Z0-9_-]/g, '_')).join('+');
+    if (fileLabel.length > 80) fileLabel = fileLabel.substring(0, 80);
+  }
+  const filename = `PCL_${fileLabel}_${dateStr}.pdf`;
 
   doc.save(filename);
 
@@ -436,6 +552,7 @@ export async function generatePCL(
     success: true,
     totalRows: allRows.length,
     routeCodes: routeGroups.length,
-    tabsScanned: tabs.length,
+    tabsScanned: totalTabsScanned,
+    booksScanned: books.length,
   };
 }

@@ -8,7 +8,7 @@ export { extractSheetId };
 
 // --- TYPES ---
 
-export type CampaignType = 'standard' | 'bc';
+export type CampaignType = 'standard' | 'bc' | 'sealing';
 
 export interface SniperConfig {
   years: number[];        // Target years to include (default [2025])
@@ -803,7 +803,7 @@ class CampaignService {
       sniperConfig = reconstructSniperConfig(data.sniper_config);
     }
 
-    const validTypes: CampaignType[] = ['standard', 'bc'];
+    const validTypes: CampaignType[] = ['standard', 'bc', 'sealing'];
     const rawType = String(data.campaign_type || 'standard').toLowerCase();
     const campaignType: CampaignType = validTypes.includes(rawType as CampaignType)
       ? (rawType as CampaignType)
@@ -823,7 +823,7 @@ class CampaignService {
   }
 
   private mapDbToBook(data: any): CampaignBook {
-    const validTypes: CampaignType[] = ['standard', 'bc'];
+    const validTypes: CampaignType[] = ['standard', 'bc', 'sealing'];
     const rawType = String(data.campaign_type || 'standard').toLowerCase();
     const campaignType: CampaignType = validTypes.includes(rawType as CampaignType)
       ? (rawType as CampaignType)

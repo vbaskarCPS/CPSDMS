@@ -37,6 +37,7 @@ import { generatePCL, PCLProgress, PCLResult } from '../../lib/pclService';
 const CAMPAIGN_TYPE_OPTIONS: { value: CampaignType; label: string; desc: string }[] = [
   { value: 'standard', label: 'Standard', desc: 'Standard aeration callbook' },
   { value: 'bc', label: 'BC Type', desc: 'BC book with service flags (ADFSL) and upsells' },
+  { value: 'sealing', label: 'Sealing', desc: 'Sealing callbook with SS/SSP/RAMP services' },
 ];
 
 const CampaignCreator: React.FC = () => {
@@ -93,6 +94,8 @@ const CampaignCreator: React.FC = () => {
   const [cutResult, setCutResult] = useState<CutResult | null>(null);
 
   // PCL state
+  const [pclSelectMode, setPclSelectMode] = useState(false);
+  const [pclSelectedBookIds, setPclSelectedBookIds] = useState<Set<string>>(new Set());
   const [pclBookId, setPclBookId] = useState<string | null>(null);
   const [pclProgress, setPclProgress] = useState<PCLProgress | null>(null);
 
@@ -389,13 +392,40 @@ const CampaignCreator: React.FC = () => {
 
   // --- PCL ---
 
-  const handlePCLBook = async (book: CampaignBook) => {
-    setPclBookId(book.id);
+  const togglePclSelectMode = () => {
+    if (pclSelectMode) {
+      // Exiting select mode — cancel
+      setPclSelectMode(false);
+      setPclSelectedBookIds(new Set());
+    } else {
+      // Entering select mode
+      setPclSelectMode(true);
+      setPclSelectedBookIds(new Set());
+    }
+  };
+
+  const togglePclBookSelection = (bookId: string) => {
+    setPclSelectedBookIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(bookId)) next.delete(bookId);
+      else next.add(bookId);
+      return next;
+    });
+  };
+
+  const handleGeneratePCL = async () => {
+    const selectedBooks = books.filter((b) => pclSelectedBookIds.has(b.id));
+    if (selectedBooks.length === 0) {
+      setError('No books selected for PCL. Check at least one book.');
+      return;
+    }
+
+    setPclBookId('generating');
     setPclProgress({ phase: 'Starting', detail: 'Initializing...', percent: 0 });
     setError(null);
 
     try {
-      const result = await generatePCL(book, (progress) => {
+      const result = await generatePCL(selectedBooks, (progress) => {
         setPclProgress(progress);
       });
 
@@ -403,6 +433,7 @@ const CampaignCreator: React.FC = () => {
         setSuccessMsg(
           '📄 PCL generated: ' + result.totalRows + ' row' + (result.totalRows !== 1 ? 's' : '') +
           ' across ' + result.routeCodes + ' route code' + (result.routeCodes !== 1 ? 's' : '') +
+          ' from ' + result.booksScanned + ' book' + (result.booksScanned !== 1 ? 's' : '') +
           ' — scanned ' + result.tabsScanned + ' tab' + (result.tabsScanned !== 1 ? 's' : '')
         );
       } else {
@@ -413,6 +444,8 @@ const CampaignCreator: React.FC = () => {
     } finally {
       setPclBookId(null);
       setPclProgress(null);
+      setPclSelectMode(false);
+      setPclSelectedBookIds(new Set());
     }
   };
 
@@ -506,6 +539,13 @@ const CampaignCreator: React.FC = () => {
         </span>
       );
     }
+    if (type === 'sealing') {
+      return (
+        <span className="text-xs font-bold px-2 py-0.5 rounded" style={{ background: 'rgba(52,152,219,0.15)', border: '1px solid rgba(52,152,219,0.35)', color: '#3498db' }}>
+          SEAL
+        </span>
+      );
+    }
     return (
       <span className="text-xs font-bold px-2 py-0.5 rounded" style={{ background: 'rgba(46,204,113,0.15)', border: '1px solid rgba(46,204,113,0.35)', color: '#2ecc71' }}>
         STD
@@ -592,14 +632,70 @@ const CampaignCreator: React.FC = () => {
                     <BookOpen size={14} />
                     Campaign Books
                   </h4>
-                  <button
-                    onClick={() => openAddBookModal(c.id)}
-                    className="bg-green-900/50 hover:bg-green-900 text-green-400 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors border border-green-800"
-                  >
-                    <Plus size={12} />
-                    Add Book
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {/* PCL Button — toggles select mode or generates */}
+                    {books.length > 0 && (
+                      <>
+                        {pclSelectMode && (
+                          <button
+                            onClick={togglePclSelectMode}
+                            className="text-gray-400 hover:text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors"
+                          >
+                            <X size={12} />
+                            Cancel
+                          </button>
+                        )}
+                        <button
+                          onClick={pclSelectMode ? handleGeneratePCL : togglePclSelectMode}
+                          disabled={pclBookId === 'generating'}
+                          className={
+                            'px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors border ' +
+                            (pclBookId === 'generating'
+                              ? 'bg-blue-900/30 border-blue-700 text-blue-400 opacity-70 cursor-not-allowed'
+                              : pclSelectMode && pclSelectedBookIds.size > 0
+                                ? 'bg-blue-600 hover:bg-blue-500 border-blue-500 text-white'
+                                : 'bg-blue-900/30 hover:bg-blue-900/60 border-blue-700 text-blue-400')
+                          }
+                        >
+                          {pclBookId === 'generating' ? (
+                            <Loader className="animate-spin" size={12} />
+                          ) : (
+                            <FileText size={12} />
+                          )}
+                          {pclSelectMode
+                            ? (pclSelectedBookIds.size > 0
+                                ? `Generate PCL (${pclSelectedBookIds.size})`
+                                : 'Select Books')
+                            : 'PCL'}
+                        </button>
+                      </>
+                    )}
+                    <button
+                      onClick={() => openAddBookModal(c.id)}
+                      className="bg-green-900/50 hover:bg-green-900 text-green-400 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors border border-green-800"
+                    >
+                      <Plus size={12} />
+                      Add Book
+                    </button>
+                  </div>
                 </div>
+
+                {/* PCL Progress Bar (shown during generation) */}
+                {pclBookId === 'generating' && pclProgress && (
+                  <div className="mb-3 p-3 bg-gray-800 rounded-lg border border-blue-800">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-blue-400 font-medium">{pclProgress.phase}</span>
+                      <span className="text-xs text-gray-500">{pclProgress.percent}%</span>
+                    </div>
+                    <div className="w-full bg-gray-900 rounded-full h-1.5">
+                      <div
+                        className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
+                        style={{ width: pclProgress.percent + '%' }}
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">{pclProgress.detail}</p>
+                  </div>
+                )}
 
                 {booksLoading ? (
                   <div className="flex items-center justify-center py-6">
@@ -613,16 +709,31 @@ const CampaignCreator: React.FC = () => {
                   <div className="space-y-2">
                     {books.map((book) => {
                       const isCutting = cuttingBookId === book.id;
-                      const isPCLing = pclBookId === book.id;
                       const hasMaster = !!book.masterSpreadsheetId;
+                      const isPclSelected = pclSelectedBookIds.has(book.id);
 
                       return (
                         <div
                           key={book.id}
-                          className="bg-gray-900 rounded-lg px-4 py-3 border border-gray-700"
+                          className={'bg-gray-900 rounded-lg px-4 py-3 border transition-colors ' +
+                            (pclSelectMode && isPclSelected
+                              ? 'border-blue-500 bg-blue-900/10'
+                              : 'border-gray-700')}
+                          onClick={pclSelectMode ? () => togglePclBookSelection(book.id) : undefined}
+                          style={pclSelectMode ? { cursor: 'pointer' } : undefined}
                         >
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3">
+                              {/* Checkbox in PCL select mode */}
+                              {pclSelectMode && (
+                                <div className={'w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ' +
+                                  (isPclSelected
+                                    ? 'bg-blue-600 border-blue-500'
+                                    : 'border-gray-600 bg-gray-800')}
+                                >
+                                  {isPclSelected && <Check size={12} className="text-white" />}
+                                </div>
+                              )}
                               <div className="w-8 h-8 rounded-full bg-blue-900/30 border border-blue-800 flex items-center justify-center">
                                 <Sheet size={14} className="text-blue-400" />
                               </div>
@@ -648,62 +759,46 @@ const CampaignCreator: React.FC = () => {
                                 </div>
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              {/* PCL Button */}
-                              <button
-                                onClick={() => handlePCLBook(book)}
-                                disabled={isPCLing}
-                                className={
-                                  'px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors border ' +
-                                  (isPCLing
-                                    ? 'bg-blue-900/30 border-blue-700 text-blue-400 opacity-70 cursor-not-allowed'
-                                    : 'bg-blue-900/30 hover:bg-blue-900/60 border-blue-700 text-blue-400')
-                                }
-                                title="Generate PCL PDF"
-                              >
-                                {isPCLing ? (
-                                  <Loader className="animate-spin" size={12} />
-                                ) : (
-                                  <FileText size={12} />
-                                )}
-                                PCL
-                              </button>
-                              {/* CUT Button */}
-                              <button
-                                onClick={() => handleCutBook(book)}
-                                disabled={isCutting}
-                                className={
-                                  'px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors border ' +
-                                  (isCutting
-                                    ? 'bg-purple-900/30 border-purple-700 text-purple-400 opacity-70 cursor-not-allowed'
-                                    : hasMaster
-                                      ? 'bg-purple-900/30 hover:bg-purple-900/60 border-purple-700 text-purple-400'
-                                      : 'bg-gray-800 border-gray-600 text-gray-500 hover:text-gray-300 hover:border-gray-500')
-                                }
-                                title={hasMaster ? 'Cut bookings to master' : 'Set master bookings URL first'}
-                              >
-                                {isCutting ? (
-                                  <Loader className="animate-spin" size={12} />
-                                ) : (
-                                  <Scissors size={12} />
-                                )}
-                                CUT
-                              </button>
-                              <button
-                                onClick={() => openEditBookModal(book)}
-                                className="text-gray-500 hover:text-white p-1 transition-colors"
-                                title="Edit Book"
-                              >
-                                <Edit2 size={14} />
-                              </button>
-                              <button
-                                onClick={() => handleDeleteBook(book)}
-                                className="text-gray-500 hover:text-red-400 p-1 transition-colors"
-                                title="Delete Book"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
+                            {/* Action buttons — hidden in PCL select mode */}
+                            {!pclSelectMode && (
+                              <div className="flex items-center gap-2">
+                                {/* CUT Button */}
+                                <button
+                                  onClick={() => handleCutBook(book)}
+                                  disabled={isCutting}
+                                  className={
+                                    'px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors border ' +
+                                    (isCutting
+                                      ? 'bg-purple-900/30 border-purple-700 text-purple-400 opacity-70 cursor-not-allowed'
+                                      : hasMaster
+                                        ? 'bg-purple-900/30 hover:bg-purple-900/60 border-purple-700 text-purple-400'
+                                        : 'bg-gray-800 border-gray-600 text-gray-500 hover:text-gray-300 hover:border-gray-500')
+                                  }
+                                  title={hasMaster ? 'Cut bookings to master' : 'Set master bookings URL first'}
+                                >
+                                  {isCutting ? (
+                                    <Loader className="animate-spin" size={12} />
+                                  ) : (
+                                    <Scissors size={12} />
+                                  )}
+                                  CUT
+                                </button>
+                                <button
+                                  onClick={() => openEditBookModal(book)}
+                                  className="text-gray-500 hover:text-white p-1 transition-colors"
+                                  title="Edit Book"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteBook(book)}
+                                  className="text-gray-500 hover:text-red-400 p-1 transition-colors"
+                                  title="Delete Book"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            )}
                           </div>
 
                           {/* CUT Progress Bar */}
@@ -720,23 +815,6 @@ const CampaignCreator: React.FC = () => {
                                 />
                               </div>
                               <p className="text-xs text-gray-500 mt-1">{cutProgress.detail}</p>
-                            </div>
-                          )}
-
-                          {/* PCL Progress Bar */}
-                          {isPCLing && pclProgress && (
-                            <div className="mt-3 pt-3 border-t border-gray-700">
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-xs text-blue-400 font-medium">{pclProgress.phase}</span>
-                                <span className="text-xs text-gray-500">{pclProgress.percent}%</span>
-                              </div>
-                              <div className="w-full bg-gray-800 rounded-full h-1.5">
-                                <div
-                                  className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
-                                  style={{ width: pclProgress.percent + '%' }}
-                                />
-                              </div>
-                              <p className="text-xs text-gray-500 mt-1">{pclProgress.detail}</p>
                             </div>
                           )}
                         </div>
