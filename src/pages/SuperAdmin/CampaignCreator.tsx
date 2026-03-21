@@ -21,6 +21,7 @@ import {
   ChevronUp,
   BookOpen,
   Scissors,
+  FileText,
 } from 'lucide-react';
 import {
   campaignService,
@@ -31,6 +32,7 @@ import {
 } from '../../lib/campaignService';
 import type { CampaignType } from '../../lib/campaignService';
 import { executeCut, CutProgress, CutResult } from '../../lib/cutService';
+import { generatePCL, PCLProgress, PCLResult } from '../../lib/pclService';
 
 const CAMPAIGN_TYPE_OPTIONS: { value: CampaignType; label: string; desc: string }[] = [
   { value: 'standard', label: 'Standard', desc: 'Standard aeration callbook' },
@@ -89,6 +91,10 @@ const CampaignCreator: React.FC = () => {
   const [cuttingBookId, setCuttingBookId] = useState<string | null>(null);
   const [cutProgress, setCutProgress] = useState<CutProgress | null>(null);
   const [cutResult, setCutResult] = useState<CutResult | null>(null);
+
+  // PCL state
+  const [pclBookId, setPclBookId] = useState<string | null>(null);
+  const [pclProgress, setPclProgress] = useState<PCLProgress | null>(null);
 
   useEffect(() => {
     loadCampaigns();
@@ -381,6 +387,35 @@ const CampaignCreator: React.FC = () => {
     }
   };
 
+  // --- PCL ---
+
+  const handlePCLBook = async (book: CampaignBook) => {
+    setPclBookId(book.id);
+    setPclProgress({ phase: 'Starting', detail: 'Initializing...', percent: 0 });
+    setError(null);
+
+    try {
+      const result = await generatePCL(book, (progress) => {
+        setPclProgress(progress);
+      });
+
+      if (result.success) {
+        setSuccessMsg(
+          '📄 PCL generated: ' + result.totalRows + ' row' + (result.totalRows !== 1 ? 's' : '') +
+          ' across ' + result.routeCodes + ' route code' + (result.routeCodes !== 1 ? 's' : '') +
+          ' — scanned ' + result.tabsScanned + ' tab' + (result.tabsScanned !== 1 ? 's' : '')
+        );
+      } else {
+        setError('PCL failed: ' + (result.errorMessage || 'Unknown error'));
+      }
+    } catch (err) {
+      setError('PCL failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+    } finally {
+      setPclBookId(null);
+      setPclProgress(null);
+    }
+  };
+
   // --- Manager CRUD ---
 
   const openAddManagerModal = (campaignId: string) => {
@@ -578,6 +613,7 @@ const CampaignCreator: React.FC = () => {
                   <div className="space-y-2">
                     {books.map((book) => {
                       const isCutting = cuttingBookId === book.id;
+                      const isPCLing = pclBookId === book.id;
                       const hasMaster = !!book.masterSpreadsheetId;
 
                       return (
@@ -613,6 +649,25 @@ const CampaignCreator: React.FC = () => {
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
+                              {/* PCL Button */}
+                              <button
+                                onClick={() => handlePCLBook(book)}
+                                disabled={isPCLing}
+                                className={
+                                  'px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors border ' +
+                                  (isPCLing
+                                    ? 'bg-blue-900/30 border-blue-700 text-blue-400 opacity-70 cursor-not-allowed'
+                                    : 'bg-blue-900/30 hover:bg-blue-900/60 border-blue-700 text-blue-400')
+                                }
+                                title="Generate PCL PDF"
+                              >
+                                {isPCLing ? (
+                                  <Loader className="animate-spin" size={12} />
+                                ) : (
+                                  <FileText size={12} />
+                                )}
+                                PCL
+                              </button>
                               {/* CUT Button */}
                               <button
                                 onClick={() => handleCutBook(book)}
@@ -665,6 +720,23 @@ const CampaignCreator: React.FC = () => {
                                 />
                               </div>
                               <p className="text-xs text-gray-500 mt-1">{cutProgress.detail}</p>
+                            </div>
+                          )}
+
+                          {/* PCL Progress Bar */}
+                          {isPCLing && pclProgress && (
+                            <div className="mt-3 pt-3 border-t border-gray-700">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs text-blue-400 font-medium">{pclProgress.phase}</span>
+                                <span className="text-xs text-gray-500">{pclProgress.percent}%</span>
+                              </div>
+                              <div className="w-full bg-gray-800 rounded-full h-1.5">
+                                <div
+                                  className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
+                                  style={{ width: pclProgress.percent + '%' }}
+                                />
+                              </div>
+                              <p className="text-xs text-gray-500 mt-1">{pclProgress.detail}</p>
                             </div>
                           )}
                         </div>
