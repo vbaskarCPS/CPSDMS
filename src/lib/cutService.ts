@@ -358,7 +358,7 @@ export async function executeCut(
 
   // --- Step 4: Write new rows into master bookings (row 3+ to preserve formatting) ---
   if (newRows.length > 0) {
-    onProgress?.({ phase: 'Writing', detail: `Writing ${newRows.length} bookings to master...`, percent: 75 });
+    onProgress?.({ phase: 'Writing', detail: `Preparing ${newRows.length} bookings...`, percent: 75 });
 
     // Find the next empty row in the Bookings tab.
     // Row 1 = summary formula, Row 2 = headers, data starts at Row 3.
@@ -382,19 +382,36 @@ export async function executeCut(
       nextRow = 3;
     }
 
-    onProgress?.({ phase: 'Writing', detail: `Pasting ${newRows.length} bookings starting at row ${nextRow}...`, percent: 80 });
+    // Write in batches of 500 rows to avoid Google Sheets API payload limits
+    const WRITE_BATCH = 500;
+    const allRows = newRows.map((r) => r.masterRow);
+    const totalBatches = Math.ceil(allRows.length / WRITE_BATCH);
 
-    const rowsToWrite = newRows.map((r) => r.masterRow);
-    const writeRange = `'Bookings'!A${nextRow}:P${nextRow + rowsToWrite.length - 1}`;
+    for (let b = 0; b < totalBatches; b++) {
+      const batchStart = b * WRITE_BATCH;
+      const batchRows = allRows.slice(batchStart, batchStart + WRITE_BATCH);
+      const writeStartRow = nextRow + batchStart;
+      const writeEndRow = writeStartRow + batchRows.length - 1;
+      const writeRange = `'Bookings'!A${writeStartRow}:P${writeEndRow}`;
 
-    try {
-      await dialerSheetsService.sheetsUpdate(masterId, writeRange, rowsToWrite);
-    } catch (err: any) {
-      return {
-        success: false, newBookings: 0, skippedBookings: skippedCount,
-        totalScanned, tabsScanned: tabs.length,
-        errorMessage: 'Failed to write to master bookings: ' + (err.message || 'Unknown error'),
-      };
+      const pct = 78 + Math.round(((b + 1) / totalBatches) * 10);
+      onProgress?.({
+        phase: 'Writing',
+        detail: `Batch ${b + 1}/${totalBatches} — rows ${writeStartRow}-${writeEndRow}...`,
+        percent: pct,
+      });
+
+      try {
+        await dialerSheetsService.sheetsUpdate(masterId, writeRange, batchRows);
+      } catch (err: any) {
+        return {
+          success: false,
+          newBookings: batchStart, // partial success — some batches may have written
+          skippedBookings: skippedCount,
+          totalScanned, tabsScanned: tabs.length,
+          errorMessage: `Failed writing batch ${b + 1}/${totalBatches} to master bookings: ` + (err.message || 'Unknown error'),
+        };
+      }
     }
 
     // --- Step 5: Record in Supabase ---
