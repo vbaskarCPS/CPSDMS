@@ -303,9 +303,19 @@ const MapBuilder: React.FC = () => {
 
       if (!areaData) { setLoadingAreas(false); return; }
 
-      const { data: routeData } = await supabase
-        .from('route_maps')
-        .select('area_name, route_number');
+      // Batch-fetch route_maps in 1000-row pages to bypass Supabase server cap
+      let routeData: { area_name: string; route_number: number }[] = [];
+      let from = 0;
+      while (true) {
+        const { data: batch, error: batchErr } = await supabase
+          .from('route_maps')
+          .select('area_name, route_number')
+          .range(from, from + 999);
+        if (batchErr || !batch || batch.length === 0) break;
+        routeData = routeData.concat(batch);
+        if (batch.length < 1000) break;
+        from += 1000;
+      }
 
       // Build saved count and max route per area
       const countByArea = new Map<string, number>();
