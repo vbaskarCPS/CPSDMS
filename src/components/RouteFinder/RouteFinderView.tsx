@@ -1631,17 +1631,23 @@ const UnresolvableCard: React.FC<UnresolvableCardProps> = ({
   const [retrying, setRetrying]     = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<SegmentSuggestion[]>([]);
-  const [suggestionsLoaded, setSuggestionsLoaded] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
-  // Compute fuzzy suggestions on first expand
-  const handleExpand = () => {
-    setIsExpanded(v => !v);
-    if (!suggestionsLoaded && customerBoundingBox) {
-      const results = fuzzyMatchSegmentName(customer.streetName, approvedRoutes, customerBoundingBox);
-      setSuggestions(results);
-      setSuggestionsLoaded(true);
+  // Recompute fuzzy suggestions whenever editStreet changes (debounced 300ms)
+  useEffect(() => {
+    if (!isExpanded || !customerBoundingBox || !editStreet.trim()) {
+      setSuggestions([]);
+      return;
     }
-  };
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      const results = fuzzyMatchSegmentName(editStreet.trim(), approvedRoutes, customerBoundingBox);
+      setSuggestions(results);
+    }, 300);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [editStreet, isExpanded, approvedRoutes, customerBoundingBox]);
+
+  const handleExpand = () => setIsExpanded(v => !v);
 
   const applySuggestion = (suggestion: SegmentSuggestion) => {
     setEditStreet(suggestion.segmentName);
