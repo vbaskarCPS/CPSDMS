@@ -1919,26 +1919,17 @@ const SidebarPanel: React.FC<SidebarPanelProps> = ({
                     No Route Found ({noRouteFoundCustomers.length})
                   </p>
                   <p className="text-xs text-gray-600 mt-0.5">
-                    Click the red pin on the map to handle
+                    Edit the address and retry to re-geocode, or click the red pin on the map
                   </p>
                 </div>
                 {noRouteFoundCustomers.map(c => (
-                  <div key={c.id} className="px-4 py-3 border-b border-gray-700/40">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-xs text-gray-300 font-medium truncate">
-                          {[c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unknown'}
-                        </p>
-                        <p className="text-xs text-gray-500 truncate">
-                          {[c.houseNum, c.streetName].filter(Boolean).join(' ')}
-                        </p>
-                        <p className="text-xs font-mono text-gray-600">{c.currentRouteCode}</p>
-                      </div>
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-900/30 text-yellow-400 flex-shrink-0">
-                        No Route
-                      </span>
-                    </div>
-                  </div>
+                  <UnresolvableCard
+                    key={c.id}
+                    customer={c}
+                    approvedRoutes={approvedRoutes}
+                    customerBoundingBox={customerBoundingBox}
+                    onRetryGeocode={onRetryGeocode}
+                  />
                 ))}
               </>
             )}
