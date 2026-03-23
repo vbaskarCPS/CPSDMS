@@ -962,6 +962,21 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         maxLng: Math.max(prev.maxLng, newLng),
       };
     });
+
+    // Silent background write — standardize street name across all rows for this customer
+    if (customer && streetName.trim()) {
+      for (const row of customer.rows) {
+        routeFinderSheetsService.applyFix(
+          row.spreadsheetId,
+          row.sheetName,
+          row.sheetRowNumber,
+          -1,                  // skip route code column
+          row.streetNameCol,
+          '',
+          streetName.trim(),
+        ).catch(e => console.warn('RF: silent street write failed:', e));
+      }
+    }
   }, [approvedRoutes, customers]);
 
   // ─── DRAW BOX mouse down ──────────────────────────────────────────────────
