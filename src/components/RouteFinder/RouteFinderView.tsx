@@ -1694,8 +1694,8 @@ const UnresolvableCard: React.FC<UnresolvableCardProps> = ({
       {/* Expanded: fuzzy suggestions + address editor */}
       {isExpanded && (
         <div className="mt-3 space-y-3">
-          {/* Fuzzy suggestions */}
-          {customer.geocodeFailed && suggestions.length > 0 && (
+          {/* Fuzzy suggestions — shown for both geocode failures and no-route-found */}
+          {suggestions.length > 0 && (
             <div>
               <p className="text-xs text-gray-500 mb-1.5 flex items-center gap-1">
                 <Zap size={10} className="text-yellow-400" />
@@ -1717,7 +1717,7 @@ const UnresolvableCard: React.FC<UnresolvableCardProps> = ({
               </div>
             </div>
           )}
-          {customer.geocodeFailed && suggestions.length === 0 && suggestionsLoaded && (
+          {suggestions.length === 0 && suggestionsLoaded && (
             <p className="text-xs text-gray-600 italic">No nearby street suggestions found.</p>
           )}
 
