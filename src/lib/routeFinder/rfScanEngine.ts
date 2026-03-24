@@ -94,7 +94,7 @@ export async function scanGroup(params: ScanGroupParams): Promise<ScanGroupResul
   // "Eagle Cres St" on EB23 → matches "Eaglecrest Street" in EB23 segments.
   // Runs entirely from local route data, zero Mapbox calls.
 
-  const STREET_NORMALIZE_THRESHOLD = 0.79;
+  const STREET_NORMALIZE_THRESHOLD = 0.75;
 
   for (const customer of customers) {
     // Use the digital map prefix (e.g. ACT) not the call book prefix (e.g. A)
@@ -540,7 +540,7 @@ export async function runQueuePostFilter(params: {
       }
     }
 
-    if (bestScore < 0.79) continue;
+    if (bestScore < 0.75) continue;
     if (bestSegmentName.toLowerCase() === entry.streetName.toLowerCase() &&
         bestRouteCode === entry.currentRouteCode) continue;
 
