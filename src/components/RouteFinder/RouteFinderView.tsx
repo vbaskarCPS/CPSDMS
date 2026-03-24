@@ -16,7 +16,7 @@
 //   (geocode failures live in sidebar only — no pin)
 //
 // Select Area: draw a bounding box on the map to mass-fix orange pins inside.
-// Unresolvable sidebar: fuzzy street suggestions + manual address edit + retry geocode.
+// Unresolvable sidebar: manual address edit + retry geocode for truly unfindable customers.
 // Red pin confirm: writes customer city to route code column.
 //
 
@@ -25,7 +25,7 @@ import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import {
   ArrowLeft, MapPin, CheckCircle, Loader, RefreshCw,
-  Search, X, AlertCircle, Navigation, Square, Edit2, Zap,
+  Search, X, AlertCircle, Navigation, Square, Edit2,
 } from 'lucide-react';
 
 import { routeFinderSheetsService } from '../../lib/routeFinder/routeFinderSheetsService';
@@ -42,13 +42,10 @@ import {
   geocodeAddress,
   normalizePhone,
   getCustomerBoundingBox,
-  fuzzyMatchSegmentName,
-  MAX_ROUTE_DISTANCE_DEG,
   SAME_ROUTE_TOLERANCE_DEG,
   ApprovedRoute,
   GeoCustomer,
   CustomerRow,
-  SegmentSuggestion,
 } from '../../lib/routeFinder/routeFinderGeoService';
 
 (mapboxgl as any).accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -621,7 +618,9 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
           const match = findClosestRoute(geoResult.lat, geoResult.lng, approvedRoutes);
 
-          if (match && match.distanceDeg <= MAX_ROUTE_DISTANCE_DEG) {
+          // Always assign to nearest route — no distance cutoff.
+          // Every geocoded customer gets placed on whichever route segment is closest.
+          if (match) {
             customer.suggestedRouteCode   = match.routeCode;
             customer.suggestedSegmentName = match.segmentName;
             customer.distanceDeg          = match.distanceDeg;
@@ -636,7 +635,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
                 assignedDist - match.distanceDeg < SAME_ROUTE_TOLERANCE_DEG ? 'grey' : 'orange';
             }
 
-            // Queue grey street name standardization if segment name differs from sheet value
+            // Queue grey street name standardization if segment name differs
             if (
               customer.pinColor === 'grey' &&
               match.segmentName &&
@@ -645,72 +644,9 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
               greyStandardizeQueue.push({ customer, newStreetName: match.segmentName.trim() });
             }
           } else {
-            // No route found — try fuzzy street correction before giving up.
-            // Use the customer's real coords + running bbox to find geographically close segments.
-            if (runningBbox) {
-              const suggestions = fuzzyMatchSegmentName(
-                customer.streetName, approvedRoutes, runningBbox,
-                0.02, geoResult.lat, geoResult.lng
-              );
-              const best = suggestions.find(s => s.score >= 1.0) ?? suggestions[0];
-
-              if (best && best.score >= 0.85 && best.segmentName.toLowerCase() !== customer.streetName.toLowerCase()) {
-                // Re-geocode with the corrected street name
-                setScanProgress({
-                  current: i + 1,
-                  total: allCustomers.length,
-                  message: `Retrying ${i + 1} of ${allCustomers.length} with "${best.segmentName}"...`,
-                });
-
-                // Pass bounding box center as proximity bias — fixes bad geocodes
-                // by pulling Mapbox toward the right neighborhood
-                const bboxCenterLat = runningBbox ? (runningBbox.minLat + runningBbox.maxLat) / 2 : undefined;
-                const bboxCenterLng = runningBbox ? (runningBbox.minLng + runningBbox.maxLng) / 2 : undefined;
-
-                const retryResult = await geocodeAddress(
-                  customer.houseNum, best.segmentName, customer.city, token,
-                  bboxCenterLat, bboxCenterLng
-                );
-
-                // Small pause after retry to avoid Mapbox rate limit (600 req/min)
-                await new Promise(r => setTimeout(r, 200));
-
-                if (retryResult) {
-                  const retryMatch = findClosestRoute(retryResult.lat, retryResult.lng, approvedRoutes);
-                  if (retryMatch && retryMatch.distanceDeg <= MAX_ROUTE_DISTANCE_DEG) {
-                    // Retry succeeded — use the corrected geocode
-                    customer.lat = retryResult.lat;
-                    customer.lng = retryResult.lng;
-                    customer.streetName = best.segmentName; // update display name
-                    customer.suggestedRouteCode   = retryMatch.routeCode;
-                    customer.suggestedSegmentName = retryMatch.segmentName;
-                    customer.distanceDeg          = retryMatch.distanceDeg;
-
-                    if (retryMatch.routeCode === customer.currentRouteCode) {
-                      customer.pinColor = 'grey';
-                    } else {
-                      const assignedDist = distanceToRoute(
-                        retryResult.lat, retryResult.lng, customer.currentRouteCode, approvedRoutes
-                      );
-                      customer.pinColor =
-                        assignedDist - retryMatch.distanceDeg < SAME_ROUTE_TOLERANCE_DEG ? 'grey' : 'orange';
-                    }
-                  } else {
-                    customer.noRouteFound = true;
-                    customer.pinColor = 'red';
-                  }
-                } else {
-                  customer.noRouteFound = true;
-                  customer.pinColor = 'red';
-                }
-              } else {
-                customer.noRouteFound = true;
-                customer.pinColor = 'red';
-              }
-            } else {
-              customer.noRouteFound = true;
-              customer.pinColor = 'red';
-            }
+            // No routes loaded at all — shouldn't happen in practice
+            customer.noRouteFound = true;
+            customer.pinColor = 'red';
           }
         } else {
           customer.geocodeFailed = true;
@@ -1092,7 +1028,8 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
     let distanceDeg          = 0;
     let noRouteFound         = false;
 
-    if (match && match.distanceDeg <= MAX_ROUTE_DISTANCE_DEG) {
+    // Always assign to nearest route — no distance cutoff
+    if (match) {
       suggestedRouteCode   = match.routeCode;
       suggestedSegmentName = match.segmentName;
       distanceDeg          = match.distanceDeg;
@@ -1787,16 +1724,16 @@ const CustomerDetailPanel: React.FC<CustomerDetailPanelProps> = ({
 };
 
 // ─── UNRESOLVABLE CUSTOMER CARD ───────────────────────────────────────────────
+// These are genuinely unfindable customers — all automatic resolution
+// already happened in the scan loop. Manual address correction only.
 
 interface UnresolvableCardProps {
   customer: GeoCustomer;
-  approvedRoutes: ApprovedRoute[];
-  customerBoundingBox: ReturnType<typeof getCustomerBoundingBox>;
   onRetryGeocode: (id: string, houseNum: string, street: string, city: string) => Promise<void>;
 }
 
 const UnresolvableCard: React.FC<UnresolvableCardProps> = ({
-  customer, approvedRoutes, customerBoundingBox, onRetryGeocode,
+  customer, onRetryGeocode,
 }) => {
   const [editHouse, setEditHouse]   = useState(customer.houseNum);
   const [editStreet, setEditStreet] = useState(customer.streetName);
@@ -1804,42 +1741,8 @@ const UnresolvableCard: React.FC<UnresolvableCardProps> = ({
   const [isExpanded, setIsExpanded] = useState(false);
   const [retrying, setRetrying]     = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
-  const [suggestions, setSuggestions] = useState<SegmentSuggestion[]>([]);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
-
-  // Always use bounding box center as reference point — for bad geocodes the
-  // customer's own coordinates are wrong, so bbox center is more reliable.
-  const bboxCenterLat = customerBoundingBox
-    ? (customerBoundingBox.minLat + customerBoundingBox.maxLat) / 2 : undefined;
-  const bboxCenterLng = customerBoundingBox
-    ? (customerBoundingBox.minLng + customerBoundingBox.maxLng) / 2 : undefined;
-
-  // No mount auto-retry here — all automatic resolution happens in the scan loop
-  // before the map loads. Customers reaching this sidebar are genuinely unresolvable
-  // and need manual address correction before retrying.
-
-  // Recompute fuzzy suggestions whenever editStreet changes while expanded (debounced 300ms).
-  useEffect(() => {
-    if (!isExpanded || !customerBoundingBox || !editStreet.trim()) {
-      setSuggestions([]);
-      return;
-    }
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      const results = fuzzyMatchSegmentName(
-        editStreet.trim(), approvedRoutes, customerBoundingBox, 0.02, bboxCenterLat, bboxCenterLng
-      );
-      setSuggestions(results);
-    }, 300);
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [editStreet, isExpanded, approvedRoutes, customerBoundingBox]);
 
   const handleExpand = () => setIsExpanded(v => !v);
-
-  const applySuggestion = (suggestion: SegmentSuggestion) => {
-    setEditStreet(suggestion.segmentName);
-    setRetryError(null);
-  };
 
   const handleRetry = async () => {
     setRetrying(true);
@@ -1884,37 +1787,9 @@ const UnresolvableCard: React.FC<UnresolvableCardProps> = ({
         </div>
       </div>
 
-      {/* Expanded: fuzzy suggestions + address editor */}
+      {/* Expanded: address editor only */}
       {isExpanded && (
         <div className="mt-3 space-y-3">
-          {/* Fuzzy suggestions — shown for both geocode failures and no-route-found */}
-          {suggestions.length > 0 && (
-            <div>
-              <p className="text-xs text-gray-500 mb-1.5 flex items-center gap-1">
-                <Zap size={10} className="text-yellow-400" />
-                Nearby street suggestions
-              </p>
-              <div className="space-y-1">
-                {suggestions.map((s, i) => (
-                  <button
-                    key={i}
-                    onClick={() => applySuggestion(s)}
-                    className="w-full text-left bg-gray-700/50 hover:bg-gray-700 rounded px-2 py-1.5 text-xs flex items-center justify-between gap-2 transition-colors"
-                  >
-                    <span className="text-gray-200 truncate">{s.segmentName}</span>
-                    <span className="text-gray-500 font-mono flex-shrink-0">
-                      {s.routeCode} · {Math.round(s.score * 100)}%
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          {suggestions.length === 0 && isExpanded && (
-            <p className="text-xs text-gray-600 italic">No nearby street suggestions found.</p>
-          )}
-
-          {/* Address editor */}
           <div className="space-y-1.5">
             <div className="flex gap-1.5">
               <input
@@ -2114,8 +1989,6 @@ const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   <UnresolvableCard
                     key={c.id}
                     customer={c}
-                    approvedRoutes={approvedRoutes}
-                    customerBoundingBox={customerBoundingBox}
                     onRetryGeocode={onRetryGeocode}
                   />
                 ))}
@@ -2137,8 +2010,6 @@ const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   <UnresolvableCard
                     key={c.id}
                     customer={c}
-                    approvedRoutes={approvedRoutes}
-                    customerBoundingBox={customerBoundingBox}
                     onRetryGeocode={onRetryGeocode}
                   />
                 ))}
