@@ -65,6 +65,21 @@ import {
     let queued = 0;
     const toQueue: Omit<RFQueueEntry, 'id' | 'createdAt' | 'updatedAt'>[] = [];
   
+    // Pending Sheets writes: spreadsheetId → list of range/value updates
+    // Flushed every WRITE_BATCH_SIZE auto-fixed customers
+    const pendingWrites = new Map<string, { range: string; values: any[][] }[]>();
+  
+    // Flush all pending writes — one batchUpdate per spreadsheet
+    const flushWrites = async () => {
+      for (const [spreadsheetId, updates] of pendingWrites) {
+        if (updates.length === 0) continue;
+        await sheetsWriteWithRetry(() =>
+          routeFinderSheetsService.applyBatchStreetWrites(spreadsheetId, updates)
+        );
+      }
+      pendingWrites.clear();
+    };
+  
     // Collect geocoded customers for bbox computation
     const geocodedSoFar: GeoCustomer[] = [];
   
@@ -76,7 +91,11 @@ import {
     const pass2Queue: GeoCustomer[] = [];
   
     for (let i = 0; i < customers.length; i++) {
-      if (isPaused()) return { fixed, queued, skipped: 0, paused: true };
+      if (isPaused()) {
+        await flushWrites();
+        await rfScanSessionService.pushToQueue(toQueue);
+        return { fixed, queued, skipped: 0, paused: true };
+      }
   
       const customer = customers[i];
   
@@ -102,10 +121,11 @@ import {
   
           const result = await handleAssigned(
             customer, mapPrefix, areaName, sessionId,
-            toQueue, approvedRoutes
+            toQueue, approvedRoutes, pendingWrites
           );
           if (result === 'fixed') fixed++;
           else queued++;
+          if (fixed > 0 && fixed % WRITE_BATCH_SIZE === 0) await flushWrites();
         } else {
           // Too far — queue for Pass 2
           customer.lat = geoResult.lat;
@@ -124,7 +144,7 @@ import {
   
     for (let i = 0; i < pass2Queue.length; i++) {
       if (isPaused()) {
-        // Flush whatever we have to queue before pausing
+        await flushWrites();
         await rfScanSessionService.pushToQueue(toQueue);
         return { fixed, queued, skipped: 0, paused: true };
       }
@@ -168,10 +188,11 @@ import {
   
           const result = await handleAssigned(
             customer, mapPrefix, areaName, sessionId,
-            toQueue, approvedRoutes
+            toQueue, approvedRoutes, pendingWrites
           );
           if (result === 'fixed') fixed++;
           else queued++;
+          if (fixed > 0 && fixed % WRITE_BATCH_SIZE === 0) await flushWrites();
           continue;
         }
       }
@@ -190,10 +211,11 @@ import {
           assignResult(customer, segmentMatch.lat, segmentMatch.lng, match, approvedRoutes, true);
           const result = await handleAssigned(
             customer, mapPrefix, areaName, sessionId,
-            toQueue, approvedRoutes
+            toQueue, approvedRoutes, pendingWrites
           );
           if (result === 'fixed') fixed++;
           else queued++;
+          if (fixed > 0 && fixed % WRITE_BATCH_SIZE === 0) await flushWrites();
         } else {
           customer.geocodeFailed = true;
           queued++;
@@ -206,6 +228,9 @@ import {
         toQueue.push(buildQueueEntry(customer, mapPrefix, areaName, sessionId, 'red'));
       }
     }
+  
+    // Flush any remaining pending writes
+    await flushWrites();
   
     // Flush remaining queue entries
     if (toQueue.length > 0) {
@@ -239,49 +264,73 @@ import {
     }
   }
   
+  // ── Sheets write with exponential backoff on 429 ────────────────────────────
+  async function sheetsWriteWithRetry(
+    fn: () => Promise<void>,
+    maxRetries = 4
+  ): Promise<void> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await fn();
+        return;
+      } catch (e: any) {
+        const is429 = e?.message?.includes('429') || e?.message?.includes('Quota');
+        if (!is429 || attempt === maxRetries) throw e;
+        // Exponential backoff: 2s, 4s, 8s, 16s
+        const delay = Math.pow(2, attempt + 1) * 1000;
+        console.warn(`RF: Sheets 429 — retrying in ${delay}ms (attempt ${attempt + 1})`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+  
   async function handleAssigned(
     customer: GeoCustomer,
     mapPrefix: string,
     areaName: string,
     sessionId: string,
     toQueue: Omit<RFQueueEntry, 'id' | 'createdAt' | 'updatedAt'>[],
-    approvedRoutes: ApprovedRoute[]
+    approvedRoutes: ApprovedRoute[],
+    pendingWrites: Map<string, { range: string; values: any[][] }[]>
   ): Promise<'fixed' | 'queued'> {
     const suggestedPrefix = customer.suggestedRouteCode.match(/^([a-zA-Z]+)/)?.[1]?.toUpperCase() || '';
     const isGrey = customer.pinColor === 'grey';
     const isSamePrefix = suggestedPrefix === mapPrefix.toUpperCase();
   
     if (isGrey || isSamePrefix) {
-      // Auto-fix: write to sheet immediately (interleaved with geocoding)
-      try {
-        for (const row of customer.rows) {
-          await routeFinderSheetsService.applyFix(
-            row.spreadsheetId,
-            row.sheetName,
-            row.sheetRowNumber,
-            row.routeCodeCol,
-            row.streetNameCol,
-            customer.suggestedRouteCode,
-            customer.suggestedSegmentName || customer.streetName,
-          );
+      // Collect this customer's updates into the pending batch.
+      // The scan loop flushes every WRITE_BATCH_SIZE customers.
+      for (const row of customer.rows) {
+        if (!pendingWrites.has(row.spreadsheetId)) {
+          pendingWrites.set(row.spreadsheetId, []);
+        }
+        const updates = pendingWrites.get(row.spreadsheetId)!;
+  
+        if (row.routeCodeCol >= 0 && customer.suggestedRouteCode) {
+          const col = columnIndexToLetter(row.routeCodeCol);
+          updates.push({ range: `'${row.sheetName}'!${col}${row.sheetRowNumber}`, values: [[customer.suggestedRouteCode]] });
         }
   
-        // Log as fixed in queue
-        toQueue.push({
-          ...buildQueueEntry(customer, mapPrefix, areaName, sessionId, 'orange'),
-          status:  'fixed',
-          fix_log: {
-            newRouteCode:  customer.suggestedRouteCode,
-            newStreetName: customer.suggestedSegmentName || customer.streetName,
-            fixedBy:       'auto',
-            timestamp:     new Date().toISOString(),
-          },
-        } as any);
-  
-        return 'fixed';
-      } catch (e) {
-        console.warn('RF: auto-fix write failed, queuing for manual review:', e);
+        const newStreet = customer.suggestedSegmentName || customer.streetName;
+        if (row.streetNameCol >= 0 && newStreet) {
+          const col = columnIndexToLetter(row.streetNameCol);
+          updates.push({ range: `'${row.sheetName}'!${col}${row.sheetRowNumber}`, values: [[newStreet]] });
+        }
       }
+  
+      // Log as fixed in queue
+      toQueue.push({
+        ...buildQueueEntry(customer, mapPrefix, areaName, sessionId, 'orange'),
+        status:  'fixed',
+        fix_log: {
+          newRouteCode:  customer.suggestedRouteCode,
+          newStreetName: customer.suggestedSegmentName || customer.streetName,
+          fixedBy:       'auto',
+          timestamp:     new Date().toISOString(),
+        },
+      } as any);
+  
+      return 'fixed';
     }
   
     // Different prefix or write failed — queue for manual review
@@ -289,6 +338,18 @@ import {
       customer.pinColor === 'grey' ? 'orange' : customer.pinColor as 'orange' | 'red'
     ));
     return 'queued';
+  }
+  
+  // Column index to letter (e.g. 0 → A, 25 → Z, 26 → AA)
+  function columnIndexToLetter(colIndex: number): string {
+    let s = '';
+    let c = colIndex + 1;
+    while (c > 0) {
+      c--;
+      s = String.fromCharCode(65 + (c % 26)) + s;
+      c = Math.floor(c / 26);
+    }
+    return s;
   }
   
   function buildQueueEntry(
