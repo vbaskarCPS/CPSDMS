@@ -43,6 +43,7 @@ import {
   normalizePhone,
   getCustomerBoundingBox,
   fuzzyMatchSegmentName,
+  findSegmentByName,
   getRouteCentroid,
   SAME_ROUTE_TOLERANCE_DEG,
   ApprovedRoute,
@@ -91,13 +92,17 @@ function assignCustomerToRoute(
   lng: number,
   match: { routeCode: string; segmentName: string; distanceDeg: number },
   approvedRoutes: ApprovedRoute[],
-  greyStandardizeQueue: { customer: GeoCustomer; newStreetName: string }[]
+  greyStandardizeQueue: { customer: GeoCustomer; newStreetName: string }[],
+  forceOrange: boolean = false
 ): void {
   customer.suggestedRouteCode   = match.routeCode;
   customer.suggestedSegmentName = match.segmentName;
   customer.distanceDeg          = match.distanceDeg;
 
-  if (match.routeCode === customer.currentRouteCode) {
+  if (forceOrange) {
+    // Pass 2/3 result — location was approximated, human must confirm
+    customer.pinColor = 'orange';
+  } else if (match.routeCode === customer.currentRouteCode) {
     customer.pinColor = 'grey';
   } else {
     const assignedDist = distanceToRoute(lat, lng, customer.currentRouteCode, approvedRoutes);
@@ -708,20 +713,60 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         await new Promise(r => setTimeout(r, 150));
 
         if (geoResult) {
-          customer.lat = geoResult.lat;
-          customer.lng = geoResult.lng;
-          if (streetToGeocode !== customer.streetName) {
-            customer.streetName = streetToGeocode; // update display to corrected name
-          }
           const match = findClosestRoute(geoResult.lat, geoResult.lng, approvedRoutes);
-          if (match) {
-            assignCustomerToRoute(customer, geoResult.lat, geoResult.lng, match, approvedRoutes, greyStandardizeQueue);
+
+          if (match && match.distanceDeg <= PASS1_THRESHOLD_DEG) {
+            // Pass 2 geocode landed close enough — trust it
+            customer.lat = geoResult.lat;
+            customer.lng = geoResult.lng;
+            if (streetToGeocode !== customer.streetName) {
+              customer.streetName = streetToGeocode;
+            }
+            assignCustomerToRoute(customer, geoResult.lat, geoResult.lng, match, approvedRoutes, greyStandardizeQueue, true);
           } else {
-            customer.noRouteFound = true;
-            customer.pinColor = 'red';
+            // Pass 2 still landed too far — Mapbox doesn't know this street.
+            // Pass 3: find the segment whose name best matches the customer's street
+            // within the route bounding box and use its midpoint directly.
+            const routeBbox = pass1Bbox;
+            const segmentMatch = routeBbox
+              ? findSegmentByName(customer.streetName, approvedRoutes, routeBbox)
+              : null;
+
+            if (segmentMatch) {
+              customer.lat = segmentMatch.lat;
+              customer.lng = segmentMatch.lng;
+              const closestMatch = findClosestRoute(segmentMatch.lat, segmentMatch.lng, approvedRoutes);
+              if (closestMatch) {
+                assignCustomerToRoute(customer, segmentMatch.lat, segmentMatch.lng, closestMatch, approvedRoutes, greyStandardizeQueue, true);
+              } else {
+                customer.noRouteFound = true;
+                customer.pinColor = 'red';
+              }
+            } else {
+              // No segment match found — goes to sidebar
+              customer.geocodeFailed = true;
+            }
           }
         } else {
-          customer.geocodeFailed = true;
+          // Mapbox returned nothing at all
+          // Try Pass 3 directly — segment name lookup
+          const routeBbox = pass1Bbox;
+          const segmentMatch = routeBbox
+            ? findSegmentByName(customer.streetName, approvedRoutes, routeBbox)
+            : null;
+
+          if (segmentMatch) {
+            customer.lat = segmentMatch.lat;
+            customer.lng = segmentMatch.lng;
+            const closestMatch = findClosestRoute(segmentMatch.lat, segmentMatch.lng, approvedRoutes);
+            if (closestMatch) {
+              assignCustomerToRoute(customer, segmentMatch.lat, segmentMatch.lng, closestMatch, approvedRoutes, greyStandardizeQueue, true);
+            } else {
+              customer.geocodeFailed = true;
+            }
+          } else {
+            customer.geocodeFailed = true;
+          }
         }
 
         geocodedCustomers.push(customer);

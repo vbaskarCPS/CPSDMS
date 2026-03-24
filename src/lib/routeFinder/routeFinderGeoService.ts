@@ -308,6 +308,50 @@ export function getRouteCentroid(
   return { lat: sumLat / count, lng: sumLng / count };
 }
 
+// ─── SEGMENT NAME LOOKUP ─────────────────────────────────────────────────────
+
+/**
+ * Find the segment whose name best fuzzy-matches the given street name,
+ * filtered to segments within the padded bounding box.
+ * Returns the midpoint coordinates of the best matching segment, or null.
+ * Used as Pass 3 fallback when Mapbox can't find the address.
+ */
+export function findSegmentByName(
+  streetName: string,
+  routes: ApprovedRoute[],
+  boundingBox: { minLat: number; maxLat: number; minLng: number; maxLng: number },
+  paddingDeg: number = 0.05
+): { lat: number; lng: number; routeCode: string; segmentName: string } | null {
+  const { minLat, maxLat, minLng, maxLng } = boundingBox;
+  let bestScore = 0;
+  let bestResult: { lat: number; lng: number; routeCode: string; segmentName: string } | null = null;
+
+  for (const route of routes) {
+    if (!route.segments) continue;
+    for (const segment of route.segments) {
+      if (!segment.name || !segment.coordinates || segment.coordinates.length === 0) continue;
+
+      // Filter to segments within padded bounding box
+      const inBox = segment.coordinates.some(([lng, lat]) =>
+        lat >= minLat - paddingDeg && lat <= maxLat + paddingDeg &&
+        lng >= minLng - paddingDeg && lng <= maxLng + paddingDeg
+      );
+      if (!inBox) continue;
+
+      const score = segmentNameSimilarity(streetName, segment.name);
+      if (score > bestScore) {
+        bestScore = score;
+        const midIdx = Math.floor(segment.coordinates.length / 2);
+        const [lng, lat] = segment.coordinates[midIdx];
+        bestResult = { lat, lng, routeCode: route.route_code, segmentName: segment.name };
+      }
+    }
+  }
+
+  // Only return if score is high enough to be confident
+  return bestScore >= 0.75 ? bestResult : null;
+}
+
 // ─── BOUNDING BOX ─────────────────────────────────────────────────────────────
 
 /**
