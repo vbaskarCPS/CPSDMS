@@ -29,8 +29,6 @@ import {
   import { rfScanSessionService, RFQueueEntry } from './rfScanSessionService';
   import { SAME_ROUTE_TOLERANCE_DEG } from './routeFinderGeoService';
   
-  const PASS1_THRESHOLD_DEG = 0.008; // ~800m
-  
   export interface ScanGroupParams {
     sessionId: string;
     mapPrefix: string;        // the digital map prefix (e.g. ACT)
@@ -54,6 +52,9 @@ import {
     skipped: number;
     paused: boolean;
   }
+  
+  const PASS1_THRESHOLD_DEG = 0.008; // ~800m — beyond this, geocode is likely wrong
+  const WRITE_BATCH_SIZE    = 20;    // flush Sheets writes every N auto-fixed customers
   
   export async function scanGroup(params: ScanGroupParams): Promise<ScanGroupResult> {
     const {
@@ -85,6 +86,47 @@ import {
   
     // Route centroid for Pass 2 proximity bias
     const routeCentroid = getRouteCentroid(approvedRoutes, mapPrefix);
+  
+    // ── PRE-PASS: Street name normalization ─────────────────────────────────
+    // Before geocoding, fuzzy-match each customer's street name against segments
+    // on their exact current route. Threshold (0.80) — corrects obvious typos
+    // obvious abbreviations/typos where we're highly confident.
+    // "Eagle Cres St" on EB23 → matches "Eaglecrest Street" in EB23 segments.
+    // Runs entirely from local route data, zero Mapbox calls.
+  
+    const STREET_NORMALIZE_THRESHOLD = 0.80;
+  
+    for (const customer of customers) {
+      // Use the digital map prefix (e.g. ACT) not the call book prefix (e.g. A)
+      // so we match against the correct segment data regardless of prefix mismatch
+      const exactRouteSegments = approvedRoutes
+        .filter(r => r.route_code.match(/^([a-zA-Z]+)/)?.[1]?.toUpperCase() === mapPrefix.toUpperCase())
+        .flatMap(r => r.segments || [])
+        .filter(s => s.name);
+  
+      if (exactRouteSegments.length === 0) continue;
+  
+      let bestScore = 0;
+      let bestName = '';
+  
+      for (const segment of exactRouteSegments) {
+        // Use the same segmentNameSimilarity logic via fuzzyMatchSegmentName internals
+        const na = normalizeForPrePass(customer.streetName);
+        const nb = normalizeForPrePass(segment.name);
+        if (!na || !nb) continue;
+        if (na === nb) { bestScore = 1; bestName = segment.name; break; }
+  
+        const score = prePassSimilarity(na, nb);
+        if (score > bestScore) { bestScore = score; bestName = segment.name; }
+      }
+  
+      if (
+        bestScore >= STREET_NORMALIZE_THRESHOLD &&
+        bestName.toLowerCase() !== customer.streetName.toLowerCase()
+      ) {
+        customer.streetName = bestName;
+      }
+    }
   
     // ── PASS 1 ───────────────────────────────────────────────────────────────
   
@@ -240,6 +282,34 @@ import {
     return { fixed, queued, skipped: 0, paused: false };
   }
   
+  // ─── PRE-PASS HELPERS ────────────────────────────────────────────────────────
+  
+  function normalizeForPrePass(s: string): string {
+    return s
+      .toLowerCase()
+      .replace(/(street|st|road|rd|avenue|ave|drive|dr|court|ct|crescent|cres|cr|boulevard|blvd|lane|ln|place|pl|circle|cir|way|trail|tr|parkway|pkwy|terrace|ter|close|crossing|xing|square|sq|grove|gv|gardens|gdns|gate|gt|heights|hts|hollow|loop|lp|park|pk|path|point|pt|ridge|run|view|vista|walk|wood|woods|wynd)/g, '')
+      .replace(/north/g, 'n').replace(/south/g, 's')
+      .replace(/east/g, 'e').replace(/west/g, 'w')
+      .replace(/[^a-z0-9]/g, '');
+  }
+  
+  function prePassSimilarity(a: string, b: string): number {
+    if (a === b) return 1.0;
+    if (!a || !b) return 0.0;
+    if (a.includes(b) || b.includes(a)) return 0.85;
+    const m = a.length, n = b.length;
+    const dp: number[] = Array.from({ length: n + 1 }, (_, j) => j);
+    for (let i = 1; i <= m; i++) {
+      let prev = dp[0]; dp[0] = i;
+      for (let j = 1; j <= n; j++) {
+        const temp = dp[j];
+        dp[j] = a[i-1] === b[j-1] ? prev : 1 + Math.min(prev, dp[j], dp[j-1]);
+        prev = temp;
+      }
+    }
+    return 1 - dp[n] / Math.max(m, n);
+  }
+  
   // ─── HELPERS ─────────────────────────────────────────────────────────────────
   
   function assignResult(
@@ -381,4 +451,123 @@ import {
       status:               'pending',
       fixLog:               {},
     };
+  }
+  
+  // ─── POST-SCAN QUEUE FILTER ───────────────────────────────────────────────────
+  
+  export interface PostFilterResult {
+    resolved: number;
+    remaining: number;
+  }
+  
+  /**
+   * After the full scan, sweep the entire review queue and auto-fix any entry
+   * whose street name fuzzy-matches a segment in the mapped prefix at ≥0.80.
+   * Handles cases where the old call book prefix didn't match any digital segments
+   * during the scan (e.g. "EB" call book → "EB" digital, but segments weren't
+   * available during pre-pass). Writes to sheets in batches of WRITE_BATCH_SIZE.
+   */
+  export async function runQueuePostFilter(params: {
+    sessionId: string;
+    approvedRoutes: ApprovedRoute[];
+    mapPrefix?: string;  // if provided, only sweep entries for this prefix
+    onProgress: (current: number, total: number) => void;
+  }): Promise<PostFilterResult> {
+    const { sessionId, approvedRoutes, mapPrefix, onProgress } = params;
+  
+    // Load pending entries — scoped to prefix if provided, otherwise full queue
+    const pending = mapPrefix
+      ? await rfScanSessionService.loadPendingQueueForPrefix(sessionId, mapPrefix)
+      : await rfScanSessionService.loadPendingQueue(sessionId);
+    if (pending.length === 0) return { resolved: 0, remaining: 0 };
+  
+    // Build a segment lookup per map prefix
+    const segmentsByPrefix = new Map<string, { name: string; routeCode: string }[]>();
+    for (const route of approvedRoutes) {
+      const prefix = route.route_code.match(/^([a-zA-Z]+)/)?.[1]?.toUpperCase() || '';
+      if (!prefix) continue;
+      if (!segmentsByPrefix.has(prefix)) segmentsByPrefix.set(prefix, []);
+      for (const seg of route.segments || []) {
+        if (seg.name) segmentsByPrefix.get(prefix)!.push({ name: seg.name, routeCode: route.route_code });
+      }
+    }
+  
+    const pendingWrites = new Map<string, { range: string; values: any[][] }[]>();
+    let resolved = 0;
+  
+    const flushWrites = async () => {
+      for (const [spreadsheetId, updates] of pendingWrites) {
+        if (updates.length === 0) continue;
+        await sheetsWriteWithRetry(() =>
+          routeFinderSheetsService.applyBatchStreetWrites(spreadsheetId, updates)
+        );
+      }
+      pendingWrites.clear();
+    };
+  
+    for (let i = 0; i < pending.length; i++) {
+      onProgress(i + 1, pending.length);
+      const entry = pending[i];
+  
+      const segments = segmentsByPrefix.get(entry.mapPrefix.toUpperCase()) || [];
+      if (segments.length === 0) continue;
+  
+      // Fuzzy match street name against all segments in this prefix
+      const normalizedEntry = normalizeForPrePass(entry.streetName);
+      let bestScore = 0;
+      let bestSegmentName = '';
+      let bestRouteCode = '';
+  
+      for (const seg of segments) {
+        const normalizedSeg = normalizeForPrePass(seg.name);
+        if (!normalizedEntry || !normalizedSeg) continue;
+        const score = prePassSimilarity(normalizedEntry, normalizedSeg);
+        if (score > bestScore) {
+          bestScore = score;
+          bestSegmentName = seg.name;
+          bestRouteCode = seg.routeCode;
+        }
+      }
+  
+      if (bestScore < 0.80) continue;
+      if (bestSegmentName.toLowerCase() === entry.streetName.toLowerCase() &&
+          bestRouteCode === entry.currentRouteCode) continue;
+  
+      // Queue the sheet writes
+      for (const row of entry.rows) {
+        if (!pendingWrites.has(row.spreadsheetId)) {
+          pendingWrites.set(row.spreadsheetId, []);
+        }
+        const updates = pendingWrites.get(row.spreadsheetId)!;
+  
+        if (row.routeCodeCol >= 0 && bestRouteCode) {
+          const col = columnIndexToLetter(row.routeCodeCol);
+          updates.push({ range: `'${row.sheetName}'!${col}${row.sheetRowNumber}`, values: [[bestRouteCode]] });
+        }
+        if (row.streetNameCol >= 0 && bestSegmentName) {
+          const col = columnIndexToLetter(row.streetNameCol);
+          updates.push({ range: `'${row.sheetName}'!${col}${row.sheetRowNumber}`, values: [[bestSegmentName]] });
+        }
+      }
+  
+      // Mark as fixed in Supabase
+      await rfScanSessionService.markFixed({
+        entryId:       entry.id,
+        newRouteCode:  bestRouteCode,
+        newStreetName: bestSegmentName,
+        fixedBy:       'auto',
+      });
+  
+      resolved++;
+  
+      // Flush every WRITE_BATCH_SIZE
+      if (resolved > 0 && resolved % WRITE_BATCH_SIZE === 0) {
+        await flushWrites();
+      }
+    }
+  
+    // Final flush
+    await flushWrites();
+  
+    return { resolved, remaining: pending.length - resolved };
   }
