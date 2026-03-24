@@ -472,8 +472,8 @@ export interface PostFilterResult {
 }
 
 /**
- * an, sweep the entire review queue and auto-fix any entry
- * whose stret name fuzzy-matches a segment in the mapped prefix at ≥0.80.
+ * After the full scan, sweep the entire review queue and auto-fix any entry
+ * whose street name fuzzy-matches a segment in the mapped prefix at ≥0.80.
  * Handles cases where the old call book prefix didn't match any digital segments
  * during the scan (e.g. "EB" call book → "EB" digital, but segments weren't
  * available during pre-pass). Writes to sheets in batches of WRITE_BATCH_SIZE.
