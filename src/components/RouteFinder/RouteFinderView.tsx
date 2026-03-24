@@ -722,36 +722,55 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       setPhase(hasIssues ? 'working' : 'complete');
 
       // ── Post-scan: standardize grey street names ──────────────────────────
-      // Rate-limited to ~40 writes/min (one every 1.5s) to stay well under
-      // Google's 60 writes/minute quota. Runs after the map is visible so
-      // users can start reviewing while standardization happens in the background.
+      // Group ALL rows for ALL grey customers by spreadsheetId, then fire ONE
+      // batchUpdate per spreadsheet. Google counts each batchUpdate as a single
+      // write quota unit regardless of how many ranges it contains — so this
+      // goes from potentially hundreds of quota hits down to just 1-2 total.
       if (greyStandardizeQueue.length > 0) {
-        setStandardizeProgress({ current: 0, total: greyStandardizeQueue.length });
+        // Build range map: spreadsheetId → list of {range, values} updates
+        const bySpreadsheet = new Map<string, { range: string; values: any[][] }[]>();
 
-        for (let i = 0; i < greyStandardizeQueue.length; i++) {
-          const { customer, newStreetName } = greyStandardizeQueue[i];
-          setStandardizeProgress({ current: i + 1, total: greyStandardizeQueue.length });
-
-          try {
-            for (const row of customer.rows) {
-              if (row.streetNameCol >= 0) {
-                await routeFinderSheetsService.applyFix(
-                  row.spreadsheetId,
-                  row.sheetName,
-                  row.sheetRowNumber,
-                  -1,
-                  row.streetNameCol,
-                  '',
-                  newStreetName,
-                );
-              }
+        for (const { customer, newStreetName } of greyStandardizeQueue) {
+          for (const row of customer.rows) {
+            if (row.streetNameCol < 0) continue;
+            const col = columnIndexToLetter(row.streetNameCol);
+            const range = `'${row.sheetName}'!${col}${row.sheetRowNumber}`;
+            if (!bySpreadsheet.has(row.spreadsheetId)) {
+              bySpreadsheet.set(row.spreadsheetId, []);
             }
-          } catch (e) {
-            console.warn('RF: grey street standardize failed:', e);
+            bySpreadsheet.get(row.spreadsheetId)!.push({
+              range,
+              values: [[newStreetName]],
+            });
+          }
+        }
+
+        const spreadsheetIds = Array.from(bySpreadsheet.keys());
+        setStandardizeProgress({ current: 0, total: spreadsheetIds.length });
+
+        for (let i = 0; i < spreadsheetIds.length; i++) {
+          const spreadsheetId = spreadsheetIds[i];
+          const updates = bySpreadsheet.get(spreadsheetId)!;
+          setStandardizeProgress({ current: i + 1, total: spreadsheetIds.length });
+
+          // Chunk at 500 ranges — well within Sheets API payload limits
+          for (let c = 0; c < updates.length; c += 500) {
+            const chunk = updates.slice(c, c + 500);
+            try {
+              await routeFinderSheetsService.applyBatchStreetWrites(spreadsheetId, chunk);
+            } catch (e) {
+              console.warn('RF: grey street standardize failed:', e);
+            }
+            // If there are multiple chunks for same spreadsheet, pause 2s between them
+            if (c + 500 < updates.length) {
+              await new Promise(r => setTimeout(r, 2000));
+            }
           }
 
-          // 1.5s between each customer's rows — ~40 customers/min, well under quota
-          await new Promise(r => setTimeout(r, 1500));
+          // Pause 2s between spreadsheets
+          if (i + 1 < spreadsheetIds.length) {
+            await new Promise(r => setTimeout(r, 2000));
+          }
         }
 
         setStandardizeProgress(null);
@@ -1098,20 +1117,8 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       };
     });
 
-    // Silent background write — standardize street name across all rows for this customer
-    if (customer && streetName.trim()) {
-      for (const row of customer.rows) {
-        routeFinderSheetsService.applyFix(
-          row.spreadsheetId,
-          row.sheetName,
-          row.sheetRowNumber,
-          -1,                  // skip route code column
-          row.streetNameCol,
-          '',
-          streetName.trim(),
-        ).catch(e => console.warn('RF: silent street write failed:', e));
-      }
-    }
+    // Street name correction is written when the user confirms the orange/grey fix.
+    // No silent write here — avoids quota flooding.
   }, [approvedRoutes, customers]);
 
   // ─── DRAW BOX mouse down ──────────────────────────────────────────────────
@@ -2005,7 +2012,7 @@ const SidebarPanel: React.FC<SidebarPanelProps> = ({
           <div className="mb-3">
             <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
               <span>Standardizing street names...</span>
-              <span>{standardizeProgress.current}/{standardizeProgress.total}</span>
+              <span>{standardizeProgress.current}/{standardizeProgress.total} books</span>
             </div>
             <div className="w-full bg-gray-700 rounded-full h-1.5">
               <div
