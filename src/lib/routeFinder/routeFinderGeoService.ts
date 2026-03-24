@@ -93,15 +93,27 @@ export const SAME_ROUTE_TOLERANCE_DEG = 0.0008;
 
 // ─── ROUTE LOADING ────────────────────────────────────────────────────────────
 
-/** Load all approved routes from the route_maps table */
+/** Load all approved routes from the route_maps table — paginated to bypass 1000-row limit */
 export async function loadApprovedRoutes(): Promise<ApprovedRoute[]> {
-  const { data, error } = await supabase
-    .from('route_maps')
-    .select('*')
-    .eq('status', 'approved');
+  const PAGE = 500;
+  const results: ApprovedRoute[] = [];
+  let from = 0;
 
-  if (error) throw new Error('Failed to load approved routes: ' + error.message);
-  return (data || []) as ApprovedRoute[];
+  while (true) {
+    const { data, error } = await supabase
+      .from('route_maps')
+      .select('*')
+      .eq('status', 'approved')
+      .range(from, from + PAGE - 1);
+
+    if (error) throw new Error('Failed to load approved routes: ' + error.message);
+    if (!data || data.length === 0) break;
+    results.push(...(data as ApprovedRoute[]));
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+
+  return results;
 }
 
 /**
