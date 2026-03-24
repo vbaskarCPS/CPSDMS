@@ -110,6 +110,9 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
   const [applying, setApplying] = useState(false);
   const [customerBoundingBox, setCustomerBoundingBox] = useState<ReturnType<typeof getCustomerBoundingBox>>(null);
 
+  // ── Street standardization (post-scan grey writes) ───────────────────────
+  const [standardizeProgress, setStandardizeProgress] = useState<{ current: number; total: number } | null>(null);
+
   // ── Box selection ──────────────────────────────────────────────────────────
   const [isDrawingBox, setIsDrawingBox] = useState(false);
   const [drawRect, setDrawRect] = useState<DrawRect | null>(null);
@@ -574,12 +577,15 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
       setSession(activeSession);
 
-      // Queue for grey street name standardization — flushed in one batch per spreadsheet after scan
-      const greyStreetWrites: { spreadsheetId: string; range: string; value: string }[] = [];
-
       // Geocode each unique customer
       const token = import.meta.env.VITE_MAPBOX_TOKEN as string;
       const geocodedCustomers: GeoCustomer[] = [];
+
+      // Build a running bounding box as we geocode — used for in-loop fuzzy retry
+      let runningBbox: { minLat: number; maxLat: number; minLng: number; maxLng: number } | null = null;
+
+      // Collect grey customers needing street name standardization — written after scan
+      const greyStandardizeQueue: { customer: GeoCustomer; newStreetName: string }[] = [];
 
       for (let i = 0; i < allCustomers.length; i++) {
         const customer = allCustomers[i];
@@ -603,6 +609,16 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
           customer.lat = geoResult.lat;
           customer.lng = geoResult.lng;
 
+          // Expand running bounding box
+          if (!runningBbox) {
+            runningBbox = { minLat: geoResult.lat, maxLat: geoResult.lat, minLng: geoResult.lng, maxLng: geoResult.lng };
+          } else {
+            runningBbox.minLat = Math.min(runningBbox.minLat, geoResult.lat);
+            runningBbox.maxLat = Math.max(runningBbox.maxLat, geoResult.lat);
+            runningBbox.minLng = Math.min(runningBbox.minLng, geoResult.lng);
+            runningBbox.maxLng = Math.max(runningBbox.maxLng, geoResult.lng);
+          }
+
           const match = findClosestRoute(geoResult.lat, geoResult.lng, approvedRoutes);
 
           if (match && match.distanceDeg <= MAX_ROUTE_DISTANCE_DEG) {
@@ -620,25 +636,72 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
                 assignedDist - match.distanceDeg < SAME_ROUTE_TOLERANCE_DEG ? 'grey' : 'orange';
             }
 
-            // Queue grey street name standardization — written in one batch after scan
+            // Queue grey street name standardization if segment name differs from sheet value
             if (
               customer.pinColor === 'grey' &&
               match.segmentName &&
               match.segmentName.trim().toLowerCase() !== customer.streetName.trim().toLowerCase()
             ) {
-              for (const row of customer.rows) {
-                if (row.streetNameCol >= 0) {
-                  greyStreetWrites.push({
-                    spreadsheetId: row.spreadsheetId,
-                    range: `'${row.sheetName}'!${columnIndexToLetter(row.streetNameCol)}${row.sheetRowNumber}`,
-                    value: match.segmentName.trim(),
-                  });
-                }
-              }
+              greyStandardizeQueue.push({ customer, newStreetName: match.segmentName.trim() });
             }
           } else {
-            customer.noRouteFound = true;
-            customer.pinColor = 'red';
+            // No route found — try fuzzy street correction before giving up.
+            // Use the customer's real coords + running bbox to find geographically close segments.
+            if (runningBbox) {
+              const suggestions = fuzzyMatchSegmentName(
+                customer.streetName, approvedRoutes, runningBbox,
+                0.02, geoResult.lat, geoResult.lng
+              );
+              const best = suggestions.find(s => s.score >= 1.0) ?? suggestions[0];
+
+              if (best && best.score >= 0.7 && best.segmentName.toLowerCase() !== customer.streetName.toLowerCase()) {
+                // Re-geocode with the corrected street name
+                setScanProgress({
+                  current: i + 1,
+                  total: allCustomers.length,
+                  message: `Retrying ${i + 1} of ${allCustomers.length} with "${best.segmentName}"...`,
+                });
+
+                const retryResult = await geocodeAddress(
+                  customer.houseNum, best.segmentName, customer.city, token
+                );
+
+                if (retryResult) {
+                  const retryMatch = findClosestRoute(retryResult.lat, retryResult.lng, approvedRoutes);
+                  if (retryMatch && retryMatch.distanceDeg <= MAX_ROUTE_DISTANCE_DEG) {
+                    // Retry succeeded — use the corrected geocode
+                    customer.lat = retryResult.lat;
+                    customer.lng = retryResult.lng;
+                    customer.streetName = best.segmentName; // update display name
+                    customer.suggestedRouteCode   = retryMatch.routeCode;
+                    customer.suggestedSegmentName = retryMatch.segmentName;
+                    customer.distanceDeg          = retryMatch.distanceDeg;
+
+                    if (retryMatch.routeCode === customer.currentRouteCode) {
+                      customer.pinColor = 'grey';
+                    } else {
+                      const assignedDist = distanceToRoute(
+                        retryResult.lat, retryResult.lng, customer.currentRouteCode, approvedRoutes
+                      );
+                      customer.pinColor =
+                        assignedDist - retryMatch.distanceDeg < SAME_ROUTE_TOLERANCE_DEG ? 'grey' : 'orange';
+                    }
+                  } else {
+                    customer.noRouteFound = true;
+                    customer.pinColor = 'red';
+                  }
+                } else {
+                  customer.noRouteFound = true;
+                  customer.pinColor = 'red';
+                }
+              } else {
+                customer.noRouteFound = true;
+                customer.pinColor = 'red';
+              }
+            } else {
+              customer.noRouteFound = true;
+              customer.pinColor = 'red';
+            }
           }
         } else {
           customer.geocodeFailed = true;
@@ -655,31 +718,44 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       setCustomerBoundingBox(bbox);
       setCustomers(geocodedCustomers);
 
-      // Flush grey street name writes — group by spreadsheetId, one batchUpdate per spreadsheet
-      if (greyStreetWrites.length > 0) {
-        const bySheet = new Map<string, { range: string; values: any[][] }[]>();
-        for (const w of greyStreetWrites) {
-          if (!bySheet.has(w.spreadsheetId)) bySheet.set(w.spreadsheetId, []);
-          bySheet.get(w.spreadsheetId)!.push({ range: w.range, values: [[w.value]] });
-        }
-        for (const [spreadsheetId, updates] of bySheet) {
-          // Chunk into groups of 50 to stay within payload limits
-          for (let i = 0; i < updates.length; i += 50) {
-            const chunk = updates.slice(i, i + 50);
-            try {
-              await (routeFinderSheetsService as any).applyBatchStreetWrites(spreadsheetId, chunk);
-            } catch (e) {
-              console.warn('RF: grey street batch write failed:', e);
-            }
-            if (i + 50 < updates.length) {
-              await new Promise(r => setTimeout(r, 1100)); // stay under 60 req/min
-            }
-          }
-        }
-      }
-
       const hasIssues = geocodedCustomers.some(c => c.pinColor === 'orange');
       setPhase(hasIssues ? 'working' : 'complete');
+
+      // ── Post-scan: standardize grey street names ──────────────────────────
+      // Rate-limited to ~40 writes/min (one every 1.5s) to stay well under
+      // Google's 60 writes/minute quota. Runs after the map is visible so
+      // users can start reviewing while standardization happens in the background.
+      if (greyStandardizeQueue.length > 0) {
+        setStandardizeProgress({ current: 0, total: greyStandardizeQueue.length });
+
+        for (let i = 0; i < greyStandardizeQueue.length; i++) {
+          const { customer, newStreetName } = greyStandardizeQueue[i];
+          setStandardizeProgress({ current: i + 1, total: greyStandardizeQueue.length });
+
+          try {
+            for (const row of customer.rows) {
+              if (row.streetNameCol >= 0) {
+                await routeFinderSheetsService.applyFix(
+                  row.spreadsheetId,
+                  row.sheetName,
+                  row.sheetRowNumber,
+                  -1,
+                  row.streetNameCol,
+                  '',
+                  newStreetName,
+                );
+              }
+            }
+          } catch (e) {
+            console.warn('RF: grey street standardize failed:', e);
+          }
+
+          // 1.5s between each customer's rows — ~40 customers/min, well under quota
+          await new Promise(r => setTimeout(r, 1500));
+        }
+
+        setStandardizeProgress(null);
+      }
 
     } catch (e: any) {
       console.error('Route Finder scan failed:', e);
@@ -1378,6 +1454,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
             onFixBoxSelection={handleFixBoxSelection}
             onClearBoxSelection={clearBoxSelection}
             onRetryGeocode={handleRetryGeocode}
+            standardizeProgress={standardizeProgress}
             onReset={() => {
               if (window.confirm('Re-scan from scratch? This will reset all session progress.')) {
                 routeFinderSessionService.resetSession(sessionKey);
@@ -1897,6 +1974,7 @@ interface SidebarPanelProps {
   boxSelectedCount: number;
   approvedRoutes: ApprovedRoute[];
   customerBoundingBox: ReturnType<typeof getCustomerBoundingBox>;
+  standardizeProgress: { current: number; total: number } | null;
   onFixAll: () => void;
   onFixBoxSelection: () => void;
   onClearBoxSelection: () => void;
@@ -1909,6 +1987,7 @@ const SidebarPanel: React.FC<SidebarPanelProps> = ({
   geocodeFailedCustomers, noRouteFoundCustomers,
   session, applying, boxSelectedCount,
   approvedRoutes, customerBoundingBox,
+  standardizeProgress,
   onFixAll, onFixBoxSelection, onClearBoxSelection, onRetryGeocode, onReset,
 }) => {
   const totalUnresolvable = geocodeFailedCustomers.length + noRouteFoundCustomers.length;
@@ -1920,6 +1999,22 @@ const SidebarPanel: React.FC<SidebarPanelProps> = ({
         <h3 className="font-bold text-white text-sm mb-3">
           <span className="font-mono">{prefix}</span> Summary
         </h3>
+
+        {/* Street standardization progress — shown while grey writes are running */}
+        {standardizeProgress && (
+          <div className="mb-3">
+            <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
+              <span>Standardizing street names...</span>
+              <span>{standardizeProgress.current}/{standardizeProgress.total}</span>
+            </div>
+            <div className="w-full bg-gray-700 rounded-full h-1.5">
+              <div
+                className="bg-blue-500 h-1.5 rounded-full transition-all duration-500"
+                style={{ width: `${Math.round((standardizeProgress.current / standardizeProgress.total) * 100)}%` }}
+              />
+            </div>
+          </div>
+        )}
         <div className="space-y-2.5">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-2">
