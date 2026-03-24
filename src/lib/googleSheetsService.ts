@@ -828,6 +828,220 @@ class GoogleSheetsService {
       applicants
     );
   }
+
+  // --- TRAINING COLOUR METHODS ---
+
+  /**
+   * Fetch all tab names and their numeric sheet IDs from the workerbook.
+   * The formatting API requires numeric IDs — tab names alone aren't enough.
+   */
+  private async sheetsGetSpreadsheetMetadata(): Promise<{ sheetId: number; title: string }[]> {
+    if (!this.accessToken) {
+      throw new Error('Not authenticated. Call authenticate() first.');
+    }
+
+    const config = this.getConfig();
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheets.workerbook}?fields=sheets.properties`,
+      {
+        headers: { Authorization: `Bearer ${this.accessToken}` },
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'Failed to fetch spreadsheet metadata');
+    }
+
+    const data = await response.json();
+    return (data.sheets || []).map((s: any) => ({
+      sheetId: s.properties.sheetId,
+      title: s.properties.title,
+    }));
+  }
+
+  /**
+   * Read multiple ranges from the workerbook in one API call.
+   * Chunked at 50 ranges per request to stay under Google's limit.
+   */
+  private async sheetsBatchGetValues(
+    ranges: string[]
+  ): Promise<{ values: any[][] }[]> {
+    if (!this.accessToken) {
+      throw new Error('Not authenticated. Call authenticate() first.');
+    }
+
+    const config = this.getConfig();
+    const CHUNK_SIZE = 50;
+    const results: { values: any[][] }[] = [];
+
+    for (let i = 0; i < ranges.length; i += CHUNK_SIZE) {
+      const chunk = ranges.slice(i, i + CHUNK_SIZE);
+      const params = chunk.map(r => `ranges=${encodeURIComponent(r)}`).join('&');
+
+      const response = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheets.workerbook}/values:batchGet?${params}`,
+        {
+          headers: { Authorization: `Bearer ${this.accessToken}` },
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error?.message || 'Failed to batch get values');
+      }
+
+      const data = await response.json();
+      for (const vr of (data.valueRanges || [])) {
+        results.push({ values: vr.values || [] });
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Apply cell background colour formatting to the workerbook.
+   * Uses the spreadsheet batchUpdate endpoint (separate from the values batchUpdate).
+   * Chunked at 1000 requests per call to stay within API limits.
+   */
+  private async sheetsFormatBatchUpdate(requests: any[]): Promise<void> {
+    if (!this.accessToken) {
+      throw new Error('Not authenticated. Call authenticate() first.');
+    }
+
+    const config = this.getConfig();
+    const CHUNK_SIZE = 1000;
+
+    for (let i = 0; i < requests.length; i += CHUNK_SIZE) {
+      const chunk = requests.slice(i, i + CHUNK_SIZE);
+
+      const response = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheets.workerbook}:batchUpdate`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ requests: chunk }),
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error?.message || 'Failed to apply cell formatting');
+      }
+    }
+  }
+
+  /**
+   * Apply training status colours to every CN# cell across all workerbook tabs.
+   *
+   * Colour legend:
+   *   Gold        (#FFD966) — Level 2 fully complete
+   *   Light grey  (#D9D9D9) — Level 1 fully complete (regardless of L2 status)
+   *   Light green (#C6EFCE) — At least 1 module complete, Level 1 not yet finished
+   *   White                 — No training progress recorded
+   *
+   * Tabs covered:
+   *   - Contractors tab        → CN# in column C (index 2)
+   *   - All MmmDD date tabs    → CN# in column B (index 1)
+   *   - WL, NS, WDR, TNB, Q, F, SNOW → CN# in column B (index 1)
+   *
+   * @param colorMap  Map of contractorId → training status
+   * @returns         Number of cells that received a non-white colour
+   */
+  public async applyTrainingColorsToWorkerbook(
+    colorMap: Map<string, 'none' | 'started' | 'level1' | 'level2'>
+  ): Promise<number> {
+    // RGB values on Google's 0–1 scale
+    const COLORS = {
+      level2:  { red: 1.0,   green: 0.851, blue: 0.4   }, // #FFD966 gold
+      level1:  { red: 0.851, green: 0.851, blue: 0.851  }, // #D9D9D9 light grey
+      started: { red: 0.776, green: 0.937, blue: 0.808  }, // #C6EFCE light green
+      none:    { red: 1.0,   green: 1.0,   blue: 1.0    }, // white (clear)
+    };
+
+    const SPECIAL_TABS = new Set(['WL', 'NS', 'WDR', 'TNB', 'Q', 'F', 'SNOW']);
+
+    // 1. Get all sheet metadata (tab name → numeric sheetId)
+    const sheetMeta = await this.sheetsGetSpreadsheetMetadata();
+    const sheetIdMap = new Map<string, number>();
+    sheetMeta.forEach(s => sheetIdMap.set(s.title, s.sheetId));
+
+    // 2. Decide which tabs to process and which column CN# lives in
+    //    cnColIndex is 0-based: column B = 1, column C = 2
+    const tabsToProcess: { title: string; cnColIndex: number }[] = [];
+
+    for (const sheet of sheetMeta) {
+      const { title } = sheet;
+      if (title === 'Contractors') {
+        tabsToProcess.push({ title, cnColIndex: 2 }); // Column C
+      } else if (SPECIAL_TABS.has(title) || isValidDateTab(title)) {
+        tabsToProcess.push({ title, cnColIndex: 1 }); // Column B
+      }
+    }
+
+    // 3. Build one range per tab to read its CN# column (rows 3 onwards)
+    const ranges = tabsToProcess.map(t => {
+      const col = t.cnColIndex === 2 ? 'C' : 'B';
+      return `'${t.title}'!${col}3:${col}2000`;
+    });
+
+    // 4. Read all CN# columns in one (chunked) batch call
+    const valueResults = await this.sheetsBatchGetValues(ranges);
+
+    // 5. Build one formatting request per non-empty CN# cell
+    const formatRequests: any[] = [];
+    let coloured = 0;
+
+    for (let i = 0; i < tabsToProcess.length; i++) {
+      const tab = tabsToProcess[i];
+      const sheetId = sheetIdMap.get(tab.title);
+      if (sheetId === undefined) continue;
+
+      const rows = valueResults[i]?.values || [];
+
+      for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+        const cn = rows[rowIdx]?.[0]?.toString().trim();
+        if (!cn) continue;
+
+        const status = colorMap.get(cn) ?? 'none';
+        const bgColor = COLORS[status];
+
+        // Sheet row index is 0-based; data starts at spreadsheet row 3 = index 2
+        const sheetRowIndex = rowIdx + 2;
+
+        formatRequests.push({
+          repeatCell: {
+            range: {
+              sheetId,
+              startRowIndex: sheetRowIndex,
+              endRowIndex: sheetRowIndex + 1,
+              startColumnIndex: tab.cnColIndex,
+              endColumnIndex: tab.cnColIndex + 1,
+            },
+            cell: {
+              userEnteredFormat: {
+                backgroundColor: bgColor,
+              },
+            },
+            fields: 'userEnteredFormat.backgroundColor',
+          },
+        });
+
+        if (status !== 'none') coloured++;
+      }
+    }
+
+    // 6. Fire all formatting requests in one (chunked) batch
+    if (formatRequests.length > 0) {
+      await this.sheetsFormatBatchUpdate(formatRequests);
+    }
+
+    return coloured;
+  }
 }
 
 export const googleSheetsService = GoogleSheetsService.getInstance();

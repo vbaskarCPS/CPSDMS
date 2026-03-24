@@ -36,8 +36,9 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
   const [summaries, setSummaries] = useState<ContractorTrainingSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ added: number; skipped: number } | null>(null);
+  const [syncResult, setSyncResult] = useState<{ added: number; skipped: number; coloured?: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [colorWarning, setColorWarning] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedContractorId, setExpandedContractorId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -76,6 +77,7 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
     setSyncing(true);
     setError(null);
     setSyncResult(null);
+    setColorWarning(null);
 
     try {
       const isAuthenticated = googleSheetsService.isAuthenticated();
@@ -94,8 +96,52 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
         commandCenter.region
       );
 
-      setSyncResult(result);
-      await loadData();
+      // Fetch fresh summaries — used for both state update and building the colour map
+      const freshSummaries = await contractorService.getTrainingSummaryForCC(
+        commandCenter.id,
+        totalModules
+      );
+      setSummaries(freshSummaries);
+
+      // Build contractorId → training status map
+      const colorMap = new Map<string, 'none' | 'started' | 'level1' | 'level2'>();
+
+      for (const s of freshSummaries) {
+        const l1Completed = level1Modules.filter(m =>
+          s.progress.some(p => p.moduleId === m.module_id && p.isCompleted)
+        ).length;
+        const l2Completed = level2Modules.filter(m =>
+          s.progress.some(p => p.moduleId === m.module_id && p.isCompleted)
+        ).length;
+
+        const l1Done = level1Modules.length > 0 && l1Completed === level1Modules.length;
+        const l2Done =
+          level2Modules.length > 0 &&
+          l2Completed === level2Modules.length &&
+          !!s.contractor.level2UnlockedAt;
+
+        let status: 'none' | 'started' | 'level1' | 'level2' = 'none';
+        if (l2Done) status = 'level2';
+        else if (l1Done) status = 'level1';
+        else if (s.progress.some(p => p.isCompleted)) status = 'started';
+
+        colorMap.set(s.contractor.contractorId, status);
+      }
+
+      // Apply colours — failures here are non-fatal, shown as a warning
+      let coloured = 0;
+      try {
+        coloured = await googleSheetsService.applyTrainingColorsToWorkerbook(colorMap);
+      } catch (colorErr) {
+        console.warn('Training colour sync failed:', colorErr);
+        setColorWarning(
+          colorErr instanceof Error
+            ? `Colours not applied: ${colorErr.message}`
+            : 'Colours could not be applied to the workerbook.'
+        );
+      }
+
+      setSyncResult({ ...result, coloured });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sync failed');
     } finally {
@@ -312,6 +358,17 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
             <CheckCircle size={14} />
             Sync complete: {syncResult.added} contractor{syncResult.added !== 1 ? 's' : ''} synced,{' '}
             {syncResult.skipped} skipped (no CN#).
+            {syncResult.coloured !== undefined && syncResult.coloured > 0 && (
+              <> {syncResult.coloured} training colour{syncResult.coloured !== 1 ? 's' : ''} applied to workerbook.</>
+            )}
+          </div>
+        )}
+
+        {/* Colour warning (non-fatal — sync succeeded but colours failed) */}
+        {colorWarning && (
+          <div className="mt-2 p-3 bg-yellow-900/20 border border-yellow-700/50 rounded-lg text-xs text-yellow-300 flex items-center gap-2">
+            <AlertCircle size={14} />
+            {colorWarning}
           </div>
         )}
 
