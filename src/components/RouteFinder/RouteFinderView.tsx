@@ -1652,33 +1652,40 @@ const UnresolvableCard: React.FC<UnresolvableCardProps> = ({
   const [suggestions, setSuggestions] = useState<SegmentSuggestion[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
-  // Recompute fuzzy suggestions whenever editStreet changes (debounced 300ms).
-  // If a 100% match is found, auto-geocode it immediately without user action.
+  // On mount: if there's a 100% fuzzy match, auto-geocode silently right away.
+  useEffect(() => {
+    if (!customerBoundingBox || !editStreet.trim()) return;
+    let cancelled = false;
+    (async () => {
+      const results = fuzzyMatchSegmentName(editStreet.trim(), approvedRoutes, customerBoundingBox);
+      if (cancelled) return;
+      const perfect = results.find(r => r.score >= 1.0);
+      if (perfect) {
+        setRetrying(true);
+        setRetryError(null);
+        try {
+          await onRetryGeocode(customer.id, editHouse.trim(), perfect.segmentName, editCity.trim());
+          if (!cancelled) setEditStreet(perfect.segmentName);
+        } catch (e: any) {
+          if (!cancelled) setRetryError(e?.message || 'Geocode failed.');
+        } finally {
+          if (!cancelled) setRetrying(false);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []); // intentionally runs once on mount only
+
+  // Recompute fuzzy suggestions whenever editStreet changes while expanded (debounced 300ms).
   useEffect(() => {
     if (!isExpanded || !customerBoundingBox || !editStreet.trim()) {
       setSuggestions([]);
       return;
     }
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(async () => {
+    debounceRef.current = setTimeout(() => {
       const results = fuzzyMatchSegmentName(editStreet.trim(), approvedRoutes, customerBoundingBox);
-      const perfect = results.find(r => r.score >= 1.0);
-      if (perfect) {
-        // Auto-apply — no need to show the suggestion list
-        setRetrying(true);
-        setRetryError(null);
-        try {
-          await onRetryGeocode(customer.id, editHouse.trim(), perfect.segmentName, editCity.trim());
-          setEditStreet(perfect.segmentName);
-        } catch (e: any) {
-          setRetryError(e?.message || 'Geocode failed.');
-          setSuggestions(results);
-        } finally {
-          setRetrying(false);
-        }
-      } else {
-        setSuggestions(results);
-      }
+      setSuggestions(results);
     }, 300);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [editStreet, isExpanded, approvedRoutes, customerBoundingBox]);
