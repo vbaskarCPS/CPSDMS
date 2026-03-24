@@ -278,13 +278,13 @@ export async function scanGroup(params: ScanGroupParams): Promise<ScanGroupResul
     }
   }
 
-  // Flush any remaining pending writes
-  await flushWrites();
-
-  // Flush remaining queue entries
+  // Push queue entries FIRST so they're in Supabase before post-filter runs
   if (toQueue.length > 0) {
     await rfScanSessionService.pushToQueue(toQueue);
   }
+
+  // Flush any remaining pending writes after queue is committed
+  await flushWrites();
 
   return { fixed, queued, skipped: 0, paused: false };
 }
