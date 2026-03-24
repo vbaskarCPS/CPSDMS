@@ -654,7 +654,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
               );
               const best = suggestions.find(s => s.score >= 1.0) ?? suggestions[0];
 
-              if (best && best.score >= 0.7 && best.segmentName.toLowerCase() !== customer.streetName.toLowerCase()) {
+              if (best && best.score >= 0.85 && best.segmentName.toLowerCase() !== customer.streetName.toLowerCase()) {
                 // Re-geocode with the corrected street name
                 setScanProgress({
                   current: i + 1,
@@ -671,6 +671,9 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
                   customer.houseNum, best.segmentName, customer.city, token,
                   bboxCenterLat, bboxCenterLng
                 );
+
+                // Small pause after retry to avoid Mapbox rate limit (600 req/min)
+                await new Promise(r => setTimeout(r, 200));
 
                 if (retryResult) {
                   const retryMatch = findClosestRoute(retryResult.lat, retryResult.lng, approvedRoutes);
@@ -715,8 +718,8 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
         geocodedCustomers.push(customer);
 
-        if (i % 25 === 0 && i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 50));
+        if (i % 10 === 0 && i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 100));
         }
       }
 
@@ -1811,38 +1814,9 @@ const UnresolvableCard: React.FC<UnresolvableCardProps> = ({
   const bboxCenterLng = customerBoundingBox
     ? (customerBoundingBox.minLng + customerBoundingBox.maxLng) / 2 : undefined;
 
-  // On mount: auto-geocode if fuzzy match score ≥ 0.85.
-  // Uses bbox center as both the geographic reference for ranking AND
-  // as proximity bias for Mapbox so it finds the right neighborhood.
-  useEffect(() => {
-    if (!customerBoundingBox || !editStreet.trim()) return;
-    let cancelled = false;
-    (async () => {
-      const results = fuzzyMatchSegmentName(
-        editStreet.trim(), approvedRoutes, customerBoundingBox, 0.02, bboxCenterLat, bboxCenterLng
-      );
-      if (cancelled) return;
-      // Auto-fire on any high-confidence match (≥ 0.85), not just perfect 1.0
-      const best = results.find(r => r.score >= 0.85);
-      if (best) {
-        setRetrying(true);
-        setRetryError(null);
-        try {
-          await onRetryGeocode(customer.id, editHouse.trim(), best.segmentName, editCity.trim());
-          if (!cancelled) setEditStreet(best.segmentName);
-        } catch (e: any) {
-          // Auto-retry failed — show suggestions so user can intervene
-          if (!cancelled) {
-            setSuggestions(results);
-            setRetryError(e?.message || 'Geocode failed.');
-          }
-        } finally {
-          if (!cancelled) setRetrying(false);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []); // intentionally runs once on mount only
+  // No mount auto-retry here — all automatic resolution happens in the scan loop
+  // before the map loads. Customers reaching this sidebar are genuinely unresolvable
+  // and need manual address correction before retrying.
 
   // Recompute fuzzy suggestions whenever editStreet changes while expanded (debounced 300ms).
   useEffect(() => {
