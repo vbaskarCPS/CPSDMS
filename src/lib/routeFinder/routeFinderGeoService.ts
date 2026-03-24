@@ -274,6 +274,40 @@ export function normalizePhone(raw: any): string {
   return trimmed.length === 10 ? trimmed : '';
 }
 
+// ─── ROUTE CENTROID ──────────────────────────────────────────────────────────
+
+/**
+ * Compute the geographic centroid of all segment midpoints for a given route prefix.
+ * Used as proximity bias for Pass 2 geocoding — more accurate than customer bbox center
+ * because it's based on ground-truth route data, not potentially bad geocode results.
+ */
+export function getRouteCentroid(
+  routes: ApprovedRoute[],
+  prefix: string
+): { lat: number; lng: number } | null {
+  const upperPrefix = prefix.toUpperCase();
+  let sumLat = 0, sumLng = 0, count = 0;
+
+  for (const route of routes) {
+    const routePrefix = route.route_code.match(/^([a-zA-Z]+)/)?.[1]?.toUpperCase();
+    if (routePrefix !== upperPrefix) continue;
+    if (!route.segments) continue;
+
+    for (const segment of route.segments) {
+      if (!segment.coordinates || segment.coordinates.length === 0) continue;
+      // Use midpoint of each segment
+      const midIdx = Math.floor(segment.coordinates.length / 2);
+      const [lng, lat] = segment.coordinates[midIdx];
+      sumLat += lat;
+      sumLng += lng;
+      count++;
+    }
+  }
+
+  if (count === 0) return null;
+  return { lat: sumLat / count, lng: sumLng / count };
+}
+
 // ─── BOUNDING BOX ─────────────────────────────────────────────────────────────
 
 /**

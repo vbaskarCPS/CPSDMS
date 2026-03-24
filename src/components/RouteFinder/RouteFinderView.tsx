@@ -43,6 +43,7 @@ import {
   normalizePhone,
   getCustomerBoundingBox,
   fuzzyMatchSegmentName,
+  getRouteCentroid,
   SAME_ROUTE_TOLERANCE_DEG,
   ApprovedRoute,
   GeoCustomer,
@@ -666,11 +667,15 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       }
 
       // ── PASS 2: Retry bad geocodes with fuzzy correction + proximity bias ──────
-      // Build bbox from all successfully geocoded Pass 1 customers — this is our
-      // geographic reference for both fuzzy matching and Mapbox proximity bias.
+      // Use route centroid (average of all segment midpoints for this prefix) as
+      // proximity bias — more accurate than customer bbox which can be skewed by
+      // bad Pass 1 geocodes landing in wrong areas.
+      const routeCentroid = getRouteCentroid(approvedRoutes, selectedPrefix);
+      const biasCenterLat = routeCentroid?.lat;
+      const biasCenterLng = routeCentroid?.lng;
+
+      // Still build pass1Bbox for fuzzy segment matching reference
       const pass1Bbox = getCustomerBoundingBox(geocodedCustomers.filter(c => c.lat !== null));
-      const biasCenterLat = pass1Bbox ? (pass1Bbox.minLat + pass1Bbox.maxLat) / 2 : undefined;
-      const biasCenterLng = pass1Bbox ? (pass1Bbox.minLng + pass1Bbox.maxLng) / 2 : undefined;
 
       for (let i = 0; i < retryQueue.length; i++) {
         const customer = retryQueue[i];
