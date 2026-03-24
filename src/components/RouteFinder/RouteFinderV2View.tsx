@@ -29,6 +29,7 @@ import { routeFinderSheetsService } from '../../lib/routeFinder/routeFinderSheet
 import { rfScanSessionService, RFScanSession, RFQueueEntry } from '../../lib/routeFinder/rfScanSessionService';
 import { rfPrefixService, RFPrefixMapping } from '../../lib/routeFinder/rfPrefixService';
 import { rfSegmentDirectoryService } from '../../lib/routeFinder/rfSegmentDirectoryService';
+import { supabase } from '../../lib/supabase';
 import { scanGroup, runQueuePostFilter } from '../../lib/routeFinder/rfScanEngine';
 import {
   loadApprovedRoutes,
@@ -320,13 +321,23 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
 
     try {
       setScanProgress({ current: 0, total: 0, message: 'Loading route maps...', fixed: 0, queued: 0, group: '' });
-      const routes = await loadApprovedRoutes();
+      const [routes, areaPrefixData] = await Promise.all([
+        loadApprovedRoutes(),
+        supabase.from('area_prefixes').select('area_name, prefix, region').then(r => r.data || []),
+      ]);
       setApprovedRoutes(routes);
+      const areas = areaPrefixData as { area_name: string; prefix: string; region: string }[];
 
       // Load prefix mappings (paginated via service)
       setScanProgress(p => ({ ...p, message: 'Loading prefix mappings...' }));
       // We'll use West region for now — TODO: derive from routes
-      const mappings = await rfPrefixService.loadMappings('West');
+      // Load mappings for all regions
+      const [mappingsWest, mappingsCentral, mappingsEast] = await Promise.all([
+        rfPrefixService.loadMappings('West'),
+        rfPrefixService.loadMappings('Central'),
+        rfPrefixService.loadMappings('East'),
+      ]);
+      const mappings = [...mappingsWest, ...mappingsCentral, ...mappingsEast];
       setPrefixMappings(mappings);
 
       // Validate books
@@ -348,8 +359,13 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
       const totalCustomers = groups.reduce((s, g) => s + g.customers.length, 0);
 
       // Create session
+      // Derive region from area_prefixes for groups that have a mapped prefix
+      const regionCounts: Record<string, number> = { West: 0, Central: 0, East: 0 };
+      for (const m of mappings) { regionCounts[m.region] = (regionCounts[m.region] || 0) + 1; }
+      const knownRegion = (Object.entries(regionCounts).sort((a,b) => b[1]-a[1])[0]?.[0] || 'West') as 'West' | 'Central' | 'East';
+
       const newSession = await rfScanSessionService.createSession({
-        region:                'West',
+        region:                knownRegion,
         aerationSpreadsheetId: aerationId,
         sealingSpreadsheetId:  sealingId,
         groupsTotal:           groups.length,
@@ -488,9 +504,13 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
         mapPrefix = await discoverMapPrefix(group, routes);
         if (mapPrefix) {
           group.mapPrefix = mapPrefix;
-          // Save discovered mapping
-          const region = routes.find(r => r.route_code.startsWith(mapPrefix!))
-            ? 'West' : 'West'; // TODO: derive from route data
+          // Derive region from area_prefixes via approved routes
+          const matchingRoute = routes.find(r =>
+            r.route_code.match(/^([a-zA-Z]+)/)?.[1]?.toUpperCase() === mapPrefix!.toUpperCase()
+          );
+          // Look up region from area_prefixes via the discovered map prefix
+          const matchingArea = areas.find(a => a.prefix.toUpperCase() === mapPrefix.toUpperCase());
+          const region = matchingArea?.region || 'West';
           await rfPrefixService.saveMapping({
             region,
             callBookPrefix: group.callBookPrefix,
