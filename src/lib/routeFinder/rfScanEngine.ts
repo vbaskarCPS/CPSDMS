@@ -74,9 +74,15 @@ export async function scanGroup(params: ScanGroupParams): Promise<ScanGroupResul
   const flushWrites = async () => {
     for (const [spreadsheetId, updates] of pendingWrites) {
       if (updates.length === 0) continue;
-      await sheetsWriteWithRetry(() =>
-        routeFinderSheetsService.applyBatchStreetWrites(spreadsheetId, updates)
-      );
+      console.log(`RF: flushing ${updates.length} writes to ${spreadsheetId}`);
+      try {
+        await sheetsWriteWithRetry(() =>
+          routeFinderSheetsService.applyBatchStreetWrites(spreadsheetId, updates)
+        );
+        console.log(`RF: flush OK — ${updates.length} ranges written`);
+      } catch (e: any) {
+        console.error(`RF: flush FAILED for ${spreadsheetId}:`, e?.message || e);
+      }
     }
     pendingWrites.clear();
   };
@@ -124,6 +130,7 @@ export async function scanGroup(params: ScanGroupParams): Promise<ScanGroupResul
       bestScore >= STREET_NORMALIZE_THRESHOLD &&
       bestName.toLowerCase() !== customer.streetName.toLowerCase()
     ) {
+      console.log(`RF pre-pass: "${customer.streetName}" → "${bestName}" (score: ${bestScore.toFixed(3)})`);
       customer.streetName = bestName;
     }
   }
@@ -378,6 +385,8 @@ async function handleAssigned(
   const isGrey = customer.pinColor === 'grey';
   const isSamePrefix = suggestedPrefix === mapPrefix.toUpperCase();
 
+  console.log(`RF handleAssigned: ${customer.id} street="${customer.streetName}" suggested="${customer.suggestedRouteCode}" mapPrefix="${mapPrefix}" isGrey=${isGrey} isSamePrefix=${isSamePrefix} rows=${customer.rows.length}`);
+
   if (isGrey || isSamePrefix) {
     // Collect this customer's updates into the pending batch.
     // The scan loop flushes every WRITE_BATCH_SIZE customers.
@@ -509,9 +518,15 @@ export async function runQueuePostFilter(params: {
   const flushWrites = async () => {
     for (const [spreadsheetId, updates] of pendingWrites) {
       if (updates.length === 0) continue;
-      await sheetsWriteWithRetry(() =>
-        routeFinderSheetsService.applyBatchStreetWrites(spreadsheetId, updates)
-      );
+      console.log(`RF post-filter: flushing ${updates.length} writes to ${spreadsheetId}`);
+      try {
+        await sheetsWriteWithRetry(() =>
+          routeFinderSheetsService.applyBatchStreetWrites(spreadsheetId, updates)
+        );
+        console.log(`RF post-filter: flush OK`);
+      } catch (e: any) {
+        console.error(`RF post-filter: flush FAILED:`, e?.message || e);
+      }
     }
     pendingWrites.clear();
   };
