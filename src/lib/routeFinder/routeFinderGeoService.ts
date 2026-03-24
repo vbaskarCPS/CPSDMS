@@ -249,7 +249,7 @@ export async function geocodeAddress(
   }
 
   try {
-    const res = await fetch(url, { cache: 'no-store' });
+    const res = await fetch(url, { cache: 'reload' });
     if (!res.ok) return null;
 
     const data = await res.json();
