@@ -81,6 +81,38 @@ function columnIndexToLetter(colIndex: number): string {
   return s;
 }
 
+// ─── ROUTE ASSIGNMENT HELPER ─────────────────────────────────────────────────
+
+function assignCustomerToRoute(
+  customer: GeoCustomer,
+  lat: number,
+  lng: number,
+  match: { routeCode: string; segmentName: string; distanceDeg: number },
+  approvedRoutes: ApprovedRoute[],
+  greyStandardizeQueue: { customer: GeoCustomer; newStreetName: string }[]
+): void {
+  customer.suggestedRouteCode   = match.routeCode;
+  customer.suggestedSegmentName = match.segmentName;
+  customer.distanceDeg          = match.distanceDeg;
+
+  if (match.routeCode === customer.currentRouteCode) {
+    customer.pinColor = 'grey';
+  } else {
+    const assignedDist = distanceToRoute(lat, lng, customer.currentRouteCode, approvedRoutes);
+    customer.pinColor =
+      assignedDist - match.distanceDeg < SAME_ROUTE_TOLERANCE_DEG ? 'grey' : 'orange';
+  }
+
+  // Queue grey street name standardization if segment name differs
+  if (
+    customer.pinColor === 'grey' &&
+    match.segmentName &&
+    match.segmentName.trim().toLowerCase() !== customer.streetName.trim().toLowerCase()
+  ) {
+    greyStandardizeQueue.push({ customer, newStreetName: match.segmentName.trim() });
+  }
+}
+
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 
 const RouteFinderView: React.FC<Props> = ({ onBack }) => {
@@ -578,12 +610,17 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       const token = import.meta.env.VITE_MAPBOX_TOKEN as string;
       const geocodedCustomers: GeoCustomer[] = [];
 
-      // Build a running bounding box as we geocode — used for in-loop fuzzy retry
-      let runningBbox: { minLat: number; maxLat: number; minLng: number; maxLng: number } | null = null;
-
       // Collect grey customers needing street name standardization — written after scan
       const greyStandardizeQueue: { customer: GeoCustomer; newStreetName: string }[] = [];
 
+      // Customers where Pass 1 geocode landed too far from any route — queued for Pass 2
+      const retryQueue: GeoCustomer[] = [];
+
+      // Pass 1 distance threshold — ~800m. Beyond this the geocode is likely wrong.
+      // These customers get a second attempt in Pass 2 with proximity bias.
+      const PASS1_THRESHOLD_DEG = 0.008;
+
+      // ── PASS 1: Geocode without bias ─────────────────────────────────────────
       for (let i = 0; i < allCustomers.length; i++) {
         const customer = allCustomers[i];
 
@@ -606,45 +643,55 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
           customer.lat = geoResult.lat;
           customer.lng = geoResult.lng;
 
-          // Expand running bounding box
-          if (!runningBbox) {
-            runningBbox = { minLat: geoResult.lat, maxLat: geoResult.lat, minLng: geoResult.lng, maxLng: geoResult.lng };
-          } else {
-            runningBbox.minLat = Math.min(runningBbox.minLat, geoResult.lat);
-            runningBbox.maxLat = Math.max(runningBbox.maxLat, geoResult.lat);
-            runningBbox.minLng = Math.min(runningBbox.minLng, geoResult.lng);
-            runningBbox.maxLng = Math.max(runningBbox.maxLng, geoResult.lng);
-          }
-
           const match = findClosestRoute(geoResult.lat, geoResult.lng, approvedRoutes);
 
-          // Always assign to nearest route — no distance cutoff.
-          // Every geocoded customer gets placed on whichever route segment is closest.
-          if (match) {
-            customer.suggestedRouteCode   = match.routeCode;
-            customer.suggestedSegmentName = match.segmentName;
-            customer.distanceDeg          = match.distanceDeg;
-
-            if (match.routeCode === customer.currentRouteCode) {
-              customer.pinColor = 'grey';
-            } else {
-              const assignedDist = distanceToRoute(
-                geoResult.lat, geoResult.lng, customer.currentRouteCode, approvedRoutes
-              );
-              customer.pinColor =
-                assignedDist - match.distanceDeg < SAME_ROUTE_TOLERANCE_DEG ? 'grey' : 'orange';
-            }
-
-            // Queue grey street name standardization if segment name differs
-            if (
-              customer.pinColor === 'grey' &&
-              match.segmentName &&
-              match.segmentName.trim().toLowerCase() !== customer.streetName.trim().toLowerCase()
-            ) {
-              greyStandardizeQueue.push({ customer, newStreetName: match.segmentName.trim() });
-            }
+          if (match && match.distanceDeg <= PASS1_THRESHOLD_DEG) {
+            // Good geocode — assign to nearest route
+            assignCustomerToRoute(customer, geoResult.lat, geoResult.lng, match, approvedRoutes, greyStandardizeQueue);
+            geocodedCustomers.push(customer);
           } else {
-            // No routes loaded at all — shouldn't happen in practice
+            // Geocode landed too far — likely wrong location, queue for Pass 2
+            retryQueue.push(customer);
+          }
+        } else {
+          // Mapbox returned nothing — goes to sidebar
+          customer.geocodeFailed = true;
+          geocodedCustomers.push(customer);
+        }
+
+        if (i % 10 === 0 && i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+
+      // ── PASS 2: Retry bad geocodes with proximity bias ───────────────────────
+      // Build bbox from all successfully geocoded Pass 1 customers
+      const pass1Bbox = getCustomerBoundingBox(geocodedCustomers.filter(c => c.lat !== null));
+      const biasCenterLat = pass1Bbox ? (pass1Bbox.minLat + pass1Bbox.maxLat) / 2 : undefined;
+      const biasCenterLng = pass1Bbox ? (pass1Bbox.minLng + pass1Bbox.maxLng) / 2 : undefined;
+
+      for (let i = 0; i < retryQueue.length; i++) {
+        const customer = retryQueue[i];
+
+        setScanProgress({
+          current: i + 1,
+          total: retryQueue.length,
+          message: `Retrying ${i + 1} of ${retryQueue.length} with proximity bias...`,
+        });
+
+        const geoResult = await geocodeAddress(
+          customer.houseNum, customer.streetName, customer.city, token,
+          biasCenterLat, biasCenterLng
+        );
+
+        if (geoResult) {
+          customer.lat = geoResult.lat;
+          customer.lng = geoResult.lng;
+          const match = findClosestRoute(geoResult.lat, geoResult.lng, approvedRoutes);
+          if (match) {
+            // Assign to nearest route — no threshold on Pass 2, trust proximity-biased result
+            assignCustomerToRoute(customer, geoResult.lat, geoResult.lng, match, approvedRoutes, greyStandardizeQueue);
+          } else {
             customer.noRouteFound = true;
             customer.pinColor = 'red';
           }
