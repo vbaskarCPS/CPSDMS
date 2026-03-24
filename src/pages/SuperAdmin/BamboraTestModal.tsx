@@ -11,6 +11,9 @@ type TestStatus = 'loading' | 'ready' | 'processing' | 'approved' | 'declined' |
 
 const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
   const [amount, setAmount] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
   const [status, setStatus] = useState<TestStatus>('loading');
   const [message, setMessage] = useState('');
   const [transactionId, setTransactionId] = useState('');
@@ -21,27 +24,21 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
 
   const merchantId = import.meta.env.VITE_BAMBORA_MERCHANT_ID || '117586112';
 
-  // Wait for first render so the Bambora divs are in the DOM before we mount into them
   useEffect(() => {
     const timer = setTimeout(loadBamboraScript, 50);
     return () => clearTimeout(timer);
   }, []);
 
   const loadBamboraScript = () => {
-    // If already loaded on window, initialize immediately
     if ((window as any).customcheckout) {
       initializeCheckout();
       return;
     }
-
-    // If script tag already exists, wait for it
     const existingScript = document.getElementById('bambora-checkout-script');
     if (existingScript) {
       existingScript.addEventListener('load', initializeCheckout);
       return;
     }
-
-    // Otherwise inject the script
     const script = document.createElement('script');
     script.id = 'bambora-checkout-script';
     script.src = 'https://libs.na.bambora.com/customcheckout/1/customcheckout.js';
@@ -55,46 +52,27 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
 
   const initializeCheckout = () => {
     try {
-      // Shared style passed into Bambora's iframes so they match our dark theme
       const style = {
         base: {
           color: '#ffffff',
           fontSize: '15px',
           fontFamily: 'ui-monospace, monospace',
-          '::placeholder': {
-            color: '#6b7280',
-          },
+          '::placeholder': { color: '#6b7280' },
         },
-        complete: {
-          color: '#34d399',
-        },
-        error: {
-          color: '#f87171',
-        },
+        complete: { color: '#34d399' },
+        error: { color: '#f87171' },
       };
 
       const checkout = (window as any).customcheckout();
       checkoutRef.current = checkout;
 
-      // Mount card number field
-      const cardNumber = checkout.create('card-number', {
-        style,
-        placeholder: '0000 0000 0000 0000',
-      });
+      const cardNumber = checkout.create('card-number', { style, placeholder: '0000 0000 0000 0000' });
       cardNumber.mount('#bambora-card-number');
 
-      // Mount expiry field
-      const expiry = checkout.create('expiry', {
-        style,
-        placeholder: 'MM / YY',
-      });
+      const expiry = checkout.create('expiry', { style, placeholder: 'MM / YY' });
       expiry.mount('#bambora-expiry');
 
-      // Mount CVV field
-      const cvv = checkout.create('cvv', {
-        style,
-        placeholder: '123',
-      });
+      const cvv = checkout.create('cvv', { style, placeholder: '123' });
       cvv.mount('#bambora-cvv');
 
       setStatus('ready');
@@ -106,6 +84,10 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
   };
 
   const handleCharge = () => {
+    if (!firstName.trim() || !lastName.trim()) {
+      setMessage('Please enter the cardholder first and last name.');
+      return;
+    }
     if (!amount || parseFloat(amount) <= 0) {
       setMessage('Please enter a valid amount greater than $0.00');
       return;
@@ -114,7 +96,6 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
     setStatus('processing');
     setMessage('');
 
-    // Ask Bambora to tokenize whatever is in the hosted fields
     checkoutRef.current.createToken((result: any) => {
       if (result.error) {
         setStatus('declined');
@@ -131,7 +112,9 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
         body: {
           token,
           amount: parseFloat(amount).toFixed(2),
-          cardName: 'Test Charge',
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          email: email.trim() || null,
         }
       });
 
@@ -162,10 +145,14 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
     setLast4('');
     setCardType('');
     setAmount('');
+    setFirstName('');
+    setLastName('');
+    setEmail('');
     setStatus('loading');
-    // Small delay so the divs re-render before we mount into them
     setTimeout(initializeCheckout, 150);
   };
+
+  const isChargeReady = status === 'ready' && firstName.trim() && lastName.trim() && amount && parseFloat(amount) > 0;
 
   return (
     <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -177,10 +164,7 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
             <CreditCard className="text-purple-400" size={22} />
             Live Card Testing
           </h3>
-          <button
-            onClick={onClose}
-            className="p-1 hover:bg-gray-700 rounded-full text-gray-400 transition-colors"
-          >
+          <button onClick={onClose} className="p-1 hover:bg-gray-700 rounded-full text-gray-400 transition-colors">
             <X size={20} />
           </button>
         </div>
@@ -191,7 +175,7 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
           <p className="text-amber-300 text-xs">This is a LIVE charge against a real card.</p>
         </div>
 
-        {/* ── LOADING SPINNER — shown on top while fields initialize ── */}
+        {/* Loading spinner */}
         {status === 'loading' && (
           <div className="flex flex-col items-center justify-center py-12 gap-3">
             <Loader className="animate-spin text-purple-400" size={32} />
@@ -199,18 +183,61 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
           </div>
         )}
 
-        {/* ── CARD FORM — always in DOM so Bambora can mount, visibility controlled by CSS ── */}
+        {/* Card Form */}
         <div style={{ display: (status === 'ready' || status === 'processing') ? 'block' : 'none' }}>
+
+          {/* First + Last Name */}
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
+                First Name <span className="text-red-400">*</span>
+              </label>
+              <input
+                type="text"
+                placeholder="Jane"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                disabled={status === 'processing'}
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg py-3 px-4 text-white focus:ring-2 focus:ring-purple-500 outline-none disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
+                Last Name <span className="text-red-400">*</span>
+              </label>
+              <input
+                type="text"
+                placeholder="Doe"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                disabled={status === 'processing'}
+                className="w-full bg-gray-700 border border-gray-600 rounded-lg py-3 px-4 text-white focus:ring-2 focus:ring-purple-500 outline-none disabled:opacity-50"
+              />
+            </div>
+          </div>
+
+          {/* Email */}
+          <div className="mb-4">
+            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
+              Email Address <span className="text-gray-600">(optional)</span>
+            </label>
+            <input
+              type="email"
+              placeholder="jane@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              disabled={status === 'processing'}
+              className="w-full bg-gray-700 border border-gray-600 rounded-lg py-3 px-4 text-white focus:ring-2 focus:ring-purple-500 outline-none disabled:opacity-50"
+            />
+          </div>
+
           {/* Amount */}
           <div className="mb-4">
             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
-              Amount (CAD)
+              Amount (CAD) <span className="text-red-400">*</span>
             </label>
             <div className="relative">
-              <DollarSign
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"
-                size={16}
-              />
+              <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
               <input
                 type="number"
                 step="0.01"
@@ -224,64 +251,41 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
             </div>
           </div>
 
-          {/* Card Number — Bambora iframe mounts here */}
+          {/* Card Number */}
           <div className="mb-4">
-            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
-              Card Number
-            </label>
-            <div
-              id="bambora-card-number"
-              className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 min-h-[48px] flex items-center"
-            />
+            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Card Number</label>
+            <div id="bambora-card-number" className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 min-h-[48px] flex items-center" />
           </div>
 
           {/* Expiry + CVV */}
           <div className="grid grid-cols-2 gap-4 mb-6">
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
-                Expiry
-              </label>
-              <div
-                id="bambora-expiry"
-                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 min-h-[48px] flex items-center"
-              />
+              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Expiry</label>
+              <div id="bambora-expiry" className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 min-h-[48px] flex items-center" />
             </div>
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
-                CVV
-              </label>
-              <div
-                id="bambora-cvv"
-                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 min-h-[48px] flex items-center"
-              />
+              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">CVV</label>
+              <div id="bambora-cvv" className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 min-h-[48px] flex items-center" />
             </div>
           </div>
 
-          {/* Inline error message */}
-          {message && (
-            <p className="text-red-400 text-sm mb-4 text-center">{message}</p>
-          )}
+          {/* Inline error */}
+          {message && <p className="text-red-400 text-sm mb-4 text-center">{message}</p>}
 
           <button
             onClick={handleCharge}
-            disabled={status === 'processing' || !amount}
+            disabled={!isChargeReady}
             className="w-full py-4 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-bold text-lg shadow-lg flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {status === 'processing' ? (
-              <>
-                <Loader className="animate-spin" size={20} />
-                Processing...
-              </>
+              <><Loader className="animate-spin" size={20} />Processing...</>
             ) : (
-              <>
-                Process Charge
-                <CreditCard size={20} />
-              </>
+              <>Process Charge<CreditCard size={20} /></>
             )}
           </button>
         </div>
 
-        {/* ── APPROVED ── */}
+        {/* Approved */}
         {status === 'approved' && (
           <div className="text-center py-4">
             <CheckCircle className="mx-auto text-green-400 mb-3" size={52} />
@@ -290,10 +294,12 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
 
             <div className="bg-gray-900/60 rounded-lg p-4 text-left space-y-3 mb-6 border border-gray-700">
               <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Cardholder</span>
+                <span className="text-white font-mono">{firstName} {lastName}</span>
+              </div>
+              <div className="flex justify-between text-sm">
                 <span className="text-gray-500">Amount Charged</span>
-                <span className="text-white font-mono font-bold">
-                  ${parseFloat(amount).toFixed(2)} CAD
-                </span>
+                <span className="text-white font-mono font-bold">${parseFloat(amount).toFixed(2)} CAD</span>
               </div>
               {transactionId && (
                 <div className="flex justify-between text-sm">
@@ -310,23 +316,18 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
               {last4 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">Card</span>
-                  <span className="text-white font-mono">
-                    {cardType && `${cardType} `}•••• {last4}
-                  </span>
+                  <span className="text-white font-mono">{cardType && `${cardType} `}•••• {last4}</span>
                 </div>
               )}
             </div>
 
-            <button
-              onClick={handleReset}
-              className="w-full py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold transition-all"
-            >
+            <button onClick={handleReset} className="w-full py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold transition-all">
               Test Another
             </button>
           </div>
         )}
 
-        {/* ── DECLINED / ERROR ── */}
+        {/* Declined / Error */}
         {(status === 'declined' || status === 'error') && (
           <div className="text-center py-4">
             <XCircle className="mx-auto text-red-400 mb-3" size={52} />
@@ -334,11 +335,7 @@ const BamboraTestModal: React.FC<BamboraTestModalProps> = ({ onClose }) => {
               {status === 'declined' ? 'Declined ❌' : 'Error ⚠️'}
             </h4>
             <p className="text-gray-400 text-sm mb-6 px-2">{message}</p>
-
-            <button
-              onClick={handleReset}
-              className="w-full py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold transition-all"
-            >
+            <button onClick={handleReset} className="w-full py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-bold transition-all">
               Try Again
             </button>
           </div>
