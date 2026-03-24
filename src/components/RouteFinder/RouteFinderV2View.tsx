@@ -29,7 +29,7 @@ import { routeFinderSheetsService } from '../../lib/routeFinder/routeFinderSheet
 import { rfScanSessionService, RFScanSession, RFQueueEntry } from '../../lib/routeFinder/rfScanSessionService';
 import { rfPrefixService, RFPrefixMapping } from '../../lib/routeFinder/rfPrefixService';
 import { rfSegmentDirectoryService } from '../../lib/routeFinder/rfSegmentDirectoryService';
-import { scanGroup } from '../../lib/routeFinder/rfScanEngine';
+import { scanGroup, runQueuePostFilter } from '../../lib/routeFinder/rfScanEngine';
 import {
   loadApprovedRoutes,
   getAvailablePrefixes,
@@ -239,9 +239,45 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
   const handleResume = async () => {
     if (!existingSession) return;
     setSession(existingSession);
+    setPhase('scanning');
 
     const routes = await loadApprovedRoutes();
     setApprovedRoutes(routes);
+
+    // Run post-filter on all pending entries from the previous session
+    // so anything like "Sommervile" gets caught before review loads
+    const pendingPrefixes = await rfScanSessionService.getPendingPrefixes(existingSession.id);
+    let totalResolved = 0;
+
+    for (const prefix of pendingPrefixes) {
+      setScanProgress(p => ({
+        ...p,
+        message: `Post-filtering ${prefix}...`,
+        group: prefix,
+        current: pendingPrefixes.indexOf(prefix) + 1,
+        total: pendingPrefixes.length,
+      }));
+
+      const postResult = await runQueuePostFilter({
+        sessionId: existingSession.id,
+        approvedRoutes: routes,
+        mapPrefix: prefix,
+        onProgress: (current, total) => {
+          setScanProgress(p => ({
+            ...p,
+            message: `Post-filtering ${prefix}: ${current} of ${total}...`,
+          }));
+        },
+      });
+      totalResolved += postResult.resolved;
+    }
+
+    if (totalResolved > 0) {
+      await rfScanSessionService.updateSession(existingSession.id, {
+        customersFixed: (existingSession.customersFixed || 0) + totalResolved,
+        customersQueued: Math.max(0, (existingSession.customersQueued || 0) - totalResolved),
+      });
+    }
 
     const entries = await rfScanSessionService.loadPendingQueue(existingSession.id);
     setQueueEntries(entries);
@@ -249,13 +285,11 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
     const counts = await rfScanSessionService.getQueueCounts(existingSession.id);
     setQueueCounts(counts);
 
-    const prefixes = await rfScanSessionService.getPendingPrefixes(existingSession.id);
-    setPendingPrefixes(prefixes);
-    if (prefixes.length > 0) setActivePrefixFilter(prefixes[0]);
+    const prefixList = await rfScanSessionService.getPendingPrefixes(existingSession.id);
+    setPendingPrefixes(prefixList);
+    if (prefixList.length > 0) setActivePrefixFilter(prefixList[0]);
 
     if (existingSession.status === 'scanning') {
-      setPhase('scanning');
-      // Resume scan from where it left off
       continueScan(existingSession, routes);
     } else {
       setPhase('reviewing');
@@ -507,6 +541,32 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
       totalFixed  += result.fixed;
       totalQueued += result.queued;
 
+      // Run post-filter immediately after this group — while mapPrefix is known
+      // and before moving to the next group. Catches garbled street names that
+      // the scan queued but can be resolved from local segment data.
+      if (!result.paused) {
+        setScanProgress(p => ({
+          ...p,
+          message: `Post-filtering ${groupLabel}...`,
+          group: groupLabel,
+        }));
+
+        const postResult = await runQueuePostFilter({
+          sessionId: sess.id,
+          approvedRoutes: routes,
+          mapPrefix,
+          onProgress: (current, total) => {
+            setScanProgress(p => ({
+              ...p,
+              message: `Post-filtering ${groupLabel}: ${current} of ${total}...`,
+            }));
+          },
+        });
+
+        totalFixed  += postResult.resolved;
+        totalQueued -= postResult.resolved;
+      }
+
       await rfScanSessionService.updateSession(sess.id, {
         groupsCompleted:  g + 1,
         customersFixed:   totalFixed,
@@ -520,7 +580,6 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
       }
     }
 
-    // Scan complete — transition to review
     await rfScanSessionService.updateSession(sess.id, {
       status:          'reviewing',
       currentGroup:    null,
