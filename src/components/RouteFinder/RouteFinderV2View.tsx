@@ -80,6 +80,7 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
   const [sealingInput, setSealingInput]   = useState(() => localStorage.getItem('rfv2_sealing_id') || '');
   const [existingSession, setExistingSession] = useState<RFScanSession | null>(null);
   const [checkingSession, setCheckingSession] = useState(false);
+  const [scanMode, setScanMode] = useState<'full' | 'fuzzy'>('full');
 
   // Scan state
   const [session, setSession] = useState<RFScanSession | null>(null);
@@ -378,6 +379,109 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
     } catch (e: any) {
       console.error('RF V2 scan failed:', e);
       setError(e?.message || 'Scan failed.');
+      setPhase('setup');
+    }
+  };
+
+  // ─── FUZZY ONLY (no Mapbox) ──────────────────────────────────────────────
+  const handleFuzzyOnly = async () => {
+    setError(null);
+
+    const resolveId = (raw: string) => {
+      const m = raw.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      return m ? m[1] : raw.trim();
+    };
+
+    const aerationId = aerationInput.trim() ? resolveId(aerationInput) : null;
+    const sealingId  = sealingInput.trim()  ? resolveId(sealingInput)  : null;
+
+    if (!aerationId && !sealingId) {
+      setError('Please enter at least one spreadsheet ID or URL.');
+      return;
+    }
+
+    setPhase('scanning');
+    setScanProgress({ current: 0, total: 0, message: 'Loading route maps...', fixed: 0, queued: 0, group: '' });
+
+    try {
+      const routes = await loadApprovedRoutes();
+      setApprovedRoutes(routes);
+
+      // Find or create session
+      let sess = await rfScanSessionService.loadLatestSession(aerationId, sealingId);
+      if (!sess) {
+        // No existing session — create a minimal one just to hold the queue
+        sess = await rfScanSessionService.createSession({
+          region: 'West',
+          aerationSpreadsheetId: aerationId,
+          sealingSpreadsheetId: sealingId,
+          groupsTotal: 0,
+          customersTotal: 0,
+        });
+      }
+      setSession(sess);
+
+      // Get all pending prefixes
+      const prefixes = await rfScanSessionService.getPendingPrefixes(sess.id);
+
+      if (prefixes.length === 0) {
+        setError('No pending items in the queue to process. Run a full scan first.');
+        setPhase('setup');
+        return;
+      }
+
+      let totalResolved = 0;
+
+      for (let i = 0; i < prefixes.length; i++) {
+        const prefix = prefixes[i];
+        setScanProgress({
+          current: i + 1,
+          total: prefixes.length,
+          message: `Fuzzy matching ${prefix}...`,
+          fixed: totalResolved,
+          queued: 0,
+          group: prefix,
+        });
+
+        const postResult = await runQueuePostFilter({
+          sessionId: sess.id,
+          approvedRoutes: routes,
+          mapPrefix: prefix,
+          onProgress: (current, total) => {
+            setScanProgress(p => ({
+              ...p,
+              message: `Fuzzy matching ${prefix}: ${current} of ${total}...`,
+              fixed: totalResolved,
+            }));
+          },
+        });
+
+        totalResolved += postResult.resolved;
+      }
+
+      await rfScanSessionService.updateSession(sess.id, {
+        customersFixed: (sess.customersFixed || 0) + totalResolved,
+        customersQueued: Math.max(0, (sess.customersQueued || 0) - totalResolved),
+        status: 'reviewing',
+      });
+
+      showToast(`Fuzzy sweep complete — ${totalResolved} entries fixed.`);
+
+      // Load review queue
+      const entries  = await rfScanSessionService.loadPendingQueue(sess.id);
+      const counts   = await rfScanSessionService.getQueueCounts(sess.id);
+      const pendingPrefixes = await rfScanSessionService.getPendingPrefixes(sess.id);
+
+      setQueueEntries(entries);
+      setQueueCounts(counts);
+      setPendingPrefixes(pendingPrefixes);
+      if (pendingPrefixes.length > 0) setActivePrefixFilter(pendingPrefixes[0]);
+
+      setPhase(entries.length > 0 ? 'reviewing' : 'complete');
+
+    } catch (e: any) {
+      console.error('RF fuzzy sweep failed:', e);
+      setError(e?.message || 'Fuzzy sweep failed.');
       setPhase('setup');
     }
   };
@@ -919,13 +1023,25 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
           )}
 
           {(!existingSession || checkingSession) && (
-            <button
-              onClick={handleStartScan}
-              disabled={!aerationInput.trim() && !sealingInput.trim()}
-              className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              <Search size={18} /> Start Full Scan
-            </button>
+            <div className="space-y-3">
+              <button
+                onClick={handleStartScan}
+                disabled={!aerationInput.trim() && !sealingInput.trim()}
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                <Search size={18} /> Full Scan (Geocode + Fuzzy)
+              </button>
+              <button
+                onClick={handleFuzzyOnly}
+                disabled={!aerationInput.trim() && !sealingInput.trim()}
+                className="w-full bg-indigo-700 hover:bg-indigo-600 text-white py-3 rounded-lg font-bold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                <RefreshCw size={18} /> Fuzzy Fix Only (No Geocoding)
+              </button>
+              <p className="text-xs text-gray-600 text-center">
+                Fuzzy Fix sweeps the existing queue using street name matching — no Mapbox calls
+              </p>
+            </div>
           )}
         </div>
       </div>
