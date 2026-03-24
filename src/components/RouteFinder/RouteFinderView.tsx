@@ -72,6 +72,18 @@ const PIN_COLORS = {
   red:    '#EF4444',
 };
 
+// Convert 0-based column index to sheet letter (e.g. 0→A, 25→Z, 26→AA)
+function columnIndexToLetter(colIndex: number): string {
+  let s = '';
+  let c = colIndex + 1;
+  while (c > 0) {
+    c--;
+    s = String.fromCharCode(65 + (c % 26)) + s;
+    c = Math.floor(c / 26);
+  }
+  return s;
+}
+
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 
 const RouteFinderView: React.FC<Props> = ({ onBack }) => {
@@ -562,6 +574,9 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
       setSession(activeSession);
 
+      // Queue for grey street name standardization — flushed in one batch per spreadsheet after scan
+      const greyStreetWrites: { spreadsheetId: string; range: string; value: string }[] = [];
+
       // Geocode each unique customer
       const token = import.meta.env.VITE_MAPBOX_TOKEN as string;
       const geocodedCustomers: GeoCustomer[] = [];
@@ -597,48 +612,27 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
             if (match.routeCode === customer.currentRouteCode) {
               customer.pinColor = 'grey';
-
-              // Grey pin: route code is already correct — silently standardize street name
-              // if the segment name differs from what's in the sheet
-              if (
-                match.segmentName &&
-                match.segmentName.trim().toLowerCase() !== customer.streetName.trim().toLowerCase()
-              ) {
-                for (const row of customer.rows) {
-                  routeFinderSheetsService.applyFix(
-                    row.spreadsheetId,
-                    row.sheetName,
-                    row.sheetRowNumber,
-                    -1,                  // skip route code
-                    row.streetNameCol,
-                    '',
-                    match.segmentName.trim(),
-                  ).catch(e => console.warn('RF: grey street standardize failed:', e));
-                }
-              }
             } else {
               const assignedDist = distanceToRoute(
                 geoResult.lat, geoResult.lng, customer.currentRouteCode, approvedRoutes
               );
               customer.pinColor =
                 assignedDist - match.distanceDeg < SAME_ROUTE_TOLERANCE_DEG ? 'grey' : 'orange';
+            }
 
-              // Borderline grey (assigned route close enough) — standardize street name too
-              if (
-                customer.pinColor === 'grey' &&
-                match.segmentName &&
-                match.segmentName.trim().toLowerCase() !== customer.streetName.trim().toLowerCase()
-              ) {
-                for (const row of customer.rows) {
-                  routeFinderSheetsService.applyFix(
-                    row.spreadsheetId,
-                    row.sheetName,
-                    row.sheetRowNumber,
-                    -1,
-                    row.streetNameCol,
-                    '',
-                    match.segmentName.trim(),
-                  ).catch(e => console.warn('RF: grey street standardize failed:', e));
+            // Queue grey street name standardization — written in one batch after scan
+            if (
+              customer.pinColor === 'grey' &&
+              match.segmentName &&
+              match.segmentName.trim().toLowerCase() !== customer.streetName.trim().toLowerCase()
+            ) {
+              for (const row of customer.rows) {
+                if (row.streetNameCol >= 0) {
+                  greyStreetWrites.push({
+                    spreadsheetId: row.spreadsheetId,
+                    range: `'${row.sheetName}'!${columnIndexToLetter(row.streetNameCol)}${row.sheetRowNumber}`,
+                    value: match.segmentName.trim(),
+                  });
                 }
               }
             }
@@ -660,6 +654,29 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       const bbox = getCustomerBoundingBox(geocodedCustomers);
       setCustomerBoundingBox(bbox);
       setCustomers(geocodedCustomers);
+
+      // Flush grey street name writes — group by spreadsheetId, one batchUpdate per spreadsheet
+      if (greyStreetWrites.length > 0) {
+        const bySheet = new Map<string, { range: string; values: any[][] }[]>();
+        for (const w of greyStreetWrites) {
+          if (!bySheet.has(w.spreadsheetId)) bySheet.set(w.spreadsheetId, []);
+          bySheet.get(w.spreadsheetId)!.push({ range: w.range, values: [[w.value]] });
+        }
+        for (const [spreadsheetId, updates] of bySheet) {
+          // Chunk into groups of 50 to stay within payload limits
+          for (let i = 0; i < updates.length; i += 50) {
+            const chunk = updates.slice(i, i + 50);
+            try {
+              await (routeFinderSheetsService as any).applyBatchStreetWrites(spreadsheetId, chunk);
+            } catch (e) {
+              console.warn('RF: grey street batch write failed:', e);
+            }
+            if (i + 50 < updates.length) {
+              await new Promise(r => setTimeout(r, 1100)); // stay under 60 req/min
+            }
+          }
+        }
+      }
 
       const hasIssues = geocodedCustomers.some(c => c.pinColor === 'orange');
       setPhase(hasIssues ? 'working' : 'complete');
@@ -1819,7 +1836,7 @@ const UnresolvableCard: React.FC<UnresolvableCardProps> = ({
               </div>
             </div>
           )}
-          {suggestions.length === 0 && suggestionsLoaded && (
+          {suggestions.length === 0 && isExpanded && (
             <p className="text-xs text-gray-600 italic">No nearby street suggestions found.</p>
           )}
 

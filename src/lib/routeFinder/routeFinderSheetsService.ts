@@ -20,9 +20,8 @@ const EXCLUDED_TABS = new Set([
 ]);
 
 function columnIndexToLetter(colIndex: number): string {
-  // colIndex is 0-based
   let s = '';
-  let c = colIndex + 1; // convert to 1-based
+  let c = colIndex + 1;
   while (c > 0) {
     c--;
     s = String.fromCharCode(65 + (c % 26)) + s;
@@ -85,9 +84,7 @@ export const routeFinderSheetsService = {
         const ci = resolveSheetColumns(headers);
         const CI: SheetColumnIndices = { ...ci, headerRowIndex };
 
-        // Data rows only (exclude the header row itself)
         const rows = raw.slice(headerRowIndex + 1);
-
         sheets.push({ sheetName, CI, rows });
       } catch (err) {
         console.warn(`Route Finder: failed to read sheet "${sheetName}":`, err);
@@ -104,8 +101,8 @@ export const routeFinderSheetsService = {
     spreadsheetId: string,
     sheetName: string,
     sheetRowNumber: number,    // 1-based actual sheet row
-    routeCodeColIndex: number, // 0-based column index
-    streetNameColIndex: number, // 0-based column index
+    routeCodeColIndex: number, // 0-based column index, -1 to skip
+    streetNameColIndex: number, // 0-based column index, -1 to skip
     newRouteCode: string,
     newStreetName: string
   ): Promise<void> {
@@ -132,9 +129,20 @@ export const routeFinderSheetsService = {
     }
   },
 
+  // ── Batch write corrected street names (grey pin standardization) ─────────
+  // Accepts pre-built range/values pairs for a single spreadsheet and writes
+  // them all in one batchUpdate call instead of one call per row.
+  // Caller is responsible for chunking to stay within API limits.
+
+  async applyBatchStreetWrites(
+    spreadsheetId: string,
+    updates: { range: string; values: any[][] }[]
+  ): Promise<void> {
+    if (updates.length === 0) return;
+    await dialerSheetsService.sheetsBatchUpdate(spreadsheetId, updates);
+  },
+
   // ── Append a learned street to the Listings tab ───────────────────────────
-  // Finds the row for the given routeCode and appends the new street
-  // to its Street_List comma-separated column.
 
   async appendLearnedStreet(
     spreadsheetId: string,
@@ -144,7 +152,6 @@ export const routeFinderSheetsService = {
     const raw = await dialerSheetsService.sheetsGet(spreadsheetId, "'Listings'");
     if (!raw || raw.length < 2) return;
 
-    // Find header row
     let headerIdx = 0;
     for (let r = 0; r < Math.min(5, raw.length); r++) {
       if (raw[r].some((h: any) => String(h ?? '').trim().toUpperCase() === 'RT #')) {
@@ -166,13 +173,12 @@ export const routeFinderSheetsService = {
       if (rowRoute !== targetRoute) continue;
 
       const currentList = String(raw[r][streetListCol] ?? '').trim();
-      // Avoid duplicate entries
       const existing = currentList.split(',').map(s => s.trim()).filter(Boolean);
       if (existing.some(s => s.toLowerCase() === newStreet.toLowerCase())) return;
 
       const newList = currentList ? `${currentList}, ${newStreet}` : newStreet;
       const col     = columnIndexToLetter(streetListCol);
-      const sheetRow = r + 1; // 1-based
+      const sheetRow = r + 1;
 
       await dialerSheetsService.sheetsBatchUpdate(spreadsheetId, [{
         range: `'Listings'!${col}${sheetRow}`,
@@ -181,12 +187,8 @@ export const routeFinderSheetsService = {
       return;
     }
 
-    // Route not found in Listings — add a new row
-    // Infer Region/Route Name from adjacent data if possible; use blanks otherwise
     const streetListColLetter = columnIndexToLetter(streetListCol);
     const rtColLetter         = columnIndexToLetter(rtCol);
-
-    // Build a minimal row matching the listings columns
     const newRow = new Array(headers.length).fill('');
     newRow[rtCol]         = routeCode;
     newRow[streetListCol] = newStreet;
