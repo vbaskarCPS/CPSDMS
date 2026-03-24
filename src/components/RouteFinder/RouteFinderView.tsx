@@ -729,7 +729,7 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
             // within the route bounding box and use its midpoint directly.
             const routeBbox = pass1Bbox;
             const segmentMatch = routeBbox
-              ? findSegmentByName(customer.streetName, approvedRoutes, routeBbox)
+              ? findSegmentByName(customer.streetName, approvedRoutes, routeBbox, selectedPrefix)
               : null;
 
             if (segmentMatch) {
@@ -749,10 +749,10 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
           }
         } else {
           // Mapbox returned nothing at all
-          // Try Pass 3 directly — segment name lookup
+          // Try Pass 3 directly — segment name lookup within selected prefix only
           const routeBbox = pass1Bbox;
           const segmentMatch = routeBbox
-            ? findSegmentByName(customer.streetName, approvedRoutes, routeBbox)
+            ? findSegmentByName(customer.streetName, approvedRoutes, routeBbox, selectedPrefix)
             : null;
 
           if (segmentMatch) {

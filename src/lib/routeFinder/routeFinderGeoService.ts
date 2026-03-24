@@ -320,13 +320,20 @@ export function findSegmentByName(
   streetName: string,
   routes: ApprovedRoute[],
   boundingBox: { minLat: number; maxLat: number; minLng: number; maxLng: number },
-  paddingDeg: number = 0.05
+  prefix?: string,   // if provided, only search routes with this prefix
+  paddingDeg: number = 0.02
 ): { lat: number; lng: number; routeCode: string; segmentName: string } | null {
   const { minLat, maxLat, minLng, maxLng } = boundingBox;
+  const upperPrefix = prefix?.toUpperCase();
   let bestScore = 0;
   let bestResult: { lat: number; lng: number; routeCode: string; segmentName: string } | null = null;
 
   for (const route of routes) {
+    // Filter to selected prefix only — prevents cross-prefix false matches
+    if (upperPrefix) {
+      const routePrefix = route.route_code.match(/^([a-zA-Z]+)/)?.[1]?.toUpperCase();
+      if (routePrefix !== upperPrefix) continue;
+    }
     if (!route.segments) continue;
     for (const segment of route.segments) {
       if (!segment.name || !segment.coordinates || segment.coordinates.length === 0) continue;
