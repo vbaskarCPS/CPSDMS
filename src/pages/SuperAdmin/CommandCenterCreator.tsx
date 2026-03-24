@@ -35,6 +35,7 @@ import {
 import { supabase } from '../../lib/supabase';
 import { removeStorageItem } from '../../lib/localStorage';
 import BamboraTestModal from './BamboraTestModal';
+import RouteFinderV2View from '../../components/RouteFinder/RouteFinderV2View';
 
 const REGIONS: Region[] = ['West', 'Central', 'East'];
 
@@ -49,8 +50,8 @@ const CommandCenterCreator: React.FC = () => {
   const [editingCC, setEditingCC] = useState<CommandCenter | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // ── NEW: Bambora test modal state ──
   const [showBamboraTest, setShowBamboraTest] = useState(false);
+  const [showRouteFinder, setShowRouteFinder] = useState(false);
   
   const [formData, setFormData] = useState({
     displayName: '',
@@ -259,107 +260,90 @@ const CommandCenterCreator: React.FC = () => {
     setError(null);
 
     try {
-      // Delete in FK-safe order (children before parents)
-
-      // 1. job_fair_applicants
       const { error: applicantsError } = await supabase
         .from('job_fair_applicants')
         .delete()
         .neq('id', '00000000-0000-0000-0000-000000000000');
       if (applicantsError) throw new Error('Failed to delete job_fair_applicants: ' + applicantsError.message);
 
-      // 2. job_fair_sessions
       const { error: jfSessionsError } = await supabase
         .from('job_fair_sessions')
         .delete()
         .neq('id', '00000000-0000-0000-0000-000000000000');
       if (jfSessionsError) throw new Error('Failed to delete job_fair_sessions: ' + jfSessionsError.message);
 
-      // 3. bookings
       const { error: bookingsError } = await supabase
         .from('bookings')
         .delete()
         .neq('booking_id', '');
       if (bookingsError) throw new Error('Failed to delete bookings: ' + bookingsError.message);
 
-      // 4. logsheet_sessions
       const { error: logsheetError } = await supabase
         .from('logsheet_sessions')
         .delete()
         .neq('id', '');
       if (logsheetError) throw new Error('Failed to delete logsheet_sessions: ' + logsheetError.message);
 
-      // 5. routes
       const { error: routesError } = await supabase
         .from('routes')
         .delete()
         .neq('route_code', '');
       if (routesError) throw new Error('Failed to delete routes: ' + routesError.message);
 
-      // 6. transactions
       const { error: transactionsError } = await supabase
         .from('transactions')
         .delete()
         .neq('id', '');
       if (transactionsError) throw new Error('Failed to delete transactions: ' + transactionsError.message);
 
-      // 7. email_logs
       const { error: emailLogsError } = await supabase
         .from('email_logs')
         .delete()
         .neq('id', '00000000-0000-0000-0000-000000000000');
       if (emailLogsError) throw new Error('Failed to delete email_logs: ' + emailLogsError.message);
 
-      // 8. email_templates
       const { error: emailTemplatesError } = await supabase
         .from('email_templates')
         .delete()
         .neq('id', '00000000-0000-0000-0000-000000000000');
       if (emailTemplatesError) throw new Error('Failed to delete email_templates: ' + emailTemplatesError.message);
 
-      // 9. dialer_sessions (campaign child)
       const { error: dialerSessionsError } = await supabase
         .from('dialer_sessions')
         .delete()
         .neq('id', '00000000-0000-0000-0000-000000000000');
       if (dialerSessionsError) throw new Error('Failed to delete dialer_sessions: ' + dialerSessionsError.message);
 
-      // 10. campaign_managers (campaign child)
       const { error: campaignManagersError } = await supabase
         .from('campaign_managers')
         .delete()
         .neq('id', '00000000-0000-0000-0000-000000000000');
       if (campaignManagersError) throw new Error('Failed to delete campaign_managers: ' + campaignManagersError.message);
 
-      // 11. campaigns
       const { error: campaignsError } = await supabase
         .from('campaigns')
         .delete()
         .neq('id', '00000000-0000-0000-0000-000000000000');
       if (campaignsError) throw new Error('Failed to delete campaigns: ' + campaignsError.message);
 
-      // 12. users
       const { error: usersError } = await supabase
         .from('users')
         .delete()
         .neq('user_id', '');
       if (usersError) throw new Error('Failed to delete users: ' + usersError.message);
 
-      // 13. daily_sessions
       const { error: dailySessionsError } = await supabase
         .from('daily_sessions')
         .delete()
         .neq('date', '1900-01-01');
       if (dailySessionsError) throw new Error('Failed to delete daily_sessions: ' + dailySessionsError.message);
 
-      // 14. command_centers
       const { error: commandCentersError } = await supabase
         .from('command_centers')
         .delete()
         .neq('id', '00000000-0000-0000-0000-000000000000');
       if (commandCentersError) throw new Error('Failed to delete command_centers: ' + commandCentersError.message);
 
-      // Clear local storage
       commandCenterService.clearCurrentCommandCenter();
       commandCenterService.setSuperAdminMode(true);
       removeStorageItem('current_user');
@@ -529,7 +513,6 @@ const CommandCenterCreator: React.FC = () => {
           </div>
         )}
 
-        {/* ── Button row — Live Card Testing added here ── */}
         <div className="mb-6 flex items-center gap-4 flex-wrap">
           <button
             onClick={openCreateModal}
@@ -556,6 +539,14 @@ const CommandCenterCreator: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setShowRouteFinder(true)}
+            className="bg-indigo-700 hover:bg-indigo-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
+          >
+            <MapIcon size={20} />
+            Route Finder
+          </button>
+
+          <button
             onClick={() => navigate('/super-admin/map-viewer')}
             className="bg-teal-700 hover:bg-teal-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
           >
@@ -563,7 +554,6 @@ const CommandCenterCreator: React.FC = () => {
             Map Viewer
           </button>
 
-          {/* ── NEW: Live Card Testing button ── */}
           <button
             onClick={() => setShowBamboraTest(true)}
             className="bg-amber-600 hover:bg-amber-500 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
@@ -615,7 +605,6 @@ const CommandCenterCreator: React.FC = () => {
         </div>
       </div>
 
-      {/* Existing create/edit modal — unchanged */}
       {showModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
           <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -811,7 +800,6 @@ const CommandCenterCreator: React.FC = () => {
         </div>
       )}
 
-      {/* Existing wipe modal — unchanged */}
       {showWipeModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-gray-900 rounded-xl border border-red-900 w-full max-w-md">
@@ -871,15 +859,19 @@ const CommandCenterCreator: React.FC = () => {
                 {wiping ? <Loader className="animate-spin" size={16} /> : <Trash2 size={16} />}
                 Wipe Everything
               </button>
-     
             </div>
           </div>
         </div>
       )}
 
-      {/* ── NEW: Bambora test modal ── */}
       {showBamboraTest && (
         <BamboraTestModal onClose={() => setShowBamboraTest(false)} />
+      )}
+
+      {showRouteFinder && (
+        <div className="fixed inset-0 z-50">
+          <RouteFinderV2View onBack={() => setShowRouteFinder(false)} />
+        </div>
       )}
     </div>
   );
