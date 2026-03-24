@@ -75,6 +75,7 @@ export interface SheetColumnIndices {
   date: number;
   year: number;
   phone: number;
+  areaCode: number;   // separate area code column (sealing sheets)
   headerRowIndex: number;
 }
 
@@ -107,7 +108,7 @@ export interface EngineResult {
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
-const SAME_ROUTE_FUZZY_CUTOFF = 0.52;   // Lower to catch "Penfair" → "Playfair Ct"
+const SAME_ROUTE_FUZZY_CUTOFF = 0.52;
 const CROSS_ROUTE_FUZZY_CUTOFF = 0.62;
 const CLUSTER_MIN_ROWS = 3;
 const CLUSTER_MIN_PCT = 0.60;
@@ -126,7 +127,7 @@ const SUFFIX_PATTERN = new RegExp(
 
 export function normalizeStreetForMatch(s: string): string {
   let t = String(s ?? '').toLowerCase().trim();
-  t = t.replace(/(\d+)(st|nd|rd|th)\b/g, '$1');   // strip ordinals: 1st→1
+  t = t.replace(/(\d+)(st|nd|rd|th)\b/g, '$1');
   t = t.replace(SUFFIX_PATTERN, '');
   t = t.replace(/\bnorth\b/g, 'n').replace(/\bsouth\b/g, 's')
        .replace(/\beast\b/g, 'e').replace(/\bwest\b/g, 'w');
@@ -174,7 +175,6 @@ function getRouteNumericSuffix(routeCode: string): number {
 
 export function detectORSuffix(routeCode: string, routeExistsInListings: boolean): boolean {
   const upper = routeCode.toUpperCase();
-  // Must end in OR, be longer than 3 chars, and not already be a valid listings route
   return upper.endsWith('OR') && upper.length > 3 && !routeExistsInListings;
 }
 
@@ -183,7 +183,6 @@ export function isZeroRoute(routeCode: string): boolean {
 }
 
 export function suggestZeroRoute(routeCode: string): string {
-  // Strip trailing OR or numbers to get the prefix, append 00
   const prefix = getRoutePrefixOnly(routeCode);
   return prefix + '00';
 }
@@ -191,7 +190,6 @@ export function suggestZeroRoute(routeCode: string): string {
 function routeProximity(assigned: string, candidate: string): number {
   const assignedPrefix = getRoutePrefixOnly(assigned);
   const candidatePrefix = getRoutePrefixOnly(candidate);
-  // Only compare proximity within the same prefix family
   if (assignedPrefix !== candidatePrefix) return 999;
   return Math.abs(getRouteNumericSuffix(assigned) - getRouteNumericSuffix(candidate));
 }
@@ -212,8 +210,8 @@ export function resolveSheetColumns(headers: any[]): Omit<SheetColumnIndices, 'h
   return {
     bookingId:      find('BOOKING ID', 'BOOKING_ID', 'BOOKINGID'),
     routeCode:      find('ROUTE CODE', 'ROUTE_CODE', 'ROUTECODE', 'RC'),
-    firstName:      find('FIRST NAME', 'FIRST_NAME', 'FIRSTNAME'),
-    lastName:       find('LAST NAME', 'LAST_NAME', 'LASTNAME'),
+    firstName:      find('FIRST NAME', 'FIRST_NAME', 'FIRSTNAME', 'FIRST'),
+    lastName:       find('LAST NAME', 'LAST_NAME', 'LASTNAME', 'LAST'),
     houseNum:       find('HOUSE #', 'HOUSE#', 'HOUSE_NUM', 'HOUSE NUM', 'PREFIX', 'HOUSE'),
     streetName:     find('STREET NAME', 'STREET_NAME', 'STREETNAME', 'STREET'),
     city:           find('CITY'),
@@ -221,6 +219,7 @@ export function resolveSheetColumns(headers: any[]): Omit<SheetColumnIndices, 'h
     date:           find('DATE'),
     year:           find('YEAR'),
     phone:          find('PHONE'),
+    areaCode:       find('AREA', 'AC', 'AREA CODE', 'AREA_CODE'),
   };
 }
 
@@ -245,7 +244,6 @@ export function parseListingsTab(rawRows: any[][]): ListingsData {
     return { routeMap, routeMapOriginal, cityRouteMap, routeToCity };
   }
 
-  // Find header row
   let headerIdx = 0;
   for (let r = 0; r < Math.min(5, rawRows.length); r++) {
     if (rawRows[r].some((h: any) => String(h ?? '').trim().toUpperCase() === 'RT #')) {
@@ -277,7 +275,6 @@ export function parseListingsTab(rawRows: any[][]): ListingsData {
     const streets           = streetListRaw.split(',').map(s => s.trim()).filter(Boolean);
     const normalizedStreets = streets.map(normalizeStreetForMatch);
 
-    // Merge if route already has entries (same route can appear in multiple listing rows)
     const existing    = routeMap.get(routeCode) || [];
     const existingOrig = routeMapOriginal.get(routeCode) || [];
     routeMap.set(routeCode, [...existing, ...normalizedStreets]);
@@ -314,7 +311,7 @@ function inferCitiesFromSheetName(sheetName: string): string[] {
   for (const hint of SHEET_CITY_HINTS) {
     if (lower.includes(hint.key) || hint.key.includes(lower)) return hint.cities;
   }
-  return [lower]; // fallback: try the sheet name itself as a city
+  return [lower];
 }
 
 // ─── PHONE NORMALIZATION ──────────────────────────────────────────────────────
@@ -327,7 +324,7 @@ function normalizePhone(raw: any): string {
   return t.length === 10 ? t : '';
 }
 
-// ─── PHONE GROUP BUILDING (Union-Find, phone only) ────────────────────────────
+// ─── PHONE GROUP BUILDING ─────────────────────────────────────────────────────
 
 function buildPhoneGroups(rows: any[][], CI: SheetColumnIndices): Map<string, number[]> {
   const n = rows.length;
@@ -353,7 +350,6 @@ function buildPhoneGroups(rows: any[][], CI: SheetColumnIndices): Map<string, nu
     }
   }
 
-  // Map each phone → all member indices in its group
   const phoneToGroup = new Map<string, number[]>();
   const rootToMembers = new Map<number, number[]>();
 
@@ -403,7 +399,6 @@ function buildContractorClusters(
 
     if (!contractor || !date || !routeCode) continue;
 
-    // Only use rows with valid (listings-confirmed) routes as cluster anchors
     const effectiveRoute = detectORSuffix(routeCode, listingsData.routeMap.has(routeCode))
       ? routeCode.toUpperCase().slice(0, -2)
       : routeCode;
@@ -412,7 +407,6 @@ function buildContractorClusters(
 
     const key = `${contractor.toLowerCase()}|${date}`;
     if (!clusters.has(key)) {
-      // Format display date: take first 10 chars of ISO or leave as-is
       const displayDate = date.length > 10 ? date.slice(0, 10) : date;
       clusters.set(key, {
         contractor, date, displayDate,
@@ -427,7 +421,6 @@ function buildContractorClusters(
     entry.routeVotes.set(routeCode, (entry.routeVotes.get(routeCode) || 0) + 1);
   }
 
-  // Compute dominant route
   for (const entry of clusters.values()) {
     let max = 0, dominant = '';
     for (const [route, count] of entry.routeVotes) {
@@ -522,29 +515,27 @@ function matchRow(
   learnedStreets: LearnedStreets,
   learnedStreetsOriginal: LearnedStreetsOriginal
 ): RouteFinderRow | null {
-  const bookingId     = CI.bookingId >= 0     ? String(row[CI.bookingId] ?? '').trim()     : `row_${dataIndex}`;
-  const rawRouteCode  = CI.routeCode >= 0     ? String(row[CI.routeCode] ?? '').trim()     : '';
-  const streetName    = CI.streetName >= 0    ? String(row[CI.streetName] ?? '').trim()    : '';
-  const city          = CI.city >= 0          ? String(row[CI.city] ?? '').trim()          : '';
-  const houseNum      = CI.houseNum >= 0      ? String(row[CI.houseNum] ?? '').trim()      : '';
+  const bookingId      = CI.bookingId >= 0     ? String(row[CI.bookingId] ?? '').trim()      : `row_${dataIndex}`;
+  const rawRouteCode   = CI.routeCode >= 0     ? String(row[CI.routeCode] ?? '').trim()      : '';
+  const streetName     = CI.streetName >= 0    ? String(row[CI.streetName] ?? '').trim()     : '';
+  const city           = CI.city >= 0          ? String(row[CI.city] ?? '').trim()           : '';
+  const houseNum       = CI.houseNum >= 0      ? String(row[CI.houseNum] ?? '').trim()       : '';
   const contractorName = CI.contractorName >= 0 ? String(row[CI.contractorName] ?? '').trim() : '';
-  const serviceDate   = CI.date >= 0          ? String(row[CI.date] ?? '').trim()          : '';
-  const year          = CI.year >= 0          ? (parseInt(String(row[CI.year] ?? ''), 10) || 0) : 0;
-  const phone         = CI.phone >= 0         ? normalizePhone(row[CI.phone])              : '';
+  const serviceDate    = CI.date >= 0          ? String(row[CI.date] ?? '').trim()           : '';
+  const year           = CI.year >= 0          ? (parseInt(String(row[CI.year] ?? ''), 10) || 0) : 0;
+  const phone          = CI.phone >= 0         ? normalizePhone(row[CI.phone])               : '';
 
   if (!bookingId) return null;
   if (!rawRouteCode && !streetName) return null;
 
-  const routeCode       = rawRouteCode.toUpperCase();
+  const routeCode        = rawRouteCode.toUpperCase();
   const normalizedStreet = normalizeStreetForMatch(streetName);
-  const sheetRowNumber  = dataIndex + CI.headerRowIndex + 2; // 1-based sheet row
-  const id              = `${sheetName}:${bookingId}`;
+  const sheetRowNumber   = dataIndex + CI.headerRowIndex + 2;
+  const id               = `${sheetName}:${bookingId}`;
 
   const routeInListings = listingsData.routeMap.has(routeCode);
   const isOR   = detectORSuffix(routeCode, routeInListings);
   const isZero = isZeroRoute(routeCode);
-
-  // Effective route for matching (strip OR suffix if present)
   const effectiveRoute = isOR ? routeCode.slice(0, -2) : routeCode;
 
   // ── Signal 1: Phone group match ──────────────────────────────────────────────
@@ -553,16 +544,16 @@ function matchRow(
     const members = phoneGroups.get(phone)!;
     for (const memberIdx of members) {
       if (memberIdx === dataIndex) continue;
-      const mRow       = allRows[memberIdx];
-      const mRoute     = CI.routeCode >= 0 ? String(mRow[CI.routeCode] ?? '').trim().toUpperCase() : '';
-      const mStreet    = CI.streetName >= 0 ? String(mRow[CI.streetName] ?? '').trim() : '';
+      const mRow    = allRows[memberIdx];
+      const mRoute  = CI.routeCode >= 0 ? String(mRow[CI.routeCode] ?? '').trim().toUpperCase() : '';
+      const mStreet = CI.streetName >= 0 ? String(mRow[CI.streetName] ?? '').trim() : '';
       if (!mRoute || !mStreet) continue;
 
-      const mNorm     = normalizeStreetForMatch(mStreet);
+      const mNorm      = normalizeStreetForMatch(mStreet);
       const mEffective = detectORSuffix(mRoute, listingsData.routeMap.has(mRoute))
         ? mRoute.slice(0, -2) : mRoute;
 
-      const memberClean = streetExactMatch(mNorm, mEffective, listingsData, learnedStreets);
+      const memberClean   = streetExactMatch(mNorm, mEffective, listingsData, learnedStreets);
       const memberDiffers = mRoute !== routeCode || mStreet !== streetName;
 
       if (memberClean && memberDiffers) {
@@ -591,11 +582,10 @@ function matchRow(
   // ── Signal 2: Exact match on assigned route (green — skip) ───────────────────
   if (!isOR && routeInListings) {
     if (streetExactMatch(normalizedStreet, routeCode, listingsData, learnedStreets)) {
-      return null; // Green — already correct
+      return null;
     }
   }
 
-  // For zero routes: sanity check against base prefix routes
   if (isZero) {
     const basePrefix = getRoutePrefixOnly(routeCode);
     const baseRoutes = [...listingsData.routeMap.keys()].filter(
@@ -603,15 +593,13 @@ function matchRow(
     );
     for (const br of baseRoutes) {
       if (streetExactMatch(normalizedStreet, br, listingsData, learnedStreets)) {
-        return null; // Street is known in this area — sanity passes, skip
+        return null;
       }
     }
   }
 
-  // Get city-scoped routes for cross-route search
   const scopedRoutes = getCityScopedRoutes(city, sheetName, listingsData);
 
-  // Build cluster signal for this row
   let clusterSignal = '';
   let clusterDominantRoute = '';
   const clusterKey = `${contractorName.toLowerCase()}|${serviceDate}`;
@@ -680,7 +668,6 @@ function matchRow(
     }
   }
 
-  // OR-suffix with no other candidates → suggest PREFIX00 rename
   if (isOR && candidates.length === 0) {
     candidates.push({
       routeCode: suggestZeroRoute(routeCode), streetName: streetName,
@@ -689,7 +676,6 @@ function matchRow(
   }
 
   if (candidates.length === 0) {
-    // Cluster can upgrade RED → YELLOW
     if (cluster && cluster.totalRows >= CLUSTER_MIN_ROWS && cluster.dominantPct >= CLUSTER_MIN_PCT) {
       candidates.push({
         routeCode: cluster.dominantRoute, streetName: streetName,
@@ -699,7 +685,6 @@ function matchRow(
       return mkYellow(id, sheetName, bookingId, dataIndex, sheetRowNumber, rawRouteCode, streetName, city, houseNum, contractorName, serviceDate, year, phone, candidates, isOR, clusterSignal, phoneGroupSignal);
     }
 
-    // RED
     return {
       id, sheetName, bookingId, dataIndex, sheetRowNumber,
       currentRouteCode: rawRouteCode, currentStreetName: streetName,
@@ -714,7 +699,6 @@ function matchRow(
     };
   }
 
-  // Sort: cluster primary first → exact before fuzzy → proximity tie-break
   candidates.sort((a, b) => {
     if (a.isClusterPrimary !== b.isClusterPrimary) return a.isClusterPrimary ? -1 : 1;
     const typeOrder = { exact: 0, fuzzy: 1, cluster: 2, learned: 3 };
@@ -784,7 +768,7 @@ export function runMatchEngine(input: EngineInput): EngineResult {
   return { queue, totalScanned, greenCount };
 }
 
-// ─── ASYNC PER-SHEET ENGINE (yields every 50 rows to keep browser alive) ─────
+// ─── ASYNC PER-SHEET ENGINE ───────────────────────────────────────────────────
 
 export async function runMatchEngineForSheet(
   params: {
@@ -805,7 +789,6 @@ export async function runMatchEngineForSheet(
   let scanned = 0;
 
   for (let i = 0; i < rows.length; i++) {
-    // Yield to browser every 50 rows so the UI stays alive
     if (i % 50 === 0) {
       await new Promise<void>(resolve => setTimeout(resolve, 0));
       onRowProgress?.(rows.length > 0 ? i / rows.length : 1);
@@ -847,13 +830,11 @@ export function cascadeCheck(
     const rowNorm  = normalizeStreetForMatch(row.currentStreetName);
     const rowRoute = row.currentRouteCode.toUpperCase();
 
-    // Same street + same route as what was just fixed
     if (rowNorm === normalizedFixed && rowRoute === fixedRC) {
       resolvedIds.push(row.id);
       continue;
     }
 
-    // Street now matches via learned streets
     if (streetExactMatch(rowNorm, rowRoute, listingsData, learnedStreets)) {
       resolvedIds.push(row.id);
     }

@@ -483,7 +483,11 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
             const routePrefix = routeCode.match(/^([a-zA-Z]+)/)?.[1]?.toUpperCase();
             if (routePrefix !== selectedPrefix) continue;
 
-            const phone      = CI.phone >= 0      ? normalizePhone(row[CI.phone])                   : '';
+            // Combine area code + phone for sealing sheets (separate columns)
+            const rawPhone   = CI.phone >= 0    ? String(row[CI.phone] ?? '').trim()  : '';
+            const rawArea    = CI.areaCode >= 0 ? String(row[CI.areaCode] ?? '').trim() : '';
+            const combinedDigits = (rawArea.replace(/\D/g, '') + rawPhone.replace(/\D/g, '')).slice(-10);
+            const phone      = combinedDigits.length === 10 ? combinedDigits : normalizePhone(rawPhone);
             const houseNum   = CI.houseNum >= 0   ? String(row[CI.houseNum] ?? '').trim()           : '';
             const streetName = CI.streetName >= 0 ? String(row[CI.streetName] ?? '').trim()         : '';
             const city       = CI.city >= 0       ? String(row[CI.city] ?? '').trim()               : '';
@@ -1648,16 +1652,33 @@ const UnresolvableCard: React.FC<UnresolvableCardProps> = ({
   const [suggestions, setSuggestions] = useState<SegmentSuggestion[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
-  // Recompute fuzzy suggestions whenever editStreet changes (debounced 300ms)
+  // Recompute fuzzy suggestions whenever editStreet changes (debounced 300ms).
+  // If a 100% match is found, auto-geocode it immediately without user action.
   useEffect(() => {
     if (!isExpanded || !customerBoundingBox || !editStreet.trim()) {
       setSuggestions([]);
       return;
     }
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
+    debounceRef.current = setTimeout(async () => {
       const results = fuzzyMatchSegmentName(editStreet.trim(), approvedRoutes, customerBoundingBox);
-      setSuggestions(results);
+      const perfect = results.find(r => r.score >= 1.0);
+      if (perfect) {
+        // Auto-apply — no need to show the suggestion list
+        setRetrying(true);
+        setRetryError(null);
+        try {
+          await onRetryGeocode(customer.id, editHouse.trim(), perfect.segmentName, editCity.trim());
+          setEditStreet(perfect.segmentName);
+        } catch (e: any) {
+          setRetryError(e?.message || 'Geocode failed.');
+          setSuggestions(results);
+        } finally {
+          setRetrying(false);
+        }
+      } else {
+        setSuggestions(results);
+      }
     }, 300);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [editStreet, isExpanded, approvedRoutes, customerBoundingBox]);
