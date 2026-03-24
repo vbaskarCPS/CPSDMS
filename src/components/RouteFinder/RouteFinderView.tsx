@@ -42,6 +42,7 @@ import {
   geocodeAddress,
   normalizePhone,
   getCustomerBoundingBox,
+  fuzzyMatchSegmentName,
   SAME_ROUTE_TOLERANCE_DEG,
   ApprovedRoute,
   GeoCustomer,
@@ -664,8 +665,9 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
         }
       }
 
-      // ── PASS 2: Retry bad geocodes with proximity bias ───────────────────────
-      // Build bbox from all successfully geocoded Pass 1 customers
+      // ── PASS 2: Retry bad geocodes with fuzzy correction + proximity bias ──────
+      // Build bbox from all successfully geocoded Pass 1 customers — this is our
+      // geographic reference for both fuzzy matching and Mapbox proximity bias.
       const pass1Bbox = getCustomerBoundingBox(geocodedCustomers.filter(c => c.lat !== null));
       const biasCenterLat = pass1Bbox ? (pass1Bbox.minLat + pass1Bbox.maxLat) / 2 : undefined;
       const biasCenterLng = pass1Bbox ? (pass1Bbox.minLng + pass1Bbox.maxLng) / 2 : undefined;
@@ -673,23 +675,41 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
       for (let i = 0; i < retryQueue.length; i++) {
         const customer = retryQueue[i];
 
+        // Try fuzzy street name correction first — use bbox center as reference
+        // so we match against streets in the right area, not wherever Pass 1 placed the pin
+        let streetToGeocode = customer.streetName;
+        if (pass1Bbox && biasCenterLat !== undefined && biasCenterLng !== undefined) {
+          const suggestions = fuzzyMatchSegmentName(
+            customer.streetName, approvedRoutes, pass1Bbox, 0.02, biasCenterLat, biasCenterLng
+          );
+          const best = suggestions[0];
+          if (best && best.score >= 0.85 && best.segmentName.toLowerCase() !== customer.streetName.toLowerCase()) {
+            streetToGeocode = best.segmentName;
+          }
+        }
+
         setScanProgress({
           current: i + 1,
           total: retryQueue.length,
-          message: `Retrying ${i + 1} of ${retryQueue.length} with proximity bias...`,
+          message: `Retrying ${i + 1} of ${retryQueue.length}${streetToGeocode !== customer.streetName ? ` → "${streetToGeocode}"` : ' with proximity bias'}...`,
         });
 
         const geoResult = await geocodeAddress(
-          customer.houseNum, customer.streetName, customer.city, token,
+          customer.houseNum, streetToGeocode, customer.city, token,
           biasCenterLat, biasCenterLng
         );
+
+        // Small pause to avoid Mapbox rate limit
+        await new Promise(r => setTimeout(r, 150));
 
         if (geoResult) {
           customer.lat = geoResult.lat;
           customer.lng = geoResult.lng;
+          if (streetToGeocode !== customer.streetName) {
+            customer.streetName = streetToGeocode; // update display to corrected name
+          }
           const match = findClosestRoute(geoResult.lat, geoResult.lng, approvedRoutes);
           if (match) {
-            // Assign to nearest route — no threshold on Pass 2, trust proximity-biased result
             assignCustomerToRoute(customer, geoResult.lat, geoResult.lng, match, approvedRoutes, greyStandardizeQueue);
           } else {
             customer.noRouteFound = true;
