@@ -225,13 +225,15 @@ export async function geocodeAddress(
   houseNum: string,
   streetName: string,
   city: string,
-  mapboxToken: string
+  mapboxToken: string,
+  proximityLat?: number,  // optional bias point — pulls results toward this location
+  proximityLng?: number
 ): Promise<{ lat: number; lng: number } | null> {
   const parts = [houseNum, streetName, city, 'Ontario', 'Canada'].filter(s => s.trim());
   const query = parts.join(' ');
   const encoded = encodeURIComponent(query);
 
-  const url = [
+  let url = [
     'https://api.mapbox.com/geocoding/v5/mapbox.places/',
     encoded,
     '.json?access_token=', mapboxToken,
@@ -239,6 +241,12 @@ export async function geocodeAddress(
     '&country=ca',
     '&types=address',
   ].join('');
+
+  // Proximity bias: Mapbox will prefer results near this coordinate.
+  // Fixes bad geocodes for local streets that exist in multiple cities.
+  if (proximityLat !== undefined && proximityLng !== undefined) {
+    url += `&proximity=${proximityLng},${proximityLat}`;
+  }
 
   try {
     const res = await fetch(url);
