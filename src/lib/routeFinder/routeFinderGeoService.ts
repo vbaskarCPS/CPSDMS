@@ -73,6 +73,7 @@ export interface SegmentSuggestion {
   segmentName: string;
   routeCode: string;
   score: number;
+  distanceDeg: number; // distance from reference point to segment midpoint
 }
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
@@ -353,9 +354,16 @@ export function fuzzyMatchSegmentName(
   streetName: string,
   routes: ApprovedRoute[],
   boundingBox: { minLat: number; maxLat: number; minLng: number; maxLng: number },
-  paddingDeg: number = 0.02 // ~2 km padding around the geocoded customer cluster
+  paddingDeg: number = 0.02, // ~2 km padding around the geocoded customer cluster
+  refLat?: number,           // reference latitude for geographic tiebreaking
+  refLng?: number            // reference longitude for geographic tiebreaking
 ): SegmentSuggestion[] {
   const { minLat, maxLat, minLng, maxLng } = boundingBox;
+
+  // Reference point: use provided coords, or fall back to bounding box center
+  const rLat = refLat ?? (minLat + maxLat) / 2;
+  const rLng = refLng ?? (minLng + maxLng) / 2;
+
   const seen = new Set<string>();
   const results: SegmentSuggestion[] = [];
 
@@ -378,11 +386,20 @@ export function fuzzyMatchSegmentName(
       seen.add(key);
 
       const score = segmentNameSimilarity(streetName, segment.name);
-      if (score >= 0.4) {
-        results.push({ segmentName: segment.name, routeCode: route.route_code, score });
-      }
+      if (score < 0.4) continue;
+
+      // Compute segment midpoint for geographic tiebreaking
+      const coords = segment.coordinates;
+      const midIdx = Math.floor(coords.length / 2);
+      const [midLng, midLat] = coords[midIdx];
+      const distanceDeg = Math.sqrt((midLat - rLat) ** 2 + (midLng - rLng) ** 2);
+
+      results.push({ segmentName: segment.name, routeCode: route.route_code, score, distanceDeg });
     }
   }
 
-  return results.sort((a, b) => b.score - a.score).slice(0, 3);
+  // Sort: score descending, then distance ascending — closest segment wins ties
+  return results
+    .sort((a, b) => b.score - a.score || a.distanceDeg - b.distanceDeg)
+    .slice(0, 3);
 }

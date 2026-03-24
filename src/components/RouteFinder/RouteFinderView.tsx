@@ -597,12 +597,50 @@ const RouteFinderView: React.FC<Props> = ({ onBack }) => {
 
             if (match.routeCode === customer.currentRouteCode) {
               customer.pinColor = 'grey';
+
+              // Grey pin: route code is already correct — silently standardize street name
+              // if the segment name differs from what's in the sheet
+              if (
+                match.segmentName &&
+                match.segmentName.trim().toLowerCase() !== customer.streetName.trim().toLowerCase()
+              ) {
+                for (const row of customer.rows) {
+                  routeFinderSheetsService.applyFix(
+                    row.spreadsheetId,
+                    row.sheetName,
+                    row.sheetRowNumber,
+                    -1,                  // skip route code
+                    row.streetNameCol,
+                    '',
+                    match.segmentName.trim(),
+                  ).catch(e => console.warn('RF: grey street standardize failed:', e));
+                }
+              }
             } else {
               const assignedDist = distanceToRoute(
                 geoResult.lat, geoResult.lng, customer.currentRouteCode, approvedRoutes
               );
               customer.pinColor =
                 assignedDist - match.distanceDeg < SAME_ROUTE_TOLERANCE_DEG ? 'grey' : 'orange';
+
+              // Borderline grey (assigned route close enough) — standardize street name too
+              if (
+                customer.pinColor === 'grey' &&
+                match.segmentName &&
+                match.segmentName.trim().toLowerCase() !== customer.streetName.trim().toLowerCase()
+              ) {
+                for (const row of customer.rows) {
+                  routeFinderSheetsService.applyFix(
+                    row.spreadsheetId,
+                    row.sheetName,
+                    row.sheetRowNumber,
+                    -1,
+                    row.streetNameCol,
+                    '',
+                    match.segmentName.trim(),
+                  ).catch(e => console.warn('RF: grey street standardize failed:', e));
+                }
+              }
             }
           } else {
             customer.noRouteFound = true;
@@ -1652,12 +1690,25 @@ const UnresolvableCard: React.FC<UnresolvableCardProps> = ({
   const [suggestions, setSuggestions] = useState<SegmentSuggestion[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
+  // Derive reference point for geographic tiebreaking among equal-score matches:
+  // - No-route-found customers already have real coords → use them
+  // - Geocode-failed customers have no coords → use bounding box center
+  const refLat = customer.lat ?? (customerBoundingBox
+    ? (customerBoundingBox.minLat + customerBoundingBox.maxLat) / 2
+    : undefined);
+  const refLng = customer.lng ?? (customerBoundingBox
+    ? (customerBoundingBox.minLng + customerBoundingBox.maxLng) / 2
+    : undefined);
+
   // On mount: if there's a 100% fuzzy match, auto-geocode silently right away.
+  // Uses geographic tiebreaking so the closest segment wins when multiple streets share the same name.
   useEffect(() => {
     if (!customerBoundingBox || !editStreet.trim()) return;
     let cancelled = false;
     (async () => {
-      const results = fuzzyMatchSegmentName(editStreet.trim(), approvedRoutes, customerBoundingBox);
+      const results = fuzzyMatchSegmentName(
+        editStreet.trim(), approvedRoutes, customerBoundingBox, 0.02, refLat, refLng
+      );
       if (cancelled) return;
       const perfect = results.find(r => r.score >= 1.0);
       if (perfect) {
@@ -1684,7 +1735,9 @@ const UnresolvableCard: React.FC<UnresolvableCardProps> = ({
     }
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      const results = fuzzyMatchSegmentName(editStreet.trim(), approvedRoutes, customerBoundingBox);
+      const results = fuzzyMatchSegmentName(
+        editStreet.trim(), approvedRoutes, customerBoundingBox, 0.02, refLat, refLng
+      );
       setSuggestions(results);
     }, 300);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
