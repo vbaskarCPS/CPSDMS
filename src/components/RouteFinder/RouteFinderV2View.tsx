@@ -438,12 +438,17 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
 
       const FUZZY_THRESHOLD = 0.75;
 
+      console.log(`RF fuzzy: ${groups.length} groups loaded`);
       for (let g = 0; g < groups.length; g++) {
         const group = groups[g];
-        if (!group.mapPrefix) continue;
+        if (!group.mapPrefix) {
+          console.log(`RF fuzzy: skipping ${group.callBookPrefix}/${group.city} — no mapPrefix`);
+          continue;
+        }
 
         const groupLabel = `${group.callBookPrefix} / ${group.city}`;
         const segments = segmentsByPrefix.get(group.mapPrefix.toUpperCase()) || [];
+        console.log(`RF fuzzy: group ${groupLabel} mapPrefix=${group.mapPrefix} customers=${group.customers.length} segments=${segments.length}`);
         if (segments.length === 0) continue;
 
         setScanProgress({
@@ -478,6 +483,7 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
           if (bestName.toLowerCase() === customer.streetName.toLowerCase() &&
               bestRouteCode === customer.currentRouteCode) continue;
 
+          console.log(`RF fuzzy: MATCH "${customer.streetName}" → "${bestName}" (${bestScore.toFixed(3)}) route ${customer.currentRouteCode} → ${bestRouteCode}`);
           totalCustomers++;
 
           for (const row of customer.rows) {
