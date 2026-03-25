@@ -410,8 +410,13 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
       const routes = await loadApprovedRoutes();
       setApprovedRoutes(routes);
 
-      const mappings = await rfPrefixService.loadMappings('West');
-      setPrefixMappings(mappings);
+      const [westMappings, centralMappings, eastMappings] = await Promise.all([
+        rfPrefixService.loadMappings('West'),
+        rfPrefixService.loadMappings('Central'),
+        rfPrefixService.loadMappings('East'),
+      ]);
+      const mappings = [...westMappings, ...centralMappings, ...eastMappings];
+      setPrefixMappings(westMappings);
 
       const books = [
         aerationId ? { id: aerationId, label: 'Aeration' } : null,
@@ -441,14 +446,16 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
       console.log(`RF fuzzy: ${groups.length} groups loaded`);
       for (let g = 0; g < groups.length; g++) {
         const group = groups[g];
-        if (!group.mapPrefix) {
-          console.log(`RF fuzzy: skipping ${group.callBookPrefix}/${group.city} — no mapPrefix`);
-          continue;
-        }
+        // In fuzzy-only mode, the route code prefix IS the map prefix —
+        // use callBookPrefix directly as the segment lookup key since
+        // the data has already been processed through previous scans.
+        const resolvedMapPrefix = group.mapPrefix || group.callBookPrefix;
+        if (!resolvedMapPrefix) continue;
+        group.mapPrefix = resolvedMapPrefix;
 
         const groupLabel = `${group.callBookPrefix} / ${group.city}`;
-        const segments = segmentsByPrefix.get(group.mapPrefix.toUpperCase()) || [];
-        console.log(`RF fuzzy: group ${groupLabel} mapPrefix=${group.mapPrefix} customers=${group.customers.length} segments=${segments.length}`);
+        const segments = segmentsByPrefix.get(effectiveMapPrefix.toUpperCase()) || [];
+        console.log(`RF fuzzy: group ${groupLabel} mapPrefix=${effectiveMapPrefix} customers=${group.customers.length} segments=${segments.length}`);
         if (segments.length === 0) continue;
 
         setScanProgress({
