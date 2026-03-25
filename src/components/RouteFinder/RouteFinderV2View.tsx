@@ -384,6 +384,9 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
   };
 
   // ─── FUZZY ONLY (no Mapbox) ──────────────────────────────────────────────
+  // Reads both call books, runs pre-pass fuzzy name normalization against
+  // segment data, and writes corrections directly to the sheet.
+  // No geocoding, no session required.
   const handleFuzzyOnly = async () => {
     setError(null);
 
@@ -407,77 +410,101 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
       const routes = await loadApprovedRoutes();
       setApprovedRoutes(routes);
 
-      // Find or create session
-      let sess = await rfScanSessionService.loadLatestSession(aerationId, sealingId);
-      if (!sess) {
-        // No existing session — create a minimal one just to hold the queue
-        sess = await rfScanSessionService.createSession({
-          region: 'West',
-          aerationSpreadsheetId: aerationId,
-          sealingSpreadsheetId: sealingId,
-          groupsTotal: 0,
-          customersTotal: 0,
-        });
+      const mappings = await rfPrefixService.loadMappings('West');
+      setPrefixMappings(mappings);
+
+      const books = [
+        aerationId ? { id: aerationId, label: 'Aeration' } : null,
+        sealingId  ? { id: sealingId,  label: 'Sealing'  } : null,
+      ].filter(Boolean) as { id: string; label: string }[];
+
+      // Read all call book sheets
+      setScanProgress(p => ({ ...p, message: 'Reading call books...' }));
+      const groups = await buildCustomerGroups(books, routes, mappings);
+
+      let totalFixed = 0;
+      let totalCustomers = 0;
+
+      // Build segment lookup by map prefix
+      const segmentsByPrefix = new Map<string, { name: string; routeCode: string; colIdx?: number }[]>();
+      for (const route of routes) {
+        const prefix = route.route_code.match(/^([a-zA-Z]+)/)?.[1]?.toUpperCase() || '';
+        if (!prefix) continue;
+        if (!segmentsByPrefix.has(prefix)) segmentsByPrefix.set(prefix, []);
+        for (const seg of route.segments || []) {
+          if (seg.name) segmentsByPrefix.get(prefix)!.push({ name: seg.name, routeCode: route.route_code });
+        }
       }
-      setSession(sess);
 
-      // Get all pending prefixes
-      const prefixes = await rfScanSessionService.getPendingPrefixes(sess.id);
+      const FUZZY_THRESHOLD = 0.75;
 
-      if (prefixes.length === 0) {
-        setError('No pending items in the queue to process. Run a full scan first.');
-        setPhase('setup');
-        return;
-      }
+      for (let g = 0; g < groups.length; g++) {
+        const group = groups[g];
+        if (!group.mapPrefix) continue;
 
-      let totalResolved = 0;
+        const groupLabel = `${group.callBookPrefix} / ${group.city}`;
+        const segments = segmentsByPrefix.get(group.mapPrefix.toUpperCase()) || [];
+        if (segments.length === 0) continue;
 
-      for (let i = 0; i < prefixes.length; i++) {
-        const prefix = prefixes[i];
         setScanProgress({
-          current: i + 1,
-          total: prefixes.length,
-          message: `Fuzzy matching ${prefix}...`,
-          fixed: totalResolved,
+          current: g + 1,
+          total: groups.length,
+          message: `Fuzzy fixing ${groupLabel}...`,
+          fixed: totalFixed,
           queued: 0,
-          group: prefix,
+          group: groupLabel,
         });
 
-        const postResult = await runQueuePostFilter({
-          sessionId: sess.id,
-          approvedRoutes: routes,
-          mapPrefix: prefix,
-          onProgress: (current, total) => {
-            setScanProgress(p => ({
-              ...p,
-              message: `Fuzzy matching ${prefix}: ${current} of ${total}...`,
-              fixed: totalResolved,
-            }));
-          },
-        });
+        // Batch writes per spreadsheet
+        const pendingWrites = new Map<string, { range: string; values: any[][] }[]>();
 
-        totalResolved += postResult.resolved;
+        for (const customer of group.customers) {
+          // Fuzzy match street name against prefix segments
+          const na = normalizeStreetForFuzzy(customer.streetName);
+          let bestScore = 0;
+          let bestName = '';
+          let bestRouteCode = '';
+
+          for (const seg of segments) {
+            const nb = normalizeStreetForFuzzy(seg.name);
+            if (!na || !nb) continue;
+            const normScore = levenshteinSimilarity(na, nb);
+            const rawScore  = levenshteinSimilarity(customer.streetName.toLowerCase(), seg.name.toLowerCase());
+            const score = Math.max(normScore, rawScore);
+            if (score > bestScore) { bestScore = score; bestName = seg.name; bestRouteCode = seg.routeCode; }
+          }
+
+          if (bestScore < FUZZY_THRESHOLD) continue;
+          if (bestName.toLowerCase() === customer.streetName.toLowerCase() &&
+              bestRouteCode === customer.currentRouteCode) continue;
+
+          totalCustomers++;
+
+          for (const row of customer.rows) {
+            if (!pendingWrites.has(row.spreadsheetId)) pendingWrites.set(row.spreadsheetId, []);
+            const updates = pendingWrites.get(row.spreadsheetId)!;
+
+            if (row.routeCodeCol >= 0 && bestRouteCode) {
+              const col = colLetter(row.routeCodeCol);
+              updates.push({ range: `'${row.sheetName}'!${col}${row.sheetRowNumber}`, values: [[bestRouteCode]] });
+            }
+            if (row.streetNameCol >= 0 && bestName) {
+              const col = colLetter(row.streetNameCol);
+              updates.push({ range: `'${row.sheetName}'!${col}${row.sheetRowNumber}`, values: [[bestName]] });
+            }
+          }
+          totalFixed++;
+        }
+
+        // Flush writes for this group
+        for (const [spreadsheetId, updates] of pendingWrites) {
+          if (updates.length === 0) continue;
+          await routeFinderSheetsService.applyBatchStreetWrites(spreadsheetId, updates);
+        }
       }
 
-      await rfScanSessionService.updateSession(sess.id, {
-        customersFixed: (sess.customersFixed || 0) + totalResolved,
-        customersQueued: Math.max(0, (sess.customersQueued || 0) - totalResolved),
-        status: 'reviewing',
-      });
-
-      showToast(`Fuzzy sweep complete — ${totalResolved} entries fixed.`);
-
-      // Load review queue
-      const entries  = await rfScanSessionService.loadPendingQueue(sess.id);
-      const counts   = await rfScanSessionService.getQueueCounts(sess.id);
-      const pendingPrefixes = await rfScanSessionService.getPendingPrefixes(sess.id);
-
-      setQueueEntries(entries);
-      setQueueCounts(counts);
-      setPendingPrefixes(pendingPrefixes);
-      if (pendingPrefixes.length > 0) setActivePrefixFilter(pendingPrefixes[0]);
-
-      setPhase(entries.length > 0 ? 'reviewing' : 'complete');
+      showToast(`Fuzzy sweep complete — ${totalFixed} customers corrected across ${totalCustomers} rows.`);
+      setPhase('complete');
 
     } catch (e: any) {
       console.error('RF fuzzy sweep failed:', e);
@@ -485,6 +512,33 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
       setPhase('setup');
     }
   };
+
+  // Helpers for fuzzy-only mode
+  function normalizeStreetForFuzzy(s: string): string {
+    return s.toLowerCase()
+      .replace(/(street|st|road|rd|avenue|ave|drive|dr|court|ct|crescent|cres|cr|boulevard|blvd|lane|ln|place|pl|circle|cir|way|trail|tr|parkway|pkwy|terrace|ter|close|square|sq)/g, '')
+      .replace(/[^a-z0-9]/g, '');
+  }
+  function levenshteinSimilarity(a: string, b: string): number {
+    if (a === b) return 1;
+    if (!a || !b) return 0;
+    const m = a.length, n = b.length;
+    const dp = Array.from({ length: n + 1 }, (_, j) => j);
+    for (let i = 1; i <= m; i++) {
+      let prev = dp[0]; dp[0] = i;
+      for (let j = 1; j <= n; j++) {
+        const tmp = dp[j];
+        dp[j] = a[i-1] === b[j-1] ? prev : 1 + Math.min(prev, dp[j], dp[j-1]);
+        prev = tmp;
+      }
+    }
+    return 1 - dp[n] / Math.max(m, n);
+  }
+  function colLetter(idx: number): string {
+    let s = '', c = idx + 1;
+    while (c > 0) { c--; s = String.fromCharCode(65 + c % 26) + s; c = Math.floor(c / 26); }
+    return s;
+  }
 
   // ─── BUILD CUSTOMER GROUPS ────────────────────────────────────────────────
   async function buildCustomerGroups(
