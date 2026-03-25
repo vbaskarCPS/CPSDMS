@@ -454,8 +454,8 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
         group.mapPrefix = resolvedMapPrefix;
 
         const groupLabel = `${group.callBookPrefix} / ${group.city}`;
-        const segments = segmentsByPrefix.get(effectiveMapPrefix.toUpperCase()) || [];
-        console.log(`RF fuzzy: group ${groupLabel} mapPrefix=${effectiveMapPrefix} customers=${group.customers.length} segments=${segments.length}`);
+        const segments = segmentsByPrefix.get(group.mapPrefix.toUpperCase()) || [];
+        console.log(`RF fuzzy: group ${groupLabel} mapPrefix=${group.mapPrefix} customers=${group.customers.length} segments=${segments.length}`);
         if (segments.length === 0) continue;
 
         setScanProgress({
