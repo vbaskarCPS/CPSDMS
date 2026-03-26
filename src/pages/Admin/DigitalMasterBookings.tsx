@@ -110,17 +110,16 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         }
 
         // Pass 2: boost road/street name layers
-        // point placement = renders at midpoint regardless of segment length
-        // text-padding 40 = suppresses duplicate same-name labels on adjacent segments
-        //   without blocking labels on nearby different streets
+        // Leave symbol-placement as Mapbox default — it uses 'line' when there's room
+        // (long streets like Heddle St) and falls back to point for short cul-de-sacs.
+        // We just make them bigger, bolder, and visible at all zooms.
         try {
           map.setLayerZoomRange(layer.id, 0, 24);
-          map.setLayoutProperty(layer.id, 'symbol-placement', 'point');
           map.setLayoutProperty(layer.id, 'text-size', 13);
           map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
           map.setLayoutProperty(layer.id, 'text-allow-overlap', false);
           map.setLayoutProperty(layer.id, 'text-ignore-placement', false);
-          map.setLayoutProperty(layer.id, 'text-padding', 40);
+          map.setLayoutProperty(layer.id, 'text-padding', 2);
           map.setPaintProperty(layer.id, 'text-color', '#222222');
           map.setPaintProperty(layer.id, 'text-halo-color', '#ffffff');
           map.setPaintProperty(layer.id, 'text-halo-width', 2);
