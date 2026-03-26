@@ -89,7 +89,12 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           id.includes('water-label') ||
           id.includes('waterway') ||
           id.includes('natural') ||
-          id.includes('continent');
+          id.includes('continent') ||
+          id.includes('housenum') ||
+          id.includes('house-number') ||
+          id.includes('address') ||
+          id.includes('housenumber') ||
+          id.includes('building');
 
         if (shouldHide) {
           map.setLayoutProperty(layer.id, 'visibility', 'none');
