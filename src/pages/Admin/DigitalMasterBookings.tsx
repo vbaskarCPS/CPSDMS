@@ -99,10 +99,10 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       ) ?? [];
 
       roadLabelLayers.forEach((layer: any) => {
-        // Boost the original line-placement layer
+        // Boost the original line-placement layer — bold, dark, visible from zoom 0.
+        // No text-optional here so it always tries to render inline along the road.
         try {
           map.setLayerZoomRange(layer.id, 0, 24);
-          map.setLayoutProperty(layer.id, 'text-optional', true);
           map.setLayoutProperty(layer.id, 'text-allow-overlap', false);
           map.setLayoutProperty(layer.id, 'text-ignore-placement', false);
           map.setLayoutProperty(layer.id, 'text-size', 13);
@@ -112,7 +112,9 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           map.setPaintProperty(layer.id, 'text-halo-width', 2);
         } catch { /* skip */ }
 
-        // Add point backup — smaller font so floated labels read as secondary
+        // Point backup — only renders when the line version couldn't.
+        // text-padding: 50 means if the line version already rendered nearby,
+        // collision detection suppresses this one (kills the double).
         const backupId = `${layer.id}-point-backup`;
         if (map.getLayer(backupId)) return;
         try {
@@ -130,6 +132,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
               'text-optional': true,
               'text-allow-overlap': false,
               'text-ignore-placement': false,
+              'text-padding': 50,
               'text-size': 11,
               'text-font': ['DIN Pro Medium', 'Arial Unicode MS Regular'],
             },
@@ -202,10 +205,12 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         return;
       }
 
-      // Find the first symbol (text label) layer to insert route lines below it.
-      // This works across both streets-v12 and light-v11 style variants.
-      const firstSymbolLayer = map.getStyle().layers?.find((l: any) => l.type === 'symbol');
-      const routeInsertBefore = firstSymbolLayer?.id ?? undefined;
+      // Insert routes just before the road-label layer so they sit below all text.
+      // Fall back to the first symbol layer if road-label doesn't exist in this style.
+      const routeInsertBefore = (
+        map.getLayer('road-label') ? 'road-label' :
+        map.getStyle().layers?.find((l: any) => l.type === 'symbol')?.id
+      ) ?? undefined;
 
       const allCoords: [number, number][] = [];
 
@@ -242,8 +247,8 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           maxzoom: 24,
           paint: {
             'line-color': route.route_color,
-            'line-width': 7,
-            'line-opacity': 0.65,
+            'line-width': 10,
+            'line-opacity': 0.9,
           },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
         }, routeInsertBefore);
