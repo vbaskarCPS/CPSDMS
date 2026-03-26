@@ -79,13 +79,12 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         }
       });
 
-      // Boost all road label layers: bigger, bolder, visible at all zooms
-      // light-v11 labels are very faint by default — we make them sharp and readable
+      // Boost ALL symbol layers in light-v11 — this style has no POIs or house numbers
+      // so every symbol layer is a road/street name. Make them bigger, bolder, and
+      // visible at all zooms so cul-de-sacs and courts always render regardless of
+      // what Mapbox calls their internal layer ID.
       map.getStyle().layers?.forEach((layer: any) => {
         if (layer.type !== 'symbol') return;
-        const id = layer.id.toLowerCase();
-        // Only touch road/street name layers — skip anything else
-        if (!id.includes('road') && !id.includes('street') && !id.includes('path')) return;
         try {
           map.setLayerZoomRange(layer.id, 0, 24);
           map.setLayoutProperty(layer.id, 'text-size', 13);
@@ -95,7 +94,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           map.setPaintProperty(layer.id, 'text-color', '#222222');
           map.setPaintProperty(layer.id, 'text-halo-color', '#ffffff');
           map.setPaintProperty(layer.id, 'text-halo-width', 2);
-        } catch { /* skip */ }
+        } catch { /* skip layers that don't support these props */ }
       });
 
       setMapLoaded(true);
