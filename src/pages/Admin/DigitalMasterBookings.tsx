@@ -71,51 +71,33 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     map.on('load', () => {
       map.resize();
 
-      // Hide POI, place, transit, and water labels — keep only road/street name labels.
-      // Also force road label layers to show at all zoom levels (Mapbox hides them below ~z13 by default).
+      // ALLOWLIST: hide every symbol layer, then only re-enable road/street name labels.
+      // This prevents house numbers, POIs, parks etc. from competing with street names.
       map.getStyle().layers?.forEach((layer: any) => {
         if (layer.type !== 'symbol') return;
         const id = layer.id.toLowerCase();
 
-        const shouldHide =
-          id.includes('poi') ||
-          id.includes('transit') ||
-          id.includes('airport') ||
-          id.includes('park-label') ||
-          id.includes('place') ||
-          id.includes('settlement') ||
-          id.includes('country') ||
-          id.includes('state') ||
-          id.includes('water-label') ||
-          id.includes('waterway') ||
-          id.includes('natural') ||
-          id.includes('continent') ||
-          id.includes('housenum') ||
-          id.includes('house-number') ||
-          id.includes('address') ||
-          id.includes('housenumber') ||
-          id.includes('building');
+        // Only street/road name label layers get to stay visible
+        const isStreetNameLabel =
+          id === 'road-label' ||
+          id.startsWith('road-label') ||
+          (id.includes('road') && id.includes('label')) ||
+          (id.includes('street') && id.includes('label'));
 
-        if (shouldHide) {
+        if (!isStreetNameLabel) {
           map.setLayoutProperty(layer.id, 'visibility', 'none');
           return;
         }
 
-        // For road/street label layers, remove the minzoom gate so names
-        // are always visible regardless of how far out the user is zoomed.
-        // For every remaining symbol layer (road names, street labels etc.)
-        // force them visible at all zooms, larger, bold, and with no collision suppression
-        // so cul-de-sacs and short courts always show their names.
+        // Street name layers: visible at all zooms, bold, large, no collision suppression
         map.setLayerZoomRange(layer.id, 0, 24);
         map.setLayoutProperty(layer.id, 'text-allow-overlap', true);
         map.setLayoutProperty(layer.id, 'text-ignore-placement', true);
         map.setLayoutProperty(layer.id, 'text-optional', true);
-
-        // Make text larger and bold so it's readable at any zoom
         try {
           map.setLayoutProperty(layer.id, 'text-size', 13);
           map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
-        } catch { /* some layers may not support these — safe to skip */ }
+        } catch { /* skip layers that don't support these props */ }
       });
 
       setMapLoaded(true);
@@ -133,10 +115,16 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     const map = mapRef.current;
     if (!map) return;
     loadedIdsRef.current.forEach(id => {
-      const lineId = `dmb-line-${id}`;
-      const srcId = `dmb-src-${id}`;
-      if (map.getLayer(lineId)) map.removeLayer(lineId);
-      if (map.getSource(srcId)) map.removeSource(srcId);
+      if (id.startsWith('label-')) {
+        const routeId = id.replace('label-', '');
+        const labelId = `dmb-label-${routeId}`;
+        if (map.getLayer(labelId)) map.removeLayer(labelId);
+      } else {
+        const lineId = `dmb-line-${id}`;
+        const srcId = `dmb-src-${id}`;
+        if (map.getLayer(lineId)) map.removeLayer(lineId);
+        if (map.getSource(srcId)) map.removeSource(srcId);
+      }
     });
     loadedIdsRef.current = [];
   }, []);
@@ -211,6 +199,31 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
         }, routeInsertBefore);
+
+        // Route code label along the line — sits above route lines, below street names
+        const labelId = `dmb-label-${route.id}`;
+        loadedIdsRef.current.push(`label-${route.id}`);
+        map.addLayer({
+          id: labelId,
+          type: 'symbol',
+          source: srcId,
+          layout: {
+            'symbol-placement': 'line',
+            'symbol-spacing': 200,
+            'text-field': route.route_code,
+            'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
+            'text-size': 12,
+            'text-keep-upright': true,
+            'text-allow-overlap': false,
+            'text-ignore-placement': false,
+            'visibility': 'visible',
+          },
+          paint: {
+            'text-color': route.route_color,
+            'text-halo-color': '#ffffff',
+            'text-halo-width': 2,
+          },
+        });
       });
 
       // Fly map to fit all routes
