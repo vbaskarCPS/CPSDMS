@@ -72,6 +72,11 @@ export async function scanGroup(params: ScanGroupParams): Promise<ScanGroupResul
   const suggestions: SuggestionEntry[] = [];
   let green = 0, yellow = 0, orange = 0, red = 0;
 
+  // Routes belonging to this map prefix — searched first before falling back globally
+  const prefixRoutes = approvedRoutes.filter(
+    r => r.route_code.match(/^([a-zA-Z]+)/)?.[1]?.toUpperCase() === mapPrefix.toUpperCase()
+  );
+
   const geocodedSoFar: GeoCustomer[] = [];
   const routeCentroid = getRouteCentroid(approvedRoutes, mapPrefix);
 
@@ -124,15 +129,23 @@ export async function scanGroup(params: ScanGroupParams): Promise<ScanGroupResul
     );
 
     if (geo) {
-      const match = findClosestRoute(geo.lat, geo.lng, approvedRoutes);
+      // Try matching within the map prefix first — only fall back globally if nothing close enough
+      const prefixMatch = findClosestRoute(geo.lat, geo.lng, prefixRoutes);
+      const match = (prefixMatch && prefixMatch.distanceDeg <= PASS1_THRESHOLD_DEG)
+        ? prefixMatch
+        : findClosestRoute(geo.lat, geo.lng, approvedRoutes);
+
       if (match && match.distanceDeg <= PASS1_THRESHOLD_DEG) {
         customer.lat = geo.lat;
         customer.lng = geo.lng;
         geocodedSoFar.push(customer);
 
+        const segmentName = preferredSegmentName(
+          customer.streetName, match.routeCode, match.segmentName, approvedRoutes
+        );
         const color: SuggestionColor =
           match.routeCode === customer.currentRouteCode ? 'green' : 'yellow';
-        pushEntries(suggestions, customer, match.routeCode, match.segmentName || customer.streetName, color);
+        pushEntries(suggestions, customer, match.routeCode, segmentName, color);
         if (color === 'green') green++; else yellow++;
         continue;
       }
@@ -182,16 +195,24 @@ export async function scanGroup(params: ScanGroupParams): Promise<ScanGroupResul
     );
 
     if (geo) {
-      const match = findClosestRoute(geo.lat, geo.lng, approvedRoutes);
+      // Try matching within the map prefix first — only fall back globally if nothing close enough
+      const prefixMatch = findClosestRoute(geo.lat, geo.lng, prefixRoutes);
+      const match = (prefixMatch && prefixMatch.distanceDeg <= PASS1_THRESHOLD_DEG)
+        ? prefixMatch
+        : findClosestRoute(geo.lat, geo.lng, approvedRoutes);
+
       if (match && match.distanceDeg <= PASS1_THRESHOLD_DEG) {
         customer.lat = geo.lat;
         customer.lng = geo.lng;
         if (streetToGeocode !== customer.streetName) customer.streetName = streetToGeocode;
         geocodedSoFar.push(customer);
 
+        const segmentName = preferredSegmentName(
+          customer.streetName, match.routeCode, match.segmentName, approvedRoutes
+        );
         const color: SuggestionColor =
           match.routeCode === customer.currentRouteCode ? 'green' : 'yellow';
-        pushEntries(suggestions, customer, match.routeCode, match.segmentName || customer.streetName, color);
+        pushEntries(suggestions, customer, match.routeCode, segmentName, color);
         if (color === 'green') green++; else yellow++;
         continue;
       }
@@ -217,6 +238,53 @@ export async function scanGroup(params: ScanGroupParams): Promise<ScanGroupResul
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+/**
+ * After a successful geocode + route match, prefer the segment name that best
+ * fuzzy-matches the customer's own street name over the geometry-nearest segment.
+ *
+ * This prevents situations where two streets are physically close (e.g. Meadowlark Dr
+ * and Redwing Rd run parallel) and the geocoded point lands slightly nearer the wrong
+ * segment line, even though the customer's address clearly names the right street.
+ *
+ * Threshold is intentionally lower than pre-pass (0.6) so partial matches like
+ * "Meadow Lark" → "Meadowlark Drive" are caught even after normalization.
+ * Falls back to the geometry result if no segment matches well enough.
+ */
+function preferredSegmentName(
+  customerStreet: string,
+  matchedRouteCode: string,
+  geometrySegmentName: string | undefined,
+  approvedRoutes: ApprovedRoute[]
+): string {
+  const FUZZY_THRESHOLD = 0.60;
+
+  const routeSegments = approvedRoutes
+    .filter(r => r.route_code === matchedRouteCode)
+    .flatMap(r => r.segments || [])
+    .filter(s => s.name);
+
+  if (routeSegments.length === 0) return geometrySegmentName || customerStreet;
+
+  let bestScore = 0;
+  let bestName  = '';
+
+  const na = normalizeForPrePass(customerStreet);
+
+  for (const seg of routeSegments) {
+    const nb = normalizeForPrePass(seg.name);
+    if (!na || !nb) continue;
+    if (na === nb) return seg.name; // exact normalized match — stop here
+    const score = Math.max(
+      levenshteinScore(na, nb),
+      levenshteinScore(customerStreet.toLowerCase(), seg.name.toLowerCase())
+    );
+    if (score > bestScore) { bestScore = score; bestName = seg.name; }
+  }
+
+  if (bestScore >= FUZZY_THRESHOLD) return bestName;
+  return geometrySegmentName || customerStreet;
+}
 
 /** Create one SuggestionEntry per call-book row belonging to this customer. */
 function pushEntries(
