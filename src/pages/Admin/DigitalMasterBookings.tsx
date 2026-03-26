@@ -63,7 +63,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     if (!mapContainerRef.current || mapRef.current) return;
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
-      style: 'mapbox://styles/mapbox/light-v11',
+      style: 'mapbox://styles/mapbox/streets-v12',
       center: [-79.870, 43.320],
       zoom: 13,
     });
@@ -71,88 +71,54 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     map.on('load', () => {
       map.resize();
 
-      // Pass 1: hide non-road symbol layers and building fills
-      map.getStyle().layers?.forEach((layer: any) => {
-        const id = layer.id.toLowerCase();
-
-        // Hide building/structure fill layers so house footprints don't render
-        if (layer.type === 'fill' || layer.type === 'fill-extrusion') {
-          if (id.includes('building') || id.includes('structure') || id.includes('indoor')) {
-            map.setLayoutProperty(layer.id, 'visibility', 'none');
-            return;
-          }
-        }
-
-        if (layer.type !== 'symbol') return;
-
-        const shouldHide =
-          id.includes('poi') ||
-          id.includes('airport') ||
-          id.includes('transit') ||
-          id.includes('place') ||
-          id.includes('settlement') ||
-          id.includes('state') ||
-          id.includes('country') ||
-          id.includes('continent') ||
-          id.includes('water') ||
-          id.includes('natural') ||
-          id.includes('park') ||
-          id.includes('housenum') ||
-          id.includes('address') ||
-          id.includes('admin') ||
-          id.includes('building') ||
-          id.includes('structure') ||
-          id.includes('junction');
-
-        if (shouldHide) {
-          map.setLayoutProperty(layer.id, 'visibility', 'none');
-          return;
-        }
-
-        // Pass 2: boost road/street name layers
-        // Leave symbol-placement as Mapbox default — it uses 'line' when there's room
-        // (long streets like Heddle St) and falls back to point for short cul-de-sacs.
-        // We just make them bigger, bolder, and visible at all zooms.
-        try {
-          map.setLayerZoomRange(layer.id, 0, 24);
-          map.setLayoutProperty(layer.id, 'text-size', 13);
-          map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
-          map.setLayoutProperty(layer.id, 'text-allow-overlap', false);
-          map.setLayoutProperty(layer.id, 'text-ignore-placement', false);
-          map.setLayoutProperty(layer.id, 'text-padding', 2);
-          map.setPaintProperty(layer.id, 'text-color', '#222222');
-          map.setPaintProperty(layer.id, 'text-halo-color', '#ffffff');
-          map.setPaintProperty(layer.id, 'text-halo-width', 2);
-        } catch { /* skip */ }
+      // Step 1: hide only POI labels, house numbers, and building fills — nothing else
+      const exactHide = ['poi-label', 'housenum-label', 'road-number-shield'];
+      exactHide.forEach(id => {
+        if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
       });
 
-      // Pass 3: make non-route street outlines more visible
-      // light-v11 roads are very faint — boost them so the street grid reads clearly
+      // Also hide building fill layers
       map.getStyle().layers?.forEach((layer: any) => {
-        if (layer.type !== 'line') return;
         const id = layer.id.toLowerCase();
         if (
-          id.includes('road') ||
-          id.includes('street') ||
-          id.includes('path') ||
-          id.includes('motorway') ||
-          id.includes('trunk') ||
-          id.includes('primary') ||
-          id.includes('secondary') ||
-          id.includes('tertiary') ||
-          id.includes('residential') ||
-          id.includes('service')
+          (layer.type === 'fill' || layer.type === 'fill-extrusion') &&
+          (id.includes('building') || id.includes('structure'))
         ) {
-          try {
-            map.setPaintProperty(layer.id, 'line-color', '#bbbbbb');
-            map.setPaintProperty(layer.id, 'line-width', [
-              'interpolate', ['linear'], ['zoom'],
-              10, 0.8,
-              14, 2,
-              17, 4,
-            ]);
-          } catch { /* skip */ }
+          map.setLayoutProperty(layer.id, 'visibility', 'none');
         }
+      });
+
+      // Step 2: for every road label layer, add a companion 'point' backup layer.
+      // The original layer uses 'line' placement (renders along the road when there's room).
+      // The backup uses 'point' placement (renders at midpoint when the segment is too short).
+      // text-optional: true means neither layer forces itself — Mapbox picks the best fit.
+      const roadLabelLayers = map.getStyle().layers?.filter((layer: any) =>
+        layer.type === 'symbol' &&
+        layer.id.toLowerCase().includes('label') &&
+        !exactHide.includes(layer.id)
+      ) ?? [];
+
+      roadLabelLayers.forEach((layer: any) => {
+        const backupId = `${layer.id}-point-backup`;
+        if (map.getLayer(backupId)) return; // don't add twice
+        try {
+          map.addLayer({
+            id: backupId,
+            type: 'symbol',
+            source: (layer as any).source ?? 'composite',
+            'source-layer': (layer as any)['source-layer'] ?? 'road',
+            filter: (layer as any).filter,
+            minzoom: 0,
+            layout: {
+              ...(layer.layout ?? {}),
+              'symbol-placement': 'point',
+              'text-optional': true,
+              'text-allow-overlap': false,
+              'text-ignore-placement': false,
+            },
+            paint: layer.paint ?? {},
+          });
+        } catch { /* skip if layer config isn't compatible */ }
       });
 
       setMapLoaded(true);
