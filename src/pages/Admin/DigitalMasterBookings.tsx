@@ -111,7 +111,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
           map.setLayoutProperty(layer.id, 'text-allow-overlap', false);
           map.setLayoutProperty(layer.id, 'text-ignore-placement', false);
-          map.setLayoutProperty(layer.id, 'text-padding', 120);
+          map.setLayoutProperty(layer.id, 'text-padding', 2);
           map.setPaintProperty(layer.id, 'text-color', '#222222');
           map.setPaintProperty(layer.id, 'text-halo-color', '#ffffff');
           map.setPaintProperty(layer.id, 'text-halo-width', 2);
