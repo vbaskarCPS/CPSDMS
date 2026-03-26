@@ -121,14 +121,26 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
       });
 
-      // Also hide building fill layers
+      // Broader sweep — hide any layer that looks like house numbers or buildings
       map.getStyle().layers?.forEach((layer: any) => {
         const id = layer.id.toLowerCase();
-        if (
-          (layer.type === 'fill' || layer.type === 'fill-extrusion') &&
-          (id.includes('building') || id.includes('structure'))
-        ) {
-          map.setLayoutProperty(layer.id, 'visibility', 'none');
+        // Hide building fills and extrusions
+        if (layer.type === 'fill' || layer.type === 'fill-extrusion') {
+          if (id.includes('building') || id.includes('structure')) {
+            map.setLayoutProperty(layer.id, 'visibility', 'none');
+          }
+        }
+        // Hide any symbol layer that looks like house numbers
+        if (layer.type === 'symbol') {
+          if (
+            id.includes('housenum') ||
+            id.includes('house-num') ||
+            id.includes('house_num') ||
+            id.includes('address') ||
+            id.includes('housenumber')
+          ) {
+            map.setLayoutProperty(layer.id, 'visibility', 'none');
+          }
         }
       });
 
