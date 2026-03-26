@@ -71,10 +71,12 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     map.on('load', () => {
       map.resize();
 
-      // Hide POI, place, transit, and water labels — keep only road/street name labels
+      // Hide POI, place, transit, and water labels — keep only road/street name labels.
+      // Also force road label layers to show at all zoom levels (Mapbox hides them below ~z13 by default).
       map.getStyle().layers?.forEach((layer: any) => {
         if (layer.type !== 'symbol') return;
         const id = layer.id.toLowerCase();
+
         const shouldHide =
           id.includes('poi') ||
           id.includes('transit') ||
@@ -88,8 +90,22 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           id.includes('waterway') ||
           id.includes('natural') ||
           id.includes('continent');
+
         if (shouldHide) {
           map.setLayoutProperty(layer.id, 'visibility', 'none');
+          return;
+        }
+
+        // For road/street label layers, remove the minzoom gate so names
+        // are always visible regardless of how far out the user is zoomed.
+        const isRoadLabel =
+          id.includes('road') ||
+          id.includes('street') ||
+          id.includes('path') ||
+          id.includes('label');
+
+        if (isRoadLabel) {
+          map.setLayerZoomRange(layer.id, 0, 24);
         }
       });
 
