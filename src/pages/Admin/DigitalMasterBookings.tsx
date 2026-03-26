@@ -39,6 +39,50 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   const [error, setError] = useState<string | null>(null);
   const loadedIdsRef = useRef<string[]>([]);
 
+  // After every render cycle, query which road names the LINE layers actually drew,
+  // then tell the POINT backup layers to exclude those exact names.
+  // This prevents doubles — if a name rendered inline, the floated backup is suppressed.
+  const suppressDuplicateLabels = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const style = map.getStyle();
+    if (!style?.layers) return;
+
+    const HIDE_LIST = ['poi-label', 'housenum-label', 'road-number-shield'];
+
+    // IDs of the original line-placement road label layers
+    const originalIds = style.layers
+      .filter((l: any) =>
+        l.type === 'symbol' &&
+        l.id.toLowerCase().includes('label') &&
+        !l.id.includes('-point-backup') &&
+        !HIDE_LIST.includes(l.id)
+      )
+      .map((l: any) => l.id);
+
+    if (originalIds.length === 0) return;
+
+    // What names did the line layers actually render on screen?
+    const lineFeatures = map.queryRenderedFeatures(undefined, { layers: originalIds });
+    const renderedNames = [...new Set(
+      lineFeatures.map((f: any) => f.properties?.name).filter(Boolean)
+    )];
+
+    // Tell every point backup layer: skip any feature whose name already rendered inline
+    style.layers
+      .filter((l: any) => l.id.includes('-point-backup'))
+      .forEach((l: any) => {
+        if (!map.getLayer(l.id)) return;
+        try {
+          if (renderedNames.length > 0) {
+            map.setFilter(l.id, ['!', ['in', ['get', 'name'], ['literal', renderedNames]]]);
+          } else {
+            map.setFilter(l.id, null);
+          }
+        } catch { /* skip */ }
+      });
+  }, []);
+
   // Load all areas on mount
   useEffect(() => {
     const loadAreas = async () => {
@@ -145,6 +189,9 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           });
         } catch { /* skip if layer config isn't compatible */ }
       });
+
+      // Run duplicate suppression after every render cycle settles
+      map.on('idle', suppressDuplicateLabels);
 
       setMapLoaded(true);
     });
