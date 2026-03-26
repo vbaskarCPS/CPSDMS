@@ -108,9 +108,12 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         map.setLayoutProperty(layer.id, 'text-optional', true);
         map.setLayoutProperty(layer.id, 'text-padding', 0);
         try {
-          // Switch to point placement so short cul-de-sacs don't need
-          // a minimum segment length to render their name
-          map.setLayoutProperty(layer.id, 'symbol-placement', 'point');
+          // Keep line placement (deduplicates naturally across multi-segment streets)
+          // but use a very high symbol-spacing so only one label renders per street,
+          // and set text-max-angle high so short/curved segments still show their name.
+          map.setLayoutProperty(layer.id, 'symbol-placement', 'line-center');
+          map.setLayoutProperty(layer.id, 'symbol-spacing', 2000);
+          map.setLayoutProperty(layer.id, 'text-max-angle', 90);
           map.setLayoutProperty(layer.id, 'text-size', 12);
           map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
         } catch { /* skip layers that don't support these props */ }
