@@ -130,15 +130,21 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
             map.setLayoutProperty(layer.id, 'visibility', 'none');
           }
         }
-        // Hide any symbol layer that looks like house numbers
+        // Hide any symbol layer that looks like house numbers —
+        // check both the layer ID and the actual text-field it renders
         if (layer.type === 'symbol') {
-          if (
+          const textField = JSON.stringify(layer.layout?.['text-field'] ?? '').toLowerCase();
+          const isHouseNumber =
             id.includes('housenum') ||
             id.includes('house-num') ||
             id.includes('house_num') ||
             id.includes('address') ||
-            id.includes('housenumber')
-          ) {
+            id.includes('housenumber') ||
+            textField.includes('housenumber') ||
+            textField.includes('addr:housenumber') ||
+            textField.includes('addr:house') ||
+            textField.includes('ref');
+          if (isHouseNumber) {
             map.setLayoutProperty(layer.id, 'visibility', 'none');
           }
         }
