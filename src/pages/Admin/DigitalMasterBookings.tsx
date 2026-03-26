@@ -103,19 +103,18 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
 
         // Street name layers: visible at all zooms, bold, no collision suppression
         map.setLayerZoomRange(layer.id, 0, 24);
-        map.setLayoutProperty(layer.id, 'text-allow-overlap', true);
-        map.setLayoutProperty(layer.id, 'text-ignore-placement', true);
+        map.setLayoutProperty(layer.id, 'text-allow-overlap', false);
+        map.setLayoutProperty(layer.id, 'text-ignore-placement', false);
         map.setLayoutProperty(layer.id, 'text-optional', true);
         map.setLayoutProperty(layer.id, 'text-padding', 0);
         try {
-          // Keep line placement (deduplicates naturally across multi-segment streets)
-          // but use a very high symbol-spacing so only one label renders per street,
-          // and set text-max-angle high so short/curved segments still show their name.
-          map.setLayoutProperty(layer.id, 'symbol-placement', 'line-center');
-          map.setLayoutProperty(layer.id, 'symbol-spacing', 2000);
-          map.setLayoutProperty(layer.id, 'text-max-angle', 90);
+          // Point placement: renders at segment midpoint regardless of length (fixes cul-de-sacs).
+          // text-allow-overlap: false means Mapbox collision detection suppresses duplicate
+          // same-name labels that are too close together — naturally deduplicates multi-segment streets.
+          map.setLayoutProperty(layer.id, 'symbol-placement', 'point');
           map.setLayoutProperty(layer.id, 'text-size', 12);
           map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
+          map.setLayoutProperty(layer.id, 'text-padding', 50);
         } catch { /* skip layers that don't support these props */ }
       });
 
