@@ -98,18 +98,19 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
 
         // For road/street label layers, remove the minzoom gate so names
         // are always visible regardless of how far out the user is zoomed.
-        const isRoadLabel =
-          id.includes('road') ||
-          id.includes('street') ||
-          id.includes('path') ||
-          id.includes('label');
+        // For every remaining symbol layer (road names, street labels etc.)
+        // force them visible at all zooms, larger, bold, and with no collision suppression
+        // so cul-de-sacs and short courts always show their names.
+        map.setLayerZoomRange(layer.id, 0, 24);
+        map.setLayoutProperty(layer.id, 'text-allow-overlap', true);
+        map.setLayoutProperty(layer.id, 'text-ignore-placement', true);
+        map.setLayoutProperty(layer.id, 'text-optional', true);
 
-        if (isRoadLabel) {
-          map.setLayerZoomRange(layer.id, 0, 24);
-          // Allow labels to overlap so short streets (courts, cul-de-sacs) always show
-          map.setLayoutProperty(layer.id, 'text-allow-overlap', true);
-          map.setLayoutProperty(layer.id, 'text-ignore-placement', true);
-        }
+        // Make text larger and bold so it's readable at any zoom
+        try {
+          map.setLayoutProperty(layer.id, 'text-size', 13);
+          map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
+        } catch { /* some layers may not support these — safe to skip */ }
       });
 
       setMapLoaded(true);
