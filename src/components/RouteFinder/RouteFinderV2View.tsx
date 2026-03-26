@@ -234,32 +234,29 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
         totalYellow += result.yellow;
         totalOrange += result.orange;
         totalRed    += result.red;
-      }
 
-      // 7. Write suggestions per sheet tab
-      // Group suggestions by sheet name (single spreadsheet — aeration only)
-      const suggestionsBySheet = new Map<string, SuggestionEntry[]>();
-      for (const s of allSuggestions) {
-        if (!suggestionsBySheet.has(s.sheetName)) suggestionsBySheet.set(s.sheetName, []);
-        suggestionsBySheet.get(s.sheetName)!.push(s);
-      }
+        // 7. Write this group's suggestions immediately so progress is visible in the sheet
+        const groupSuggestionsBySheet = new Map<string, SuggestionEntry[]>();
+        for (const s of result.suggestions) {
+          if (!groupSuggestionsBySheet.has(s.sheetName)) groupSuggestionsBySheet.set(s.sheetName, []);
+          groupSuggestionsBySheet.get(s.sheetName)!.push(s);
+        }
 
-      let writtenSheets = 0;
-      for (const [sheetName, sheetSuggestions] of suggestionsBySheet) {
-        writtenSheets++;
-        const sheetId = sheetIdByName.get(sheetName);
-        const colInfo = suggestedColBySheet.get(sheetName);
-        if (sheetId === undefined || !colInfo) continue;
+        for (const [sheetName, sheetSuggestions] of groupSuggestionsBySheet) {
+          const sheetId = sheetIdByName.get(sheetName);
+          const colInfo = suggestedColBySheet.get(sheetName);
+          if (sheetId === undefined || !colInfo) continue;
 
-        setScanProgress(p => ({
-          ...p,
-          message: `Writing suggestions: ${sheetName} (${writtenSheets} of ${suggestionsBySheet.size})...`,
-        }));
+          setScanProgress(p => ({
+            ...p,
+            message: `Writing ${groupLabel} → ${sheetName}...`,
+          }));
 
-        await routeFinderSheetsService.writeSuggestionsBatch(
-          aerationId, sheetId, sheetSuggestions,
-          colInfo.suggestedRCCol, colInfo.suggestedStreetCol
-        );
+          await routeFinderSheetsService.writeSuggestionsBatch(
+            aerationId, sheetId, sheetSuggestions,
+            colInfo.suggestedRCCol, colInfo.suggestedStreetCol
+          );
+        }
       }
 
       setCompleteCounts({ green: totalGreen, yellow: totalYellow, orange: totalOrange, red: totalRed });
