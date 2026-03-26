@@ -71,12 +71,31 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     map.on('load', () => {
       map.resize();
 
-      // light-v11 has no POIs or house numbers — just hide building footprints for a clean look
+      // Hide building footprints for a cleaner look
       map.getStyle().layers?.forEach((layer: any) => {
         const id = layer.id.toLowerCase();
         if (id.includes('building') || id.includes('structure')) {
           map.setLayoutProperty(layer.id, 'visibility', 'none');
         }
+      });
+
+      // Boost all road label layers: bigger, bolder, visible at all zooms
+      // light-v11 labels are very faint by default — we make them sharp and readable
+      map.getStyle().layers?.forEach((layer: any) => {
+        if (layer.type !== 'symbol') return;
+        const id = layer.id.toLowerCase();
+        // Only touch road/street name layers — skip anything else
+        if (!id.includes('road') && !id.includes('street') && !id.includes('path')) return;
+        try {
+          map.setLayerZoomRange(layer.id, 0, 24);
+          map.setLayoutProperty(layer.id, 'text-size', 13);
+          map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
+          map.setLayoutProperty(layer.id, 'text-allow-overlap', false);
+          map.setLayoutProperty(layer.id, 'text-ignore-placement', false);
+          map.setPaintProperty(layer.id, 'text-color', '#222222');
+          map.setPaintProperty(layer.id, 'text-halo-color', '#ffffff');
+          map.setPaintProperty(layer.id, 'text-halo-width', 2);
+        } catch { /* skip */ }
       });
 
       setMapLoaded(true);
@@ -138,9 +157,10 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         return;
       }
 
-      // Use 'road-label' as a stable insertion point in streets-v12.
-      // This keeps route lines above road fills but below all text labels at every zoom level.
-      const routeInsertBefore = map.getLayer('road-label') ? 'road-label' : undefined;
+      // Find the first symbol (text label) layer to insert route lines below it.
+      // This works across both streets-v12 and light-v11 style variants.
+      const firstSymbolLayer = map.getStyle().layers?.find((l: any) => l.type === 'symbol');
+      const routeInsertBefore = firstSymbolLayer?.id ?? undefined;
 
       const allCoords: [number, number][] = [];
 
