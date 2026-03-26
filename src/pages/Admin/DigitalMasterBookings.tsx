@@ -88,12 +88,10 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         if (layer.type !== 'symbol') return;
         const id = layer.id.toLowerCase();
 
-        // Only street/road name label layers get to stay visible
-        const isStreetNameLabel =
-          id === 'road-label' ||
-          id.startsWith('road-label') ||
-          (id.includes('road') && id.includes('label')) ||
-          (id.includes('street') && id.includes('label'));
+        // Keep ANY layer with 'label' in the name — this catches road-label,
+        // road-minor-label, road-street-label, local-road-label, residential-label
+        // etc. Cul-de-sacs live in minor/local label layers so we need all of them.
+        const isStreetNameLabel = id.includes('label');
 
         if (!isStreetNameLabel) {
           map.setLayoutProperty(layer.id, 'visibility', 'none');
