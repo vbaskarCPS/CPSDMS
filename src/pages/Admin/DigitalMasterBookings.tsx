@@ -71,6 +71,17 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     map.on('load', () => {
       map.resize();
 
+      // Hide building and structure fill/extrusion layers for a cleaner map
+      map.getStyle().layers?.forEach((layer: any) => {
+        const id = layer.id.toLowerCase();
+        if (
+          (layer.type === 'fill' || layer.type === 'fill-extrusion' || layer.type === 'line') &&
+          (id.includes('building') || id.includes('structure') || id.includes('indoor'))
+        ) {
+          map.setLayoutProperty(layer.id, 'visibility', 'none');
+        }
+      });
+
       // ALLOWLIST: hide every symbol layer, then only re-enable road/street name labels.
       // This prevents house numbers, POIs, parks etc. from competing with street names.
       map.getStyle().layers?.forEach((layer: any) => {
@@ -115,10 +126,12 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     const map = mapRef.current;
     if (!map) return;
     loadedIdsRef.current.forEach(id => {
-      if (id.startsWith('label-')) {
-        const routeId = id.replace('label-', '');
-        const labelId = `dmb-label-${routeId}`;
-        if (map.getLayer(labelId)) map.removeLayer(labelId);
+      if (id.startsWith('num-')) {
+        const routeId = id.replace('num-', '');
+        const numLabelId = `dmb-num-${routeId}`;
+        const numSrcId = `dmb-num-src-${routeId}`;
+        if (map.getLayer(numLabelId)) map.removeLayer(numLabelId);
+        if (map.getSource(numSrcId)) map.removeSource(numSrcId);
       } else {
         const lineId = `dmb-line-${id}`;
         const srcId = `dmb-src-${id}`;
@@ -200,27 +213,46 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           layout: { 'line-cap': 'round', 'line-join': 'round' },
         }, routeInsertBefore);
 
-        // Route code label along the line — sits above route lines, below street names
-        const labelId = `dmb-label-${route.id}`;
-        loadedIdsRef.current.push(`label-${route.id}`);
+        // Calculate centroid of all route coordinates for the floating number label
+        const allRoutCoords: [number, number][] = [];
+        route.segments.forEach((seg: any) => {
+          seg.coordinates.forEach((c: [number, number]) => allRoutCoords.push(c));
+        });
+        const centroidLng = allRoutCoords.reduce((s, c) => s + c[0], 0) / allRoutCoords.length;
+        const centroidLat = allRoutCoords.reduce((s, c) => s + c[1], 0) / allRoutCoords.length;
+
+        // Add a point source for the floating route number
+        const numSrcId = `dmb-num-src-${route.id}`;
+        const numLabelId = `dmb-num-${route.id}`;
+        loadedIdsRef.current.push(`num-${route.id}`);
+
+        map.addSource(numSrcId, {
+          type: 'geojson',
+          data: {
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              properties: { num: String(route.route_number), color: route.route_color },
+              geometry: { type: 'Point', coordinates: [centroidLng, centroidLat] },
+            }],
+          },
+        });
+
+        // Large floating route number — same style as printed mastermaps
         map.addLayer({
-          id: labelId,
+          id: numLabelId,
           type: 'symbol',
-          source: srcId,
+          source: numSrcId,
           layout: {
-            'symbol-placement': 'line',
-            'symbol-spacing': 200,
-            'text-field': route.route_code,
+            'text-field': ['get', 'num'],
             'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-            'text-size': 12,
-            'text-keep-upright': true,
-            'text-allow-overlap': false,
-            'text-ignore-placement': false,
-            'visibility': 'visible',
+            'text-size': 28,
+            'text-allow-overlap': true,
+            'text-ignore-placement': true,
           },
           paint: {
-            'text-color': route.route_color,
-            'text-halo-color': '#ffffff',
+            'text-color': ['get', 'color'],
+            'text-halo-color': 'rgba(255,255,255,0.85)',
             'text-halo-width': 2,
           },
         });
