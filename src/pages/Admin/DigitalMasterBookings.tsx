@@ -121,32 +121,46 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
       });
 
-      // Broader sweep — hide any layer that looks like house numbers or buildings
+      // Broader sweep — hide buildings and house numbers
       map.getStyle().layers?.forEach((layer: any) => {
         const id = layer.id.toLowerCase();
+
         // Hide building fills and extrusions
         if (layer.type === 'fill' || layer.type === 'fill-extrusion') {
           if (id.includes('building') || id.includes('structure')) {
             map.setLayoutProperty(layer.id, 'visibility', 'none');
           }
         }
-        // Hide any symbol layer that looks like house numbers —
-        // check both the layer ID and the actual text-field it renders
-        if (layer.type === 'symbol') {
-          const textField = JSON.stringify(layer.layout?.['text-field'] ?? '').toLowerCase();
-          const isHouseNumber =
-            id.includes('housenum') ||
-            id.includes('house-num') ||
-            id.includes('house_num') ||
-            id.includes('address') ||
-            id.includes('housenumber') ||
-            textField.includes('housenumber') ||
-            textField.includes('addr:housenumber') ||
-            textField.includes('addr:house') ||
-            textField.includes('ref');
-          if (isHouseNumber) {
-            map.setLayoutProperty(layer.id, 'visibility', 'none');
-          }
+
+        if (layer.type !== 'symbol') return;
+
+        // Check layer ID for house number hints
+        const idIsHouseNum =
+          id.includes('housenum') ||
+          id.includes('house-num') ||
+          id.includes('house_num') ||
+          id.includes('address') ||
+          id.includes('housenumber');
+
+        // Check the text-field expression — house number layers reference numeric address fields
+        const textField = JSON.stringify(layer.layout?.['text-field'] ?? '');
+        const fieldIsHouseNum =
+          textField.includes('housenumber') ||
+          textField.includes('house_num') ||
+          textField.includes('addr') ||
+          textField.includes('ref');
+
+        // Also catch any layer NOT containing 'label' or 'shield' in its ID
+        // that isn't a road name layer — these are almost certainly address/number layers
+        const isNotRoadLabel =
+          !id.includes('label') &&
+          !id.includes('shield') &&
+          !id.includes('motorway') &&
+          !id.includes('road') &&
+          !id.includes('street');
+
+        if (idIsHouseNum || fieldIsHouseNum || isNotRoadLabel) {
+          map.setLayoutProperty(layer.id, 'visibility', 'none');
         }
       });
 
