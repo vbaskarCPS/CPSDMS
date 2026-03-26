@@ -71,12 +71,20 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     map.on('load', () => {
       map.resize();
 
-      // Single pass: hide non-road labels, boost road labels with point placement
+      // Pass 1: hide non-road symbol layers and building fills
       map.getStyle().layers?.forEach((layer: any) => {
-        if (layer.type !== 'symbol') return;
         const id = layer.id.toLowerCase();
 
-        // Hide anything that isn't a road/street name
+        // Hide building/structure fill layers so house footprints don't render
+        if (layer.type === 'fill' || layer.type === 'fill-extrusion') {
+          if (id.includes('building') || id.includes('structure') || id.includes('indoor')) {
+            map.setLayoutProperty(layer.id, 'visibility', 'none');
+            return;
+          }
+        }
+
+        if (layer.type !== 'symbol') return;
+
         const shouldHide =
           id.includes('poi') ||
           id.includes('airport') ||
@@ -101,9 +109,10 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           return;
         }
 
-        // Boost road/street name layers:
-        // point placement = renders at midpoint regardless of segment length (cul-de-sacs always show)
-        // text-padding 120 = collision detection removes duplicate same-name adjacent segment labels
+        // Pass 2: boost road/street name layers
+        // point placement = renders at midpoint regardless of segment length
+        // text-padding 40 = suppresses duplicate same-name labels on adjacent segments
+        //   without blocking labels on nearby different streets
         try {
           map.setLayerZoomRange(layer.id, 0, 24);
           map.setLayoutProperty(layer.id, 'symbol-placement', 'point');
@@ -111,11 +120,40 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
           map.setLayoutProperty(layer.id, 'text-allow-overlap', false);
           map.setLayoutProperty(layer.id, 'text-ignore-placement', false);
-          map.setLayoutProperty(layer.id, 'text-padding', 2);
+          map.setLayoutProperty(layer.id, 'text-padding', 40);
           map.setPaintProperty(layer.id, 'text-color', '#222222');
           map.setPaintProperty(layer.id, 'text-halo-color', '#ffffff');
           map.setPaintProperty(layer.id, 'text-halo-width', 2);
         } catch { /* skip */ }
+      });
+
+      // Pass 3: make non-route street outlines more visible
+      // light-v11 roads are very faint — boost them so the street grid reads clearly
+      map.getStyle().layers?.forEach((layer: any) => {
+        if (layer.type !== 'line') return;
+        const id = layer.id.toLowerCase();
+        if (
+          id.includes('road') ||
+          id.includes('street') ||
+          id.includes('path') ||
+          id.includes('motorway') ||
+          id.includes('trunk') ||
+          id.includes('primary') ||
+          id.includes('secondary') ||
+          id.includes('tertiary') ||
+          id.includes('residential') ||
+          id.includes('service')
+        ) {
+          try {
+            map.setPaintProperty(layer.id, 'line-color', '#bbbbbb');
+            map.setPaintProperty(layer.id, 'line-width', [
+              'interpolate', ['linear'], ['zoom'],
+              10, 0.8,
+              14, 2,
+              17, 4,
+            ]);
+          } catch { /* skip */ }
+        }
       });
 
       setMapLoaded(true);
