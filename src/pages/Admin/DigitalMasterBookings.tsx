@@ -88,23 +88,30 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         if (layer.type !== 'symbol') return;
         const id = layer.id.toLowerCase();
 
-        // Keep ANY layer with 'label' in the name — this catches road-label,
-        // road-minor-label, road-street-label, local-road-label, residential-label
-        // etc. Cul-de-sacs live in minor/local label layers so we need all of them.
-        const isStreetNameLabel = id.includes('label');
+        // Keep label layers EXCEPT house numbers and addresses
+        const isHouseNumber =
+          id.includes('housenum') ||
+          id.includes('house-num') ||
+          id.includes('address');
+
+        const isStreetNameLabel = id.includes('label') && !isHouseNumber;
 
         if (!isStreetNameLabel) {
           map.setLayoutProperty(layer.id, 'visibility', 'none');
           return;
         }
 
-        // Street name layers: visible at all zooms, bold, large, no collision suppression
+        // Street name layers: visible at all zooms, bold, no collision suppression
         map.setLayerZoomRange(layer.id, 0, 24);
         map.setLayoutProperty(layer.id, 'text-allow-overlap', true);
         map.setLayoutProperty(layer.id, 'text-ignore-placement', true);
         map.setLayoutProperty(layer.id, 'text-optional', true);
+        map.setLayoutProperty(layer.id, 'text-padding', 0);
         try {
-          map.setLayoutProperty(layer.id, 'text-size', 13);
+          // Switch to point placement so short cul-de-sacs don't need
+          // a minimum segment length to render their name
+          map.setLayoutProperty(layer.id, 'symbol-placement', 'point');
+          map.setLayoutProperty(layer.id, 'text-size', 12);
           map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
         } catch { /* skip layers that don't support these props */ }
       });
