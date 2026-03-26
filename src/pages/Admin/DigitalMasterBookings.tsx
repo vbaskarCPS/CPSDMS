@@ -70,6 +70,29 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     map.addControl(new mapboxgl.NavigationControl(), 'top-right');
     map.on('load', () => {
       map.resize();
+
+      // Hide POI, place, transit, and water labels — keep only road/street name labels
+      map.getStyle().layers?.forEach((layer: any) => {
+        if (layer.type !== 'symbol') return;
+        const id = layer.id.toLowerCase();
+        const shouldHide =
+          id.includes('poi') ||
+          id.includes('transit') ||
+          id.includes('airport') ||
+          id.includes('park-label') ||
+          id.includes('place') ||
+          id.includes('settlement') ||
+          id.includes('country') ||
+          id.includes('state') ||
+          id.includes('water-label') ||
+          id.includes('waterway') ||
+          id.includes('natural') ||
+          id.includes('continent');
+        if (shouldHide) {
+          map.setLayoutProperty(layer.id, 'visibility', 'none');
+        }
+      });
+
       setMapLoaded(true);
     });
     mapRef.current = map;
@@ -121,6 +144,12 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         return;
       }
 
+      // Find the first symbol (label) layer so we can insert route lines BELOW it.
+      // This keeps street names always visible on top of the coloured route lines.
+      const firstSymbolLayerId = map.getStyle().layers?.find(
+        (l: mapboxgl.AnyLayer) => l.type === 'symbol'
+      )?.id;
+
       const allCoords: [number, number][] = [];
 
       routes.forEach(route => {
@@ -147,7 +176,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           data: { type: 'FeatureCollection', features },
         });
 
-        // Bold, visible lines on light map
+        // Insert BEFORE the first symbol layer so street name labels render on top
         map.addLayer({
           id: lineId,
           type: 'line',
@@ -155,10 +184,10 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           paint: {
             'line-color': route.route_color,
             'line-width': 7,
-            'line-opacity': 0.75,
+            'line-opacity': 0.5,
           },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
-        });
+        }, firstSymbolLayerId);
       });
 
       // Fly map to fit all routes
