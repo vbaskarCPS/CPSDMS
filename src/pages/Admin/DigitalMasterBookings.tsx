@@ -71,30 +71,51 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     map.on('load', () => {
       map.resize();
 
-      // Hide building footprints for a cleaner look
-      map.getStyle().layers?.forEach((layer: any) => {
-        const id = layer.id.toLowerCase();
-        if (id.includes('building') || id.includes('structure')) {
-          map.setLayoutProperty(layer.id, 'visibility', 'none');
-        }
-      });
-
-      // Boost ALL symbol layers in light-v11 — this style has no POIs or house numbers
-      // so every symbol layer is a road/street name. Make them bigger, bolder, and
-      // visible at all zooms so cul-de-sacs and courts always render regardless of
-      // what Mapbox calls their internal layer ID.
+      // Single pass: hide non-road labels, boost road labels with point placement
       map.getStyle().layers?.forEach((layer: any) => {
         if (layer.type !== 'symbol') return;
+        const id = layer.id.toLowerCase();
+
+        // Hide anything that isn't a road/street name
+        const shouldHide =
+          id.includes('poi') ||
+          id.includes('airport') ||
+          id.includes('transit') ||
+          id.includes('place') ||
+          id.includes('settlement') ||
+          id.includes('state') ||
+          id.includes('country') ||
+          id.includes('continent') ||
+          id.includes('water') ||
+          id.includes('natural') ||
+          id.includes('park') ||
+          id.includes('housenum') ||
+          id.includes('address') ||
+          id.includes('admin') ||
+          id.includes('building') ||
+          id.includes('structure') ||
+          id.includes('junction');
+
+        if (shouldHide) {
+          map.setLayoutProperty(layer.id, 'visibility', 'none');
+          return;
+        }
+
+        // Boost road/street name layers:
+        // point placement = renders at midpoint regardless of segment length (cul-de-sacs always show)
+        // text-padding 120 = collision detection removes duplicate same-name adjacent segment labels
         try {
           map.setLayerZoomRange(layer.id, 0, 24);
+          map.setLayoutProperty(layer.id, 'symbol-placement', 'point');
           map.setLayoutProperty(layer.id, 'text-size', 13);
           map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
           map.setLayoutProperty(layer.id, 'text-allow-overlap', false);
           map.setLayoutProperty(layer.id, 'text-ignore-placement', false);
+          map.setLayoutProperty(layer.id, 'text-padding', 120);
           map.setPaintProperty(layer.id, 'text-color', '#222222');
           map.setPaintProperty(layer.id, 'text-halo-color', '#ffffff');
           map.setPaintProperty(layer.id, 'text-halo-width', 2);
-        } catch { /* skip layers that don't support these props */ }
+        } catch { /* skip */ }
       });
 
       setMapLoaded(true);
