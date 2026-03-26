@@ -63,7 +63,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     if (!mapContainerRef.current || mapRef.current) return;
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
-      style: 'mapbox://styles/mapbox/streets-v12',
+      style: 'mapbox://styles/mapbox/light-v11',
       center: [-79.870, 43.320],
       zoom: 13,
     });
@@ -71,51 +71,12 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     map.on('load', () => {
       map.resize();
 
-      // Hide building and structure fill/extrusion layers for a cleaner map
+      // light-v11 has no POIs or house numbers — just hide building footprints for a clean look
       map.getStyle().layers?.forEach((layer: any) => {
         const id = layer.id.toLowerCase();
-        if (
-          (layer.type === 'fill' || layer.type === 'fill-extrusion' || layer.type === 'line') &&
-          (id.includes('building') || id.includes('structure') || id.includes('indoor'))
-        ) {
+        if (id.includes('building') || id.includes('structure')) {
           map.setLayoutProperty(layer.id, 'visibility', 'none');
         }
-      });
-
-      // ALLOWLIST: hide every symbol layer, then only re-enable road/street name labels.
-      // This prevents house numbers, POIs, parks etc. from competing with street names.
-      map.getStyle().layers?.forEach((layer: any) => {
-        if (layer.type !== 'symbol') return;
-        const id = layer.id.toLowerCase();
-
-        // Keep label layers EXCEPT house numbers and addresses
-        const isHouseNumber =
-          id.includes('housenum') ||
-          id.includes('house-num') ||
-          id.includes('address');
-
-        const isStreetNameLabel = id.includes('label') && !isHouseNumber;
-
-        if (!isStreetNameLabel) {
-          map.setLayoutProperty(layer.id, 'visibility', 'none');
-          return;
-        }
-
-        // Street name layers: visible at all zooms, bold, no collision suppression
-        map.setLayerZoomRange(layer.id, 0, 24);
-        map.setLayoutProperty(layer.id, 'text-allow-overlap', false);
-        map.setLayoutProperty(layer.id, 'text-ignore-placement', false);
-        map.setLayoutProperty(layer.id, 'text-optional', true);
-        map.setLayoutProperty(layer.id, 'text-padding', 0);
-        try {
-          // Point placement: renders at segment midpoint regardless of length (fixes cul-de-sacs).
-          // text-allow-overlap: false means Mapbox collision detection suppresses duplicate
-          // same-name labels that are too close together — naturally deduplicates multi-segment streets.
-          map.setLayoutProperty(layer.id, 'symbol-placement', 'point');
-          map.setLayoutProperty(layer.id, 'text-size', 12);
-          map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
-          map.setLayoutProperty(layer.id, 'text-padding', 50);
-        } catch { /* skip layers that don't support these props */ }
       });
 
       setMapLoaded(true);
