@@ -106,6 +106,9 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
 
         if (isRoadLabel) {
           map.setLayerZoomRange(layer.id, 0, 24);
+          // Allow labels to overlap so short streets (courts, cul-de-sacs) always show
+          map.setLayoutProperty(layer.id, 'text-allow-overlap', true);
+          map.setLayoutProperty(layer.id, 'text-ignore-placement', true);
         }
       });
 
@@ -160,11 +163,9 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         return;
       }
 
-      // Find the first symbol (label) layer so we can insert route lines BELOW it.
-      // This keeps street names always visible on top of the coloured route lines.
-      const firstSymbolLayerId = map.getStyle().layers?.find(
-        (l: mapboxgl.AnyLayer) => l.type === 'symbol'
-      )?.id;
+      // Use 'road-label' as a stable insertion point in streets-v12.
+      // This keeps route lines above road fills but below all text labels at every zoom level.
+      const routeInsertBefore = map.getLayer('road-label') ? 'road-label' : undefined;
 
       const allCoords: [number, number][] = [];
 
@@ -200,10 +201,10 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           paint: {
             'line-color': route.route_color,
             'line-width': 7,
-            'line-opacity': 0.5,
+            'line-opacity': 0.65,
           },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
-        }, firstSymbolLayerId);
+        }, routeInsertBefore);
       });
 
       // Fly map to fit all routes
