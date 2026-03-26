@@ -88,10 +88,10 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         }
       });
 
-      // Step 2: for every road label layer, add a companion 'point' backup layer.
-      // The original layer uses 'line' placement (renders along the road when there's room).
-      // The backup uses 'point' placement (renders at midpoint when the segment is too short).
-      // text-optional: true means neither layer forces itself — Mapbox picks the best fit.
+      // Step 2: for every road label layer:
+      // - Boost the original (line placement) with bold font, visible from zoom 0, text-optional
+      // - Add a point backup that only fires when the line placement has no room
+      // Both are text-optional so Mapbox's collision system ensures only ONE renders per street.
       const roadLabelLayers = map.getStyle().layers?.filter((layer: any) =>
         layer.type === 'symbol' &&
         layer.id.toLowerCase().includes('label') &&
@@ -99,8 +99,22 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       ) ?? [];
 
       roadLabelLayers.forEach((layer: any) => {
+        // Boost the original line-placement layer
+        try {
+          map.setLayerZoomRange(layer.id, 0, 24);
+          map.setLayoutProperty(layer.id, 'text-optional', true);
+          map.setLayoutProperty(layer.id, 'text-allow-overlap', false);
+          map.setLayoutProperty(layer.id, 'text-ignore-placement', false);
+          map.setLayoutProperty(layer.id, 'text-size', 13);
+          map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
+          map.setPaintProperty(layer.id, 'text-color', '#111111');
+          map.setPaintProperty(layer.id, 'text-halo-color', '#ffffff');
+          map.setPaintProperty(layer.id, 'text-halo-width', 2);
+        } catch { /* skip */ }
+
+        // Add point backup — smaller font so floated labels read as secondary
         const backupId = `${layer.id}-point-backup`;
-        if (map.getLayer(backupId)) return; // don't add twice
+        if (map.getLayer(backupId)) return;
         try {
           map.addLayer({
             id: backupId,
@@ -109,14 +123,22 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
             'source-layer': (layer as any)['source-layer'] ?? 'road',
             filter: (layer as any).filter,
             minzoom: 0,
+            maxzoom: 24,
             layout: {
               ...(layer.layout ?? {}),
               'symbol-placement': 'point',
               'text-optional': true,
               'text-allow-overlap': false,
               'text-ignore-placement': false,
+              'text-size': 11,
+              'text-font': ['DIN Pro Medium', 'Arial Unicode MS Regular'],
             },
-            paint: layer.paint ?? {},
+            paint: {
+              ...(layer.paint ?? {}),
+              'text-color': '#111111',
+              'text-halo-color': '#ffffff',
+              'text-halo-width': 2,
+            },
           });
         } catch { /* skip if layer config isn't compatible */ }
       });
@@ -216,6 +238,8 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           id: lineId,
           type: 'line',
           source: srcId,
+          minzoom: 0,
+          maxzoom: 24,
           paint: {
             'line-color': route.route_color,
             'line-width': 7,
