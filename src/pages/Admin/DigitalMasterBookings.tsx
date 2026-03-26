@@ -132,7 +132,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
               'text-optional': true,
               'text-allow-overlap': false,
               'text-ignore-placement': false,
-              'text-padding': 50,
+              'text-padding': 5,
               'text-size': 11,
               'text-font': ['DIN Pro Medium', 'Arial Unicode MS Regular'],
             },
@@ -247,8 +247,8 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           maxzoom: 24,
           paint: {
             'line-color': route.route_color,
-            'line-width': 10,
-            'line-opacity': 0.9,
+            'line-width': 7,
+            'line-opacity': 0.75,
           },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
         }, routeInsertBefore);
