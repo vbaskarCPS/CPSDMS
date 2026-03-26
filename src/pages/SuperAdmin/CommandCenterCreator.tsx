@@ -62,6 +62,7 @@ const CommandCenterCreator: React.FC = () => {
     masterbookingsUrl: '',
     jobFairsEnabled: false,
     jobFairsSlug: '',
+    digitalMappingEnabled: false,
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -97,6 +98,7 @@ const CommandCenterCreator: React.FC = () => {
       masterbookingsUrl: '',
       jobFairsEnabled: false,
       jobFairsSlug: '',
+      digitalMappingEnabled: false,
     });
     setFormErrors({});
     setEditingCC(null);
@@ -120,6 +122,7 @@ const CommandCenterCreator: React.FC = () => {
       masterbookingsUrl: mbUrl,
       jobFairsEnabled: cc.jobFairsEnabled || false,
       jobFairsSlug: cc.jobFairsSlug || '',
+      digitalMappingEnabled: cc.digitalMappingEnabled || false,
     });
     setFormErrors({});
     setShowModal(true);
@@ -187,6 +190,7 @@ const CommandCenterCreator: React.FC = () => {
           masterbookingsSheetId,
           jobFairsEnabled: formData.jobFairsEnabled,
           jobFairsSlug: formData.jobFairsEnabled ? formData.jobFairsSlug : '',
+          digitalMappingEnabled: formData.digitalMappingEnabled,
         };
         
         if (formData.password.trim()) {
@@ -204,6 +208,7 @@ const CommandCenterCreator: React.FC = () => {
           masterbookingsSheetId,
           jobFairsEnabled: formData.jobFairsEnabled,
           jobFairsSlug: formData.jobFairsEnabled ? formData.jobFairsSlug : '',
+          digitalMappingEnabled: formData.digitalMappingEnabled,
         });
       }
 
@@ -393,7 +398,7 @@ const CommandCenterCreator: React.FC = () => {
             </div>
             <div>
               <h3 className="text-lg font-bold text-white">{cc.displayName}</h3>
-              <div className="flex items-center gap-3 text-sm text-gray-400">
+              <div className="flex items-center gap-3 text-sm text-gray-400 flex-wrap">
                 <span className="flex items-center gap-1">
                   <User size={12} />
                   {cc.username}
@@ -409,6 +414,12 @@ const CommandCenterCreator: React.FC = () => {
                   <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-900/50 text-purple-300 flex items-center gap-1">
                     <UserPlus size={10} />
                     Job Fairs
+                  </span>
+                )}
+                {cc.digitalMappingEnabled && (
+                  <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-900/50 text-blue-300 flex items-center gap-1">
+                    <MapIcon size={10} />
+                    Digital Map
                   </span>
                 )}
               </div>
@@ -605,6 +616,7 @@ const CommandCenterCreator: React.FC = () => {
         </div>
       </div>
 
+      {/* CREATE / EDIT MODAL */}
       {showModal && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
           <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -734,6 +746,27 @@ const CommandCenterCreator: React.FC = () => {
                 )}
               </div>
 
+              {/* DIGITAL MAPPING TOGGLE */}
+              <div className="pt-4 border-t border-gray-700">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <MapIcon className="text-blue-400" size={18} />
+                    <div>
+                      <label className="text-sm font-medium text-gray-300">Enable Digital Mapping</label>
+                      <p className="text-xs text-gray-500 mt-0.5">Shows Digital Master Bookings map in the session panel</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, digitalMappingEnabled: !formData.digitalMappingEnabled })}
+                    className={`relative w-12 h-6 rounded-full transition-colors flex-shrink-0 ${formData.digitalMappingEnabled ? 'bg-blue-600' : 'bg-gray-600'}`}
+                  >
+                    <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${formData.digitalMappingEnabled ? 'translate-x-7' : 'translate-x-1'}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* JOB FAIRS TOGGLE */}
               <div className="pt-4 border-t border-gray-700">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
@@ -800,6 +833,7 @@ const CommandCenterCreator: React.FC = () => {
         </div>
       )}
 
+      {/* WIPE MODAL */}
       {showWipeModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
           <div className="bg-gray-900 rounded-xl border border-red-900 w-full max-w-md">

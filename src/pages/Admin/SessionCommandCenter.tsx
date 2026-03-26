@@ -27,6 +27,7 @@ import {
   GraduationCap,
   FileSpreadsheet,
   MapPin,
+  Map as MapIcon,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
@@ -41,6 +42,7 @@ import JobFairManager from './JobFairManager';
 import TrainingsTab from './TrainingsTab';
 import PayslipGenerator from './PayslipGenerator';
 import RouteFinderView from '../../components/RouteFinder/RouteFinderView';
+import DigitalMasterBookings from './DigitalMasterBookings';
 
 const SessionCommandCenter: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -61,6 +63,9 @@ const SessionCommandCenter: React.FC = () => {
 
   // Route Finder visibility
   const [showRouteFinder, setShowRouteFinder] = useState(false);
+
+  // Digital Master Bookings visibility
+  const [showDigitalMasterBookings, setShowDigitalMasterBookings] = useState(false);
 
   // --- COMMAND CENTER CONTEXT (stored in state to avoid infinite loops) ---
   const [currentCC, setCurrentCC] = useState(() => commandCenterService.getCurrentCommandCenter());
@@ -143,6 +148,9 @@ const SessionCommandCenter: React.FC = () => {
 
   // Computed: Has job fairs / onboarding enabled
   const hasOnboarding = currentCC?.jobFairsEnabled || false;
+
+  // Computed: Has digital mapping enabled
+  const hasDigitalMapping = currentCC?.digitalMappingEnabled || false;
 
   // Load session function (memoized to avoid recreation)
   const loadSession = useCallback(async () => {
@@ -496,6 +504,11 @@ const SessionCommandCenter: React.FC = () => {
     return null;
   }
 
+  // --- DIGITAL MASTER BOOKINGS OVERLAY ---
+  if (showDigitalMasterBookings) {
+    return <DigitalMasterBookings onBack={() => setShowDigitalMasterBookings(false)} />;
+  }
+
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4">
       <div className="max-w-6xl mx-auto">
@@ -590,7 +603,7 @@ const SessionCommandCenter: React.FC = () => {
               >
                 Payout Today
               </button>
-              {/* ONBOARDING TAB (replaces Job Fairs, shown when jobFairsEnabled) */}
+              {/* ONBOARDING TAB (shown when jobFairsEnabled) */}
               {hasOnboarding && (
                 <button
                   onClick={() => handleTabChange('onboarding')}
@@ -626,8 +639,18 @@ const SessionCommandCenter: React.FC = () => {
               <RouteFinderView onBack={() => setShowRouteFinder(false)} />
             ) : (
               <>
-                {/* Generate Payslips + Route Finder buttons */}
+                {/* Utility buttons row */}
                 <div className="flex justify-end gap-2">
+                  {/* Digital Master Bookings — only if enabled for this CC */}
+                  {hasDigitalMapping && (
+                    <button
+                      onClick={() => setShowDigitalMasterBookings(true)}
+                      className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-700 transition-colors text-sm font-medium"
+                    >
+                      <MapIcon size={16} className="text-blue-400" />
+                      Digital Master Bookings
+                    </button>
+                  )}
                   <button
                     onClick={() => setShowRouteFinder(true)}
                     className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-700 transition-colors text-sm font-medium"

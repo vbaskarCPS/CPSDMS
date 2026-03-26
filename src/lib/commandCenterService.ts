@@ -21,6 +21,8 @@ export interface CommandCenter {
   // Job Fairs
   jobFairsEnabled?: boolean;
   jobFairsSlug?: string;
+  // Digital Mapping
+  digitalMappingEnabled?: boolean;
 }
 
 export interface CommandCenterWithPassword extends CommandCenter {
@@ -253,6 +255,14 @@ class CommandCenterService {
   }
 
   /**
+   * Check if current command center has digital mapping enabled
+   */
+  public currentHasDigitalMapping(): boolean {
+    const cc = this.getCurrentCommandCenter();
+    return cc?.digitalMappingEnabled || false;
+  }
+
+  /**
    * Set the current command center context
    */
   public setCurrentCommandCenter(cc: CommandCenter): void {
@@ -359,6 +369,7 @@ class CommandCenterService {
     replyToEmail?: string;
     jobFairsEnabled?: boolean;
     jobFairsSlug?: string;
+    digitalMappingEnabled?: boolean;
   }): Promise<CommandCenter> {
     // Validate username uniqueness across all login types
     const isAvailable = await this.isUsernameAvailable(cc.username);
@@ -392,6 +403,7 @@ class CommandCenterService {
         reply_to_email: cc.replyToEmail,
         job_fairs_enabled: cc.jobFairsEnabled || false,
         job_fairs_slug: cc.jobFairsEnabled ? cc.jobFairsSlug : null,
+        digital_mapping_enabled: cc.digitalMappingEnabled || false,
       })
       .select()
       .single();
@@ -414,6 +426,7 @@ class CommandCenterService {
     replyToEmail: string;
     jobFairsEnabled: boolean;
     jobFairsSlug: string;
+    digitalMappingEnabled: boolean;
   }>): Promise<CommandCenter> {
     // If username is being changed, check availability
     if (updates.username) {
@@ -452,6 +465,7 @@ class CommandCenterService {
     if (updates.jobFairsSlug !== undefined) {
       dbUpdates.job_fairs_slug = updates.jobFairsEnabled ? updates.jobFairsSlug : null;
     }
+    if (updates.digitalMappingEnabled !== undefined) dbUpdates.digital_mapping_enabled = updates.digitalMappingEnabled;
 
     const { data, error } = await supabase
       .from('command_centers')
@@ -657,6 +671,7 @@ class CommandCenterService {
       createdAt: data.created_at,
       jobFairsEnabled: data.job_fairs_enabled || false,
       jobFairsSlug: data.job_fairs_slug,
+      digitalMappingEnabled: data.digital_mapping_enabled || false,
     };
   }
 }
