@@ -50,6 +50,18 @@ const SAMPLE_SHUTTLE = {
   googleMapsUrl: 'https://maps.google.com',
 };
 
+// Variable reference shown in the editor
+const BODY_VARS = [
+  { placeholder: '{{firstName}}',     description: 'Contractor first name' },
+  { placeholder: '{{lastName}}',      description: 'Last name' },
+  { placeholder: '{{fullName}}',      description: 'Full name' },
+  { placeholder: '{{date}}',          description: 'Date tab (e.g. Mar27)' },
+  { placeholder: '{{contractorId}}',  description: 'CN# (e.g. H1001)' },
+  { placeholder: '{{days}}',          description: 'Days worked count' },
+  { placeholder: '{{shuttlePoint}}',  description: 'Shuttle location + time (or fallback address if no shuttle)' },
+  { placeholder: '{{confirmButton}}', description: 'Green "Confirm My Shift" button — links to confirmation page' },
+];
+
 const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
   const [currentCC] = useState(() => commandCenterService.getCurrentCommandCenter());
   const [activeTab, setActiveTab] = useState<TemplateTab>('regular');
@@ -61,13 +73,9 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
   const [error,    setError]    = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
 
-  // Load templates on mount
   useEffect(() => {
     loadWorkerbookTemplates()
-      .then(({ regular: r, rookie: k }) => {
-        setRegular(r);
-        setRookie(k);
-      })
+      .then(({ regular: r, rookie: k }) => { setRegular(r); setRookie(k); })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
@@ -211,32 +219,45 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
                   className={inputClass}
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Variables: {'{{firstName}}'}, {'{{date}}'}, {'{{contractorId}}'}
+                  Variables: <code className="text-gray-400">{'{{firstName}}'}</code>, <code className="text-gray-400">{'{{date}}'}</code>, <code className="text-gray-400">{'{{contractorId}}'}</code>
                 </p>
               </div>
 
-              {/* Body Intro */}
+              {/* Body */}
               <div className="bg-gray-800 rounded-xl border border-gray-700 p-4">
                 <h3 className="font-bold text-sm text-gray-300 mb-2">Email Body</h3>
                 <textarea
-                  rows={6}
+                  rows={10}
                   value={currentTemplate.bodyIntro}
                   onChange={e => update({ bodyIntro: e.target.value })}
-                  className={inputClass + ' resize-y'}
+                  className={inputClass + ' resize-y font-mono text-xs leading-relaxed'}
                   placeholder="Write the email body here..."
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  Variables: {'{{firstName}}'}, {'{{lastName}}'}, {'{{date}}'}, {'{{contractorId}}'}, {'{{days}}'}
-                  <br />Use blank lines to create paragraph breaks.
-                </p>
+
+                {/* Variable reference table */}
+                <div className="mt-3 bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
+                  <div className="px-3 py-2 bg-gray-700/50 text-xs font-bold text-gray-400 uppercase tracking-wide">
+                    Available Placeholders
+                  </div>
+                  <div className="divide-y divide-gray-800">
+                    {BODY_VARS.map(v => (
+                      <div key={v.placeholder} className="flex items-start gap-3 px-3 py-2">
+                        <code
+                          className="text-[11px] bg-gray-800 text-blue-300 px-1.5 py-0.5 rounded border border-gray-700 flex-shrink-0 cursor-pointer hover:bg-blue-900/30 hover:border-blue-700 transition-colors"
+                          title="Click to copy"
+                          onClick={() => navigator.clipboard?.writeText(v.placeholder)}
+                        >
+                          {v.placeholder}
+                        </code>
+                        <span className="text-xs text-gray-400 leading-relaxed">{v.description}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 {activeTab === 'rookie' && (
                   <div className="mt-2 text-xs text-purple-300 bg-purple-900/20 border border-purple-700/40 rounded p-2">
-                    🎓 Rookie emails automatically include the online training login section and shuttle info.
-                  </div>
-                )}
-                {activeTab === 'regular' && (
-                  <div className="mt-2 text-xs text-blue-300 bg-blue-900/20 border border-blue-700/40 rounded p-2">
-                    🚐 Shuttle point info is automatically included when the contractor has a shuttle assigned.
+                    🎓 Rookie emails automatically include the online training login section below the body.
                   </div>
                 )}
               </div>
@@ -253,7 +274,7 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
                 />
                 <p className="text-xs text-gray-500 mt-1">
                   Emails send from <code className="text-gray-400">staff@propertystars.app</code>.
-                  When the contractor clicks "Confirm My Shift" it opens a reply to this address.
+                  Leave blank to use the default.
                 </p>
               </div>
 
@@ -317,7 +338,7 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
                 </span>
                 <span className="text-xs text-gray-500">Sample data shown</span>
               </div>
-              <div className="bg-white" style={{ height: '680px', overflow: 'auto' }}>
+              <div className="bg-white" style={{ height: '700px', overflow: 'auto' }}>
                 <iframe
                   srcDoc={previewHtml()}
                   className="w-full h-full border-0"

@@ -5,6 +5,7 @@ import { ShuttlePoint } from './onboardingService';
 
 const LOGO_URL = 'https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png';
 const CONFIRM_FUNCTION_URL = 'https://mipvcafqrmwxnoqmicxh.supabase.co/functions/v1/workerbook-confirm';
+const NO_SHUTTLE_FALLBACK  = 'No Shuttle Assigned: Please be at 405 Jones Road by 8:15AM';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -46,7 +47,7 @@ export const DEFAULT_REGULAR_TEMPLATE: WorkerbookEmailTemplate = {
   subject: 'Your Shift Confirmation – {{date}}',
   bodyIntro:
     'Hi {{firstName}},\n\nThis is a reminder about your upcoming shift on {{date}}. ' +
-    'Please review your details below and confirm your attendance.',
+    'Please review your details below and confirm your attendance.\n\n{{shuttlePoint}}\n\n{{confirmButton}}',
   replyTo: '',
   signatureName: '',
   signatureTitle: '',
@@ -58,7 +59,7 @@ export const DEFAULT_ROOKIE_TEMPLATE: WorkerbookEmailTemplate = {
   subject: "Welcome to Your First Day – {{date}}",
   bodyIntro:
     "Hi {{firstName}},\n\nWelcome to the team! We're excited for your first day on {{date}}. " +
-    'Please review your shift details and complete your online training before you arrive.',
+    'Please review your shift details and complete your online training before you arrive.\n\n{{shuttlePoint}}\n\n{{confirmButton}}',
   replyTo: '',
   signatureName: '',
   signatureTitle: '',
@@ -168,10 +169,6 @@ export async function cleanOldWorkerbookEmailLogs(): Promise<void> {
 
 // ─── CONFIRMATIONS ────────────────────────────────────────────────────────────
 
-/**
- * Build the base64 token embedded in the confirm button URL.
- * Contains everything the edge function needs — no row number (rows shift).
- */
 export function buildConfirmToken(data: WorkerbookEmailData): string {
   const payload = {
     commandCenterId: data.commandCenterId,
@@ -182,9 +179,6 @@ export function buildConfirmToken(data: WorkerbookEmailData): string {
   return btoa(JSON.stringify(payload));
 }
 
-/**
- * Load all confirmations for a specific CC + date tab from Supabase.
- */
 export async function getConfirmationsForDateTab(
   commandCenterId: string,
   dateTab: string,
@@ -207,14 +201,58 @@ export async function getConfirmationsForDateTab(
   }));
 }
 
-/**
- * Mark a confirmation row as synced to Google Sheets.
- */
 export async function markConfirmationSynced(id: string): Promise<void> {
   await supabase
     .from('workerbook_confirmations')
     .update({ synced_to_sheets: true })
     .eq('id', id);
+}
+
+// ─── INLINE PLACEHOLDER BUILDERS ─────────────────────────────────────────────
+
+/**
+ * Builds the HTML string that replaces {{shuttlePoint}} inline in the body.
+ * With shuttle + configured point → shows name + pickup time.
+ * With shuttle but no point configured → shows shuttle number.
+ * No shuttle → fallback address text.
+ */
+function buildShuttleInline(shuttle: string | undefined, point: ShuttlePoint | null): string {
+  if (!shuttle) {
+    return `<span style="color:#92400e;background-color:#fef3c7;padding:6px 12px;border-radius:6px;
+      display:inline-block;font-size:14px;font-weight:bold;">
+      🚐 ${NO_SHUTTLE_FALLBACK}
+    </span>`;
+  }
+
+  if (point) {
+    const mapsLink = point.googleMapsUrl
+      ? ` &nbsp;<a href="${point.googleMapsUrl}" style="color:#2563eb;font-size:13px;">View on Maps</a>`
+      : '';
+    return `<span style="color:#1e40af;background-color:#eff6ff;padding:6px 12px;border-radius:6px;
+      display:inline-block;font-size:14px;">
+      🚐 <strong>${point.description}</strong> &nbsp;·&nbsp; ${point.pickupTime}${mapsLink}
+    </span>`;
+  }
+
+  return `<span style="color:#92400e;background-color:#fef3c7;padding:6px 12px;border-radius:6px;
+    display:inline-block;font-size:14px;">
+    🚐 Shuttle #${shuttle} — details TBC
+  </span>`;
+}
+
+/**
+ * Builds the HTML string that replaces {{confirmButton}} inline in the body.
+ */
+function buildConfirmButtonInline(confirmUrl: string, date: string): string {
+  return `<a href="${confirmUrl}"
+    style="display:inline-block;background-color:#16a34a;color:#ffffff;
+           padding:14px 32px;border-radius:8px;font-size:16px;font-weight:bold;
+           text-decoration:none;margin:4px 0;">
+    ✅ Confirm My Shift
+  </a>
+  <br/><span style="font-size:12px;color:#9ca3af;">
+    Tap above to confirm your attendance for ${date}.
+  </span>`;
 }
 
 // ─── HTML BUILDER ─────────────────────────────────────────────────────────────
@@ -226,6 +264,8 @@ function replaceVars(text: string, vars: Record<string, string>): string {
   );
 }
 
+// Auto-appended sections (used only if placeholders are NOT in the body)
+
 function buildShuttleSection(shuttle: string | undefined, point: ShuttlePoint | null): string {
   if (!shuttle) return '';
   const hasPoint = !!point;
@@ -236,8 +276,7 @@ function buildShuttleSection(shuttle: string | undefined, point: ShuttlePoint | 
     ? `<strong>${point!.description}</strong><br/>
        <span style="color:#4b5563;">Pickup Time: ${point!.pickupTime}</span>
        ${point!.googleMapsUrl ? `<br/><a href="${point!.googleMapsUrl}" style="color:#2563eb;font-weight:bold;">📍 View on Google Maps</a>` : ''}`
-    : `Shuttle #${shuttle} — details not yet configured`;
-
+    : `Shuttle #${shuttle} — details TBC`;
   return `
     <tr><td style="padding:10px 30px;">
       <table width="100%" cellpadding="0" cellspacing="0"
@@ -247,6 +286,20 @@ function buildShuttleSection(shuttle: string | undefined, point: ShuttlePoint | 
           <div style="margin-top:8px;line-height:1.6;">${body}</div>
         </td></tr>
       </table>
+    </td></tr>`;
+}
+
+function buildConfirmSection(confirmUrl: string, date: string): string {
+  return `
+    <tr><td style="padding:20px 30px;text-align:center;">
+      <a href="${confirmUrl}"
+         style="display:inline-block;background-color:#16a34a;color:#ffffff;padding:14px 32px;
+                border-radius:8px;font-size:16px;font-weight:bold;text-decoration:none;">
+        ✅ Confirm My Shift
+      </a>
+      <p style="margin:10px 0 0 0;font-size:12px;color:#9ca3af;">
+        Tap the button above to confirm your attendance for ${date}.
+      </p>
     </td></tr>`;
 }
 
@@ -286,7 +339,19 @@ export function buildWorkerbookEmailHtml(
   data: WorkerbookEmailData,
   shuttlePoint: ShuttlePoint | null,
 ): string {
-  const vars: Record<string, string> = {
+  const confirmToken = buildConfirmToken(data);
+  const confirmUrl   = `${CONFIRM_FUNCTION_URL}?token=${encodeURIComponent(confirmToken)}`;
+
+  // Build inline HTML replacements for the two custom placeholders
+  const shuttleInlineHtml  = buildShuttleInline(data.shuttle, shuttlePoint);
+  const confirmButtonHtml  = buildConfirmButtonInline(confirmUrl, data.date);
+
+  // Detect whether the template body uses these placeholders
+  const hasShuttlePlaceholder  = template.bodyIntro.includes('{{shuttlePoint}}');
+  const hasConfirmPlaceholder  = template.bodyIntro.includes('{{confirmButton}}');
+
+  // All text variable replacements (simple string swaps)
+  const textVars: Record<string, string> = {
     firstName:    data.firstName,
     lastName:     data.lastName,
     fullName:     `${data.firstName} ${data.lastName}`.trim(),
@@ -295,16 +360,18 @@ export function buildWorkerbookEmailHtml(
     days:         String(data.days),
   };
 
-  const introHtml = replaceVars(template.bodyIntro, vars)
+  // Replace text vars first, then inject HTML for the special placeholders
+  let processedBody = replaceVars(template.bodyIntro, textVars);
+  processedBody = processedBody.replace(/\{\{shuttlePoint\}\}/g, shuttleInlineHtml);
+  processedBody = processedBody.replace(/\{\{confirmButton\}\}/g, confirmButtonHtml);
+
+  // Convert newline-separated paragraphs to HTML <p> tags
+  const introHtml = processedBody
     .split('\n')
-    .map(l => l.trim()
-      ? `<p style="margin:0 0 12px 0;color:#4b5563;font-size:16px;line-height:1.6;">${l}</p>`
+    .map(line => line.trim()
+      ? `<p style="margin:0 0 12px 0;color:#4b5563;font-size:16px;line-height:1.6;">${line}</p>`
       : '')
     .join('');
-
-  // Real confirm URL — writes to Supabase, no mailto
-  const confirmToken = buildConfirmToken(data);
-  const confirmUrl   = `${CONFIRM_FUNCTION_URL}?token=${encodeURIComponent(confirmToken)}`;
 
   return `<!DOCTYPE html>
 <html>
@@ -320,30 +387,21 @@ export function buildWorkerbookEmailHtml(
             <img src="${LOGO_URL}" alt="${data.commandCenterName}" style="max-width:200px;height:auto;" />
           </td>
         </tr>
+
+        <!-- Body (with inline placeholders already rendered) -->
         <tr><td style="padding:30px 30px 10px 30px;">${introHtml}</td></tr>
-        <tr><td style="padding:10px 30px;">
-          <table width="100%" cellpadding="0" cellspacing="0"
-                 style="background-color:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;">
-            <tr><td style="padding:16px;font-size:14px;color:#374151;line-height:1.8;">
-              <strong>Date:</strong> ${data.date}<br/>
-              <strong>Contractor ID:</strong> ${data.contractorId}<br/>
-              <strong>Days Worked:</strong> ${data.days}
-            </td></tr>
-          </table>
-        </td></tr>
-        ${buildShuttleSection(data.shuttle, shuttlePoint)}
+
+        <!-- Shuttle section — only auto-appended if {{shuttlePoint}} NOT used in body -->
+        ${!hasShuttlePlaceholder ? buildShuttleSection(data.shuttle, shuttlePoint) : ''}
+
+        <!-- Rookie training section — always auto-appended when applicable -->
         ${data.isRookie ? buildTrainingSection(data.contractorId, data.firstName) : ''}
-        <tr><td style="padding:20px 30px;text-align:center;">
-          <a href="${confirmUrl}"
-             style="display:inline-block;background-color:#16a34a;color:#ffffff;padding:14px 32px;
-                    border-radius:8px;font-size:16px;font-weight:bold;text-decoration:none;">
-            ✅ Confirm My Shift
-          </a>
-          <p style="margin:10px 0 0 0;font-size:12px;color:#9ca3af;">
-            Tap the button above to confirm your attendance for ${data.date}.
-          </p>
-        </td></tr>
+
+        <!-- Confirm button — only auto-appended if {{confirmButton}} NOT used in body -->
+        ${!hasConfirmPlaceholder ? buildConfirmSection(confirmUrl, data.date) : ''}
+
         ${buildSignature(template)}
+
         <tr><td style="padding:20px 30px 30px 30px;border-top:1px solid #e5e7eb;text-align:center;">
           <p style="margin:0 0 8px 0;color:#6b7280;font-size:14px;">Questions? Simply reply to this email.</p>
           <p style="margin:0;color:#9ca3af;font-size:12px;">© 2026 ${data.commandCenterName}. All rights reserved.</p>
@@ -364,10 +422,10 @@ export async function sendWorkerbookEmail(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const html      = buildWorkerbookEmailHtml(template, data, shuttlePoint);
-    const vars: Record<string, string> = {
+    const textVars: Record<string, string> = {
       firstName: data.firstName, date: data.date, contractorId: data.contractorId,
     };
-    const subject   = replaceVars(template.subject, vars);
+    const subject   = replaceVars(template.subject, textVars);
     const emailType = data.isRookie ? 'workerbook_day_of_rookie' : 'workerbook_day_of_regular';
 
     const payload: Record<string, any> = {
