@@ -100,7 +100,6 @@ function parseContractors(rows: any[][]): WBContractor[] {
     .filter(c => c.cnId);
 }
 
-// Sort: confirmed first (stable), then unconfirmed alphabetical by last name
 function sortContractors(
   contractors: WBContractor[],
   emailConfirmedIds: Set<string>,
@@ -298,7 +297,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         currentCC.workerbookSheetId, `'${selectedTab}'!J${c.rowNum}`, [[newVal]],
       );
       setContractors(prev => prev.map(p => p.rowNum === c.rowNum ? { ...p, confirmed: !c.confirmed } : p));
-      // When confirming (not unconfirming), clear this contractor's NA counts
+      // When confirming (not unconfirming), clear NA counts
       if (!c.confirmed) {
         await clearNaCountsForContractor(currentCC.id, c.cnId, selectedTab);
         setNaCounters(prev => {
@@ -317,7 +316,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   const handlePhoneDial = async (c: WBContractor, phoneType: PhoneType) => {
     if (!currentCC) return;
     const key = `${c.cnId}:${phoneType}`;
-    // Optimistically update the UI immediately so it feels instant
+    // Optimistically update UI immediately
     setNaCounters(prev => {
       const next = new Map(prev);
       next.set(key, (prev.get(key) ?? 0) + 1);
@@ -325,14 +324,13 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     });
     try {
       const newCount = await incrementNaCount(currentCC.id, c.cnId, selectedTab, phoneType);
-      // Sync with the confirmed count from the server
       setNaCounters(prev => {
         const next = new Map(prev);
         next.set(key, newCount);
         return next;
       });
     } catch {
-      // Revert the optimistic update if Supabase failed
+      // Revert on failure
       setNaCounters(prev => {
         const next = new Map(prev);
         const current = prev.get(key) ?? 1;
@@ -546,7 +544,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
           isConfirmed ? 'border-green-700/50' : 'border-gray-700'
         }`}
       >
-        {/* ── LINE 1: Dot · CN# · Rookie · Name · [spacer] · Days · NS · Team · Email btn · Confirm btn ── */}
+        {/* ── LINE 1 ── */}
         <div className="flex items-center gap-2 min-w-0">
           {dotColor && <div className={`w-2 h-2 rounded-full flex-shrink-0 ${dotClass[dotColor]}`} />}
 
@@ -564,7 +562,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             {c.firstName} {c.lastName}
           </span>
 
-          {/* Stats */}
           <span className={`text-[11px] px-2 py-0.5 rounded flex-shrink-0 ${
             isRookie ? 'bg-purple-900/30 text-purple-300 border border-purple-700/40' : 'bg-gray-700 text-gray-300'
           }`}>
@@ -581,7 +578,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             </span>
           )}
 
-          {/* Email send button */}
           {c.email ? (
             <button
               onClick={() => handleSendEmail(c)}
@@ -599,7 +595,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             <span className="text-[10px] text-gray-600 flex-shrink-0">No email</span>
           )}
 
-          {/* Confirm button */}
           <ConfirmButton
             confirmed={c.confirmed}
             emailConfirmed={emailConfirmed}
@@ -608,7 +603,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
           />
         </div>
 
-        {/* ── LINE 2: Phone · Alt Phone · Email addr · Shuttle · Move To ── */}
+        {/* ── LINE 2 ── */}
         <div className="flex items-center gap-2 mt-2 flex-wrap">
           {c.cellPhone && (
             
@@ -616,7 +611,8 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               onClick={() => handlePhoneDial(c, 'cell')}
               className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-blue-400 hover:text-blue-300 transition-colors flex-shrink-0"
             >
-              <Phone size={11} /> {c.cellPhone}
+              <Phone size={11} />
+              {c.cellPhone}
               {naCell > 0 && (
                 <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
                   NA ×{naCell}
@@ -630,7 +626,8 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               onClick={() => handlePhoneDial(c, 'alt')}
               className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-blue-300 transition-colors flex-shrink-0"
             >
-              <Phone size={11} className="text-gray-600" /> {c.altPhone}
+              <Phone size={11} className="text-gray-600" />
+              {c.altPhone}
               <span className="text-gray-600">Alt</span>
               {naAlt > 0 && (
                 <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
