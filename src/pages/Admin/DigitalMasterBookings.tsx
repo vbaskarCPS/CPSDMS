@@ -10,7 +10,6 @@ import {
   MapPin,
   MapPinned,
   CheckCircle,
-  MapOff,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { googleSheetsService } from '../../lib/googleSheetsService';
@@ -982,7 +981,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
             {/* Panel header */}
             <div className="px-3 py-2 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-2">
-                <MapOff size={14} className="text-red-400" />
+                <AlertCircle size={14} className="text-red-400" />
                 <span className="text-xs text-gray-300 font-medium uppercase tracking-wider">
                   Unplotted
                 </span>
