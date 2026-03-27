@@ -71,8 +71,8 @@ function getTodayTabName(): string {
 }
 
 function toMmmDD(dateInput: string): string {
-  const [year, month, day] = dateInput.split('-').map(Number);
-  const d = new Date(year, month - 1, day);
+  const parts = dateInput.split('-').map(Number);
+  const d = new Date(parts[0], parts[1] - 1, parts[2]);
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return months[d.getMonth()] + String(d.getDate()).padStart(2, '0');
 }
@@ -130,7 +130,7 @@ const ConfirmButton: React.FC<ConfirmButtonProps> = ({ confirmed, emailConfirmed
   if (loading) {
     return (
       <button disabled className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-gray-700 text-gray-400 cursor-not-allowed flex-shrink-0">
-        <Loader size={12} className="animate-spin" /> Confirming…
+        <Loader size={12} className="animate-spin" /> Confirming...
       </button>
     );
   }
@@ -145,7 +145,7 @@ const ConfirmButton: React.FC<ConfirmButtonProps> = ({ confirmed, emailConfirmed
         }
       >
         <CheckCircle size={12} />
-        {'Confirmed' + (emailConfirmed ? ' ✉️' : '')}
+        {emailConfirmed ? 'Confirmed ✉️' : 'Confirmed'}
       </button>
     );
   }
@@ -202,7 +202,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   const [movingTo, setMovingTo]                 = useState(false);
   const [confirmingFor, setConfirmingFor]       = useState<string | null>(null);
 
-  // NA counters — keyed by "contractorId:phoneType"
   const [naCounters, setNaCounters] = useState<Map<string, number>>(new Map());
 
   // ─── INIT ──────────────────────────────────────────────────────────────────
@@ -313,7 +312,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   // ─── NA PHONE DIAL ─────────────────────────────────────────────────────────
 
-  const handlePhoneDial = async (c: WBContractor, phoneType: PhoneType) => {
+  const handlePhoneDial = async (c: WBContractor, phoneType: PhoneType, phoneNumber: string) => {
     if (!currentCC) return;
     const key = c.cnId + ':' + phoneType;
     setNaCounters(prev => {
@@ -321,6 +320,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
       next.set(key, (prev.get(key) ?? 0) + 1);
       return next;
     });
+    window.location.href = 'tel:' + phoneNumber;
     try {
       const newCount = await incrementNaCount(currentCC.id, c.cnId, selectedTab, phoneType);
       setNaCounters(prev => {
@@ -500,7 +500,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                   <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
                 </svg>
               )}
-              {connecting ? 'Connecting…' : 'Connect to Google'}
+              {connecting ? 'Connecting...' : 'Connect to Google'}
             </button>
           </div>
         </div>
@@ -542,7 +542,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         key={c.rowNum}
         className={'bg-gray-800 rounded-xl border px-4 py-3 transition-colors ' + (isConfirmed ? 'border-green-700/50' : 'border-gray-700')}
       >
-        {/* ── LINE 1 ── */}
+        {/* LINE 1 */}
         <div className="flex items-center gap-2 min-w-0">
           {dotColor && <div className={'w-2 h-2 rounded-full flex-shrink-0 ' + dotClass[dotColor]} />}
 
@@ -595,12 +595,12 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
           />
         </div>
 
-        {/* ── LINE 2 ── */}
+        {/* LINE 2 */}
         <div className="flex items-center gap-2 mt-2 flex-wrap">
+
           {c.cellPhone && (
-            
-              href={'tel:' + c.cellPhone}
-              onClick={() => handlePhoneDial(c, 'cell')}
+            <button
+              onClick={() => handlePhoneDial(c, 'cell', c.cellPhone)}
               className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-blue-400 hover:text-blue-300 transition-colors flex-shrink-0"
             >
               <Phone size={11} />
@@ -610,33 +610,35 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                   {'NA x' + naCell}
                 </span>
               )}
-            </a>
+            </button>
           )}
+
           {c.altPhone && (
-            
-              href={'tel:' + c.altPhone}
-              onClick={() => handlePhoneDial(c, 'alt')}
+            <button
+              onClick={() => handlePhoneDial(c, 'alt', c.altPhone)}
               className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-blue-300 transition-colors flex-shrink-0"
             >
               <Phone size={11} className="text-gray-600" />
               {c.altPhone}
-              <span className="text-gray-600">Alt</span>
+              <span className="text-gray-600 ml-0.5">Alt</span>
               {naAlt > 0 && (
                 <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
                   {'NA x' + naAlt}
                 </span>
               )}
-            </a>
+            </button>
           )}
+
           {c.email && (
-            
-              href={'mailto:' + c.email}
+            <button
+              onClick={() => { window.location.href = 'mailto:' + c.email; }}
               className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-400 transition-colors min-w-0 flex-1 truncate"
             >
               <Mail size={10} className="flex-shrink-0" />
               <span className="truncate">{c.email}</span>
-            </a>
+            </button>
           )}
+
           {c.shuttle && (
             <div className={'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs flex-shrink-0 ' + (shuttlePt ? 'bg-blue-900/20 border border-blue-700/40 text-blue-300' : 'bg-gray-900 border border-gray-700 text-gray-500')}>
               {'🚐 '}
@@ -646,6 +648,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               }
             </div>
           )}
+
           <button
             onClick={() => { setMoveTarget(c); setMoveToDate(''); }}
             className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-white transition-colors flex-shrink-0 ml-auto"
@@ -662,7 +665,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   return (
     <div className="min-h-screen bg-gray-900 text-white">
 
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="bg-gray-800 border-b border-gray-700 sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 py-3">
           <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -717,7 +720,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         </div>
       </div>
 
-      {/* ── Alerts ── */}
+      {/* Alerts */}
       <div className="max-w-5xl mx-auto px-4 mt-3 space-y-2">
         {syncResult && (
           <div className="bg-green-900/30 border border-green-700 rounded-lg p-3 flex items-center gap-2 text-green-400 text-sm">
@@ -737,7 +740,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         )}
       </div>
 
-      {/* ── Cards ── */}
+      {/* Cards */}
       <div className="max-w-5xl mx-auto p-4 space-y-2">
         {loading ? (
           <div className="flex items-center justify-center py-20">
@@ -755,7 +758,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               <div className="space-y-2">
                 <div className="flex items-center gap-2 px-1">
                   <span className="text-xs font-bold text-green-400 uppercase tracking-wide">
-                    {'✅ Confirmed (' + confirmedGroup.length + ')'}
+                    {'Confirmed (' + confirmedGroup.length + ')'}
                   </span>
                   <div className="flex-1 h-px bg-green-800/40" />
                 </div>
@@ -782,7 +785,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         )}
       </div>
 
-      {/* ── Move To Modal ── */}
+      {/* Move To Modal */}
       {moveTarget && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-sm">
