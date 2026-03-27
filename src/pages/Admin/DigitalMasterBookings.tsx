@@ -10,6 +10,7 @@ import {
   MapPin,
   MapPinned,
   CheckCircle,
+  MapOff,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { googleSheetsService } from '../../lib/googleSheetsService';
@@ -48,6 +49,7 @@ interface BookingRecord {
 interface GeocodedBooking extends BookingRecord {
   lat: number;
   lng: number;
+  routeColor: string;
 }
 
 interface Props {
@@ -103,11 +105,15 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   const [currentRoutes, setCurrentRoutes] = useState<SavedRoute[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // Lightweight map: areaName → Set<routeCode> — loaded once on mount, no geometry
+  const [areaRouteCodes, setAreaRouteCodes] = useState<Map<string, Set<string>>>(new Map());
+
   // ── Bookings / geocoding state ──────────────────────────────────────────────
   const [isGoogleConnected, setIsGoogleConnected] = useState(false);
   const [sheetsLoading, setSheetsLoading] = useState(false);
   const [bookingsData, setBookingsData] = useState<Map<string, BookingRecord[]>>(new Map());
   const [geocodedBookings, setGeocodedBookings] = useState<GeocodedBooking[]>([]);
+  const [unplottedBookings, setUnplottedBookings] = useState<BookingRecord[]>([]);
   const [geocodingProgress, setGeocodingProgress] = useState<{ current: number; total: number } | null>(null);
   const [isPlotted, setIsPlotted] = useState(false);
 
@@ -116,7 +122,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   const bookingClickHandlerRef = useRef<((e: any) => void) | null>(null);
 
   // ─── SUPPRESS DUPLICATE LABELS ─────────────────────────────────────────────
-  // Unchanged from original — prevents double street name labels.
+  // Unchanged from original.
   const suppressDuplicateLabels = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -159,18 +165,14 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   const clearBookingLayers = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
-
-    // Remove the click handler we stored
     if (bookingClickHandlerRef.current) {
       map.off('click', 'dmb-bookings-circles', bookingClickHandlerRef.current);
       bookingClickHandlerRef.current = null;
     }
-    // Remove any open popup
     if (popupRef.current) {
       popupRef.current.remove();
       popupRef.current = null;
     }
-    // Remove layer then source (order matters in Mapbox)
     if (map.getLayer('dmb-bookings-circles')) map.removeLayer('dmb-bookings-circles');
     if (map.getSource('dmb-bookings-src')) map.removeSource('dmb-bookings-src');
   }, []);
@@ -197,16 +199,59 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     loadedIdsRef.current = [];
   }, []);
 
+  // ─── LOAD AREA ROUTE CODES (lightweight — no geometry) ────────────────────
+  // Runs once on mount. Builds areaName → Set<routeCode> so booking counts
+  // are exact per area rather than prefix-based (fixes multi-area same-prefix problem).
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const { data, error: dbErr } = await supabase
+          .from('route_maps')
+          .select('area_name, route_code')
+          .eq('status', 'approved');
+        if (dbErr) throw dbErr;
+        const map = new Map<string, Set<string>>();
+        for (const row of (data || [])) {
+          if (!map.has(row.area_name)) map.set(row.area_name, new Set());
+          map.get(row.area_name)!.add(row.route_code);
+        }
+        setAreaRouteCodes(map);
+      } catch {
+        // Non-fatal — booking counts just won't show
+      }
+    };
+    load();
+  }, []);
+
+  // ─── LOAD AREAS ────────────────────────────────────────────────────────────
+  // Unchanged from original.
+  useEffect(() => {
+    const loadAreas = async () => {
+      try {
+        const { data, error: dbErr } = await supabase
+          .from('area_prefixes')
+          .select('area_name, prefix, route_count, route_start')
+          .order('area_name');
+        if (dbErr) throw dbErr;
+        setAreas(data || []);
+      } catch {
+        setError('Failed to load areas.');
+      } finally {
+        setLoadingAreas(false);
+      }
+    };
+    loadAreas();
+  }, []);
+
   // ─── SELECT AREA ───────────────────────────────────────────────────────────
-  // Extended to clear booking dots whenever a new area is chosen.
   const handleSelectArea = useCallback(async (areaName: string) => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
-    // Clear everything before loading new area
     clearAllRoutes();
     clearBookingLayers();
     setGeocodedBookings([]);
+    setUnplottedBookings([]);
     setIsPlotted(false);
     setGeocodingProgress(null);
 
@@ -232,7 +277,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         return;
       }
 
-      // Insert routes just below road labels so text stays on top
       const routeInsertBefore = (
         map.getLayer('road-label') ? 'road-label' :
         map.getStyle().layers?.find((l: any) => l.type === 'symbol')?.id
@@ -277,7 +321,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           layout: { 'line-cap': 'round', 'line-join': 'round' },
         }, routeInsertBefore);
 
-        // Floating route number label at segment centroid
         const allRoutCoords: [number, number][] = [];
         route.segments.forEach((seg: any) => {
           seg.coordinates.forEach((c: [number, number]) => allRoutCoords.push(c));
@@ -334,9 +377,36 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     }
   }, [mapLoaded, clearAllRoutes, clearBookingLayers]);
 
-  // ─── GOOGLE CONNECT + LOAD BOOKINGS ────────────────────────────────────────
-  // Authenticates once, then reads the entire Bookings tab and builds a
-  // Map<routeCode → BookingRecord[]> for instant lookups.
+  // ─── READ BOOKINGS FROM SHEETS ─────────────────────────────────────────────
+  // Extracted so both connect and re-plot can call it for a fresh load.
+  const fetchBookingsFromSheets = useCallback(async (): Promise<Map<string, BookingRecord[]>> => {
+    // Columns A–P: A=BookedBy B=Date C=Time D=Route# E=First F=Last
+    //              G=House# H=Street I=Call1st J=Phone K=Email
+    //              L=ServiceType M=PP N=Price O=City P=Notes
+    const rows = await googleSheetsService.readMasterbookingsRange("'Bookings'!A:P");
+    const map = new Map<string, BookingRecord[]>();
+    // Row 0 = formula banner, Row 1 = header, Row 2+ = data
+    for (let i = 2; i < rows.length; i++) {
+      const row = rows[i];
+      const routeCode = row[3]?.toString().trim();
+      if (!routeCode) continue;
+      const booking: BookingRecord = {
+        routeCode,
+        firstName:   row[4]?.toString().trim()  || '',
+        lastName:    row[5]?.toString().trim()  || '',
+        houseNum:    row[6]?.toString().trim()  || '',
+        streetName:  row[7]?.toString().trim()  || '',
+        city:        row[14]?.toString().trim() || '',
+        serviceType: row[11]?.toString().trim() || '',
+        price:       row[13]?.toString().trim() || '',
+      };
+      if (!map.has(routeCode)) map.set(routeCode, []);
+      map.get(routeCode)!.push(booking);
+    }
+    return map;
+  }, []);
+
+  // ─── GOOGLE CONNECT ────────────────────────────────────────────────────────
   const handleConnectGoogle = useCallback(async () => {
     setSheetsLoading(true);
     setError(null);
@@ -346,34 +416,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         setError('Failed to connect to Google. Please try again.');
         return;
       }
-
-      // Columns A–P: A=BookedBy B=Date C=Time D=Route# E=First F=Last
-      //              G=House# H=Street I=Call1st J=Phone K=Email
-      //              L=ServiceType M=PP N=Price O=City P=Notes
-      const rows = await googleSheetsService.readMasterbookingsRange("'Bookings'!A:P");
-
-      const map = new Map<string, BookingRecord[]>();
-      // Row 0 = formula banner, Row 1 = header, Row 2+ = data
-      for (let i = 2; i < rows.length; i++) {
-        const row = rows[i];
-        const routeCode = row[3]?.toString().trim();
-        if (!routeCode) continue;
-
-        const booking: BookingRecord = {
-          routeCode,
-          firstName:   row[4]?.toString().trim()  || '',
-          lastName:    row[5]?.toString().trim()  || '',
-          houseNum:    row[6]?.toString().trim()  || '',
-          streetName:  row[7]?.toString().trim()  || '',
-          city:        row[14]?.toString().trim() || '',
-          serviceType: row[11]?.toString().trim() || '',
-          price:       row[13]?.toString().trim() || '',
-        };
-
-        if (!map.has(routeCode)) map.set(routeCode, []);
-        map.get(routeCode)!.push(booking);
-      }
-
+      const map = await fetchBookingsFromSheets();
       setBookingsData(map);
       setIsGoogleConnected(true);
     } catch (err) {
@@ -381,25 +424,40 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     } finally {
       setSheetsLoading(false);
     }
-  }, []);
+  }, [fetchBookingsFromSheets]);
 
   // ─── PLOT BOOKINGS ─────────────────────────────────────────────────────────
-  // Geocodes every booking in the selected area's routes using Mapbox,
-  // then draws yellow circle markers on the map with click popups.
   const handlePlotBookings = useCallback(async () => {
     const map = mapRef.current;
     if (!map || !selectedArea || loadingRoutes) return;
 
-    // Reset any previous plot
+    // Clear existing dots and reset all plot state
     clearBookingLayers();
     setGeocodedBookings([]);
+    setUnplottedBookings([]);
     setIsPlotted(false);
+    setGeocodingProgress(null);
+    setError(null);
 
-    // Collect bookings only for routes that are actually drawn on the map
-    const areaRouteCodes = new Set(currentRoutes.map(r => r.route_code));
+    // ── 1. Fresh reload from Sheets ─────────────────────────────────────────
+    let freshData = bookingsData;
+    try {
+      freshData = await fetchBookingsFromSheets();
+      setBookingsData(freshData);
+    } catch {
+      // Non-fatal — fall back to previously loaded data
+    }
+
+    // ── 2. Collect bookings only for this area's exact route codes ───────────
+    const areaRouteCodeSet = new Set(currentRoutes.map(r => r.route_code));
+
+    // routeCode → routeColor lookup
+    const routeColorMap = new Map<string, string>();
+    currentRoutes.forEach(r => routeColorMap.set(r.route_code, r.route_color));
+
     const areaBookings: BookingRecord[] = [];
-    bookingsData.forEach((bookings, routeCode) => {
-      if (areaRouteCodes.has(routeCode)) areaBookings.push(...bookings);
+    freshData.forEach((bookings, routeCode) => {
+      if (areaRouteCodeSet.has(routeCode)) areaBookings.push(...bookings);
     });
 
     if (areaBookings.length === 0) {
@@ -407,7 +465,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       return;
     }
 
-    // Compute geographic centre of all route segments for Mapbox proximity bias
+    // ── 3. Proximity bias from route segment centroids ───────────────────────
     const allCoords: [number, number][] = [];
     currentRoutes.forEach(r =>
       r.segments?.forEach(s => s.coordinates.forEach(c => allCoords.push(c)))
@@ -419,35 +477,50 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       ? allCoords.reduce((s, c) => s + c[1], 0) / allCoords.length
       : 43.32;
 
+    // ── 4. Geocode each booking ──────────────────────────────────────────────
     setGeocodingProgress({ current: 0, total: areaBookings.length });
 
-    const results: GeocodedBooking[] = [];
+    const plotted: GeocodedBooking[] = [];
+    const failed: BookingRecord[] = [];
+
     for (let i = 0; i < areaBookings.length; i++) {
       const b = areaBookings[i];
       if (b.houseNum && b.streetName) {
         const coord = await geocodeAddress(b.houseNum, b.streetName, b.city, centerLat, centerLng);
-        if (coord) results.push({ ...b, lat: coord.lat, lng: coord.lng });
+        if (coord) {
+          plotted.push({
+            ...b,
+            lat: coord.lat,
+            lng: coord.lng,
+            routeColor: routeColorMap.get(b.routeCode) ?? '#888888',
+          });
+        } else {
+          failed.push(b);
+        }
+      } else {
+        failed.push(b);
       }
       setGeocodingProgress({ current: i + 1, total: areaBookings.length });
-      // Small delay to respect Mapbox rate limits
+      // Small delay to respect Mapbox geocoding rate limits
       await new Promise(resolve => setTimeout(resolve, 80));
     }
 
-    setGeocodedBookings(results);
+    setGeocodedBookings(plotted);
+    setUnplottedBookings(failed);
     setGeocodingProgress(null);
     setIsPlotted(true);
 
-    if (results.length === 0) {
+    if (plotted.length === 0) {
       setError('None of the bookings could be geocoded. Check address data.');
       return;
     }
 
-    // ── Draw yellow circle layer ──────────────────────────────────────────────
+    // ── 5. Draw route-colored circles with black border ──────────────────────
     map.addSource('dmb-bookings-src', {
       type: 'geojson',
       data: {
         type: 'FeatureCollection',
-        features: results.map(b => ({
+        features: plotted.map(b => ({
           type: 'Feature' as const,
           properties: {
             name:        `${b.firstName} ${b.lastName}`,
@@ -456,6 +529,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
             serviceType: b.serviceType,
             price:       b.price,
             routeCode:   b.routeCode,
+            routeColor:  b.routeColor,
           },
           geometry: {
             type: 'Point' as const,
@@ -470,11 +544,11 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       type: 'circle',
       source: 'dmb-bookings-src',
       paint: {
-        'circle-color':        '#FFD700',
-        'circle-radius':       7,
-        'circle-stroke-color': '#333333',
-        'circle-stroke-width': 1.5,
-        'circle-opacity':      0.92,
+        'circle-color':        ['get', 'routeColor'],  // matches the route line
+        'circle-radius':       4,
+        'circle-stroke-color': '#000000',
+        'circle-stroke-width': 2,
+        'circle-opacity':      0.95,
       },
     });
 
@@ -491,7 +565,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       const feature = e.features?.[0];
       if (!feature) return;
 
-      const { name, address, city, serviceType, price, routeCode } = feature.properties;
+      const { name, address, city, serviceType, price, routeCode, routeColor } = feature.properties;
       const coords = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
 
       if (popupRef.current) popupRef.current.remove();
@@ -504,7 +578,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
             <div style="color:#555;">${address}</div>
             <div style="color:#777;font-size:11px;">${city}</div>
             <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-              <span style="background:#e0e7ff;color:#3730a3;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">${routeCode}</span>
+              <span style="background:${routeColor}22;color:${routeColor};border:1px solid ${routeColor}88;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${routeCode}</span>
               ${serviceType ? `<span style="background:#fef9c3;color:#854d0e;border-radius:4px;padding:2px 7px;font-size:11px;">${serviceType}</span>` : ''}
             </div>
             ${price ? `<div style="margin-top:6px;color:#166534;font-weight:700;font-size:13px;">$${price}</div>` : ''}
@@ -516,45 +590,26 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     bookingClickHandlerRef.current = clickHandler;
     map.on('click', 'dmb-bookings-circles', clickHandler);
 
-  }, [selectedArea, currentRoutes, bookingsData, clearBookingLayers, loadingRoutes]);
+  }, [selectedArea, currentRoutes, bookingsData, fetchBookingsFromSheets, clearBookingLayers, loadingRoutes]);
 
   // ─── BOOKING COUNT HELPERS ─────────────────────────────────────────────────
 
-  /** Total bookings for an area prefix (all routes starting with that prefix) */
-  const getAreaBookingCount = useCallback((prefix: string): number => {
+  /** Total bookings for an area using exact route membership (not prefix-based) */
+  const getAreaBookingCount = useCallback((areaName: string): number => {
     if (!isGoogleConnected) return 0;
+    const codes = areaRouteCodes.get(areaName);
+    if (!codes) return 0;
     let total = 0;
-    bookingsData.forEach((bookings, routeCode) => {
-      if (routeCode.toUpperCase().startsWith(prefix.toUpperCase())) total += bookings.length;
+    codes.forEach(code => {
+      total += bookingsData.get(code)?.length ?? 0;
     });
     return total;
-  }, [isGoogleConnected, bookingsData]);
+  }, [isGoogleConnected, bookingsData, areaRouteCodes]);
 
-  /** Total bookings loaded across ALL routes */
   const totalBookingsLoaded = Array.from(bookingsData.values()).reduce((s, b) => s + b.length, 0);
 
-  // ─── LOAD AREAS ────────────────────────────────────────────────────────────
-  // Unchanged from original.
-  useEffect(() => {
-    const loadAreas = async () => {
-      try {
-        const { data, error: dbErr } = await supabase
-          .from('area_prefixes')
-          .select('area_name, prefix, route_count, route_start')
-          .order('area_name');
-        if (dbErr) throw dbErr;
-        setAreas(data || []);
-      } catch {
-        setError('Failed to load areas.');
-      } finally {
-        setLoadingAreas(false);
-      }
-    };
-    loadAreas();
-  }, []);
-
   // ─── MAP INIT ──────────────────────────────────────────────────────────────
-  // Completely unchanged from original — every line is identical.
+  // Completely unchanged from original.
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
     const map = new mapboxgl.Map({
@@ -671,6 +726,8 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
 
   // ─── RENDER ────────────────────────────────────────────────────────────────
 
+  const showUnplottedPanel = isPlotted && unplottedBookings.length > 0;
+
   return (
     <div className="fixed inset-0 z-50 bg-white flex flex-col">
 
@@ -692,15 +749,15 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           </p>
         </div>
 
-        {/* Geocoding progress indicator */}
+        {/* Geocoding progress */}
         {geocodingProgress && (
-          <div className="flex items-center gap-2 text-yellow-400 text-xs font-medium">
+          <div className="flex items-center gap-2 text-blue-400 text-xs font-medium">
             <Loader size={14} className="animate-spin" />
             Geocoding {geocodingProgress.current}/{geocodingProgress.total}…
           </div>
         )}
 
-        {/* Plot Bookings button — visible once an area is selected */}
+        {/* Plot Bookings button */}
         {selectedArea && !geocodingProgress && (
           <button
             onClick={handlePlotBookings}
@@ -710,8 +767,8 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
               !isGoogleConnected || loadingRoutes
                 ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
                 : isPlotted
-                  ? 'bg-yellow-600 hover:bg-yellow-500 text-white'
-                  : 'bg-yellow-500 hover:bg-yellow-400 text-gray-900'
+                  ? 'bg-blue-700 hover:bg-blue-600 text-white'
+                  : 'bg-blue-600 hover:bg-blue-500 text-white'
             }`}
           >
             <MapPinned size={14} />
@@ -736,7 +793,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         )}
       </div>
 
-      {/* ── Error / warning bar ─────────────────────────────────────────────── */}
+      {/* ── Error bar ──────────────────────────────────────────────────────── */}
       {error && (
         <div className="bg-yellow-900/30 border-b border-yellow-700/50 px-4 py-2 text-sm text-yellow-300 flex items-center gap-2 flex-shrink-0">
           <AlertCircle size={14} />
@@ -752,10 +809,10 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
 
       <div className="flex flex-1 overflow-hidden">
 
-        {/* ── LEFT PANEL ──────────────────────────────────────────────────────── */}
+        {/* ── LEFT PANEL ────────────────────────────────────────────────────── */}
         <div className="w-64 bg-gray-900 border-r border-gray-700 flex flex-col overflow-hidden flex-shrink-0">
 
-          {/* Google Connect button */}
+          {/* Google Connect */}
           <div className="px-3 py-2 border-b border-gray-700">
             {!isGoogleConnected ? (
               <button
@@ -789,7 +846,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
             )}
           </div>
 
-          {/* Areas label row */}
+          {/* Areas header */}
           <div className="px-3 py-2 border-b border-gray-700 flex items-center justify-between">
             <span className="text-xs text-gray-400 uppercase tracking-wider font-medium">Areas</span>
             {!loadingAreas && (
@@ -797,7 +854,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
             )}
           </div>
 
-          {/* Area list with accordion */}
+          {/* Area list */}
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {loadingAreas ? (
               <div className="flex items-center justify-center py-10">
@@ -810,12 +867,12 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
             ) : (
               areas.map(area => {
                 const isSelected = selectedArea === area.area_name;
-                const bookingCount = getAreaBookingCount(area.prefix);
+                const bookingCount = getAreaBookingCount(area.area_name);
 
                 return (
                   <div key={area.area_name}>
 
-                    {/* Area card button */}
+                    {/* Area card */}
                     <button
                       onClick={() => handleSelectArea(area.area_name)}
                       disabled={loadingRoutes}
@@ -830,9 +887,8 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
                           {area.prefix}
                         </span>
                         <div className="flex items-center gap-1.5 flex-shrink-0">
-                          {/* Yellow booking count badge — only when connected */}
                           {isGoogleConnected && bookingCount > 0 && (
-                            <span className="text-[10px] bg-yellow-500/20 text-yellow-400 border border-yellow-500/40 px-1.5 py-0.5 rounded font-bold leading-none">
+                            <span className="text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/40 px-1.5 py-0.5 rounded font-bold leading-none">
                               {bookingCount}
                             </span>
                           )}
@@ -846,7 +902,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
                       </div>
                     </button>
 
-                    {/* Accordion: route breakdown for selected area */}
+                    {/* Accordion — per-route breakdown */}
                     {isSelected && (
                       <div className="mt-1 ml-2 mb-1 border-l-2 border-blue-700/40 pl-2 space-y-0.5">
                         {loadingRoutes ? (
@@ -869,7 +925,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
                                   className="flex items-center justify-between px-2 py-1 rounded bg-gray-800/60"
                                 >
                                   <div className="flex items-center gap-1.5">
-                                    {/* Route colour dot */}
                                     <span
                                       className="w-2 h-2 rounded-full flex-shrink-0"
                                       style={{ backgroundColor: route.route_color }}
@@ -880,7 +935,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
                                   </div>
                                   {isGoogleConnected && (
                                     <span className={`text-[11px] font-bold ${
-                                      count > 0 ? 'text-yellow-400' : 'text-gray-600'
+                                      count > 0 ? 'text-blue-300' : 'text-gray-600'
                                     }`}>
                                       {count}
                                     </span>
@@ -899,18 +954,16 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           </div>
         </div>
 
-        {/* ── MAP ──────────────────────────────────────────────────────────────── */}
+        {/* ── MAP ──────────────────────────────────────────────────────────── */}
         <div className="flex-1 relative">
           <div ref={mapContainerRef} className="absolute inset-0" />
 
-          {/* Map loading overlay */}
           {!mapLoaded && (
             <div className="absolute inset-0 bg-gray-100 flex items-center justify-center z-10">
               <Loader size={24} className="animate-spin text-blue-500" />
             </div>
           )}
 
-          {/* Empty state — no area selected yet */}
           {mapLoaded && !selectedArea && !loadingRoutes && (
             <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
               <div className="text-center bg-white/95 rounded-2xl px-10 py-8 border border-gray-200 shadow-lg">
@@ -921,6 +974,74 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
         </div>
+
+        {/* ── RIGHT PANEL — Unplotted bookings ─────────────────────────────── */}
+        {showUnplottedPanel && (
+          <div className="w-64 bg-gray-900 border-l border-gray-700 flex flex-col overflow-hidden flex-shrink-0">
+
+            {/* Panel header */}
+            <div className="px-3 py-2 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <MapOff size={14} className="text-red-400" />
+                <span className="text-xs text-gray-300 font-medium uppercase tracking-wider">
+                  Unplotted
+                </span>
+              </div>
+              <span className="text-xs bg-red-900/40 text-red-400 border border-red-700/50 px-1.5 py-0.5 rounded font-bold leading-none">
+                {unplottedBookings.length}
+              </span>
+            </div>
+
+            {/* Unplotted list */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+              {unplottedBookings.map((b, idx) => {
+                const routeColor = currentRoutes.find(r => r.route_code === b.routeCode)?.route_color;
+                return (
+                  <div
+                    key={idx}
+                    className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-xs"
+                  >
+                    {/* Name */}
+                    <div className="font-semibold text-white mb-0.5">
+                      {b.firstName} {b.lastName}
+                    </div>
+
+                    {/* Address */}
+                    <div className="text-gray-400 leading-snug">
+                      {b.houseNum} {b.streetName}
+                      {b.city ? <span className="text-gray-600">, {b.city}</span> : null}
+                    </div>
+
+                    {/* Route + service + price row */}
+                    <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                      {routeColor ? (
+                        <span
+                          className="px-1.5 py-0.5 rounded font-bold text-[10px] leading-none"
+                          style={{
+                            background: `${routeColor}22`,
+                            color: routeColor,
+                            border: `1px solid ${routeColor}66`,
+                          }}
+                        >
+                          {b.routeCode}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-gray-500 font-mono">{b.routeCode}</span>
+                      )}
+                      {b.serviceType && (
+                        <span className="text-[10px] text-amber-400">{b.serviceType}</span>
+                      )}
+                      {b.price && (
+                        <span className="ml-auto text-[11px] text-green-400 font-bold">${b.price}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+          </div>
+        )}
 
       </div>
     </div>
