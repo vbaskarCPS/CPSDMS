@@ -21,7 +21,7 @@
 //   E-Mail       ← E-MAIL
 //   Service Type ← FO column: X→"FO", BO→"BO", else→"FP"
 //   PP           ← PP
-//   AER. AMT     ← AMT
+//   AER. AMT     ← AMT (with 13% tax if divisible by 5, fallback to col I)
 //   City         ← CITY
 //   Notes        ← BOOKING NOTES
 //
@@ -184,6 +184,41 @@ function buildCallFirst(row: any[], CI: CutColumnIndices): string {
   return result;
 }
 
+/**
+ * Resolve the AMT value for a row, applying 13% tax if the amount is divisible by 5.
+ *
+ * Priority:
+ *   1. AMT column (by header name)
+ *   2. Column I (index 8, zero-based) as fallback when AMT is empty
+ *
+ * Tax rule: if the numeric value is divisible by 5 → multiply by 1.13,
+ * round to 2 decimal places. Otherwise write the value as-is.
+ * If the value is empty or unparseable → return empty string.
+ */
+function resolveAmt(row: any[], amtCol: number): string {
+  // Step 1: try the AMT column by header
+  let raw = amtCol >= 0 ? cell(row, amtCol) : '';
+
+  // Step 2: fall back to column I (index 8) if AMT is empty
+  if (!raw) {
+    const colI = row.length > 8 ? String(row[8] ?? '').trim() : '';
+    // Strip trailing .0 so "70.0" parses cleanly
+    raw = colI.endsWith('.0') && colI.length > 2 ? colI.slice(0, -2) : colI;
+  }
+
+  if (!raw) return '';
+
+  const num = parseFloat(raw);
+  if (isNaN(num)) return raw; // not numeric — pass through unchanged
+
+  // Apply 13% tax if divisible by 5
+  if (num % 5 === 0) {
+    return (Math.round(num * 1.13 * 100) / 100).toFixed(2);
+  }
+
+  return raw;
+}
+
 // =============================================================================
 // MAP A CALLBOOK ROW → MASTER BOOKINGS ROW (16 columns)
 // =============================================================================
@@ -216,7 +251,7 @@ function mapRowToMaster(row: any[], CI: CutColumnIndices): any[] {
     cell(row, CI.EMAIL),                    // E-Mail
     interpretServiceType(row, CI.FO),       // Service Type
     cell(row, CI.PP),                       // PP
-    cell(row, CI.AMT),                      // AER. AMT
+    resolveAmt(row, CI.AMT),                // AER. AMT (with tax if flat price)
     cell(row, CI.CITY),                     // City
     cell(row, CI.BOOKING_NOTES),            // Notes
   ];
@@ -230,19 +265,22 @@ function mapRowToMaster(row: any[], CI: CutColumnIndices): any[] {
  * Execute the CUT operation for a specific campaign book.
  *
  * 1. Reads all data tabs from the callbook spreadsheet (skips Managers, CCD).
+ *    If selectedTabs is provided, only those tabs are scanned.
  * 2. Finds all rows where AER = x.
  * 3. Deduplicates against the Supabase cut_bookings table.
  * 4. Maps new booking rows to the 16-column master Bookings format.
  * 5. Appends them to the "Bookings" tab of the master spreadsheet.
  * 6. Records the newly cut Booking IDs in Supabase.
  *
- * @param book       The CampaignBook to cut from.
- * @param onProgress Optional callback for progress updates.
+ * @param book          The CampaignBook to cut from.
+ * @param onProgress    Optional callback for progress updates.
+ * @param selectedTabs  Optional list of tab names to scan. If omitted, all tabs are scanned.
  * @returns CutResult with counts of new/skipped bookings.
  */
 export async function executeCut(
   book: CampaignBook,
-  onProgress?: (progress: CutProgress) => void
+  onProgress?: (progress: CutProgress) => void,
+  selectedTabs?: string[]
 ): Promise<CutResult> {
   // --- Validate prerequisites ---
   if (!book.masterSpreadsheetId) {
@@ -280,9 +318,9 @@ export async function executeCut(
   // --- Step 1: Get tab list ---
   onProgress?.({ phase: 'Loading', detail: 'Fetching tab list...', percent: 5 });
 
-  let tabs: string[];
+  let allTabs: string[];
   try {
-    tabs = await dialerSheetsService.getCallbookTabs(callbookId);
+    allTabs = await dialerSheetsService.getCallbookTabs(callbookId);
   } catch (err: any) {
     return {
       success: false, newBookings: 0, skippedBookings: 0,
@@ -291,11 +329,24 @@ export async function executeCut(
     };
   }
 
-  if (tabs.length === 0) {
+  if (allTabs.length === 0) {
     return {
       success: false, newBookings: 0, skippedBookings: 0,
       totalScanned: 0, tabsScanned: 0,
       errorMessage: 'No data tabs found in the callbook spreadsheet.',
+    };
+  }
+
+  // Filter to only selected tabs if the caller specified them
+  const tabs = selectedTabs && selectedTabs.length > 0
+    ? allTabs.filter((t) => selectedTabs.includes(t))
+    : allTabs;
+
+  if (tabs.length === 0) {
+    return {
+      success: false, newBookings: 0, skippedBookings: 0,
+      totalScanned: 0, tabsScanned: 0,
+      errorMessage: 'None of the selected tabs were found in the callbook spreadsheet.',
     };
   }
 

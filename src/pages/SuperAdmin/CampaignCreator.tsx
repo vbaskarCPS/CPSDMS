@@ -11,6 +11,7 @@ import {
 } from '../../lib/campaignService';
 import type { CampaignType } from '../../lib/campaignService';
 import { executeCut, CutProgress, CutResult } from '../../lib/cutService';
+import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import {
   generatePCL, PCLProgress, PCLResult,
   scanPCLFromFile, generatePCLFromGroups, PCLScanResult, CityGroup,
@@ -69,6 +70,13 @@ const CampaignCreator: React.FC = () => {
   const [cuttingBookId, setCuttingBookId] = useState<string | null>(null);
   const [cutProgress, setCutProgress] = useState<CutProgress | null>(null);
   const [cutResult, setCutResult] = useState<CutResult | null>(null);
+
+  // CUT tab selection modal state
+  const [showCutTabModal, setShowCutTabModal] = useState(false);
+  const [cutTabBook, setCutTabBook] = useState<CampaignBook | null>(null);
+  const [cutTabList, setCutTabList] = useState<string[]>([]);
+  const [cutTabLoading, setCutTabLoading] = useState(false);
+  const [cutTabSelected, setCutTabSelected] = useState<Set<string>>(new Set());
 
   // PCL Google Sheets state
   const [pclSelectMode, setPclSelectMode] = useState(false);
@@ -291,7 +299,7 @@ const CampaignCreator: React.FC = () => {
   };
 
   // ============================================================
-  // CUT
+  // CUT — OPEN TAB SELECTION MODAL
   // ============================================================
 
   const handleCutBook = async (book: CampaignBook) => {
@@ -299,16 +307,72 @@ const CampaignCreator: React.FC = () => {
       setError('No master bookings URL set for "' + book.displayName + '". Edit the book and add one first.');
       return;
     }
-    const msg = '✂️ CUT Bookings from "' + book.displayName + '"?\n\nThis will scan all tabs for AER bookings and append new ones to the master bookings spreadsheet.\n\nAlready-cut bookings will be skipped (no duplicates).';
-    if (!window.confirm(msg)) return;
 
-    setCuttingBookId(book.id);
+    // Open the modal immediately and show a loading spinner while we fetch tabs
+    setCutTabBook(book);
+    setCutTabSelected(new Set());
+    setCutTabList([]);
+    setCutTabLoading(true);
+    setShowCutTabModal(true);
+    setError(null);
+
+    try {
+      // Authenticate if needed before fetching tabs
+      if (!dialerSheetsService.isAuthenticated()) {
+        const authed = await dialerSheetsService.authenticate();
+        if (!authed) {
+          setShowCutTabModal(false);
+          setCutTabBook(null);
+          setError('Google Sheets authentication was cancelled or failed. Please try again.');
+          return;
+        }
+      }
+
+      const tabs = await dialerSheetsService.getCallbookTabs(book.spreadsheetId);
+      setCutTabList(tabs);
+    } catch (err) {
+      setShowCutTabModal(false);
+      setCutTabBook(null);
+      setError('Failed to load tabs: ' + (err instanceof Error ? err.message : 'Unknown error'));
+    } finally {
+      setCutTabLoading(false);
+    }
+  };
+
+  const toggleCutTab = (tabName: string) => {
+    setCutTabSelected((prev) => {
+      const next = new Set(prev);
+      next.has(tabName) ? next.delete(tabName) : next.add(tabName);
+      return next;
+    });
+  };
+
+  const closeCutTabModal = () => {
+    setShowCutTabModal(false);
+    setCutTabBook(null);
+    setCutTabList([]);
+    setCutTabSelected(new Set());
+  };
+
+  // ============================================================
+  // CUT — EXECUTE AFTER TAB SELECTION
+  // ============================================================
+
+  const handleConfirmCut = async () => {
+    if (!cutTabBook || cutTabSelected.size === 0) return;
+
+    const selectedTabs = Array.from(cutTabSelected);
+    const bookSnapshot = cutTabBook;
+
+    closeCutTabModal();
+
+    setCuttingBookId(bookSnapshot.id);
     setCutProgress({ phase: 'Starting', detail: 'Initializing...', percent: 0 });
     setCutResult(null);
     setError(null);
 
     try {
-      const result = await executeCut(book, (progress) => setCutProgress(progress));
+      const result = await executeCut(bookSnapshot, (progress) => setCutProgress(progress), selectedTabs);
       setCutResult(result);
 
       if (result.tabCounts) {
@@ -431,7 +495,6 @@ const CampaignCreator: React.FC = () => {
       setUploadProgress(null);
 
       if (result.cities.length <= 1) {
-        // Only one city — skip grouping modal, generate immediately
         const singleGroup: CityGroup[] = [{ name: result.cities[0] || 'All', cities: result.cities }];
         setUploadGenerating(true);
         setUploadProgress({ phase: 'Generating', detail: 'Building PDF...', percent: 0 });
@@ -445,7 +508,6 @@ const CampaignCreator: React.FC = () => {
         setUploadGenerating(false);
         setUploadProgress(null);
       } else {
-        // Multiple cities — open the grouping modal
         setCityGroups([]);
         setNewGroupName('');
         setActiveGroupIndex(0);
@@ -992,6 +1054,103 @@ const CampaignCreator: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* ============================================================ */}
+      {/* CUT TAB SELECTION MODAL                                       */}
+      {/* ============================================================ */}
+      {showCutTabModal && (
+        <div className="fixed inset-0 bg-black/75 flex items-center justify-center p-4 z-50">
+          <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md flex flex-col max-h-[80vh]">
+            {/* Header */}
+            <div className="p-4 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
+              <div>
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Scissors size={18} className="text-purple-400" /> Select Tabs to Cut
+                </h2>
+                {cutTabBook && (
+                  <p className="text-xs text-gray-400 mt-0.5">{cutTabBook.displayName}</p>
+                )}
+              </div>
+              <button onClick={closeCutTabModal} className="text-gray-400 hover:text-white transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-4 overflow-y-auto flex-1">
+              {cutTabLoading ? (
+                <div className="flex flex-col items-center justify-center py-10 gap-3">
+                  <Loader className="animate-spin text-purple-400" size={28} />
+                  <p className="text-gray-400 text-sm">Fetching tabs from spreadsheet...</p>
+                </div>
+              ) : cutTabList.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-gray-500 text-sm">No tabs found in this callbook.</p>
+                </div>
+              ) : (
+                <>
+                  {/* Select all / clear controls */}
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs text-gray-500">
+                      {cutTabSelected.size} of {cutTabList.length} selected
+                    </span>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => setCutTabSelected(new Set(cutTabList))}
+                        className="text-xs text-purple-400 hover:text-purple-300 transition-colors">
+                        Select all
+                      </button>
+                      <button
+                        onClick={() => setCutTabSelected(new Set())}
+                        className="text-xs text-gray-500 hover:text-gray-300 transition-colors">
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Tab checklist */}
+                  <div className="space-y-1.5">
+                    {cutTabList.map((tab) => {
+                      const isSelected = cutTabSelected.has(tab);
+                      return (
+                        <button
+                          key={tab}
+                          onClick={() => toggleCutTab(tab)}
+                          className={'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors text-left ' +
+                            (isSelected
+                              ? 'bg-purple-900/20 border-purple-600'
+                              : 'bg-gray-900 border-gray-700 hover:border-gray-500')}>
+                          <div className={'w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ' +
+                            (isSelected ? 'bg-purple-600 border-purple-500' : 'border-gray-600 bg-gray-800')}>
+                            {isSelected && <Check size={11} className="text-white" />}
+                          </div>
+                          <span className={'text-sm font-medium ' + (isSelected ? 'text-white' : 'text-gray-400')}>
+                            {tab}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-gray-700 flex items-center justify-between flex-shrink-0">
+              <button onClick={closeCutTabModal} className="px-4 py-2 text-gray-400 hover:text-white transition-colors text-sm">
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmCut}
+                disabled={cutTabSelected.size === 0 || cutTabLoading}
+                className="bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-6 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors text-sm">
+                <Scissors size={14} />
+                Cut {cutTabSelected.size > 0 ? `${cutTabSelected.size} Tab${cutTabSelected.size !== 1 ? 's' : ''}` : 'Selected Tabs'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ============================================================ */}
       {/* CITY GROUPING MODAL                                           */}
