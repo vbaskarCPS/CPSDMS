@@ -22,6 +22,7 @@ interface BookingRecord {
   city: string;
   serviceType: string;
   price: string;
+  isPrepaid: boolean;
   email: string;
   rowIndex: number;
 }

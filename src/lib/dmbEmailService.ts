@@ -25,6 +25,7 @@ export interface DmbBookingPayload {
   streetName: string;
   city: string;
   price: string;
+  isPrepaid: boolean;
   serviceType: string;
   routeCode: string;
   rowIndex: number;
@@ -143,25 +144,28 @@ export function buildDmbEmailHtml(
                    style="background-color:#f0fdf4;border-radius:8px;">
               <tr>
                 <td style="font-size:14px;color:#166534;padding:16px;">
-                  <strong style="display:block;margin-bottom:8px;">Price Breakdown</strong>
-                  <table>
-                    <tr>
-                      <td style="padding:2px 24px 2px 0;color:#4b5563;">Base price</td>
-                      <td style="color:#4b5563;">$${price.base}</td>
-                    </tr>
-                    <tr>
-                      <td style="padding:2px 24px 2px 0;color:#4b5563;">HST (13%)</td>
-                      <td style="color:#4b5563;">$${price.hst}</td>
-                    </tr>
-                    <tr>
-                      <td style="padding:8px 24px 2px 0;border-top:1px solid #bbf7d0;">
-                        <strong style="color:#166534;">Total</strong>
-                      </td>
-                      <td style="padding:8px 0 2px 0;border-top:1px solid #bbf7d0;">
-                        <strong style="color:#166534;font-size:16px;">$${price.total}</strong>
-                      </td>
-                    </tr>
-                  </table>
+                  ${booking.isPrepaid
+                    ? `<strong style="font-size:16px;">$${booking.price} &nbsp; Already Paid</strong>`
+                    : `<strong style="display:block;margin-bottom:8px;">Price Breakdown</strong>
+                    <table>
+                      <tr>
+                        <td style="padding:2px 24px 2px 0;color:#4b5563;">Base price</td>
+                        <td style="color:#4b5563;">$${price.base}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:2px 24px 2px 0;color:#4b5563;">HST (13%)</td>
+                        <td style="color:#4b5563;">$${price.hst}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:8px 24px 2px 0;border-top:1px solid #bbf7d0;">
+                          <strong style="color:#166534;">Total</strong>
+                        </td>
+                        <td style="padding:8px 0 2px 0;border-top:1px solid #bbf7d0;">
+                          <strong style="color:#166534;font-size:16px;">$${price.total}</strong>
+                        </td>
+                      </tr>
+                    </table>`
+                  }
                 </td>
               </tr>
             </table>

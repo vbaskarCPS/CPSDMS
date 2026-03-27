@@ -45,8 +45,9 @@ interface BookingRecord {
   city: string;
   serviceType: string;
   price: string;
-  email: string;    // column K
-  rowIndex: number; // 1-based sheet row — used for red-cell highlight on failure
+  isPrepaid: boolean; // column M — 'x' means already paid
+  email: string;      // column K
+  rowIndex: number;   // 1-based sheet row — used for red-cell highlight on failure
 }
 
 interface GeocodedBooking extends BookingRecord {
@@ -414,6 +415,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         city:        row[14]?.toString().trim() || '',
         serviceType: row[11]?.toString().trim() || '',
         price:       row[13]?.toString().trim() || '',
+        isPrepaid:   row[12]?.toString().trim().toLowerCase() === 'x',
         email:       row[10]?.toString().trim() || '', // column K
         rowIndex:    i + 1,                            // 1-based sheet row
       };
