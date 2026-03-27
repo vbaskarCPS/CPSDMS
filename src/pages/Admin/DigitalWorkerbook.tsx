@@ -67,14 +67,14 @@ const DATED_TAB_RE = /^[A-Z][a-z]{2}\d{2}$/;
 function getTodayTabName(): string {
   const d = new Date();
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  return `${months[d.getMonth()]}${String(d.getDate()).padStart(2, '0')}`;
+  return months[d.getMonth()] + String(d.getDate()).padStart(2, '0');
 }
 
 function toMmmDD(dateInput: string): string {
   const [year, month, day] = dateInput.split('-').map(Number);
   const d = new Date(year, month - 1, day);
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  return `${months[d.getMonth()]}${String(d.getDate()).padStart(2, '0')}`;
+  return months[d.getMonth()] + String(d.getDate()).padStart(2, '0');
 }
 
 function parseContractors(rows: any[][]): WBContractor[] {
@@ -139,12 +139,13 @@ const ConfirmButton: React.FC<ConfirmButtonProps> = ({ confirmed, emailConfirmed
     return (
       <button
         onClick={onClick}
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex-shrink-0
-          bg-green-600 text-white hover:bg-green-500
-          ${emailConfirmed ? 'ring-2 ring-yellow-400 ring-offset-1 ring-offset-gray-800' : ''}`}
+        className={
+          'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex-shrink-0 bg-green-600 text-white hover:bg-green-500 ' +
+          (emailConfirmed ? 'ring-2 ring-yellow-400 ring-offset-1 ring-offset-gray-800' : '')
+        }
       >
         <CheckCircle size={12} />
-        Confirmed{emailConfirmed ? ' ✉️' : ''}
+        {'Confirmed' + (emailConfirmed ? ' ✉️' : '')}
       </button>
     );
   }
@@ -251,7 +252,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     setLoading(true); setError(null);
     try {
       const rows = await dialerSheetsService.sheetsGet(
-        currentCC.workerbookSheetId, `'${selectedTab}'!A3:S200`,
+        currentCC.workerbookSheetId, "'" + selectedTab + "'!A3:S200",
       );
       setContractors(parseContractors(rows));
     } catch (err: any) { setError(err.message || 'Failed to load contractor data'); }
@@ -294,16 +295,15 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     const newVal = c.confirmed ? '' : 'x';
     try {
       await dialerSheetsService.sheetsUpdate(
-        currentCC.workerbookSheetId, `'${selectedTab}'!J${c.rowNum}`, [[newVal]],
+        currentCC.workerbookSheetId, "'" + selectedTab + "'!J" + c.rowNum, [[newVal]],
       );
       setContractors(prev => prev.map(p => p.rowNum === c.rowNum ? { ...p, confirmed: !c.confirmed } : p));
-      // When confirming (not unconfirming), clear NA counts
       if (!c.confirmed) {
         await clearNaCountsForContractor(currentCC.id, c.cnId, selectedTab);
         setNaCounters(prev => {
           const next = new Map(prev);
-          next.delete(`${c.cnId}:cell`);
-          next.delete(`${c.cnId}:alt`);
+          next.delete(c.cnId + ':cell');
+          next.delete(c.cnId + ':alt');
           return next;
         });
       }
@@ -315,8 +315,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   const handlePhoneDial = async (c: WBContractor, phoneType: PhoneType) => {
     if (!currentCC) return;
-    const key = `${c.cnId}:${phoneType}`;
-    // Optimistically update UI immediately
+    const key = c.cnId + ':' + phoneType;
     setNaCounters(prev => {
       const next = new Map(prev);
       next.set(key, (prev.get(key) ?? 0) + 1);
@@ -330,7 +329,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         return next;
       });
     } catch {
-      // Revert on failure
       setNaCounters(prev => {
         const next = new Map(prev);
         const current = prev.get(key) ?? 1;
@@ -350,7 +348,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     setSyncingConfirm(true); setSyncResult(null); setError(null);
     try {
       const cnColumn = await dialerSheetsService.sheetsGet(
-        currentCC.workerbookSheetId, `'${selectedTab}'!B3:B200`,
+        currentCC.workerbookSheetId, "'" + selectedTab + "'!B3:B200",
       );
       const cnRowMap = new Map<string, number>();
       cnColumn.forEach((row, idx) => {
@@ -362,15 +360,15 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         const rowNum = cnRowMap.get(conf.contractorId);
         if (!rowNum) { notFound++; continue; }
         await dialerSheetsService.sheetsUpdate(
-          currentCC.workerbookSheetId, `'${selectedTab}'!J${rowNum}`, [['x']],
+          currentCC.workerbookSheetId, "'" + selectedTab + "'!J" + rowNum, [['x']],
         );
         await markConfirmationSynced(conf.id);
         setContractors(prev => prev.map(p => p.rowNum === rowNum ? { ...p, confirmed: true } : p));
         synced++;
       }
       await loadConfirmations();
-      const parts = [`${synced} confirmation${synced !== 1 ? 's' : ''} synced to Sheets`];
-      if (notFound > 0) parts.push(`${notFound} not found in current tab`);
+      const parts = [synced + ' confirmation' + (synced !== 1 ? 's' : '') + ' synced to Sheets'];
+      if (notFound > 0) parts.push(notFound + ' not found in current tab');
       setSyncResult(parts.join(' · '));
       setTimeout(() => setSyncResult(null), 5000);
     } catch (err: any) { setError(err.message || 'Failed to sync confirmations'); }
@@ -385,7 +383,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     const mmmdd = toMmmDD(moveToDate);
     try {
       await dialerSheetsService.sheetsUpdate(
-        currentCC.workerbookSheetId, `'${selectedTab}'!L${moveTarget.rowNum}`, [[mmmdd]],
+        currentCC.workerbookSheetId, "'" + selectedTab + "'!L" + moveTarget.rowNum, [[mmmdd]],
       );
       setContractors(prev => prev.map(p => p.rowNum === moveTarget.rowNum ? { ...p, nextDay: mmmdd } : p));
       setMoveTarget(null); setMoveToDate('');
@@ -427,7 +425,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     if (!c.email) return;
     setSendingFor(c.cnId); setEmailError(null);
     const ok = await sendToContractor(c);
-    ok ? setEmailSuccess(`Email sent to ${c.firstName}!`) : setEmailError(`Failed to email ${c.firstName}.`);
+    ok ? setEmailSuccess('Email sent to ' + c.firstName + '!') : setEmailError('Failed to email ' + c.firstName + '.');
     setTimeout(() => setEmailSuccess(null), 3000);
     setSendingFor(null);
   };
@@ -439,7 +437,9 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     let sent = 0; let failed = 0;
     for (const c of toSend) { (await sendToContractor(c)) ? sent++ : failed++; }
     setSendingAll(false);
-    failed === 0 ? setEmailSuccess(`All ${sent} emails sent!`) : setEmailError(`${sent} sent, ${failed} failed.`);
+    failed === 0
+      ? setEmailSuccess('All ' + sent + ' emails sent!')
+      : setEmailError(sent + ' sent, ' + failed + ' failed.');
     setTimeout(() => { setEmailSuccess(null); setEmailError(null); }, 5000);
   };
 
@@ -534,19 +534,17 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     const isConfirming   = confirmingFor === c.cnId;
     const emailConfirmed = emailConfirmedIds.has(c.cnId);
     const isConfirmed    = c.confirmed || emailConfirmed;
-    const naCell         = naCounters.get(`${c.cnId}:cell`) ?? 0;
-    const naAlt          = naCounters.get(`${c.cnId}:alt`) ?? 0;
+    const naCell         = naCounters.get(c.cnId + ':cell') ?? 0;
+    const naAlt          = naCounters.get(c.cnId + ':alt') ?? 0;
 
     return (
       <div
         key={c.rowNum}
-        className={`bg-gray-800 rounded-xl border px-4 py-3 transition-colors ${
-          isConfirmed ? 'border-green-700/50' : 'border-gray-700'
-        }`}
+        className={'bg-gray-800 rounded-xl border px-4 py-3 transition-colors ' + (isConfirmed ? 'border-green-700/50' : 'border-gray-700')}
       >
         {/* ── LINE 1 ── */}
         <div className="flex items-center gap-2 min-w-0">
-          {dotColor && <div className={`w-2 h-2 rounded-full flex-shrink-0 ${dotClass[dotColor]}`} />}
+          {dotColor && <div className={'w-2 h-2 rounded-full flex-shrink-0 ' + dotClass[dotColor]} />}
 
           <span className="text-[11px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded font-mono flex-shrink-0">
             {c.cnId}
@@ -559,17 +557,15 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
           )}
 
           <span className="font-bold text-white text-sm truncate flex-1 min-w-0">
-            {c.firstName} {c.lastName}
+            {c.firstName + ' ' + c.lastName}
           </span>
 
-          <span className={`text-[11px] px-2 py-0.5 rounded flex-shrink-0 ${
-            isRookie ? 'bg-purple-900/30 text-purple-300 border border-purple-700/40' : 'bg-gray-700 text-gray-300'
-          }`}>
-            Days: {c.days}
+          <span className={'text-[11px] px-2 py-0.5 rounded flex-shrink-0 ' + (isRookie ? 'bg-purple-900/30 text-purple-300 border border-purple-700/40' : 'bg-gray-700 text-gray-300')}>
+            {'Days: ' + c.days}
           </span>
           {c.ns > 0 && (
             <span className="text-[11px] px-2 py-0.5 rounded bg-red-900/30 text-red-300 border border-red-700/40 flex-shrink-0">
-              NS: {c.ns}
+              {'NS: ' + c.ns}
             </span>
           )}
           {c.team && (
@@ -582,11 +578,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             <button
               onClick={() => handleSendEmail(c)}
               disabled={isSending || sendingAll}
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex-shrink-0 disabled:opacity-50 ${
-                isEmailed
-                  ? 'bg-green-900/30 text-green-400 border border-green-700/50 hover:bg-green-900/50'
-                  : 'bg-blue-900/30 text-blue-400 border border-blue-700/50 hover:bg-blue-900/50'
-              }`}
+              className={'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex-shrink-0 disabled:opacity-50 ' + (isEmailed ? 'bg-green-900/30 text-green-400 border border-green-700/50 hover:bg-green-900/50' : 'bg-blue-900/30 text-blue-400 border border-blue-700/50 hover:bg-blue-900/50')}
             >
               {isSending ? <Loader size={11} className="animate-spin" /> : isEmailed ? <CheckCircle size={11} /> : <Mail size={11} />}
               {isEmailed ? 'Sent' : 'Email'}
@@ -607,7 +599,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         <div className="flex items-center gap-2 mt-2 flex-wrap">
           {c.cellPhone && (
             
-              href={`tel:${c.cellPhone}`}
+              href={'tel:' + c.cellPhone}
               onClick={() => handlePhoneDial(c, 'cell')}
               className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-blue-400 hover:text-blue-300 transition-colors flex-shrink-0"
             >
@@ -615,14 +607,14 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               {c.cellPhone}
               {naCell > 0 && (
                 <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
-                  NA ×{naCell}
+                  {'NA x' + naCell}
                 </span>
               )}
             </a>
           )}
           {c.altPhone && (
             
-              href={`tel:${c.altPhone}`}
+              href={'tel:' + c.altPhone}
               onClick={() => handlePhoneDial(c, 'alt')}
               className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-blue-300 transition-colors flex-shrink-0"
             >
@@ -631,27 +623,26 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               <span className="text-gray-600">Alt</span>
               {naAlt > 0 && (
                 <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
-                  NA ×{naAlt}
+                  {'NA x' + naAlt}
                 </span>
               )}
             </a>
           )}
           {c.email && (
-            <a href={`mailto:${c.email}`}
-               className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-400 transition-colors min-w-0 flex-1 truncate">
+            
+              href={'mailto:' + c.email}
+              className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-400 transition-colors min-w-0 flex-1 truncate"
+            >
               <Mail size={10} className="flex-shrink-0" />
               <span className="truncate">{c.email}</span>
             </a>
           )}
           {c.shuttle && (
-            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs flex-shrink-0 ${
-              shuttlePt
-                ? 'bg-blue-900/20 border border-blue-700/40 text-blue-300'
-                : 'bg-gray-900 border border-gray-700 text-gray-500'
-            }`}>
-              🚐 {shuttlePt
-                ? <><strong>{shuttlePt.description}</strong>{shuttlePt.pickupTime && ` · ${shuttlePt.pickupTime}`}</>
-                : `Shuttle #${c.shuttle} — not configured`
+            <div className={'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs flex-shrink-0 ' + (shuttlePt ? 'bg-blue-900/20 border border-blue-700/40 text-blue-300' : 'bg-gray-900 border border-gray-700 text-gray-500')}>
+              {'🚐 '}
+              {shuttlePt
+                ? <><strong>{shuttlePt.description}</strong>{shuttlePt.pickupTime && ' · ' + shuttlePt.pickupTime}</>
+                : 'Shuttle #' + c.shuttle + ' — not configured'
               }
             </div>
           )}
@@ -693,7 +684,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                 </button>
               </div>
               {contractors.length > 0 && (
-                <span className="text-xs text-gray-500">{contractors.length} contractors</span>
+                <span className="text-xs text-gray-500">{contractors.length + ' contractors'}</span>
               )}
             </div>
             <div className="flex items-center gap-2 flex-wrap">
@@ -713,13 +704,13 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                 <button onClick={handleSyncConfirmations} disabled={syncingConfirm}
                         className="flex items-center gap-1.5 px-3 py-2 bg-green-700 hover:bg-green-600 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50">
                   {syncingConfirm ? <Loader size={14} className="animate-spin" /> : <CloudUpload size={14} />}
-                  Sync Confirmations ({unsyncedCount})
+                  {'Sync Confirmations (' + unsyncedCount + ')'}
                 </button>
               )}
               <button onClick={handleEmailAll} disabled={sendingAll || pendingEmailCount === 0 || !templates}
                       className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50">
                 {sendingAll ? <Loader size={14} className="animate-spin" /> : <Send size={14} />}
-                Email All {pendingEmailCount > 0 ? `(${pendingEmailCount})` : ''}
+                {'Email All' + (pendingEmailCount > 0 ? ' (' + pendingEmailCount + ')' : '')}
               </button>
             </div>
           </div>
@@ -755,7 +746,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         ) : contractors.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-gray-500">
             <AlertCircle size={48} className="mb-3 opacity-20" />
-            <p className="font-medium">No contractors on {selectedTab || 'this date'}</p>
+            <p className="font-medium">{'No contractors on ' + (selectedTab || 'this date')}</p>
             <p className="text-sm mt-1">This tab may be empty or not yet populated.</p>
           </div>
         ) : (
@@ -764,7 +755,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               <div className="space-y-2">
                 <div className="flex items-center gap-2 px-1">
                   <span className="text-xs font-bold text-green-400 uppercase tracking-wide">
-                    ✅ Confirmed ({confirmedGroup.length})
+                    {'✅ Confirmed (' + confirmedGroup.length + ')'}
                   </span>
                   <div className="flex-1 h-px bg-green-800/40" />
                 </div>
@@ -780,7 +771,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               <div className="space-y-2">
                 <div className="flex items-center gap-2 px-1">
                   <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
-                    Pending ({unconfirmedGroup.length})
+                    {'Pending (' + unconfirmedGroup.length + ')'}
                   </span>
                   <div className="flex-1 h-px bg-gray-700/60" />
                 </div>
@@ -798,7 +789,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             <div className="p-4 border-b border-gray-700 flex items-center justify-between">
               <div>
                 <h3 className="font-bold text-white">Move to Next Day</h3>
-                <p className="text-xs text-gray-400 mt-0.5">{moveTarget.firstName} {moveTarget.lastName} · {moveTarget.cnId}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{moveTarget.firstName + ' ' + moveTarget.lastName + ' · ' + moveTarget.cnId}</p>
               </div>
               <button onClick={() => setMoveTarget(null)} className="text-gray-400 hover:text-white"><X size={18} /></button>
             </div>
