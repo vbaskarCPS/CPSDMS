@@ -29,6 +29,12 @@ import {
   getConfirmationsForDateTab,
   markConfirmationSynced,
 } from '../../lib/workerbookEmailService';
+import {
+  PhoneType,
+  getNaCountsForTab,
+  incrementNaCount,
+  clearNaCountsForContractor,
+} from '../../lib/workerbookNaService';
 import WorkerbookEmailService from './WorkerbookEmailService';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -104,7 +110,6 @@ function sortContractors(
     const bConf = b.confirmed || emailConfirmedIds.has(b.cnId);
     if (aConf && !bConf) return -1;
     if (!aConf && bConf)  return 1;
-    // Same confirmation group — sort by last name then first name
     const lastCmp = a.lastName.localeCompare(b.lastName);
     if (lastCmp !== 0) return lastCmp;
     return a.firstName.localeCompare(b.firstName);
@@ -197,6 +202,9 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   const [movingTo, setMovingTo]                 = useState(false);
   const [confirmingFor, setConfirmingFor]       = useState<string | null>(null);
 
+  // NA counters — keyed by "contractorId:phoneType"
+  const [naCounters, setNaCounters] = useState<Map<string, number>>(new Map());
+
   // ─── INIT ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -219,7 +227,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   }, [selectedTab, isConnected]);
 
   useEffect(() => {
-    if (selectedTab && currentCC) loadConfirmations();
+    if (selectedTab && currentCC) {
+      loadConfirmations();
+      loadNaCounts();
+    }
   }, [selectedTab, currentCC]);
 
   // ─── DATA LOADING ──────────────────────────────────────────────────────────
@@ -256,6 +267,14 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     } catch { /* non-fatal */ }
   }, [currentCC, selectedTab]);
 
+  const loadNaCounts = useCallback(async () => {
+    if (!currentCC || !selectedTab) return;
+    try {
+      const map = await getNaCountsForTab(currentCC.id, selectedTab);
+      setNaCounters(map);
+    } catch { /* non-fatal */ }
+  }, [currentCC, selectedTab]);
+
   // ─── GOOGLE CONNECT ────────────────────────────────────────────────────────
 
   const handleConnect = async () => {
@@ -279,8 +298,49 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         currentCC.workerbookSheetId, `'${selectedTab}'!J${c.rowNum}`, [[newVal]],
       );
       setContractors(prev => prev.map(p => p.rowNum === c.rowNum ? { ...p, confirmed: !c.confirmed } : p));
+      // When confirming (not unconfirming), clear this contractor's NA counts
+      if (!c.confirmed) {
+        await clearNaCountsForContractor(currentCC.id, c.cnId, selectedTab);
+        setNaCounters(prev => {
+          const next = new Map(prev);
+          next.delete(`${c.cnId}:cell`);
+          next.delete(`${c.cnId}:alt`);
+          return next;
+        });
+      }
     } catch (err: any) { setError(err.message || 'Failed to update confirm'); }
     finally { setConfirmingFor(null); }
+  };
+
+  // ─── NA PHONE DIAL ─────────────────────────────────────────────────────────
+
+  const handlePhoneDial = async (c: WBContractor, phoneType: PhoneType) => {
+    if (!currentCC) return;
+    const key = `${c.cnId}:${phoneType}`;
+    // Optimistically update the UI immediately so it feels instant
+    setNaCounters(prev => {
+      const next = new Map(prev);
+      next.set(key, (prev.get(key) ?? 0) + 1);
+      return next;
+    });
+    try {
+      const newCount = await incrementNaCount(currentCC.id, c.cnId, selectedTab, phoneType);
+      // Sync with the confirmed count from the server
+      setNaCounters(prev => {
+        const next = new Map(prev);
+        next.set(key, newCount);
+        return next;
+      });
+    } catch {
+      // Revert the optimistic update if Supabase failed
+      setNaCounters(prev => {
+        const next = new Map(prev);
+        const current = prev.get(key) ?? 1;
+        if (current <= 1) next.delete(key);
+        else next.set(key, current - 1);
+        return next;
+      });
+    }
   };
 
   // ─── SYNC CONFIRMATIONS ────────────────────────────────────────────────────
@@ -476,6 +536,8 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     const isConfirming   = confirmingFor === c.cnId;
     const emailConfirmed = emailConfirmedIds.has(c.cnId);
     const isConfirmed    = c.confirmed || emailConfirmed;
+    const naCell         = naCounters.get(`${c.cnId}:cell`) ?? 0;
+    const naAlt          = naCounters.get(`${c.cnId}:alt`) ?? 0;
 
     return (
       <div
@@ -549,15 +611,32 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         {/* ── LINE 2: Phone · Alt Phone · Email addr · Shuttle · Move To ── */}
         <div className="flex items-center gap-2 mt-2 flex-wrap">
           {c.cellPhone && (
-            <a href={`tel:${c.cellPhone}`}
-               className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-blue-400 hover:text-blue-300 transition-colors flex-shrink-0">
+            
+              href={`tel:${c.cellPhone}`}
+              onClick={() => handlePhoneDial(c, 'cell')}
+              className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-blue-400 hover:text-blue-300 transition-colors flex-shrink-0"
+            >
               <Phone size={11} /> {c.cellPhone}
+              {naCell > 0 && (
+                <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                  NA ×{naCell}
+                </span>
+              )}
             </a>
           )}
           {c.altPhone && (
-            <a href={`tel:${c.altPhone}`}
-               className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-blue-300 transition-colors flex-shrink-0">
-              <Phone size={11} className="text-gray-600" /> {c.altPhone} <span className="text-gray-600">Alt</span>
+            
+              href={`tel:${c.altPhone}`}
+              onClick={() => handlePhoneDial(c, 'alt')}
+              className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-blue-300 transition-colors flex-shrink-0"
+            >
+              <Phone size={11} className="text-gray-600" /> {c.altPhone}
+              <span className="text-gray-600">Alt</span>
+              {naAlt > 0 && (
+                <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                  NA ×{naAlt}
+                </span>
+              )}
             </a>
           )}
           {c.email && (
@@ -625,6 +704,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                       className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors disabled:opacity-50">
                 <RefreshCw size={14} className={loadingColors ? 'animate-spin' : ''} /> Colors
               </button>
+              <button onClick={loadNaCounts} disabled={!contractors.length || !currentCC}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors disabled:opacity-50">
+                <RefreshCw size={14} /> NA
+              </button>
               <button onClick={() => setShowEmailService(true)}
                       className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors">
                 <Settings size={14} /> Email Service
@@ -680,7 +763,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
           </div>
         ) : (
           <>
-            {/* Confirmed group */}
             {confirmedGroup.length > 0 && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2 px-1">
@@ -693,12 +775,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               </div>
             )}
 
-            {/* Spacer between groups */}
             {confirmedGroup.length > 0 && unconfirmedGroup.length > 0 && (
               <div className="h-3" />
             )}
 
-            {/* Unconfirmed group */}
             {unconfirmedGroup.length > 0 && (
               <div className="space-y-2">
                 <div className="flex items-center gap-2 px-1">
