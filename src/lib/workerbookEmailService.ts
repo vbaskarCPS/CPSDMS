@@ -4,6 +4,7 @@ import { commandCenterService } from './commandCenterService';
 import { ShuttlePoint } from './onboardingService';
 
 const LOGO_URL = 'https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png';
+const CONFIRM_FUNCTION_URL = 'https://mipvcafqrmwxnoqmicxh.supabase.co/functions/v1/workerbook-confirm';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -22,12 +23,21 @@ export interface WorkerbookEmailData {
   firstName: string;
   lastName: string;
   email: string;
-  date: string;        // e.g. "Mar27"
+  date: string;
   shuttle?: string;
   days: number;
   isRookie: boolean;
   commandCenterId: string;
   commandCenterName: string;
+}
+
+export interface WorkerbookConfirmation {
+  id: string;
+  commandCenterId: string;
+  dateTab: string;
+  contractorId: string;
+  confirmedAt: string;
+  syncedToSheets: boolean;
 }
 
 // ─── DEFAULTS ─────────────────────────────────────────────────────────────────
@@ -73,13 +83,13 @@ export async function loadWorkerbookTemplates(): Promise<{
       .in('template_type', ['workerbook_regular', 'workerbook_rookie']);
 
     const mapTemplate = (row: any, def: WorkerbookEmailTemplate): WorkerbookEmailTemplate => ({
-      subject:        row?.subject                          || def.subject,
-      bodyIntro:      (row?.content_structure as any)?.bodyIntro       || def.bodyIntro,
-      replyTo:        (row?.content_structure as any)?.replyTo         || '',
-      signatureName:  (row?.content_structure as any)?.signatureName   || '',
-      signatureTitle: (row?.content_structure as any)?.signatureTitle  || '',
-      signaturePhone: (row?.content_structure as any)?.signaturePhone  || '',
-      signatureEmail: (row?.content_structure as any)?.signatureEmail  || '',
+      subject:        row?.subject                                     || def.subject,
+      bodyIntro:      (row?.content_structure as any)?.bodyIntro      || def.bodyIntro,
+      replyTo:        (row?.content_structure as any)?.replyTo        || '',
+      signatureName:  (row?.content_structure as any)?.signatureName  || '',
+      signatureTitle: (row?.content_structure as any)?.signatureTitle || '',
+      signaturePhone: (row?.content_structure as any)?.signaturePhone || '',
+      signatureEmail: (row?.content_structure as any)?.signatureEmail || '',
     });
 
     const reg = data?.find(t => t.template_type === 'workerbook_regular');
@@ -156,6 +166,57 @@ export async function cleanOldWorkerbookEmailLogs(): Promise<void> {
     .lt('sent_at', cutoff.toISOString());
 }
 
+// ─── CONFIRMATIONS ────────────────────────────────────────────────────────────
+
+/**
+ * Build the base64 token embedded in the confirm button URL.
+ * Contains everything the edge function needs — no row number (rows shift).
+ */
+export function buildConfirmToken(data: WorkerbookEmailData): string {
+  const payload = {
+    commandCenterId: data.commandCenterId,
+    dateTab:         data.date,
+    contractorId:    data.contractorId,
+    firstName:       data.firstName,
+  };
+  return btoa(JSON.stringify(payload));
+}
+
+/**
+ * Load all confirmations for a specific CC + date tab from Supabase.
+ */
+export async function getConfirmationsForDateTab(
+  commandCenterId: string,
+  dateTab: string,
+): Promise<WorkerbookConfirmation[]> {
+  const { data, error } = await supabase
+    .from('workerbook_confirmations')
+    .select('*')
+    .eq('command_center_id', commandCenterId)
+    .eq('date_tab', dateTab);
+
+  if (error) return [];
+
+  return (data || []).map(row => ({
+    id:              row.id,
+    commandCenterId: row.command_center_id,
+    dateTab:         row.date_tab,
+    contractorId:    row.contractor_id,
+    confirmedAt:     row.confirmed_at,
+    syncedToSheets:  row.synced_to_sheets,
+  }));
+}
+
+/**
+ * Mark a confirmation row as synced to Google Sheets.
+ */
+export async function markConfirmationSynced(id: string): Promise<void> {
+  await supabase
+    .from('workerbook_confirmations')
+    .update({ synced_to_sheets: true })
+    .eq('id', id);
+}
+
 // ─── HTML BUILDER ─────────────────────────────────────────────────────────────
 
 function replaceVars(text: string, vars: Record<string, string>): string {
@@ -168,7 +229,7 @@ function replaceVars(text: string, vars: Record<string, string>): string {
 function buildShuttleSection(shuttle: string | undefined, point: ShuttlePoint | null): string {
   if (!shuttle) return '';
   const hasPoint = !!point;
-  const bg     = hasPoint ? '#eff6ff' : '#fef3c7';
+  const bg      = hasPoint ? '#eff6ff' : '#fef3c7';
   const border  = hasPoint ? '#bfdbfe' : '#fde68a';
   const color   = hasPoint ? '#1e40af' : '#92400e';
   const body    = hasPoint
@@ -241,7 +302,9 @@ export function buildWorkerbookEmailHtml(
       : '')
     .join('');
 
-  const replyTarget = template.replyTo?.trim() || 'staff@propertystars.app';
+  // Real confirm URL — writes to Supabase, no mailto
+  const confirmToken = buildConfirmToken(data);
+  const confirmUrl   = `${CONFIRM_FUNCTION_URL}?token=${encodeURIComponent(confirmToken)}`;
 
   return `<!DOCTYPE html>
 <html>
@@ -271,11 +334,14 @@ export function buildWorkerbookEmailHtml(
         ${buildShuttleSection(data.shuttle, shuttlePoint)}
         ${data.isRookie ? buildTrainingSection(data.contractorId, data.firstName) : ''}
         <tr><td style="padding:20px 30px;text-align:center;">
-          <a href="mailto:${replyTarget}?subject=Confirming%20Shift%20${encodeURIComponent(data.date)}%20-%20${data.contractorId}"
+          <a href="${confirmUrl}"
              style="display:inline-block;background-color:#16a34a;color:#ffffff;padding:14px 32px;
                     border-radius:8px;font-size:16px;font-weight:bold;text-decoration:none;">
             ✅ Confirm My Shift
           </a>
+          <p style="margin:10px 0 0 0;font-size:12px;color:#9ca3af;">
+            Tap the button above to confirm your attendance for ${data.date}.
+          </p>
         </td></tr>
         ${buildSignature(template)}
         <tr><td style="padding:20px 30px 30px 30px;border-top:1px solid #e5e7eb;text-align:center;">
@@ -305,11 +371,11 @@ export async function sendWorkerbookEmail(
     const emailType = data.isRookie ? 'workerbook_day_of_rookie' : 'workerbook_day_of_regular';
 
     const payload: Record<string, any> = {
-      emailType:     'onboarding',
-      customerEmail: data.email,
+      emailType:       'onboarding',
+      customerEmail:   data.email,
       subject,
       html,
-      fromAddress:   'staff@propertystars.app',
+      fromAddress:     'staff@propertystars.app',
       commandCenterId: data.commandCenterId,
     };
     if (template.replyTo?.trim()) payload.replyTo = template.replyTo.trim();
@@ -317,7 +383,6 @@ export async function sendWorkerbookEmail(
     const { error } = await supabase.functions.invoke('bright-processor', { body: payload });
     if (error) throw error;
 
-    // Track this send separately so we can query by our specific types
     await supabase.from('email_logs').insert({
       recipient_email: data.email,
       email_type:      emailType,

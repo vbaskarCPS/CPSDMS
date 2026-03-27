@@ -14,23 +14,27 @@ import {
   Settings,
   Send,
   X,
+  CloudUpload,
 } from 'lucide-react';
 import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import { commandCenterService } from '../../lib/commandCenterService';
 import { onboardingService, ShuttlePoint } from '../../lib/onboardingService';
 import {
   WorkerbookEmailTemplate,
+  WorkerbookConfirmation,
   loadWorkerbookTemplates,
   getEmailedTodaySet,
   cleanOldWorkerbookEmailLogs,
   sendWorkerbookEmail,
+  getConfirmationsForDateTab,
+  markConfirmationSynced,
 } from '../../lib/workerbookEmailService';
 import WorkerbookEmailService from './WorkerbookEmailService';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
 interface WBContractor {
-  rowNum: number;    // actual sheet row (starts at 3)
+  rowNum: number;
   shuttle: string;
   cnId: string;
   firstName: string;
@@ -61,9 +65,8 @@ function getTodayTabName(): string {
 }
 
 function toMmmDD(dateInput: string): string {
-  // dateInput is YYYY-MM-DD from <input type="date">
   const [year, month, day] = dateInput.split('-').map(Number);
-  const d = new Date(year, month - 1, day); // local time, no UTC shift
+  const d = new Date(year, month - 1, day);
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return `${months[d.getMonth()]}${String(d.getDate()).padStart(2, '0')}`;
 }
@@ -71,25 +74,80 @@ function toMmmDD(dateInput: string): string {
 function parseContractors(rows: any[][]): WBContractor[] {
   return rows
     .map((row, idx) => ({
-      rowNum:    idx + 3, // data starts at sheet row 3
+      rowNum:    idx + 3,
       shuttle:   String(row[0]  ?? '').trim(),
       cnId:      String(row[1]  ?? '').trim(),
       firstName: String(row[2]  ?? '').trim(),
       lastName:  String(row[3]  ?? '').trim(),
       cellPhone: String(row[4]  ?? '').trim(),
-      altPhone:  String(row[16] ?? '').trim(), // col Q
-      email:     String(row[17] ?? '').trim(), // col R
+      altPhone:  String(row[16] ?? '').trim(),
+      email:     String(row[17] ?? '').trim(),
       manager:   String(row[7]  ?? '').trim(),
       team:      String(row[8]  ?? '').trim(),
-      confirmed: String(row[9]  ?? '').trim().toLowerCase() === 'x', // col J
-      showed:    String(row[10] ?? '').trim().toLowerCase() === 'x', // col K
-      nextDay:   String(row[11] ?? '').trim(), // col L
-      days:      parseInt(String(row[14] ?? '0'), 10) || 0, // col O
-      ns:        parseInt(String(row[15] ?? '0'), 10) || 0, // col P
+      // confirmed = true if col J already has an x loaded from the sheet
+      confirmed: String(row[9]  ?? '').trim().toLowerCase() === 'x',
+      showed:    String(row[10] ?? '').trim().toLowerCase() === 'x',
+      nextDay:   String(row[11] ?? '').trim(),
+      days:      parseInt(String(row[14] ?? '0'), 10) || 0,
+      ns:        parseInt(String(row[15] ?? '0'), 10) || 0,
       notes:     String(row[18] ?? '').trim(),
     }))
     .filter(c => c.cnId);
 }
+
+// ─── CONFIRM BUTTON ───────────────────────────────────────────────────────────
+// States:
+//   unconfirmed         → solid blue  "Confirm"
+//   confirmed (manual)  → solid green "Confirmed"
+//   confirmed (email)   → solid green "Confirmed" + gold ring
+//   confirmed (both)    → solid green "Confirmed" + gold ring
+
+interface ConfirmButtonProps {
+  confirmed: boolean;         // from sheet col J or manual click
+  emailConfirmed: boolean;    // from Supabase email confirmation
+  loading: boolean;
+  onClick: () => void;
+}
+
+const ConfirmButton: React.FC<ConfirmButtonProps> = ({ confirmed, emailConfirmed, loading, onClick }) => {
+  const isConfirmed = confirmed || emailConfirmed;
+  const hasGold     = emailConfirmed;
+
+  if (loading) {
+    return (
+      <button
+        disabled
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-gray-700 text-gray-400 cursor-not-allowed"
+      >
+        <Loader size={12} className="animate-spin" />
+        Confirming…
+      </button>
+    );
+  }
+
+  if (isConfirmed) {
+    return (
+      <button
+        onClick={onClick}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all
+          bg-green-600 text-white hover:bg-green-500
+          ${hasGold ? 'ring-2 ring-yellow-400 ring-offset-1 ring-offset-gray-800' : ''}`}
+      >
+        <CheckCircle size={12} />
+        Confirmed{hasGold ? ' ✉️' : ''}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors bg-blue-600 text-white hover:bg-blue-500"
+    >
+      Confirm
+    </button>
+  );
+};
 
 // ─── COMPONENT ────────────────────────────────────────────────────────────────
 
@@ -100,36 +158,33 @@ interface Props {
 const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   const [currentCC] = useState(() => commandCenterService.getCurrentCommandCenter());
 
-  // Google auth
   const [isConnected, setIsConnected]   = useState(() => dialerSheetsService.isAuthenticated());
   const [connecting, setConnecting]     = useState(false);
 
-  // Tab navigation
   const [allTabs, setAllTabs]           = useState<string[]>([]);
   const [tabIndex, setTabIndex]         = useState(0);
   const selectedTab                     = allTabs[tabIndex] ?? '';
 
-  // Data
   const [contractors, setContractors]   = useState<WBContractor[]>([]);
   const [loading, setLoading]           = useState(false);
   const [error, setError]               = useState<string | null>(null);
 
-  // Shuttle points from Supabase
   const [shuttlePoints, setShuttlePoints] = useState<ShuttlePoint[]>([]);
 
-  // Email state
   const [emailedToday, setEmailedToday] = useState<Set<string>>(new Set());
   const [templates, setTemplates]       = useState<{ regular: WorkerbookEmailTemplate; rookie: WorkerbookEmailTemplate } | null>(null);
-  const [sendingFor, setSendingFor]     = useState<string | null>(null); // cnId being emailed
+  const [sendingFor, setSendingFor]     = useState<string | null>(null);
   const [sendingAll, setSendingAll]     = useState(false);
   const [emailError, setEmailError]     = useState<string | null>(null);
   const [emailSuccess, setEmailSuccess] = useState<string | null>(null);
 
-  // Cell colors
-  const [cellColors, setCellColors]       = useState<Map<number, DotColor>>(new Map());
-  const [loadingColors, setLoadingColors] = useState(false);
+  const [confirmations, setConfirmations]   = useState<WorkerbookConfirmation[]>([]);
+  const [syncingConfirm, setSyncingConfirm] = useState(false);
+  const [syncResult, setSyncResult]         = useState<string | null>(null);
 
-  // Views / modals
+  const [cellColors, setCellColors]         = useState<Map<number, DotColor>>(new Map());
+  const [loadingColors, setLoadingColors]   = useState(false);
+
   const [showEmailService, setShowEmailService] = useState(false);
   const [moveTarget, setMoveTarget]             = useState<WBContractor | null>(null);
   const [moveToDate, setMoveToDate]             = useState('');
@@ -139,14 +194,12 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   // ─── INIT ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    // Load shuttle points and email data regardless of Google state
     onboardingService.getShuttlePoints().then(setShuttlePoints).catch(() => {});
     getEmailedTodaySet().then(setEmailedToday).catch(() => {});
     loadWorkerbookTemplates().then(setTemplates).catch(() => {});
     cleanOldWorkerbookEmailLogs().catch(() => {});
   }, []);
 
-  // Reload templates when coming back from email service
   useEffect(() => {
     if (!showEmailService) {
       loadWorkerbookTemplates().then(setTemplates).catch(() => {});
@@ -164,21 +217,9 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     }
   }, [selectedTab, isConnected]);
 
-  // ─── GOOGLE CONNECT ────────────────────────────────────────────────────────
-
-  const handleConnect = async () => {
-    setConnecting(true);
-    setError(null);
-    try {
-      const ok = await dialerSheetsService.authenticate();
-      setIsConnected(ok);
-      if (!ok) setError('Failed to connect to Google. Please try again.');
-    } catch (err: any) {
-      setError(err.message || 'Failed to connect');
-    } finally {
-      setConnecting(false);
-    }
-  };
+  useEffect(() => {
+    if (selectedTab && currentCC) loadConfirmations();
+  }, [selectedTab, currentCC]);
 
   // ─── DATA LOADING ──────────────────────────────────────────────────────────
 
@@ -201,7 +242,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     setLoading(true);
     setError(null);
     try {
-      // A3:S200 covers all 19 columns we care about (A-S)
       const rows = await dialerSheetsService.sheetsGet(
         currentCC.workerbookSheetId,
         `'${selectedTab}'!A3:S200`,
@@ -214,11 +254,38 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     }
   }, [currentCC, selectedTab]);
 
-  // ─── CONFIRM ───────────────────────────────────────────────────────────────
+  const loadConfirmations = useCallback(async () => {
+    if (!currentCC || !selectedTab) return;
+    try {
+      const data = await getConfirmationsForDateTab(currentCC.id, selectedTab);
+      setConfirmations(data);
+    } catch {
+      // non-fatal
+    }
+  }, [currentCC, selectedTab]);
+
+  // ─── GOOGLE CONNECT ────────────────────────────────────────────────────────
+
+  const handleConnect = async () => {
+    setConnecting(true);
+    setError(null);
+    try {
+      const ok = await dialerSheetsService.authenticate();
+      setIsConnected(ok);
+      if (!ok) setError('Failed to connect to Google. Please try again.');
+    } catch (err: any) {
+      setError(err.message || 'Failed to connect');
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  // ─── CONFIRM (button click) ────────────────────────────────────────────────
 
   const handleToggleConfirm = async (c: WBContractor) => {
     if (!currentCC) return;
     setConfirmingFor(c.cnId);
+    // If already confirmed (any source), clicking toggles off only the sheet x
     const newVal = c.confirmed ? '' : 'x';
     try {
       await dialerSheetsService.sheetsUpdate(
@@ -233,6 +300,60 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
       setError(err.message || 'Failed to update confirm');
     } finally {
       setConfirmingFor(null);
+    }
+  };
+
+  // ─── SYNC EMAIL CONFIRMATIONS → SHEETS ────────────────────────────────────
+
+  const handleSyncConfirmations = async () => {
+    if (!currentCC || !selectedTab) return;
+    const unsynced = confirmations.filter(c => !c.syncedToSheets);
+    if (!unsynced.length) return;
+
+    setSyncingConfirm(true);
+    setSyncResult(null);
+    setError(null);
+
+    try {
+      const cnColumn = await dialerSheetsService.sheetsGet(
+        currentCC.workerbookSheetId,
+        `'${selectedTab}'!B3:B200`,
+      );
+
+      const cnRowMap = new Map<string, number>();
+      cnColumn.forEach((row, idx) => {
+        const cn = String(row[0] ?? '').trim();
+        if (cn) cnRowMap.set(cn, idx + 3);
+      });
+
+      let synced = 0;
+      let notFound = 0;
+
+      for (const confirmation of unsynced) {
+        const rowNum = cnRowMap.get(confirmation.contractorId);
+        if (!rowNum) { notFound++; continue; }
+
+        await dialerSheetsService.sheetsUpdate(
+          currentCC.workerbookSheetId,
+          `'${selectedTab}'!J${rowNum}`,
+          [['x']],
+        );
+        await markConfirmationSynced(confirmation.id);
+        setContractors(prev =>
+          prev.map(p => p.rowNum === rowNum ? { ...p, confirmed: true } : p),
+        );
+        synced++;
+      }
+
+      await loadConfirmations();
+      const parts = [`${synced} confirmation${synced !== 1 ? 's' : ''} synced to Sheets`];
+      if (notFound > 0) parts.push(`${notFound} not found in current tab`);
+      setSyncResult(parts.join(' · '));
+      setTimeout(() => setSyncResult(null), 5000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to sync confirmations');
+    } finally {
+      setSyncingConfirm(false);
     }
   };
 
@@ -315,18 +436,12 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     if (!toSend.length) return;
     setSendingAll(true);
     setEmailError(null);
-    let sent = 0;
-    let failed = 0;
-    for (const c of toSend) {
-      const ok = await sendToContractor(c);
-      ok ? sent++ : failed++;
-    }
+    let sent = 0; let failed = 0;
+    for (const c of toSend) { (await sendToContractor(c)) ? sent++ : failed++; }
     setSendingAll(false);
-    if (failed === 0) {
-      setEmailSuccess(`All ${sent} emails sent!`);
-    } else {
-      setEmailError(`${sent} sent, ${failed} failed.`);
-    }
+    failed === 0
+      ? setEmailSuccess(`All ${sent} emails sent!`)
+      : setEmailError(`${sent} sent, ${failed} failed.`);
     setTimeout(() => { setEmailSuccess(null); setEmailError(null); }, 5000);
   };
 
@@ -337,16 +452,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     setLoadingColors(true);
     try {
       const colors = await dialerSheetsService.getColumnBackgroundColors(
-        currentCC.workerbookSheetId,
-        selectedTab,
-        3,
-        3 + contractors.length - 1,
-        'B', // CN# column
+        currentCC.workerbookSheetId, selectedTab, 3, 3 + contractors.length - 1, 'B',
       );
       const map = new Map<number, DotColor>();
-      contractors.forEach((c, idx) => {
-        map.set(c.rowNum, colors[idx] ?? null);
-      });
+      contractors.forEach((c, idx) => map.set(c.rowNum, colors[idx] ?? null));
       setCellColors(map);
     } catch (err: any) {
       setError(err.message || 'Failed to load colors');
@@ -355,7 +464,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     }
   };
 
-  // ─── SUB-VIEW: EMAIL SERVICE ────────────────────────────────────────────────
+  // ─── EMAIL SERVICE ─────────────────────────────────────────────────────────
 
   if (showEmailService) {
     return <WorkerbookEmailService onBack={() => setShowEmailService(false)} />;
@@ -383,12 +492,8 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               </svg>
             </div>
             <h2 className="text-xl font-bold mb-2">Connect to Google</h2>
-            <p className="text-gray-400 text-sm mb-6">
-              Sign in to load the live Workerbook data from Google Sheets.
-            </p>
-            {error && (
-              <p className="text-red-400 text-sm mb-4 bg-red-900/20 p-2 rounded">{error}</p>
-            )}
+            <p className="text-gray-400 text-sm mb-6">Sign in to load the live Workerbook data from Google Sheets.</p>
+            {error && <p className="text-red-400 text-sm mb-4 bg-red-900/20 p-2 rounded">{error}</p>}
             <button
               onClick={handleConnect}
               disabled={connecting}
@@ -410,9 +515,11 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     );
   }
 
-  // ─── MAIN VIEW ─────────────────────────────────────────────────────────────
+  // ─── DERIVED STATE ─────────────────────────────────────────────────────────
 
-  const pendingEmailCount = contractors.filter(
+  const emailConfirmedIds  = new Set(confirmations.map(c => c.contractorId));
+  const unsyncedCount      = confirmations.filter(c => !c.syncedToSheets).length;
+  const pendingEmailCount  = contractors.filter(
     c => c.email && !emailedToday.has(c.email.toLowerCase()),
   ).length;
 
@@ -422,14 +529,15 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     gold:   'bg-yellow-400',
   };
 
+  // ─── MAIN VIEW ─────────────────────────────────────────────────────────────
+
   return (
     <div className="min-h-screen bg-gray-900 text-white">
 
       {/* ── Header ── */}
       <div className="bg-gray-800 border-b border-gray-700 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            {/* Left: back + date toggle */}
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-3">
               <button onClick={onBack} className="p-2 hover:bg-gray-700 rounded-lg transition-colors">
                 <ArrowLeft size={20} />
@@ -458,12 +566,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               )}
             </div>
 
-            {/* Right: action buttons */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <button
                 onClick={handleRefreshColors}
                 disabled={loadingColors || !contractors.length}
-                title="Refresh CN# cell colors"
                 className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors disabled:opacity-50"
               >
                 <RefreshCw size={14} className={loadingColors ? 'animate-spin' : ''} />
@@ -476,14 +582,22 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                 <Settings size={14} />
                 Email Service
               </button>
+              {unsyncedCount > 0 && (
+                <button
+                  onClick={handleSyncConfirmations}
+                  disabled={syncingConfirm}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-green-700 hover:bg-green-600 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+                >
+                  {syncingConfirm ? <Loader size={14} className="animate-spin" /> : <CloudUpload size={14} />}
+                  Sync Confirmations ({unsyncedCount})
+                </button>
+              )}
               <button
                 onClick={handleEmailAll}
                 disabled={sendingAll || pendingEmailCount === 0 || !templates}
                 className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
               >
-                {sendingAll
-                  ? <Loader size={14} className="animate-spin" />
-                  : <Send size={14} />}
+                {sendingAll ? <Loader size={14} className="animate-spin" /> : <Send size={14} />}
                 Email All {pendingEmailCount > 0 ? `(${pendingEmailCount})` : ''}
               </button>
             </div>
@@ -493,6 +607,11 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
       {/* ── Alerts ── */}
       <div className="max-w-7xl mx-auto px-4 mt-3 space-y-2">
+        {syncResult && (
+          <div className="bg-green-900/30 border border-green-700 rounded-lg p-3 flex items-center gap-2 text-green-400 text-sm">
+            <CheckCircle size={16} /> {syncResult}
+          </div>
+        )}
         {emailSuccess && (
           <div className="bg-green-900/30 border border-green-700 rounded-lg p-3 flex items-center gap-2 text-green-400 text-sm">
             <CheckCircle size={16} /> {emailSuccess}
@@ -508,7 +627,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         )}
       </div>
 
-      {/* ── Content ── */}
+      {/* ── Cards ── */}
       <div className="max-w-7xl mx-auto p-4">
         {loading ? (
           <div className="flex items-center justify-center py-20">
@@ -521,25 +640,28 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             <p className="text-sm mt-1">This tab may be empty or not yet populated.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          // 2-column grid, full width cards
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {contractors.map(c => {
-              const dotColor   = cellColors.get(c.rowNum) ?? null;
-              const shuttlePt  = getShuttlePoint(c.shuttle);
-              const isEmailed  = !!(c.email && emailedToday.has(c.email.toLowerCase()));
-              const isRookie   = c.days === 0;
-              const isSending  = sendingFor === c.cnId;
-              const isConfirming = confirmingFor === c.cnId;
+              const dotColor       = cellColors.get(c.rowNum) ?? null;
+              const shuttlePt      = getShuttlePoint(c.shuttle);
+              const isEmailed      = !!(c.email && emailedToday.has(c.email.toLowerCase()));
+              const isRookie       = c.days === 0;
+              const isSending      = sendingFor === c.cnId;
+              const isConfirming   = confirmingFor === c.cnId;
+              const emailConfirmed = emailConfirmedIds.has(c.cnId);
+              const isConfirmed    = c.confirmed || emailConfirmed;
 
               return (
                 <div
                   key={c.rowNum}
                   className={`bg-gray-800 rounded-xl border p-4 transition-colors ${
-                    c.confirmed ? 'border-green-700/60' : 'border-gray-700'
+                    isConfirmed ? 'border-green-700/50' : 'border-gray-700'
                   }`}
                 >
-                  {/* Row 1: Dot + CN# + Name + Email btn */}
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2 min-w-0">
+                  {/* ── LINE 1: Dot · CN# · Rookie badge · Name · Email button ── */}
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
                       {dotColor && (
                         <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${dotClass[dotColor]}`} />
                       )}
@@ -555,23 +677,24 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                         {c.firstName} {c.lastName}
                       </span>
                     </div>
+
+                    {/* Email send button */}
                     {c.email ? (
                       <button
                         onClick={() => handleSendEmail(c)}
                         disabled={isSending || sendingAll}
-                        className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors flex-shrink-0 ${
+                        className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex-shrink-0 disabled:opacity-50 ${
                           isEmailed
                             ? 'bg-green-900/30 text-green-400 border border-green-700/50 hover:bg-green-900/50'
                             : 'bg-blue-900/30 text-blue-400 border border-blue-700/50 hover:bg-blue-900/50'
-                        } disabled:opacity-50`}
+                        }`}
                       >
-                        {isSending ? (
-                          <Loader size={11} className="animate-spin" />
-                        ) : isEmailed ? (
-                          <CheckCircle size={11} />
-                        ) : (
-                          <Mail size={11} />
-                        )}
+                        {isSending
+                          ? <Loader size={11} className="animate-spin" />
+                          : isEmailed
+                            ? <CheckCircle size={11} />
+                            : <Mail size={11} />
+                        }
                         {isEmailed ? 'Sent' : 'Email'}
                       </button>
                     ) : (
@@ -579,106 +702,91 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                     )}
                   </div>
 
-                  {/* Row 2: Confirm + Phone + Move To */}
-                  <div className="flex items-center gap-2 mb-2 flex-wrap">
-                    {/* Confirm checkbox */}
-                    <label className={`flex items-center gap-1.5 cursor-pointer select-none px-2 py-1 rounded transition-colors ${
-                      c.confirmed ? 'bg-green-900/30 border border-green-700/50' : 'bg-gray-900 border border-gray-700'
-                    }`}>
-                      {isConfirming ? (
-                        <Loader size={13} className="animate-spin text-gray-400" />
-                      ) : (
-                        <input
-                          type="checkbox"
-                          checked={c.confirmed}
-                          onChange={() => handleToggleConfirm(c)}
-                          className="accent-green-500 w-3.5 h-3.5 cursor-pointer"
-                        />
-                      )}
-                      <span className={`text-xs font-medium ${c.confirmed ? 'text-green-400' : 'text-gray-400'}`}>
-                        Conf
-                      </span>
-                    </label>
+                  {/* ── LINE 2: Confirm btn · Phone · Alt phone · Move To ── */}
+                  <div className="flex items-center gap-2 flex-wrap mb-3">
+                    <ConfirmButton
+                      confirmed={c.confirmed}
+                      emailConfirmed={emailConfirmed}
+                      loading={isConfirming}
+                      onClick={() => handleToggleConfirm(c)}
+                    />
 
-                    {/* Cell phone */}
                     {c.cellPhone && (
                       <a
                         href={`tel:${c.cellPhone}`}
-                        className="flex items-center gap-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                        className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-xs text-blue-400 hover:text-blue-300 transition-colors"
                       >
                         <Phone size={11} />
                         {c.cellPhone}
                       </a>
                     )}
 
-                    {/* Move To */}
+                    {c.altPhone && (
+                      <a
+                        href={`tel:${c.altPhone}`}
+                        className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-blue-300 transition-colors"
+                      >
+                        <Phone size={11} className="text-gray-600" />
+                        {c.altPhone}
+                        <span className="text-gray-600">Alt</span>
+                      </a>
+                    )}
+
                     <button
                       onClick={() => { setMoveTarget(c); setMoveToDate(''); }}
-                      className="flex items-center gap-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-400 hover:text-white transition-colors ml-auto"
+                      className="flex items-center gap-1 px-2.5 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-white transition-colors ml-auto"
                     >
                       <Calendar size={11} />
-                      {c.nextDay ? c.nextDay : 'Move To'}
+                      {c.nextDay || 'Move To'}
                     </button>
                   </div>
 
-                  {/* Alt phone */}
-                  {c.altPhone && (
-                    <div className="mb-2">
-                      <a
-                        href={`tel:${c.altPhone}`}
-                        className="flex items-center gap-1 text-xs text-gray-400 hover:text-blue-400 transition-colors"
-                      >
-                        <Phone size={10} className="text-gray-600" />
-                        {c.altPhone}
-                        <span className="text-gray-600 ml-1">Alt</span>
-                      </a>
-                    </div>
-                  )}
-
-                  {/* Email address */}
-                  {c.email && (
-                    <div className="mb-2">
+                  {/* ── LINE 3: Email address · Days · NS · Team · Shuttle ── */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {c.email && (
                       <a
                         href={`mailto:${c.email}`}
-                        className="flex items-center gap-1 text-xs text-gray-400 hover:text-blue-400 transition-colors truncate"
+                        className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-400 transition-colors min-w-0 flex-1"
                       >
-                        <Mail size={10} className="text-gray-600 flex-shrink-0" />
+                        <Mail size={10} className="flex-shrink-0" />
                         <span className="truncate">{c.email}</span>
                       </a>
-                    </div>
-                  )}
+                    )}
 
-                  {/* Stats row */}
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className={`text-[11px] px-2 py-0.5 rounded ${
-                      c.days === 0
-                        ? 'bg-purple-900/30 text-purple-300 border border-purple-700/40'
-                        : 'bg-gray-700 text-gray-300'
-                    }`}>
-                      Days: {c.days}
-                    </span>
-                    {c.ns > 0 && (
-                      <span className="text-[11px] px-2 py-0.5 rounded bg-red-900/30 text-red-300 border border-red-700/40">
-                        NS: {c.ns}
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <span className={`text-[11px] px-2 py-0.5 rounded ${
+                        isRookie
+                          ? 'bg-purple-900/30 text-purple-300 border border-purple-700/40'
+                          : 'bg-gray-700 text-gray-300'
+                      }`}>
+                        Days: {c.days}
                       </span>
-                    )}
-                    {c.team && (
-                      <span className="text-[11px] px-2 py-0.5 rounded bg-gray-700 text-gray-400">
-                        {c.team}
-                      </span>
-                    )}
+                      {c.ns > 0 && (
+                        <span className="text-[11px] px-2 py-0.5 rounded bg-red-900/30 text-red-300 border border-red-700/40">
+                          NS: {c.ns}
+                        </span>
+                      )}
+                      {c.team && (
+                        <span className="text-[11px] px-2 py-0.5 rounded bg-gray-700 text-gray-400">
+                          {c.team}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Shuttle point */}
+                  {/* ── Shuttle (only if present) ── */}
                   {c.shuttle && (
-                    <div className={`rounded-lg px-3 py-2 text-xs ${
+                    <div className={`mt-2 rounded-lg px-3 py-2 text-xs ${
                       shuttlePt
                         ? 'bg-blue-900/20 border border-blue-700/40 text-blue-300'
                         : 'bg-gray-900 border border-gray-700 text-gray-500'
                     }`}>
                       🚐{' '}
                       {shuttlePt
-                        ? <><strong>{shuttlePt.description}</strong>{shuttlePt.pickupTime && ` · ${shuttlePt.pickupTime}`}</>
+                        ? <>
+                            <strong>{shuttlePt.description}</strong>
+                            {shuttlePt.pickupTime && ` · ${shuttlePt.pickupTime}`}
+                          </>
                         : `Shuttle #${c.shuttle} — not configured`
                       }
                     </div>
@@ -720,7 +828,9 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                   className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm"
                 />
                 {moveToDate && (
-                  <p className="text-xs text-blue-400 mt-1">Will write: <strong>{toMmmDD(moveToDate)}</strong></p>
+                  <p className="text-xs text-blue-400 mt-1">
+                    Will write: <strong>{toMmmDD(moveToDate)}</strong>
+                  </p>
                 )}
               </div>
             </div>
