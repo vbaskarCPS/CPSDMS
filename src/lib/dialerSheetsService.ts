@@ -361,6 +361,64 @@ class DialerSheetsService {
       .filter((name) => !excludeNames.has(name.toLowerCase()));
   }
 
+  // --- CELL BACKGROUND COLORS ---
+
+  /**
+   * Fetch background colors for a single column range.
+   * Returns an array (one entry per row) of 'green' | 'silver' | 'gold' | null.
+   * Used by Digital Workerbook to show contractor status dots.
+   */
+  public async getColumnBackgroundColors(
+    spreadsheetId: string,
+    sheetName: string,
+    startRow: number,
+    endRow: number,
+    column: string, // e.g. 'B'
+  ): Promise<Array<'green' | 'silver' | 'gold' | null>> {
+    const token = await this.ensureFreshToken();
+    const range = `'${sheetName}'!${column}${startRow}:${column}${endRow}`;
+
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}` +
+      `?ranges=${encodeURIComponent(range)}&includeGridData=true` +
+      `&fields=sheets.data.rowData.values.userEnteredFormat.backgroundColor`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'Failed to fetch background colors');
+    }
+
+    const data = await response.json();
+    const rowData: any[] = data?.sheets?.[0]?.data?.[0]?.rowData || [];
+
+    return rowData.map((row): 'green' | 'silver' | 'gold' | null => {
+      const bg = row?.values?.[0]?.userEnteredFormat?.backgroundColor;
+      if (!bg) return null;
+
+      const r = bg.red   ?? 0;
+      const g = bg.green ?? 0;
+      const b = bg.blue  ?? 0;
+
+      // White / near-white = no status
+      if (r > 0.9 && g > 0.9 && b > 0.9) return null;
+
+      // Green: dominant green channel
+      if (g > 0.5 && g > r * 1.3 && g > b * 1.3) return 'green';
+
+      // Gold/Yellow: high red + green, low blue
+      if (r > 0.5 && g > 0.5 && b < 0.4) return 'gold';
+
+      // Silver/Gray: all channels close to each other
+      if (Math.abs(r - g) < 0.15 && Math.abs(g - b) < 0.15 && r > 0.2) return 'silver';
+
+      return null;
+    });
+  }
+
   // --- CAMPAIGN STATS ---
 
   /**
@@ -459,18 +517,14 @@ class DialerSheetsService {
     };
 
     // ── Build route-code groups from data rows ──
-    // Still used for reachedPct and avgAttempts calculations
     const routeGroups = new Map<string, any[][]>();
     let totalRows = 0;
     let bookings = 0;
     let latestDate: Date | null = null;
 
     for (const row of raw.slice(headerIdx + 1)) {
-      // Skip rows without a Booking ID (col 0) — these are truly empty rows
       if (!row[0]) continue;
-      // Skip rows without a valid 10-digit phone (engine ignores these too)
       if (CI.PHONE >= 0 && !normalizePhone(row[CI.PHONE])) continue;
-      // Skip rows without a route code (can't assign to a group)
       const route = CI.ROUTE_CODE >= 0 ? String(row[CI.ROUTE_CODE] ?? '').trim() : '';
       if (!route) continue;
 
@@ -478,14 +532,10 @@ class DialerSheetsService {
       if (!routeGroups.has(route)) routeGroups.set(route, []);
       routeGroups.get(route)!.push(row);
 
-      // Count bookings: each individual row with an AER x is one booking.
-      // Since the dialer writes exactly one AER x per group (on the detail row),
-      // this gives the true count of booked groups across the whole tab.
       if (CI.AER >= 0 && hasAER(row[CI.AER])) {
         bookings++;
       }
 
-      // Track most recent DATE.1 for the "last used" indicator
       if (CI.DATE1 >= 0 && hasValue(row[CI.DATE1])) {
         try {
           const d = new Date(row[CI.DATE1]);
@@ -494,7 +544,6 @@ class DialerSheetsService {
       }
     }
 
-    // Aggregate reachedPct and avgAttempts stats from route groups
     const totalGroups = routeGroups.size;
     let reachedRows = 0;
     const unreachedNAs: number[] = [];
@@ -503,7 +552,6 @@ class DialerSheetsService {
       const groupReached = rows.filter(r => isDisposed(r)).length;
       reachedRows += groupReached;
 
-      // Avg attempts: only for groups where no row has been disposed yet
       if (groupReached === 0) {
         unreachedNAs.push(rows.reduce((mx, r) => Math.max(mx, getNA(r)), 0));
       }
