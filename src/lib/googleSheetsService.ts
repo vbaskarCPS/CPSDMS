@@ -337,6 +337,16 @@ class GoogleSheetsService {
   }
 
   /**
+   * Read a range from the Masterbookings spreadsheet.
+   * Used by Digital Master Bookings to load the Bookings tab.
+   * @param range - A1 notation, e.g. "'Bookings'!A:P"
+   */
+  public async readMasterbookingsRange(range: string): Promise<any[][]> {
+    const config = this.getConfig();
+    return this.sheetsGet(config.spreadsheets.masterbookings, range);
+  }
+
+  /**
    * Import session data from Google Sheets.
    * @param dateTab - The date tab name (e.g., "Feb01")
    * @param seasonType - The season type ('aeration' or 'lawn_rejuv')
