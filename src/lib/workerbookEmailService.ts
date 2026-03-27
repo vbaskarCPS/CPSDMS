@@ -7,6 +7,11 @@ const LOGO_URL = 'https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/pub
 const CONFIRM_FUNCTION_URL = 'https://mipvcafqrmwxnoqmicxh.supabase.co/functions/v1/workerbook-confirm';
 const NO_SHUTTLE_FALLBACK  = 'No Shuttle Assigned: Please be at 405 Jones Road by 8:15AM';
 
+// Sentinel strings — plain text that survives paragraph conversion,
+// then swapped for real HTML blocks AFTER the <p> pass.
+const SENTINEL_SHUTTLE = '%%SHUTTLE_BLOCK%%';
+const SENTINEL_CONFIRM = '%%CONFIRM_BLOCK%%';
+
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
 export interface WorkerbookEmailTemplate {
@@ -24,7 +29,7 @@ export interface WorkerbookEmailData {
   firstName: string;
   lastName: string;
   email: string;
-  date: string;
+  date: string;        // MmmDD storage format e.g. "Mar27"
   shuttle?: string;
   days: number;
   isRookie: boolean;
@@ -41,12 +46,49 @@ export interface WorkerbookConfirmation {
   syncedToSheets: boolean;
 }
 
+// ─── DATE FORMATTING ──────────────────────────────────────────────────────────
+
+/**
+ * Convert a MmmDD tab name (e.g. "Mar27") to a friendly display string
+ * like "Saturday, March 27th" for use inside outgoing emails.
+ */
+export function formatDateForEmail(mmmdd: string): string {
+  const monthMap: Record<string, number> = {
+    Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4,  Jun: 5,
+    Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+  };
+
+  const match = mmmdd.match(/^([A-Z][a-z]{2})(\d{1,2})$/);
+  if (!match) return mmmdd; // fallback: return as-is
+
+  const monthIdx = monthMap[match[1]];
+  const day      = parseInt(match[2], 10);
+  const year     = new Date().getFullYear();
+
+  if (monthIdx === undefined || isNaN(day)) return mmmdd;
+
+  const date = new Date(year, monthIdx, day);
+
+  const weekday = date.toLocaleDateString('en-US', { weekday: 'long' });
+  const month   = date.toLocaleDateString('en-US', { month: 'long' });
+
+  // Ordinal suffix
+  const suffix =
+    day >= 11 && day <= 13 ? 'th'
+    : day % 10 === 1 ? 'st'
+    : day % 10 === 2 ? 'nd'
+    : day % 10 === 3 ? 'rd'
+    : 'th';
+
+  return `${weekday}, ${month} ${day}${suffix}`;
+}
+
 // ─── DEFAULTS ─────────────────────────────────────────────────────────────────
 
 export const DEFAULT_REGULAR_TEMPLATE: WorkerbookEmailTemplate = {
-  subject: 'Your Shift Confirmation – {{date}}',
+  subject: 'Your Shift Confirmation – {{dateFriendly}}',
   bodyIntro:
-    'Hi {{firstName}},\n\nThis is a reminder about your upcoming shift on {{date}}. ' +
+    'Hi {{firstName}},\n\nThis is a reminder about your upcoming shift on {{dateFriendly}}. ' +
     'Please review your details below and confirm your attendance.\n\n{{shuttlePoint}}\n\n{{confirmButton}}',
   replyTo: '',
   signatureName: '',
@@ -56,9 +98,9 @@ export const DEFAULT_REGULAR_TEMPLATE: WorkerbookEmailTemplate = {
 };
 
 export const DEFAULT_ROOKIE_TEMPLATE: WorkerbookEmailTemplate = {
-  subject: "Welcome to Your First Day – {{date}}",
+  subject: "Welcome to Your First Day – {{dateFriendly}}",
   bodyIntro:
-    "Hi {{firstName}},\n\nWelcome to the team! We're excited for your first day on {{date}}. " +
+    "Hi {{firstName}},\n\nWelcome to the team! We're excited for your first day on {{dateFriendly}}. " +
     'Please review your shift details and complete your online training before you arrive.\n\n{{shuttlePoint}}\n\n{{confirmButton}}',
   replyTo: '',
   signatureName: '',
@@ -208,63 +250,55 @@ export async function markConfirmationSynced(id: string): Promise<void> {
     .eq('id', id);
 }
 
-// ─── INLINE PLACEHOLDER BUILDERS ─────────────────────────────────────────────
+// ─── HTML BLOCK BUILDERS ──────────────────────────────────────────────────────
 
-/**
- * Builds the HTML string that replaces {{shuttlePoint}} inline in the body.
- * With shuttle + configured point → shows name + pickup time.
- * With shuttle but no point configured → shows shuttle number.
- * No shuttle → fallback address text.
- */
-function buildShuttleInline(shuttle: string | undefined, point: ShuttlePoint | null): string {
+function buildShuttleBlock(shuttle: string | undefined, point: ShuttlePoint | null): string {
   if (!shuttle) {
-    return `<span style="color:#92400e;background-color:#fef3c7;padding:6px 12px;border-radius:6px;
-      display:inline-block;font-size:14px;font-weight:bold;">
-      🚐 ${NO_SHUTTLE_FALLBACK}
-    </span>`;
+    return `<table width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0;">
+      <tr><td style="background-color:#fef3c7;border:1px solid #fde68a;border-radius:8px;
+                     padding:14px 16px;font-size:14px;color:#92400e;">
+        🚐 <strong>${NO_SHUTTLE_FALLBACK}</strong>
+      </td></tr>
+    </table>`;
   }
 
   if (point) {
     const mapsLink = point.googleMapsUrl
-      ? ` &nbsp;<a href="${point.googleMapsUrl}" style="color:#2563eb;font-size:13px;">View on Maps</a>`
+      ? ` &nbsp;<a href="${point.googleMapsUrl}" style="color:#2563eb;font-weight:bold;font-size:13px;">📍 View on Maps</a>`
       : '';
-    return `<span style="color:#1e40af;background-color:#eff6ff;padding:6px 12px;border-radius:6px;
-      display:inline-block;font-size:14px;">
-      🚐 <strong>${point.description}</strong> &nbsp;·&nbsp; ${point.pickupTime}${mapsLink}
-    </span>`;
+    return `<table width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0;">
+      <tr><td style="background-color:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;
+                     padding:14px 16px;font-size:14px;color:#1e40af;">
+        🚐 <strong>${point.description}</strong> &nbsp;·&nbsp; ${point.pickupTime}${mapsLink}
+      </td></tr>
+    </table>`;
   }
 
-  return `<span style="color:#92400e;background-color:#fef3c7;padding:6px 12px;border-radius:6px;
-    display:inline-block;font-size:14px;">
-    🚐 Shuttle #${shuttle} — details TBC
-  </span>`;
+  return `<table width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0;">
+    <tr><td style="background-color:#fef3c7;border:1px solid #fde68a;border-radius:8px;
+                   padding:14px 16px;font-size:14px;color:#92400e;">
+      🚐 Shuttle #${shuttle} — details TBC
+    </td></tr>
+  </table>`;
 }
 
-/**
- * Builds the HTML string that replaces {{confirmButton}} inline in the body.
- */
-function buildConfirmButtonInline(confirmUrl: string, date: string): string {
-  return `<a href="${confirmUrl}"
-    style="display:inline-block;background-color:#16a34a;color:#ffffff;
-           padding:14px 32px;border-radius:8px;font-size:16px;font-weight:bold;
-           text-decoration:none;margin:4px 0;">
-    ✅ Confirm My Shift
-  </a>
-  <br/><span style="font-size:12px;color:#9ca3af;">
-    Tap above to confirm your attendance for ${date}.
-  </span>`;
+function buildConfirmBlock(confirmUrl: string, dateFriendly: string): string {
+  return `<table width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0;text-align:center;">
+    <tr><td style="padding:12px 0;">
+      <a href="${confirmUrl}"
+         style="display:inline-block;background-color:#16a34a;color:#ffffff;
+                padding:14px 32px;border-radius:8px;font-size:16px;font-weight:bold;
+                text-decoration:none;">
+        ✅ Confirm My Shift
+      </a>
+      <p style="margin:8px 0 0 0;font-size:12px;color:#9ca3af;">
+        Tap above to confirm your attendance for ${dateFriendly}.
+      </p>
+    </td></tr>
+  </table>`;
 }
 
-// ─── HTML BUILDER ─────────────────────────────────────────────────────────────
-
-function replaceVars(text: string, vars: Record<string, string>): string {
-  return Object.entries(vars).reduce(
-    (s, [k, v]) => s.replace(new RegExp(`{{${k}}}`, 'g'), v || ''),
-    text,
-  );
-}
-
-// Auto-appended sections (used only if placeholders are NOT in the body)
+// Auto-appended card versions (used when placeholders not in body)
 
 function buildShuttleSection(shuttle: string | undefined, point: ShuttlePoint | null): string {
   if (!shuttle) return '';
@@ -289,7 +323,7 @@ function buildShuttleSection(shuttle: string | undefined, point: ShuttlePoint | 
     </td></tr>`;
 }
 
-function buildConfirmSection(confirmUrl: string, date: string): string {
+function buildConfirmSection(confirmUrl: string, dateFriendly: string): string {
   return `
     <tr><td style="padding:20px 30px;text-align:center;">
       <a href="${confirmUrl}"
@@ -298,7 +332,7 @@ function buildConfirmSection(confirmUrl: string, date: string): string {
         ✅ Confirm My Shift
       </a>
       <p style="margin:10px 0 0 0;font-size:12px;color:#9ca3af;">
-        Tap the button above to confirm your attendance for ${date}.
+        Tap above to confirm your attendance for ${dateFriendly}.
       </p>
     </td></tr>`;
 }
@@ -334,44 +368,61 @@ function buildSignature(t: WorkerbookEmailTemplate): string {
     </td></tr>`;
 }
 
+// ─── HTML BUILDER ─────────────────────────────────────────────────────────────
+
+function replaceVars(text: string, vars: Record<string, string>): string {
+  return Object.entries(vars).reduce(
+    (s, [k, v]) => s.replace(new RegExp(`{{${k}}}`, 'g'), v || ''),
+    text,
+  );
+}
+
 export function buildWorkerbookEmailHtml(
   template: WorkerbookEmailTemplate,
   data: WorkerbookEmailData,
   shuttlePoint: ShuttlePoint | null,
 ): string {
-  const confirmToken = buildConfirmToken(data);
-  const confirmUrl   = `${CONFIRM_FUNCTION_URL}?token=${encodeURIComponent(confirmToken)}`;
+  const confirmToken    = buildConfirmToken(data);
+  const confirmUrl      = `${CONFIRM_FUNCTION_URL}?token=${encodeURIComponent(confirmToken)}`;
+  const dateFriendly    = formatDateForEmail(data.date);
 
-  // Build inline HTML replacements for the two custom placeholders
-  const shuttleInlineHtml  = buildShuttleInline(data.shuttle, shuttlePoint);
-  const confirmButtonHtml  = buildConfirmButtonInline(confirmUrl, data.date);
+  const hasShuttlePlaceholder = template.bodyIntro.includes('{{shuttlePoint}}');
+  const hasConfirmPlaceholder = template.bodyIntro.includes('{{confirmButton}}');
 
-  // Detect whether the template body uses these placeholders
-  const hasShuttlePlaceholder  = template.bodyIntro.includes('{{shuttlePoint}}');
-  const hasConfirmPlaceholder  = template.bodyIntro.includes('{{confirmButton}}');
+  // Step 1: swap {{shuttlePoint}} / {{confirmButton}} for plain sentinels
+  // so they don't get mangled by the paragraph pass
+  let bodyText = template.bodyIntro;
+  bodyText = bodyText.replace(/\{\{shuttlePoint\}\}/g, SENTINEL_SHUTTLE);
+  bodyText = bodyText.replace(/\{\{confirmButton\}\}/g, SENTINEL_CONFIRM);
 
-  // All text variable replacements (simple string swaps)
+  // Step 2: replace all plain text variables
   const textVars: Record<string, string> = {
     firstName:    data.firstName,
     lastName:     data.lastName,
     fullName:     `${data.firstName} ${data.lastName}`.trim(),
     date:         data.date,
+    dateFriendly,
     contractorId: data.contractorId,
     days:         String(data.days),
   };
+  bodyText = replaceVars(bodyText, textVars);
 
-  // Replace text vars first, then inject HTML for the special placeholders
-  let processedBody = replaceVars(template.bodyIntro, textVars);
-  processedBody = processedBody.replace(/\{\{shuttlePoint\}\}/g, shuttleInlineHtml);
-  processedBody = processedBody.replace(/\{\{confirmButton\}\}/g, confirmButtonHtml);
-
-  // Convert newline-separated paragraphs to HTML <p> tags
-  const introHtml = processedBody
+  // Step 3: convert newline-delimited lines to <p> tags.
+  // Sentinels are plain strings so they come through wrapped in <p> — we'll strip that next.
+  const paragraphed = bodyText
     .split('\n')
     .map(line => line.trim()
       ? `<p style="margin:0 0 12px 0;color:#4b5563;font-size:16px;line-height:1.6;">${line}</p>`
       : '')
     .join('');
+
+  // Step 4: replace sentinel <p> wrappers with real HTML blocks
+  const shuttleHtml = buildShuttleBlock(data.shuttle, shuttlePoint);
+  const confirmHtml = buildConfirmBlock(confirmUrl, dateFriendly);
+
+  const introHtml = paragraphed
+    .replace(/<p[^>]*>%%SHUTTLE_BLOCK%%<\/p>/g, shuttleHtml)
+    .replace(/<p[^>]*>%%CONFIRM_BLOCK%%<\/p>/g, confirmHtml);
 
   return `<!DOCTYPE html>
 <html>
@@ -383,22 +434,22 @@ export function buildWorkerbookEmailHtml(
              style="background-color:#ffffff;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,0.1);">
         <tr>
           <td style="background:linear-gradient(135deg,#1f2937 0%,#374151 100%);
-                      padding:30px;border-radius:12px 12px 0 0;text-align:center;">
+                     padding:30px;border-radius:12px 12px 0 0;text-align:center;">
             <img src="${LOGO_URL}" alt="${data.commandCenterName}" style="max-width:200px;height:auto;" />
           </td>
         </tr>
 
-        <!-- Body (with inline placeholders already rendered) -->
+        <!-- Body -->
         <tr><td style="padding:30px 30px 10px 30px;">${introHtml}</td></tr>
 
-        <!-- Shuttle section — only auto-appended if {{shuttlePoint}} NOT used in body -->
+        <!-- Shuttle section — only auto-appended if {{shuttlePoint}} NOT in body -->
         ${!hasShuttlePlaceholder ? buildShuttleSection(data.shuttle, shuttlePoint) : ''}
 
-        <!-- Rookie training section — always auto-appended when applicable -->
+        <!-- Rookie training — always auto-appended for rookies -->
         ${data.isRookie ? buildTrainingSection(data.contractorId, data.firstName) : ''}
 
-        <!-- Confirm button — only auto-appended if {{confirmButton}} NOT used in body -->
-        ${!hasConfirmPlaceholder ? buildConfirmSection(confirmUrl, data.date) : ''}
+        <!-- Confirm button — only auto-appended if {{confirmButton}} NOT in body -->
+        ${!hasConfirmPlaceholder ? buildConfirmSection(confirmUrl, dateFriendly) : ''}
 
         ${buildSignature(template)}
 
@@ -421,9 +472,13 @@ export async function sendWorkerbookEmail(
   shuttlePoint: ShuttlePoint | null,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const html      = buildWorkerbookEmailHtml(template, data, shuttlePoint);
+    const html          = buildWorkerbookEmailHtml(template, data, shuttlePoint);
+    const dateFriendly  = formatDateForEmail(data.date);
     const textVars: Record<string, string> = {
-      firstName: data.firstName, date: data.date, contractorId: data.contractorId,
+      firstName:    data.firstName,
+      date:         data.date,
+      dateFriendly,
+      contractorId: data.contractorId,
     };
     const subject   = replaceVars(template.subject, textVars);
     const emailType = data.isRookie ? 'workerbook_day_of_rookie' : 'workerbook_day_of_regular';
