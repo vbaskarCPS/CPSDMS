@@ -142,6 +142,13 @@ class GoogleSheetsService {
     return !!this.accessToken;
   }
 
+  // Returns the current OAuth access token, or null if not authenticated.
+  // Used by features (like Write Routes) that need to call the Sheets API
+  // on behalf of the user against arbitrary spreadsheets.
+  public getAccessToken(): string | null {
+    return this.accessToken;
+  }
+
   public async authenticate(): Promise<boolean> {
     await this.initGapi();
     this.initTokenClient();

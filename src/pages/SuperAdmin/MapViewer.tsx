@@ -3,8 +3,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { ArrowLeft, Loader, AlertCircle, Tag, Map as MapIcon } from 'lucide-react';
+import { ArrowLeft, Loader, AlertCircle, Tag, Map as MapIcon, FileSpreadsheet, X, CheckCircle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { googleSheetsService } from '../../lib/googleSheetsService';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -18,6 +19,25 @@ interface SavedRoute {
   status: string;
 }
 
+// Pull the Sheet ID out of a full Google Sheets URL
+const extractSheetId = (url: string): string | null => {
+  const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  return match ? match[1] : null;
+};
+
+// Reverse geocode a coordinate to a city name via Mapbox
+const geocodeCity = async (lng: number, lat: number, token: string): Promise<string> => {
+  try {
+    const res = await fetch(
+      `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?types=place&access_token=${token}`
+    );
+    const data = await res.json();
+    return data.features?.[0]?.text || '';
+  } catch {
+    return '';
+  }
+};
+
 const MapViewer: React.FC = () => {
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -29,6 +49,17 @@ const MapViewer: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [showLabels, setShowLabels] = useState(false);
   const [hoveredRoute, setHoveredRoute] = useState<string | null>(null);
+
+  // ── Write Routes modal state ──
+  const [showWriteModal, setShowWriteModal] = useState(false);
+  const [sheetUrl, setSheetUrl] = useState('');
+  const [sheetId, setSheetId] = useState<string | null>(null);
+  const [sheetUrlError, setSheetUrlError] = useState<string | null>(null);
+  const [isAuthed, setIsAuthed] = useState(false);
+  const [isAuthing, setIsAuthing] = useState(false);
+  const [isWriting, setIsWriting] = useState(false);
+  const [writeResult, setWriteResult] = useState<{ count: number } | null>(null);
+  const [writeError, setWriteError] = useState<string | null>(null);
 
   // ─── Load routes from Supabase (batched to bypass 1000-row server cap) ───
   useEffect(() => {
@@ -109,7 +140,6 @@ const MapViewer: React.FC = () => {
       const lineId = `route-line-${route.id}`;
       const labelId = `route-label-${route.id}`;
 
-      // Each segment becomes a LineString feature
       const features: GeoJSON.Feature[] = route.segments.map(seg => ({
         type: 'Feature',
         properties: {
@@ -130,7 +160,6 @@ const MapViewer: React.FC = () => {
         data: { type: 'FeatureCollection', features },
       });
 
-      // Route line — drawn at low opacity so street labels show through
       map.addLayer({
         id: lineId,
         type: 'line',
@@ -146,7 +175,6 @@ const MapViewer: React.FC = () => {
         },
       });
 
-      // Route code label — placed along the line, hidden by default
       map.addLayer({
         id: labelId,
         type: 'symbol',
@@ -167,7 +195,6 @@ const MapViewer: React.FC = () => {
         },
       });
 
-      // Hover interaction
       map.on('mouseenter', lineId, () => {
         map.getCanvas().style.cursor = 'pointer';
         setHoveredRoute(`${route.route_code} — ${route.area_name}`);
@@ -205,6 +232,135 @@ const MapViewer: React.FC = () => {
     });
   }, [showLabels, mapLoaded, routes]);
 
+  // ─── Modal: URL input handler ───
+  const handleSheetUrlChange = (val: string) => {
+    setSheetUrl(val);
+    setWriteResult(null);
+    setWriteError(null);
+    const id = extractSheetId(val);
+    if (val && !id) {
+      setSheetUrlError('Not a valid Google Sheets URL');
+      setSheetId(null);
+    } else {
+      setSheetUrlError(null);
+      setSheetId(id);
+    }
+  };
+
+  // ─── Modal: Google auth ───
+  const handleAuth = async () => {
+    setIsAuthing(true);
+    setWriteError(null);
+    try {
+      const success = await googleSheetsService.authenticate();
+      setIsAuthed(success);
+      if (!success) setWriteError('Google sign-in was cancelled or failed.');
+    } catch (e: any) {
+      setWriteError(e.message || 'Authentication failed.');
+    } finally {
+      setIsAuthing(false);
+    }
+  };
+
+  // ─── Modal: Write routes to sheet ───
+  const handleWriteRoutes = async () => {
+    if (!sheetId) return;
+    setIsWriting(true);
+    setWriteError(null);
+    setWriteResult(null);
+
+    try {
+      const token = googleSheetsService.getAccessToken();
+      if (!token) throw new Error('Not authenticated.');
+
+      // 1. Geocode one city per area (cached — only one Mapbox call per area)
+      const cityCache = new Map<string, string>();
+      for (const route of routes) {
+        if (cityCache.has(route.area_name)) continue;
+        const segs = route.segments || [];
+        const midSeg = segs[Math.floor(segs.length / 2)];
+        if (!midSeg?.coordinates?.length) {
+          cityCache.set(route.area_name, '');
+          continue;
+        }
+        const coords = midSeg.coordinates;
+        const midCoord = coords[Math.floor(coords.length / 2)];
+        const city = await geocodeCity(midCoord[0], midCoord[1], import.meta.env.VITE_MAPBOX_TOKEN);
+        cityCache.set(route.area_name, city);
+      }
+
+      // 2. Build rows matching the sheet columns:
+      //    A=Manager Assignment (blank), B=Region (blank), C=Master Map,
+      //    D=RT #, E=Street_List, F=CITY, G=Territory (blank)
+      const rows = routes.map(route => {
+        const streets = (route.segments || [])
+          .map(s => s.name)
+          .filter(Boolean)
+          .join(', ');
+        return [
+          '',                                    // A: Manager Assignment
+          '',                                    // B: Region
+          route.area_name,                       // C: Master Map
+          route.route_code,                      // D: RT #
+          streets,                               // E: Street_List
+          cityCache.get(route.area_name) || '',  // F: CITY
+          '',                                    // G: Territory
+        ];
+      });
+
+      // 3. Clear existing data from row 2 downward (keeps the header row)
+      const clearRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent("'Routes'!A2:G")}:clear`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({}),
+        }
+      );
+      if (!clearRes.ok) {
+        const err = await clearRes.json();
+        throw new Error(err.error?.message || 'Failed to clear Routes tab. Make sure the tab is named exactly "Routes".');
+      }
+
+      // 4. Write all route rows starting at A2
+      const writeRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent("'Routes'!A2")}?valueInputOption=RAW`,
+        {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ values: rows }),
+        }
+      );
+      if (!writeRes.ok) {
+        const err = await writeRes.json();
+        throw new Error(err.error?.message || 'Failed to write routes to sheet.');
+      }
+
+      setWriteResult({ count: rows.length });
+    } catch (e: any) {
+      setWriteError(e.message || 'Something went wrong.');
+    } finally {
+      setIsWriting(false);
+    }
+  };
+
+  // ─── Modal: close + reset ───
+  const handleCloseModal = () => {
+    setShowWriteModal(false);
+    setSheetUrl('');
+    setSheetId(null);
+    setSheetUrlError(null);
+    setWriteResult(null);
+    setWriteError(null);
+    // intentionally keep isAuthed — the token persists in the service
+  };
+
   // Group routes by area for the legend
   const routesByArea = routes.reduce<Record<string, SavedRoute[]>>((acc, r) => {
     if (!acc[r.area_name]) acc[r.area_name] = [];
@@ -241,6 +397,15 @@ const MapViewer: React.FC = () => {
           >
             <Tag size={14} />
             {showLabels ? 'Hide Labels' : 'Show Labels'}
+          </button>
+
+          <button
+            onClick={() => setShowWriteModal(true)}
+            disabled={loading || routes.length === 0}
+            className="flex items-center gap-2 px-3 py-1.5 rounded text-sm border border-green-700 bg-green-900/30 text-green-300 hover:bg-green-800/40 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <FileSpreadsheet size={14} />
+            Write Routes
           </button>
         </div>
       </div>
@@ -337,6 +502,118 @@ const MapViewer: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* ─── Write Routes Modal ─── */}
+      {showWriteModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-gray-800 border border-gray-700 rounded-xl w-full max-w-md mx-4 shadow-2xl">
+
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700">
+              <div className="flex items-center gap-2">
+                <FileSpreadsheet size={18} className="text-green-400" />
+                <h2 className="text-sm font-bold">Write Routes to Sheet</h2>
+              </div>
+              <button onClick={handleCloseModal} className="text-gray-400 hover:text-white transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal body */}
+            <div className="px-5 py-5 space-y-5">
+
+              {/* Sheet URL input */}
+              <div>
+                <label className="text-xs text-gray-400 mb-1.5 block font-medium">Google Sheet URL</label>
+                <input
+                  type="text"
+                  value={sheetUrl}
+                  onChange={e => handleSheetUrlChange(e.target.value)}
+                  placeholder="https://docs.google.com/spreadsheets/d/..."
+                  className="w-full bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500 transition-colors"
+                />
+                {sheetUrlError && (
+                  <p className="text-xs text-red-400 mt-1.5 flex items-center gap-1">
+                    <AlertCircle size={11} /> {sheetUrlError}
+                  </p>
+                )}
+                {sheetId && !sheetUrlError && (
+                  <p className="text-xs text-green-400 mt-1.5 flex items-center gap-1">
+                    <CheckCircle size={11} /> Sheet ID detected
+                  </p>
+                )}
+              </div>
+
+              {/* Google auth */}
+              <div>
+                <label className="text-xs text-gray-400 mb-1.5 block font-medium">Google Account</label>
+                {isAuthed ? (
+                  <div className="flex items-center gap-2 text-green-400 text-sm">
+                    <CheckCircle size={15} />
+                    Connected
+                  </div>
+                ) : (
+                  <button
+                    onClick={handleAuth}
+                    disabled={isAuthing}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white text-sm disabled:opacity-50 transition-colors"
+                  >
+                    {isAuthing && <Loader size={13} className="animate-spin" />}
+                    {isAuthing ? 'Connecting...' : 'Connect Google Account'}
+                  </button>
+                )}
+              </div>
+
+              {/* Summary of what will be written */}
+              <div className="bg-gray-900 rounded-lg px-4 py-3 text-xs text-gray-400 space-y-1.5">
+                <p className="text-gray-300 font-medium mb-2">
+                  Will write to the <span className="text-green-400 font-semibold">Routes</span> tab:
+                </p>
+                <p>• <span className="text-gray-200">{routes.length} routes</span> across <span className="text-gray-200">{Object.keys(routesByArea).length} areas</span></p>
+                <p>• Clears existing data first, then rewrites fresh</p>
+                <p>• City geocoded automatically (one lookup per area)</p>
+                <p>• Manager, Region, Territory left blank</p>
+              </div>
+
+              {/* Error message */}
+              {writeError && (
+                <div className="flex items-start gap-2 text-red-400 text-xs bg-red-900/20 border border-red-800 rounded-lg px-3 py-2.5">
+                  <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
+                  <span>{writeError}</span>
+                </div>
+              )}
+
+              {/* Success message */}
+              {writeResult && (
+                <div className="flex items-center gap-2 text-green-400 text-sm bg-green-900/20 border border-green-800 rounded-lg px-3 py-2.5">
+                  <CheckCircle size={15} />
+                  {writeResult.count} routes written successfully!
+                </div>
+              )}
+            </div>
+
+            {/* Modal footer */}
+            <div className="px-5 py-4 border-t border-gray-700 flex justify-end gap-3">
+              <button
+                onClick={handleCloseModal}
+                className="px-4 py-2 rounded-lg text-sm text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+              >
+                {writeResult ? 'Close' : 'Cancel'}
+              </button>
+              <button
+                onClick={handleWriteRoutes}
+                disabled={!sheetId || !isAuthed || isWriting || !!writeResult}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {isWriting
+                  ? <><Loader size={13} className="animate-spin" /> Writing...</>
+                  : <><FileSpreadsheet size={13} /> Write Routes</>
+                }
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
