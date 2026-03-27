@@ -1,5 +1,5 @@
 // src/pages/Admin/DigitalMasterBookings.tsx
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import {
@@ -10,9 +10,11 @@ import {
   MapPin,
   MapPinned,
   CheckCircle,
+  Mail,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { googleSheetsService } from '../../lib/googleSheetsService';
+import DmbEmailModal from '../../components/DmbEmailModal';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -43,6 +45,8 @@ interface BookingRecord {
   city: string;
   serviceType: string;
   price: string;
+  email: string;    // column K
+  rowIndex: number; // 1-based sheet row — used for red-cell highlight on failure
 }
 
 interface GeocodedBooking extends BookingRecord {
@@ -116,9 +120,23 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   const [geocodingProgress, setGeocodingProgress] = useState<{ current: number; total: number } | null>(null);
   const [isPlotted, setIsPlotted] = useState(false);
 
+  // ── Email modal ─────────────────────────────────────────────────────────────
+  const [showEmailModal, setShowEmailModal] = useState(false);
+
   // ── Popup / handler refs ────────────────────────────────────────────────────
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   const bookingClickHandlerRef = useRef<((e: any) => void) | null>(null);
+
+  // Count of emailable bookings — drives the badge on the header button
+  const emailableCount = useMemo(() => {
+    let count = 0;
+    currentRoutes.forEach(r => {
+      (bookingsData.get(r.route_code) || []).forEach(b => {
+        if (b.email?.trim() && b.email.includes('@')) count++;
+      });
+    });
+    return count;
+  }, [currentRoutes, bookingsData]);
 
   // ─── SUPPRESS DUPLICATE LABELS ─────────────────────────────────────────────
   // Unchanged from original.
@@ -199,8 +217,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   }, []);
 
   // ─── LOAD AREA ROUTE CODES (lightweight — no geometry) ────────────────────
-  // Runs once on mount. Builds areaName → Set<routeCode> so booking counts
-  // are exact per area rather than prefix-based (fixes multi-area same-prefix problem).
   useEffect(() => {
     const load = async () => {
       try {
@@ -253,6 +269,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     setUnplottedBookings([]);
     setIsPlotted(false);
     setGeocodingProgress(null);
+    setShowEmailModal(false);
 
     setSelectedArea(areaName);
     setLoadingRoutes(true);
@@ -377,7 +394,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   }, [mapLoaded, clearAllRoutes, clearBookingLayers]);
 
   // ─── READ BOOKINGS FROM SHEETS ─────────────────────────────────────────────
-  // Extracted so both connect and re-plot can call it for a fresh load.
   const fetchBookingsFromSheets = useCallback(async (): Promise<Map<string, BookingRecord[]>> => {
     // Columns A–P: A=BookedBy B=Date C=Time D=Route# E=First F=Last
     //              G=House# H=Street I=Call1st J=Phone K=Email
@@ -398,6 +414,8 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         city:        row[14]?.toString().trim() || '',
         serviceType: row[11]?.toString().trim() || '',
         price:       row[13]?.toString().trim() || '',
+        email:       row[10]?.toString().trim() || '', // column K
+        rowIndex:    i + 1,                            // 1-based sheet row
       };
       if (!map.has(routeCode)) map.set(routeCode, []);
       map.get(routeCode)!.push(booking);
@@ -450,7 +468,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     // ── 2. Collect bookings only for this area's exact route codes ───────────
     const areaRouteCodeSet = new Set(currentRoutes.map(r => r.route_code));
 
-    // routeCode → routeColor lookup
     const routeColorMap = new Map<string, string>();
     currentRoutes.forEach(r => routeColorMap.set(r.route_code, r.route_color));
 
@@ -500,7 +517,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         failed.push(b);
       }
       setGeocodingProgress({ current: i + 1, total: areaBookings.length });
-      // Small delay to respect Mapbox geocoding rate limits
       await new Promise(resolve => setTimeout(resolve, 80));
     }
 
@@ -543,7 +559,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       type: 'circle',
       source: 'dmb-bookings-src',
       paint: {
-        'circle-color':        ['get', 'routeColor'],  // matches the route line
+        'circle-color':        ['get', 'routeColor'],
         'circle-radius':       4,
         'circle-stroke-color': '#000000',
         'circle-stroke-width': 2,
@@ -551,7 +567,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       },
     });
 
-    // Pointer cursor on hover
     map.on('mouseenter', 'dmb-bookings-circles', () => {
       map.getCanvas().style.cursor = 'pointer';
     });
@@ -559,7 +574,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       map.getCanvas().style.cursor = '';
     });
 
-    // Click → popup with booking details
     const clickHandler = (e: any) => {
       const feature = e.features?.[0];
       if (!feature) return;
@@ -593,7 +607,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
 
   // ─── BOOKING COUNT HELPERS ─────────────────────────────────────────────────
 
-  /** Total bookings for an area using exact route membership (not prefix-based) */
   const getAreaBookingCount = useCallback((areaName: string): number => {
     if (!isGoogleConnected) return 0;
     const codes = areaRouteCodes.get(areaName);
@@ -608,7 +621,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   const totalBookingsLoaded = Array.from(bookingsData.values()).reduce((s, b) => s + b.length, 0);
 
   // ─── MAP INIT ──────────────────────────────────────────────────────────────
-  // Completely unchanged from original.
+  // Unchanged from original.
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
     const map = new mapboxgl.Map({
@@ -754,6 +767,28 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
             <Loader size={14} className="animate-spin" />
             Geocoding {geocodingProgress.current}/{geocodingProgress.total}…
           </div>
+        )}
+
+        {/* Confirm Emails button */}
+        {selectedArea && currentRoutes.length > 0 && !geocodingProgress && (
+          <button
+            onClick={() => setShowEmailModal(true)}
+            disabled={!isGoogleConnected || loadingRoutes}
+            title={!isGoogleConnected ? 'Connect to Google first using the sidebar button' : ''}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+              !isGoogleConnected || loadingRoutes
+                ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                : 'bg-green-600 hover:bg-green-500 text-white'
+            }`}
+          >
+            <Mail size={14} />
+            Confirm Emails
+            {isGoogleConnected && emailableCount > 0 && (
+              <span className="bg-white/20 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                {emailableCount}
+              </span>
+            )}
+          </button>
         )}
 
         {/* Plot Bookings button */}
@@ -1000,18 +1035,13 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
                     key={idx}
                     className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-xs"
                   >
-                    {/* Name */}
                     <div className="font-semibold text-white mb-0.5">
                       {b.firstName} {b.lastName}
                     </div>
-
-                    {/* Address */}
                     <div className="text-gray-400 leading-snug">
                       {b.houseNum} {b.streetName}
                       {b.city ? <span className="text-gray-600">, {b.city}</span> : null}
                     </div>
-
-                    {/* Route + service + price row */}
                     <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                       {routeColor ? (
                         <span
@@ -1043,6 +1073,17 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         )}
 
       </div>
+
+      {/* ── EMAIL MODAL ────────────────────────────────────────────────────── */}
+      {showEmailModal && (
+        <DmbEmailModal
+          currentRoutes={currentRoutes}
+          bookingsData={bookingsData}
+          isGoogleConnected={isGoogleConnected}
+          onClose={() => setShowEmailModal(false)}
+        />
+      )}
+
     </div>
   );
 };

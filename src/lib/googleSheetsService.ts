@@ -347,6 +347,217 @@ class GoogleSheetsService {
   }
 
   /**
+   * Get the numeric sheetId for a named tab in the Masterbookings spreadsheet.
+   * Needed by the formatting API — tab names alone aren't accepted there.
+   */
+  public async getMasterbookingsTabSheetId(tabName: string): Promise<number | null> {
+    if (!this.accessToken) throw new Error('Not authenticated. Call authenticate() first.');
+    const config = this.getConfig();
+
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheets.masterbookings}?fields=sheets.properties`,
+      { headers: { Authorization: `Bearer ${this.accessToken}` } }
+    );
+
+    if (!response.ok) return null;
+    const data = await response.json();
+    const sheet = (data.sheets || []).find(
+      (s: any) => s.properties.title === tabName
+    );
+    return sheet?.properties.sheetId ?? null;
+  }
+
+  /**
+   * Paint cell K (email column, 0-based index 10) a light red background
+   * in the Masterbookings Bookings tab for a given 1-based sheet row number.
+   * Called when a DMB confirmation email fails to send.
+   */
+  public async highlightBookingEmailCell(
+    sheetId: number,
+    rowNumber: number
+  ): Promise<void> {
+    if (!this.accessToken) throw new Error('Not authenticated. Call authenticate() first.');
+    const config = this.getConfig();
+
+    // Convert 1-based sheet row to 0-based Sheets API index
+    const rowIndex = rowNumber - 1;
+
+    const request = {
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: rowIndex,
+          endRowIndex: rowIndex + 1,
+          startColumnIndex: 10, // Column K (0-based)
+          endColumnIndex: 11,
+        },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: { red: 1.0, green: 0.8, blue: 0.8 }, // #FFCCCC
+          },
+        },
+        fields: 'userEnteredFormat.backgroundColor',
+      },
+    };
+
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheets.masterbookings}:batchUpdate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ requests: [request] }),
+      }
+    );
+  }
+
+  /**
+   * Get the numeric sheet ID for a named tab in the Masterbookings spreadsheet.
+   * Required for the formatting API which uses numeric IDs, not tab names.
+   */
+  public async getMasterbookingsTabSheetId(tabName: string): Promise<number | null> {
+    if (!this.accessToken) {
+      throw new Error('Not authenticated. Call authenticate() first.');
+    }
+    const config = this.getConfig();
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheets.masterbookings}?fields=sheets.properties`,
+      { headers: { Authorization: `Bearer ${this.accessToken}` } }
+    );
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'Failed to fetch masterbookings metadata');
+    }
+    const data = await response.json();
+    const sheet = (data.sheets || []).find((s: any) => s.properties.title === tabName);
+    return sheet ? sheet.properties.sheetId : null;
+  }
+
+  /**
+   * Highlight the email cell (column K, index 10) light red for a specific row
+   * in the Bookings tab. Called when a DMB confirmation email fails to send.
+   * @param sheetId   - Numeric sheet ID of the Bookings tab
+   * @param rowNumber - 1-based sheet row number
+   */
+  public async highlightBookingEmailCell(sheetId: number, rowNumber: number): Promise<void> {
+    if (!this.accessToken) {
+      throw new Error('Not authenticated. Call authenticate() first.');
+    }
+    const config = this.getConfig();
+    const request = {
+      repeatCell: {
+        range: {
+          sheetId,
+          startRowIndex: rowNumber - 1,  // 0-based
+          endRowIndex:   rowNumber,
+          startColumnIndex: 10,          // Column K (0-based)
+          endColumnIndex:   11,
+        },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: { red: 1.0, green: 0.8, blue: 0.8 }, // #FFCCCC light red
+          },
+        },
+        fields: 'userEnteredFormat.backgroundColor',
+      },
+    };
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheets.masterbookings}:batchUpdate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ requests: [request] }),
+      }
+    );
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'Failed to highlight email cell');
+    }
+  }
+
+  /**
+   * Get the numeric sheet ID for a named tab in the Masterbookings spreadsheet.
+   * The formatting API requires numeric IDs — tab names alone are not enough.
+   * @param tabName - e.g. 'Bookings'
+   */
+  public async getMasterbookingsTabSheetId(tabName: string): Promise<number | null> {
+    if (!this.accessToken) {
+      throw new Error('Not authenticated. Call authenticate() first.');
+    }
+
+    const config = this.getConfig();
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheets.masterbookings}?fields=sheets.properties`,
+      {
+        headers: { Authorization: `Bearer ${this.accessToken}` },
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'Failed to fetch masterbookings metadata');
+    }
+
+    const data = await response.json();
+    const sheet = (data.sheets || []).find((s: any) => s.properties.title === tabName);
+    return sheet ? sheet.properties.sheetId : null;
+  }
+
+  /**
+   * Highlight the email cell (column K) for a specific row in the Bookings tab
+   * with a light red background to flag a failed email send.
+   * Non-fatal — logs a warning on failure but does not throw.
+   * @param numericSheetId - pre-fetched via getMasterbookingsTabSheetId('Bookings')
+   * @param rowNumber      - 1-based sheet row number
+   */
+  public async highlightFailedEmailCell(numericSheetId: number, rowNumber: number): Promise<void> {
+    if (!this.accessToken) return;
+
+    const config = this.getConfig();
+
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${config.spreadsheets.masterbookings}:batchUpdate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          requests: [{
+            repeatCell: {
+              range: {
+                sheetId: numericSheetId,
+                startRowIndex: rowNumber - 1, // 0-based
+                endRowIndex: rowNumber,
+                startColumnIndex: 10,         // Column K (email)
+                endColumnIndex: 11,
+              },
+              cell: {
+                userEnteredFormat: {
+                  // Light red #FFCCCC
+                  backgroundColor: { red: 1.0, green: 0.8, blue: 0.8 },
+                },
+              },
+              fields: 'userEnteredFormat.backgroundColor',
+            },
+          }],
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.warn('Failed to highlight email cell:', error.error?.message);
+    }
+  }
+
+  /**
    * Import session data from Google Sheets.
    * @param dateTab - The date tab name (e.g., "Feb01")
    * @param seasonType - The season type ('aeration' or 'lawn_rejuv')
