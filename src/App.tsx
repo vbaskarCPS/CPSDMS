@@ -11,6 +11,7 @@ import CommandCenterCreator from './pages/SuperAdmin/CommandCenterCreator';
 import EmailTemplates from './pages/Admin/EmailTemplates';
 import EmailTemplateEditor from './pages/Admin/EmailTemplateEditor';
 import OnboardingSetup from './pages/Admin/OnboardingSetup';
+import ShiftConfirmed from './pages/ShiftConfirmed';
 
 // Lazy load less frequently used pages
 const RMLogbook = React.lazy(() => import('./pages/Management/RMLogbook'));
@@ -47,6 +48,9 @@ function App() {
         {/* Public Routes */}
         <Route path="/login" element={<HomePage />} />
         <Route path="/" element={<Navigate to="/login" replace />} />
+
+        {/* Shift confirmation landing page — must be before /:slug catch-all */}
+        <Route path="/shift-confirmed" element={<ShiftConfirmed />} />
 
         {/* Public Job Fair Application Form */}
         <Route path="/:slug" element={<ApplicantForm />} />
