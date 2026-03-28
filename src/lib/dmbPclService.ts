@@ -731,7 +731,7 @@ interface RoadPath {
 const MM_PAGE_W = 612;    // 8.5" in pt
 const MM_PAGE_H = 792;    // 11" in pt
 const MM_MARGIN = 12;
-const MM_SIDEBAR_H = 200;  // top sidebar height — scaled up for 3x route text
+const MM_SIDEBAR_H = 85;   // top sidebar height — compact, ~8 routes per row
 
 // FIX C: Condensed font ratio — squeeze text to 70% width for narrow look
 const CONDENSE = 0.7;
@@ -802,11 +802,11 @@ function thickenMastermapRoads(map: mapboxgl.Map): void {
     if (id.startsWith('mm-') || id.startsWith('pcl-')) return;
     try {
       if (id.includes('motorway') || id.includes('trunk')) {
-        map.setPaintProperty(layer.id, 'line-width', 112);
+        map.setPaintProperty(layer.id, 'line-width', 44);
       } else if (id.includes('primary') || id.includes('secondary')) {
-        map.setPaintProperty(layer.id, 'line-width', 80);
+        map.setPaintProperty(layer.id, 'line-width', 32);
       } else if (id.includes('street') || id.includes('tertiary') || id.includes('minor') || id.includes('road')) {
-        map.setPaintProperty(layer.id, 'line-width', 52);
+        map.setPaintProperty(layer.id, 'line-width', 22);
       }
     } catch { /* skip */ }
   });
@@ -1448,10 +1448,10 @@ function drawLegendOnCanvas(
 ): void {
   if (entries.length === 0) return;
 
-  // Scale legend sizing to canvas resolution — 3x for print readability
-  const fontSize = Math.round(canvasW * 0.015);
+  // Scale legend sizing to canvas resolution
+  const fontSize = Math.round(canvasW * 0.008);
   const rowH = Math.round(fontSize * 1.6);
-  const colW = Math.round(canvasW * 0.20);
+  const colW = Math.round(canvasW * 0.14);
   const COLS = 2;
   const pad = Math.round(fontSize * 0.8);
   const rows = Math.ceil(entries.length / COLS);
@@ -1632,7 +1632,7 @@ async function renderMastermapOffscreen(
         });
         map.addLayer({
           id: `mm-line-${idx}`, type: 'line', source: `mm-route-${idx}`,
-          paint: { 'line-color': route.route_color, 'line-width': 14, 'line-opacity': 0.85 },
+          paint: { 'line-color': route.route_color, 'line-width': 28, 'line-opacity': 0.85 },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
         }, routeInsertBefore);
       });
@@ -1783,30 +1783,30 @@ export async function generateMastermap(
   const sy = MM_MARGIN;
   let sx = MM_MARGIN;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(27);
+  doc.setFontSize(16);
   doc.setTextColor(0, 0, 0);
-  doc.text(areaName, sx, sy + 27);
-  sx += areaName.length * 16.5 + 30;
-  doc.setFontSize(20);
+  doc.text(areaName, sx, sy + 14);
+  sx += areaName.length * 9.5 + 12;
+  doc.setFontSize(12);
   let rowY = sy;
   for (const route of sortedRoutes) {
     const count = bookingsData.get(route.route_code)?.length ?? 0;
     const label = `${route.route_code}(${count})`;
-    const entryW = label.length * 11.4 + 42;
+    const entryW = label.length * 7 + 18;
     if (sx + entryW > MM_PAGE_W - MM_MARGIN) {
       sx = MM_MARGIN;
-      rowY += 42;
-      if (rowY > MM_MARGIN + MM_SIDEBAR_H - 24) break;
+      rowY += 20;
+      if (rowY > MM_MARGIN + MM_SIDEBAR_H - 12) break;
     }
     const rgb = hexToRgb(route.route_color);
     doc.setFillColor(rgb.r, rgb.g, rgb.b);
-    doc.circle(sx + 9, rowY + 21, 7.5, 'F');
+    doc.circle(sx + 4, rowY + 11, 4, 'F');
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(30, 30, 30);
-    doc.text(route.route_code, sx + 24, rowY + 27);
+    doc.text(route.route_code, sx + 12, rowY + 14);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(100, 100, 100);
-    doc.text(`(${count})`, sx + 24 + route.route_code.length * 11.4 + 3, rowY + 27);
+    doc.text(`(${count})`, sx + 12 + route.route_code.length * 7 + 1, rowY + 14);
     sx += entryW;
   }
   doc.setDrawColor(180, 180, 180);
