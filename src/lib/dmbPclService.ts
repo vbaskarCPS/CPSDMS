@@ -737,9 +737,8 @@ function calculateOptimalBearing(coords: [number, number][]): number {
   const cx = coords.reduce((s, c) => s + c[0], 0) / coords.length;
   const cy = coords.reduce((s, c) => s + c[1], 0) / coords.length;
   const cosLat = Math.cos(cy * Math.PI / 180);
-  let bestBearing = 0;
-  let bestArea = Infinity;
-  for (let deg = 0; deg < 180; deg++) {
+
+  const calcArea = (deg: number): number => {
     const rad = deg * Math.PI / 180;
     const cosR = Math.cos(rad);
     const sinR = Math.sin(rad);
@@ -752,9 +751,23 @@ function calculateOptimalBearing(coords: [number, number][]): number {
       if (rx < minX) minX = rx; if (rx > maxX) maxX = rx;
       if (ry < minY) minY = ry; if (ry > maxY) maxY = ry;
     }
-    const area = (maxX - minX) * (maxY - minY);
+    return (maxX - minX) * (maxY - minY);
+  };
+
+  // Coarse pass: 1° steps
+  let bestBearing = 0;
+  let bestArea = Infinity;
+  for (let deg = 0; deg < 180; deg++) {
+    const area = calcArea(deg);
     if (area < bestArea) { bestArea = area; bestBearing = deg; }
   }
+
+  // Fine pass: 0.1° steps around the winner for precise highway alignment
+  for (let deg = bestBearing - 2; deg <= bestBearing + 2; deg += 0.1) {
+    const area = calcArea(deg);
+    if (area < bestArea) { bestArea = area; bestBearing = Math.round(deg * 10) / 10; }
+  }
+
   return bestBearing;
 }
 
@@ -1241,8 +1254,12 @@ function labelRoadsThreePass(
       const subPath = getSubPath(road.pixelPath, segStart, segEnd);
       if (subPath.length < 2) continue;
 
-      // PASS 1 — Inline: text curves along road
-      if (drawTextAlongPath(ctx, road.name, subPath, fontSize, grid)) {
+      // Detect cul-de-sacs / loops: start ≈ end means circular path.
+      // Skip inline (text would wrap the circle) → go straight to offset/legend.
+      const isLoop = subPath.length >= 4 && pDist(subPath[0], subPath[subPath.length - 1]) < 40;
+
+      // PASS 1 — Inline: text curves along road (skip for loops)
+      if (!isLoop && drawTextAlongPath(ctx, road.name, subPath, fontSize, grid)) {
         labeledNames.set(road.name, (labeledNames.get(road.name) || 0) + 1);
         continue;
       }
