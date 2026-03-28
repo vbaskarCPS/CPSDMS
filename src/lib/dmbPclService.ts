@@ -997,16 +997,24 @@ function getSubPath(
   return result;
 }
 
-// FIX 1: Ensure path goes left-to-right using NET horizontal movement across
-// all segments, not just comparing the first and last endpoint.
-// This correctly handles curved / S-shaped / merged roads.
+// Ensure text reads naturally: left-to-right for horizontal roads,
+// bottom-to-top for vertical roads (standard cartographic convention).
+// Uses net movement across ALL segments, not just endpoints.
 function ensureLeftToRight(path: { x: number; y: number }[]): { x: number; y: number }[] {
   if (path.length < 2) return path;
   let sumDx = 0;
+  let sumDy = 0;
   for (let i = 1; i < path.length; i++) {
     sumDx += path[i].x - path[i - 1].x;
+    sumDy += path[i].y - path[i - 1].y;
   }
-  return sumDx >= 0 ? path : [...path].reverse();
+  if (Math.abs(sumDx) >= Math.abs(sumDy)) {
+    // Primarily horizontal — ensure left to right
+    return sumDx >= 0 ? path : [...path].reverse();
+  } else {
+    // Primarily vertical — ensure bottom to top (negative sumDy in screen coords)
+    return sumDy <= 0 ? path : [...path].reverse();
+  }
 }
 
 // ─── Merge connected road segments by proximity ──────────────────────────────
@@ -1686,7 +1694,7 @@ async function renderMastermapOffscreen(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
-      map.fitBounds(bounds, { padding: 8, maxZoom: 20, duration: 0 });
+      map.fitBounds(bounds, { padding: 2, maxZoom: 20, duration: 0 });
 
       // Wait for tiles at the correct viewport to load
       map.once('idle', () => {
@@ -1696,7 +1704,7 @@ async function renderMastermapOffscreen(
         const bearing = detectHighwayBearing(map);
 
         // Re-fit with the correct bearing — this rotates the view
-        map.fitBounds(bounds, { padding: 8, maxZoom: 20, duration: 0, bearing });
+        map.fitBounds(bounds, { padding: 2, maxZoom: 20, duration: 0, bearing });
 
         // Wait for rotated tiles to load, then capture
         map.once('idle', () => {
