@@ -1616,7 +1616,7 @@ async function renderMastermapOffscreen(
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
       map.jumpTo({ bearing, center: bounds.getCenter() });
-      map.fitBounds(bounds, { padding: 20, maxZoom: 20, duration: 0 });
+      map.fitBounds(bounds, { padding: 20, maxZoom: 20, duration: 0, bearing });
 
       // Wait for tiles to load, then capture + label
       map.once('idle', () => {
@@ -1686,9 +1686,28 @@ export async function generateMastermap(
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
 
-  // Map image
+  // ── Calculate legend dimensions BEFORE placing map ───────────────────────
+  // If there are legend entries, we need to shrink the map to make room below.
+  // If none, the map uses the full available height.
+  const legendEntries = renderResult?.legendEntries || [];
+  const LEGEND_COLS = 2;
+  const LEGEND_ROW_H = 7;
+  const LEGEND_COL_W = 130;
+  const LEGEND_GAP = 6; // space between bottom of map and top of legend
+
+  let legendTotalH = 0; // total vertical space consumed by legend + gap
+  if (legendEntries.length > 0) {
+    const legendRows = Math.ceil(legendEntries.length / LEGEND_COLS);
+    const legendBoxH = legendRows * LEGEND_ROW_H + 14;
+    legendTotalH = legendBoxH + LEGEND_GAP;
+  }
+
+  // Map display height — shrunk by legend when needed
+  const mapDisplayH = mapAreaH - legendTotalH;
+
+  // Map image — fits in the (possibly shorter) display area
   if (renderResult?.imageDataUrl) {
-    try { doc.addImage(renderResult.imageDataUrl, 'PNG', mapX, mapY, mapAreaW, mapAreaH); }
+    try { doc.addImage(renderResult.imageDataUrl, 'PNG', mapX, mapY, mapAreaW, mapDisplayH); }
     catch { /* map unavailable */ }
   }
 
@@ -1736,35 +1755,31 @@ export async function generateMastermap(
   doc.setTextColor(160, 160, 160);
   doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', MM_PAGE_W - MM_MARGIN - 80, MM_PAGE_H - MM_MARGIN + 2);
 
-  // ── Legend table (for streets that got numbered markers) ────────────────────
-  const legendEntries = renderResult?.legendEntries || [];
+  // ── Legend table — drawn BELOW the map, never overlapping routes ────────────
   if (legendEntries.length > 0) {
-    const COLS = 2;
-    const ROW_H = 7;
-    const COL_W = 130;
-    const rows = Math.ceil(legendEntries.length / COLS);
-    const legendW = COLS * COL_W + 8;
-    const legendH = rows * ROW_H + 14;
+    const legendRows = Math.ceil(legendEntries.length / LEGEND_COLS);
+    const legendBoxW = LEGEND_COLS * LEGEND_COL_W + 8;
+    const legendBoxH = legendRows * LEGEND_ROW_H + 14;
 
-    // Position: top-right corner of map area
-    const lx = mapX + mapAreaW - legendW - 4;
-    const ly = mapY + 4;
+    // Position: centered horizontally, directly below the map image
+    const lx = mapX + (mapAreaW - legendBoxW) / 2;
+    const ly = mapY + mapDisplayH + LEGEND_GAP;
 
     // White background with border
     doc.setFillColor(255, 255, 255);
     doc.setDrawColor(100, 100, 100);
     doc.setLineWidth(0.5);
-    doc.rect(lx, ly, legendW, legendH, 'FD');
+    doc.rect(lx, ly, legendBoxW, legendBoxH, 'FD');
 
     // Entries in two columns
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(5);
     doc.setTextColor(0, 0, 0);
     for (let i = 0; i < legendEntries.length; i++) {
-      const col = Math.floor(i / rows);
-      const row = i % rows;
-      const ex = lx + 4 + col * COL_W;
-      const ey = ly + 9 + row * ROW_H;
+      const col = Math.floor(i / legendRows);
+      const row = i % legendRows;
+      const ex = lx + 4 + col * LEGEND_COL_W;
+      const ey = ly + 9 + row * LEGEND_ROW_H;
       doc.text(`${legendEntries[i].number}. ${legendEntries[i].streetName}`, ex, ey);
     }
   }
