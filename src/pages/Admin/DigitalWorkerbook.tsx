@@ -15,6 +15,7 @@ import {
   Send,
   X,
   CloudUpload,
+  Bus,
 } from 'lucide-react';
 import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import { commandCenterService } from '../../lib/commandCenterService';
@@ -35,6 +36,7 @@ import {
   incrementNaCount,
   clearNaCountsForContractor,
 } from '../../lib/workerbookNaService';
+import { pushShuttleRoster } from '../../lib/shuttleRosterService';
 import WorkerbookEmailService from './WorkerbookEmailService';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -203,6 +205,8 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   const [confirmingFor, setConfirmingFor]       = useState<string | null>(null);
 
   const [naCounters, setNaCounters] = useState<Map<string, number>>(new Map());
+
+  const [pushingToShuttles, setPushingToShuttles] = useState(false);
 
   // ─── INIT ──────────────────────────────────────────────────────────────────
 
@@ -389,6 +393,41 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
       setMoveTarget(null); setMoveToDate('');
     } catch (err: any) { setError(err.message || 'Failed to move contractor'); }
     finally { setMovingTo(false); }
+  };
+
+  // ─── PUSH TO SHUTTLES ─────────────────────────────────────────────────────
+
+  const handlePushToShuttles = async () => {
+    if (!currentCC || !selectedTab || !contractors.length) return;
+    setPushingToShuttles(true); setError(null);
+    try {
+      // Compute email-confirmed IDs at call time
+      const emailConfIds = new Set(confirmations.map(c => c.contractorId));
+
+      const rosterData = contractors.map(c => ({
+        contractorId:  c.cnId,
+        firstName:     c.firstName,
+        lastName:      c.lastName,
+        cellPhone:     c.cellPhone,
+        shuttleNumber: c.shuttle,
+        confirmed:     c.confirmed || emailConfIds.has(c.cnId),
+      }));
+
+      await pushShuttleRoster(currentCC.id, selectedTab, rosterData);
+
+      // Open the public shuttle page in a new tab
+      const ccUsername = (currentCC as any).username;
+      if (ccUsername) {
+        window.open('/' + ccUsername + '-shuttle', '_blank');
+      }
+
+      setEmailSuccess('Pushed ' + rosterData.length + ' contractors to Shuttles page!');
+      setTimeout(() => setEmailSuccess(null), 4000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to push to shuttles');
+    } finally {
+      setPushingToShuttles(false);
+    }
   };
 
   // ─── EMAIL ─────────────────────────────────────────────────────────────────
@@ -640,10 +679,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
           )}
 
           {c.shuttle && (
-            <div className={'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs flex-shrink-0 ' + (shuttlePt ? 'bg-blue-900/20 border border-blue-700/40 text-blue-300' : 'bg-gray-900 border border-gray-700 text-gray-500')}>
+            <div className={'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs flex-shrink-0 ' + (getShuttlePoint(c.shuttle) ? 'bg-blue-900/20 border border-blue-700/40 text-blue-300' : 'bg-gray-900 border border-gray-700 text-gray-500')}>
               {'🚐 '}
-              {shuttlePt
-                ? <><strong>{shuttlePt.description}</strong>{shuttlePt.pickupTime && ' · ' + shuttlePt.pickupTime}</>
+              {getShuttlePoint(c.shuttle)
+                ? <><strong>{getShuttlePoint(c.shuttle)!.description}</strong>{getShuttlePoint(c.shuttle)!.pickupTime && ' · ' + getShuttlePoint(c.shuttle)!.pickupTime}</>
                 : 'Shuttle #' + c.shuttle + ' — not configured'
               }
             </div>
@@ -691,6 +730,11 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               )}
             </div>
             <div className="flex items-center gap-2 flex-wrap">
+              <button onClick={handlePushToShuttles} disabled={pushingToShuttles || !contractors.length}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50">
+                {pushingToShuttles ? <Loader size={14} className="animate-spin" /> : <Bus size={14} />}
+                Push to Shuttles
+              </button>
               <button onClick={handleRefreshColors} disabled={loadingColors || !contractors.length}
                       className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors disabled:opacity-50">
                 <RefreshCw size={14} className={loadingColors ? 'animate-spin' : ''} /> Colors

@@ -20,7 +20,7 @@ const NewJob = React.lazy(() => import('./pages/Logsheet/NewJob'));
 const JobDetail = React.lazy(() => import('./pages/Logsheet/JobDetail'));
 const NotFound = React.lazy(() => import('./pages/Logsheet/NotFound'));
 const PayoutContractor = React.lazy(() => import('./pages/Management/PayoutContractor'));
-const ApplicantForm = React.lazy(() => import('./pages/Public/ApplicantForm'));
+const SlugRouter = React.lazy(() => import('./pages/Public/SlugRouter'));
 
 // Campaign / Dialer pages
 const CampaignCreator = React.lazy(() => import('./pages/SuperAdmin/CampaignCreator'));
@@ -52,8 +52,8 @@ function App() {
         {/* Shift confirmation landing page — must be before /:slug catch-all */}
         <Route path="/shift-confirmed" element={<ShiftConfirmed />} />
 
-        {/* Public Job Fair Application Form */}
-        <Route path="/:slug" element={<ApplicantForm />} />
+        {/* Public catch-all: handles both job fair forms AND shuttle pages */}
+        <Route path="/:slug" element={<SlugRouter />} />
 
         {/* Super Admin Routes */}
         <Route path="/super-admin" element={<CommandCenterCreator />} />
