@@ -1090,7 +1090,7 @@ function queryAndGroupRoads(map: mapboxgl.Map): RoadPath[] {
       if (!isDup) deduped.push(seg);
     }
 
-    const merged = mergePixelSegments(deduped, 20);
+    const merged = mergePixelSegments(deduped, 50);
     for (const path of merged) {
       const pl = measurePath(path);
       if (pl < 10) continue;
@@ -1289,7 +1289,10 @@ function labelRoadsThreePass(
 
   // Track which names have been labeled (name → # of labels placed)
   const labeledNames = new Map<string, number>();
+  // Track label placement positions to prevent same-name stacking
+  const labelPositions = new Map<string, { x: number; y: number }[]>();
   const REPEAT_INTERVAL = 600; // label every 600px on long roads
+  const MIN_SAME_NAME_DIST = 200; // minimum px between labels of same street name
 
   for (const road of roads) {
     const fontSize = getFontSize(road.roadClass);
@@ -1310,19 +1313,28 @@ function labelRoadsThreePass(
       const subPath = getSubPath(road.pixelPath, segStart, segEnd);
       if (subPath.length < 2) continue;
 
+      // Check if a label for this name was already placed too close
+      const midPt = getPointAtDistance(subPath, measurePath(subPath) / 2);
+      const existingPositions = labelPositions.get(road.name) || [];
+      const tooClose = existingPositions.some((pos) => pDist(pos, midPt) < MIN_SAME_NAME_DIST);
+      if (tooClose) continue;
+
       // Detect cul-de-sacs / loops: start ≈ end means circular path.
-      // Skip inline (text would wrap the circle) → go straight to offset/legend.
       const isLoop = subPath.length >= 4 && pDist(subPath[0], subPath[subPath.length - 1]) < 40;
 
       // PASS 1 — Inline: text curves along road (skip for loops)
       if (!isLoop && drawTextAlongPath(ctx, road.name, subPath, fontSize, grid)) {
         labeledNames.set(road.name, (labeledNames.get(road.name) || 0) + 1);
+        if (!labelPositions.has(road.name)) labelPositions.set(road.name, []);
+        labelPositions.get(road.name)!.push(midPt);
         continue;
       }
 
       // PASS 2 — Offset: shifted perpendicular, still aligned with road angle
       if (drawOffsetLabel(ctx, road.name, subPath, fontSize * 0.85, grid, fontSize * 1.2)) {
         labeledNames.set(road.name, (labeledNames.get(road.name) || 0) + 1);
+        if (!labelPositions.has(road.name)) labelPositions.set(road.name, []);
+        labelPositions.get(road.name)!.push(midPt);
         continue;
       }
 
