@@ -278,12 +278,27 @@ function groupClientsByAddress(rows: CallbookRow[]): ClientGroup[] {
 }
 
 // ─── STEP 3 — OFF-SCREEN MAPBOX GL RENDERER ─────────────────────────────────
-// Creates a Mapbox GL map behind the page (z-index: -1) with the EXACT same
-// styling as DigitalMasterBookings, draws the route in yellow, captures canvas.
 //
-// IMPORTANT: The container must NOT use visibility:hidden or display:none —
-// WebGL requires the canvas to be in a visible rendering context. We use
-// z-index:-1 + pointer-events:none to keep it behind the UI but renderable.
+// DESIGN NOTES (why it's built this way):
+//
+// 1. Container uses z-index:-1, NOT visibility:hidden.
+//    WebGL requires the canvas to be in a visible rendering context.
+//    visibility:hidden kills the GL context → blank canvas → "Map unavailable".
+//
+// 2. NO map.on('error') abort handler.
+//    Mapbox fires 'error' for ANY issue including single tile 404s, which are
+//    completely normal. An early-abort on error was racing with the idle/render
+//    flow and resolving the promise with null before the map had a chance to
+//    finish rendering. Tile errors are non-fatal — the map renders fine with
+//    a few missing tiles.
+//
+// 3. Capture uses triggerRepaint() → render event, not just idle + setTimeout.
+//    Even with preserveDrawingBuffer:true, the GL buffer can be stale by the
+//    time we call toDataURL(). triggerRepaint() forces a fresh frame, and
+//    capturing on the 'render' event guarantees the buffer is hot.
+//
+// 4. 30-second timeout. Vijay confirmed this is acceptable per route.
+//
 
 function applyMapStyling(map: mapboxgl.Map): void {
   const HIDE_LIST = ['poi-label', 'housenum-label', 'road-number-shield'];
@@ -374,8 +389,8 @@ async function renderRouteMapOffscreen(
   if (allCoords.length === 0) return null;
 
   return new Promise<string | null>((resolve) => {
-    // Container sits at top-left, behind everything — WebGL needs a visible
-    // rendering context, so we can NOT use visibility:hidden or display:none.
+    // Container sits at top-left behind everything. z-index:-1 keeps it
+    // invisible to the user but WebGL can still render (unlike visibility:hidden).
     const container = document.createElement('div');
     container.style.position = 'fixed';
     container.style.top = '0px';
@@ -408,13 +423,27 @@ async function renderRouteMapOffscreen(
       interactive: false,
     });
 
-    // 15-second safety timeout
+    // 30-second safety timeout — if nothing else works, grab whatever is on canvas
     const timeout = setTimeout(() => {
-      try { finish(map, map.getCanvas().toDataURL('image/png')); }
-      catch { finish(map, null); }
-    }, 15000);
+      console.warn('[DMB PCL] Map render timed out after 30s, capturing whatever is available');
+      try {
+        map.triggerRepaint();
+        setTimeout(() => {
+          try {
+            const url = map.getCanvas().toDataURL('image/png');
+            finish(map, url.length > 500 ? url : null);
+          } catch { finish(map, null); }
+        }, 200);
+      } catch { finish(map, null); }
+    }, 30000);
+
+    // NOTE: We intentionally do NOT add map.on('error') here.
+    // Tile 404s and transient network errors fire 'error' and would
+    // race with the idle flow, aborting the capture prematurely.
+    // The map renders fine with a few missing tiles.
 
     map.on('load', () => {
+      // Apply the exact same styling as the DMB interactive map
       applyMapStyling(map);
 
       // Insert route line below road labels so street names stay on top
@@ -439,24 +468,39 @@ async function renderRouteMapOffscreen(
         layout: { 'line-cap': 'round', 'line-join': 'round' },
       }, routeInsertBefore);
 
-      // Fit bounds to route
+      // Fit bounds to route with padding
       const bounds = allCoords.reduce(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
       map.fitBounds(bounds, { padding: 40, duration: 0 });
 
-      // Wait for tiles + labels to fully render, then capture
+      // STEP A: Wait for all tiles + labels to finish rendering
       map.once('idle', () => {
+        // STEP B: Wait 2s for label placement to fully settle
         setTimeout(() => {
-          clearTimeout(timeout);
-          try { finish(map, map.getCanvas().toDataURL('image/png')); }
-          catch { finish(map, null); }
-        }, 1000);
+          // STEP C: Force a fresh frame so the GL buffer is hot
+          map.triggerRepaint();
+
+          // STEP D: Capture on the next render — buffer is guaranteed fresh
+          map.once('render', () => {
+            // Small extra delay to ensure the buffer write is complete
+            setTimeout(() => {
+              clearTimeout(timeout);
+              try {
+                const url = map.getCanvas().toDataURL('image/png');
+                // Sanity check: a real PNG data URL is always > 1KB.
+                // A blank/empty capture would be much shorter.
+                finish(map, url.length > 1000 ? url : null);
+              } catch (err) {
+                console.error('[DMB PCL] toDataURL failed:', err);
+                finish(map, null);
+              }
+            }, 300);
+          });
+        }, 2000);
       });
     });
-
-    map.on('error', () => { clearTimeout(timeout); finish(map, null); });
   });
 }
 
@@ -607,8 +651,6 @@ export async function generateDmbPCL(
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
   let isFirstPage = true;
-
-  // Off-screen map pixel dimensions — smaller = less GPU strain, still sharp in PDF
   const mapPixelW = 500;
   const mapPixelH = 730;
 
