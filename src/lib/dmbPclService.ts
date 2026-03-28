@@ -1068,6 +1068,13 @@ export async function generateMastermap(
   const bearing = 0;
 
   // ── Determine bounding box aspect ratio for sidebar layout ─────────────────
+  let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
+  allCoords.forEach(([lng, lat]) => {
+    if (lng < minLng) minLng = lng;
+    if (lng > maxLng) maxLng = lng;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+  });
   const midLat = (minLat + maxLat) / 2;
   const cosLat = Math.cos(midLat * Math.PI / 180);
   const widthKm = (maxLng - minLng) * 111 * cosLat;
