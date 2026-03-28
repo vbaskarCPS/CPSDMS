@@ -802,11 +802,11 @@ function thickenMastermapRoads(map: mapboxgl.Map): void {
     if (id.startsWith('mm-') || id.startsWith('pcl-')) return;
     try {
       if (id.includes('motorway') || id.includes('trunk')) {
-        map.setPaintProperty(layer.id, 'line-width', 48);
+        map.setPaintProperty(layer.id, 'line-width', 56);
       } else if (id.includes('primary') || id.includes('secondary')) {
-        map.setPaintProperty(layer.id, 'line-width', 34);
+        map.setPaintProperty(layer.id, 'line-width', 40);
       } else if (id.includes('street') || id.includes('tertiary') || id.includes('minor') || id.includes('road')) {
-        map.setPaintProperty(layer.id, 'line-width', 22);
+        map.setPaintProperty(layer.id, 'line-width', 26);
       }
     } catch { /* skip */ }
   });
@@ -1449,9 +1449,9 @@ function drawLegendOnCanvas(
   if (entries.length === 0) return;
 
   // Scale legend sizing to canvas resolution
-  const fontSize = Math.round(canvasW * 0.003);
+  const fontSize = Math.round(canvasW * 0.005);
   const rowH = Math.round(fontSize * 1.6);
-  const colW = Math.round(canvasW * 0.085);
+  const colW = Math.round(canvasW * 0.12);
   const COLS = 2;
   const pad = Math.round(fontSize * 0.8);
   const rows = Math.ceil(entries.length / COLS);
@@ -1632,7 +1632,7 @@ async function renderMastermapOffscreen(
         });
         map.addLayer({
           id: `mm-line-${idx}`, type: 'line', source: `mm-route-${idx}`,
-          paint: { 'line-color': route.route_color, 'line-width': 10, 'line-opacity': 0.85 },
+          paint: { 'line-color': route.route_color, 'line-width': 14, 'line-opacity': 0.85 },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
         }, routeInsertBefore);
       });
@@ -1679,44 +1679,48 @@ async function renderMastermapOffscreen(
         });
       }
 
-      // Detect highway bearing from Mapbox motorway data — aligns QEW horizontally
-      // FIX B: ramps excluded via detectHighwayBearing
-      const bearing = detectHighwayBearing(map);
-
-      // Fit bounds with detected bearing
+      // ── TWO-PASS BEARING DETECTION ─────────────────────────────────────────
+      // Pass 1: fitBounds with NO bearing to get the correct viewport/zoom.
+      // We need all highway features visible before detecting their angle.
       const bounds = allCoords.reduce(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
-      map.jumpTo({ bearing, center: bounds.getCenter() });
-      map.fitBounds(bounds, { padding: 20, maxZoom: 20, duration: 0, bearing });
+      map.fitBounds(bounds, { padding: 20, maxZoom: 20, duration: 0 });
 
-      // Wait for tiles to load, then FORCE bearing and capture
+      // Wait for tiles at the correct viewport to load
       map.once('idle', () => {
-        // Re-apply bearing after fitBounds has settled — belt and suspenders
-        map.jumpTo({ bearing, center: map.getCenter(), zoom: map.getZoom() });
+        clearTimeout(timeout); // safe — if we got here, map is alive
 
-        setTimeout(() => {
-          map.triggerRepaint();
-          map.once('render', () => {
-            setTimeout(() => {
-              if (done) return; done = true;
-              clearTimeout(timeout);
-              try {
-                const rawUrl = map.getCanvas().toDataURL('image/png');
-                // Query roads BEFORE removing map (need map.project() for pixel coords)
-                const roads = queryAndGroupRoads(map);
-                try { map.remove(); } catch {} cleanup();
-                // Composite: greyscale base + custom curving labels
-                processMapWithLabels(rawUrl, roads, pixelW, pixelH).then(resolve);
-              } catch (err) {
-                console.error('[DMB Mastermap] capture failed:', err);
-                try { map.remove(); } catch {} cleanup();
-                resolve(null);
-              }
-            }, 300);
-          });
-        }, 2000);
+        // Pass 2: NOW detect bearing from the full visible highway geometry
+        const bearing = detectHighwayBearing(map);
+
+        // Re-fit with the correct bearing — this rotates the view
+        map.fitBounds(bounds, { padding: 20, maxZoom: 20, duration: 0, bearing });
+
+        // Wait for rotated tiles to load, then capture
+        map.once('idle', () => {
+          setTimeout(() => {
+            map.triggerRepaint();
+            map.once('render', () => {
+              setTimeout(() => {
+                if (done) return; done = true;
+                try {
+                  const rawUrl = map.getCanvas().toDataURL('image/png');
+                  // Query roads BEFORE removing map (need map.project() for pixel coords)
+                  const roads = queryAndGroupRoads(map);
+                  try { map.remove(); } catch {} cleanup();
+                  // Composite: greyscale base + custom curving labels
+                  processMapWithLabels(rawUrl, roads, pixelW, pixelH).then(resolve);
+                } catch (err) {
+                  console.error('[DMB Mastermap] capture failed:', err);
+                  try { map.remove(); } catch {} cleanup();
+                  resolve(null);
+                }
+              }, 300);
+            });
+          }, 2000);
+        });
       });
     });
   });
