@@ -705,3 +705,502 @@ export async function generateDmbPCL(
 function contentTop(): number { return MARGIN + BORDER_W + BLOCK_PAD; }
 function contentBottom(): number { return MARGIN + BLOCK_H - BORDER_W - BLOCK_PAD; }
 function yieldUI(): Promise<void> { return new Promise((r) => setTimeout(r, 0)); }
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MASTERMAP — Full-area legal landscape PDF with all routes, bookings, sidebar
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── MASTERMAP TYPES ─────────────────────────────────────────────────────────
+
+export interface MastermapBookingInput {
+  lat: number;
+  lng: number;
+  routeColor: string;
+}
+
+export interface MastermapResult {
+  success: boolean;
+  routeCount: number;
+  bookingCount: number;
+  errorMessage?: string;
+}
+
+// ─── MASTERMAP CONSTANTS ─────────────────────────────────────────────────────
+
+const LEGAL_W = 1008;   // 14" in pt
+const LEGAL_H = 612;    // 8.5" in pt
+const MM_MARGIN = 12;
+
+// ─── GREYSCALE BASE — recolor water/parks at Mapbox style level ──────────────
+
+function applyGreyscaleBase(map: mapboxgl.Map): void {
+  map.getStyle().layers?.forEach((layer: any) => {
+    const id = layer.id.toLowerCase();
+    try {
+      if (layer.type === 'fill') {
+        if (id.includes('water')) {
+          map.setPaintProperty(layer.id, 'fill-color', '#d0d0d0');
+        } else if (id.includes('landuse') || id.includes('park') || id.includes('national')) {
+          map.setPaintProperty(layer.id, 'fill-color', '#e8e8e8');
+        } else if (id.includes('land') && !id.includes('label')) {
+          map.setPaintProperty(layer.id, 'fill-color', '#f2f2f2');
+        }
+      } else if (layer.type === 'background') {
+        map.setPaintProperty(layer.id, 'background-color', '#f5f5f5');
+      }
+    } catch { /* skip */ }
+  });
+}
+
+// ─── GREYSCALE PIXEL FILTER — keeps high-saturation pixels (routes + dots) ───
+
+function greyscalePreservingSaturated(dataUrl: string, width: number, height: number): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, width, height);
+
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const px = imageData.data;
+
+      for (let i = 0; i < px.length; i += 4) {
+        const r = px[i];
+        const g = px[i + 1];
+        const b = px[i + 2];
+
+        // HSV saturation: (max - min) / max
+        const mx = Math.max(r, g, b);
+        const mn = Math.min(r, g, b);
+        const sat = mx > 0 ? (mx - mn) / mx : 0;
+
+        // Low saturation → greyscale (map base, roads, labels)
+        // High saturation → keep in color (route lines, booking dots)
+        if (sat < 0.18) {
+          const grey = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+          px[i] = grey;
+          px[i + 1] = grey;
+          px[i + 2] = grey;
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+// ─── OFF-SCREEN MAP RENDERER (all routes + booking dots) ─────────────────────
+
+async function renderMastermapOffscreen(
+  routes: SavedRouteInput[],
+  bookings: MastermapBookingInput[],
+  pixelW: number,
+  pixelH: number,
+): Promise<string | null> {
+  // Collect all coordinates for bounds
+  const allCoords: [number, number][] = [];
+  routes.forEach((r) => r.segments?.forEach((s) => allCoords.push(...s.coordinates)));
+  bookings.forEach((b) => allCoords.push([b.lng, b.lat]));
+  if (!allCoords.length) return null;
+
+  return new Promise<string | null>((resolve) => {
+    const container = document.createElement('div');
+    container.style.position = 'fixed';
+    container.style.top = '0px';
+    container.style.left = '0px';
+    container.style.width = `${pixelW}px`;
+    container.style.height = `${pixelH}px`;
+    container.style.zIndex = '-1';
+    container.style.pointerEvents = 'none';
+    container.style.overflow = 'hidden';
+    document.body.appendChild(container);
+
+    let done = false;
+    const finish = async (m: mapboxgl.Map, url: string | null) => {
+      if (done) return;
+      done = true;
+      try { m.remove(); } catch { /* ok */ }
+      try { document.body.removeChild(container); } catch { /* ok */ }
+
+      if (url && url.length > 1000) {
+        resolve(await greyscalePreservingSaturated(url, pixelW, pixelH));
+      } else {
+        resolve(null);
+      }
+    };
+
+    mapboxgl.accessToken = (import.meta.env.VITE_MAPBOX_TOKEN as string) || '';
+
+    const map = new mapboxgl.Map({
+      container,
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: allCoords[0],
+      zoom: 12,
+      preserveDrawingBuffer: true,
+      attributionControl: false,
+      interactive: false,
+    });
+
+    const timeout = setTimeout(() => {
+      console.warn('[DMB Mastermap] Map render timed out after 30s');
+      try {
+        map.triggerRepaint();
+        setTimeout(() => {
+          try { finish(map, map.getCanvas().toDataURL('image/png')); }
+          catch { finish(map, null); }
+        }, 200);
+      } catch { finish(map, null); }
+    }, 30000);
+
+    map.on('load', () => {
+      // Apply DMB styling (hide buildings, POIs, format labels)
+      applyMapStyling(map);
+
+      // Greyscale the base map (water, parks, land → grey)
+      applyGreyscaleBase(map);
+
+      // Insert routes below labels
+      const routeInsertBefore = (
+        map.getLayer('road-label') ? 'road-label' :
+        map.getStyle().layers?.find((l: any) => l.type === 'symbol')?.id
+      ) ?? undefined;
+
+      // Add each route as a separate colored line
+      routes.forEach((route, idx) => {
+        if (!route.segments?.length) return;
+
+        const srcId = `mm-route-${idx}`;
+        map.addSource(srcId, {
+          type: 'geojson',
+          data: {
+            type: 'FeatureCollection',
+            features: route.segments.map((s) => ({
+              type: 'Feature' as const,
+              properties: {},
+              geometry: { type: 'LineString' as const, coordinates: s.coordinates },
+            })),
+          },
+        });
+
+        map.addLayer({
+          id: `mm-line-${idx}`,
+          type: 'line',
+          source: srcId,
+          paint: {
+            'line-color': route.route_color,
+            'line-width': 5,
+            'line-opacity': 0.85,
+          },
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+        }, routeInsertBefore);
+      });
+
+      // Add route number labels at centroids
+      const labelFeatures: GeoJSON.Feature[] = [];
+      routes.forEach((route) => {
+        const coords: [number, number][] = [];
+        route.segments?.forEach((s) => coords.push(...s.coordinates));
+        if (!coords.length) return;
+        const cLng = coords.reduce((sum, c) => sum + c[0], 0) / coords.length;
+        const cLat = coords.reduce((sum, c) => sum + c[1], 0) / coords.length;
+        labelFeatures.push({
+          type: 'Feature',
+          properties: { num: String(route.route_number), color: route.route_color },
+          geometry: { type: 'Point', coordinates: [cLng, cLat] },
+        });
+      });
+
+      if (labelFeatures.length) {
+        map.addSource('mm-labels', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: labelFeatures },
+        });
+        map.addLayer({
+          id: 'mm-route-nums',
+          type: 'symbol',
+          source: 'mm-labels',
+          layout: {
+            'text-field': ['get', 'num'],
+            'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
+            'text-size': 22,
+            'text-allow-overlap': true,
+            'text-ignore-placement': true,
+          },
+          paint: {
+            'text-color': ['get', 'color'],
+            'text-halo-color': 'rgba(255,255,255,0.9)',
+            'text-halo-width': 2,
+          },
+        });
+      }
+
+      // Add booking dots (route-colored with black border)
+      if (bookings.length) {
+        map.addSource('mm-bookings', {
+          type: 'geojson',
+          data: {
+            type: 'FeatureCollection',
+            features: bookings.map((b) => ({
+              type: 'Feature' as const,
+              properties: { routeColor: b.routeColor },
+              geometry: { type: 'Point' as const, coordinates: [b.lng, b.lat] },
+            })),
+          },
+        });
+        map.addLayer({
+          id: 'mm-booking-dots',
+          type: 'circle',
+          source: 'mm-bookings',
+          paint: {
+            'circle-color': ['get', 'routeColor'],
+            'circle-radius': 4,
+            'circle-stroke-color': '#000000',
+            'circle-stroke-width': 1.5,
+            'circle-opacity': 0.95,
+          },
+        });
+      }
+
+      // Fit bounds to all content
+      const bounds = allCoords.reduce(
+        (b, c) => b.extend(c),
+        new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
+      );
+      map.fitBounds(bounds, { padding: 30, duration: 0 });
+
+      // Capture after tiles load
+      map.once('idle', () => {
+        setTimeout(() => {
+          map.triggerRepaint();
+          map.once('render', () => {
+            setTimeout(() => {
+              clearTimeout(timeout);
+              try { finish(map, map.getCanvas().toDataURL('image/png')); }
+              catch (err) {
+                console.error('[DMB Mastermap] toDataURL failed:', err);
+                finish(map, null);
+              }
+            }, 300);
+          });
+        }, 2000);
+      });
+    });
+  });
+}
+
+// ─── MASTERMAP PDF BUILDER ───────────────────────────────────────────────────
+
+export async function generateMastermap(
+  areaName: string,
+  routes: SavedRouteInput[],
+  geocodedBookings: MastermapBookingInput[],
+  bookingsData: Map<string, any[]>,
+  onProgress?: (p: DmbPCLProgress) => void,
+): Promise<MastermapResult> {
+  if (!routes.length) {
+    return { success: false, routeCount: 0, bookingCount: 0, errorMessage: 'No routes in this area.' };
+  }
+
+  onProgress?.({ phase: 'Analyzing', detail: 'Calculating layout\u2026', percent: 5 });
+  await yieldUI();
+
+  // ── Determine bounding box aspect ratio ────────────────────────────────────
+  const allCoords: [number, number][] = [];
+  routes.forEach((r) => r.segments?.forEach((s) => allCoords.push(...s.coordinates)));
+
+  let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
+  allCoords.forEach(([lng, lat]) => {
+    if (lng < minLng) minLng = lng;
+    if (lng > maxLng) maxLng = lng;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+  });
+
+  // Convert to approximate equal-distance: 1° lat ≈ 111km, 1° lng ≈ 111km × cos(lat)
+  const midLat = (minLat + maxLat) / 2;
+  const widthKm = (maxLng - minLng) * 111 * Math.cos(midLat * Math.PI / 180);
+  const heightKm = (maxLat - minLat) * 111;
+  const isLandscape = widthKm >= heightKm;
+
+  // ── Layout dimensions ──────────────────────────────────────────────────────
+  const SIDEBAR_W = 80;   // sidebar width when on left (<10% of 1008)
+  const SIDEBAR_H = 45;   // sidebar height when on top
+
+  let mapAreaW: number, mapAreaH: number, mapX: number, mapY: number;
+  let sidebarLayout: 'left' | 'top';
+
+  if (isLandscape) {
+    sidebarLayout = 'left';
+    mapX = MM_MARGIN + SIDEBAR_W;
+    mapY = MM_MARGIN;
+    mapAreaW = LEGAL_W - 2 * MM_MARGIN - SIDEBAR_W;
+    mapAreaH = LEGAL_H - 2 * MM_MARGIN;
+  } else {
+    sidebarLayout = 'top';
+    mapX = MM_MARGIN;
+    mapY = MM_MARGIN + SIDEBAR_H;
+    mapAreaW = LEGAL_W - 2 * MM_MARGIN;
+    mapAreaH = LEGAL_H - 2 * MM_MARGIN - SIDEBAR_H;
+  }
+
+  // Off-screen pixel size (match available PDF area aspect ratio for clean scaling)
+  const pixelW = isLandscape ? 1400 : 1200;
+  const pixelH = Math.round(pixelW * (mapAreaH / mapAreaW));
+
+  // ── Render off-screen map ──────────────────────────────────────────────────
+  onProgress?.({ phase: 'Rendering map', detail: 'This may take 15\u201330 seconds\u2026', percent: 10 });
+  await yieldUI();
+  await new Promise((r) => setTimeout(r, 1000)); // GPU settle
+
+  const mapImage = await renderMastermapOffscreen(routes, geocodedBookings, pixelW, pixelH);
+
+  // ── Build PDF ──────────────────────────────────────────────────────────────
+  onProgress?.({ phase: 'Building PDF', detail: 'Drawing layout\u2026', percent: 85 });
+  await yieldUI();
+
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'legal' });
+
+  // Draw the map image
+  if (mapImage) {
+    try { doc.addImage(mapImage, 'PNG', mapX, mapY, mapAreaW, mapAreaH); }
+    catch { /* map unavailable */ }
+  }
+
+  // Sort routes for sidebar
+  const sortedRoutes = [...routes].sort((a, b) => a.route_number - b.route_number);
+
+  // Helper: parse hex color to RGB
+  function hexToRgb(hex: string): { r: number; g: number; b: number } {
+    const h = hex.replace('#', '');
+    return {
+      r: parseInt(h.slice(0, 2), 16) || 0,
+      g: parseInt(h.slice(2, 4), 16) || 0,
+      b: parseInt(h.slice(4, 6), 16) || 0,
+    };
+  }
+
+  if (sidebarLayout === 'left') {
+    // ── Sidebar on LEFT — one route per row, stacked vertically ──────────────
+    const sx = MM_MARGIN;
+    let sy = MM_MARGIN;
+
+    // Area title
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(0, 0, 0);
+    doc.text(areaName, sx, sy + 8);
+    sy += 14;
+
+    // Divider
+    doc.setDrawColor(180, 180, 180);
+    doc.setLineWidth(0.5);
+    doc.line(sx, sy, sx + SIDEBAR_W - 4, sy);
+    sy += 6;
+
+    // Route rows
+    doc.setFontSize(6.5);
+    for (const route of sortedRoutes) {
+      const count = bookingsData.get(route.route_code)?.length ?? 0;
+
+      // Color dot
+      const rgb = hexToRgb(route.route_color);
+      doc.setFillColor(rgb.r, rgb.g, rgb.b);
+      doc.circle(sx + 4, sy + 2, 2.5, 'F');
+
+      // Route code
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(30, 30, 30);
+      doc.text(route.route_code, sx + 10, sy + 4);
+
+      // Booking count
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(100, 100, 100);
+      const codeWidth = route.route_code.length * 3.8;
+      doc.text(`(${count})`, sx + 10 + codeWidth + 2, sy + 4);
+
+      sy += 10;
+      if (sy > LEGAL_H - MM_MARGIN - 10) break; // safety overflow
+    }
+
+    // Attribution
+    doc.setFontSize(3.5);
+    doc.setTextColor(160, 160, 160);
+    doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', sx, LEGAL_H - MM_MARGIN);
+
+  } else {
+    // ── Sidebar on TOP — routes flow left-to-right ───────────────────────────
+    const sy = MM_MARGIN;
+    let sx = MM_MARGIN;
+
+    // Area title
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(0, 0, 0);
+    doc.text(areaName, sx, sy + 9);
+    sx += areaName.length * 5.5 + 10;
+
+    // Route entries flowing left to right
+    doc.setFontSize(6.5);
+    let rowY = sy;
+    for (const route of sortedRoutes) {
+      const count = bookingsData.get(route.route_code)?.length ?? 0;
+      const label = `${route.route_code}(${count})`;
+      const entryW = label.length * 3.8 + 14;
+
+      // Wrap to second line if needed
+      if (sx + entryW > LEGAL_W - MM_MARGIN) {
+        sx = MM_MARGIN;
+        rowY += 14;
+        if (rowY > MM_MARGIN + SIDEBAR_H - 8) break; // out of space
+      }
+
+      // Color dot
+      const rgb = hexToRgb(route.route_color);
+      doc.setFillColor(rgb.r, rgb.g, rgb.b);
+      doc.circle(sx + 3, rowY + 7, 2.5, 'F');
+
+      // Route code + count
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(30, 30, 30);
+      doc.text(route.route_code, sx + 8, rowY + 9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(100, 100, 100);
+      const codeW = route.route_code.length * 3.8;
+      doc.text(`(${count})`, sx + 8 + codeW + 1, rowY + 9);
+
+      sx += entryW;
+    }
+
+    // Divider below sidebar
+    doc.setDrawColor(180, 180, 180);
+    doc.setLineWidth(0.5);
+    doc.line(MM_MARGIN, mapY - 3, LEGAL_W - MM_MARGIN, mapY - 3);
+
+    // Attribution
+    doc.setFontSize(3.5);
+    doc.setTextColor(160, 160, 160);
+    doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', LEGAL_W - MM_MARGIN - 80, LEGAL_H - MM_MARGIN + 2);
+  }
+
+  // ── Save PDF ───────────────────────────────────────────────────────────────
+  onProgress?.({ phase: 'Downloading', detail: 'Saving PDF\u2026', percent: 97 });
+  await yieldUI();
+
+  const today = new Date();
+  const dateStr = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, '0'),
+    String(today.getDate()).padStart(2, '0'),
+  ].join('-');
+  doc.save(`Mastermap_${areaName.replace(/[^a-zA-Z0-9_-]/g, '_')}_${dateStr}.pdf`);
+
+  onProgress?.({ phase: 'Done', detail: 'Complete', percent: 100 });
+  return { success: true, routeCount: routes.length, bookingCount: geocodedBookings.length };
+}

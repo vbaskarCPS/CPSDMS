@@ -12,11 +12,13 @@ import {
   CheckCircle,
   Mail,
   FileText,
+  Printer,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { googleSheetsService } from '../../lib/googleSheetsService';
+import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import { commandCenterService } from '../../lib/commandCenterService';
-import { generateDmbPCL, DmbPCLProgress } from '../../lib/dmbPclService';
+import { generateDmbPCL, generateMastermap, DmbPCLProgress } from '../../lib/dmbPclService';
 import DmbEmailModal from '../../components/DmbEmailModal';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -130,6 +132,10 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   // ── PCL generation state ────────────────────────────────────────────────────
   const [pclGenerating, setPclGenerating] = useState(false);
   const [pclProgress, setPclProgress] = useState<DmbPCLProgress | null>(null);
+
+  // ── Mastermap generation state ──────────────────────────────────────────────
+  const [mastermapGenerating, setMastermapGenerating] = useState(false);
+  const [mastermapProgress, setMastermapProgress] = useState<DmbPCLProgress | null>(null);
 
   // ── Popup / handler refs ────────────────────────────────────────────────────
   const popupRef = useRef<mapboxgl.Popup | null>(null);
@@ -426,7 +432,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     return map;
   }, []);
 
-  // ─── GOOGLE CONNECT ────────────────────────────────────────────────────────
+  // ─── GOOGLE CONNECT — unified OAuth for both services ──────────────────────
   const handleConnectGoogle = useCallback(async () => {
     setSheetsLoading(true);
     setError(null);
@@ -436,6 +442,15 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         setError('Failed to connect to Google. Please try again.');
         return;
       }
+
+      // Also auth dialerSheetsService so PCL works without a second popup.
+      // Same OAuth client ID + scopes = silent token grant (no extra consent screen).
+      try {
+        await dialerSheetsService.authenticate();
+      } catch {
+        // Non-fatal — PCL will re-prompt if needed
+      }
+
       const map = await fetchBookingsFromSheets();
       setBookingsData(map);
       setIsGoogleConnected(true);
@@ -639,6 +654,42 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     }
   }, [selectedArea, currentRoutes, pclGenerating]);
 
+  // ─── PRINT MASTERMAP ───────────────────────────────────────────────────────
+  const handlePrintMastermap = useCallback(async () => {
+    if (!selectedArea || currentRoutes.length === 0 || mastermapGenerating || !isPlotted) return;
+
+    setMastermapGenerating(true);
+    setMastermapProgress(null);
+    setError(null);
+
+    try {
+      const result = await generateMastermap(
+        selectedArea,
+        currentRoutes,
+        geocodedBookings.map(b => ({ lat: b.lat, lng: b.lng, routeColor: b.routeColor })),
+        bookingsData,
+        (p) => setMastermapProgress(p),
+      );
+
+      if (result.success) {
+        setMastermapProgress({
+          phase: 'Done',
+          detail: `${result.routeCount} routes, ${result.bookingCount} bookings`,
+          percent: 100,
+        });
+        setTimeout(() => setMastermapProgress(null), 4000);
+      } else {
+        setError('Mastermap failed: ' + (result.errorMessage || 'Unknown error'));
+        setMastermapProgress(null);
+      }
+    } catch (err: any) {
+      setError('Mastermap failed: ' + (err.message || 'Unknown error'));
+      setMastermapProgress(null);
+    } finally {
+      setMastermapGenerating(false);
+    }
+  }, [selectedArea, currentRoutes, geocodedBookings, bookingsData, mastermapGenerating, isPlotted]);
+
   // ─── BOOKING COUNT HELPERS ─────────────────────────────────────────────────
 
   const getAreaBookingCount = useCallback((areaName: string): number => {
@@ -653,6 +704,9 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   }, [isGoogleConnected, bookingsData, areaRouteCodes]);
 
   const totalBookingsLoaded = Array.from(bookingsData.values()).reduce((s, b) => s + b.length, 0);
+
+  // Hide action buttons while either generator is running
+  const anyGenerating = pclGenerating || mastermapGenerating;
 
   // ─── MAP INIT ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -819,8 +873,36 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           </div>
         )}
 
+        {/* Mastermap progress */}
+        {mastermapProgress && (
+          <div className="flex items-center gap-2 text-xs font-medium">
+            {mastermapGenerating ? (
+              <>
+                <Loader size={14} className="animate-spin text-teal-400" />
+                <span className="text-teal-400">{mastermapProgress.phase}: {mastermapProgress.detail}</span>
+              </>
+            ) : (
+              <>
+                <CheckCircle size={14} className="text-green-400" />
+                <span className="text-green-400">{mastermapProgress.detail}</span>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Print Mastermap button — only visible after plotting */}
+        {selectedArea && isPlotted && !geocodingProgress && !anyGenerating && (
+          <button
+            onClick={handlePrintMastermap}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors bg-teal-600 hover:bg-teal-500 text-white"
+          >
+            <Printer size={14} />
+            Print Mastermap
+          </button>
+        )}
+
         {/* Download PCL button */}
-        {selectedArea && currentRoutes.length > 0 && !geocodingProgress && !pclGenerating && (
+        {selectedArea && currentRoutes.length > 0 && !geocodingProgress && !anyGenerating && (
           <button
             onClick={handleDownloadPCL}
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors bg-amber-600 hover:bg-amber-500 text-white"
