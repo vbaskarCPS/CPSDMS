@@ -685,11 +685,12 @@ function yieldUI(): Promise<void> { return new Promise((r) => setTimeout(r, 0));
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MASTERMAP — Full-area legal landscape PDF with all routes, bookings, sidebar
+// MASTERMAP — Full-area portrait letter PDF with all routes, bookings, sidebar
 //
 // Custom road label system:  Mapbox renders roads + routes + dots with NO text.
 // We then draw street names ourselves, character-by-character along road curves.
 // Three-pass approach: inline → offset → numbered legend.
+// Condensed font (0.7x horizontal squeeze) for compact readable labels.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── MASTERMAP TYPES ─────────────────────────────────────────────────────────
@@ -725,10 +726,15 @@ interface RoadPath {
 }
 
 // ─── MASTERMAP CONSTANTS ─────────────────────────────────────────────────────
+// FIX A: Letter portrait (8.5×11") instead of legal landscape (14×8.5")
 
-const LEGAL_W = 1008;   // 14" in pt
-const LEGAL_H = 612;    // 8.5" in pt
+const MM_PAGE_W = 612;    // 8.5" in pt
+const MM_PAGE_H = 792;    // 11" in pt
 const MM_MARGIN = 12;
+const MM_SIDEBAR_H = 55;  // top sidebar height for route info
+
+// FIX C: Condensed font ratio — squeeze text to 70% width for narrow look
+const CONDENSE = 0.7;
 
 // ─── OPTIMAL BEARING — rotate map to minimize wasted space ───────────────────
 
@@ -754,7 +760,6 @@ function calculateOptimalBearing(coords: [number, number][]): number {
     return (maxX - minX) * (maxY - minY);
   };
 
-  // Coarse pass: 1° steps
   let bestBearing = 0;
   let bestArea = Infinity;
   for (let deg = 0; deg < 180; deg++) {
@@ -762,7 +767,6 @@ function calculateOptimalBearing(coords: [number, number][]): number {
     if (area < bestArea) { bestArea = area; bestBearing = deg; }
   }
 
-  // Fine pass: 0.1° steps around the winner for precise highway alignment
   for (let deg = bestBearing - 2; deg <= bestBearing + 2; deg += 0.1) {
     const area = calcArea(deg);
     if (area < bestArea) { bestArea = area; bestBearing = Math.round(deg * 10) / 10; }
@@ -789,6 +793,7 @@ function applyGreyscaleBase(map: mapboxgl.Map): void {
 }
 
 // ─── THICKEN ROADS for print legibility ──────────────────────────────────────
+// FIX D: Fatter road lines (28/20/12 → 48/34/22)
 
 function thickenMastermapRoads(map: mapboxgl.Map): void {
   map.getStyle().layers?.forEach((layer: any) => {
@@ -797,11 +802,11 @@ function thickenMastermapRoads(map: mapboxgl.Map): void {
     if (id.startsWith('mm-') || id.startsWith('pcl-')) return;
     try {
       if (id.includes('motorway') || id.includes('trunk')) {
-        map.setPaintProperty(layer.id, 'line-width', 28);
+        map.setPaintProperty(layer.id, 'line-width', 48);
       } else if (id.includes('primary') || id.includes('secondary')) {
-        map.setPaintProperty(layer.id, 'line-width', 20);
+        map.setPaintProperty(layer.id, 'line-width', 34);
       } else if (id.includes('street') || id.includes('tertiary') || id.includes('minor') || id.includes('road')) {
-        map.setPaintProperty(layer.id, 'line-width', 12);
+        map.setPaintProperty(layer.id, 'line-width', 22);
       }
     } catch { /* skip */ }
   });
@@ -818,15 +823,20 @@ function hideMapboxLabels(map: mapboxgl.Map): void {
 }
 
 // ─── DETECT HIGHWAY BEARING — find the QEW/major highway angle from map data ─
+// FIX B: Exclude ramp/link layers and casing layers so only the mainline
+// highway geometry drives the bearing calculation. This prevents short
+// on-ramps and off-ramps from pulling the angle off true horizontal.
 
 function detectHighwayBearing(map: mapboxgl.Map): number {
-  // Find motorway/trunk line layers
+  // Find motorway/trunk line layers — exclude links (ramps) and casings
   const hwLayerIds: string[] = [];
   map.getStyle().layers?.forEach((layer: any) => {
     if (layer.type !== 'line') return;
     const id = layer.id.toLowerCase();
     if (id.startsWith('mm-')) return;
-    if (id.includes('motorway') || id.includes('trunk')) hwLayerIds.push(layer.id);
+    if ((id.includes('motorway') || id.includes('trunk')) && !id.includes('link') && !id.includes('case')) {
+      hwLayerIds.push(layer.id);
+    }
   });
   if (!hwLayerIds.length) return 0;
 
@@ -878,7 +888,6 @@ function detectHighwayBearing(map: mapboxgl.Map): number {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── Occupancy grid for collision detection ──────────────────────────────────
-// FIX 2: Bumped cell size from 8 → 14 for fatter collision zones on rotated text
 
 class OccupancyGrid {
   private cells = new Set<string>();
@@ -1116,16 +1125,17 @@ function queryAndGroupRoads(map: mapboxgl.Map): RoadPath[] {
 }
 
 // ─── Font size by road class ─────────────────────────────────────────────────
-// FIX 4: Bumped all sizes to match physical map legibility for in-vehicle use
+// FIX F: Slightly smaller text (80/60/46 → 68/52/40) — condensed font makes
+// them visually equivalent while taking less horizontal space
 
 function getFontSize(roadClass: string): number {
-  if (roadClass === 'motorway' || roadClass === 'trunk') return 80;
-  if (roadClass === 'primary' || roadClass === 'secondary') return 60;
-  return 46;
+  if (roadClass === 'motorway' || roadClass === 'trunk') return 68;
+  if (roadClass === 'primary' || roadClass === 'secondary') return 52;
+  return 40;
 }
 
 // ─── PASS 1: Draw text curving along road path, character by character ───────
-// FIX 2: Bumped collision padding from 2 → 6 to prevent rotated text overlaps
+// FIX C: 0.7x horizontal squeeze applied to character widths and drawing
 
 function drawTextAlongPath(
   ctx: CanvasRenderingContext2D,
@@ -1139,7 +1149,8 @@ function drawTextAlongPath(
   ctx.textAlign = 'center';
 
   const chars = [...text];
-  const charWidths = chars.map((c) => ctx.measureText(c).width);
+  // Measure at full width, then apply condensing for actual occupied width
+  const charWidths = chars.map((c) => ctx.measureText(c).width * CONDENSE);
   const totalWidth = charWidths.reduce((a, b) => a + b, 0);
   const pathLen = measurePath(path);
 
@@ -1177,6 +1188,9 @@ function drawTextAlongPath(
     if (angle < -Math.PI / 2) angle += Math.PI;
     ctx.rotate(angle);
 
+    // FIX C: Condense horizontally
+    ctx.scale(CONDENSE, 1.0);
+
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = Math.max(4, fontSize * 0.18);
     ctx.lineJoin = 'round';
@@ -1196,7 +1210,7 @@ function drawTextAlongPath(
 }
 
 // ─── PASS 2: Offset label — shifted perpendicular to road ────────────────────
-// FIX 2: Bumped collision padding from 2 → 6
+// FIX C: 0.7x condensed font applied
 
 function drawOffsetLabel(
   ctx: CanvasRenderingContext2D,
@@ -1215,7 +1229,7 @@ function drawOffsetLabel(
   if (angle < -Math.PI / 2) angle += Math.PI;
 
   ctx.font = `bold ${fontSize}px Arial, Helvetica, sans-serif`;
-  const tw = ctx.measureText(text).width;
+  const tw = ctx.measureText(text).width * CONDENSE;
   const pad = 6;
 
   // Try both sides (above and below the road)
@@ -1232,6 +1246,7 @@ function drawOffsetLabel(
     ctx.save();
     ctx.translate(ox, oy);
     ctx.rotate(angle);
+    ctx.scale(CONDENSE, 1.0);
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
 
@@ -1251,6 +1266,7 @@ function drawOffsetLabel(
 }
 
 // ─── PASS 3: Legend numbered marker on map ───────────────────────────────────
+// FIX E: Bigger markers — radius 14→22, font 14→18
 
 function drawLegendMarker(
   ctx: CanvasRenderingContext2D,
@@ -1259,9 +1275,9 @@ function drawLegendMarker(
   y: number,
   grid: OccupancyGrid,
 ): boolean {
-  const r = 14;
+  const r = 22;
   // Try the point and nearby offsets
-  for (const [dx, dy] of [[0, 0], [0, -20], [0, 20], [-20, 0], [20, 0]]) {
+  for (const [dx, dy] of [[0, 0], [0, -28], [0, 28], [-28, 0], [28, 0]]) {
     const px = x + dx;
     const py = y + dy;
     if (grid.isOccupied(px - r, py - r, r * 2, r * 2)) continue;
@@ -1272,11 +1288,11 @@ function drawLegendMarker(
     ctx.fillStyle = '#ffffff';
     ctx.fill();
     ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
     ctx.stroke();
 
     // Number inside
-    ctx.font = `bold ${r}px Arial, sans-serif`;
+    ctx.font = `bold 18px Arial, sans-serif`;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
     ctx.fillStyle = '#000000';
@@ -1291,6 +1307,7 @@ function drawLegendMarker(
 // ─── FIX 3 HELPER: Draw straight horizontal label for highways ───────────────
 // Forces angle=0 so QEW / Highway 8 always reads perfectly horizontal,
 // matching the physical map aesthetic.
+// FIX C: Condensed font applied
 
 function drawStraightHorizontalLabel(
   ctx: CanvasRenderingContext2D,
@@ -1301,7 +1318,7 @@ function drawStraightHorizontalLabel(
   grid: OccupancyGrid,
 ): boolean {
   ctx.font = `bold ${fontSize}px Arial, Helvetica, sans-serif`;
-  const tw = ctx.measureText(text).width;
+  const tw = ctx.measureText(text).width * CONDENSE;
   const pad = 6;
 
   if (grid.isOccupied(x - tw / 2 - pad, y - fontSize / 2 - pad, tw + pad * 2, fontSize + pad * 2)) {
@@ -1310,6 +1327,8 @@ function drawStraightHorizontalLabel(
 
   ctx.save();
   ctx.translate(x, y);
+  // FIX C: Condense horizontally
+  ctx.scale(CONDENSE, 1.0);
   // angle forced to 0 — perfectly horizontal
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'center';
@@ -1328,8 +1347,6 @@ function drawStraightHorizontalLabel(
 }
 
 // ─── MAIN 3-PASS LABELING ────────────────────────────────────────────────────
-// FIX 2: MIN_SAME_NAME_DIST bumped from 200 → 400
-// FIX 3: Motorway/trunk roads get forced horizontal labels (skip curved Pass 1)
 
 function labelRoadsThreePass(
   ctx: CanvasRenderingContext2D,
@@ -1344,7 +1361,7 @@ function labelRoadsThreePass(
   // Track label placement positions to prevent same-name stacking
   const labelPositions = new Map<string, { x: number; y: number }[]>();
   const REPEAT_INTERVAL = 600; // label every 600px on long roads
-  const MIN_SAME_NAME_DIST = 400; // FIX 2: bumped from 200 → 400
+  const MIN_SAME_NAME_DIST = 400;
 
   for (const road of roads) {
     const fontSize = getFontSize(road.roadClass);
@@ -1548,7 +1565,6 @@ async function renderMastermapOffscreen(
       });
 
       // Route number labels at centroids
-      // FIX 4: Bumped text-size from 40 → 56 and halo-width from 3 → 4
       const labelFeatures: GeoJSON.Feature[] = [];
       routes.forEach((route) => {
         const coords: [number, number][] = [];
@@ -1591,6 +1607,7 @@ async function renderMastermapOffscreen(
       }
 
       // Detect highway bearing from Mapbox motorway data — aligns QEW horizontally
+      // FIX B: ramps excluded via detectHighwayBearing
       const bearing = detectHighwayBearing(map);
 
       // Fit bounds with detected bearing
@@ -1630,6 +1647,7 @@ async function renderMastermapOffscreen(
 }
 
 // ─── MASTERMAP PDF BUILDER ───────────────────────────────────────────────────
+// FIX A: Portrait letter page, sidebar always on top
 
 export async function generateMastermap(
   areaName: string,
@@ -1645,44 +1663,14 @@ export async function generateMastermap(
   onProgress?.({ phase: 'Analyzing', detail: 'Calculating layout\u2026', percent: 5 });
   await yieldUI();
 
-  // ── Collect coordinates + calculate bearing ────────────────────────────────
-  const allCoords: [number, number][] = [];
-  routes.forEach((r) => r.segments?.forEach((s) => allCoords.push(...s.coordinates)));
+  // ── Map area — sidebar always on top, map fills below ──────────────────────
+  const mapX = MM_MARGIN;
+  const mapY = MM_MARGIN + MM_SIDEBAR_H;
+  const mapAreaW = MM_PAGE_W - 2 * MM_MARGIN;
+  const mapAreaH = MM_PAGE_H - 2 * MM_MARGIN - MM_SIDEBAR_H;
 
-  // ── Bounding box for aspect ratio ──────────────────────────────────────────
-  let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
-  allCoords.forEach(([lng, lat]) => {
-    if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng;
-    if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
-  });
-  const midLat = (minLat + maxLat) / 2;
-  const cosLat = Math.cos(midLat * Math.PI / 180);
-  const widthKm = (maxLng - minLng) * 111 * cosLat;
-  const heightKm = (maxLat - minLat) * 111;
-  const isLandscape = widthKm >= heightKm;
-
-  // ── Layout ─────────────────────────────────────────────────────────────────
-  const SIDEBAR_W = 80;
-  const SIDEBAR_H = 45;
-  let mapAreaW: number, mapAreaH: number, mapX: number, mapY: number;
-  let sidebarLayout: 'left' | 'top';
-
-  if (isLandscape) {
-    sidebarLayout = 'left';
-    mapX = MM_MARGIN + SIDEBAR_W;
-    mapY = MM_MARGIN;
-    mapAreaW = LEGAL_W - 2 * MM_MARGIN - SIDEBAR_W;
-    mapAreaH = LEGAL_H - 2 * MM_MARGIN;
-  } else {
-    sidebarLayout = 'top';
-    mapX = MM_MARGIN;
-    mapY = MM_MARGIN + SIDEBAR_H;
-    mapAreaW = LEGAL_W - 2 * MM_MARGIN;
-    mapAreaH = LEGAL_H - 2 * MM_MARGIN - SIDEBAR_H;
-  }
-
-  // 6000px render — sweet spot for custom label legibility
-  const pixelW = isLandscape ? 6000 : 5200;
+  // High-res pixel render matching the portrait aspect ratio
+  const pixelW = 5000;
   const pixelH = Math.round(pixelW * (mapAreaH / mapAreaW));
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -1696,7 +1684,7 @@ export async function generateMastermap(
   onProgress?.({ phase: 'Building PDF', detail: 'Drawing layout\u2026', percent: 85 });
   await yieldUI();
 
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'legal' });
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
 
   // Map image
   if (renderResult?.imageDataUrl) {
@@ -1704,7 +1692,7 @@ export async function generateMastermap(
     catch { /* map unavailable */ }
   }
 
-  // ── Sidebar ────────────────────────────────────────────────────────────────
+  // ── Sidebar (always top) ───────────────────────────────────────────────────
   const sortedRoutes = [...routes].sort((a, b) => a.route_number - b.route_number);
 
   function hexToRgb(hex: string) {
@@ -1712,69 +1700,41 @@ export async function generateMastermap(
     return { r: parseInt(h.slice(0, 2), 16) || 0, g: parseInt(h.slice(2, 4), 16) || 0, b: parseInt(h.slice(4, 6), 16) || 0 };
   }
 
-  if (sidebarLayout === 'left') {
-    const sx = MM_MARGIN;
-    let sy = MM_MARGIN;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
-    doc.setTextColor(0, 0, 0);
-    doc.text(areaName, sx, sy + 8);
-    sy += 14;
-    doc.setDrawColor(180, 180, 180);
-    doc.setLineWidth(0.5);
-    doc.line(sx, sy, sx + SIDEBAR_W - 4, sy);
-    sy += 6;
-    doc.setFontSize(6.5);
-    for (const route of sortedRoutes) {
-      const count = bookingsData.get(route.route_code)?.length ?? 0;
-      const rgb = hexToRgb(route.route_color);
-      doc.setFillColor(rgb.r, rgb.g, rgb.b);
-      doc.circle(sx + 4, sy + 2, 2.5, 'F');
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(30, 30, 30);
-      doc.text(route.route_code, sx + 10, sy + 4);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(100, 100, 100);
-      doc.text(`(${count})`, sx + 10 + route.route_code.length * 3.8 + 2, sy + 4);
-      sy += 10;
-      if (sy > LEGAL_H - MM_MARGIN - 10) break;
+  const sy = MM_MARGIN;
+  let sx = MM_MARGIN;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(0, 0, 0);
+  doc.text(areaName, sx, sy + 9);
+  sx += areaName.length * 5.5 + 10;
+  doc.setFontSize(6.5);
+  let rowY = sy;
+  for (const route of sortedRoutes) {
+    const count = bookingsData.get(route.route_code)?.length ?? 0;
+    const label = `${route.route_code}(${count})`;
+    const entryW = label.length * 3.8 + 14;
+    if (sx + entryW > MM_PAGE_W - MM_MARGIN) {
+      sx = MM_MARGIN;
+      rowY += 14;
+      if (rowY > MM_MARGIN + MM_SIDEBAR_H - 8) break;
     }
-    doc.setFontSize(3.5);
-    doc.setTextColor(160, 160, 160);
-    doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', sx, LEGAL_H - MM_MARGIN);
-  } else {
-    const sy = MM_MARGIN;
-    let sx = MM_MARGIN;
+    const rgb = hexToRgb(route.route_color);
+    doc.setFillColor(rgb.r, rgb.g, rgb.b);
+    doc.circle(sx + 3, rowY + 7, 2.5, 'F');
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(0, 0, 0);
-    doc.text(areaName, sx, sy + 9);
-    sx += areaName.length * 5.5 + 10;
-    doc.setFontSize(6.5);
-    let rowY = sy;
-    for (const route of sortedRoutes) {
-      const count = bookingsData.get(route.route_code)?.length ?? 0;
-      const label = `${route.route_code}(${count})`;
-      const entryW = label.length * 3.8 + 14;
-      if (sx + entryW > LEGAL_W - MM_MARGIN) { sx = MM_MARGIN; rowY += 14; if (rowY > MM_MARGIN + SIDEBAR_H - 8) break; }
-      const rgb = hexToRgb(route.route_color);
-      doc.setFillColor(rgb.r, rgb.g, rgb.b);
-      doc.circle(sx + 3, rowY + 7, 2.5, 'F');
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(30, 30, 30);
-      doc.text(route.route_code, sx + 8, rowY + 9);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(100, 100, 100);
-      doc.text(`(${count})`, sx + 8 + route.route_code.length * 3.8 + 1, rowY + 9);
-      sx += entryW;
-    }
-    doc.setDrawColor(180, 180, 180);
-    doc.setLineWidth(0.5);
-    doc.line(MM_MARGIN, mapY - 3, LEGAL_W - MM_MARGIN, mapY - 3);
-    doc.setFontSize(3.5);
-    doc.setTextColor(160, 160, 160);
-    doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', LEGAL_W - MM_MARGIN - 80, LEGAL_H - MM_MARGIN + 2);
+    doc.setTextColor(30, 30, 30);
+    doc.text(route.route_code, sx + 8, rowY + 9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 100, 100);
+    doc.text(`(${count})`, sx + 8 + route.route_code.length * 3.8 + 1, rowY + 9);
+    sx += entryW;
   }
+  doc.setDrawColor(180, 180, 180);
+  doc.setLineWidth(0.5);
+  doc.line(MM_MARGIN, mapY - 3, MM_PAGE_W - MM_MARGIN, mapY - 3);
+  doc.setFontSize(3.5);
+  doc.setTextColor(160, 160, 160);
+  doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', MM_PAGE_W - MM_MARGIN - 80, MM_PAGE_H - MM_MARGIN + 2);
 
   // ── Legend table (for streets that got numbered markers) ────────────────────
   const legendEntries = renderResult?.legendEntries || [];
