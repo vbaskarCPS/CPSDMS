@@ -998,7 +998,7 @@ function getSubPath(
 }
 
 // Ensure text reads naturally: left-to-right for horizontal roads,
-// bottom-to-top for vertical roads (standard cartographic convention).
+// top-to-bottom for vertical roads (tilt head right to read).
 // Uses net movement across ALL segments, not just endpoints.
 function ensureLeftToRight(path: { x: number; y: number }[]): { x: number; y: number }[] {
   if (path.length < 2) return path;
@@ -1012,8 +1012,8 @@ function ensureLeftToRight(path: { x: number; y: number }[]): { x: number; y: nu
     // Primarily horizontal — ensure left to right
     return sumDx >= 0 ? path : [...path].reverse();
   } else {
-    // Primarily vertical — ensure bottom to top (negative sumDy in screen coords)
-    return sumDy <= 0 ? path : [...path].reverse();
+    // Primarily vertical — ensure top to bottom (positive sumDy in screen coords)
+    return sumDy >= 0 ? path : [...path].reverse();
   }
 }
 
