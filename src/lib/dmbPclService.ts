@@ -3,9 +3,8 @@
 // Digital Master Bookings — PCL PDF Generator
 //
 // Generates a single landscape PDF for an area's routes.
-// Each route starts with a map (rendered off-screen with the same styling
-// as the interactive DMB map) followed by client history tables in a
-// two-column layout.
+// Each route starts with a GREYSCALE map (yellow route preserved) followed
+// by client history tables in a two-column layout.
 //
 // Data source: callbook spreadsheet (aeration type), read via dialerSheetsService.
 // Clients are grouped by address; the most common name/phone is shown
@@ -278,27 +277,6 @@ function groupClientsByAddress(rows: CallbookRow[]): ClientGroup[] {
 }
 
 // ─── STEP 3 — OFF-SCREEN MAPBOX GL RENDERER ─────────────────────────────────
-//
-// DESIGN NOTES (why it's built this way):
-//
-// 1. Container uses z-index:-1, NOT visibility:hidden.
-//    WebGL requires the canvas to be in a visible rendering context.
-//    visibility:hidden kills the GL context → blank canvas → "Map unavailable".
-//
-// 2. NO map.on('error') abort handler.
-//    Mapbox fires 'error' for ANY issue including single tile 404s, which are
-//    completely normal. An early-abort on error was racing with the idle/render
-//    flow and resolving the promise with null before the map had a chance to
-//    finish rendering. Tile errors are non-fatal — the map renders fine with
-//    a few missing tiles.
-//
-// 3. Capture uses triggerRepaint() → render event, not just idle + setTimeout.
-//    Even with preserveDrawingBuffer:true, the GL buffer can be stale by the
-//    time we call toDataURL(). triggerRepaint() forces a fresh frame, and
-//    capturing on the 'render' event guarantees the buffer is hot.
-//
-// 4. 30-second timeout. Vijay confirmed this is acceptable per route.
-//
 
 function applyMapStyling(map: mapboxgl.Map): void {
   const HIDE_LIST = ['poi-label', 'housenum-label', 'road-number-shield'];
@@ -308,14 +286,12 @@ function applyMapStyling(map: mapboxgl.Map): void {
 
   map.getStyle().layers?.forEach((layer: any) => {
     const id = layer.id.toLowerCase();
-
     if (layer.type === 'fill' || layer.type === 'fill-extrusion') {
       if (id.includes('building') || id.includes('structure')) {
         map.setLayoutProperty(layer.id, 'visibility', 'none');
       }
     }
     if (layer.type !== 'symbol') return;
-
     const idIsHouseNum =
       id.includes('housenum') || id.includes('house-num') ||
       id.includes('house_num') || id.includes('address') || id.includes('housenumber');
@@ -326,7 +302,6 @@ function applyMapStyling(map: mapboxgl.Map): void {
     const isNotRoadLabel =
       !id.includes('label') && !id.includes('shield') &&
       !id.includes('motorway') && !id.includes('road') && !id.includes('street');
-
     if (idIsHouseNum || fieldIsHouseNum || isNotRoadLabel) {
       map.setLayoutProperty(layer.id, 'visibility', 'none');
     }
@@ -379,6 +354,57 @@ function applyMapStyling(map: mapboxgl.Map): void {
   });
 }
 
+/**
+ * Post-process a captured map image: convert all pixels to greyscale
+ * EXCEPT yellow-ish pixels (the route highlight).
+ *
+ * The route is drawn with #FFD700 at 0.9 opacity. When composited over
+ * any base color, route pixels have: R > 200, G > 160, B < 80.
+ * Everything else on the Mapbox streets style (roads, water, parks, text)
+ * falls well outside this range, so the threshold is safe.
+ */
+function greyscalePreservingYellow(dataUrl: string, width: number, height: number): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, width, height);
+
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const px = imageData.data;
+
+      for (let i = 0; i < px.length; i += 4) {
+        const r = px[i];
+        const g = px[i + 1];
+        const b = px[i + 2];
+        // px[i+3] = alpha — leave untouched
+
+        // Is this pixel part of the yellow route?
+        // #FFD700 composited at 0.9 opacity over any base gives:
+        //   R > 200, G > 160, B < 80, and (R+G) substantially > B
+        const isYellow = r > 200 && g > 160 && b < 80;
+
+        if (!isYellow) {
+          // Standard luminance greyscale
+          const grey = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+          px[i] = grey;
+          px[i + 1] = grey;
+          px[i + 2] = grey;
+        }
+        // Yellow pixels stay full color
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => resolve(dataUrl); // fallback to unprocessed
+    img.src = dataUrl;
+  });
+}
+
 async function renderRouteMapOffscreen(
   segments: Array<{ coordinates: [number, number][] }>,
   pixelWidth: number,
@@ -389,8 +415,6 @@ async function renderRouteMapOffscreen(
   if (allCoords.length === 0) return null;
 
   return new Promise<string | null>((resolve) => {
-    // Container sits at top-left behind everything. z-index:-1 keeps it
-    // invisible to the user but WebGL can still render (unlike visibility:hidden).
     const container = document.createElement('div');
     container.style.position = 'fixed';
     container.style.top = '0px';
@@ -403,12 +427,19 @@ async function renderRouteMapOffscreen(
     document.body.appendChild(container);
 
     let resolved = false;
-    const finish = (m: mapboxgl.Map, url: string | null) => {
+    const finish = async (m: mapboxgl.Map, url: string | null) => {
       if (resolved) return;
       resolved = true;
       try { m.remove(); } catch { /* ok */ }
       try { document.body.removeChild(container); } catch { /* ok */ }
-      resolve(url);
+
+      // Post-process: greyscale the map but keep yellow route
+      if (url && url.length > 1000) {
+        const processed = await greyscalePreservingYellow(url, pixelWidth, pixelHeight);
+        resolve(processed);
+      } else {
+        resolve(null);
+      }
     };
 
     mapboxgl.accessToken = (import.meta.env.VITE_MAPBOX_TOKEN as string) || '';
@@ -423,30 +454,20 @@ async function renderRouteMapOffscreen(
       interactive: false,
     });
 
-    // 30-second safety timeout — if nothing else works, grab whatever is on canvas
     const timeout = setTimeout(() => {
-      console.warn('[DMB PCL] Map render timed out after 30s, capturing whatever is available');
+      console.warn('[DMB PCL] Map render timed out after 30s');
       try {
         map.triggerRepaint();
         setTimeout(() => {
-          try {
-            const url = map.getCanvas().toDataURL('image/png');
-            finish(map, url.length > 500 ? url : null);
-          } catch { finish(map, null); }
+          try { finish(map, map.getCanvas().toDataURL('image/png')); }
+          catch { finish(map, null); }
         }, 200);
       } catch { finish(map, null); }
     }, 30000);
 
-    // NOTE: We intentionally do NOT add map.on('error') here.
-    // Tile 404s and transient network errors fire 'error' and would
-    // race with the idle flow, aborting the capture prematurely.
-    // The map renders fine with a few missing tiles.
-
     map.on('load', () => {
-      // Apply the exact same styling as the DMB interactive map
       applyMapStyling(map);
 
-      // Insert route line below road labels so street names stay on top
       const routeInsertBefore = (
         map.getLayer('road-label') ? 'road-label' :
         map.getStyle().layers?.find((l: any) => l.type === 'symbol')?.id
@@ -468,31 +489,20 @@ async function renderRouteMapOffscreen(
         layout: { 'line-cap': 'round', 'line-join': 'round' },
       }, routeInsertBefore);
 
-      // Fit bounds to route with padding
       const bounds = allCoords.reduce(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
       map.fitBounds(bounds, { padding: 40, duration: 0 });
 
-      // STEP A: Wait for all tiles + labels to finish rendering
       map.once('idle', () => {
-        // STEP B: Wait 2s for label placement to fully settle
         setTimeout(() => {
-          // STEP C: Force a fresh frame so the GL buffer is hot
           map.triggerRepaint();
-
-          // STEP D: Capture on the next render — buffer is guaranteed fresh
           map.once('render', () => {
-            // Small extra delay to ensure the buffer write is complete
             setTimeout(() => {
               clearTimeout(timeout);
-              try {
-                const url = map.getCanvas().toDataURL('image/png');
-                // Sanity check: a real PNG data URL is always > 1KB.
-                // A blank/empty capture would be much shorter.
-                finish(map, url.length > 1000 ? url : null);
-              } catch (err) {
+              try { finish(map, map.getCanvas().toDataURL('image/png')); }
+              catch (err) {
                 console.error('[DMB PCL] toDataURL failed:', err);
                 finish(map, null);
               }
