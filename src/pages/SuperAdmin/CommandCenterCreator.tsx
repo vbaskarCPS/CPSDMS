@@ -24,6 +24,7 @@ import {
   Map as MapIcon,
   Eye,
   CreditCard,
+  BookOpen,
 } from 'lucide-react';
 import {
   commandCenterService,
@@ -63,6 +64,7 @@ const CommandCenterCreator: React.FC = () => {
     jobFairsEnabled: false,
     jobFairsSlug: '',
     digitalMappingEnabled: false,
+    callbookUrl: '',
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -99,6 +101,7 @@ const CommandCenterCreator: React.FC = () => {
       jobFairsEnabled: false,
       jobFairsSlug: '',
       digitalMappingEnabled: false,
+      callbookUrl: '',
     });
     setFormErrors({});
     setEditingCC(null);
@@ -113,6 +116,9 @@ const CommandCenterCreator: React.FC = () => {
     setEditingCC(cc);
     const wbUrl = 'https://docs.google.com/spreadsheets/d/' + cc.workerbookSheetId + '/edit';
     const mbUrl = 'https://docs.google.com/spreadsheets/d/' + cc.masterbookingsSheetId + '/edit';
+    const cbUrl = cc.callbookSheetId
+      ? 'https://docs.google.com/spreadsheets/d/' + cc.callbookSheetId + '/edit'
+      : '';
     setFormData({
       displayName: cc.displayName,
       username: cc.username,
@@ -123,6 +129,7 @@ const CommandCenterCreator: React.FC = () => {
       jobFairsEnabled: cc.jobFairsEnabled || false,
       jobFairsSlug: cc.jobFairsSlug || '',
       digitalMappingEnabled: cc.digitalMappingEnabled || false,
+      callbookUrl: cbUrl,
     });
     setFormErrors({});
     setShowModal(true);
@@ -167,6 +174,12 @@ const CommandCenterCreator: React.FC = () => {
       }
     }
 
+    if (formData.digitalMappingEnabled && formData.callbookUrl.trim()) {
+      if (!extractSheetId(formData.callbookUrl)) {
+        errors.callbookUrl = 'Invalid Google Sheets URL or ID';
+      }
+    }
+
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -180,6 +193,9 @@ const CommandCenterCreator: React.FC = () => {
     try {
       const workerbookSheetId = extractSheetId(formData.workerbookUrl)!;
       const masterbookingsSheetId = extractSheetId(formData.masterbookingsUrl)!;
+      const callbookSheetId = formData.digitalMappingEnabled && formData.callbookUrl.trim()
+        ? extractSheetId(formData.callbookUrl) || undefined
+        : undefined;
 
       if (editingCC) {
         const updates: any = {
@@ -191,6 +207,7 @@ const CommandCenterCreator: React.FC = () => {
           jobFairsEnabled: formData.jobFairsEnabled,
           jobFairsSlug: formData.jobFairsEnabled ? formData.jobFairsSlug : '',
           digitalMappingEnabled: formData.digitalMappingEnabled,
+          callbookSheetId: callbookSheetId || '',
         };
         
         if (formData.password.trim()) {
@@ -209,6 +226,7 @@ const CommandCenterCreator: React.FC = () => {
           jobFairsEnabled: formData.jobFairsEnabled,
           jobFairsSlug: formData.jobFairsEnabled ? formData.jobFairsSlug : '',
           digitalMappingEnabled: formData.digitalMappingEnabled,
+          callbookSheetId,
         });
       }
 
@@ -487,6 +505,7 @@ const CommandCenterCreator: React.FC = () => {
   const formBaseUrlDisplay = baseUrl + '/';
   const workerbookIdPreview = getSheetIdPreview(formData.workerbookUrl);
   const masterbookingsIdPreview = getSheetIdPreview(formData.masterbookingsUrl);
+  const callbookIdPreview = getSheetIdPreview(formData.callbookUrl);
   const ccCountText = '• All command centers (' + commandCenters.length + ')';
 
   return (
@@ -764,6 +783,34 @@ const CommandCenterCreator: React.FC = () => {
                     <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${formData.digitalMappingEnabled ? 'translate-x-7' : 'translate-x-1'}`} />
                   </button>
                 </div>
+
+                {/* CALLBOOK SHEET URL — only when digital mapping is on */}
+                {formData.digitalMappingEnabled && (
+                  <div className="mt-4">
+                    <label className="block text-sm font-medium text-gray-300 mb-1">
+                      Callbook Sheet URL <span className="text-gray-500">(for PCL generation)</span>
+                    </label>
+                    <div className="relative">
+                      <BookOpen className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+                      <input
+                        type="text"
+                        value={formData.callbookUrl}
+                        onChange={(e) => setFormData({ ...formData, callbookUrl: e.target.value })}
+                        placeholder="https://docs.google.com/spreadsheets/d/..."
+                        className={`w-full bg-gray-900 border rounded-lg py-2 pl-10 pr-3 text-white focus:ring-2 focus:outline-none text-sm ${
+                          formErrors.callbookUrl ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-blue-500'
+                        }`}
+                      />
+                    </div>
+                    {formErrors.callbookUrl && <p className="text-red-400 text-xs mt-1">{formErrors.callbookUrl}</p>}
+                    {callbookIdPreview && (
+                      <p className="text-blue-400 text-xs mt-1 flex items-center gap-1">
+                        <Check size={12} /><span>{callbookIdPreview}</span>
+                      </p>
+                    )}
+                    <p className="text-gray-500 text-xs mt-1">The aeration callbook spreadsheet used to generate PCL PDFs from the Digital Master Bookings map.</p>
+                  </div>
+                )}
               </div>
 
               {/* JOB FAIRS TOGGLE */}

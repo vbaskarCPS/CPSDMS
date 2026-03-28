@@ -11,9 +11,12 @@ import {
   MapPinned,
   CheckCircle,
   Mail,
+  FileText,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { googleSheetsService } from '../../lib/googleSheetsService';
+import { commandCenterService } from '../../lib/commandCenterService';
+import { generateDmbPCL, DmbPCLProgress } from '../../lib/dmbPclService';
 import DmbEmailModal from '../../components/DmbEmailModal';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -124,6 +127,10 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   // ── Email modal ─────────────────────────────────────────────────────────────
   const [showEmailModal, setShowEmailModal] = useState(false);
 
+  // ── PCL generation state ────────────────────────────────────────────────────
+  const [pclGenerating, setPclGenerating] = useState(false);
+  const [pclProgress, setPclProgress] = useState<DmbPCLProgress | null>(null);
+
   // ── Popup / handler refs ────────────────────────────────────────────────────
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   const bookingClickHandlerRef = useRef<((e: any) => void) | null>(null);
@@ -196,7 +203,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   }, []);
 
   // ─── CLEAR ALL ROUTE LAYERS ────────────────────────────────────────────────
-  // Unchanged from original.
   const clearAllRoutes = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -240,7 +246,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   }, []);
 
   // ─── LOAD AREAS ────────────────────────────────────────────────────────────
-  // Unchanged from original.
   useEffect(() => {
     const loadAreas = async () => {
       try {
@@ -396,12 +401,8 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
 
   // ─── READ BOOKINGS FROM SHEETS ─────────────────────────────────────────────
   const fetchBookingsFromSheets = useCallback(async (): Promise<Map<string, BookingRecord[]>> => {
-    // Columns A–P: A=BookedBy B=Date C=Time D=Route# E=First F=Last
-    //              G=House# H=Street I=Call1st J=Phone K=Email
-    //              L=ServiceType M=PP N=Price O=City P=Notes
     const rows = await googleSheetsService.readMasterbookingsRange("'Bookings'!A:P");
     const map = new Map<string, BookingRecord[]>();
-    // Row 0 = formula banner, Row 1 = header, Row 2+ = data
     for (let i = 2; i < rows.length; i++) {
       const row = rows[i];
       const routeCode = row[3]?.toString().trim();
@@ -416,8 +417,8 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         serviceType: row[11]?.toString().trim() || '',
         price:       row[13]?.toString().trim() || '',
         isPrepaid:   row[12]?.toString().trim().toLowerCase() === 'x',
-        email:       row[10]?.toString().trim() || '', // column K
-        rowIndex:    i + 1,                            // 1-based sheet row
+        email:       row[10]?.toString().trim() || '',
+        rowIndex:    i + 1,
       };
       if (!map.has(routeCode)) map.set(routeCode, []);
       map.get(routeCode)!.push(booking);
@@ -450,7 +451,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     const map = mapRef.current;
     if (!map || !selectedArea || loadingRoutes) return;
 
-    // Clear existing dots and reset all plot state
     clearBookingLayers();
     setGeocodedBookings([]);
     setUnplottedBookings([]);
@@ -458,7 +458,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     setGeocodingProgress(null);
     setError(null);
 
-    // ── 1. Fresh reload from Sheets ─────────────────────────────────────────
     let freshData = bookingsData;
     try {
       freshData = await fetchBookingsFromSheets();
@@ -467,9 +466,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       // Non-fatal — fall back to previously loaded data
     }
 
-    // ── 2. Collect bookings only for this area's exact route codes ───────────
     const areaRouteCodeSet = new Set(currentRoutes.map(r => r.route_code));
-
     const routeColorMap = new Map<string, string>();
     currentRoutes.forEach(r => routeColorMap.set(r.route_code, r.route_color));
 
@@ -483,7 +480,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       return;
     }
 
-    // ── 3. Proximity bias from route segment centroids ───────────────────────
     const allCoords: [number, number][] = [];
     currentRoutes.forEach(r =>
       r.segments?.forEach(s => s.coordinates.forEach(c => allCoords.push(c)))
@@ -495,7 +491,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       ? allCoords.reduce((s, c) => s + c[1], 0) / allCoords.length
       : 43.32;
 
-    // ── 4. Geocode each booking ──────────────────────────────────────────────
     setGeocodingProgress({ current: 0, total: areaBookings.length });
 
     const plotted: GeocodedBooking[] = [];
@@ -532,7 +527,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
       return;
     }
 
-    // ── 5. Draw route-colored circles with black border ──────────────────────
     map.addSource('dmb-bookings-src', {
       type: 'geojson',
       data: {
@@ -607,6 +601,44 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
 
   }, [selectedArea, currentRoutes, bookingsData, fetchBookingsFromSheets, clearBookingLayers, loadingRoutes]);
 
+  // ─── DOWNLOAD PCL ──────────────────────────────────────────────────────────
+  const handleDownloadPCL = useCallback(async () => {
+    if (!selectedArea || currentRoutes.length === 0 || pclGenerating) return;
+
+    const cc = commandCenterService.getCurrentCommandCenter();
+    if (!cc?.callbookSheetId) {
+      setError('No callbook sheet configured for this command center. Add one in Super Admin → Edit CC → Callbook Sheet URL.');
+      return;
+    }
+
+    setPclGenerating(true);
+    setPclProgress(null);
+    setError(null);
+
+    try {
+      const result = await generateDmbPCL(
+        selectedArea,
+        currentRoutes,
+        cc.callbookSheetId,
+        (p) => setPclProgress(p),
+      );
+
+      if (result.success) {
+        setPclProgress({ phase: 'Done', detail: `${result.totalClients} clients across ${result.routeCount} routes`, percent: 100 });
+        // Auto-clear success message after 4 seconds
+        setTimeout(() => setPclProgress(null), 4000);
+      } else {
+        setError('PCL generation failed: ' + (result.errorMessage || 'Unknown error'));
+        setPclProgress(null);
+      }
+    } catch (err: any) {
+      setError('PCL generation failed: ' + (err.message || 'Unknown error'));
+      setPclProgress(null);
+    } finally {
+      setPclGenerating(false);
+    }
+  }, [selectedArea, currentRoutes, pclGenerating]);
+
   // ─── BOOKING COUNT HELPERS ─────────────────────────────────────────────────
 
   const getAreaBookingCount = useCallback((areaName: string): number => {
@@ -623,7 +655,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   const totalBookingsLoaded = Array.from(bookingsData.values()).reduce((s, b) => s + b.length, 0);
 
   // ─── MAP INIT ──────────────────────────────────────────────────────────────
-  // Unchanged from original.
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
     const map = new mapboxgl.Map({
@@ -769,6 +800,34 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
             <Loader size={14} className="animate-spin" />
             Geocoding {geocodingProgress.current}/{geocodingProgress.total}…
           </div>
+        )}
+
+        {/* PCL progress */}
+        {pclProgress && (
+          <div className="flex items-center gap-2 text-xs font-medium">
+            {pclGenerating ? (
+              <>
+                <Loader size={14} className="animate-spin text-amber-400" />
+                <span className="text-amber-400">{pclProgress.phase}: {pclProgress.detail}</span>
+              </>
+            ) : (
+              <>
+                <CheckCircle size={14} className="text-green-400" />
+                <span className="text-green-400">{pclProgress.detail}</span>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Download PCL button */}
+        {selectedArea && currentRoutes.length > 0 && !geocodingProgress && !pclGenerating && (
+          <button
+            onClick={handleDownloadPCL}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors bg-amber-600 hover:bg-amber-500 text-white"
+          >
+            <FileText size={14} />
+            Download PCL
+          </button>
         )}
 
         {/* Confirm Emails button */}

@@ -23,6 +23,7 @@ export interface CommandCenter {
   jobFairsSlug?: string;
   // Digital Mapping
   digitalMappingEnabled?: boolean;
+  callbookSheetId?: string;
 }
 
 export interface CommandCenterWithPassword extends CommandCenter {
@@ -370,6 +371,7 @@ class CommandCenterService {
     jobFairsEnabled?: boolean;
     jobFairsSlug?: string;
     digitalMappingEnabled?: boolean;
+    callbookSheetId?: string;
   }): Promise<CommandCenter> {
     // Validate username uniqueness across all login types
     const isAvailable = await this.isUsernameAvailable(cc.username);
@@ -404,6 +406,7 @@ class CommandCenterService {
         job_fairs_enabled: cc.jobFairsEnabled || false,
         job_fairs_slug: cc.jobFairsEnabled ? cc.jobFairsSlug : null,
         digital_mapping_enabled: cc.digitalMappingEnabled || false,
+        callbook_sheet_id: cc.callbookSheetId || null,
       })
       .select()
       .single();
@@ -427,6 +430,7 @@ class CommandCenterService {
     jobFairsEnabled: boolean;
     jobFairsSlug: string;
     digitalMappingEnabled: boolean;
+    callbookSheetId: string;
   }>): Promise<CommandCenter> {
     // If username is being changed, check availability
     if (updates.username) {
@@ -466,6 +470,9 @@ class CommandCenterService {
       dbUpdates.job_fairs_slug = updates.jobFairsEnabled ? updates.jobFairsSlug : null;
     }
     if (updates.digitalMappingEnabled !== undefined) dbUpdates.digital_mapping_enabled = updates.digitalMappingEnabled;
+    if (updates.callbookSheetId !== undefined) {
+      dbUpdates.callbook_sheet_id = updates.digitalMappingEnabled ? updates.callbookSheetId : null;
+    }
 
     const { data, error } = await supabase
       .from('command_centers')
@@ -672,6 +679,7 @@ class CommandCenterService {
       jobFairsEnabled: data.job_fairs_enabled || false,
       jobFairsSlug: data.job_fairs_slug,
       digitalMappingEnabled: data.digital_mapping_enabled || false,
+      callbookSheetId: data.callbook_sheet_id || undefined,
     };
   }
 }
