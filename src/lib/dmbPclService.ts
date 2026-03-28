@@ -655,6 +655,10 @@ export async function generateDmbPCL(
     onProgress?.({ phase: 'Generating PDF', detail: `Route ${rd.routeCode} \u2014 rendering map (${ri + 1}/${routeDataList.length})`, percent: pct });
     await yieldUI();
 
+    // Let the main map's GPU context settle before the first off-screen render.
+    // Subsequent routes are fine because the prior off-screen context was destroyed.
+    if (ri === 0) await new Promise(r => setTimeout(r, 1000));
+
     const mapImage = await renderRouteMapOffscreen(rd.segments, mapPixelW, mapPixelH);
 
     if (!isFirstPage) doc.addPage();
