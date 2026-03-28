@@ -731,7 +731,7 @@ interface RoadPath {
 const MM_PAGE_W = 612;    // 8.5" in pt
 const MM_PAGE_H = 792;    // 11" in pt
 const MM_MARGIN = 12;
-const MM_SIDEBAR_H = 55;  // top sidebar height for route info
+const MM_SIDEBAR_H = 200;  // top sidebar height — scaled up for 3x route text
 
 // FIX C: Condensed font ratio — squeeze text to 70% width for narrow look
 const CONDENSE = 0.7;
@@ -802,11 +802,11 @@ function thickenMastermapRoads(map: mapboxgl.Map): void {
     if (id.startsWith('mm-') || id.startsWith('pcl-')) return;
     try {
       if (id.includes('motorway') || id.includes('trunk')) {
-        map.setPaintProperty(layer.id, 'line-width', 56);
+        map.setPaintProperty(layer.id, 'line-width', 112);
       } else if (id.includes('primary') || id.includes('secondary')) {
-        map.setPaintProperty(layer.id, 'line-width', 40);
+        map.setPaintProperty(layer.id, 'line-width', 80);
       } else if (id.includes('street') || id.includes('tertiary') || id.includes('minor') || id.includes('road')) {
-        map.setPaintProperty(layer.id, 'line-width', 26);
+        map.setPaintProperty(layer.id, 'line-width', 52);
       }
     } catch { /* skip */ }
   });
@@ -1129,9 +1129,9 @@ function queryAndGroupRoads(map: mapboxgl.Map): RoadPath[] {
 // them visually equivalent while taking less horizontal space
 
 function getFontSize(roadClass: string): number {
-  if (roadClass === 'motorway' || roadClass === 'trunk') return 68;
-  if (roadClass === 'primary' || roadClass === 'secondary') return 52;
-  return 40;
+  if (roadClass === 'motorway' || roadClass === 'trunk') return 78;
+  if (roadClass === 'primary' || roadClass === 'secondary') return 60;
+  return 46;
 }
 
 // ─── PASS 1: Draw text curving along road path, character by character ───────
@@ -1448,10 +1448,10 @@ function drawLegendOnCanvas(
 ): void {
   if (entries.length === 0) return;
 
-  // Scale legend sizing to canvas resolution
-  const fontSize = Math.round(canvasW * 0.005);
+  // Scale legend sizing to canvas resolution — 3x for print readability
+  const fontSize = Math.round(canvasW * 0.015);
   const rowH = Math.round(fontSize * 1.6);
-  const colW = Math.round(canvasW * 0.12);
+  const colW = Math.round(canvasW * 0.20);
   const COLS = 2;
   const pad = Math.round(fontSize * 0.8);
   const rows = Math.ceil(entries.length / COLS);
@@ -1686,7 +1686,7 @@ async function renderMastermapOffscreen(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
-      map.fitBounds(bounds, { padding: 20, maxZoom: 20, duration: 0 });
+      map.fitBounds(bounds, { padding: 8, maxZoom: 20, duration: 0 });
 
       // Wait for tiles at the correct viewport to load
       map.once('idle', () => {
@@ -1696,7 +1696,7 @@ async function renderMastermapOffscreen(
         const bearing = detectHighwayBearing(map);
 
         // Re-fit with the correct bearing — this rotates the view
-        map.fitBounds(bounds, { padding: 20, maxZoom: 20, duration: 0, bearing });
+        map.fitBounds(bounds, { padding: 8, maxZoom: 20, duration: 0, bearing });
 
         // Wait for rotated tiles to load, then capture
         map.once('idle', () => {
@@ -1783,30 +1783,30 @@ export async function generateMastermap(
   const sy = MM_MARGIN;
   let sx = MM_MARGIN;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
+  doc.setFontSize(27);
   doc.setTextColor(0, 0, 0);
-  doc.text(areaName, sx, sy + 9);
-  sx += areaName.length * 5.5 + 10;
-  doc.setFontSize(6.5);
+  doc.text(areaName, sx, sy + 27);
+  sx += areaName.length * 16.5 + 30;
+  doc.setFontSize(20);
   let rowY = sy;
   for (const route of sortedRoutes) {
     const count = bookingsData.get(route.route_code)?.length ?? 0;
     const label = `${route.route_code}(${count})`;
-    const entryW = label.length * 3.8 + 14;
+    const entryW = label.length * 11.4 + 42;
     if (sx + entryW > MM_PAGE_W - MM_MARGIN) {
       sx = MM_MARGIN;
-      rowY += 14;
-      if (rowY > MM_MARGIN + MM_SIDEBAR_H - 8) break;
+      rowY += 42;
+      if (rowY > MM_MARGIN + MM_SIDEBAR_H - 24) break;
     }
     const rgb = hexToRgb(route.route_color);
     doc.setFillColor(rgb.r, rgb.g, rgb.b);
-    doc.circle(sx + 3, rowY + 7, 2.5, 'F');
+    doc.circle(sx + 9, rowY + 21, 7.5, 'F');
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(30, 30, 30);
-    doc.text(route.route_code, sx + 8, rowY + 9);
+    doc.text(route.route_code, sx + 24, rowY + 27);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(100, 100, 100);
-    doc.text(`(${count})`, sx + 8 + route.route_code.length * 3.8 + 1, rowY + 9);
+    doc.text(`(${count})`, sx + 24 + route.route_code.length * 11.4 + 3, rowY + 27);
     sx += entryW;
   }
   doc.setDrawColor(180, 180, 180);
