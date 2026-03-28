@@ -1154,7 +1154,10 @@ function drawTextAlongPath(
   const totalWidth = charWidths.reduce((a, b) => a + b, 0);
   const pathLen = measurePath(path);
 
-  // Center text along path (text can extend beyond short paths)
+  // If text is wider than the road segment, bail out — Pass 2 offset will handle it
+  if (totalWidth > pathLen * 1.2) return false;
+
+  // Center text along path
   const startDist = Math.max(0, (pathLen - totalWidth) / 2);
 
   // Pre-calculate character positions
@@ -1351,7 +1354,7 @@ function drawStraightHorizontalLabel(
 function labelRoadsThreePass(
   ctx: CanvasRenderingContext2D,
   roads: RoadPath[],
-): LegendEntry[] {
+): { entries: LegendEntry[]; grid: OccupancyGrid } {
   const grid = new OccupancyGrid(14);
   const legendEntries: LegendEntry[] = [];
   let legendNum = 1;
@@ -1431,10 +1434,77 @@ function labelRoadsThreePass(
     }
   }
 
-  return legendEntries;
+  return { entries: legendEntries, grid };
 }
 
-// ─── COMPOSITE: greyscale base + custom labels ──────────────────────────────
+// ─── LEGEND ON CANVAS — find empty space using the occupancy grid ────────────
+
+function drawLegendOnCanvas(
+  ctx: CanvasRenderingContext2D,
+  grid: OccupancyGrid,
+  entries: LegendEntry[],
+  canvasW: number,
+  canvasH: number,
+): void {
+  if (entries.length === 0) return;
+
+  // Scale legend sizing to canvas resolution
+  const fontSize = Math.round(canvasW * 0.003);
+  const rowH = Math.round(fontSize * 1.6);
+  const colW = Math.round(canvasW * 0.085);
+  const COLS = 2;
+  const pad = Math.round(fontSize * 0.8);
+  const rows = Math.ceil(entries.length / COLS);
+  const boxW = COLS * colW + pad * 2;
+  const boxH = rows * rowH + pad * 2;
+  const margin = Math.round(canvasW * 0.01);
+
+  // Try candidate positions — corners and edges, pick first that fits
+  const candidates = [
+    { x: canvasW - boxW - margin, y: margin },                     // top-right
+    { x: margin, y: margin },                                       // top-left
+    { x: canvasW - boxW - margin, y: canvasH - boxH - margin },    // bottom-right
+    { x: margin, y: canvasH - boxH - margin },                      // bottom-left
+    { x: canvasW - boxW - margin, y: (canvasH - boxH) / 2 },       // center-right
+    { x: margin, y: (canvasH - boxH) / 2 },                         // center-left
+    { x: (canvasW - boxW) / 2, y: canvasH - boxH - margin },       // bottom-center
+    { x: (canvasW - boxW) / 2, y: margin },                         // top-center
+  ];
+
+  let bestPos = candidates[0]; // fallback to top-right
+  for (const pos of candidates) {
+    if (!grid.isOccupied(pos.x, pos.y, boxW, boxH)) {
+      bestPos = pos;
+      break;
+    }
+  }
+
+  // White box with border
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#666666';
+  ctx.lineWidth = 2;
+  ctx.fillRect(bestPos.x, bestPos.y, boxW, boxH);
+  ctx.strokeRect(bestPos.x, bestPos.y, boxW, boxH);
+
+  // Draw entries in two columns
+  ctx.font = `${fontSize}px Arial, sans-serif`;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#000000';
+
+  for (let i = 0; i < entries.length; i++) {
+    const col = Math.floor(i / rows);
+    const row = i % rows;
+    const ex = bestPos.x + pad + col * colW;
+    const ey = bestPos.y + pad + row * rowH;
+    ctx.fillText(`${entries[i].number}. ${entries[i].streetName}`, ex, ey);
+  }
+
+  // Mark legend area as occupied
+  grid.occupy(bestPos.x, bestPos.y, boxW, boxH);
+}
+
+// ─── COMPOSITE: greyscale base + custom labels + legend ─────────────────────
 
 async function processMapWithLabels(
   rawDataUrl: string,
@@ -1468,7 +1538,10 @@ async function processMapWithLabels(
       ctx.putImageData(imageData, 0, 0);
 
       // Draw custom road labels on top of greyscaled map
-      const legendEntries = labelRoadsThreePass(ctx, roads);
+      const { entries: legendEntries, grid } = labelRoadsThreePass(ctx, roads);
+
+      // Draw legend on the canvas itself — placed in empty space, never over routes
+      drawLegendOnCanvas(ctx, grid, legendEntries, width, height);
 
       resolve({
         imageDataUrl: canvas.toDataURL('image/png'),
@@ -1618,8 +1691,11 @@ async function renderMastermapOffscreen(
       map.jumpTo({ bearing, center: bounds.getCenter() });
       map.fitBounds(bounds, { padding: 20, maxZoom: 20, duration: 0, bearing });
 
-      // Wait for tiles to load, then capture + label
+      // Wait for tiles to load, then FORCE bearing and capture
       map.once('idle', () => {
+        // Re-apply bearing after fitBounds has settled — belt and suspenders
+        map.jumpTo({ bearing, center: map.getCenter(), zoom: map.getZoom() });
+
         setTimeout(() => {
           map.triggerRepaint();
           map.once('render', () => {
@@ -1686,28 +1762,9 @@ export async function generateMastermap(
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
 
-  // ── Calculate legend dimensions BEFORE placing map ───────────────────────
-  // If there are legend entries, we need to shrink the map to make room below.
-  // If none, the map uses the full available height.
-  const legendEntries = renderResult?.legendEntries || [];
-  const LEGEND_COLS = 2;
-  const LEGEND_ROW_H = 7;
-  const LEGEND_COL_W = 130;
-  const LEGEND_GAP = 6; // space between bottom of map and top of legend
-
-  let legendTotalH = 0; // total vertical space consumed by legend + gap
-  if (legendEntries.length > 0) {
-    const legendRows = Math.ceil(legendEntries.length / LEGEND_COLS);
-    const legendBoxH = legendRows * LEGEND_ROW_H + 14;
-    legendTotalH = legendBoxH + LEGEND_GAP;
-  }
-
-  // Map display height — shrunk by legend when needed
-  const mapDisplayH = mapAreaH - legendTotalH;
-
-  // Map image — fits in the (possibly shorter) display area
+  // Map image — full height, legend is drawn on the canvas image itself
   if (renderResult?.imageDataUrl) {
-    try { doc.addImage(renderResult.imageDataUrl, 'PNG', mapX, mapY, mapAreaW, mapDisplayH); }
+    try { doc.addImage(renderResult.imageDataUrl, 'PNG', mapX, mapY, mapAreaW, mapAreaH); }
     catch { /* map unavailable */ }
   }
 
@@ -1754,35 +1811,6 @@ export async function generateMastermap(
   doc.setFontSize(3.5);
   doc.setTextColor(160, 160, 160);
   doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', MM_PAGE_W - MM_MARGIN - 80, MM_PAGE_H - MM_MARGIN + 2);
-
-  // ── Legend table — drawn BELOW the map, never overlapping routes ────────────
-  if (legendEntries.length > 0) {
-    const legendRows = Math.ceil(legendEntries.length / LEGEND_COLS);
-    const legendBoxW = LEGEND_COLS * LEGEND_COL_W + 8;
-    const legendBoxH = legendRows * LEGEND_ROW_H + 14;
-
-    // Position: centered horizontally, directly below the map image
-    const lx = mapX + (mapAreaW - legendBoxW) / 2;
-    const ly = mapY + mapDisplayH + LEGEND_GAP;
-
-    // White background with border
-    doc.setFillColor(255, 255, 255);
-    doc.setDrawColor(100, 100, 100);
-    doc.setLineWidth(0.5);
-    doc.rect(lx, ly, legendBoxW, legendBoxH, 'FD');
-
-    // Entries in two columns
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(5);
-    doc.setTextColor(0, 0, 0);
-    for (let i = 0; i < legendEntries.length; i++) {
-      const col = Math.floor(i / legendRows);
-      const row = i % legendRows;
-      const ex = lx + 4 + col * LEGEND_COL_W;
-      const ey = ly + 9 + row * LEGEND_ROW_H;
-      doc.text(`${legendEntries[i].number}. ${legendEntries[i].streetName}`, ex, ey);
-    }
-  }
 
   // ── Save ───────────────────────────────────────────────────────────────────
   onProgress?.({ phase: 'Downloading', detail: 'Saving PDF\u2026', percent: 97 });
