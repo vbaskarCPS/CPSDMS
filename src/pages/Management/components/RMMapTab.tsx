@@ -161,28 +161,41 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [routeMapData]);
 
   // ─── COMPUTED: Pin list from bookings + sessions ───────────────────────────
+  // Includes ALL completed transactions (matched by team OR route) and pending bookings.
+  // This ensures every completed job with an address shows up on load.
 
   const pins = useMemo<PinData[]>(() => {
     const result: PinData[] = [];
     const completedJobIds = new Set<string>();
     const myRouteSet = new Set(myRouteCodes);
 
-    // 1. Completed transactions from my team's sessions
+    // 1. Completed transactions — include if worker is on my team OR job is on my route.
+    // This is intentionally permissive so no completed jobs are missed.
     allSessions.forEach(session => {
       const sessionWorkerIds = session.teamWorkerIds || [session.workerId];
       const isMyTeam = sessionWorkerIds.some(wid => myTeamIds.has(wid));
-      if (!isMyTeam) return;
 
       (session.financialStore || []).forEach((tx: any) => {
+        // Skip upsells and add-ons
         if (tx.type === 'Upgrade' || tx.type === 'Add-On') return;
-        if (!tx.address) return;
+
+        // Include if: worker is on my team OR transaction is on one of my routes
+        const isOnMyRoute = tx.routeCode && myRouteSet.has(tx.routeCode);
+        if (!isMyTeam && !isOnMyRoute) return;
+
+        // Try to get an address — fall back to itemDescription if address is empty
+        const address = tx.address || tx.itemDescription || '';
+        if (!address) {
+          console.warn('[RMMap] Skipping transaction with no address:', tx.jobId, tx.customerName);
+          return;
+        }
 
         completedJobIds.add(tx.jobId);
         const isNewSale = tx.jobId?.startsWith('NEW-');
 
         result.push({
           id: tx.jobId || tx.id,
-          address: tx.address,
+          address,
           routeCode: tx.routeCode || '',
           name: tx.customerName || 'Unknown',
           status: isNewSale ? 'new_sale' : 'completed',
@@ -208,6 +221,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     });
 
+    console.log(`[RMMap] Pins: ${result.filter(p => p.status === 'pending').length} pending, ${result.filter(p => p.status === 'completed').length} completed, ${result.filter(p => p.status === 'new_sale').length} new sales`);
     return result;
   }, [bookings, allSessions, myRouteCodes, myTeamIds]);
 
