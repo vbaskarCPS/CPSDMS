@@ -332,7 +332,7 @@ function applyMapStyling(map: mapboxgl.Map): void {
         type: 'symbol',
         source: (layer as any).source ?? 'composite',
         'source-layer': (layer as any)['source-layer'] ?? 'road',
-        filter: (layer as any).filter,
+        ...((layer as any).filter ? { filter: (layer as any).filter } : {}),
         minzoom: 0, maxzoom: 24,
         layout: {
           ...(layer.layout ?? {}),
