@@ -683,8 +683,13 @@ function contentBottom(): number { return MARGIN + BLOCK_H - BORDER_W - BLOCK_PA
 function yieldUI(): Promise<void> { return new Promise((r) => setTimeout(r, 0)); }
 
 
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MASTERMAP — Full-area legal landscape PDF with all routes, bookings, sidebar
+//
+// Custom road label system:  Mapbox renders roads + routes + dots with NO text.
+// We then draw street names ourselves, character-by-character along road curves.
+// Three-pass approach: inline → offset → numbered legend.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── MASTERMAP TYPES ─────────────────────────────────────────────────────────
@@ -702,6 +707,23 @@ export interface MastermapResult {
   errorMessage?: string;
 }
 
+interface LegendEntry {
+  number: number;
+  streetName: string;
+}
+
+interface MastermapRenderResult {
+  imageDataUrl: string;
+  legendEntries: LegendEntry[];
+}
+
+interface RoadPath {
+  name: string;
+  roadClass: string;
+  pixelPath: { x: number; y: number }[];
+  pathLength: number;
+}
+
 // ─── MASTERMAP CONSTANTS ─────────────────────────────────────────────────────
 
 const LEGAL_W = 1008;   // 14" in pt
@@ -709,52 +731,30 @@ const LEGAL_H = 612;    // 8.5" in pt
 const MM_MARGIN = 12;
 
 // ─── OPTIMAL BEARING — rotate map to minimize wasted space ───────────────────
-//
-// Tries every angle 0–179° and picks the rotation that produces the tightest
-// bounding box around all route coordinates.  For Winona this makes the QEW
-// nearly horizontal; for Western Hill it makes Louth St vertical.  The result
-// is maximum zoom with zero dead space.
 
 function calculateOptimalBearing(coords: [number, number][]): number {
   if (coords.length < 3) return 0;
-
-  // Centroid
   const cx = coords.reduce((s, c) => s + c[0], 0) / coords.length;
   const cy = coords.reduce((s, c) => s + c[1], 0) / coords.length;
   const cosLat = Math.cos(cy * Math.PI / 180);
-
   let bestBearing = 0;
   let bestArea = Infinity;
-
   for (let deg = 0; deg < 180; deg++) {
     const rad = deg * Math.PI / 180;
     const cosR = Math.cos(rad);
     const sinR = Math.sin(rad);
-
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const [lng, lat] of coords) {
-      // Normalize lon to metres-ish so aspect ratio is fair
       const dx = (lng - cx) * cosLat;
       const dy = lat - cy;
-      // Rotate
       const rx = dx * cosR - dy * sinR;
       const ry = dx * sinR + dy * cosR;
-
-      if (rx < minX) minX = rx;
-      if (rx > maxX) maxX = rx;
-      if (ry < minY) minY = ry;
-      if (ry > maxY) maxY = ry;
+      if (rx < minX) minX = rx; if (rx > maxX) maxX = rx;
+      if (ry < minY) minY = ry; if (ry > maxY) maxY = ry;
     }
-
     const area = (maxX - minX) * (maxY - minY);
-    if (area < bestArea) {
-      bestArea = area;
-      bestBearing = deg;
-    }
+    if (area < bestArea) { bestArea = area; bestBearing = deg; }
   }
-
   return bestBearing;
 }
 
@@ -765,13 +765,9 @@ function applyGreyscaleBase(map: mapboxgl.Map): void {
     const id = layer.id.toLowerCase();
     try {
       if (layer.type === 'fill') {
-        if (id.includes('water')) {
-          map.setPaintProperty(layer.id, 'fill-color', '#d0d0d0');
-        } else if (id.includes('landuse') || id.includes('park') || id.includes('national')) {
-          map.setPaintProperty(layer.id, 'fill-color', '#e8e8e8');
-        } else if (id.includes('land') && !id.includes('label')) {
-          map.setPaintProperty(layer.id, 'fill-color', '#f2f2f2');
-        }
+        if (id.includes('water')) map.setPaintProperty(layer.id, 'fill-color', '#d0d0d0');
+        else if (id.includes('landuse') || id.includes('park') || id.includes('national')) map.setPaintProperty(layer.id, 'fill-color', '#e8e8e8');
+        else if (id.includes('land') && !id.includes('label')) map.setPaintProperty(layer.id, 'fill-color', '#f2f2f2');
       } else if (layer.type === 'background') {
         map.setPaintProperty(layer.id, 'background-color', '#f5f5f5');
       }
@@ -779,41 +775,13 @@ function applyGreyscaleBase(map: mapboxgl.Map): void {
   });
 }
 
-// ─── ENHANCE LABELS FOR MASTERMAP — denser, larger, more visible ─────────────
+// ─── THICKEN ROADS for print legibility ──────────────────────────────────────
 
-function enhanceMastermapLabels(map: mapboxgl.Map): void {
-  const HIDE_LIST = ['poi-label', 'housenum-label', 'road-number-shield'];
-
-  map.getStyle().layers?.forEach((layer: any) => {
-    if (layer.type !== 'symbol') return;
-    const id = layer.id.toLowerCase();
-    if (!id.includes('label') || HIDE_LIST.includes(layer.id)) return;
-    if (id.includes('-point-backup')) return;
-
-    try {
-      map.setLayoutProperty(layer.id, 'text-size', 35);
-      map.setLayoutProperty(layer.id, 'text-padding', 1);
-      if (layer.layout?.['symbol-placement'] === 'line' || layer.layout?.['symbol-placement'] === 'line-center') {
-        map.setLayoutProperty(layer.id, 'symbol-spacing', 150);
-      }
-    } catch { /* skip */ }
-  });
-
-  map.getStyle().layers?.forEach((layer: any) => {
-    if (!layer.id.includes('-point-backup')) return;
-    try {
-      map.setLayoutProperty(layer.id, 'text-size', 28);
-      map.setLayoutProperty(layer.id, 'text-padding', 1);
-    } catch { /* skip */ }
-  });
-
-  // Thicken base map road lines so they stay visible when the 15000px
-  // render is downscaled into the PDF.  Skip our own route layers (mm-*).
+function thickenMastermapRoads(map: mapboxgl.Map): void {
   map.getStyle().layers?.forEach((layer: any) => {
     if (layer.type !== 'line') return;
     const id = layer.id.toLowerCase();
     if (id.startsWith('mm-') || id.startsWith('pcl-')) return;
-
     try {
       if (id.includes('motorway') || id.includes('trunk')) {
         map.setPaintProperty(layer.id, 'line-width', 28);
@@ -826,9 +794,469 @@ function enhanceMastermapLabels(map: mapboxgl.Map): void {
   });
 }
 
-// ─── GREYSCALE PIXEL FILTER — keeps high-saturation pixels (routes + dots) ───
+// ─── HIDE ALL MAPBOX LABELS — we draw our own ───────────────────────────────
 
-function greyscalePreservingSaturated(dataUrl: string, width: number, height: number): Promise<string> {
+function hideMapboxLabels(map: mapboxgl.Map): void {
+  map.getStyle().layers?.forEach((layer: any) => {
+    if (layer.type !== 'symbol') return;
+    if (layer.id.startsWith('mm-')) return; // keep our route number labels
+    try { map.setLayoutProperty(layer.id, 'visibility', 'none'); } catch { /* skip */ }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CUSTOM ROAD LABEL SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Occupancy grid for collision detection ──────────────────────────────────
+
+class OccupancyGrid {
+  private cells = new Set<string>();
+  constructor(private cellSize: number = 8) {}
+
+  isOccupied(x: number, y: number, w: number, h: number): boolean {
+    const x1 = Math.floor(x / this.cellSize);
+    const y1 = Math.floor(y / this.cellSize);
+    const x2 = Math.floor((x + w) / this.cellSize);
+    const y2 = Math.floor((y + h) / this.cellSize);
+    for (let cx = x1; cx <= x2; cx++)
+      for (let cy = y1; cy <= y2; cy++)
+        if (this.cells.has(`${cx},${cy}`)) return true;
+    return false;
+  }
+
+  occupy(x: number, y: number, w: number, h: number): void {
+    const x1 = Math.floor(x / this.cellSize);
+    const y1 = Math.floor(y / this.cellSize);
+    const x2 = Math.floor((x + w) / this.cellSize);
+    const y2 = Math.floor((y + h) / this.cellSize);
+    for (let cx = x1; cx <= x2; cx++)
+      for (let cy = y1; cy <= y2; cy++)
+        this.cells.add(`${cx},${cy}`);
+  }
+}
+
+// ─── Path utility functions ──────────────────────────────────────────────────
+
+function pDist(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+}
+
+function measurePath(path: { x: number; y: number }[]): number {
+  let len = 0;
+  for (let i = 1; i < path.length; i++) len += pDist(path[i - 1], path[i]);
+  return len;
+}
+
+function getPointAtDistance(
+  path: { x: number; y: number }[],
+  dist: number,
+): { x: number; y: number; angle: number } {
+  if (path.length < 2) return { x: path[0]?.x || 0, y: path[0]?.y || 0, angle: 0 };
+
+  let remaining = dist;
+  for (let i = 1; i < path.length; i++) {
+    const segLen = pDist(path[i - 1], path[i]);
+    if (remaining <= segLen || i === path.length - 1) {
+      const t = segLen > 0 ? Math.min(remaining / segLen, 1) : 0;
+      return {
+        x: path[i - 1].x + t * (path[i].x - path[i - 1].x),
+        y: path[i - 1].y + t * (path[i].y - path[i - 1].y),
+        angle: Math.atan2(path[i].y - path[i - 1].y, path[i].x - path[i - 1].x),
+      };
+    }
+    remaining -= segLen;
+  }
+
+  // Extrapolate beyond path end
+  const last = path[path.length - 1];
+  const prev = path[path.length - 2];
+  const angle = Math.atan2(last.y - prev.y, last.x - prev.x);
+  return { x: last.x + Math.cos(angle) * remaining, y: last.y + Math.sin(angle) * remaining, angle };
+}
+
+function getSubPath(
+  path: { x: number; y: number }[],
+  startDist: number,
+  endDist: number,
+): { x: number; y: number }[] {
+  const result: { x: number; y: number }[] = [];
+  let dist = 0;
+  let started = false;
+
+  for (let i = 0; i < path.length; i++) {
+    if (i > 0) {
+      const segLen = pDist(path[i - 1], path[i]);
+      const newDist = dist + segLen;
+
+      if (!started && newDist >= startDist) {
+        const t = segLen > 0 ? (startDist - dist) / segLen : 0;
+        result.push({
+          x: path[i - 1].x + t * (path[i].x - path[i - 1].x),
+          y: path[i - 1].y + t * (path[i].y - path[i - 1].y),
+        });
+        started = true;
+      }
+
+      if (started) {
+        if (newDist >= endDist) {
+          const t = segLen > 0 ? (endDist - dist) / segLen : 0;
+          result.push({
+            x: path[i - 1].x + t * (path[i].x - path[i - 1].x),
+            y: path[i - 1].y + t * (path[i].y - path[i - 1].y),
+          });
+          break;
+        }
+        result.push({ x: path[i].x, y: path[i].y });
+      }
+      dist = newDist;
+    } else if (startDist === 0) {
+      result.push({ x: path[i].x, y: path[i].y });
+      started = true;
+    }
+  }
+  return result;
+}
+
+/** Ensure path goes left-to-right so text reads naturally. */
+function ensureLeftToRight(path: { x: number; y: number }[]): { x: number; y: number }[] {
+  if (path.length < 2) return path;
+  return path[path.length - 1].x >= path[0].x ? path : [...path].reverse();
+}
+
+// ─── Merge connected road segments by proximity ──────────────────────────────
+
+function mergePixelSegments(
+  segments: { x: number; y: number }[][],
+  threshold: number,
+): { x: number; y: number }[][] {
+  if (segments.length === 0) return [];
+  const merged: { x: number; y: number }[][] = [];
+  const used = new Set<number>();
+
+  for (let i = 0; i < segments.length; i++) {
+    if (used.has(i)) continue;
+    used.add(i);
+    let current = [...segments[i]];
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+      for (let j = 0; j < segments.length; j++) {
+        if (used.has(j)) continue;
+        const seg = segments[j];
+        const cEnd = current[current.length - 1];
+        const cStart = current[0];
+
+        if (pDist(cEnd, seg[0]) < threshold) {
+          current = [...current, ...seg.slice(1)];
+          used.add(j); changed = true;
+        } else if (pDist(cEnd, seg[seg.length - 1]) < threshold) {
+          current = [...current, ...[...seg].reverse().slice(1)];
+          used.add(j); changed = true;
+        } else if (pDist(cStart, seg[seg.length - 1]) < threshold) {
+          current = [...seg, ...current.slice(1)];
+          used.add(j); changed = true;
+        } else if (pDist(cStart, seg[0]) < threshold) {
+          current = [...[...seg].reverse(), ...current.slice(1)];
+          used.add(j); changed = true;
+        }
+      }
+    }
+    merged.push(current);
+  }
+  return merged;
+}
+
+// ─── Query roads from Mapbox and group by name ──────────────────────────────
+
+function queryAndGroupRoads(map: mapboxgl.Map): RoadPath[] {
+  const roadLayerIds: string[] = [];
+  map.getStyle().layers?.forEach((layer: any) => {
+    if (layer.type !== 'line') return;
+    const id = layer.id.toLowerCase();
+    if (id.startsWith('mm-') || id.startsWith('pcl-')) return;
+    if (id.includes('road') || id.includes('street') || id.includes('bridge') || id.includes('tunnel')) {
+      roadLayerIds.push(layer.id);
+    }
+  });
+  if (!roadLayerIds.length) return [];
+
+  const features = map.queryRenderedFeatures(undefined, { layers: roadLayerIds });
+
+  // Group by name
+  const byName = new Map<string, { coords: [number, number][][]; roadClass: string }>();
+  for (const f of features) {
+    const name = ((f.properties as any)?.name_en || (f.properties as any)?.name || '').trim();
+    if (!name) continue;
+    const roadClass = (f.properties as any)?.class || 'street';
+    const geom = f.geometry as any;
+    let lineCoords: [number, number][][] = [];
+    if (geom.type === 'LineString') lineCoords = [geom.coordinates];
+    else if (geom.type === 'MultiLineString') lineCoords = geom.coordinates;
+    if (!byName.has(name)) byName.set(name, { coords: [], roadClass });
+    byName.get(name)!.coords.push(...lineCoords);
+  }
+
+  // Convert to pixel coords, merge segments, build RoadPath objects
+  const results: RoadPath[] = [];
+  for (const [name, data] of byName) {
+    const pixelSegments = data.coords.map((coords) =>
+      coords.map(([lng, lat]) => {
+        const p = map.project([lng, lat]);
+        return { x: p.x, y: p.y };
+      })
+    );
+    const merged = mergePixelSegments(pixelSegments, 5);
+    for (const path of merged) {
+      const pl = measurePath(path);
+      if (pl < 10) continue;
+      results.push({
+        name,
+        roadClass: data.roadClass,
+        pixelPath: ensureLeftToRight(path),
+        pathLength: pl,
+      });
+    }
+  }
+
+  // Sort by path length descending — major/long roads get label priority
+  results.sort((a, b) => b.pathLength - a.pathLength);
+  return results;
+}
+
+// ─── Font size by road class ─────────────────────────────────────────────────
+
+function getFontSize(roadClass: string): number {
+  if (roadClass === 'motorway' || roadClass === 'trunk') return 48;
+  if (roadClass === 'primary' || roadClass === 'secondary') return 38;
+  return 28;
+}
+
+// ─── PASS 1: Draw text curving along road path, character by character ───────
+
+function drawTextAlongPath(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  path: { x: number; y: number }[],
+  fontSize: number,
+  grid: OccupancyGrid,
+): boolean {
+  ctx.font = `bold ${fontSize}px Arial, Helvetica, sans-serif`;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+
+  const chars = [...text];
+  const charWidths = chars.map((c) => ctx.measureText(c).width);
+  const totalWidth = charWidths.reduce((a, b) => a + b, 0);
+  const pathLen = measurePath(path);
+
+  // Center text along path (text can extend beyond short paths)
+  const startDist = Math.max(0, (pathLen - totalWidth) / 2);
+
+  // Pre-calculate character positions
+  const positions: { x: number; y: number; angle: number; w: number }[] = [];
+  let dist = startDist;
+  for (let i = 0; i < chars.length; i++) {
+    const pos = getPointAtDistance(path, dist + charWidths[i] / 2);
+    positions.push({ ...pos, w: charWidths[i] });
+    dist += charWidths[i];
+  }
+
+  // Collision check — test each character's bounding box
+  const pad = 2;
+  for (const cp of positions) {
+    const hw = cp.w / 2 + pad;
+    const hh = fontSize / 2 + pad;
+    if (grid.isOccupied(cp.x - hw, cp.y - hh, cp.w + pad * 2, fontSize + pad * 2)) {
+      return false;
+    }
+  }
+
+  // No collision — draw characters with halo + fill
+  for (let i = 0; i < chars.length; i++) {
+    const cp = positions[i];
+    ctx.save();
+    ctx.translate(cp.x, cp.y);
+    ctx.rotate(cp.angle);
+
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = Math.max(4, fontSize * 0.18);
+    ctx.lineJoin = 'round';
+    ctx.strokeText(chars[i], 0, 0);
+
+    ctx.fillStyle = '#111111';
+    ctx.fillText(chars[i], 0, 0);
+    ctx.restore();
+
+    // Mark occupied
+    const hw = cp.w / 2 + pad;
+    const hh = fontSize / 2 + pad;
+    grid.occupy(cp.x - hw, cp.y - hh, cp.w + pad * 2, fontSize + pad * 2);
+  }
+
+  return true;
+}
+
+// ─── PASS 2: Offset label — shifted perpendicular to road ────────────────────
+
+function drawOffsetLabel(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  path: { x: number; y: number }[],
+  fontSize: number,
+  grid: OccupancyGrid,
+  offset: number,
+): boolean {
+  const pathLen = measurePath(path);
+  const mid = getPointAtDistance(path, pathLen / 2);
+
+  // Ensure readable angle (not upside down)
+  let angle = mid.angle;
+  if (angle > Math.PI / 2) angle -= Math.PI;
+  if (angle < -Math.PI / 2) angle += Math.PI;
+
+  ctx.font = `bold ${fontSize}px Arial, Helvetica, sans-serif`;
+  const tw = ctx.measureText(text).width;
+
+  // Try both sides (above and below the road)
+  for (const sign of [1, -1]) {
+    const perpAngle = mid.angle + (Math.PI / 2) * sign;
+    const ox = mid.x + Math.cos(perpAngle) * offset;
+    const oy = mid.y + Math.sin(perpAngle) * offset;
+
+    if (grid.isOccupied(ox - tw / 2 - 2, oy - fontSize / 2 - 2, tw + 4, fontSize + 4)) {
+      continue;
+    }
+
+    // Draw
+    ctx.save();
+    ctx.translate(ox, oy);
+    ctx.rotate(angle);
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = Math.max(4, fontSize * 0.18);
+    ctx.lineJoin = 'round';
+    ctx.strokeText(text, 0, 0);
+    ctx.fillStyle = '#333333';
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+
+    grid.occupy(ox - tw / 2 - 2, oy - fontSize / 2 - 2, tw + 4, fontSize + 4);
+    return true;
+  }
+
+  return false;
+}
+
+// ─── PASS 3: Legend numbered marker on map ───────────────────────────────────
+
+function drawLegendMarker(
+  ctx: CanvasRenderingContext2D,
+  num: number,
+  x: number,
+  y: number,
+  grid: OccupancyGrid,
+): boolean {
+  const r = 14;
+  // Try the point and nearby offsets
+  for (const [dx, dy] of [[0, 0], [0, -20], [0, 20], [-20, 0], [20, 0]]) {
+    const px = x + dx;
+    const py = y + dy;
+    if (grid.isOccupied(px - r, py - r, r * 2, r * 2)) continue;
+
+    // White circle with black border
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Number inside
+    ctx.font = `bold ${r}px Arial, sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#000000';
+    ctx.fillText(String(num), px, py);
+
+    grid.occupy(px - r, py - r, r * 2, r * 2);
+    return true;
+  }
+  return false;
+}
+
+// ─── MAIN 3-PASS LABELING ────────────────────────────────────────────────────
+
+function labelRoadsThreePass(
+  ctx: CanvasRenderingContext2D,
+  roads: RoadPath[],
+): LegendEntry[] {
+  const grid = new OccupancyGrid(8);
+  const legendEntries: LegendEntry[] = [];
+  let legendNum = 1;
+
+  // Track which names have been labeled (name → # of labels placed)
+  const labeledNames = new Map<string, number>();
+  const REPEAT_INTERVAL = 600; // label every 600px on long roads
+
+  for (const road of roads) {
+    const fontSize = getFontSize(road.roadClass);
+    const currentCount = labeledNames.get(road.name) || 0;
+
+    // Allow repeats on long roads
+    const maxLabels = Math.max(1, Math.floor(road.pathLength / REPEAT_INTERVAL));
+    if (currentCount >= maxLabels) continue;
+
+    const numPlacements = Math.min(
+      maxLabels - currentCount,
+      Math.max(1, Math.floor(road.pathLength / REPEAT_INTERVAL)),
+    );
+
+    for (let p = 0; p < numPlacements; p++) {
+      const segStart = (road.pathLength / numPlacements) * p;
+      const segEnd = (road.pathLength / numPlacements) * (p + 1);
+      const subPath = getSubPath(road.pixelPath, segStart, segEnd);
+      if (subPath.length < 2) continue;
+
+      // PASS 1 — Inline: text curves along road
+      if (drawTextAlongPath(ctx, road.name, subPath, fontSize, grid)) {
+        labeledNames.set(road.name, (labeledNames.get(road.name) || 0) + 1);
+        continue;
+      }
+
+      // PASS 2 — Offset: shifted perpendicular, still aligned with road angle
+      if (drawOffsetLabel(ctx, road.name, subPath, fontSize * 0.85, grid, fontSize * 1.2)) {
+        labeledNames.set(road.name, (labeledNames.get(road.name) || 0) + 1);
+        continue;
+      }
+
+      // PASS 3 — Legend: numbered circle on map, name in PDF legend table
+      if (!labeledNames.has(road.name)) {
+        const mid = getPointAtDistance(road.pixelPath, road.pathLength / 2);
+        if (drawLegendMarker(ctx, legendNum, mid.x, mid.y, grid)) {
+          legendEntries.push({ number: legendNum, streetName: road.name });
+          legendNum++;
+          labeledNames.set(road.name, 1);
+        }
+      }
+    }
+  }
+
+  return legendEntries;
+}
+
+// ─── COMPOSITE: greyscale base + custom labels ──────────────────────────────
+
+async function processMapWithLabels(
+  rawDataUrl: string,
+  roads: RoadPath[],
+  width: number,
+  height: number,
+): Promise<MastermapRenderResult> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
@@ -836,35 +1264,38 @@ function greyscalePreservingSaturated(dataUrl: string, width: number, height: nu
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d')!;
+
+      // Draw base map
       ctx.drawImage(img, 0, 0, width, height);
 
+      // Greyscale filter — preserve saturated pixels (route colors + booking dots)
       const imageData = ctx.getImageData(0, 0, width, height);
       const px = imageData.data;
-
       for (let i = 0; i < px.length; i += 4) {
-        const r = px[i];
-        const g = px[i + 1];
-        const b = px[i + 2];
-        const mx = Math.max(r, g, b);
-        const mn = Math.min(r, g, b);
+        const r = px[i], g = px[i + 1], b = px[i + 2];
+        const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
         const sat = mx > 0 ? (mx - mn) / mx : 0;
         if (sat < 0.18) {
           const grey = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-          px[i] = grey;
-          px[i + 1] = grey;
-          px[i + 2] = grey;
+          px[i] = grey; px[i + 1] = grey; px[i + 2] = grey;
         }
       }
-
       ctx.putImageData(imageData, 0, 0);
-      resolve(canvas.toDataURL('image/png'));
+
+      // Draw custom road labels on top of greyscaled map
+      const legendEntries = labelRoadsThreePass(ctx, roads);
+
+      resolve({
+        imageDataUrl: canvas.toDataURL('image/png'),
+        legendEntries,
+      });
     };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
+    img.onerror = () => resolve({ imageDataUrl: rawDataUrl, legendEntries: [] });
+    img.src = rawDataUrl;
   });
 }
 
-// ─── OFF-SCREEN MAP RENDERER (all routes + booking dots) ─────────────────────
+// ─── OFF-SCREEN MAP RENDERER ─────────────────────────────────────────────────
 
 async function renderMastermapOffscreen(
   routes: SavedRouteInput[],
@@ -872,35 +1303,20 @@ async function renderMastermapOffscreen(
   pixelW: number,
   pixelH: number,
   bearing: number,
-): Promise<string | null> {
+): Promise<MastermapRenderResult | null> {
   const allCoords: [number, number][] = [];
   routes.forEach((r) => r.segments?.forEach((s) => allCoords.push(...s.coordinates)));
   bookings.forEach((b) => allCoords.push([b.lng, b.lat]));
   if (!allCoords.length) return null;
 
-  return new Promise<string | null>((resolve) => {
+  return new Promise<MastermapRenderResult | null>((resolve) => {
     const container = document.createElement('div');
-    container.style.position = 'fixed';
-    container.style.top = '0px';
-    container.style.left = '0px';
-    container.style.width = `${pixelW}px`;
-    container.style.height = `${pixelH}px`;
-    container.style.zIndex = '-1';
-    container.style.pointerEvents = 'none';
-    container.style.overflow = 'hidden';
+    container.style.cssText = `position:fixed;top:0;left:0;width:${pixelW}px;height:${pixelH}px;z-index:-1;pointer-events:none;overflow:hidden`;
     document.body.appendChild(container);
 
     let done = false;
-    const finish = async (m: mapboxgl.Map, url: string | null) => {
-      if (done) return;
-      done = true;
-      try { m.remove(); } catch { /* ok */ }
+    const cleanup = () => {
       try { document.body.removeChild(container); } catch { /* ok */ }
-      if (url && url.length > 1000) {
-        resolve(await greyscalePreservingSaturated(url, pixelW, pixelH));
-      } else {
-        resolve(null);
-      }
     };
 
     mapboxgl.accessToken = (import.meta.env.VITE_MAPBOX_TOKEN as string) || '';
@@ -916,27 +1332,35 @@ async function renderMastermapOffscreen(
     });
 
     const timeout = setTimeout(() => {
-      console.warn('[DMB Mastermap] Map render timed out after 30s');
+      if (done) return;
+      console.warn('[DMB Mastermap] Map render timed out after 30s — capturing anyway');
       try {
         map.triggerRepaint();
         setTimeout(() => {
-          try { finish(map, map.getCanvas().toDataURL('image/png')); }
-          catch { finish(map, null); }
+          if (done) return; done = true;
+          try {
+            const url = map.getCanvas().toDataURL('image/png');
+            const roads = queryAndGroupRoads(map);
+            try { map.remove(); } catch {} cleanup();
+            processMapWithLabels(url, roads, pixelW, pixelH).then(resolve);
+          } catch { try { map.remove(); } catch {} cleanup(); resolve(null); }
         }, 200);
-      } catch { finish(map, null); }
+      } catch { if (!done) { done = true; try { map.remove(); } catch {} cleanup(); resolve(null); } }
     }, 30000);
 
     map.on('load', () => {
+      // Style: DMB styling + greyscale + thick roads + hide all Mapbox text
       applyMapStyling(map);
       applyGreyscaleBase(map);
-      enhanceMastermapLabels(map);
+      thickenMastermapRoads(map);
+      hideMapboxLabels(map);
 
-      const routeInsertBefore = (
-        map.getLayer('road-label') ? 'road-label' :
-        map.getStyle().layers?.find((l: any) => l.type === 'symbol')?.id
-      ) ?? undefined;
+      // Insert routes below any remaining visible layers
+      const routeInsertBefore = map.getStyle().layers?.find((l: any) =>
+        l.type === 'symbol' && l.id.startsWith('mm-')
+      )?.id ?? undefined;
 
-      // Add each route as a separate colored line
+      // Add each route as a colored line
       routes.forEach((route, idx) => {
         if (!route.segments?.length) return;
         map.addSource(`mm-route-${idx}`, {
@@ -974,18 +1398,8 @@ async function renderMastermapOffscreen(
         map.addSource('mm-labels', { type: 'geojson', data: { type: 'FeatureCollection', features: labelFeatures } });
         map.addLayer({
           id: 'mm-route-nums', type: 'symbol', source: 'mm-labels',
-          layout: {
-            'text-field': ['get', 'num'],
-            'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-            'text-size': 40,
-            'text-allow-overlap': true,
-            'text-ignore-placement': true,
-          },
-          paint: {
-            'text-color': ['get', 'color'],
-            'text-halo-color': 'rgba(255,255,255,0.9)',
-            'text-halo-width': 3,
-          },
+          layout: { 'text-field': ['get', 'num'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 40, 'text-allow-overlap': true, 'text-ignore-placement': true },
+          paint: { 'text-color': ['get', 'color'], 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 3 },
         });
       }
 
@@ -1004,20 +1418,11 @@ async function renderMastermapOffscreen(
         });
         map.addLayer({
           id: 'mm-booking-dots', type: 'circle', source: 'mm-bookings',
-          paint: {
-            'circle-color': ['get', 'routeColor'],
-            'circle-radius': 8,
-            'circle-stroke-color': '#000000',
-            'circle-stroke-width': 3,
-            'circle-opacity': 0.95,
-          },
+          paint: { 'circle-color': ['get', 'routeColor'], 'circle-radius': 8, 'circle-stroke-color': '#000000', 'circle-stroke-width': 3, 'circle-opacity': 0.95 },
         });
       }
 
-      // Set bearing first, then fitBounds WITHOUT passing bearing.
-      // When fitBounds sees the bearing is already set, it calculates a
-      // tighter center+zoom at that rotation — much less dead space than
-      // passing bearing as a fitBounds option.
+      // Fit bounds with bearing
       const bounds = allCoords.reduce(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
@@ -1025,16 +1430,25 @@ async function renderMastermapOffscreen(
       map.jumpTo({ bearing, center: bounds.getCenter() });
       map.fitBounds(bounds, { padding: 20, maxZoom: 20, duration: 0 });
 
+      // Wait for tiles to load, then capture + label
       map.once('idle', () => {
         setTimeout(() => {
           map.triggerRepaint();
           map.once('render', () => {
             setTimeout(() => {
+              if (done) return; done = true;
               clearTimeout(timeout);
-              try { finish(map, map.getCanvas().toDataURL('image/png')); }
-              catch (err) {
-                console.error('[DMB Mastermap] toDataURL failed:', err);
-                finish(map, null);
+              try {
+                const rawUrl = map.getCanvas().toDataURL('image/png');
+                // Query roads BEFORE removing map (need map.project() for pixel coords)
+                const roads = queryAndGroupRoads(map);
+                try { map.remove(); } catch {} cleanup();
+                // Composite: greyscale base + custom curving labels
+                processMapWithLabels(rawUrl, roads, pixelW, pixelH).then(resolve);
+              } catch (err) {
+                console.error('[DMB Mastermap] capture failed:', err);
+                try { map.remove(); } catch {} cleanup();
+                resolve(null);
               }
             }, 300);
           });
@@ -1060,20 +1474,17 @@ export async function generateMastermap(
   onProgress?.({ phase: 'Analyzing', detail: 'Calculating layout\u2026', percent: 5 });
   await yieldUI();
 
-  // ── Collect all route coordinates ──────────────────────────────────────────
+  // ── Collect coordinates + calculate bearing ────────────────────────────────
   const allCoords: [number, number][] = [];
   routes.forEach((r) => r.segments?.forEach((s) => allCoords.push(...s.coordinates)));
 
-  // ── Optimal bearing — rotates map so main axis (e.g. QEW) is horizontal ─────
   const bearing = calculateOptimalBearing(allCoords);
 
-  // ── Determine bounding box aspect ratio for sidebar layout ─────────────────
+  // ── Bounding box for aspect ratio ──────────────────────────────────────────
   let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
   allCoords.forEach(([lng, lat]) => {
-    if (lng < minLng) minLng = lng;
-    if (lng > maxLng) maxLng = lng;
-    if (lat < minLat) minLat = lat;
-    if (lat > maxLat) maxLat = lat;
+    if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng;
+    if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
   });
   const midLat = (minLat + maxLat) / 2;
   const cosLat = Math.cos(midLat * Math.PI / 180);
@@ -1081,10 +1492,9 @@ export async function generateMastermap(
   const heightKm = (maxLat - minLat) * 111;
   const isLandscape = widthKm >= heightKm;
 
-  // ── Layout dimensions ──────────────────────────────────────────────────────
+  // ── Layout ─────────────────────────────────────────────────────────────────
   const SIDEBAR_W = 80;
   const SIDEBAR_H = 45;
-
   let mapAreaW: number, mapAreaH: number, mapX: number, mapY: number;
   let sidebarLayout: 'left' | 'top';
 
@@ -1102,19 +1512,16 @@ export async function generateMastermap(
     mapAreaH = LEGAL_H - 2 * MM_MARGIN - SIDEBAR_H;
   }
 
-  // Render at 6000px — sweet spot where Mapbox zoom 16-17 shows all streets
-  // AND text-size 35 fits inline along roads (curving with the road geometry).
-  // When downscaled to the PDF, text lands at ~5pt — same as the physical
-  // reference master maps, legible at arm's length.
+  // 6000px render — sweet spot for custom label legibility
   const pixelW = isLandscape ? 6000 : 5200;
   const pixelH = Math.round(pixelW * (mapAreaH / mapAreaW));
 
-  // ── Render off-screen map ──────────────────────────────────────────────────
-  onProgress?.({ phase: 'Rendering map', detail: 'High-res capture \u2014 may take 15\u201330 seconds\u2026', percent: 10 });
+  // ── Render ─────────────────────────────────────────────────────────────────
+  onProgress?.({ phase: 'Rendering map', detail: 'Capturing + labeling streets\u2026', percent: 10 });
   await yieldUI();
-  await new Promise((r) => setTimeout(r, 1000)); // GPU settle
+  await new Promise((r) => setTimeout(r, 1000));
 
-  const mapImage = await renderMastermapOffscreen(routes, geocodedBookings, pixelW, pixelH, bearing);
+  const renderResult = await renderMastermapOffscreen(routes, geocodedBookings, pixelW, pixelH, bearing);
 
   // ── Build PDF ──────────────────────────────────────────────────────────────
   onProgress?.({ phase: 'Building PDF', detail: 'Drawing layout\u2026', percent: 85 });
@@ -1122,20 +1529,18 @@ export async function generateMastermap(
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'legal' });
 
-  if (mapImage) {
-    try { doc.addImage(mapImage, 'PNG', mapX, mapY, mapAreaW, mapAreaH); }
+  // Map image
+  if (renderResult?.imageDataUrl) {
+    try { doc.addImage(renderResult.imageDataUrl, 'PNG', mapX, mapY, mapAreaW, mapAreaH); }
     catch { /* map unavailable */ }
   }
 
+  // ── Sidebar ────────────────────────────────────────────────────────────────
   const sortedRoutes = [...routes].sort((a, b) => a.route_number - b.route_number);
 
-  function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  function hexToRgb(hex: string) {
     const h = hex.replace('#', '');
-    return {
-      r: parseInt(h.slice(0, 2), 16) || 0,
-      g: parseInt(h.slice(2, 4), 16) || 0,
-      b: parseInt(h.slice(4, 6), 16) || 0,
-    };
+    return { r: parseInt(h.slice(0, 2), 16) || 0, g: parseInt(h.slice(2, 4), 16) || 0, b: parseInt(h.slice(4, 6), 16) || 0 };
   }
 
   if (sidebarLayout === 'left') {
@@ -1182,11 +1587,7 @@ export async function generateMastermap(
       const count = bookingsData.get(route.route_code)?.length ?? 0;
       const label = `${route.route_code}(${count})`;
       const entryW = label.length * 3.8 + 14;
-      if (sx + entryW > LEGAL_W - MM_MARGIN) {
-        sx = MM_MARGIN;
-        rowY += 14;
-        if (rowY > MM_MARGIN + SIDEBAR_H - 8) break;
-      }
+      if (sx + entryW > LEGAL_W - MM_MARGIN) { sx = MM_MARGIN; rowY += 14; if (rowY > MM_MARGIN + SIDEBAR_H - 8) break; }
       const rgb = hexToRgb(route.route_color);
       doc.setFillColor(rgb.r, rgb.g, rgb.b);
       doc.circle(sx + 3, rowY + 7, 2.5, 'F');
@@ -1206,6 +1607,40 @@ export async function generateMastermap(
     doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', LEGAL_W - MM_MARGIN - 80, LEGAL_H - MM_MARGIN + 2);
   }
 
+  // ── Legend table (for streets that got numbered markers) ────────────────────
+  const legendEntries = renderResult?.legendEntries || [];
+  if (legendEntries.length > 0) {
+    const COLS = 2;
+    const ROW_H = 7;
+    const COL_W = 130;
+    const rows = Math.ceil(legendEntries.length / COLS);
+    const legendW = COLS * COL_W + 8;
+    const legendH = rows * ROW_H + 14;
+
+    // Position: top-right corner of map area
+    const lx = mapX + mapAreaW - legendW - 4;
+    const ly = mapY + 4;
+
+    // White background with border
+    doc.setFillColor(255, 255, 255);
+    doc.setDrawColor(100, 100, 100);
+    doc.setLineWidth(0.5);
+    doc.rect(lx, ly, legendW, legendH, 'FD');
+
+    // Entries in two columns
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5);
+    doc.setTextColor(0, 0, 0);
+    for (let i = 0; i < legendEntries.length; i++) {
+      const col = Math.floor(i / rows);
+      const row = i % rows;
+      const ex = lx + 4 + col * COL_W;
+      const ey = ly + 9 + row * ROW_H;
+      doc.text(`${legendEntries[i].number}. ${legendEntries[i].streetName}`, ex, ey);
+    }
+  }
+
+  // ── Save ───────────────────────────────────────────────────────────────────
   onProgress?.({ phase: 'Downloading', detail: 'Saving PDF\u2026', percent: 97 });
   await yieldUI();
   const today = new Date();
