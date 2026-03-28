@@ -1391,7 +1391,7 @@ function labelRoadsThreePass(
     for (let p = 0; p < numPlacements; p++) {
       const segStart = (road.pathLength / numPlacements) * p;
       const segEnd = (road.pathLength / numPlacements) * (p + 1);
-      const subPath = getSubPath(road.pixelPath, segStart, segEnd);
+      const subPath = ensureLeftToRight(getSubPath(road.pixelPath, segStart, segEnd));
       if (subPath.length < 2) continue;
 
       // Check if a label for this name was already placed too close
@@ -1694,7 +1694,7 @@ async function renderMastermapOffscreen(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
-      map.fitBounds(bounds, { padding: 2, maxZoom: 20, duration: 0 });
+      map.fitBounds(bounds, { padding: 0, maxZoom: 20, duration: 0 });
 
       // Wait for tiles at the correct viewport to load
       map.once('idle', () => {
@@ -1704,7 +1704,7 @@ async function renderMastermapOffscreen(
         const bearing = detectHighwayBearing(map);
 
         // Re-fit with the correct bearing — this rotates the view
-        map.fitBounds(bounds, { padding: 2, maxZoom: 20, duration: 0, bearing });
+        map.fitBounds(bounds, { padding: 0, maxZoom: 20, duration: 0, bearing });
 
         // Wait for rotated tiles to load, then capture
         map.once('idle', () => {
