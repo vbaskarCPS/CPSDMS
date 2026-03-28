@@ -791,7 +791,7 @@ function enhanceMastermapLabels(map: mapboxgl.Map): void {
     if (id.includes('-point-backup')) return;
 
     try {
-      map.setLayoutProperty(layer.id, 'text-size', 96);
+      map.setLayoutProperty(layer.id, 'text-size', 35);
       map.setLayoutProperty(layer.id, 'text-padding', 1);
       if (layer.layout?.['symbol-placement'] === 'line' || layer.layout?.['symbol-placement'] === 'line-center') {
         map.setLayoutProperty(layer.id, 'symbol-spacing', 150);
@@ -802,7 +802,7 @@ function enhanceMastermapLabels(map: mapboxgl.Map): void {
   map.getStyle().layers?.forEach((layer: any) => {
     if (!layer.id.includes('-point-backup')) return;
     try {
-      map.setLayoutProperty(layer.id, 'text-size', 80);
+      map.setLayoutProperty(layer.id, 'text-size', 28);
       map.setLayoutProperty(layer.id, 'text-padding', 1);
     } catch { /* skip */ }
   });
@@ -816,11 +816,11 @@ function enhanceMastermapLabels(map: mapboxgl.Map): void {
 
     try {
       if (id.includes('motorway') || id.includes('trunk')) {
-        map.setPaintProperty(layer.id, 'line-width', 84);
+        map.setPaintProperty(layer.id, 'line-width', 28);
       } else if (id.includes('primary') || id.includes('secondary')) {
-        map.setPaintProperty(layer.id, 'line-width', 60);
+        map.setPaintProperty(layer.id, 'line-width', 20);
       } else if (id.includes('street') || id.includes('tertiary') || id.includes('minor') || id.includes('road')) {
-        map.setPaintProperty(layer.id, 'line-width', 36);
+        map.setPaintProperty(layer.id, 'line-width', 12);
       }
     } catch { /* skip */ }
   });
@@ -916,7 +916,7 @@ async function renderMastermapOffscreen(
     });
 
     const timeout = setTimeout(() => {
-      console.warn('[DMB Mastermap] Map render timed out after 60s');
+      console.warn('[DMB Mastermap] Map render timed out after 30s');
       try {
         map.triggerRepaint();
         setTimeout(() => {
@@ -924,7 +924,7 @@ async function renderMastermapOffscreen(
           catch { finish(map, null); }
         }, 200);
       } catch { finish(map, null); }
-    }, 60000);
+    }, 30000);
 
     map.on('load', () => {
       applyMapStyling(map);
@@ -951,7 +951,7 @@ async function renderMastermapOffscreen(
         });
         map.addLayer({
           id: `mm-line-${idx}`, type: 'line', source: `mm-route-${idx}`,
-          paint: { 'line-color': route.route_color, 'line-width': 24, 'line-opacity': 0.85 },
+          paint: { 'line-color': route.route_color, 'line-width': 10, 'line-opacity': 0.85 },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
         }, routeInsertBefore);
       });
@@ -977,14 +977,14 @@ async function renderMastermapOffscreen(
           layout: {
             'text-field': ['get', 'num'],
             'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-            'text-size': 90,
+            'text-size': 40,
             'text-allow-overlap': true,
             'text-ignore-placement': true,
           },
           paint: {
             'text-color': ['get', 'color'],
             'text-halo-color': 'rgba(255,255,255,0.9)',
-            'text-halo-width': 5,
+            'text-halo-width': 3,
           },
         });
       }
@@ -1006,9 +1006,9 @@ async function renderMastermapOffscreen(
           id: 'mm-booking-dots', type: 'circle', source: 'mm-bookings',
           paint: {
             'circle-color': ['get', 'routeColor'],
-            'circle-radius': 16,
+            'circle-radius': 8,
             'circle-stroke-color': '#000000',
-            'circle-stroke-width': 5,
+            'circle-stroke-width': 3,
             'circle-opacity': 0.95,
           },
         });
@@ -1023,7 +1023,7 @@ async function renderMastermapOffscreen(
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
       map.jumpTo({ bearing, center: bounds.getCenter() });
-      map.fitBounds(bounds, { padding: 0, maxZoom: 20, duration: 0 });
+      map.fitBounds(bounds, { padding: 20, maxZoom: 20, duration: 0 });
 
       map.once('idle', () => {
         setTimeout(() => {
@@ -1102,14 +1102,15 @@ export async function generateMastermap(
     mapAreaH = LEGAL_H - 2 * MM_MARGIN - SIDEBAR_H;
   }
 
-  // Ultra high-res off-screen render — 15000px forces Mapbox to zoom 19+
-  // where every cul-de-sac and lane gets a primary inline label.
-  // The massive image downscales cleanly when placed in the PDF.
-  const pixelW = isLandscape ? 15000 : 12800;
+  // Render at 6000px — sweet spot where Mapbox zoom 16-17 shows all streets
+  // AND text-size 35 fits inline along roads (curving with the road geometry).
+  // When downscaled to the PDF, text lands at ~5pt — same as the physical
+  // reference master maps, legible at arm's length.
+  const pixelW = isLandscape ? 6000 : 5200;
   const pixelH = Math.round(pixelW * (mapAreaH / mapAreaW));
 
   // ── Render off-screen map ──────────────────────────────────────────────────
-  onProgress?.({ phase: 'Rendering map', detail: 'Ultra high-res capture \u2014 may take 30\u201360 seconds\u2026', percent: 10 });
+  onProgress?.({ phase: 'Rendering map', detail: 'High-res capture \u2014 may take 15\u201330 seconds\u2026', percent: 10 });
   await yieldUI();
   await new Promise((r) => setTimeout(r, 1000)); // GPU settle
 
