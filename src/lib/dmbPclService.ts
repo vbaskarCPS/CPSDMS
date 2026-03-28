@@ -354,15 +354,6 @@ function applyMapStyling(map: mapboxgl.Map): void {
   });
 }
 
-/**
- * Post-process a captured map image: convert all pixels to greyscale
- * EXCEPT yellow-ish pixels (the route highlight).
- *
- * The route is drawn with #FFD700 at 0.9 opacity. When composited over
- * any base color, route pixels have: R > 200, G > 160, B < 80.
- * Everything else on the Mapbox streets style (roads, water, parks, text)
- * falls well outside this range, so the threshold is safe.
- */
 function greyscalePreservingYellow(dataUrl: string, width: number, height: number): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
@@ -380,27 +371,21 @@ function greyscalePreservingYellow(dataUrl: string, width: number, height: numbe
         const r = px[i];
         const g = px[i + 1];
         const b = px[i + 2];
-        // px[i+3] = alpha — leave untouched
 
-        // Is this pixel part of the yellow route?
-        // #FFD700 composited at 0.9 opacity over any base gives:
-        //   R > 200, G > 160, B < 80, and (R+G) substantially > B
         const isYellow = r > 200 && g > 160 && b < 80;
 
         if (!isYellow) {
-          // Standard luminance greyscale
           const grey = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
           px[i] = grey;
           px[i + 1] = grey;
           px[i + 2] = grey;
         }
-        // Yellow pixels stay full color
       }
 
       ctx.putImageData(imageData, 0, 0);
       resolve(canvas.toDataURL('image/png'));
     };
-    img.onerror = () => resolve(dataUrl); // fallback to unprocessed
+    img.onerror = () => resolve(dataUrl);
     img.src = dataUrl;
   });
 }
@@ -433,7 +418,6 @@ async function renderRouteMapOffscreen(
       try { m.remove(); } catch { /* ok */ }
       try { document.body.removeChild(container); } catch { /* ok */ }
 
-      // Post-process: greyscale the map but keep yellow route
       if (url && url.length > 1000) {
         const processed = await greyscalePreservingYellow(url, pixelWidth, pixelHeight);
         resolve(processed);
@@ -647,17 +631,18 @@ export async function generateDmbPCL(
   onProgress?.({ phase: 'Processing', detail: 'Grouping clients by address\u2026', percent: 45 });
   await yieldUI();
 
+  // Build route data for ALL routes — even those with no callbook matches
+  // get a map page (the map alone is valuable for contractors)
   const sortedRoutes = [...routes].sort((a, b) => a.route_number - b.route_number);
   const routeDataList: RouteData[] = [];
   let totalClients = 0;
   for (const route of sortedRoutes) {
     const rows = routeRowsMap.get(route.route_code) || [];
-    if (rows.length === 0) continue;
-    const clients = groupClientsByAddress(rows);
+    const clients = rows.length > 0 ? groupClientsByAddress(rows) : [];
     totalClients += clients.length;
     routeDataList.push({ routeCode: route.route_code, routeNumber: route.route_number, segments: route.segments || [], clients });
   }
-  if (routeDataList.length === 0) return { success: false, totalClients: 0, routeCount: 0, errorMessage: 'No callbook data found for any routes in this area.' };
+  if (routeDataList.length === 0) return { success: false, totalClients: 0, routeCount: 0, errorMessage: 'No routes found in this area.' };
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
   let isFirstPage = true;
