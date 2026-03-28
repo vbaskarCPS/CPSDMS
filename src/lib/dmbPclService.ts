@@ -878,10 +878,11 @@ function detectHighwayBearing(map: mapboxgl.Map): number {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── Occupancy grid for collision detection ──────────────────────────────────
+// FIX 2: Bumped cell size from 8 → 14 for fatter collision zones on rotated text
 
 class OccupancyGrid {
   private cells = new Set<string>();
-  constructor(private cellSize: number = 8) {}
+  constructor(private cellSize: number = 14) {}
 
   isOccupied(x: number, y: number, w: number, h: number): boolean {
     const x1 = Math.floor(x / this.cellSize);
@@ -987,10 +988,16 @@ function getSubPath(
   return result;
 }
 
-/** Ensure path goes left-to-right so text reads naturally. */
+// FIX 1: Ensure path goes left-to-right using NET horizontal movement across
+// all segments, not just comparing the first and last endpoint.
+// This correctly handles curved / S-shaped / merged roads.
 function ensureLeftToRight(path: { x: number; y: number }[]): { x: number; y: number }[] {
   if (path.length < 2) return path;
-  return path[path.length - 1].x >= path[0].x ? path : [...path].reverse();
+  let sumDx = 0;
+  for (let i = 1; i < path.length; i++) {
+    sumDx += path[i].x - path[i - 1].x;
+  }
+  return sumDx >= 0 ? path : [...path].reverse();
 }
 
 // ─── Merge connected road segments by proximity ──────────────────────────────
@@ -1109,14 +1116,16 @@ function queryAndGroupRoads(map: mapboxgl.Map): RoadPath[] {
 }
 
 // ─── Font size by road class ─────────────────────────────────────────────────
+// FIX 4: Bumped all sizes to match physical map legibility for in-vehicle use
 
 function getFontSize(roadClass: string): number {
-  if (roadClass === 'motorway' || roadClass === 'trunk') return 48;
-  if (roadClass === 'primary' || roadClass === 'secondary') return 38;
-  return 28;
+  if (roadClass === 'motorway' || roadClass === 'trunk') return 80;
+  if (roadClass === 'primary' || roadClass === 'secondary') return 60;
+  return 46;
 }
 
 // ─── PASS 1: Draw text curving along road path, character by character ───────
+// FIX 2: Bumped collision padding from 2 → 6 to prevent rotated text overlaps
 
 function drawTextAlongPath(
   ctx: CanvasRenderingContext2D,
@@ -1147,7 +1156,7 @@ function drawTextAlongPath(
   }
 
   // Collision check — test each character's bounding box
-  const pad = 2;
+  const pad = 6;
   for (const cp of positions) {
     const hw = cp.w / 2 + pad;
     const hh = fontSize / 2 + pad;
@@ -1187,6 +1196,7 @@ function drawTextAlongPath(
 }
 
 // ─── PASS 2: Offset label — shifted perpendicular to road ────────────────────
+// FIX 2: Bumped collision padding from 2 → 6
 
 function drawOffsetLabel(
   ctx: CanvasRenderingContext2D,
@@ -1206,6 +1216,7 @@ function drawOffsetLabel(
 
   ctx.font = `bold ${fontSize}px Arial, Helvetica, sans-serif`;
   const tw = ctx.measureText(text).width;
+  const pad = 6;
 
   // Try both sides (above and below the road)
   for (const sign of [1, -1]) {
@@ -1213,7 +1224,7 @@ function drawOffsetLabel(
     const ox = mid.x + Math.cos(perpAngle) * offset;
     const oy = mid.y + Math.sin(perpAngle) * offset;
 
-    if (grid.isOccupied(ox - tw / 2 - 2, oy - fontSize / 2 - 2, tw + 4, fontSize + 4)) {
+    if (grid.isOccupied(ox - tw / 2 - pad, oy - fontSize / 2 - pad, tw + pad * 2, fontSize + pad * 2)) {
       continue;
     }
 
@@ -1232,7 +1243,7 @@ function drawOffsetLabel(
     ctx.fillText(text, 0, 0);
     ctx.restore();
 
-    grid.occupy(ox - tw / 2 - 2, oy - fontSize / 2 - 2, tw + 4, fontSize + 4);
+    grid.occupy(ox - tw / 2 - pad, oy - fontSize / 2 - pad, tw + pad * 2, fontSize + pad * 2);
     return true;
   }
 
@@ -1277,13 +1288,54 @@ function drawLegendMarker(
   return false;
 }
 
+// ─── FIX 3 HELPER: Draw straight horizontal label for highways ───────────────
+// Forces angle=0 so QEW / Highway 8 always reads perfectly horizontal,
+// matching the physical map aesthetic.
+
+function drawStraightHorizontalLabel(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  grid: OccupancyGrid,
+): boolean {
+  ctx.font = `bold ${fontSize}px Arial, Helvetica, sans-serif`;
+  const tw = ctx.measureText(text).width;
+  const pad = 6;
+
+  if (grid.isOccupied(x - tw / 2 - pad, y - fontSize / 2 - pad, tw + pad * 2, fontSize + pad * 2)) {
+    return false;
+  }
+
+  ctx.save();
+  ctx.translate(x, y);
+  // angle forced to 0 — perfectly horizontal
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = Math.max(5, fontSize * 0.18);
+  ctx.lineJoin = 'round';
+  ctx.strokeText(text, 0, 0);
+
+  ctx.fillStyle = '#111111';
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+
+  grid.occupy(x - tw / 2 - pad, y - fontSize / 2 - pad, tw + pad * 2, fontSize + pad * 2);
+  return true;
+}
+
 // ─── MAIN 3-PASS LABELING ────────────────────────────────────────────────────
+// FIX 2: MIN_SAME_NAME_DIST bumped from 200 → 400
+// FIX 3: Motorway/trunk roads get forced horizontal labels (skip curved Pass 1)
 
 function labelRoadsThreePass(
   ctx: CanvasRenderingContext2D,
   roads: RoadPath[],
 ): LegendEntry[] {
-  const grid = new OccupancyGrid(8);
+  const grid = new OccupancyGrid(14);
   const legendEntries: LegendEntry[] = [];
   let legendNum = 1;
 
@@ -1292,11 +1344,12 @@ function labelRoadsThreePass(
   // Track label placement positions to prevent same-name stacking
   const labelPositions = new Map<string, { x: number; y: number }[]>();
   const REPEAT_INTERVAL = 600; // label every 600px on long roads
-  const MIN_SAME_NAME_DIST = 200; // minimum px between labels of same street name
+  const MIN_SAME_NAME_DIST = 400; // FIX 2: bumped from 200 → 400
 
   for (const road of roads) {
     const fontSize = getFontSize(road.roadClass);
     const currentCount = labeledNames.get(road.name) || 0;
+    const isMajorHighway = road.roadClass === 'motorway' || road.roadClass === 'trunk';
 
     // Allow repeats on long roads
     const maxLabels = Math.max(1, Math.floor(road.pathLength / REPEAT_INTERVAL));
@@ -1322,8 +1375,19 @@ function labelRoadsThreePass(
       // Detect cul-de-sacs / loops: start ≈ end means circular path.
       const isLoop = subPath.length >= 4 && pDist(subPath[0], subPath[subPath.length - 1]) < 40;
 
-      // PASS 1 — Inline: text curves along road (skip for loops)
-      if (!isLoop && drawTextAlongPath(ctx, road.name, subPath, fontSize, grid)) {
+      // FIX 3: For motorway/trunk, force perfectly horizontal text at midpoint
+      if (isMajorHighway) {
+        if (drawStraightHorizontalLabel(ctx, road.name, midPt.x, midPt.y, fontSize, grid)) {
+          labeledNames.set(road.name, (labeledNames.get(road.name) || 0) + 1);
+          if (!labelPositions.has(road.name)) labelPositions.set(road.name, []);
+          labelPositions.get(road.name)!.push(midPt);
+          continue;
+        }
+        // If horizontal didn't fit, fall through to offset/legend
+      }
+
+      // PASS 1 — Inline: text curves along road (skip for loops and highways handled above)
+      if (!isLoop && !isMajorHighway && drawTextAlongPath(ctx, road.name, subPath, fontSize, grid)) {
         labeledNames.set(road.name, (labeledNames.get(road.name) || 0) + 1);
         if (!labelPositions.has(road.name)) labelPositions.set(road.name, []);
         labelPositions.get(road.name)!.push(midPt);
@@ -1484,6 +1548,7 @@ async function renderMastermapOffscreen(
       });
 
       // Route number labels at centroids
+      // FIX 4: Bumped text-size from 40 → 56 and halo-width from 3 → 4
       const labelFeatures: GeoJSON.Feature[] = [];
       routes.forEach((route) => {
         const coords: [number, number][] = [];
@@ -1501,8 +1566,8 @@ async function renderMastermapOffscreen(
         map.addSource('mm-labels', { type: 'geojson', data: { type: 'FeatureCollection', features: labelFeatures } });
         map.addLayer({
           id: 'mm-route-nums', type: 'symbol', source: 'mm-labels',
-          layout: { 'text-field': ['get', 'num'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 40, 'text-allow-overlap': true, 'text-ignore-placement': true },
-          paint: { 'text-color': ['get', 'color'], 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 3 },
+          layout: { 'text-field': ['get', 'num'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 56, 'text-allow-overlap': true, 'text-ignore-placement': true },
+          paint: { 'text-color': ['get', 'color'], 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 4 },
         });
       }
 
