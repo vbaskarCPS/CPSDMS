@@ -128,8 +128,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const geocodeBatchRef = useRef(0);
   const mountedRef = useRef(true);
 
-  // --- Location mode (arrow only — no camera changes) ---
-  const [locationMode, setLocationMode] = useState(false);
+  // --- Location: arrow always visible, toggle controls map centering ---
+  const [centerOnLocation, setCenterOnLocation] = useState(false);
+  const centerOnLocationRef = useRef(false);
   const watchIdRef = useRef<number | null>(null);
   const navMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const navArrowElRef = useRef<HTMLDivElement | null>(null);
@@ -588,59 +589,51 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     geocodeLoop();
   }, [pins, routeMapData, mapLoaded, routeColorMap, routeCentroid, updateMapPins]);
 
-  // ─── LOCATION MODE — Arrow only, no camera changes ───────────────────────
+  // ─── GPS TRACKING — Always on, arrow always visible ─────────────────────
+  // Starts as soon as map loads. Arrow moves with GPS. No camera changes here.
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
+    if (!navigator.geolocation) return;
 
-    if (locationMode) {
-      if (!navigator.geolocation) {
-        console.error('Geolocation not supported');
-        setLocationMode(false);
-        return;
-      }
-
-      // Create arrow element
-      if (!navArrowElRef.current) {
-        navArrowElRef.current = createNavigationArrowElement();
-      }
-
-      // Place marker (starts at 0,0, will move to real position immediately)
-      navMarkerRef.current = new mapboxgl.Marker({ element: navArrowElRef.current })
-        .setLngLat([0, 0])
-        .addTo(map);
-
-      // Continuous tracking — just moves the arrow, doesn't touch the camera
-      watchIdRef.current = navigator.geolocation.watchPosition(
-        (position) => {
-          if (!navMarkerRef.current) return;
-          const { latitude, longitude, heading } = position.coords;
-
-          // Move arrow to current position
-          navMarkerRef.current.setLngLat([longitude, latitude]);
-
-          // Rotate arrow based on heading (if available)
-          const hasHeading = heading !== null && heading !== undefined && !isNaN(heading);
-          if (hasHeading && navArrowElRef.current) {
-            navArrowElRef.current.style.transform = `rotate(${heading}deg)`;
-          }
-        },
-        (err) => {
-          console.error('Geolocation error:', err.code, err.message);
-          setLocationMode(false);
-        },
-        { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 }
-      );
-    } else {
-      // Clean up
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-      }
-      navMarkerRef.current?.remove();
-      navMarkerRef.current = null;
+    // Create arrow element
+    if (!navArrowElRef.current) {
+      navArrowElRef.current = createNavigationArrowElement();
     }
+
+    navMarkerRef.current = new mapboxgl.Marker({ element: navArrowElRef.current })
+      .setLngLat([0, 0])
+      .addTo(map);
+
+    // Continuous tracking — arrow always moves, centering depends on toggle
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (position) => {
+        if (!navMarkerRef.current || !mapRef.current) return;
+        const { latitude, longitude, heading } = position.coords;
+
+        // Always move the arrow
+        navMarkerRef.current.setLngLat([longitude, latitude]);
+
+        // Always rotate arrow based on heading
+        const hasHeading = heading !== null && heading !== undefined && !isNaN(heading);
+        if (hasHeading && navArrowElRef.current) {
+          navArrowElRef.current.style.transform = `rotate(${heading}deg)`;
+        }
+
+        // Only center map if the toggle is ON
+        if (centerOnLocationRef.current) {
+          mapRef.current.easeTo({
+            center: [longitude, latitude],
+            duration: 1000,
+          });
+        }
+      },
+      (err) => {
+        console.warn('Geolocation error:', err.code, err.message);
+      },
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 }
+    );
 
     return () => {
       if (watchIdRef.current !== null) {
@@ -650,7 +643,32 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       navMarkerRef.current?.remove();
       navMarkerRef.current = null;
     };
-  }, [locationMode, mapLoaded]);
+  }, [mapLoaded]);
+
+  // ─── SYNC centering ref when toggle changes ───────────────────────────────
+
+  useEffect(() => {
+    centerOnLocationRef.current = centerOnLocation;
+  }, [centerOnLocation]);
+
+  // ─── HANDLE CENTER TOGGLE — immediate snap when turned on ─────────────────
+
+  const handleToggleCenter = useCallback(() => {
+    setCenterOnLocation(prev => {
+      const newVal = !prev;
+      centerOnLocationRef.current = newVal;
+
+      // If turning ON, immediately center on current arrow position
+      if (newVal && navMarkerRef.current && mapRef.current) {
+        const lngLat = navMarkerRef.current.getLngLat();
+        if (lngLat.lng !== 0 || lngLat.lat !== 0) {
+          mapRef.current.easeTo({ center: [lngLat.lng, lngLat.lat], duration: 800 });
+        }
+      }
+
+      return newVal;
+    });
+  }, []);
 
   // ─── MAP INITIALIZATION ───────────────────────────────────────────────────
 
@@ -805,17 +823,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         </div>
       )}
 
-      {/* Location toggle */}
+      {/* Center-on-me toggle */}
       <button
-        onClick={() => setLocationMode(prev => !prev)}
+        onClick={handleToggleCenter}
         className={`absolute bottom-6 right-3 z-20 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all ${
-          locationMode
+          centerOnLocation
             ? 'bg-blue-600 text-white ring-2 ring-blue-400 ring-offset-2 ring-offset-gray-900'
             : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
         }`}
-        title={locationMode ? 'Hide my location' : 'Show my location'}
+        title={centerOnLocation ? 'Stop following my location' : 'Follow my location'}
       >
-        <Navigation size={22} className={locationMode ? 'fill-current' : ''} />
+        <Navigation size={22} className={centerOnLocation ? 'fill-current' : ''} />
       </button>
 
       {/* Pin legend */}
