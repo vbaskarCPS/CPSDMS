@@ -817,6 +817,62 @@ function hideMapboxLabels(map: mapboxgl.Map): void {
   });
 }
 
+// ─── DETECT HIGHWAY BEARING — find the QEW/major highway angle from map data ─
+
+function detectHighwayBearing(map: mapboxgl.Map): number {
+  // Find motorway/trunk line layers
+  const hwLayerIds: string[] = [];
+  map.getStyle().layers?.forEach((layer: any) => {
+    if (layer.type !== 'line') return;
+    const id = layer.id.toLowerCase();
+    if (id.startsWith('mm-')) return;
+    if (id.includes('motorway') || id.includes('trunk')) hwLayerIds.push(layer.id);
+  });
+  if (!hwLayerIds.length) return 0;
+
+  const features = map.queryRenderedFeatures(undefined, { layers: hwLayerIds });
+  if (!features.length) return 0;
+
+  // Weighted average direction of highway segments (double-angle trick for lines)
+  let sumSin = 0, sumCos = 0;
+  for (const f of features) {
+    const geom = f.geometry as any;
+    let coords: number[][] = [];
+    if (geom.type === 'LineString') coords = geom.coordinates;
+    else if (geom.type === 'MultiLineString') {
+      for (const c of geom.coordinates) coords.push(...c);
+    }
+    for (let i = 1; i < coords.length; i++) {
+      const midLat = (coords[i][1] + coords[i - 1][1]) / 2;
+      const cosLat = Math.cos(midLat * Math.PI / 180);
+      const dx = (coords[i][0] - coords[i - 1][0]) * cosLat;
+      const dy = coords[i][1] - coords[i - 1][1];
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (len < 0.00001) continue;
+      const geoBearing = Math.atan2(dx, dy); // 0 = north, positive = east
+      sumSin += Math.sin(2 * geoBearing) * len;
+      sumCos += Math.cos(2 * geoBearing) * len;
+    }
+  }
+
+  if (Math.abs(sumSin) < 0.0001 && Math.abs(sumCos) < 0.0001) return 0;
+
+  const avgBearingDeg = (Math.atan2(sumSin, sumCos) / 2) * (180 / Math.PI);
+
+  // Two candidates: make highway horizontal vs vertical
+  let bHoriz = avgBearingDeg - 90; // highway goes left-right
+  let bVert = avgBearingDeg;        // highway goes up-down
+
+  // Normalize both to [-90, 90]
+  while (bHoriz > 90) bHoriz -= 180;
+  while (bHoriz < -90) bHoriz += 180;
+  while (bVert > 90) bVert -= 180;
+  while (bVert < -90) bVert += 180;
+
+  // Pick the one with least rotation from north-up
+  return Math.abs(bHoriz) < Math.abs(bVert) ? bHoriz : bVert;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // CUSTOM ROAD LABEL SYSTEM
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1338,7 +1394,6 @@ async function renderMastermapOffscreen(
   bookings: MastermapBookingInput[],
   pixelW: number,
   pixelH: number,
-  bearing: number,
 ): Promise<MastermapRenderResult | null> {
   const allCoords: [number, number][] = [];
   routes.forEach((r) => r.segments?.forEach((s) => allCoords.push(...s.coordinates)));
@@ -1458,7 +1513,10 @@ async function renderMastermapOffscreen(
         });
       }
 
-      // Fit bounds with bearing
+      // Detect highway bearing from Mapbox motorway data — aligns QEW horizontally
+      const bearing = detectHighwayBearing(map);
+
+      // Fit bounds with detected bearing
       const bounds = allCoords.reduce(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
@@ -1514,8 +1572,6 @@ export async function generateMastermap(
   const allCoords: [number, number][] = [];
   routes.forEach((r) => r.segments?.forEach((s) => allCoords.push(...s.coordinates)));
 
-  const bearing = calculateOptimalBearing(allCoords);
-
   // ── Bounding box for aspect ratio ──────────────────────────────────────────
   let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
   allCoords.forEach(([lng, lat]) => {
@@ -1557,7 +1613,7 @@ export async function generateMastermap(
   await yieldUI();
   await new Promise((r) => setTimeout(r, 1000));
 
-  const renderResult = await renderMastermapOffscreen(routes, geocodedBookings, pixelW, pixelH, bearing);
+  const renderResult = await renderMastermapOffscreen(routes, geocodedBookings, pixelW, pixelH);
 
   // ── Build PDF ──────────────────────────────────────────────────────────────
   onProgress?.({ phase: 'Building PDF', detail: 'Drawing layout\u2026', percent: 85 });
