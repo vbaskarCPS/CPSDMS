@@ -3,8 +3,9 @@
 // Digital Master Bookings — PCL PDF Generator
 //
 // Generates a single landscape PDF for an area's routes.
-// Each route starts with a greyscale map (yellow-highlighted route)
-// followed by client history tables in a two-column layout.
+// Each route starts with a map (rendered off-screen with the same styling
+// as the interactive DMB map) followed by client history tables in a
+// two-column layout.
 //
 // Data source: callbook spreadsheet (aeration type), read via dialerSheetsService.
 // Clients are grouped by address; the most common name/phone is shown
@@ -17,6 +18,7 @@
 
 import { dialerSheetsService } from './dialerSheetsService';
 import jsPDF from 'jspdf';
+import mapboxgl from 'mapbox-gl';
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 
@@ -78,26 +80,24 @@ export interface DmbPCLResult {
 }
 
 // ─── PDF LAYOUT CONSTANTS ────────────────────────────────────────────────────
-// All values in points (1pt = 1/72 inch).
-// Landscape letter = 792 × 612 pt.
 
 const PAGE_W = 792;
 const PAGE_H = 612;
 const MARGIN = 14;
-const GAP = 8;                                          // gap between left & right blocks
-const BORDER_W = 1.5;                                   // black border stroke width
+const GAP = 8;
+const BORDER_W = 1.5;
 
-const BLOCK_W = (PAGE_W - 2 * MARGIN - GAP) / 2;       // ≈ 378 pt
-const BLOCK_H = PAGE_H - 2 * MARGIN;                    // ≈ 584 pt
-const BLOCK_L_X = MARGIN;                               // left block origin x
-const BLOCK_R_X = MARGIN + BLOCK_W + GAP;               // right block origin x
+const BLOCK_W = (PAGE_W - 2 * MARGIN - GAP) / 2;
+const BLOCK_H = PAGE_H - 2 * MARGIN;
+const BLOCK_L_X = MARGIN;
+const BLOCK_R_X = MARGIN + BLOCK_W + GAP;
 
-const TITLE_H = 30;                                     // map title bar height
-const BLOCK_PAD = 6;                                    // inner padding
+const TITLE_H = 30;
+const BLOCK_PAD = 6;
 
-const CLIENT_HEADER_H = 13;                             // grey client header row
-const HISTORY_ROW_H = 10;                               // each year of history
-const CLIENT_GAP = 4;                                   // vertical space between groups
+const CLIENT_HEADER_H = 13;
+const HISTORY_ROW_H = 10;
+const CLIENT_GAP = 4;
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
@@ -109,9 +109,7 @@ function normalizePhone(raw: string): string {
 }
 
 function formatPhone(digits: string): string {
-  if (digits.length === 10) {
-    return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
-  }
+  if (digits.length === 10) return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
   return digits;
 }
 
@@ -161,30 +159,19 @@ function findHeaderRow(rawData: any[][]): number | null {
 }
 
 interface ColumnIndices {
-  ROUTE_CODE: number;
-  FIRST: number;
-  LAST: number;
-  HOUSE: number;
-  STREET: number;
-  CITY: number;
-  PHONE: number;
-  FO: number;
-  PRICE: number;
-  CONTRACTOR: number;
-  YEAR: number;
+  ROUTE_CODE: number; FIRST: number; LAST: number; HOUSE: number;
+  STREET: number; CITY: number; PHONE: number; FO: number;
+  PRICE: number; CONTRACTOR: number; YEAR: number;
 }
 
 function resolveColumns(headers: any[]): ColumnIndices {
   const CI: ColumnIndices = {
-    ROUTE_CODE: -1, FIRST: -1, LAST: -1, HOUSE: -1,
-    STREET: -1, CITY: -1, PHONE: -1, FO: -1,
-    PRICE: -1, CONTRACTOR: -1, YEAR: -1,
+    ROUTE_CODE: -1, FIRST: -1, LAST: -1, HOUSE: -1, STREET: -1,
+    CITY: -1, PHONE: -1, FO: -1, PRICE: -1, CONTRACTOR: -1, YEAR: -1,
   };
-
   for (let i = 0; i < headers.length; i++) {
     const h = String(headers[i] ?? '').trim().toUpperCase();
     if (!h) continue;
-
     if (['ROUTE CODE', 'ROUTE_CODE', 'ROUTECODE'].includes(h) && CI.ROUTE_CODE < 0) CI.ROUTE_CODE = i;
     else if (['FIRST NAME', 'FIRST_NAME', 'FIRSTNAME', 'FIRST'].includes(h) && CI.FIRST < 0) CI.FIRST = i;
     else if (['LAST NAME', 'LAST_NAME', 'LASTNAME', 'LAST'].includes(h) && CI.LAST < 0) CI.LAST = i;
@@ -197,114 +184,73 @@ function resolveColumns(headers: any[]): ColumnIndices {
     else if (['CONTRACTOR NAME', 'CONTRACTOR_NAME', 'CONTRACTORNAME', 'CONTRACTOR'].includes(h) && CI.CONTRACTOR < 0) CI.CONTRACTOR = i;
     else if (h === 'YEAR' && CI.YEAR < 0) CI.YEAR = i;
   }
-
   return CI;
 }
 
 // ─── STEP 1 — READ CALLBOOK ─────────────────────────────────────────────────
 
 async function readCallbookForRoutes(
-  callbookSheetId: string,
-  routeCodes: Set<string>,
+  callbookSheetId: string, routeCodes: Set<string>,
   onProgress?: (p: DmbPCLProgress) => void,
 ): Promise<Map<string, CallbookRow[]>> {
   const tabs = await dialerSheetsService.getCallbookTabs(callbookSheetId);
   const routeRows = new Map<string, CallbookRow[]>();
-
   for (let t = 0; t < tabs.length; t++) {
     const tabName = tabs[t];
     const pct = 10 + Math.round(((t + 1) / tabs.length) * 30);
     onProgress?.({ phase: 'Reading callbook', detail: `Tab "${tabName}"`, percent: pct });
-
     let rawData: any[][];
-    try {
-      rawData = await dialerSheetsService.sheetsGet(callbookSheetId, `'${tabName}'`);
-    } catch {
-      continue;
-    }
+    try { rawData = await dialerSheetsService.sheetsGet(callbookSheetId, `'${tabName}'`); } catch { continue; }
     if (!rawData || rawData.length < 2) continue;
-
     const headerIdx = findHeaderRow(rawData);
     if (headerIdx === null) continue;
-
     const CI = resolveColumns(rawData[headerIdx]);
     if (CI.PHONE < 0 || CI.ROUTE_CODE < 0) continue;
-
     for (const row of rawData.slice(headerIdx + 1)) {
       if (!row || !row[0]) continue;
-
       const rc = cellVal(row, CI.ROUTE_CODE);
       if (!rc || !routeCodes.has(rc)) continue;
-
-      const yearRaw = cellVal(row, CI.YEAR);
-      const year = parseInt(yearRaw, 10);
+      const year = parseInt(cellVal(row, CI.YEAR), 10);
       if (isNaN(year) || year < 2000) continue;
-
-      const phone = normalizePhone(cellVal(row, CI.PHONE));
-
       const cbRow: CallbookRow = {
-        routeCode: rc,
-        firstName: cellVal(row, CI.FIRST),
-        lastName: cellVal(row, CI.LAST),
-        houseNum: cellVal(row, CI.HOUSE),
-        streetName: cellVal(row, CI.STREET),
-        city: cellVal(row, CI.CITY),
-        phone,
-        fo: cellVal(row, CI.FO),
-        price: cellVal(row, CI.PRICE),
-        contractor: cellVal(row, CI.CONTRACTOR),
-        year,
+        routeCode: rc, firstName: cellVal(row, CI.FIRST), lastName: cellVal(row, CI.LAST),
+        houseNum: cellVal(row, CI.HOUSE), streetName: cellVal(row, CI.STREET), city: cellVal(row, CI.CITY),
+        phone: normalizePhone(cellVal(row, CI.PHONE)), fo: cellVal(row, CI.FO),
+        price: cellVal(row, CI.PRICE), contractor: cellVal(row, CI.CONTRACTOR), year,
       };
-
       if (!routeRows.has(rc)) routeRows.set(rc, []);
       routeRows.get(rc)!.push(cbRow);
     }
   }
-
   return routeRows;
 }
 
 // ─── STEP 2 — GROUP CLIENTS BY ADDRESS ───────────────────────────────────────
 
 function groupClientsByAddress(rows: CallbookRow[]): ClientGroup[] {
-  // Key = normalized houseNum|street
   const addrMap = new Map<string, CallbookRow[]>();
-
   for (const row of rows) {
     const key = `${row.houseNum.toLowerCase()}|${normalizeStreet(row.streetName)}`;
     if (!addrMap.has(key)) addrMap.set(key, []);
     addrMap.get(key)!.push(row);
   }
-
   const groups: ClientGroup[] = [];
-
   for (const addrRows of addrMap.values()) {
-    // Most recent first
     addrRows.sort((a, b) => b.year - a.year);
-
-    // ── Most common name (tie → most recent year) ──
     const nameCounts = new Map<string, { count: number; year: number; first: string; last: string }>();
     for (const r of addrRows) {
       const nk = `${r.firstName.toLowerCase()}|${r.lastName.toLowerCase()}`;
       const ex = nameCounts.get(nk);
-      if (ex) {
-        ex.count++;
-        if (r.year > ex.year) { ex.year = r.year; ex.first = r.firstName; ex.last = r.lastName; }
-      } else {
-        nameCounts.set(nk, { count: 1, year: r.year, first: r.firstName, last: r.lastName });
-      }
+      if (ex) { ex.count++; if (r.year > ex.year) { ex.year = r.year; ex.first = r.firstName; ex.last = r.lastName; } }
+      else nameCounts.set(nk, { count: 1, year: r.year, first: r.firstName, last: r.lastName });
     }
     let bestName = { first: addrRows[0].firstName, last: addrRows[0].lastName };
-    let bestCount = 0;
-    let bestYear = 0;
+    let bestCount = 0; let bestYear = 0;
     for (const e of nameCounts.values()) {
       if (e.count > bestCount || (e.count === bestCount && e.year > bestYear)) {
-        bestCount = e.count; bestYear = e.year;
-        bestName = { first: e.first, last: e.last };
+        bestCount = e.count; bestYear = e.year; bestName = { first: e.first, last: e.last };
       }
     }
-
-    // ── Most common phone (tie → most recent year) ──
     const phoneCounts = new Map<string, { count: number; year: number }>();
     for (const r of addrRows) {
       if (!r.phone) continue;
@@ -312,119 +258,193 @@ function groupClientsByAddress(rows: CallbookRow[]): ClientGroup[] {
       if (ex) { ex.count++; if (r.year > ex.year) ex.year = r.year; }
       else phoneCounts.set(r.phone, { count: 1, year: r.year });
     }
-    let bestPhone = '';
-    let bpCount = 0;
-    let bpYear = 0;
-    for (const [ph, e] of phoneCounts) {
-      if (e.count > bpCount || (e.count === bpCount && e.year > bpYear)) {
-        bpCount = e.count; bpYear = e.year; bestPhone = ph;
-      }
+    let bestPhone = ''; let bpCount = 0; let bpYear = 0;
+    for (const [, e] of phoneCounts) {
+      if (e.count > bpCount || (e.count === bpCount && e.year > bpYear)) { bpCount = e.count; bpYear = e.year; bestPhone = [...phoneCounts].find(([, v]) => v === e)![0]; }
     }
-
     groups.push({
-      firstName: bestName.first,
-      lastName: bestName.last,
-      houseNum: addrRows[0].houseNum,
-      streetName: addrRows[0].streetName,
+      firstName: bestName.first, lastName: bestName.last,
+      houseNum: addrRows[0].houseNum, streetName: addrRows[0].streetName,
       phone: formatPhone(bestPhone),
-      history: addrRows.map((r) => ({
-        year: r.year,
-        price: formatPrice(r.price),
-        serviceType: interpretService(r.fo),
-        contractor: r.contractor,
-      })),
+      history: addrRows.map((r) => ({ year: r.year, price: formatPrice(r.price), serviceType: interpretService(r.fo), contractor: r.contractor })),
     });
   }
-
-  // Sort: street → house number
   groups.sort((a, b) => {
     const stCmp = normalizeStreet(a.streetName).localeCompare(normalizeStreet(b.streetName));
     if (stCmp !== 0) return stCmp;
     return parseHouseNum(a.houseNum) - parseHouseNum(b.houseNum);
   });
-
   return groups;
 }
 
-// ─── STEP 3 — MAPBOX STATIC IMAGE ───────────────────────────────────────────
+// ─── STEP 3 — OFF-SCREEN MAPBOX GL RENDERER ─────────────────────────────────
+// Creates a hidden Mapbox GL map with the EXACT same styling as
+// DigitalMasterBookings, draws the route in yellow, captures the canvas.
 
-function simplifyCoords(
-  segments: Array<{ coordinates: [number, number][] }>,
-  maxTotal: number,
-): [number, number][][] {
-  let total = 0;
-  segments.forEach((s) => (total += s.coordinates.length));
+function applyMapStyling(map: mapboxgl.Map): void {
+  const HIDE_LIST = ['poi-label', 'housenum-label', 'road-number-shield'];
+  HIDE_LIST.forEach((id) => {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
+  });
 
-  if (total <= maxTotal) {
-    return segments.map((s) => [...s.coordinates]);
-  }
+  map.getStyle().layers?.forEach((layer: any) => {
+    const id = layer.id.toLowerCase();
 
-  const ratio = maxTotal / total;
-  return segments.map((seg) => {
-    const keep = Math.max(2, Math.round(seg.coordinates.length * ratio));
-    const step = Math.max(1, Math.floor(seg.coordinates.length / keep));
-    const out: [number, number][] = [];
-    for (let i = 0; i < seg.coordinates.length; i += step) out.push(seg.coordinates[i]);
-    const last = seg.coordinates[seg.coordinates.length - 1];
-    if (out[out.length - 1] !== last) out.push(last);
-    return out;
+    if (layer.type === 'fill' || layer.type === 'fill-extrusion') {
+      if (id.includes('building') || id.includes('structure')) {
+        map.setLayoutProperty(layer.id, 'visibility', 'none');
+      }
+    }
+    if (layer.type !== 'symbol') return;
+
+    const idIsHouseNum =
+      id.includes('housenum') || id.includes('house-num') ||
+      id.includes('house_num') || id.includes('address') || id.includes('housenumber');
+    const textField = JSON.stringify(layer.layout?.['text-field'] ?? '');
+    const fieldIsHouseNum =
+      textField.includes('housenumber') || textField.includes('house_num') ||
+      textField.includes('addr') || textField.includes('ref');
+    const isNotRoadLabel =
+      !id.includes('label') && !id.includes('shield') &&
+      !id.includes('motorway') && !id.includes('road') && !id.includes('street');
+
+    if (idIsHouseNum || fieldIsHouseNum || isNotRoadLabel) {
+      map.setLayoutProperty(layer.id, 'visibility', 'none');
+    }
+  });
+
+  const roadLabelLayers = map.getStyle().layers?.filter((layer: any) =>
+    layer.type === 'symbol' && layer.id.toLowerCase().includes('label') &&
+    !HIDE_LIST.includes(layer.id)
+  ) ?? [];
+
+  roadLabelLayers.forEach((layer: any) => {
+    try {
+      map.setLayerZoomRange(layer.id, 0, 24);
+      map.setLayoutProperty(layer.id, 'text-allow-overlap', false);
+      map.setLayoutProperty(layer.id, 'text-ignore-placement', false);
+      map.setLayoutProperty(layer.id, 'text-size', 13);
+      map.setLayoutProperty(layer.id, 'text-font', ['DIN Pro Bold', 'Arial Unicode MS Bold']);
+      map.setPaintProperty(layer.id, 'text-color', '#111111');
+      map.setPaintProperty(layer.id, 'text-halo-color', '#ffffff');
+      map.setPaintProperty(layer.id, 'text-halo-width', 2);
+    } catch { /* skip */ }
+
+    const backupId = `${layer.id}-point-backup`;
+    if (map.getLayer(backupId)) return;
+    try {
+      map.addLayer({
+        id: backupId,
+        type: 'symbol',
+        source: (layer as any).source ?? 'composite',
+        'source-layer': (layer as any)['source-layer'] ?? 'road',
+        filter: (layer as any).filter,
+        minzoom: 0, maxzoom: 24,
+        layout: {
+          ...(layer.layout ?? {}),
+          'symbol-placement': 'point',
+          'text-optional': true,
+          'text-allow-overlap': false,
+          'text-ignore-placement': false,
+          'text-padding': 5, 'text-size': 11,
+          'text-font': ['DIN Pro Medium', 'Arial Unicode MS Regular'],
+        },
+        paint: {
+          ...(layer.paint ?? {}),
+          'text-color': '#111111',
+          'text-halo-color': '#ffffff',
+          'text-halo-width': 2,
+        },
+      });
+    } catch { /* skip */ }
   });
 }
 
-async function fetchRouteMapImage(
+async function renderRouteMapOffscreen(
   segments: Array<{ coordinates: [number, number][] }>,
-  mapboxToken: string,
-  width: number,
-  height: number,
+  pixelWidth: number,
+  pixelHeight: number,
 ): Promise<string | null> {
-  let allCoords: [number, number][] = [];
+  const allCoords: [number, number][] = [];
   segments.forEach((s) => allCoords.push(...s.coordinates));
   if (allCoords.length === 0) return null;
 
-  // Start with up to 200 points
-  let simplified = simplifyCoords(segments, 200);
+  return new Promise<string | null>((resolve) => {
+    const container = document.createElement('div');
+    container.style.width = `${pixelWidth}px`;
+    container.style.height = `${pixelHeight}px`;
+    container.style.position = 'fixed';
+    container.style.left = '-9999px';
+    container.style.top = '-9999px';
+    container.style.visibility = 'hidden';
+    document.body.appendChild(container);
 
-  const buildUrl = (segs: [number, number][][]): string => {
-    const geojson = {
-      type: 'FeatureCollection',
-      features: segs.map((coords) => ({
-        type: 'Feature',
-        properties: { stroke: '#FFD700', 'stroke-width': 5, 'stroke-opacity': 0.9 },
-        geometry: { type: 'LineString', coordinates: coords },
-      })),
+    let resolved = false;
+    const finish = (m: mapboxgl.Map, url: string | null) => {
+      if (resolved) return;
+      resolved = true;
+      try { m.remove(); } catch { /* ok */ }
+      try { document.body.removeChild(container); } catch { /* ok */ }
+      resolve(url);
     };
-    const encoded = encodeURIComponent(JSON.stringify(geojson));
-    return `https://api.mapbox.com/styles/v1/mapbox/light-v11/static/geojson(${encoded})/auto/${width}x${height}@2x?padding=50&access_token=${mapboxToken}`;
-  };
 
-  let url = buildUrl(simplified);
+    mapboxgl.accessToken = (import.meta.env.VITE_MAPBOX_TOKEN as string) || '';
 
-  // If URL too long, simplify further
-  if (url.length > 7500) {
-    simplified = simplifyCoords(segments, 80);
-    url = buildUrl(simplified);
-  }
-  if (url.length > 7500) {
-    simplified = simplifyCoords(segments, 30);
-    url = buildUrl(simplified);
-  }
+    const map = new mapboxgl.Map({
+      container,
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: allCoords[0],
+      zoom: 14,
+      preserveDrawingBuffer: true,
+      attributionControl: false,
+      interactive: false,
+    });
 
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    return await blobToBase64(blob);
-  } catch {
-    return null;
-  }
-}
+    const timeout = setTimeout(() => {
+      try { finish(map, map.getCanvas().toDataURL('image/png')); }
+      catch { finish(map, null); }
+    }, 15000);
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
+    map.on('load', () => {
+      applyMapStyling(map);
+
+      const routeInsertBefore = (
+        map.getLayer('road-label') ? 'road-label' :
+        map.getStyle().layers?.find((l: any) => l.type === 'symbol')?.id
+      ) ?? undefined;
+
+      const features: GeoJSON.Feature[] = segments.map((seg) => ({
+        type: 'Feature', properties: {},
+        geometry: { type: 'LineString', coordinates: seg.coordinates },
+      }));
+
+      map.addSource('pcl-route-src', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features },
+      });
+
+      map.addLayer({
+        id: 'pcl-route-line', type: 'line', source: 'pcl-route-src',
+        paint: { 'line-color': '#FFD700', 'line-width': 7, 'line-opacity': 0.9 },
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+      }, routeInsertBefore);
+
+      const bounds = allCoords.reduce(
+        (b, c) => b.extend(c),
+        new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
+      );
+      map.fitBounds(bounds, { padding: 40, duration: 0 });
+
+      map.once('idle', () => {
+        setTimeout(() => {
+          clearTimeout(timeout);
+          try { finish(map, map.getCanvas().toDataURL('image/png')); }
+          catch { finish(map, null); }
+        }, 600);
+      });
+    });
+
+    map.on('error', () => { clearTimeout(timeout); finish(map, null); });
   });
 }
 
@@ -437,67 +457,47 @@ function drawBlockBorder(doc: jsPDF, side: 'left' | 'right'): void {
   doc.rect(x, MARGIN, BLOCK_W, BLOCK_H);
 }
 
-function drawMapBlock(
-  doc: jsPDF,
-  areaName: string,
-  routeCode: string,
-  mapImage: string | null,
-): void {
+function drawMapBlock(doc: jsPDF, areaName: string, routeCode: string, mapImage: string | null): void {
   const x = BLOCK_L_X;
-
-  // Outer border
   drawBlockBorder(doc, 'left');
 
-  // ── Title bar ──
   const titleY = MARGIN + BORDER_W;
   const titleW = BLOCK_W - 2 * BORDER_W;
 
-  // White background
   doc.setFillColor(255, 255, 255);
   doc.rect(x + BORDER_W, titleY, titleW, TITLE_H, 'F');
-
-  // Divider line below title
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(BORDER_W);
   doc.line(x + BORDER_W, titleY + TITLE_H, x + BLOCK_W - BORDER_W, titleY + TITLE_H);
 
-  // Area name (bold, centered)
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(0, 0, 0);
   doc.text(areaName, x + BLOCK_W / 2, titleY + 12, { align: 'center' });
 
-  // Route code (smaller, grey)
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(85, 85, 85);
   doc.text(`Route ${routeCode}`, x + BLOCK_W / 2, titleY + 23, { align: 'center' });
 
-  // ── Map image ──
   const imgX = x + BORDER_W;
   const imgY = titleY + TITLE_H;
   const imgW = titleW;
   const imgH = BLOCK_H - 2 * BORDER_W - TITLE_H;
 
   if (mapImage) {
-    try {
-      doc.addImage(mapImage, 'PNG', imgX, imgY, imgW, imgH);
-    } catch {
-      drawMapPlaceholder(doc, imgX, imgY, imgW, imgH, x);
-    }
+    try { doc.addImage(mapImage, 'PNG', imgX, imgY, imgW, imgH); }
+    catch { drawMapPlaceholder(doc, imgX, imgY, imgW, imgH, x); }
   } else {
     drawMapPlaceholder(doc, imgX, imgY, imgW, imgH, x);
   }
+
+  doc.setFontSize(4);
+  doc.setTextColor(160, 160, 160);
+  doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', x + BLOCK_W - BORDER_W - 3, MARGIN + BLOCK_H - BORDER_W - 2, { align: 'right' });
 }
 
-function drawMapPlaceholder(
-  doc: jsPDF,
-  imgX: number,
-  imgY: number,
-  imgW: number,
-  imgH: number,
-  blockX: number,
-): void {
+function drawMapPlaceholder(doc: jsPDF, imgX: number, imgY: number, imgW: number, imgH: number, blockX: number): void {
   doc.setFillColor(230, 230, 230);
   doc.rect(imgX, imgY, imgW, imgH, 'F');
   doc.setFontSize(9);
@@ -505,94 +505,53 @@ function drawMapPlaceholder(
   doc.text('Map unavailable', blockX + BLOCK_W / 2, imgY + imgH / 2, { align: 'center' });
 }
 
-/** Height of one client group (header + history rows + gap). */
 function clientGroupHeight(group: ClientGroup): number {
   return CLIENT_HEADER_H + group.history.length * HISTORY_ROW_H + CLIENT_GAP;
 }
 
-/**
- * Truncate text to fit within a pixel width estimate.
- * Rough glyph width: fontSize × 0.52 per character.
- */
 function truncate(text: string, maxWidthPt: number, fontSize: number): string {
   const glyphW = fontSize * 0.52;
   const maxChars = Math.floor(maxWidthPt / glyphW);
   if (text.length <= maxChars) return text;
-  return text.substring(0, maxChars - 1) + '…';
+  return text.substring(0, maxChars - 1) + '\u2026';
 }
 
-function drawClientGroup(
-  doc: jsPDF,
-  group: ClientGroup,
-  blockX: number,
-  y: number,
-): void {
+function drawClientGroup(doc: jsPDF, group: ClientGroup, blockX: number, y: number): void {
   const innerX = blockX + BORDER_W + BLOCK_PAD;
   const contentW = BLOCK_W - 2 * BORDER_W - 2 * BLOCK_PAD;
 
-  // ── Client header (grey row) ──
   doc.setFillColor(224, 224, 224);
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.5);
   doc.rect(innerX, y, contentW, CLIENT_HEADER_H, 'FD');
 
-  // Column proportions for the header
-  const hCols = [
-    contentW * 0.18,   // First
-    contentW * 0.18,   // Last
-    contentW * 0.10,   // House#
-    contentW * 0.30,   // Street
-    contentW * 0.24,   // Phone
-  ];
-
+  const hCols = [contentW * 0.18, contentW * 0.18, contentW * 0.10, contentW * 0.30, contentW * 0.24];
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(6.5);
   doc.setTextColor(17, 17, 17);
-
   const hTextY = y + CLIENT_HEADER_H * 0.72;
   let cx = innerX + 3;
-
-  doc.text(truncate(group.firstName, hCols[0] - 4, 6.5), cx, hTextY);
-  cx += hCols[0];
-  doc.text(truncate(group.lastName, hCols[1] - 4, 6.5), cx, hTextY);
-  cx += hCols[1];
-  doc.text(truncate(group.houseNum, hCols[2] - 4, 6.5), cx, hTextY);
-  cx += hCols[2];
-  doc.text(truncate(group.streetName, hCols[3] - 4, 6.5), cx, hTextY);
-  cx += hCols[3];
+  doc.text(truncate(group.firstName, hCols[0] - 4, 6.5), cx, hTextY); cx += hCols[0];
+  doc.text(truncate(group.lastName, hCols[1] - 4, 6.5), cx, hTextY); cx += hCols[1];
+  doc.text(truncate(group.houseNum, hCols[2] - 4, 6.5), cx, hTextY); cx += hCols[2];
+  doc.text(truncate(group.streetName, hCols[3] - 4, 6.5), cx, hTextY); cx += hCols[3];
   doc.text(truncate(group.phone, hCols[4] - 4, 6.5), cx, hTextY);
 
-  // ── History rows (no sub-headers) ──
-  const histCols = [
-    contentW * 0.12,   // Year
-    contentW * 0.18,   // Price
-    contentW * 0.12,   // Service type
-    contentW * 0.58,   // Contractor
-  ];
-
+  const histCols = [contentW * 0.12, contentW * 0.18, contentW * 0.12, contentW * 0.58];
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6);
   doc.setTextColor(51, 51, 51);
-
   let rowY = y + CLIENT_HEADER_H;
-
   for (const hist of group.history) {
-    // Thin border
     doc.setDrawColor(180, 180, 180);
     doc.setLineWidth(0.3);
     doc.rect(innerX, rowY, contentW, HISTORY_ROW_H);
-
     const tY = rowY + HISTORY_ROW_H * 0.72;
     let hx = innerX + 3;
-
-    doc.text(String(hist.year), hx, tY);
-    hx += histCols[0];
-    doc.text(hist.price, hx, tY);
-    hx += histCols[1];
-    doc.text(hist.serviceType, hx, tY);
-    hx += histCols[2];
+    doc.text(String(hist.year), hx, tY); hx += histCols[0];
+    doc.text(hist.price, hx, tY); hx += histCols[1];
+    doc.text(hist.serviceType, hx, tY); hx += histCols[2];
     doc.text(truncate(hist.contractor, histCols[3] - 6, 6), hx, tY);
-
     rowY += HISTORY_ROW_H;
   }
 }
@@ -600,23 +559,13 @@ function drawClientGroup(
 // ─── MAIN EXPORT ─────────────────────────────────────────────────────────────
 
 export async function generateDmbPCL(
-  areaName: string,
-  routes: SavedRouteInput[],
-  callbookSheetId: string,
+  areaName: string, routes: SavedRouteInput[], callbookSheetId: string,
   onProgress?: (progress: DmbPCLProgress) => void,
 ): Promise<DmbPCLResult> {
-  if (routes.length === 0) {
-    return { success: false, totalClients: 0, routeCount: 0, errorMessage: 'No routes in this area.' };
-  }
+  if (routes.length === 0) return { success: false, totalClients: 0, routeCount: 0, errorMessage: 'No routes in this area.' };
 
-  const mapboxToken = (import.meta.env.VITE_MAPBOX_TOKEN as string) || '';
-  if (!mapboxToken) {
-    return { success: false, totalClients: 0, routeCount: 0, errorMessage: 'Mapbox token not configured.' };
-  }
-
-  // ── Auth ──
   if (!dialerSheetsService.isAuthenticated()) {
-    onProgress?.({ phase: 'Authenticating', detail: 'Connecting to Google Sheets…', percent: 2 });
+    onProgress?.({ phase: 'Authenticating', detail: 'Connecting to Google Sheets\u2026', percent: 2 });
     try {
       const ok = await dialerSheetsService.authenticate();
       if (!ok) return { success: false, totalClients: 0, routeCount: 0, errorMessage: 'Google Sheets auth cancelled.' };
@@ -625,125 +574,79 @@ export async function generateDmbPCL(
     }
   }
 
-  // ── Read callbook ──
   const routeCodeSet = new Set(routes.map((r) => r.route_code));
-  onProgress?.({ phase: 'Reading callbook', detail: 'Loading tabs…', percent: 5 });
-
+  onProgress?.({ phase: 'Reading callbook', detail: 'Loading tabs\u2026', percent: 5 });
   const routeRowsMap = await readCallbookForRoutes(callbookSheetId, routeCodeSet, onProgress);
 
-  // ── Group clients per route ──
-  onProgress?.({ phase: 'Processing', detail: 'Grouping clients by address…', percent: 45 });
+  onProgress?.({ phase: 'Processing', detail: 'Grouping clients by address\u2026', percent: 45 });
   await yieldUI();
 
   const sortedRoutes = [...routes].sort((a, b) => a.route_number - b.route_number);
   const routeDataList: RouteData[] = [];
   let totalClients = 0;
-
   for (const route of sortedRoutes) {
     const rows = routeRowsMap.get(route.route_code) || [];
     if (rows.length === 0) continue;
-
     const clients = groupClientsByAddress(rows);
     totalClients += clients.length;
-
-    routeDataList.push({
-      routeCode: route.route_code,
-      routeNumber: route.route_number,
-      segments: route.segments || [],
-      clients,
-    });
+    routeDataList.push({ routeCode: route.route_code, routeNumber: route.route_number, segments: route.segments || [], clients });
   }
+  if (routeDataList.length === 0) return { success: false, totalClients: 0, routeCount: 0, errorMessage: 'No callbook data found for any routes in this area.' };
 
-  if (routeDataList.length === 0) {
-    return { success: false, totalClients: 0, routeCount: 0, errorMessage: 'No callbook data found for any routes in this area.' };
-  }
-
-  // ── Build PDF ──
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
   let isFirstPage = true;
-
-  // Mapbox image dimensions (request at half-block size; @2x doubles it)
-  const mapReqW = Math.round((BLOCK_W - 2 * BORDER_W) / 2);
-  const mapReqH = Math.round((BLOCK_H - 2 * BORDER_W - TITLE_H) / 2);
+  const mapPixelW = 756;
+  const mapPixelH = 1100;
 
   for (let ri = 0; ri < routeDataList.length; ri++) {
     const rd = routeDataList[ri];
     const pct = 50 + Math.round(((ri + 1) / routeDataList.length) * 40);
-    onProgress?.({ phase: 'Generating PDF', detail: `Route ${rd.routeCode} (${ri + 1}/${routeDataList.length})`, percent: pct });
+    onProgress?.({ phase: 'Generating PDF', detail: `Route ${rd.routeCode} \u2014 rendering map (${ri + 1}/${routeDataList.length})`, percent: pct });
     await yieldUI();
 
-    // Fetch static map image
-    const mapImage = await fetchRouteMapImage(rd.segments, mapboxToken, mapReqW, mapReqH);
+    const mapImage = await renderRouteMapOffscreen(rd.segments, mapPixelW, mapPixelH);
 
-    // ── First page for this route: map left, PCL right ──
     if (!isFirstPage) doc.addPage();
     isFirstPage = false;
 
     drawMapBlock(doc, areaName, rd.routeCode, mapImage);
     drawBlockBorder(doc, 'right');
 
-    // ── Render client groups, flowing across blocks / pages ──
     let side: 'left' | 'right' = 'right';
     let curY = contentTop();
     let ci = 0;
-
     while (ci < rd.clients.length) {
       const client = rd.clients[ci];
       const groupH = clientGroupHeight(client);
-
-      // Does this group fit in the current block?
       if (curY + groupH > contentBottom() && curY > contentTop() + 10) {
-        // Advance to next block
         if (side === 'right') {
-          // New page — both blocks available
           doc.addPage();
           drawBlockBorder(doc, 'left');
           drawBlockBorder(doc, 'right');
           side = 'left';
-        } else {
-          side = 'right';
-        }
+        } else { side = 'right'; }
         curY = contentTop();
       }
-
       drawClientGroup(doc, client, side === 'left' ? BLOCK_L_X : BLOCK_R_X, curY);
       curY += groupH;
       ci++;
-
-      // Yield every 20 clients to keep the UI alive
       if (ci % 20 === 0) await yieldUI();
     }
   }
 
-  // ── Download ──
-  onProgress?.({ phase: 'Downloading', detail: 'Saving PDF…', percent: 97 });
+  onProgress?.({ phase: 'Downloading', detail: 'Saving PDF\u2026', percent: 97 });
   await yieldUI();
 
   const today = new Date();
-  const dateStr = [
-    today.getFullYear(),
-    String(today.getMonth() + 1).padStart(2, '0'),
-    String(today.getDate()).padStart(2, '0'),
-  ].join('-');
-  const safeName = areaName.replace(/[^a-zA-Z0-9_-]/g, '_');
-  doc.save(`DMB_PCL_${safeName}_${dateStr}.pdf`);
+  const dateStr = [today.getFullYear(), String(today.getMonth() + 1).padStart(2, '0'), String(today.getDate()).padStart(2, '0')].join('-');
+  doc.save(`DMB_PCL_${areaName.replace(/[^a-zA-Z0-9_-]/g, '_')}_${dateStr}.pdf`);
 
   onProgress?.({ phase: 'Done', detail: 'Complete', percent: 100 });
-
   return { success: true, totalClients, routeCount: routeDataList.length };
 }
 
 // ─── TINY UTILITIES ──────────────────────────────────────────────────────────
 
-function contentTop(): number {
-  return MARGIN + BORDER_W + BLOCK_PAD;
-}
-
-function contentBottom(): number {
-  return MARGIN + BLOCK_H - BORDER_W - BLOCK_PAD;
-}
-
-/** Let the browser paint / keep the tab responsive. */
-function yieldUI(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
+function contentTop(): number { return MARGIN + BORDER_W + BLOCK_PAD; }
+function contentBottom(): number { return MARGIN + BLOCK_H - BORDER_W - BLOCK_PAD; }
+function yieldUI(): Promise<void> { return new Promise((r) => setTimeout(r, 0)); }
