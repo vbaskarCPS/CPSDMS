@@ -5,10 +5,12 @@ import { Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock, L
 import { getStorageItem } from '../../lib/localStorage';
 import { ManagementUser, DailySessionData, LogsheetSession, SeasonType } from '../../types';
 import { sessionService } from '../../lib/sessionService';
+import { commandCenterService } from '../../lib/commandCenterService';
 import { subscribeAsRouteManager } from '../../lib/realtimeService';
 
 import RMTeamTab from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
+import RMMapTab from './components/RMMapTab';
 
 export interface TabStats {
   totalSteps: number;
@@ -27,11 +29,14 @@ export interface TabStats {
 const RMLogbook: React.FC = () => {
   const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<ManagementUser | null>(null);
-  const [activeTab, setActiveTab] = useState<'team' | 'routes'>('team');
+  const [activeTab, setActiveTab] = useState<'team' | 'routes' | 'maps'>('team');
   
   // Lock State
   const [isTeamLocked, setIsTeamLocked] = useState(false);
   const [lockLoading, setLockLoading] = useState(false);
+  
+  // Digital Mapping State
+  const [digitalMappingEnabled, setDigitalMappingEnabled] = useState(false);
   
   // Initialize Stats
   const [stats, setStats] = useState<TabStats>({
@@ -120,6 +125,9 @@ const RMLogbook: React.FC = () => {
         return;
       }
       setCurrentUser(user);
+      
+      // Check if digital mapping is enabled for this CC
+      setDigitalMappingEnabled(commandCenterService.currentHasDigitalMapping());
 
       await refreshData();
       await checkLockStatus(user.userId);
@@ -324,6 +332,20 @@ const RMLogbook: React.FC = () => {
                   </span>
                 )}
               </button>
+
+              {/* Maps Tab — only when digital mapping is enabled */}
+              {digitalMappingEnabled && (
+                <button
+                  onClick={() => setActiveTab('maps')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    activeTab === 'maps'
+                      ? 'bg-gray-700 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <MapIcon size={14} /> Map
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -386,33 +408,43 @@ const RMLogbook: React.FC = () => {
       </div>
 
       {/* CONTENT */}
-      <div className="flex-1 overflow-hidden p-4 relative">
-        <div className="h-full overflow-y-auto custom-scrollbar">
-          {activeTab === 'team' && (
-            <RMTeamTab
-              managerId={currentUser.userId}
-              workers={dailyData.workers}
-              allSessions={allSessions}
-              allManagers={dailyData.managers}
-              seasonType={seasonType}
-              currentUser={currentUser}
-            />
-          )}
-          {activeTab === 'routes' && (
-            <RMRoutesTab
-              managerId={currentUser.userId}
-              routes={dailyData.routes}
-              bookings={dailyData.pendingBookings}
-              workers={dailyData.workers}
-              managers={dailyData.managers}
-              seasonType={seasonType}
-              teamCarts={dailyData.teamCarts}
-              onRefresh={() => {
-                  refreshData();
-              }} 
-            />
-          )}
-        </div>
+      <div className={`flex-1 overflow-hidden ${activeTab !== 'maps' ? 'p-4' : ''} relative`}>
+        {activeTab !== 'maps' ? (
+          <div className="h-full overflow-y-auto custom-scrollbar">
+            {activeTab === 'team' && (
+              <RMTeamTab
+                managerId={currentUser.userId}
+                workers={dailyData.workers}
+                allSessions={allSessions}
+                allManagers={dailyData.managers}
+                seasonType={seasonType}
+                currentUser={currentUser}
+              />
+            )}
+            {activeTab === 'routes' && (
+              <RMRoutesTab
+                managerId={currentUser.userId}
+                routes={dailyData.routes}
+                bookings={dailyData.pendingBookings}
+                workers={dailyData.workers}
+                managers={dailyData.managers}
+                seasonType={seasonType}
+                teamCarts={dailyData.teamCarts}
+                onRefresh={() => {
+                    refreshData();
+                }} 
+              />
+            )}
+          </div>
+        ) : (
+          <RMMapTab
+            managerId={currentUser.userId}
+            routes={dailyData.routes}
+            bookings={dailyData.pendingBookings}
+            allSessions={allSessions}
+            workers={dailyData.workers}
+          />
+        )}
       </div>
     </div>
   );
