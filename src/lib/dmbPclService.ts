@@ -371,9 +371,7 @@ function greyscalePreservingYellow(dataUrl: string, width: number, height: numbe
         const r = px[i];
         const g = px[i + 1];
         const b = px[i + 2];
-
         const isYellow = r > 200 && g > 160 && b < 80;
-
         if (!isYellow) {
           const grey = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
           px[i] = grey;
@@ -417,7 +415,6 @@ async function renderRouteMapOffscreen(
       resolved = true;
       try { m.remove(); } catch { /* ok */ }
       try { document.body.removeChild(container); } catch { /* ok */ }
-
       if (url && url.length > 1000) {
         const processed = await greyscalePreservingYellow(url, pixelWidth, pixelHeight);
         resolve(processed);
@@ -510,38 +507,31 @@ function drawBlockBorder(doc: jsPDF, side: 'left' | 'right'): void {
 function drawMapBlock(doc: jsPDF, areaName: string, routeCode: string, mapImage: string | null): void {
   const x = BLOCK_L_X;
   drawBlockBorder(doc, 'left');
-
   const titleY = MARGIN + BORDER_W;
   const titleW = BLOCK_W - 2 * BORDER_W;
-
   doc.setFillColor(255, 255, 255);
   doc.rect(x + BORDER_W, titleY, titleW, TITLE_H, 'F');
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(BORDER_W);
   doc.line(x + BORDER_W, titleY + TITLE_H, x + BLOCK_W - BORDER_W, titleY + TITLE_H);
-
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(0, 0, 0);
   doc.text(areaName, x + BLOCK_W / 2, titleY + 12, { align: 'center' });
-
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(85, 85, 85);
   doc.text(`Route ${routeCode}`, x + BLOCK_W / 2, titleY + 23, { align: 'center' });
-
   const imgX = x + BORDER_W;
   const imgY = titleY + TITLE_H;
   const imgW = titleW;
   const imgH = BLOCK_H - 2 * BORDER_W - TITLE_H;
-
   if (mapImage) {
     try { doc.addImage(mapImage, 'PNG', imgX, imgY, imgW, imgH); }
     catch { drawMapPlaceholder(doc, imgX, imgY, imgW, imgH, x); }
   } else {
     drawMapPlaceholder(doc, imgX, imgY, imgW, imgH, x);
   }
-
   doc.setFontSize(4);
   doc.setTextColor(160, 160, 160);
   doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', x + BLOCK_W - BORDER_W - 3, MARGIN + BLOCK_H - BORDER_W - 2, { align: 'right' });
@@ -569,12 +559,10 @@ function truncate(text: string, maxWidthPt: number, fontSize: number): string {
 function drawClientGroup(doc: jsPDF, group: ClientGroup, blockX: number, y: number): void {
   const innerX = blockX + BORDER_W + BLOCK_PAD;
   const contentW = BLOCK_W - 2 * BORDER_W - 2 * BLOCK_PAD;
-
   doc.setFillColor(224, 224, 224);
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.5);
   doc.rect(innerX, y, contentW, CLIENT_HEADER_H, 'FD');
-
   const hCols = [contentW * 0.18, contentW * 0.18, contentW * 0.10, contentW * 0.30, contentW * 0.24];
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(6.5);
@@ -586,7 +574,6 @@ function drawClientGroup(doc: jsPDF, group: ClientGroup, blockX: number, y: numb
   doc.text(truncate(group.houseNum, hCols[2] - 4, 6.5), cx, hTextY); cx += hCols[2];
   doc.text(truncate(group.streetName, hCols[3] - 4, 6.5), cx, hTextY); cx += hCols[3];
   doc.text(truncate(group.phone, hCols[4] - 4, 6.5), cx, hTextY);
-
   const histCols = [contentW * 0.12, contentW * 0.18, contentW * 0.12, contentW * 0.58];
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6);
@@ -652,17 +639,12 @@ export async function generateDmbPCL(
     const pct = 50 + Math.round(((ri + 1) / routeDataList.length) * 40);
     onProgress?.({ phase: 'Generating PDF', detail: `Route ${rd.routeCode} \u2014 rendering map (${ri + 1}/${routeDataList.length})`, percent: pct });
     await yieldUI();
-
     if (ri === 0) await new Promise(r => setTimeout(r, 1000));
-
     const mapImage = await renderRouteMapOffscreen(rd.segments, mapPixelW, mapPixelH);
-
     if (!isFirstPage) doc.addPage();
     isFirstPage = false;
-
     drawMapBlock(doc, areaName, rd.routeCode, mapImage);
     drawBlockBorder(doc, 'right');
-
     let side: 'left' | 'right' = 'right';
     let curY = contentTop();
     let ci = 0;
@@ -687,11 +669,9 @@ export async function generateDmbPCL(
 
   onProgress?.({ phase: 'Downloading', detail: 'Saving PDF\u2026', percent: 97 });
   await yieldUI();
-
   const today = new Date();
   const dateStr = [today.getFullYear(), String(today.getMonth() + 1).padStart(2, '0'), String(today.getDate()).padStart(2, '0')].join('-');
   doc.save(`DMB_PCL_${areaName.replace(/[^a-zA-Z0-9_-]/g, '_')}_${dateStr}.pdf`);
-
   onProgress?.({ phase: 'Done', detail: 'Complete', percent: 100 });
   return { success: true, totalClients, routeCount: routeDataList.length };
 }
@@ -728,6 +708,56 @@ const LEGAL_W = 1008;   // 14" in pt
 const LEGAL_H = 612;    // 8.5" in pt
 const MM_MARGIN = 12;
 
+// ─── OPTIMAL BEARING — rotate map to minimize wasted space ───────────────────
+//
+// Tries every angle 0–179° and picks the rotation that produces the tightest
+// bounding box around all route coordinates.  For Winona this makes the QEW
+// nearly horizontal; for Western Hill it makes Louth St vertical.  The result
+// is maximum zoom with zero dead space.
+
+function calculateOptimalBearing(coords: [number, number][]): number {
+  if (coords.length < 3) return 0;
+
+  // Centroid
+  const cx = coords.reduce((s, c) => s + c[0], 0) / coords.length;
+  const cy = coords.reduce((s, c) => s + c[1], 0) / coords.length;
+  const cosLat = Math.cos(cy * Math.PI / 180);
+
+  let bestBearing = 0;
+  let bestArea = Infinity;
+
+  for (let deg = 0; deg < 180; deg++) {
+    const rad = deg * Math.PI / 180;
+    const cosR = Math.cos(rad);
+    const sinR = Math.sin(rad);
+
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+
+    for (const [lng, lat] of coords) {
+      // Normalize lon to metres-ish so aspect ratio is fair
+      const dx = (lng - cx) * cosLat;
+      const dy = lat - cy;
+      // Rotate
+      const rx = dx * cosR - dy * sinR;
+      const ry = dx * sinR + dy * cosR;
+
+      if (rx < minX) minX = rx;
+      if (rx > maxX) maxX = rx;
+      if (ry < minY) minY = ry;
+      if (ry > maxY) maxY = ry;
+    }
+
+    const area = (maxX - minX) * (maxY - minY);
+    if (area < bestArea) {
+      bestArea = area;
+      bestBearing = deg;
+    }
+  }
+
+  return bestBearing;
+}
+
 // ─── GREYSCALE BASE — recolor water/parks at Mapbox style level ──────────────
 
 function applyGreyscaleBase(map: mapboxgl.Map): void {
@@ -758,23 +788,17 @@ function enhanceMastermapLabels(map: mapboxgl.Map): void {
     if (layer.type !== 'symbol') return;
     const id = layer.id.toLowerCase();
     if (!id.includes('label') || HIDE_LIST.includes(layer.id)) return;
-
-    // Skip backup layers — we'll handle them separately
     if (id.includes('-point-backup')) return;
 
     try {
-      // Larger text for print readability
       map.setLayoutProperty(layer.id, 'text-size', 16);
-      // Tighter padding = more labels can fit
       map.setLayoutProperty(layer.id, 'text-padding', 1);
-      // Denser label placement along roads
       if (layer.layout?.['symbol-placement'] === 'line' || layer.layout?.['symbol-placement'] === 'line-center') {
         map.setLayoutProperty(layer.id, 'symbol-spacing', 150);
       }
     } catch { /* skip */ }
   });
 
-  // Also boost backup (point) labels
   map.getStyle().layers?.forEach((layer: any) => {
     if (!layer.id.includes('-point-backup')) return;
     try {
@@ -803,14 +827,9 @@ function greyscalePreservingSaturated(dataUrl: string, width: number, height: nu
         const r = px[i];
         const g = px[i + 1];
         const b = px[i + 2];
-
-        // HSV saturation: (max - min) / max
         const mx = Math.max(r, g, b);
         const mn = Math.min(r, g, b);
         const sat = mx > 0 ? (mx - mn) / mx : 0;
-
-        // Low saturation → greyscale (map base, roads, labels)
-        // High saturation → keep in color (route lines, booking dots)
         if (sat < 0.18) {
           const grey = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
           px[i] = grey;
@@ -834,8 +853,8 @@ async function renderMastermapOffscreen(
   bookings: MastermapBookingInput[],
   pixelW: number,
   pixelH: number,
+  bearing: number,
 ): Promise<string | null> {
-  // Collect all coordinates for bounds
   const allCoords: [number, number][] = [];
   routes.forEach((r) => r.segments?.forEach((s) => allCoords.push(...s.coordinates)));
   bookings.forEach((b) => allCoords.push([b.lng, b.lat]));
@@ -859,7 +878,6 @@ async function renderMastermapOffscreen(
       done = true;
       try { m.remove(); } catch { /* ok */ }
       try { document.body.removeChild(container); } catch { /* ok */ }
-
       if (url && url.length > 1000) {
         resolve(await greyscalePreservingSaturated(url, pixelW, pixelH));
       } else {
@@ -891,16 +909,10 @@ async function renderMastermapOffscreen(
     }, 30000);
 
     map.on('load', () => {
-      // Apply DMB styling (hide buildings, POIs, format labels)
       applyMapStyling(map);
-
-      // Greyscale the base map (water, parks, land → grey)
       applyGreyscaleBase(map);
-
-      // Boost label density and size for print-quality mastermap
       enhanceMastermapLabels(map);
 
-      // Insert routes below labels
       const routeInsertBefore = (
         map.getLayer('road-label') ? 'road-label' :
         map.getStyle().layers?.find((l: any) => l.type === 'symbol')?.id
@@ -909,34 +921,24 @@ async function renderMastermapOffscreen(
       // Add each route as a separate colored line
       routes.forEach((route, idx) => {
         if (!route.segments?.length) return;
-
-        const srcId = `mm-route-${idx}`;
-        map.addSource(srcId, {
+        map.addSource(`mm-route-${idx}`, {
           type: 'geojson',
           data: {
             type: 'FeatureCollection',
             features: route.segments.map((s) => ({
-              type: 'Feature' as const,
-              properties: {},
+              type: 'Feature' as const, properties: {},
               geometry: { type: 'LineString' as const, coordinates: s.coordinates },
             })),
           },
         });
-
         map.addLayer({
-          id: `mm-line-${idx}`,
-          type: 'line',
-          source: srcId,
-          paint: {
-            'line-color': route.route_color,
-            'line-width': 7,
-            'line-opacity': 0.85,
-          },
+          id: `mm-line-${idx}`, type: 'line', source: `mm-route-${idx}`,
+          paint: { 'line-color': route.route_color, 'line-width': 7, 'line-opacity': 0.85 },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
         }, routeInsertBefore);
       });
 
-      // Add route number labels at centroids
+      // Route number labels at centroids
       const labelFeatures: GeoJSON.Feature[] = [];
       routes.forEach((route) => {
         const coords: [number, number][] = [];
@@ -950,16 +952,10 @@ async function renderMastermapOffscreen(
           geometry: { type: 'Point', coordinates: [cLng, cLat] },
         });
       });
-
       if (labelFeatures.length) {
-        map.addSource('mm-labels', {
-          type: 'geojson',
-          data: { type: 'FeatureCollection', features: labelFeatures },
-        });
+        map.addSource('mm-labels', { type: 'geojson', data: { type: 'FeatureCollection', features: labelFeatures } });
         map.addLayer({
-          id: 'mm-route-nums',
-          type: 'symbol',
-          source: 'mm-labels',
+          id: 'mm-route-nums', type: 'symbol', source: 'mm-labels',
           layout: {
             'text-field': ['get', 'num'],
             'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
@@ -975,7 +971,7 @@ async function renderMastermapOffscreen(
         });
       }
 
-      // Add booking dots (route-colored with black border)
+      // Booking dots
       if (bookings.length) {
         map.addSource('mm-bookings', {
           type: 'geojson',
@@ -989,9 +985,7 @@ async function renderMastermapOffscreen(
           },
         });
         map.addLayer({
-          id: 'mm-booking-dots',
-          type: 'circle',
-          source: 'mm-bookings',
+          id: 'mm-booking-dots', type: 'circle', source: 'mm-bookings',
           paint: {
             'circle-color': ['get', 'routeColor'],
             'circle-radius': 6,
@@ -1002,14 +996,13 @@ async function renderMastermapOffscreen(
         });
       }
 
-      // Fit bounds — bearing 0 keeps grid streets horizontal/vertical
+      // Fit bounds with optimal bearing — rotates map to minimize dead space
       const bounds = allCoords.reduce(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
-      map.fitBounds(bounds, { padding: 50, bearing: 0, duration: 0 });
+      map.fitBounds(bounds, { padding: 50, bearing, duration: 0 });
 
-      // Capture after tiles load
       map.once('idle', () => {
         setTimeout(() => {
           map.triggerRepaint();
@@ -1045,27 +1038,43 @@ export async function generateMastermap(
   onProgress?.({ phase: 'Analyzing', detail: 'Calculating layout\u2026', percent: 5 });
   await yieldUI();
 
-  // ── Determine bounding box aspect ratio ────────────────────────────────────
+  // ── Collect all route coordinates ──────────────────────────────────────────
   const allCoords: [number, number][] = [];
   routes.forEach((r) => r.segments?.forEach((s) => allCoords.push(...s.coordinates)));
 
-  let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
-  allCoords.forEach(([lng, lat]) => {
-    if (lng < minLng) minLng = lng;
-    if (lng > maxLng) maxLng = lng;
-    if (lat < minLat) minLat = lat;
-    if (lat > maxLat) maxLat = lat;
-  });
+  // ── Calculate optimal bearing — rotates map to minimize wasted space ────────
+  // For Winona this makes the QEW nearly horizontal (~12° rotation).
+  // For a perfectly N-S area it would be 0°.
+  const bearing = calculateOptimalBearing(allCoords);
 
-  // Convert to approximate equal-distance: 1° lat ≈ 111km, 1° lng ≈ 111km × cos(lat)
-  const midLat = (minLat + maxLat) / 2;
-  const widthKm = (maxLng - minLng) * 111 * Math.cos(midLat * Math.PI / 180);
-  const heightKm = (maxLat - minLat) * 111;
-  const isLandscape = widthKm >= heightKm;
+  // ── Determine rotated bounding box aspect ratio ────────────────────────────
+  // After rotation, recalculate which dimension is wider to pick sidebar layout
+  const cx = allCoords.reduce((s, c) => s + c[0], 0) / allCoords.length;
+  const cy = allCoords.reduce((s, c) => s + c[1], 0) / allCoords.length;
+  const cosLat = Math.cos(cy * Math.PI / 180);
+  const rad = bearing * Math.PI / 180;
+  const cosR = Math.cos(rad);
+  const sinR = Math.sin(rad);
+
+  let rMinX = Infinity, rMaxX = -Infinity, rMinY = Infinity, rMaxY = -Infinity;
+  for (const [lng, lat] of allCoords) {
+    const dx = (lng - cx) * cosLat;
+    const dy = lat - cy;
+    const rx = dx * cosR - dy * sinR;
+    const ry = dx * sinR + dy * cosR;
+    if (rx < rMinX) rMinX = rx;
+    if (rx > rMaxX) rMaxX = rx;
+    if (ry < rMinY) rMinY = ry;
+    if (ry > rMaxY) rMaxY = ry;
+  }
+
+  const rotatedWidth = rMaxX - rMinX;
+  const rotatedHeight = rMaxY - rMinY;
+  const isLandscape = rotatedWidth >= rotatedHeight;
 
   // ── Layout dimensions ──────────────────────────────────────────────────────
-  const SIDEBAR_W = 80;   // sidebar width when on left (<10% of 1008)
-  const SIDEBAR_H = 45;   // sidebar height when on top
+  const SIDEBAR_W = 80;
+  const SIDEBAR_H = 45;
 
   let mapAreaW: number, mapAreaH: number, mapX: number, mapY: number;
   let sidebarLayout: 'left' | 'top';
@@ -1084,17 +1093,18 @@ export async function generateMastermap(
     mapAreaH = LEGAL_H - 2 * MM_MARGIN - SIDEBAR_H;
   }
 
-  // High-res off-screen render — 2800px forces Mapbox to zoom ~15-16
-  // which shows ALL minor street names at print quality
-  const pixelW = isLandscape ? 2800 : 2400;
+  // High-res off-screen render — 5600px forces Mapbox to zoom 17+
+  // where EVERY cul-de-sac and residential street gets a label.
+  // The large image downscales cleanly when placed in the PDF.
+  const pixelW = isLandscape ? 5600 : 4800;
   const pixelH = Math.round(pixelW * (mapAreaH / mapAreaW));
 
   // ── Render off-screen map ──────────────────────────────────────────────────
-  onProgress?.({ phase: 'Rendering map', detail: 'This may take 15\u201330 seconds\u2026', percent: 10 });
+  onProgress?.({ phase: 'Rendering map', detail: 'High-res capture \u2014 may take 20\u201340 seconds\u2026', percent: 10 });
   await yieldUI();
   await new Promise((r) => setTimeout(r, 1000)); // GPU settle
 
-  const mapImage = await renderMastermapOffscreen(routes, geocodedBookings, pixelW, pixelH);
+  const mapImage = await renderMastermapOffscreen(routes, geocodedBookings, pixelW, pixelH, bearing);
 
   // ── Build PDF ──────────────────────────────────────────────────────────────
   onProgress?.({ phase: 'Building PDF', detail: 'Drawing layout\u2026', percent: 85 });
@@ -1102,16 +1112,13 @@ export async function generateMastermap(
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'legal' });
 
-  // Draw the map image
   if (mapImage) {
     try { doc.addImage(mapImage, 'PNG', mapX, mapY, mapAreaW, mapAreaH); }
     catch { /* map unavailable */ }
   }
 
-  // Sort routes for sidebar
   const sortedRoutes = [...routes].sort((a, b) => a.route_number - b.route_number);
 
-  // Helper: parse hex color to RGB
   function hexToRgb(hex: string): { r: number; g: number; b: number } {
     const h = hex.replace('#', '');
     return {
@@ -1122,120 +1129,78 @@ export async function generateMastermap(
   }
 
   if (sidebarLayout === 'left') {
-    // ── Sidebar on LEFT — one route per row, stacked vertically ──────────────
     const sx = MM_MARGIN;
     let sy = MM_MARGIN;
-
-    // Area title
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
     doc.setTextColor(0, 0, 0);
     doc.text(areaName, sx, sy + 8);
     sy += 14;
-
-    // Divider
     doc.setDrawColor(180, 180, 180);
     doc.setLineWidth(0.5);
     doc.line(sx, sy, sx + SIDEBAR_W - 4, sy);
     sy += 6;
-
-    // Route rows
     doc.setFontSize(6.5);
     for (const route of sortedRoutes) {
       const count = bookingsData.get(route.route_code)?.length ?? 0;
-
-      // Color dot
       const rgb = hexToRgb(route.route_color);
       doc.setFillColor(rgb.r, rgb.g, rgb.b);
       doc.circle(sx + 4, sy + 2, 2.5, 'F');
-
-      // Route code
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(30, 30, 30);
       doc.text(route.route_code, sx + 10, sy + 4);
-
-      // Booking count
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(100, 100, 100);
-      const codeWidth = route.route_code.length * 3.8;
-      doc.text(`(${count})`, sx + 10 + codeWidth + 2, sy + 4);
-
+      doc.text(`(${count})`, sx + 10 + route.route_code.length * 3.8 + 2, sy + 4);
       sy += 10;
-      if (sy > LEGAL_H - MM_MARGIN - 10) break; // safety overflow
+      if (sy > LEGAL_H - MM_MARGIN - 10) break;
     }
-
-    // Attribution
     doc.setFontSize(3.5);
     doc.setTextColor(160, 160, 160);
     doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', sx, LEGAL_H - MM_MARGIN);
-
   } else {
-    // ── Sidebar on TOP — routes flow left-to-right ───────────────────────────
     const sy = MM_MARGIN;
     let sx = MM_MARGIN;
-
-    // Area title
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
     doc.setTextColor(0, 0, 0);
     doc.text(areaName, sx, sy + 9);
     sx += areaName.length * 5.5 + 10;
-
-    // Route entries flowing left to right
     doc.setFontSize(6.5);
     let rowY = sy;
     for (const route of sortedRoutes) {
       const count = bookingsData.get(route.route_code)?.length ?? 0;
       const label = `${route.route_code}(${count})`;
       const entryW = label.length * 3.8 + 14;
-
-      // Wrap to second line if needed
       if (sx + entryW > LEGAL_W - MM_MARGIN) {
         sx = MM_MARGIN;
         rowY += 14;
-        if (rowY > MM_MARGIN + SIDEBAR_H - 8) break; // out of space
+        if (rowY > MM_MARGIN + SIDEBAR_H - 8) break;
       }
-
-      // Color dot
       const rgb = hexToRgb(route.route_color);
       doc.setFillColor(rgb.r, rgb.g, rgb.b);
       doc.circle(sx + 3, rowY + 7, 2.5, 'F');
-
-      // Route code + count
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(30, 30, 30);
       doc.text(route.route_code, sx + 8, rowY + 9);
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(100, 100, 100);
-      const codeW = route.route_code.length * 3.8;
-      doc.text(`(${count})`, sx + 8 + codeW + 1, rowY + 9);
-
+      doc.text(`(${count})`, sx + 8 + route.route_code.length * 3.8 + 1, rowY + 9);
       sx += entryW;
     }
-
-    // Divider below sidebar
     doc.setDrawColor(180, 180, 180);
     doc.setLineWidth(0.5);
     doc.line(MM_MARGIN, mapY - 3, LEGAL_W - MM_MARGIN, mapY - 3);
-
-    // Attribution
     doc.setFontSize(3.5);
     doc.setTextColor(160, 160, 160);
     doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', LEGAL_W - MM_MARGIN - 80, LEGAL_H - MM_MARGIN + 2);
   }
 
-  // ── Save PDF ───────────────────────────────────────────────────────────────
   onProgress?.({ phase: 'Downloading', detail: 'Saving PDF\u2026', percent: 97 });
   await yieldUI();
-
   const today = new Date();
-  const dateStr = [
-    today.getFullYear(),
-    String(today.getMonth() + 1).padStart(2, '0'),
-    String(today.getDate()).padStart(2, '0'),
-  ].join('-');
+  const dateStr = [today.getFullYear(), String(today.getMonth() + 1).padStart(2, '0'), String(today.getDate()).padStart(2, '0')].join('-');
   doc.save(`Mastermap_${areaName.replace(/[^a-zA-Z0-9_-]/g, '_')}_${dateStr}.pdf`);
-
   onProgress?.({ phase: 'Done', detail: 'Complete', percent: 100 });
   return { success: true, routeCount: routes.length, bookingCount: geocodedBookings.length };
 }
