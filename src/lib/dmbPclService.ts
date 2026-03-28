@@ -631,8 +631,6 @@ export async function generateDmbPCL(
   onProgress?.({ phase: 'Processing', detail: 'Grouping clients by address\u2026', percent: 45 });
   await yieldUI();
 
-  // Build route data for ALL routes — even those with no callbook matches
-  // get a map page (the map alone is valuable for contractors)
   const sortedRoutes = [...routes].sort((a, b) => a.route_number - b.route_number);
   const routeDataList: RouteData[] = [];
   let totalClients = 0;
@@ -655,8 +653,6 @@ export async function generateDmbPCL(
     onProgress?.({ phase: 'Generating PDF', detail: `Route ${rd.routeCode} \u2014 rendering map (${ri + 1}/${routeDataList.length})`, percent: pct });
     await yieldUI();
 
-    // Let the main map's GPU context settle before the first off-screen render.
-    // Subsequent routes are fine because the prior off-screen context was destroyed.
     if (ri === 0) await new Promise(r => setTimeout(r, 1000));
 
     const mapImage = await renderRouteMapOffscreen(rd.segments, mapPixelW, mapPixelH);
@@ -749,6 +745,41 @@ function applyGreyscaleBase(map: mapboxgl.Map): void {
       } else if (layer.type === 'background') {
         map.setPaintProperty(layer.id, 'background-color', '#f5f5f5');
       }
+    } catch { /* skip */ }
+  });
+}
+
+// ─── ENHANCE LABELS FOR MASTERMAP — denser, larger, more visible ─────────────
+
+function enhanceMastermapLabels(map: mapboxgl.Map): void {
+  const HIDE_LIST = ['poi-label', 'housenum-label', 'road-number-shield'];
+
+  map.getStyle().layers?.forEach((layer: any) => {
+    if (layer.type !== 'symbol') return;
+    const id = layer.id.toLowerCase();
+    if (!id.includes('label') || HIDE_LIST.includes(layer.id)) return;
+
+    // Skip backup layers — we'll handle them separately
+    if (id.includes('-point-backup')) return;
+
+    try {
+      // Larger text for print readability
+      map.setLayoutProperty(layer.id, 'text-size', 16);
+      // Tighter padding = more labels can fit
+      map.setLayoutProperty(layer.id, 'text-padding', 1);
+      // Denser label placement along roads
+      if (layer.layout?.['symbol-placement'] === 'line' || layer.layout?.['symbol-placement'] === 'line-center') {
+        map.setLayoutProperty(layer.id, 'symbol-spacing', 150);
+      }
+    } catch { /* skip */ }
+  });
+
+  // Also boost backup (point) labels
+  map.getStyle().layers?.forEach((layer: any) => {
+    if (!layer.id.includes('-point-backup')) return;
+    try {
+      map.setLayoutProperty(layer.id, 'text-size', 14);
+      map.setLayoutProperty(layer.id, 'text-padding', 1);
     } catch { /* skip */ }
   });
 }
@@ -866,6 +897,9 @@ async function renderMastermapOffscreen(
       // Greyscale the base map (water, parks, land → grey)
       applyGreyscaleBase(map);
 
+      // Boost label density and size for print-quality mastermap
+      enhanceMastermapLabels(map);
+
       // Insert routes below labels
       const routeInsertBefore = (
         map.getLayer('road-label') ? 'road-label' :
@@ -895,7 +929,7 @@ async function renderMastermapOffscreen(
           source: srcId,
           paint: {
             'line-color': route.route_color,
-            'line-width': 5,
+            'line-width': 7,
             'line-opacity': 0.85,
           },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
@@ -929,7 +963,7 @@ async function renderMastermapOffscreen(
           layout: {
             'text-field': ['get', 'num'],
             'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-            'text-size': 22,
+            'text-size': 28,
             'text-allow-overlap': true,
             'text-ignore-placement': true,
           },
@@ -960,20 +994,20 @@ async function renderMastermapOffscreen(
           source: 'mm-bookings',
           paint: {
             'circle-color': ['get', 'routeColor'],
-            'circle-radius': 4,
+            'circle-radius': 6,
             'circle-stroke-color': '#000000',
-            'circle-stroke-width': 1.5,
+            'circle-stroke-width': 2,
             'circle-opacity': 0.95,
           },
         });
       }
 
-      // Fit bounds to all content
+      // Fit bounds — bearing 0 keeps grid streets horizontal/vertical
       const bounds = allCoords.reduce(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
-      map.fitBounds(bounds, { padding: 30, duration: 0 });
+      map.fitBounds(bounds, { padding: 50, bearing: 0, duration: 0 });
 
       // Capture after tiles load
       map.once('idle', () => {
@@ -1050,8 +1084,9 @@ export async function generateMastermap(
     mapAreaH = LEGAL_H - 2 * MM_MARGIN - SIDEBAR_H;
   }
 
-  // Off-screen pixel size (match available PDF area aspect ratio for clean scaling)
-  const pixelW = isLandscape ? 1400 : 1200;
+  // High-res off-screen render — 2800px forces Mapbox to zoom ~15-16
+  // which shows ALL minor street names at print quality
+  const pixelW = isLandscape ? 2800 : 2400;
   const pixelH = Math.round(pixelW * (mapAreaH / mapAreaW));
 
   // ── Render off-screen map ──────────────────────────────────────────────────
