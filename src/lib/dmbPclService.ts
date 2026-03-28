@@ -1001,7 +1001,7 @@ async function renderMastermapOffscreen(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
-      map.fitBounds(bounds, { padding: 50, bearing, duration: 0 });
+      map.fitBounds(bounds, { padding: 5, bearing, duration: 0 });
 
       map.once('idle', () => {
         setTimeout(() => {
@@ -1093,10 +1093,10 @@ export async function generateMastermap(
     mapAreaH = LEGAL_H - 2 * MM_MARGIN - SIDEBAR_H;
   }
 
-  // High-res off-screen render — 5600px forces Mapbox to zoom 17+
-  // where EVERY cul-de-sac and residential street gets a label.
+  // High-res off-screen render — 8000px forces Mapbox to zoom 18+
+  // where EVERY cul-de-sac and residential street gets a primary label.
   // The large image downscales cleanly when placed in the PDF.
-  const pixelW = isLandscape ? 5600 : 4800;
+  const pixelW = isLandscape ? 8000 : 6800;
   const pixelH = Math.round(pixelW * (mapAreaH / mapAreaW));
 
   // ── Render off-screen map ──────────────────────────────────────────────────
