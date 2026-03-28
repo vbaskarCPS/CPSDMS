@@ -791,7 +791,7 @@ function enhanceMastermapLabels(map: mapboxgl.Map): void {
     if (id.includes('-point-backup')) return;
 
     try {
-      map.setLayoutProperty(layer.id, 'text-size', 24);
+      map.setLayoutProperty(layer.id, 'text-size', 96);
       map.setLayoutProperty(layer.id, 'text-padding', 1);
       if (layer.layout?.['symbol-placement'] === 'line' || layer.layout?.['symbol-placement'] === 'line-center') {
         map.setLayoutProperty(layer.id, 'symbol-spacing', 150);
@@ -802,7 +802,7 @@ function enhanceMastermapLabels(map: mapboxgl.Map): void {
   map.getStyle().layers?.forEach((layer: any) => {
     if (!layer.id.includes('-point-backup')) return;
     try {
-      map.setLayoutProperty(layer.id, 'text-size', 20);
+      map.setLayoutProperty(layer.id, 'text-size', 80);
       map.setLayoutProperty(layer.id, 'text-padding', 1);
     } catch { /* skip */ }
   });
@@ -816,11 +816,11 @@ function enhanceMastermapLabels(map: mapboxgl.Map): void {
 
     try {
       if (id.includes('motorway') || id.includes('trunk')) {
-        map.setPaintProperty(layer.id, 'line-width', 42);
+        map.setPaintProperty(layer.id, 'line-width', 84);
       } else if (id.includes('primary') || id.includes('secondary')) {
-        map.setPaintProperty(layer.id, 'line-width', 30);
+        map.setPaintProperty(layer.id, 'line-width', 60);
       } else if (id.includes('street') || id.includes('tertiary') || id.includes('minor') || id.includes('road')) {
-        map.setPaintProperty(layer.id, 'line-width', 18);
+        map.setPaintProperty(layer.id, 'line-width', 36);
       }
     } catch { /* skip */ }
   });
@@ -951,7 +951,7 @@ async function renderMastermapOffscreen(
         });
         map.addLayer({
           id: `mm-line-${idx}`, type: 'line', source: `mm-route-${idx}`,
-          paint: { 'line-color': route.route_color, 'line-width': 12, 'line-opacity': 0.85 },
+          paint: { 'line-color': route.route_color, 'line-width': 24, 'line-opacity': 0.85 },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
         }, routeInsertBefore);
       });
@@ -977,14 +977,14 @@ async function renderMastermapOffscreen(
           layout: {
             'text-field': ['get', 'num'],
             'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-            'text-size': 45,
+            'text-size': 90,
             'text-allow-overlap': true,
             'text-ignore-placement': true,
           },
           paint: {
             'text-color': ['get', 'color'],
             'text-halo-color': 'rgba(255,255,255,0.9)',
-            'text-halo-width': 3,
+            'text-halo-width': 5,
           },
         });
       }
@@ -1006,9 +1006,9 @@ async function renderMastermapOffscreen(
           id: 'mm-booking-dots', type: 'circle', source: 'mm-bookings',
           paint: {
             'circle-color': ['get', 'routeColor'],
-            'circle-radius': 10,
+            'circle-radius': 16,
             'circle-stroke-color': '#000000',
-            'circle-stroke-width': 3,
+            'circle-stroke-width': 5,
             'circle-opacity': 0.95,
           },
         });
@@ -1064,8 +1064,8 @@ export async function generateMastermap(
   const allCoords: [number, number][] = [];
   routes.forEach((r) => r.segments?.forEach((s) => allCoords.push(...s.coordinates)));
 
-  // ── Bearing: 0 (north up) — keeps grid streets perfectly horizontal/vertical ─
-  const bearing = 0;
+  // ── Optimal bearing — rotates map so main axis (e.g. QEW) is horizontal ─────
+  const bearing = calculateOptimalBearing(allCoords);
 
   // ── Determine bounding box aspect ratio for sidebar layout ─────────────────
   let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
