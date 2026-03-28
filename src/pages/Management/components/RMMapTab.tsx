@@ -41,9 +41,13 @@ interface RMMapTabProps {
   workers: Worker[];
 }
 
-// ─── MODULE-LEVEL GEOCODE CACHE (survives tab switches) ──────────────────────
+// ─── MODULE-LEVEL CACHES (survive tab switches, cleared on page reload) ──────
 
+/** Primary cache: address string → coordinates */
 const geocodeCache = new Map<string, { lat: number; lng: number }>();
+
+/** Secondary cache: job/booking ID → coordinates (handles status transitions) */
+const jobIdCache = new Map<string, { lat: number; lng: number }>();
 
 function makeCacheKey(address: string): string {
   return address.trim().toLowerCase();
@@ -108,11 +112,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const loadedIdsRef = useRef<string[]>([]);
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   const pinClickHandlerRef = useRef<((e: any) => void) | null>(null);
-  const pinSourceCreatedRef = useRef(false);
 
   // --- Route data from route_maps table ---
   const [routeMapData, setRouteMapData] = useState<SavedRoute[]>([]);
   const [routesLoading, setRoutesLoading] = useState(true);
+  const prevRouteCodesKeyRef = useRef<string>('');
+  const routeDataLoadedRef = useRef(false);
+  const initialFitDoneRef = useRef(false);
 
   // --- Geocoding state ---
   const [geocodedPins, setGeocodedPins] = useState<GeocodedPin[]>([]);
@@ -265,13 +271,24 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, []);
 
   // ─── LOAD ROUTE GEOMETRY FROM route_maps ──────────────────────────────────
+  // FIX #3: Only re-fetch if actual route codes changed (not just array reference)
 
   useEffect(() => {
     if (myRouteCodes.length === 0) {
       setRouteMapData([]);
       setRoutesLoading(false);
+      routeDataLoadedRef.current = false;
+      prevRouteCodesKeyRef.current = '';
       return;
     }
+
+    // Compare sorted route codes to detect actual changes
+    const codesKey = [...myRouteCodes].sort().join(',');
+    if (codesKey === prevRouteCodesKeyRef.current && routeDataLoadedRef.current) {
+      // Route codes unchanged and data already loaded — skip fetch
+      return;
+    }
+    prevRouteCodesKeyRef.current = codesKey;
 
     let cancelled = false;
 
@@ -290,6 +307,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           return;
         }
         setRouteMapData((data || []) as SavedRoute[]);
+        routeDataLoadedRef.current = true;
       } catch (err) {
         if (!cancelled) console.error('Route map load error:', err);
       } finally {
@@ -407,13 +425,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     });
 
-    // Fit bounds to show all routes
-    if (allCoords.length > 0) {
-      const bounds = allCoords.reduce(
-        (b, c) => b.extend(c),
-        new mapboxgl.LngLatBounds(allCoords[0], allCoords[0])
-      );
-      map.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 800 });
+    // FIX #2: Delayed fitBounds so the map is ready, and only on first load
+    if (allCoords.length > 0 && !initialFitDoneRef.current) {
+      initialFitDoneRef.current = true;
+      setTimeout(() => {
+        if (!mapRef.current) return;
+        const bounds = allCoords.reduce(
+          (b, c) => b.extend(c),
+          new mapboxgl.LngLatBounds(allCoords[0], allCoords[0])
+        );
+        mapRef.current.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 800 });
+      }, 300);
     }
   }, [routeMapData, mapLoaded]);
 
@@ -479,8 +501,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       map.on('mouseleave', 'rm-pins-circles', () => {
         map.getCanvas().style.cursor = '';
       });
-
-      pinSourceCreatedRef.current = true;
     }
 
     // Click handler for popups
@@ -515,6 +535,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, []);
 
   // ─── GEOCODE AND RENDER PINS ──────────────────────────────────────────────
+  // FIX #1: Uses both address cache AND job ID cache for status transitions
 
   useEffect(() => {
     const map = mapRef.current;
@@ -527,9 +548,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const alreadyCached: GeocodedPin[] = [];
 
       pins.forEach(pin => {
-        const key = makeCacheKey(pin.address);
-        const cached = geocodeCache.get(key);
+        // Check address cache first, then job ID cache (handles status transitions
+        // where the address string might differ slightly between booking and transaction)
+        const addrCached = geocodeCache.get(makeCacheKey(pin.address));
+        const idCached = jobIdCache.get(pin.id);
+        const cached = addrCached || idCached;
+
         if (cached) {
+          // Backfill both caches for future lookups
+          if (!addrCached) geocodeCache.set(makeCacheKey(pin.address), cached);
+          if (!idCached) jobIdCache.set(pin.id, cached);
+
           alreadyCached.push({
             ...pin,
             lat: cached.lat,
@@ -541,17 +570,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
       });
 
-      // Render cached pins immediately
-      if (alreadyCached.length > 0) {
-        updateMapPins(map, alreadyCached);
-        setGeocodedPins(alreadyCached);
-      }
+      // Render cached pins immediately (includes status changes from realtime)
+      updateMapPins(map, alreadyCached);
+      setGeocodedPins(alreadyCached);
 
       if (toGeocode.length === 0) {
-        // Even if nothing to geocode, ensure map has the latest pin statuses
-        if (alreadyCached.length > 0) {
-          updateMapPins(map, alreadyCached);
-        }
         setGeocodingProgress(null);
         return;
       }
@@ -571,7 +594,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         );
 
         if (coord) {
+          // Store in BOTH caches
           geocodeCache.set(makeCacheKey(pin.address), coord);
+          jobIdCache.set(pin.id, coord);
+
           newlyGeocoded.push({
             ...pin,
             lat: coord.lat,
@@ -601,6 +627,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [pins, routeMapData, mapLoaded, routeColorMap, routeCentroid, updateMapPins]);
 
   // ─── LOCATION MODE ────────────────────────────────────────────────────────
+  // FIX #4: No forced zoom, getCurrentPosition for fast first fix, robust heading
 
   useEffect(() => {
     const map = mapRef.current;
@@ -608,6 +635,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
     if (locationMode) {
       if (!navigator.geolocation) {
+        console.error('Geolocation not supported by this browser');
         setLocationMode(false);
         return;
       }
@@ -625,34 +653,53 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         .setLngLat([0, 0])
         .addTo(map);
 
-      watchIdRef.current = navigator.geolocation.watchPosition(
-        (position) => {
-          const { latitude, longitude, heading } = position.coords;
-
-          navMarkerRef.current?.setLngLat([longitude, latitude]);
-
-          const h = (heading !== null && heading !== undefined && !isNaN(heading)) ? heading : lastHeadingRef.current;
-          if (heading !== null && heading !== undefined && !isNaN(heading)) {
-            lastHeadingRef.current = heading;
-          }
-
-          if (navArrowElRef.current) {
-            navArrowElRef.current.style.transform = `rotate(${h}deg)`;
-          }
-
-          map.easeTo({
+      // Get an immediate first position so the map responds right away
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          if (!mapRef.current || !navMarkerRef.current) return;
+          const { latitude, longitude } = pos.coords;
+          navMarkerRef.current.setLngLat([longitude, latitude]);
+          mapRef.current.flyTo({
             center: [longitude, latitude],
             pitch: 60,
-            bearing: h,
-            zoom: Math.max(map.getZoom(), 16),
+            zoom: 15,
+            duration: 1200,
+          });
+        },
+        () => { /* non-fatal — watchPosition will handle it */ },
+        { enableHighAccuracy: true, timeout: 8000 }
+      );
+
+      // Start continuous tracking
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        (position) => {
+          if (!mapRef.current || !navMarkerRef.current) return;
+          const { latitude, longitude, heading } = position.coords;
+
+          navMarkerRef.current.setLngLat([longitude, latitude]);
+
+          // Heading is null when stationary or unavailable
+          const hasHeading = heading !== null && heading !== undefined && !isNaN(heading);
+          if (hasHeading) {
+            lastHeadingRef.current = heading;
+            if (navArrowElRef.current) {
+              navArrowElRef.current.style.transform = `rotate(${heading}deg)`;
+            }
+          }
+
+          // Center and tilt — NO zoom change (user controls zoom manually)
+          mapRef.current.easeTo({
+            center: [longitude, latitude],
+            pitch: 60,
+            bearing: hasHeading ? heading : mapRef.current.getBearing(),
             duration: 1000,
           });
         },
         (err) => {
-          console.error('Geolocation error:', err);
+          console.error('Geolocation watch error:', err.code, err.message);
           setLocationMode(false);
         },
-        { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
+        { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 }
       );
     } else {
       // Stop watching
@@ -788,7 +835,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
     return () => {
       mountedRef.current = false;
-      pinSourceCreatedRef.current = false;
+      initialFitDoneRef.current = false;
+      routeDataLoadedRef.current = false;
+      prevRouteCodesKeyRef.current = '';
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
