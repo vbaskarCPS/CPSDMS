@@ -43,10 +43,7 @@ interface RMMapTabProps {
 
 // ─── MODULE-LEVEL CACHES (survive tab switches, cleared on page reload) ──────
 
-/** Primary cache: address string → coordinates */
 const geocodeCache = new Map<string, { lat: number; lng: number }>();
-
-/** Secondary cache: job/booking ID → coordinates (handles status transitions) */
 const jobIdCache = new Map<string, { lat: number; lng: number }>();
 
 function makeCacheKey(address: string): string {
@@ -88,8 +85,9 @@ async function geocodeAddress(
 function createNavigationArrowElement(): HTMLDivElement {
   const el = document.createElement('div');
   el.innerHTML = `
-    <svg width="32" height="32" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 2 L20 20 L12 15 L4 20 Z" fill="#4285F4" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
+    <svg width="28" height="28" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="12" r="11" fill="#4285F4" stroke="white" stroke-width="2" opacity="0.25"/>
+      <path d="M12 4 L18 18 L12 14 L6 18 Z" fill="#4285F4" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
     </svg>
   `;
   el.style.cssText = 'transition: transform 0.3s ease;';
@@ -113,25 +111,28 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   const pinClickHandlerRef = useRef<((e: any) => void) | null>(null);
 
-  // --- Route data from route_maps table ---
+  // --- Route data ---
   const [routeMapData, setRouteMapData] = useState<SavedRoute[]>([]);
   const [routesLoading, setRoutesLoading] = useState(true);
   const prevRouteCodesKeyRef = useRef<string>('');
   const routeDataLoadedRef = useRef(false);
   const initialFitDoneRef = useRef(false);
 
-  // --- Geocoding state ---
+  // --- Pin tracking ---
+  // knownPinsRef remembers ALL geocoded pins. Pins never disappear from it —
+  // when a pending booking vanishes (completed), it gets upgraded to 'completed'
+  // status so the dot stays on the map with a green border.
+  const knownPinsRef = useRef<Map<string, GeocodedPin>>(new Map());
   const [geocodedPins, setGeocodedPins] = useState<GeocodedPin[]>([]);
   const [geocodingProgress, setGeocodingProgress] = useState<{ current: number; total: number } | null>(null);
   const geocodeBatchRef = useRef(0);
   const mountedRef = useRef(true);
 
-  // --- Location mode ---
+  // --- Location mode (arrow only — no camera changes) ---
   const [locationMode, setLocationMode] = useState(false);
   const watchIdRef = useRef<number | null>(null);
   const navMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const navArrowElRef = useRef<HTMLDivElement | null>(null);
-  const lastHeadingRef = useRef<number>(0);
 
   // ─── COMPUTED: My route codes ──────────────────────────────────────────────
 
@@ -173,12 +174,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       if (!isMyTeam) return;
 
       (session.financialStore || []).forEach((tx: any) => {
-        // Skip upsells and add-ons — only aeration production/sales
         if (tx.type === 'Upgrade' || tx.type === 'Add-On') return;
         if (!tx.address) return;
 
         completedJobIds.add(tx.jobId);
-
         const isNewSale = tx.jobId?.startsWith('NEW-');
 
         result.push({
@@ -231,7 +230,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return { lat: sumLat / count, lng: sumLng / count };
   }, [routeMapData]);
 
-  // ─── SUPPRESS DUPLICATE LABELS (identical to DMB) ─────────────────────────
+  // ─── SUPPRESS DUPLICATE LABELS ────────────────────────────────────────────
 
   const suppressDuplicateLabels = useCallback(() => {
     const map = mapRef.current;
@@ -270,8 +269,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
   }, []);
 
-  // ─── LOAD ROUTE GEOMETRY FROM route_maps ──────────────────────────────────
-  // FIX #3: Only re-fetch if actual route codes changed (not just array reference)
+  // ─── LOAD ROUTE GEOMETRY ──────────────────────────────────────────────────
 
   useEffect(() => {
     if (myRouteCodes.length === 0) {
@@ -282,16 +280,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       return;
     }
 
-    // Compare sorted route codes to detect actual changes
     const codesKey = [...myRouteCodes].sort().join(',');
     if (codesKey === prevRouteCodesKeyRef.current && routeDataLoadedRef.current) {
-      // Route codes unchanged and data already loaded — skip fetch
       return;
     }
     prevRouteCodesKeyRef.current = codesKey;
 
     let cancelled = false;
-
     const load = async () => {
       setRoutesLoading(true);
       try {
@@ -302,10 +297,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           .eq('status', 'approved');
 
         if (cancelled) return;
-        if (error) {
-          console.error('Failed to load route maps:', error);
-          return;
-        }
+        if (error) { console.error('Failed to load route maps:', error); return; }
         setRouteMapData((data || []) as SavedRoute[]);
         routeDataLoadedRef.current = true;
       } catch (err) {
@@ -325,7 +317,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const map = mapRef.current;
     if (!map || !mapLoaded || routeMapData.length === 0) return;
 
-    // Clear existing route layers
+    // Clear old layers
     loadedIdsRef.current.forEach(id => {
       if (id.startsWith('num-')) {
         const routeId = id.replace('num-', '');
@@ -363,32 +355,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         allCoords.push(...coords);
       });
 
-      map.addSource(srcId, {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features },
-      });
-
+      map.addSource(srcId, { type: 'geojson', data: { type: 'FeatureCollection', features } });
       map.addLayer({
-        id: lineId,
-        type: 'line',
-        source: srcId,
-        minzoom: 0,
-        maxzoom: 24,
-        paint: {
-          'line-color': route.route_color,
-          'line-width': 7,
-          'line-opacity': 0.75,
-        },
+        id: lineId, type: 'line', source: srcId, minzoom: 0, maxzoom: 24,
+        paint: { 'line-color': route.route_color, 'line-width': 7, 'line-opacity': 0.75 },
         layout: { 'line-cap': 'round', 'line-join': 'round' },
       }, routeInsertBefore);
 
-      // Route number label at centroid
+      // Route number at centroid
       const allRouteCoords: [number, number][] = [];
       route.segments.forEach(seg => seg.coordinates.forEach(c => allRouteCoords.push(c)));
       if (allRouteCoords.length === 0) return;
 
-      const centroidLng = allRouteCoords.reduce((s, c) => s + c[0], 0) / allRouteCoords.length;
-      const centroidLat = allRouteCoords.reduce((s, c) => s + c[1], 0) / allRouteCoords.length;
+      const cLng = allRouteCoords.reduce((s, c) => s + c[0], 0) / allRouteCoords.length;
+      const cLat = allRouteCoords.reduce((s, c) => s + c[1], 0) / allRouteCoords.length;
 
       const numSrcId = `rm-num-src-${route.id}`;
       const numLabelId = `rm-num-${route.id}`;
@@ -396,36 +376,27 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
       map.addSource(numSrcId, {
         type: 'geojson',
-        data: {
-          type: 'FeatureCollection',
-          features: [{
-            type: 'Feature',
-            properties: { num: String(route.route_number), color: route.route_color },
-            geometry: { type: 'Point', coordinates: [centroidLng, centroidLat] },
-          }],
-        },
+        data: { type: 'FeatureCollection', features: [{
+          type: 'Feature',
+          properties: { num: String(route.route_number), color: route.route_color },
+          geometry: { type: 'Point', coordinates: [cLng, cLat] },
+        }] },
       });
-
       map.addLayer({
-        id: numLabelId,
-        type: 'symbol',
-        source: numSrcId,
+        id: numLabelId, type: 'symbol', source: numSrcId,
         layout: {
           'text-field': ['get', 'num'],
           'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-          'text-size': 28,
-          'text-allow-overlap': true,
-          'text-ignore-placement': true,
+          'text-size': 28, 'text-allow-overlap': true, 'text-ignore-placement': true,
         },
         paint: {
           'text-color': ['get', 'color'],
-          'text-halo-color': 'rgba(255,255,255,0.85)',
-          'text-halo-width': 2,
+          'text-halo-color': 'rgba(255,255,255,0.85)', 'text-halo-width': 2,
         },
       });
     });
 
-    // FIX #2: Delayed fitBounds so the map is ready, and only on first load
+    // Fit bounds only on first load
     if (allCoords.length > 0 && !initialFitDoneRef.current) {
       initialFitDoneRef.current = true;
       setTimeout(() => {
@@ -442,74 +413,51 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // ─── UPDATE MAP PIN LAYER ─────────────────────────────────────────────────
 
   const updateMapPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedPin[]) => {
-    // Remove old click handler
     if (pinClickHandlerRef.current) {
       map.off('click', 'rm-pins-circles', pinClickHandlerRef.current);
       pinClickHandlerRef.current = null;
     }
-    if (popupRef.current) {
-      popupRef.current.remove();
-      popupRef.current = null;
-    }
+    if (popupRef.current) { popupRef.current.remove(); popupRef.current = null; }
 
     const geojsonData: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
       features: geocoded.map(pin => ({
         type: 'Feature' as const,
         properties: {
-          name: pin.name,
-          address: pin.address,
-          routeCode: pin.routeCode,
-          routeColor: pin.routeColor,
-          status: pin.status,
+          name: pin.name, address: pin.address, routeCode: pin.routeCode,
+          routeColor: pin.routeColor, status: pin.status,
         },
-        geometry: {
-          type: 'Point' as const,
-          coordinates: [pin.lng, pin.lat],
-        },
+        geometry: { type: 'Point' as const, coordinates: [pin.lng, pin.lat] },
       })),
     };
 
-    // Update or create source + layer
     const source = map.getSource('rm-pins-src') as mapboxgl.GeoJSONSource;
     if (source) {
       source.setData(geojsonData);
     } else {
       map.addSource('rm-pins-src', { type: 'geojson', data: geojsonData });
-
       map.addLayer({
-        id: 'rm-pins-circles',
-        type: 'circle',
-        source: 'rm-pins-src',
+        id: 'rm-pins-circles', type: 'circle', source: 'rm-pins-src',
         paint: {
           'circle-color': ['get', 'routeColor'],
           'circle-radius': 5,
           'circle-stroke-color': [
             'match', ['get', 'status'],
-            'completed', '#22c55e',
-            'new_sale', '#eab308',
-            '#000000',
+            'completed', '#22c55e', 'new_sale', '#eab308', '#000000',
           ],
           'circle-stroke-width': 2.5,
           'circle-opacity': 0.95,
         },
       });
-
-      map.on('mouseenter', 'rm-pins-circles', () => {
-        map.getCanvas().style.cursor = 'pointer';
-      });
-      map.on('mouseleave', 'rm-pins-circles', () => {
-        map.getCanvas().style.cursor = '';
-      });
+      map.on('mouseenter', 'rm-pins-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'rm-pins-circles', () => { map.getCanvas().style.cursor = ''; });
     }
 
-    // Click handler for popups
     const clickHandler = (e: any) => {
       const feature = e.features?.[0];
       if (!feature) return;
       const { name, address, routeCode, routeColor, status } = feature.properties;
       const coords = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
-
       if (popupRef.current) popupRef.current.remove();
 
       const statusLabel = status === 'completed' ? '✅ Completed' : status === 'new_sale' ? '🆕 New Sale' : '⏳ Pending';
@@ -529,79 +477,80 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         `)
         .addTo(map);
     };
-
     pinClickHandlerRef.current = clickHandler;
     map.on('click', 'rm-pins-circles', clickHandler);
   }, []);
 
   // ─── GEOCODE AND RENDER PINS ──────────────────────────────────────────────
-  // FIX #1: Uses both address cache AND job ID cache for status transitions
+  // Uses knownPinsRef: pins NEVER disappear. When a pending pin leaves both
+  // data sources (booking completed), it gets upgraded to 'completed' status
+  // so the dot stays on the map with a green border.
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded || routeMapData.length === 0) return;
 
     const currentBatch = ++geocodeBatchRef.current;
+    const currentPinIds = new Set(pins.map(p => p.id));
 
-    const run = async () => {
-      const toGeocode: PinData[] = [];
-      const alreadyCached: GeocodedPin[] = [];
+    // --- Phase 1: Update knownPins with fresh data + upgrade disappeared pins ---
 
-      pins.forEach(pin => {
-        // Check address cache first, then job ID cache (handles status transitions
-        // where the address string might differ slightly between booking and transaction)
-        const addrCached = geocodeCache.get(makeCacheKey(pin.address));
-        const idCached = jobIdCache.get(pin.id);
-        const cached = addrCached || idCached;
+    const toGeocode: PinData[] = [];
 
-        if (cached) {
-          // Backfill both caches for future lookups
-          if (!addrCached) geocodeCache.set(makeCacheKey(pin.address), cached);
-          if (!idCached) jobIdCache.set(pin.id, cached);
+    // Update or add pins from the current data
+    pins.forEach(pin => {
+      const addrCached = geocodeCache.get(makeCacheKey(pin.address));
+      const idCached = jobIdCache.get(pin.id);
+      const cached = addrCached || idCached;
 
-          alreadyCached.push({
-            ...pin,
-            lat: cached.lat,
-            lng: cached.lng,
-            routeColor: routeColorMap.get(pin.routeCode) || '#888888',
-          });
-        } else {
-          toGeocode.push(pin);
-        }
-      });
+      if (cached) {
+        if (!addrCached) geocodeCache.set(makeCacheKey(pin.address), cached);
+        if (!idCached) jobIdCache.set(pin.id, cached);
 
-      // Render cached pins immediately (includes status changes from realtime)
-      updateMapPins(map, alreadyCached);
-      setGeocodedPins(alreadyCached);
-
-      if (toGeocode.length === 0) {
-        setGeocodingProgress(null);
-        return;
+        knownPinsRef.current.set(pin.id, {
+          ...pin,
+          lat: cached.lat, lng: cached.lng,
+          routeColor: routeColorMap.get(pin.routeCode) || '#888888',
+        });
+      } else {
+        toGeocode.push(pin);
       }
+    });
 
-      setGeocodingProgress({ current: 0, total: toGeocode.length });
+    // Upgrade disappeared pending pins → completed (handles timing gap)
+    knownPinsRef.current.forEach((existingPin, id) => {
+      if (!currentPinIds.has(id) && existingPin.status === 'pending') {
+        knownPinsRef.current.set(id, { ...existingPin, status: 'completed' });
+      }
+    });
 
-      const newlyGeocoded: GeocodedPin[] = [];
+    // Render immediately with what we have
+    const snapshot = Array.from(knownPinsRef.current.values());
+    updateMapPins(map, snapshot);
+    setGeocodedPins(snapshot);
 
+    if (toGeocode.length === 0) {
+      setGeocodingProgress(null);
+      return;
+    }
+
+    // --- Phase 2: Geocode uncached pins ---
+
+    setGeocodingProgress({ current: 0, total: toGeocode.length });
+
+    const geocodeLoop = async () => {
       for (let i = 0; i < toGeocode.length; i++) {
         if (geocodeBatchRef.current !== currentBatch || !mountedRef.current) return;
 
         const pin = toGeocode[i];
-        const coord = await geocodeAddress(
-          pin.address,
-          routeCentroid?.lat,
-          routeCentroid?.lng
-        );
+        const coord = await geocodeAddress(pin.address, routeCentroid?.lat, routeCentroid?.lng);
 
         if (coord) {
-          // Store in BOTH caches
           geocodeCache.set(makeCacheKey(pin.address), coord);
           jobIdCache.set(pin.id, coord);
-
-          newlyGeocoded.push({
+          knownPinsRef.current.set(pin.id, {
             ...pin,
-            lat: coord.lat,
-            lng: coord.lng,
+            lat: coord.lat, lng: coord.lng,
             routeColor: routeColorMap.get(pin.routeCode) || '#888888',
           });
         }
@@ -609,7 +558,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         if (geocodeBatchRef.current !== currentBatch || !mountedRef.current) return;
         setGeocodingProgress({ current: i + 1, total: toGeocode.length });
 
-        // Throttle requests
         if (i < toGeocode.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 80));
         }
@@ -617,17 +565,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
       if (geocodeBatchRef.current !== currentBatch || !mountedRef.current) return;
 
-      const allPins = [...alreadyCached, ...newlyGeocoded];
-      setGeocodedPins(allPins);
-      updateMapPins(map, allPins);
+      const finalPins = Array.from(knownPinsRef.current.values());
+      setGeocodedPins(finalPins);
+      updateMapPins(map, finalPins);
       setGeocodingProgress(null);
     };
 
-    run();
+    geocodeLoop();
   }, [pins, routeMapData, mapLoaded, routeColorMap, routeCentroid, updateMapPins]);
 
-  // ─── LOCATION MODE ────────────────────────────────────────────────────────
-  // FIX #4: No forced zoom, getCurrentPosition for fast first fix, robust heading
+  // ─── LOCATION MODE — Arrow only, no camera changes ───────────────────────
 
   useEffect(() => {
     const map = mapRef.current;
@@ -635,84 +582,50 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
     if (locationMode) {
       if (!navigator.geolocation) {
-        console.error('Geolocation not supported by this browser');
+        console.error('Geolocation not supported');
         setLocationMode(false);
         return;
       }
 
-      // Create navigation arrow
+      // Create arrow element
       if (!navArrowElRef.current) {
         navArrowElRef.current = createNavigationArrowElement();
       }
 
-      navMarkerRef.current = new mapboxgl.Marker({
-        element: navArrowElRef.current,
-        pitchAlignment: 'map',
-        rotationAlignment: 'map',
-      })
+      // Place marker (starts at 0,0, will move to real position immediately)
+      navMarkerRef.current = new mapboxgl.Marker({ element: navArrowElRef.current })
         .setLngLat([0, 0])
         .addTo(map);
 
-      // Get an immediate first position so the map responds right away
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          if (!mapRef.current || !navMarkerRef.current) return;
-          const { latitude, longitude } = pos.coords;
-          navMarkerRef.current.setLngLat([longitude, latitude]);
-          mapRef.current.flyTo({
-            center: [longitude, latitude],
-            pitch: 60,
-            zoom: 15,
-            duration: 1200,
-          });
-        },
-        () => { /* non-fatal — watchPosition will handle it */ },
-        { enableHighAccuracy: true, timeout: 8000 }
-      );
-
-      // Start continuous tracking
+      // Continuous tracking — just moves the arrow, doesn't touch the camera
       watchIdRef.current = navigator.geolocation.watchPosition(
         (position) => {
-          if (!mapRef.current || !navMarkerRef.current) return;
+          if (!navMarkerRef.current) return;
           const { latitude, longitude, heading } = position.coords;
 
+          // Move arrow to current position
           navMarkerRef.current.setLngLat([longitude, latitude]);
 
-          // Heading is null when stationary or unavailable
+          // Rotate arrow based on heading (if available)
           const hasHeading = heading !== null && heading !== undefined && !isNaN(heading);
-          if (hasHeading) {
-            lastHeadingRef.current = heading;
-            if (navArrowElRef.current) {
-              navArrowElRef.current.style.transform = `rotate(${heading}deg)`;
-            }
+          if (hasHeading && navArrowElRef.current) {
+            navArrowElRef.current.style.transform = `rotate(${heading}deg)`;
           }
-
-          // Center and tilt — NO zoom change (user controls zoom manually)
-          mapRef.current.easeTo({
-            center: [longitude, latitude],
-            pitch: 60,
-            bearing: hasHeading ? heading : mapRef.current.getBearing(),
-            duration: 1000,
-          });
         },
         (err) => {
-          console.error('Geolocation watch error:', err.code, err.message);
+          console.error('Geolocation error:', err.code, err.message);
           setLocationMode(false);
         },
         { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 }
       );
     } else {
-      // Stop watching
+      // Clean up
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
-
       navMarkerRef.current?.remove();
       navMarkerRef.current = null;
-
-      // Reset to top-down view
-      map.easeTo({ pitch: 0, bearing: 0, duration: 500 });
     }
 
     return () => {
@@ -744,7 +657,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     map.on('load', () => {
       map.resize();
 
-      // ── Hide unwanted labels & buildings (identical to DMB) ──
+      // Hide unwanted labels & buildings (identical to DMB)
       const exactHide = ['poi-label', 'housenum-label', 'road-number-shield'];
       exactHide.forEach(id => {
         if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
@@ -777,7 +690,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
       });
 
-      // ── Bold road labels ──
+      // Bold road labels
       const roadLabelLayers = map.getStyle().layers?.filter((layer: any) =>
         layer.type === 'symbol' &&
         layer.id.toLowerCase().includes('label') &&
@@ -805,23 +718,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             source: (layer as any).source ?? 'composite',
             'source-layer': (layer as any)['source-layer'] ?? 'road',
             filter: (layer as any).filter,
-            minzoom: 0,
-            maxzoom: 24,
+            minzoom: 0, maxzoom: 24,
             layout: {
               ...(layer.layout ?? {}),
-              'symbol-placement': 'point',
-              'text-optional': true,
-              'text-allow-overlap': false,
-              'text-ignore-placement': false,
-              'text-padding': 5,
-              'text-size': 11,
+              'symbol-placement': 'point', 'text-optional': true,
+              'text-allow-overlap': false, 'text-ignore-placement': false,
+              'text-padding': 5, 'text-size': 11,
               'text-font': ['DIN Pro Medium', 'Arial Unicode MS Regular'],
             },
             paint: {
               ...(layer.paint ?? {}),
-              'text-color': '#111111',
-              'text-halo-color': '#ffffff',
-              'text-halo-width': 2,
+              'text-color': '#111111', 'text-halo-color': '#ffffff', 'text-halo-width': 2,
             },
           });
         } catch { /* skip */ }
@@ -844,10 +751,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
       navMarkerRef.current?.remove();
       navMarkerRef.current = null;
-      if (popupRef.current) {
-        popupRef.current.remove();
-        popupRef.current = null;
-      }
+      if (popupRef.current) { popupRef.current.remove(); popupRef.current = null; }
       map.remove();
       mapRef.current = null;
       setMapLoaded(false);
@@ -862,7 +766,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   return (
     <div className="absolute inset-0 flex flex-col">
-      {/* Map container */}
       <div ref={mapContainerRef} className="flex-1" />
 
       {/* Geocoding progress */}
@@ -881,14 +784,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         </div>
       )}
 
-      {/* No route map data warning */}
+      {/* No route map data */}
       {!routesLoading && routeMapData.length === 0 && myRouteCodes.length > 0 && mapLoaded && !geocodingProgress && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-yellow-900/90 text-yellow-300 px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm">
           No map data found for your routes
         </div>
       )}
 
-      {/* Location mode toggle */}
+      {/* Location toggle */}
       <button
         onClick={() => setLocationMode(prev => !prev)}
         className={`absolute bottom-6 right-3 z-20 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all ${
@@ -896,7 +799,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             ? 'bg-blue-600 text-white ring-2 ring-blue-400 ring-offset-2 ring-offset-gray-900'
             : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
         }`}
-        title={locationMode ? 'Disable navigation mode' : 'Enable navigation mode'}
+        title={locationMode ? 'Hide my location' : 'Show my location'}
       >
         <Navigation size={22} className={locationMode ? 'fill-current' : ''} />
       </button>
@@ -925,7 +828,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         </div>
       )}
 
-      {/* Map loading overlay */}
+      {/* Loading overlay */}
       {!mapLoaded && (
         <div className="absolute inset-0 bg-gray-100 flex items-center justify-center z-10">
           <Loader size={24} className="animate-spin text-blue-500" />
