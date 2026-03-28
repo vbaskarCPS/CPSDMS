@@ -816,11 +816,11 @@ function enhanceMastermapLabels(map: mapboxgl.Map): void {
 
     try {
       if (id.includes('motorway') || id.includes('trunk')) {
-        map.setPaintProperty(layer.id, 'line-width', 14);
+        map.setPaintProperty(layer.id, 'line-width', 42);
       } else if (id.includes('primary') || id.includes('secondary')) {
-        map.setPaintProperty(layer.id, 'line-width', 10);
+        map.setPaintProperty(layer.id, 'line-width', 30);
       } else if (id.includes('street') || id.includes('tertiary') || id.includes('minor') || id.includes('road')) {
-        map.setPaintProperty(layer.id, 'line-width', 6);
+        map.setPaintProperty(layer.id, 'line-width', 18);
       }
     } catch { /* skip */ }
   });
@@ -1064,35 +1064,15 @@ export async function generateMastermap(
   const allCoords: [number, number][] = [];
   routes.forEach((r) => r.segments?.forEach((s) => allCoords.push(...s.coordinates)));
 
-  // ── Calculate optimal bearing — rotates map to minimize wasted space ────────
-  // For Winona this makes the QEW nearly horizontal (~12° rotation).
-  // For a perfectly N-S area it would be 0°.
-  const bearing = calculateOptimalBearing(allCoords);
+  // ── Bearing: 0 (north up) — keeps grid streets perfectly horizontal/vertical ─
+  const bearing = 0;
 
-  // ── Determine rotated bounding box aspect ratio ────────────────────────────
-  // After rotation, recalculate which dimension is wider to pick sidebar layout
-  const cx = allCoords.reduce((s, c) => s + c[0], 0) / allCoords.length;
-  const cy = allCoords.reduce((s, c) => s + c[1], 0) / allCoords.length;
-  const cosLat = Math.cos(cy * Math.PI / 180);
-  const rad = bearing * Math.PI / 180;
-  const cosR = Math.cos(rad);
-  const sinR = Math.sin(rad);
-
-  let rMinX = Infinity, rMaxX = -Infinity, rMinY = Infinity, rMaxY = -Infinity;
-  for (const [lng, lat] of allCoords) {
-    const dx = (lng - cx) * cosLat;
-    const dy = lat - cy;
-    const rx = dx * cosR - dy * sinR;
-    const ry = dx * sinR + dy * cosR;
-    if (rx < rMinX) rMinX = rx;
-    if (rx > rMaxX) rMaxX = rx;
-    if (ry < rMinY) rMinY = ry;
-    if (ry > rMaxY) rMaxY = ry;
-  }
-
-  const rotatedWidth = rMaxX - rMinX;
-  const rotatedHeight = rMaxY - rMinY;
-  const isLandscape = rotatedWidth >= rotatedHeight;
+  // ── Determine bounding box aspect ratio for sidebar layout ─────────────────
+  const midLat = (minLat + maxLat) / 2;
+  const cosLat = Math.cos(midLat * Math.PI / 180);
+  const widthKm = (maxLng - minLng) * 111 * cosLat;
+  const heightKm = (maxLat - minLat) * 111;
+  const isLandscape = widthKm >= heightKm;
 
   // ── Layout dimensions ──────────────────────────────────────────────────────
   const SIDEBAR_W = 80;
