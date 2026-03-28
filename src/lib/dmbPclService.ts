@@ -259,8 +259,8 @@ function groupClientsByAddress(rows: CallbookRow[]): ClientGroup[] {
       else phoneCounts.set(r.phone, { count: 1, year: r.year });
     }
     let bestPhone = ''; let bpCount = 0; let bpYear = 0;
-    for (const [, e] of phoneCounts) {
-      if (e.count > bpCount || (e.count === bpCount && e.year > bpYear)) { bpCount = e.count; bpYear = e.year; bestPhone = [...phoneCounts].find(([, v]) => v === e)![0]; }
+    for (const [ph, e] of phoneCounts) {
+      if (e.count > bpCount || (e.count === bpCount && e.year > bpYear)) { bpCount = e.count; bpYear = e.year; bestPhone = ph; }
     }
     groups.push({
       firstName: bestName.first, lastName: bestName.last,
@@ -278,8 +278,12 @@ function groupClientsByAddress(rows: CallbookRow[]): ClientGroup[] {
 }
 
 // ─── STEP 3 — OFF-SCREEN MAPBOX GL RENDERER ─────────────────────────────────
-// Creates a hidden Mapbox GL map with the EXACT same styling as
-// DigitalMasterBookings, draws the route in yellow, captures the canvas.
+// Creates a Mapbox GL map behind the page (z-index: -1) with the EXACT same
+// styling as DigitalMasterBookings, draws the route in yellow, captures canvas.
+//
+// IMPORTANT: The container must NOT use visibility:hidden or display:none —
+// WebGL requires the canvas to be in a visible rendering context. We use
+// z-index:-1 + pointer-events:none to keep it behind the UI but renderable.
 
 function applyMapStyling(map: mapboxgl.Map): void {
   const HIDE_LIST = ['poi-label', 'housenum-label', 'road-number-shield'];
@@ -370,13 +374,17 @@ async function renderRouteMapOffscreen(
   if (allCoords.length === 0) return null;
 
   return new Promise<string | null>((resolve) => {
+    // Container sits at top-left, behind everything — WebGL needs a visible
+    // rendering context, so we can NOT use visibility:hidden or display:none.
     const container = document.createElement('div');
+    container.style.position = 'fixed';
+    container.style.top = '0px';
+    container.style.left = '0px';
     container.style.width = `${pixelWidth}px`;
     container.style.height = `${pixelHeight}px`;
-    container.style.position = 'fixed';
-    container.style.left = '-9999px';
-    container.style.top = '-9999px';
-    container.style.visibility = 'hidden';
+    container.style.zIndex = '-1';
+    container.style.pointerEvents = 'none';
+    container.style.overflow = 'hidden';
     document.body.appendChild(container);
 
     let resolved = false;
@@ -400,6 +408,7 @@ async function renderRouteMapOffscreen(
       interactive: false,
     });
 
+    // 15-second safety timeout
     const timeout = setTimeout(() => {
       try { finish(map, map.getCanvas().toDataURL('image/png')); }
       catch { finish(map, null); }
@@ -408,6 +417,7 @@ async function renderRouteMapOffscreen(
     map.on('load', () => {
       applyMapStyling(map);
 
+      // Insert route line below road labels so street names stay on top
       const routeInsertBefore = (
         map.getLayer('road-label') ? 'road-label' :
         map.getStyle().layers?.find((l: any) => l.type === 'symbol')?.id
@@ -429,18 +439,20 @@ async function renderRouteMapOffscreen(
         layout: { 'line-cap': 'round', 'line-join': 'round' },
       }, routeInsertBefore);
 
+      // Fit bounds to route
       const bounds = allCoords.reduce(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
       map.fitBounds(bounds, { padding: 40, duration: 0 });
 
+      // Wait for tiles + labels to fully render, then capture
       map.once('idle', () => {
         setTimeout(() => {
           clearTimeout(timeout);
           try { finish(map, map.getCanvas().toDataURL('image/png')); }
           catch { finish(map, null); }
-        }, 600);
+        }, 1000);
       });
     });
 
@@ -595,8 +607,10 @@ export async function generateDmbPCL(
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
   let isFirstPage = true;
-  const mapPixelW = 756;
-  const mapPixelH = 1100;
+
+  // Off-screen map pixel dimensions — smaller = less GPU strain, still sharp in PDF
+  const mapPixelW = 500;
+  const mapPixelH = 730;
 
   for (let ri = 0; ri < routeDataList.length; ri++) {
     const rd = routeDataList[ri];
