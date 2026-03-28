@@ -998,7 +998,7 @@ function queryAndGroupRoads(map: mapboxgl.Map): RoadPath[] {
     byName.get(name)!.coords.push(...lineCoords);
   }
 
-  // Convert to pixel coords, merge segments, build RoadPath objects
+  // Convert to pixel coords, deduplicate, merge segments, build RoadPath objects
   const results: RoadPath[] = [];
   for (const [name, data] of byName) {
     const pixelSegments = data.coords.map((coords) =>
@@ -1007,7 +1007,21 @@ function queryAndGroupRoads(map: mapboxgl.Map): RoadPath[] {
         return { x: p.x, y: p.y };
       })
     );
-    const merged = mergePixelSegments(pixelSegments, 5);
+
+    // Deduplicate: skip segments whose start+end are within 3px of an existing one
+    const deduped: { x: number; y: number }[][] = [];
+    for (const seg of pixelSegments) {
+      if (seg.length < 2) continue;
+      const isDup = deduped.some((existing) => {
+        if (existing.length < 2) return false;
+        const sameDir = pDist(seg[0], existing[0]) < 3 && pDist(seg[seg.length - 1], existing[existing.length - 1]) < 3;
+        const reverseDir = pDist(seg[0], existing[existing.length - 1]) < 3 && pDist(seg[seg.length - 1], existing[0]) < 3;
+        return sameDir || reverseDir;
+      });
+      if (!isDup) deduped.push(seg);
+    }
+
+    const merged = mergePixelSegments(deduped, 20);
     for (const path of merged) {
       const pl = measurePath(path);
       if (pl < 10) continue;
@@ -1078,7 +1092,12 @@ function drawTextAlongPath(
     const cp = positions[i];
     ctx.save();
     ctx.translate(cp.x, cp.y);
-    ctx.rotate(cp.angle);
+
+    // Normalize angle to [-π/2, π/2] so characters never render upside down
+    let angle = cp.angle;
+    if (angle > Math.PI / 2) angle -= Math.PI;
+    if (angle < -Math.PI / 2) angle += Math.PI;
+    ctx.rotate(angle);
 
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = Math.max(4, fontSize * 0.18);
