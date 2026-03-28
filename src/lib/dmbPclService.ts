@@ -791,7 +791,7 @@ function enhanceMastermapLabels(map: mapboxgl.Map): void {
     if (id.includes('-point-backup')) return;
 
     try {
-      map.setLayoutProperty(layer.id, 'text-size', 16);
+      map.setLayoutProperty(layer.id, 'text-size', 24);
       map.setLayoutProperty(layer.id, 'text-padding', 1);
       if (layer.layout?.['symbol-placement'] === 'line' || layer.layout?.['symbol-placement'] === 'line-center') {
         map.setLayoutProperty(layer.id, 'symbol-spacing', 150);
@@ -802,8 +802,26 @@ function enhanceMastermapLabels(map: mapboxgl.Map): void {
   map.getStyle().layers?.forEach((layer: any) => {
     if (!layer.id.includes('-point-backup')) return;
     try {
-      map.setLayoutProperty(layer.id, 'text-size', 14);
+      map.setLayoutProperty(layer.id, 'text-size', 20);
       map.setLayoutProperty(layer.id, 'text-padding', 1);
+    } catch { /* skip */ }
+  });
+
+  // Thicken base map road lines so they stay visible when the 15000px
+  // render is downscaled into the PDF.  Skip our own route layers (mm-*).
+  map.getStyle().layers?.forEach((layer: any) => {
+    if (layer.type !== 'line') return;
+    const id = layer.id.toLowerCase();
+    if (id.startsWith('mm-') || id.startsWith('pcl-')) return;
+
+    try {
+      if (id.includes('motorway') || id.includes('trunk')) {
+        map.setPaintProperty(layer.id, 'line-width', 14);
+      } else if (id.includes('primary') || id.includes('secondary')) {
+        map.setPaintProperty(layer.id, 'line-width', 10);
+      } else if (id.includes('street') || id.includes('tertiary') || id.includes('minor') || id.includes('road')) {
+        map.setPaintProperty(layer.id, 'line-width', 6);
+      }
     } catch { /* skip */ }
   });
 }
@@ -898,7 +916,7 @@ async function renderMastermapOffscreen(
     });
 
     const timeout = setTimeout(() => {
-      console.warn('[DMB Mastermap] Map render timed out after 30s');
+      console.warn('[DMB Mastermap] Map render timed out after 60s');
       try {
         map.triggerRepaint();
         setTimeout(() => {
@@ -906,7 +924,7 @@ async function renderMastermapOffscreen(
           catch { finish(map, null); }
         }, 200);
       } catch { finish(map, null); }
-    }, 30000);
+    }, 60000);
 
     map.on('load', () => {
       applyMapStyling(map);
@@ -933,7 +951,7 @@ async function renderMastermapOffscreen(
         });
         map.addLayer({
           id: `mm-line-${idx}`, type: 'line', source: `mm-route-${idx}`,
-          paint: { 'line-color': route.route_color, 'line-width': 7, 'line-opacity': 0.85 },
+          paint: { 'line-color': route.route_color, 'line-width': 12, 'line-opacity': 0.85 },
           layout: { 'line-cap': 'round', 'line-join': 'round' },
         }, routeInsertBefore);
       });
@@ -959,14 +977,14 @@ async function renderMastermapOffscreen(
           layout: {
             'text-field': ['get', 'num'],
             'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-            'text-size': 28,
+            'text-size': 45,
             'text-allow-overlap': true,
             'text-ignore-placement': true,
           },
           paint: {
             'text-color': ['get', 'color'],
             'text-halo-color': 'rgba(255,255,255,0.9)',
-            'text-halo-width': 2,
+            'text-halo-width': 3,
           },
         });
       }
@@ -988,20 +1006,24 @@ async function renderMastermapOffscreen(
           id: 'mm-booking-dots', type: 'circle', source: 'mm-bookings',
           paint: {
             'circle-color': ['get', 'routeColor'],
-            'circle-radius': 6,
+            'circle-radius': 10,
             'circle-stroke-color': '#000000',
-            'circle-stroke-width': 2,
+            'circle-stroke-width': 3,
             'circle-opacity': 0.95,
           },
         });
       }
 
-      // Fit bounds with optimal bearing — rotates map to minimize dead space
+      // Set bearing first, then fitBounds WITHOUT passing bearing.
+      // When fitBounds sees the bearing is already set, it calculates a
+      // tighter center+zoom at that rotation — much less dead space than
+      // passing bearing as a fitBounds option.
       const bounds = allCoords.reduce(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
-      map.fitBounds(bounds, { padding: 5, bearing, duration: 0 });
+      map.jumpTo({ bearing, center: bounds.getCenter() });
+      map.fitBounds(bounds, { padding: 0, maxZoom: 20, duration: 0 });
 
       map.once('idle', () => {
         setTimeout(() => {
@@ -1093,14 +1115,14 @@ export async function generateMastermap(
     mapAreaH = LEGAL_H - 2 * MM_MARGIN - SIDEBAR_H;
   }
 
-  // High-res off-screen render — 8000px forces Mapbox to zoom 18+
-  // where EVERY cul-de-sac and residential street gets a primary label.
-  // The large image downscales cleanly when placed in the PDF.
-  const pixelW = isLandscape ? 8000 : 6800;
+  // Ultra high-res off-screen render — 15000px forces Mapbox to zoom 19+
+  // where every cul-de-sac and lane gets a primary inline label.
+  // The massive image downscales cleanly when placed in the PDF.
+  const pixelW = isLandscape ? 15000 : 12800;
   const pixelH = Math.round(pixelW * (mapAreaH / mapAreaW));
 
   // ── Render off-screen map ──────────────────────────────────────────────────
-  onProgress?.({ phase: 'Rendering map', detail: 'High-res capture \u2014 may take 20\u201340 seconds\u2026', percent: 10 });
+  onProgress?.({ phase: 'Rendering map', detail: 'Ultra high-res capture \u2014 may take 30\u201360 seconds\u2026', percent: 10 });
   await yieldUI();
   await new Promise((r) => setTimeout(r, 1000)); // GPU settle
 
