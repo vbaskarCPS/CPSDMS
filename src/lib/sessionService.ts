@@ -1431,6 +1431,180 @@ class SessionService {
     return this.getActiveLogsheetSession(workerId) as Promise<LogsheetSession>;
   }
 
+  /**
+   * Add net-new workers, managers, routes, and bookings to an already-active session.
+   * Used by the "Add Additional" button in SessionCommandCenter.
+   *
+   * Deduplication rules:
+   *   Workers  — skip if contractorId already exists in users table for this CC
+   *   Managers — skip if userId already exists in users table for this CC
+   *   Routes   — skip if routeCode already exists in routes table for this date/CC
+   *   Bookings — skip if Route Number + Full Address (case-insensitive) already exists
+   *
+   * Returns counts of what was actually inserted.
+   */
+  public async addAdditionalSessionData(
+    newData: DailySessionData
+  ): Promise<{ managersAdded: number; workersAdded: number; routesAdded: number; bookingsAdded: number }> {
+    const ccId = this.getCCId();
+    const date = await this.getDailySessionDate();
+    if (!date) throw new Error('No active session found');
+
+    const seasonType = await this.getSessionSeasonType();
+    const isTeamSeason = seasonHasTeams(seasonType);
+
+    // --- 1. Load existing keys from DB ---
+    const [existingUsersRes, existingRoutesRes, existingBookingsRes] = await Promise.all([
+      supabase.from('users').select('user_id').eq('command_center_id', ccId),
+      supabase.from('routes').select('route_code').eq('session_date', date).eq('command_center_id', ccId),
+      supabase.from('bookings').select('route_number, customer_details').eq('session_date', date).eq('command_center_id', ccId),
+    ]);
+
+    const existingUserIds = new Set((existingUsersRes.data || []).map(u => u.user_id));
+    const existingRouteCodes = new Set((existingRoutesRes.data || []).map(r => r.route_code));
+    const existingBookingKeys = new Set(
+      (existingBookingsRes.data || []).map(b => {
+        const addr = (b.customer_details?.['Full Address'] || '').toLowerCase().trim();
+        return `${b.route_number}::${addr}`;
+      })
+    );
+
+    // --- 2. Filter to net-new only ---
+    const newManagers = newData.managers.filter(m => !existingUserIds.has(m.userId));
+    const newWorkers  = newData.workers.filter(w => !existingUserIds.has(w.contractorId));
+    const newRoutes   = newData.routes.filter(r => !existingRouteCodes.has(r.routeCode));
+    const newBookings = newData.pendingBookings.filter(b => {
+      const addr = (b['Full Address'] || '').toLowerCase().trim();
+      const key  = `${b['Route Number']}::${addr}`;
+      return !existingBookingKeys.has(key);
+    });
+
+    // --- 3. Upsert net-new managers ---
+    if (newManagers.length > 0) {
+      const managerRows = newManagers.map(m => ({
+        user_id: m.userId,
+        name: m.name,
+        username: m.username,
+        password: m.password,
+        role: 'RouteManager',
+        metadata: { phone: m.phone },
+        command_center_id: ccId,
+      }));
+      const { error } = await supabase.from('users').upsert(managerRows, { onConflict: 'user_id' });
+      if (error) throw error;
+    }
+
+    // --- 4. Upsert net-new workers ---
+    if (newWorkers.length > 0) {
+      const workerRows = newWorkers.map(w => ({
+        user_id: w.contractorId,
+        name: `${w.firstName} ${w.lastName}`,
+        role: 'Worker',
+        password: w.firstName,
+        metadata: {
+          phone: w.cellPhone,
+          alumniRate: w.alumniRate,
+          silverRate: w.silverRate,
+          assignedManagerId: w.assignedManagerId,
+          upsellsEnabled: true,
+          teamId: w.teamId,
+        },
+        command_center_id: ccId,
+      }));
+      const { error } = await supabase.from('users').upsert(workerRows, { onConflict: 'user_id' });
+      if (error) throw error;
+
+      // --- 5. Create logsheet sessions for new workers ---
+      if (isTeamSeason && newData.teamCarts) {
+        // Only create sessions for carts that contain at least one new worker
+        const newWorkerIdSet = new Set(newWorkers.map(w => w.contractorId));
+        const newCarts = newData.teamCarts.filter(cart =>
+          cart.workerIds.some(id => newWorkerIdSet.has(id))
+        );
+        if (newCarts.length > 0) {
+          const logsheetRows = newCarts.map(cart => {
+            const primaryWorker = cart.workers[0];
+            const equalSplit = createEqualSplit(cart.workerIds);
+            return {
+              id: `sess_${cart.teamId}_${Date.now()}`,
+              worker_id: primaryWorker.contractorId,
+              team_worker_ids: cart.workerIds,
+              date,
+              status: 'OPEN',
+              stats: this.getEmptyStats(),
+              email_enabled: true,
+              command_center_id: ccId,
+              equiv_split: equalSplit,
+              upsell_split: equalSplit,
+            };
+          });
+          const { error } = await supabase.from('logsheet_sessions').insert(logsheetRows);
+          if (error) throw error;
+        }
+      } else {
+        const logsheetRows = newWorkers.map(w => ({
+          id: `sess_${w.contractorId}_${Date.now()}`,
+          worker_id: w.contractorId,
+          date,
+          status: 'OPEN',
+          stats: this.getEmptyStats(),
+          email_enabled: true,
+          command_center_id: ccId,
+        }));
+        const { error } = await supabase.from('logsheet_sessions').insert(logsheetRows);
+        if (error) throw error;
+      }
+    }
+
+    // --- 6. Insert net-new routes ---
+    if (newRoutes.length > 0) {
+      const routeRows = newRoutes.map(r => ({
+        route_code: r.routeCode,
+        manager_id: r.managerId,
+        assigned_worker_ids: r.assignedWorkerIds || [],
+        streets: r.streets,
+        session_date: date,
+        command_center_id: ccId,
+      }));
+      const { error } = await supabase.from('routes').insert(routeRows);
+      if (error) throw error;
+    }
+
+    // --- 7. Insert net-new bookings ---
+    if (newBookings.length > 0) {
+      const bookingRows = newBookings.map(b => ({
+        booking_id: b['Booking ID'],
+        route_number: b['Route Number'],
+        status: 'pending',
+        price: String(b.Price || ''),
+        customer_details: {
+          'First Name': b['First Name'],
+          'Last Name': b['Last Name'],
+          'Full Address': b['Full Address'],
+          'Home Phone': b['Home Phone'],
+          'Cell Phone': b['Cell Phone'],
+          'Email Address': b['Email Address'],
+          'FO/BO/FP': b['FO/BO/FP'],
+        },
+        log_notes: b['Log Sheet Notes'],
+        is_prepaid: b.Prepaid === 'x',
+        session_date: date,
+        data: b,
+        command_center_id: ccId,
+        services: b.services,
+      }));
+      const { error } = await supabase.from('bookings').insert(bookingRows);
+      if (error) throw error;
+    }
+
+    return {
+      managersAdded: newManagers.length,
+      workersAdded:  newWorkers.length,
+      routesAdded:   newRoutes.length,
+      bookingsAdded: newBookings.length,
+    };
+  }
+
   public async updateLogsheetSession(sessionId: string, updates: Partial<LogsheetSession>): Promise<void> {
     const ccId = this.getCCId();
     const safeUpdates: any = {};

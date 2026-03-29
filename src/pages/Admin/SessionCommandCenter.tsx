@@ -29,6 +29,7 @@ import {
   MapPin,
   Map as MapIcon,
   BookOpen,
+  PlusCircle,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
@@ -113,6 +114,16 @@ const SessionCommandCenter: React.FC = () => {
   
   // Email Settings
   const [emailEnabled, setEmailEnabled] = useState(true);
+
+  // --- ADD ADDITIONAL STATE ---
+  const [showAddAdditional, setShowAddAdditional] = useState(false);
+  const [addAdditionalLoading, setAddAdditionalLoading] = useState(false);
+  const [addAdditionalResult, setAddAdditionalResult] = useState<{
+    managersAdded: number;
+    workersAdded: number;
+    routesAdded: number;
+    bookingsAdded: number;
+  } | null>(null);
 
   // --- SEASON TYPE STATE (West Region Only) ---
   const [selectedSeasonType, setSelectedSeasonType] = useState<SeasonType>('aeration');
@@ -458,6 +469,41 @@ const SessionCommandCenter: React.FC = () => {
       } finally {
         setLoading(false);
       }
+    }
+  };
+
+  // --- ADD ADDITIONAL HANDLER ---
+  const handleAddAdditional = async () => {
+    if (!importMeta?.dateTab) return;
+
+    // Ensure Google is connected
+    if (!isGoogleConnected) {
+      setError('Please connect to Google first using the button below.');
+      return;
+    }
+
+    setAddAdditionalLoading(true);
+    setError(null);
+    setAddAdditionalResult(null);
+
+    try {
+      // Re-import the same tab to get the latest data
+      const freshData = await googleSheetsService.importSessionData(
+        importMeta.dateTab,
+        selectedSeasonType
+      );
+
+      // Add only the net-new entries
+      const result = await sessionService.addAdditionalSessionData(freshData);
+      setAddAdditionalResult(result);
+
+      // Reload the live session report to reflect new workers/bookings
+      await loadSession();
+    } catch (err) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : 'Failed to add additional data.');
+    } finally {
+      setAddAdditionalLoading(false);
     }
   };
 
@@ -902,7 +948,29 @@ const SessionCommandCenter: React.FC = () => {
                         </h3>
                         <div className="flex items-center gap-2">
                           {previewData && <span className="text-xs bg-yellow-900/30 text-yellow-300 px-2 py-1 rounded border border-yellow-700/50">PREVIEW MODE</span>}
-                          {currentSession && !previewData && <span className="text-xs bg-green-900/30 text-green-300 px-2 py-1 rounded border border-green-700/50">LIVE</span>}
+                          {currentSession && !previewData && (
+                            <>
+                              <span className="text-xs bg-green-900/30 text-green-300 px-2 py-1 rounded border border-green-700/50">LIVE</span>
+                              {/* ADD ADDITIONAL BUTTON — only for Sheets-based sessions */}
+                              {isFromSheets && (
+                                <button
+                                  onClick={() => {
+                                    setShowAddAdditional(v => !v);
+                                    setAddAdditionalResult(null);
+                                    setError(null);
+                                  }}
+                                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold border transition-colors ${
+                                    showAddAdditional
+                                      ? 'bg-blue-900/40 text-blue-300 border-blue-600'
+                                      : 'bg-gray-800 text-gray-300 hover:text-white border-gray-600 hover:border-blue-500'
+                                  }`}
+                                >
+                                  <PlusCircle size={13} />
+                                  Add Additional
+                                </button>
+                              )}
+                            </>
+                          )}
                         </div>
                     </div>
                     
@@ -941,6 +1009,112 @@ const SessionCommandCenter: React.FC = () => {
                                 </tbody>
                             </table>
                         </div>
+
+                        {/* ADD ADDITIONAL PANEL */}
+                        {currentSession && !previewData && showAddAdditional && (
+                          <div className="mt-6 p-5 bg-gray-900/60 rounded-xl border border-blue-800/50">
+                            <div className="flex items-start gap-3 mb-4">
+                              <PlusCircle size={18} className="text-blue-400 mt-0.5 flex-shrink-0" />
+                              <div>
+                                <h4 className="text-white font-bold text-sm">Add Additional Workers & Bookings</h4>
+                                <p className="text-gray-400 text-xs mt-0.5">
+                                  Re-reads <span className="text-blue-300 font-mono">{importMeta?.dateTab}</span> from Google Sheets and appends anything not already in the live session. Existing workers, routes, and bookings are untouched.
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Google connect (if not already connected) */}
+                            {!isGoogleConnected && (
+                              <button
+                                onClick={handleConnectGoogle}
+                                disabled={sheetsLoading}
+                                className="w-full mb-3 bg-white hover:bg-gray-100 text-gray-800 py-2.5 px-4 rounded-lg font-medium flex items-center justify-center gap-3 transition-colors disabled:opacity-50 text-sm"
+                              >
+                                {sheetsLoading ? (
+                                  <Loader className="animate-spin" size={16} />
+                                ) : (
+                                  <>
+                                    <svg width="16" height="16" viewBox="0 0 24 24">
+                                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                                    </svg>
+                                    Connect to Google first
+                                  </>
+                                )}
+                              </button>
+                            )}
+
+                            {isGoogleConnected && (
+                              <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-2.5 flex items-center gap-2 text-green-400 mb-3 text-xs">
+                                <CheckCircle size={14} />
+                                <span className="font-medium">Connected to Google</span>
+                              </div>
+                            )}
+
+                            {/* Result summary */}
+                            {addAdditionalResult && (
+                              <div className={`mb-3 p-3 rounded-lg border text-xs ${
+                                addAdditionalResult.workersAdded === 0 && addAdditionalResult.bookingsAdded === 0
+                                  ? 'bg-gray-800 border-gray-600 text-gray-400'
+                                  : 'bg-green-900/20 border-green-700/50 text-green-300'
+                              }`}>
+                                {addAdditionalResult.workersAdded === 0 &&
+                                 addAdditionalResult.routesAdded === 0 &&
+                                 addAdditionalResult.bookingsAdded === 0 ? (
+                                  <div className="flex items-center gap-2">
+                                    <CheckCircle size={13} className="text-gray-500" />
+                                    <span>Nothing new found — session is already up to date.</span>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div className="flex items-center gap-2 font-bold mb-1.5">
+                                      <CheckCircle size={13} />
+                                      <span>Added successfully</span>
+                                    </div>
+                                    {addAdditionalResult.managersAdded > 0 && (
+                                      <div>• {addAdditionalResult.managersAdded} new manager{addAdditionalResult.managersAdded !== 1 ? 's' : ''}</div>
+                                    )}
+                                    {addAdditionalResult.workersAdded > 0 && (
+                                      <div>• {addAdditionalResult.workersAdded} new worker{addAdditionalResult.workersAdded !== 1 ? 's' : ''}</div>
+                                    )}
+                                    {addAdditionalResult.routesAdded > 0 && (
+                                      <div>• {addAdditionalResult.routesAdded} new route{addAdditionalResult.routesAdded !== 1 ? 's' : ''}</div>
+                                    )}
+                                    {addAdditionalResult.bookingsAdded > 0 && (
+                                      <div>• {addAdditionalResult.bookingsAdded} new booking{addAdditionalResult.bookingsAdded !== 1 ? 's' : ''}</div>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            )}
+
+                            {error && (
+                              <div className="mb-3 text-red-400 text-xs bg-red-900/20 p-3 rounded border border-red-900/50">
+                                {error}
+                              </div>
+                            )}
+
+                            <button
+                              onClick={handleAddAdditional}
+                              disabled={addAdditionalLoading || !isGoogleConnected}
+                              className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 px-4 rounded-lg font-bold flex items-center justify-center gap-2 transition-colors text-sm"
+                            >
+                              {addAdditionalLoading ? (
+                                <>
+                                  <Loader className="animate-spin" size={16} />
+                                  Checking for new entries…
+                                </>
+                              ) : (
+                                <>
+                                  <PlusCircle size={16} />
+                                  Load Additional from {importMeta?.dateTab}
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        )}
 
                         {/* EMAIL TOGGLE + START SESSION */}
                         {previewData && !currentSession && (
@@ -1095,7 +1269,7 @@ const SessionCommandCenter: React.FC = () => {
                     </div>
 
                     {/* Error Display */}
-                    {error && (
+                    {error && !showAddAdditional && (
                       <div className="bg-red-900/20 border border-red-700/50 rounded-lg p-4 text-red-400 text-sm">
                         {error}
                       </div>
