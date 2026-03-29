@@ -685,7 +685,7 @@ function yieldUI(): Promise<void> { return new Promise((r) => setTimeout(r, 0));
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MASTERMAP — Full-area portrait letter PDF with all routes, bookings, sidebar
+// MASTERMAP — Full-area PDF with all routes, bookings, sidebar
 //
 // Custom road label system:  Mapbox renders roads + routes + dots with NO text.
 // We then draw street names ourselves, character-by-character along road curves.
@@ -694,6 +694,8 @@ function yieldUI(): Promise<void> { return new Promise((r) => setTimeout(r, 0));
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── MASTERMAP TYPES ─────────────────────────────────────────────────────────
+
+export type MastermapPageFormat = 'letter-portrait' | 'letter-landscape' | 'legal-portrait' | 'legal-landscape';
 
 export interface MastermapBookingInput {
   lat: number;
@@ -726,15 +728,32 @@ interface RoadPath {
 }
 
 // ─── MASTERMAP CONSTANTS ─────────────────────────────────────────────────────
-// FIX A: Letter portrait (8.5×11") instead of legal landscape (14×8.5")
 
-const MM_PAGE_W = 612;    // 8.5" in pt
-const MM_PAGE_H = 792;    // 11" in pt
 const MM_MARGIN = 12;
-const MM_SIDEBAR_H = 85;   // top sidebar height — compact, ~8 routes per row
 
 // FIX C: Condensed font ratio — squeeze text to 70% width for narrow look
 const CONDENSE = 0.7;
+
+// ─── DYNAMIC PAGE DIMENSIONS ─────────────────────────────────────────────────
+
+function getMastermapDimensions(format: MastermapPageFormat): {
+  pageW: number;
+  pageH: number;
+  sidebarH: number;
+  orientation: 'portrait' | 'landscape';
+  paper: 'letter' | 'legal';
+} {
+  switch (format) {
+    case 'letter-portrait':
+      return { pageW: 612, pageH: 792, sidebarH: 85, orientation: 'portrait', paper: 'letter' };
+    case 'letter-landscape':
+      return { pageW: 792, pageH: 612, sidebarH: 60, orientation: 'landscape', paper: 'letter' };
+    case 'legal-portrait':
+      return { pageW: 612, pageH: 1008, sidebarH: 85, orientation: 'portrait', paper: 'legal' };
+    case 'legal-landscape':
+      return { pageW: 1008, pageH: 612, sidebarH: 60, orientation: 'landscape', paper: 'legal' };
+  }
+}
 
 // ─── OPTIMAL BEARING — rotate map to minimize wasted space ───────────────────
 
@@ -793,7 +812,6 @@ function applyGreyscaleBase(map: mapboxgl.Map): void {
 }
 
 // ─── THICKEN ROADS for print legibility ──────────────────────────────────────
-// FIX D: Fatter road lines (28/20/12 → 48/34/22)
 
 function thickenMastermapRoads(map: mapboxgl.Map): void {
   map.getStyle().layers?.forEach((layer: any) => {
@@ -840,7 +858,12 @@ function detectHighwayBearing(map: mapboxgl.Map): number {
   });
   if (!hwLayerIds.length) return 0;
 
-  const features = map.queryRenderedFeatures(undefined, { layers: hwLayerIds });
+  // BUG FIX: Use explicit full-viewport bounding box instead of undefined
+  const canvas = map.getCanvas();
+  const features = map.queryRenderedFeatures(
+    [[0, 0], [canvas.width, canvas.height]] as [mapboxgl.PointLike, mapboxgl.PointLike],
+    { layers: hwLayerIds }
+  );
   if (!features.length) return 0;
 
   // Weighted average direction of highway segments (double-angle trick for lines)
@@ -1075,7 +1098,12 @@ function queryAndGroupRoads(map: mapboxgl.Map): RoadPath[] {
   });
   if (!roadLayerIds.length) return [];
 
-  const features = map.queryRenderedFeatures(undefined, { layers: roadLayerIds });
+  // BUG FIX: Use explicit full-viewport bounding box instead of undefined
+  const canvas = map.getCanvas();
+  const features = map.queryRenderedFeatures(
+    [[0, 0], [canvas.width, canvas.height]] as [mapboxgl.PointLike, mapboxgl.PointLike],
+    { layers: roadLayerIds }
+  );
 
   // Group by name
   const byName = new Map<string, { coords: [number, number][][]; roadClass: string }>();
@@ -1133,8 +1161,6 @@ function queryAndGroupRoads(map: mapboxgl.Map): RoadPath[] {
 }
 
 // ─── Font size by road class ─────────────────────────────────────────────────
-// FIX F: Slightly smaller text (80/60/46 → 68/52/40) — condensed font makes
-// them visually equivalent while taking less horizontal space
 
 function getFontSize(roadClass: string): number {
   if (roadClass === 'motorway' || roadClass === 'trunk') return 78;
@@ -1143,7 +1169,6 @@ function getFontSize(roadClass: string): number {
 }
 
 // ─── PASS 1: Draw text curving along road path, character by character ───────
-// FIX C: 0.7x horizontal squeeze applied to character widths and drawing
 
 function drawTextAlongPath(
   ctx: CanvasRenderingContext2D,
@@ -1157,18 +1182,14 @@ function drawTextAlongPath(
   ctx.textAlign = 'center';
 
   const chars = [...text];
-  // Measure at full width, then apply condensing for actual occupied width
   const charWidths = chars.map((c) => ctx.measureText(c).width * CONDENSE);
   const totalWidth = charWidths.reduce((a, b) => a + b, 0);
   const pathLen = measurePath(path);
 
-  // If text is wider than the road segment, bail out — Pass 2 offset will handle it
   if (totalWidth > pathLen * 1.2) return false;
 
-  // Center text along path
   const startDist = Math.max(0, (pathLen - totalWidth) / 2);
 
-  // Pre-calculate character positions
   const positions: { x: number; y: number; angle: number; w: number }[] = [];
   let dist = startDist;
   for (let i = 0; i < chars.length; i++) {
@@ -1177,7 +1198,6 @@ function drawTextAlongPath(
     dist += charWidths[i];
   }
 
-  // Collision check — test each character's bounding box
   const pad = 6;
   for (const cp of positions) {
     const hw = cp.w / 2 + pad;
@@ -1187,19 +1207,16 @@ function drawTextAlongPath(
     }
   }
 
-  // No collision — draw characters with halo + fill
   for (let i = 0; i < chars.length; i++) {
     const cp = positions[i];
     ctx.save();
     ctx.translate(cp.x, cp.y);
 
-    // Normalize angle to [-π/2, π/2] so characters never render upside down
     let angle = cp.angle;
     if (angle > Math.PI / 2) angle -= Math.PI;
     if (angle < -Math.PI / 2) angle += Math.PI;
     ctx.rotate(angle);
 
-    // FIX C: Condense horizontally
     ctx.scale(CONDENSE, 1.0);
 
     ctx.strokeStyle = '#ffffff';
@@ -1211,7 +1228,6 @@ function drawTextAlongPath(
     ctx.fillText(chars[i], 0, 0);
     ctx.restore();
 
-    // Mark occupied
     const hw = cp.w / 2 + pad;
     const hh = fontSize / 2 + pad;
     grid.occupy(cp.x - hw, cp.y - hh, cp.w + pad * 2, fontSize + pad * 2);
@@ -1221,7 +1237,6 @@ function drawTextAlongPath(
 }
 
 // ─── PASS 2: Offset label — shifted perpendicular to road ────────────────────
-// FIX C: 0.7x condensed font applied
 
 function drawOffsetLabel(
   ctx: CanvasRenderingContext2D,
@@ -1234,7 +1249,6 @@ function drawOffsetLabel(
   const pathLen = measurePath(path);
   const mid = getPointAtDistance(path, pathLen / 2);
 
-  // Ensure readable angle (not upside down)
   let angle = mid.angle;
   if (angle > Math.PI / 2) angle -= Math.PI;
   if (angle < -Math.PI / 2) angle += Math.PI;
@@ -1243,7 +1257,6 @@ function drawOffsetLabel(
   const tw = ctx.measureText(text).width * CONDENSE;
   const pad = 6;
 
-  // Try both sides (above and below the road)
   for (const sign of [1, -1]) {
     const perpAngle = mid.angle + (Math.PI / 2) * sign;
     const ox = mid.x + Math.cos(perpAngle) * offset;
@@ -1253,7 +1266,6 @@ function drawOffsetLabel(
       continue;
     }
 
-    // Draw
     ctx.save();
     ctx.translate(ox, oy);
     ctx.rotate(angle);
@@ -1277,7 +1289,6 @@ function drawOffsetLabel(
 }
 
 // ─── PASS 3: Legend numbered marker on map ───────────────────────────────────
-// FIX E: Bigger markers — radius 14→22, font 14→18
 
 function drawLegendMarker(
   ctx: CanvasRenderingContext2D,
@@ -1287,13 +1298,11 @@ function drawLegendMarker(
   grid: OccupancyGrid,
 ): boolean {
   const r = 22;
-  // Try the point and nearby offsets
   for (const [dx, dy] of [[0, 0], [0, -28], [0, 28], [-28, 0], [28, 0]]) {
     const px = x + dx;
     const py = y + dy;
     if (grid.isOccupied(px - r, py - r, r * 2, r * 2)) continue;
 
-    // White circle with black border
     ctx.beginPath();
     ctx.arc(px, py, r, 0, Math.PI * 2);
     ctx.fillStyle = '#ffffff';
@@ -1302,7 +1311,6 @@ function drawLegendMarker(
     ctx.lineWidth = 3;
     ctx.stroke();
 
-    // Number inside
     ctx.font = `bold 18px Arial, sans-serif`;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
@@ -1315,10 +1323,7 @@ function drawLegendMarker(
   return false;
 }
 
-// ─── FIX 3 HELPER: Draw straight horizontal label for highways ───────────────
-// Forces angle=0 so QEW / Highway 8 always reads perfectly horizontal,
-// matching the physical map aesthetic.
-// FIX C: Condensed font applied
+// ─── Draw straight horizontal label for highways ─────────────────────────────
 
 function drawStraightHorizontalLabel(
   ctx: CanvasRenderingContext2D,
@@ -1338,9 +1343,7 @@ function drawStraightHorizontalLabel(
 
   ctx.save();
   ctx.translate(x, y);
-  // FIX C: Condense horizontally
   ctx.scale(CONDENSE, 1.0);
-  // angle forced to 0 — perfectly horizontal
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'center';
 
@@ -1367,11 +1370,9 @@ function labelRoadsThreePass(
   const legendEntries: LegendEntry[] = [];
   let legendNum = 1;
 
-  // Track which names have been labeled (name → # of labels placed)
   const labeledNames = new Map<string, number>();
-  // Track label placement positions to prevent same-name stacking
   const labelPositions = new Map<string, { x: number; y: number }[]>();
-  const REPEAT_INTERVAL = 600; // label every 600px on long roads
+  const REPEAT_INTERVAL = 600;
   const MIN_SAME_NAME_DIST = 400;
 
   for (const road of roads) {
@@ -1379,7 +1380,6 @@ function labelRoadsThreePass(
     const currentCount = labeledNames.get(road.name) || 0;
     const isMajorHighway = road.roadClass === 'motorway' || road.roadClass === 'trunk';
 
-    // Allow repeats on long roads
     const maxLabels = Math.max(1, Math.floor(road.pathLength / REPEAT_INTERVAL));
     if (currentCount >= maxLabels) continue;
 
@@ -1394,16 +1394,13 @@ function labelRoadsThreePass(
       const subPath = ensureLeftToRight(getSubPath(road.pixelPath, segStart, segEnd));
       if (subPath.length < 2) continue;
 
-      // Check if a label for this name was already placed too close
       const midPt = getPointAtDistance(subPath, measurePath(subPath) / 2);
       const existingPositions = labelPositions.get(road.name) || [];
       const tooClose = existingPositions.some((pos) => pDist(pos, midPt) < MIN_SAME_NAME_DIST);
       if (tooClose) continue;
 
-      // Detect cul-de-sacs / loops: start ≈ end means circular path.
       const isLoop = subPath.length >= 4 && pDist(subPath[0], subPath[subPath.length - 1]) < 40;
 
-      // FIX 3: For motorway/trunk, force perfectly horizontal text at midpoint
       if (isMajorHighway) {
         if (drawStraightHorizontalLabel(ctx, road.name, midPt.x, midPt.y, fontSize, grid)) {
           labeledNames.set(road.name, (labeledNames.get(road.name) || 0) + 1);
@@ -1411,10 +1408,8 @@ function labelRoadsThreePass(
           labelPositions.get(road.name)!.push(midPt);
           continue;
         }
-        // If horizontal didn't fit, fall through to offset/legend
       }
 
-      // PASS 1 — Inline: text curves along road (skip for loops and highways handled above)
       if (!isLoop && !isMajorHighway && drawTextAlongPath(ctx, road.name, subPath, fontSize, grid)) {
         labeledNames.set(road.name, (labeledNames.get(road.name) || 0) + 1);
         if (!labelPositions.has(road.name)) labelPositions.set(road.name, []);
@@ -1422,7 +1417,6 @@ function labelRoadsThreePass(
         continue;
       }
 
-      // PASS 2 — Offset: shifted perpendicular, still aligned with road angle
       if (drawOffsetLabel(ctx, road.name, subPath, fontSize * 0.85, grid, fontSize * 1.2)) {
         labeledNames.set(road.name, (labeledNames.get(road.name) || 0) + 1);
         if (!labelPositions.has(road.name)) labelPositions.set(road.name, []);
@@ -1430,7 +1424,6 @@ function labelRoadsThreePass(
         continue;
       }
 
-      // PASS 3 — Legend: numbered circle on map, name in PDF legend table
       if (!labeledNames.has(road.name)) {
         const mid = getPointAtDistance(road.pixelPath, road.pathLength / 2);
         if (drawLegendMarker(ctx, legendNum, mid.x, mid.y, grid)) {
@@ -1456,7 +1449,6 @@ function drawLegendOnCanvas(
 ): void {
   if (entries.length === 0) return;
 
-  // Scale legend sizing to canvas resolution
   const fontSize = Math.round(canvasW * 0.008);
   const rowH = Math.round(fontSize * 1.6);
   const colW = Math.round(canvasW * 0.14);
@@ -1467,19 +1459,18 @@ function drawLegendOnCanvas(
   const boxH = rows * rowH + pad * 2;
   const margin = Math.round(canvasW * 0.01);
 
-  // Try candidate positions — corners and edges, pick first that fits
   const candidates = [
-    { x: canvasW - boxW - margin, y: margin },                     // top-right
-    { x: margin, y: margin },                                       // top-left
-    { x: canvasW - boxW - margin, y: canvasH - boxH - margin },    // bottom-right
-    { x: margin, y: canvasH - boxH - margin },                      // bottom-left
-    { x: canvasW - boxW - margin, y: (canvasH - boxH) / 2 },       // center-right
-    { x: margin, y: (canvasH - boxH) / 2 },                         // center-left
-    { x: (canvasW - boxW) / 2, y: canvasH - boxH - margin },       // bottom-center
-    { x: (canvasW - boxW) / 2, y: margin },                         // top-center
+    { x: canvasW - boxW - margin, y: margin },
+    { x: margin, y: margin },
+    { x: canvasW - boxW - margin, y: canvasH - boxH - margin },
+    { x: margin, y: canvasH - boxH - margin },
+    { x: canvasW - boxW - margin, y: (canvasH - boxH) / 2 },
+    { x: margin, y: (canvasH - boxH) / 2 },
+    { x: (canvasW - boxW) / 2, y: canvasH - boxH - margin },
+    { x: (canvasW - boxW) / 2, y: margin },
   ];
 
-  let bestPos = candidates[0]; // fallback to top-right
+  let bestPos = candidates[0];
   for (const pos of candidates) {
     if (!grid.isOccupied(pos.x, pos.y, boxW, boxH)) {
       bestPos = pos;
@@ -1487,14 +1478,12 @@ function drawLegendOnCanvas(
     }
   }
 
-  // White box with border
   ctx.fillStyle = '#ffffff';
   ctx.strokeStyle = '#666666';
   ctx.lineWidth = 2;
   ctx.fillRect(bestPos.x, bestPos.y, boxW, boxH);
   ctx.strokeRect(bestPos.x, bestPos.y, boxW, boxH);
 
-  // Draw entries in two columns
   ctx.font = `${fontSize}px Arial, sans-serif`;
   ctx.textBaseline = 'top';
   ctx.textAlign = 'left';
@@ -1508,7 +1497,6 @@ function drawLegendOnCanvas(
     ctx.fillText(`${entries[i].number}. ${entries[i].streetName}`, ex, ey);
   }
 
-  // Mark legend area as occupied
   grid.occupy(bestPos.x, bestPos.y, boxW, boxH);
 }
 
@@ -1528,10 +1516,8 @@ async function processMapWithLabels(
       canvas.height = height;
       const ctx = canvas.getContext('2d')!;
 
-      // Draw base map
       ctx.drawImage(img, 0, 0, width, height);
 
-      // Greyscale filter — preserve saturated pixels (route colors + booking dots)
       const imageData = ctx.getImageData(0, 0, width, height);
       const px = imageData.data;
       for (let i = 0; i < px.length; i += 4) {
@@ -1545,10 +1531,8 @@ async function processMapWithLabels(
       }
       ctx.putImageData(imageData, 0, 0);
 
-      // Draw custom road labels on top of greyscaled map
       const { entries: legendEntries, grid } = labelRoadsThreePass(ctx, roads);
 
-      // Draw legend on the canvas itself — placed in empty space, never over routes
       drawLegendOnCanvas(ctx, grid, legendEntries, width, height);
 
       resolve({
@@ -1614,18 +1598,15 @@ async function renderMastermapOffscreen(
     }, 30000);
 
     map.on('load', () => {
-      // Style: DMB styling + greyscale + thick roads + hide all Mapbox text
       applyMapStyling(map);
       applyGreyscaleBase(map);
       thickenMastermapRoads(map);
       hideMapboxLabels(map);
 
-      // Insert routes below any remaining visible layers
       const routeInsertBefore = map.getStyle().layers?.find((l: any) =>
         l.type === 'symbol' && l.id.startsWith('mm-')
       )?.id ?? undefined;
 
-      // Add each route as a colored line
       routes.forEach((route, idx) => {
         if (!route.segments?.length) return;
         map.addSource(`mm-route-${idx}`, {
@@ -1645,7 +1626,6 @@ async function renderMastermapOffscreen(
         }, routeInsertBefore);
       });
 
-      // Route number labels at centroids
       const labelFeatures: GeoJSON.Feature[] = [];
       routes.forEach((route) => {
         const coords: [number, number][] = [];
@@ -1668,7 +1648,6 @@ async function renderMastermapOffscreen(
         });
       }
 
-      // Booking dots
       if (bookings.length) {
         map.addSource('mm-bookings', {
           type: 'geojson',
@@ -1687,26 +1666,19 @@ async function renderMastermapOffscreen(
         });
       }
 
-      // ── TWO-PASS BEARING DETECTION ─────────────────────────────────────────
-      // Pass 1: fitBounds with NO bearing to get the correct viewport/zoom.
-      // We need all highway features visible before detecting their angle.
       const bounds = allCoords.reduce(
         (b, c) => b.extend(c),
         new mapboxgl.LngLatBounds(allCoords[0], allCoords[0]),
       );
       map.fitBounds(bounds, { padding: 0, maxZoom: 20, duration: 0 });
 
-      // Wait for tiles at the correct viewport to load
       map.once('idle', () => {
-        clearTimeout(timeout); // safe — if we got here, map is alive
+        clearTimeout(timeout);
 
-        // Pass 2: NOW detect bearing from the full visible highway geometry
         const bearing = detectHighwayBearing(map);
 
-        // Re-fit with the correct bearing — this rotates the view
         map.fitBounds(bounds, { padding: 0, maxZoom: 20, duration: 0, bearing });
 
-        // Wait for rotated tiles to load, then capture
         map.once('idle', () => {
           setTimeout(() => {
             map.triggerRepaint();
@@ -1715,10 +1687,8 @@ async function renderMastermapOffscreen(
                 if (done) return; done = true;
                 try {
                   const rawUrl = map.getCanvas().toDataURL('image/png');
-                  // Query roads BEFORE removing map (need map.project() for pixel coords)
                   const roads = queryAndGroupRoads(map);
                   try { map.remove(); } catch {} cleanup();
-                  // Composite: greyscale base + custom curving labels
                   processMapWithLabels(rawUrl, roads, pixelW, pixelH).then(resolve);
                 } catch (err) {
                   console.error('[DMB Mastermap] capture failed:', err);
@@ -1735,7 +1705,9 @@ async function renderMastermapOffscreen(
 }
 
 // ─── MASTERMAP PDF BUILDER ───────────────────────────────────────────────────
-// FIX A: Portrait letter page, sidebar always on top
+// Supports four page formats: letter/legal × portrait/landscape
+// Sidebar adapts: 85pt for portrait, 60pt for landscape
+// Map fills all remaining space after sidebar
 
 export async function generateMastermap(
   areaName: string,
@@ -1743,6 +1715,7 @@ export async function generateMastermap(
   geocodedBookings: MastermapBookingInput[],
   bookingsData: Map<string, any[]>,
   onProgress?: (p: DmbPCLProgress) => void,
+  pageFormat: MastermapPageFormat = 'letter-portrait',
 ): Promise<MastermapResult> {
   if (!routes.length) {
     return { success: false, routeCount: 0, bookingCount: 0, errorMessage: 'No routes in this area.' };
@@ -1751,13 +1724,16 @@ export async function generateMastermap(
   onProgress?.({ phase: 'Analyzing', detail: 'Calculating layout\u2026', percent: 5 });
   await yieldUI();
 
+  // ── Dynamic page dimensions based on chosen format ─────────────────────────
+  const { pageW, pageH, sidebarH, orientation, paper } = getMastermapDimensions(pageFormat);
+
   // ── Map area — sidebar always on top, map fills below ──────────────────────
   const mapX = MM_MARGIN;
-  const mapY = MM_MARGIN + MM_SIDEBAR_H;
-  const mapAreaW = MM_PAGE_W - 2 * MM_MARGIN;
-  const mapAreaH = MM_PAGE_H - 2 * MM_MARGIN - MM_SIDEBAR_H;
+  const mapY = MM_MARGIN + sidebarH;
+  const mapAreaW = pageW - 2 * MM_MARGIN;
+  const mapAreaH = pageH - 2 * MM_MARGIN - sidebarH;
 
-  // High-res pixel render matching the portrait aspect ratio
+  // High-res pixel render matching the chosen aspect ratio
   const pixelW = 5000;
   const pixelH = Math.round(pixelW * (mapAreaH / mapAreaW));
 
@@ -1772,7 +1748,7 @@ export async function generateMastermap(
   onProgress?.({ phase: 'Building PDF', detail: 'Drawing layout\u2026', percent: 85 });
   await yieldUI();
 
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+  const doc = new jsPDF({ orientation, unit: 'pt', format: paper });
 
   // Map image — full height, legend is drawn on the canvas image itself
   if (renderResult?.imageDataUrl) {
@@ -1801,10 +1777,10 @@ export async function generateMastermap(
     const count = bookingsData.get(route.route_code)?.length ?? 0;
     const label = `${route.route_code}(${count})`;
     const entryW = label.length * 7 + 18;
-    if (sx + entryW > MM_PAGE_W - MM_MARGIN) {
+    if (sx + entryW > pageW - MM_MARGIN) {
       sx = MM_MARGIN;
       rowY += 20;
-      if (rowY > MM_MARGIN + MM_SIDEBAR_H - 12) break;
+      if (rowY > MM_MARGIN + sidebarH - 12) break;
     }
     const rgb = hexToRgb(route.route_color);
     doc.setFillColor(rgb.r, rgb.g, rgb.b);
@@ -1819,10 +1795,10 @@ export async function generateMastermap(
   }
   doc.setDrawColor(180, 180, 180);
   doc.setLineWidth(0.5);
-  doc.line(MM_MARGIN, mapY - 3, MM_PAGE_W - MM_MARGIN, mapY - 3);
+  doc.line(MM_MARGIN, mapY - 3, pageW - MM_MARGIN, mapY - 3);
   doc.setFontSize(3.5);
   doc.setTextColor(160, 160, 160);
-  doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', MM_PAGE_W - MM_MARGIN - 80, MM_PAGE_H - MM_MARGIN + 2);
+  doc.text('\u00A9 Mapbox \u00A9 OpenStreetMap', pageW - MM_MARGIN - 80, pageH - MM_MARGIN + 2);
 
   // ── Save ───────────────────────────────────────────────────────────────────
   onProgress?.({ phase: 'Downloading', detail: 'Saving PDF\u2026', percent: 97 });

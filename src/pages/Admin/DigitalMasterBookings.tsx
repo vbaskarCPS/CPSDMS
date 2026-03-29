@@ -18,7 +18,7 @@ import { supabase } from '../../lib/supabase';
 import { googleSheetsService } from '../../lib/googleSheetsService';
 import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import { commandCenterService } from '../../lib/commandCenterService';
-import { generateDmbPCL, generateMastermap, DmbPCLProgress } from '../../lib/dmbPclService';
+import { generateDmbPCL, generateMastermap, DmbPCLProgress, MastermapPageFormat } from '../../lib/dmbPclService';
 import DmbEmailModal from '../../components/DmbEmailModal';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -64,6 +64,21 @@ interface GeocodedBooking extends BookingRecord {
 interface Props {
   onBack: () => void;
 }
+
+// ─── PAGE FORMAT OPTIONS FOR MASTERMAP MODAL ──────────────────────────────────
+
+const PAGE_FORMAT_OPTIONS: {
+  value: MastermapPageFormat;
+  label: string;
+  dims: string;
+  shapeW: number;
+  shapeH: number;
+}[] = [
+  { value: 'letter-portrait',  label: 'Letter Portrait',  dims: '8.5 × 11"',  shapeW: 34, shapeH: 44 },
+  { value: 'letter-landscape', label: 'Letter Landscape', dims: '11 × 8.5"',  shapeW: 44, shapeH: 34 },
+  { value: 'legal-portrait',   label: 'Legal Portrait',   dims: '8.5 × 14"',  shapeW: 34, shapeH: 56 },
+  { value: 'legal-landscape',  label: 'Legal Landscape',  dims: '14 × 8.5"',  shapeW: 56, shapeH: 34 },
+];
 
 // ─── LOCAL GEOCODE HELPER ─────────────────────────────────────────────────────
 
@@ -137,6 +152,10 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   const [mastermapGenerating, setMastermapGenerating] = useState(false);
   const [mastermapProgress, setMastermapProgress] = useState<DmbPCLProgress | null>(null);
 
+  // ── Mastermap page format modal ─────────────────────────────────────────────
+  const [showMastermapModal, setShowMastermapModal] = useState(false);
+  const [mastermapFormat, setMastermapFormat] = useState<MastermapPageFormat>('letter-portrait');
+
   // ── Popup / handler refs ────────────────────────────────────────────────────
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   const bookingClickHandlerRef = useRef<((e: any) => void) | null>(null);
@@ -153,7 +172,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   }, [currentRoutes, bookingsData]);
 
   // ─── SUPPRESS DUPLICATE LABELS ─────────────────────────────────────────────
-  // Unchanged from original.
   const suppressDuplicateLabels = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -282,6 +300,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
     setIsPlotted(false);
     setGeocodingProgress(null);
     setShowEmailModal(false);
+    setShowMastermapModal(false);
 
     setSelectedArea(areaName);
     setLoadingRoutes(true);
@@ -443,8 +462,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         return;
       }
 
-      // Also auth dialerSheetsService so PCL works without a second popup.
-      // Same OAuth client ID + scopes = silent token grant (no extra consent screen).
       try {
         await dialerSheetsService.authenticate();
       } catch {
@@ -640,7 +657,6 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
 
       if (result.success) {
         setPclProgress({ phase: 'Done', detail: `${result.totalClients} clients across ${result.routeCount} routes`, percent: 100 });
-        // Auto-clear success message after 4 seconds
         setTimeout(() => setPclProgress(null), 4000);
       } else {
         setError('PCL generation failed: ' + (result.errorMessage || 'Unknown error'));
@@ -655,7 +671,8 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
   }, [selectedArea, currentRoutes, pclGenerating]);
 
   // ─── PRINT MASTERMAP ───────────────────────────────────────────────────────
-  const handlePrintMastermap = useCallback(async () => {
+  // Accepts a format parameter directly so there's no async state-update issue
+  const handlePrintMastermap = useCallback(async (format: MastermapPageFormat) => {
     if (!selectedArea || currentRoutes.length === 0 || mastermapGenerating || !isPlotted) return;
 
     setMastermapGenerating(true);
@@ -669,6 +686,7 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
         geocodedBookings.map(b => ({ lat: b.lat, lng: b.lng, routeColor: b.routeColor })),
         bookingsData,
         (p) => setMastermapProgress(p),
+        format,
       );
 
       if (result.success) {
@@ -789,7 +807,8 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
             type: 'symbol',
             source: (layer as any).source ?? 'composite',
             'source-layer': (layer as any)['source-layer'] ?? 'road',
-            filter: (layer as any).filter,
+            // BUG FIX: use conditional spread so undefined filters don't crash Mapbox
+            ...((layer as any).filter ? { filter: (layer as any).filter } : {}),
             minzoom: 0,
             maxzoom: 24,
             layout: {
@@ -890,10 +909,10 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           </div>
         )}
 
-        {/* Print Mastermap button — only visible after plotting */}
+        {/* Print Mastermap button — opens format picker modal */}
         {selectedArea && isPlotted && !geocodingProgress && !anyGenerating && (
           <button
-            onClick={handlePrintMastermap}
+            onClick={() => setShowMastermapModal(true)}
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors bg-teal-600 hover:bg-teal-500 text-white"
           >
             <Printer size={14} />
@@ -1225,6 +1244,73 @@ const DigitalMasterBookings: React.FC<Props> = ({ onBack }) => {
           isGoogleConnected={isGoogleConnected}
           onClose={() => setShowEmailModal(false)}
         />
+      )}
+
+      {/* ── MASTERMAP PAGE FORMAT MODAL ────────────────────────────────────── */}
+      {showMastermapModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-[440px] shadow-2xl">
+
+            {/* Title */}
+            <h2 className="text-white font-bold text-lg mb-1">Mastermap Page Setup</h2>
+            <p className="text-xs text-gray-400 mb-5">Choose page size and orientation for your PDF</p>
+
+            {/* 2×2 grid of format options */}
+            <div className="grid grid-cols-2 gap-3 mb-6">
+              {PAGE_FORMAT_OPTIONS.map(opt => {
+                const isActive = mastermapFormat === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    onClick={() => setMastermapFormat(opt.value)}
+                    className={`flex flex-col items-center gap-2.5 p-4 rounded-xl border-2 transition-all ${
+                      isActive
+                        ? 'border-teal-500 bg-teal-500/10'
+                        : 'border-gray-700 bg-gray-800 hover:border-gray-500'
+                    }`}
+                  >
+                    {/* Page shape rectangle */}
+                    <div
+                      className="rounded-sm"
+                      style={{
+                        width: opt.shapeW,
+                        height: opt.shapeH,
+                        border: `2.5px solid ${isActive ? '#14b8a6' : '#6b7280'}`,
+                        transition: 'border-color 0.15s',
+                      }}
+                    />
+                    <div className="text-center">
+                      <div className={`text-xs font-semibold ${isActive ? 'text-teal-300' : 'text-gray-300'}`}>
+                        {opt.label}
+                      </div>
+                      <div className="text-[10px] text-gray-500 mt-0.5">{opt.dims}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowMastermapModal(false)}
+                className="flex-1 py-2.5 rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 text-sm font-medium transition-colors border border-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setShowMastermapModal(false);
+                  handlePrintMastermap(mastermapFormat);
+                }}
+                className="flex-1 py-2.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-sm font-bold transition-colors"
+              >
+                Generate
+              </button>
+            </div>
+
+          </div>
+        </div>
       )}
 
     </div>
