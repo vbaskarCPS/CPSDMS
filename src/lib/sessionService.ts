@@ -986,7 +986,7 @@ class SessionService {
       .from('users')
       .select('*')
       .ilike('username', username)
-      .eq('password', password)
+      .ilike('password', password)
       .eq('role', 'RouteManager')
       .maybeSingle();
     
@@ -1017,8 +1017,8 @@ class SessionService {
     const { data } = await supabase
       .from('users')
       .select('*')
-      .eq('user_id', contractorId)
-      .eq('password', password)
+      .ilike('user_id', contractorId)
+      .ilike('password', password)
       .eq('role', 'Worker')
       .maybeSingle();
     
