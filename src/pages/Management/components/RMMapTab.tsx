@@ -968,7 +968,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       {/* Center-on-me toggle */}
       <button
         onClick={handleToggleCenter}
-        className={`absolute bottom-6 right-3 z-20 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all ${
+        style={{ left: sidebarOpen ? 'calc(20% + 8px)' : '28px' }}
+        className={`absolute bottom-6 z-20 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all ${
           centerOnLocation
             ? 'bg-blue-600 text-white ring-2 ring-blue-400 ring-offset-2 ring-offset-gray-900'
             : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
