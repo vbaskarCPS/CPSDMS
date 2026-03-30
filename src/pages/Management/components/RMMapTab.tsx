@@ -2,9 +2,10 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { Loader, Navigation } from 'lucide-react';
+import { Loader, Navigation, ChevronLeft, ChevronRight, X, Users } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { RouteData, MasterBooking, LogsheetSession, Worker } from '../../../types';
+import ContractorJobs from './ContractorJobs';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -39,6 +40,21 @@ interface RMMapTabProps {
   bookings: MasterBooking[];
   allSessions: LogsheetSession[];
   workers: Worker[];
+}
+
+// NEW: Compact worker card data for the sidebar
+interface WorkerCardData {
+  worker: Worker;
+  displayBookings: MasterBooking[];
+  financialStore: any[];
+  assignedRoutes: string[];
+  stats: {
+    steps: number;
+    pending: number;
+    eq: number;
+    upsellCount: number;
+    upsellGross: number;
+  };
 }
 
 // ─── MODULE-LEVEL CACHES (survive tab switches, cleared on page reload) ──────
@@ -119,9 +135,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const initialFitDoneRef = useRef(false);
 
   // --- Pin tracking ---
-  // knownPinsRef remembers ALL geocoded pins. Pins never disappear from it —
-  // when a pending booking vanishes (completed), it gets upgraded to 'completed'
-  // status so the dot stays on the map with a green border.
   const knownPinsRef = useRef<Map<string, GeocodedPin>>(new Map());
   const [geocodedPins, setGeocodedPins] = useState<GeocodedPin[]>([]);
   const [geocodingProgress, setGeocodingProgress] = useState<{ current: number; total: number } | null>(null);
@@ -134,6 +147,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const watchIdRef = useRef<number | null>(null);
   const navMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const navArrowElRef = useRef<HTMLDivElement | null>(null);
+
+  // NEW: Sidebar & modal state
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [selectedWorkerForModal, setSelectedWorkerForModal] = useState<WorkerCardData | null>(null);
 
   // ─── COMPUTED: My route codes ──────────────────────────────────────────────
 
@@ -161,30 +178,70 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return map;
   }, [routeMapData]);
 
+  // NEW: Detect if this is an aeration season (no team sessions with multiple workers)
+  const isAerationSeason = useMemo(() => {
+    return !allSessions.some(s => s.teamWorkerIds && s.teamWorkerIds.length > 1);
+  }, [allSessions]);
+
+  // NEW: Derive compact worker card data from existing props — no API calls needed
+  const workerCardData = useMemo<WorkerCardData[]>(() => {
+    if (!isAerationSeason) return [];
+
+    const myTeam = workers.filter(w => w.assignedManagerId === managerId);
+
+    return myTeam.map(worker => {
+      const session = allSessions.find(s => s.workerId === worker.contractorId);
+      const stats = session?.stats;
+      const financialStore = session?.financialStore || [];
+
+      const workerBookings = bookings.filter(b => b['Contractor Number'] === worker.contractorId);
+
+      const assignedRoutes = Array.from(new Set(
+        workerBookings
+          .map(b => b['Route Number'])
+          .filter((r): r is string => !!r && r.trim() !== '')
+      ));
+
+      const pending = workerBookings.filter(b =>
+        b.Completed !== 'x' &&
+        b.Status !== 'completed' &&
+        b.Status !== 'cancelled' &&
+        b.Status !== 'next_time'
+      ).length;
+
+      return {
+        worker,
+        displayBookings: workerBookings,
+        financialStore,
+        assignedRoutes,
+        stats: {
+          steps: stats?.stepCount || 0,
+          pending,
+          eq: stats?.totalEQ || 0,
+          upsellCount: stats?.upsellCount || 0,
+          upsellGross: stats?.upsellGross || 0,
+        },
+      };
+    });
+  }, [workers, managerId, allSessions, bookings, isAerationSeason]);
+
   // ─── COMPUTED: Pin list from bookings + sessions ───────────────────────────
-  // Includes ALL completed transactions (matched by team OR route) and pending bookings.
-  // This ensures every completed job with an address shows up on load.
 
   const pins = useMemo<PinData[]>(() => {
     const result: PinData[] = [];
     const completedJobIds = new Set<string>();
     const myRouteSet = new Set(myRouteCodes);
 
-    // 1. Completed transactions — include if worker is on my team OR job is on my route.
-    // This is intentionally permissive so no completed jobs are missed.
     allSessions.forEach(session => {
       const sessionWorkerIds = session.teamWorkerIds || [session.workerId];
       const isMyTeam = sessionWorkerIds.some(wid => myTeamIds.has(wid));
 
       (session.financialStore || []).forEach((tx: any) => {
-        // Skip upsells and add-ons
         if (tx.type === 'Upgrade' || tx.type === 'Add-On') return;
 
-        // Include if: worker is on my team OR transaction is on one of my routes
         const isOnMyRoute = tx.routeCode && myRouteSet.has(tx.routeCode);
         if (!isMyTeam && !isOnMyRoute) return;
 
-        // Try to get an address — fall back to itemDescription if address is empty
         const address = tx.address || tx.itemDescription || '';
         if (!address) {
           console.warn('[RMMap] Skipping transaction with no address:', tx.jobId, tx.customerName);
@@ -204,7 +261,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     });
 
-    // 2. Pending bookings on my routes (not already completed)
     bookings.forEach(b => {
       const routeNum = b['Route Number'];
       if (!routeNum || !myRouteSet.has(routeNum)) return;
@@ -332,7 +388,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const map = mapRef.current;
     if (!map || !mapLoaded || routeMapData.length === 0) return;
 
-    // Clear old layers
     loadedIdsRef.current.forEach(id => {
       if (id.startsWith('num-')) {
         const routeId = id.replace('num-', '');
@@ -377,7 +432,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         layout: { 'line-cap': 'round', 'line-join': 'round' },
       }, routeInsertBefore);
 
-      // Route number at centroid
       const allRouteCoords: [number, number][] = [];
       route.segments.forEach(seg => seg.coordinates.forEach(c => allRouteCoords.push(c)));
       if (allRouteCoords.length === 0) return;
@@ -411,7 +465,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     });
 
-    // Fit bounds only on first load
     if (allCoords.length > 0 && !initialFitDoneRef.current) {
       initialFitDoneRef.current = true;
       setTimeout(() => {
@@ -497,9 +550,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, []);
 
   // ─── GEOCODE AND RENDER PINS ──────────────────────────────────────────────
-  // Uses knownPinsRef: pins NEVER disappear. When a pending pin leaves both
-  // data sources (booking completed), it gets upgraded to 'completed' status
-  // so the dot stays on the map with a green border.
 
   useEffect(() => {
     const map = mapRef.current;
@@ -508,11 +558,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const currentBatch = ++geocodeBatchRef.current;
     const currentPinIds = new Set(pins.map(p => p.id));
 
-    // --- Phase 1: Update knownPins with fresh data + upgrade disappeared pins ---
-
     const toGeocode: PinData[] = [];
 
-    // Update or add pins from the current data
     pins.forEach(pin => {
       const addrCached = geocodeCache.get(makeCacheKey(pin.address));
       const idCached = jobIdCache.get(pin.id);
@@ -532,14 +579,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
     });
 
-    // Upgrade disappeared pending pins → completed (handles timing gap)
     knownPinsRef.current.forEach((existingPin, id) => {
       if (!currentPinIds.has(id) && existingPin.status === 'pending') {
         knownPinsRef.current.set(id, { ...existingPin, status: 'completed' });
       }
     });
 
-    // Render immediately with what we have
     const snapshot = Array.from(knownPinsRef.current.values());
     updateMapPins(map, snapshot);
     setGeocodedPins(snapshot);
@@ -548,8 +593,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       setGeocodingProgress(null);
       return;
     }
-
-    // --- Phase 2: Geocode uncached pins ---
 
     setGeocodingProgress({ current: 0, total: toGeocode.length });
 
@@ -589,15 +632,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     geocodeLoop();
   }, [pins, routeMapData, mapLoaded, routeColorMap, routeCentroid, updateMapPins]);
 
-  // ─── GPS TRACKING — Always on, arrow always visible ─────────────────────
-  // Starts as soon as map loads. Arrow moves with GPS. No camera changes here.
+  // ─── GPS TRACKING ─────────────────────────────────────────────────────────
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
     if (!navigator.geolocation) return;
 
-    // Create arrow element
     if (!navArrowElRef.current) {
       navArrowElRef.current = createNavigationArrowElement();
     }
@@ -606,22 +647,18 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       .setLngLat([0, 0])
       .addTo(map);
 
-    // Continuous tracking — arrow always moves, centering depends on toggle
     watchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
         if (!navMarkerRef.current || !mapRef.current) return;
         const { latitude, longitude, heading } = position.coords;
 
-        // Always move the arrow
         navMarkerRef.current.setLngLat([longitude, latitude]);
 
-        // Always rotate arrow based on heading
         const hasHeading = heading !== null && heading !== undefined && !isNaN(heading);
         if (hasHeading && navArrowElRef.current) {
           navArrowElRef.current.style.transform = `rotate(${heading}deg)`;
         }
 
-        // Only center map if the toggle is ON
         if (centerOnLocationRef.current) {
           mapRef.current.easeTo({
             center: [longitude, latitude],
@@ -645,20 +682,19 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     };
   }, [mapLoaded]);
 
-  // ─── SYNC centering ref when toggle changes ───────────────────────────────
+  // ─── SYNC centering ref ───────────────────────────────────────────────────
 
   useEffect(() => {
     centerOnLocationRef.current = centerOnLocation;
   }, [centerOnLocation]);
 
-  // ─── HANDLE CENTER TOGGLE — immediate snap when turned on ─────────────────
+  // ─── HANDLE CENTER TOGGLE ─────────────────────────────────────────────────
 
   const handleToggleCenter = useCallback(() => {
     setCenterOnLocation(prev => {
       const newVal = !prev;
       centerOnLocationRef.current = newVal;
 
-      // If turning ON, immediately center on current arrow position
       if (newVal && navMarkerRef.current && mapRef.current) {
         const lngLat = navMarkerRef.current.getLngLat();
         if (lngLat.lng !== 0 || lngLat.lat !== 0) {
@@ -689,7 +725,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     map.on('load', () => {
       map.resize();
 
-      // Hide unwanted labels & buildings (identical to DMB)
       const exactHide = ['poi-label', 'housenum-label', 'road-number-shield'];
       exactHide.forEach(id => {
         if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
@@ -722,7 +757,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
       });
 
-      // Bold road labels
       const roadLabelLayers = map.getStyle().layers?.filter((layer: any) =>
         layer.type === 'symbol' &&
         layer.id.toLowerCase().includes('label') &&
@@ -790,6 +824,65 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     };
   }, [suppressDuplicateLabels]);
 
+  // ─── NEW: Compact sidebar card renderer ──────────────────────────────────
+
+  const renderSidebarCard = (card: WorkerCardData) => {
+    return (
+      <div
+        key={card.worker.contractorId}
+        onClick={() => setSelectedWorkerForModal(card)}
+        className="bg-gray-800 border border-gray-700 rounded-lg p-2 cursor-pointer hover:border-blue-500 hover:bg-gray-750 transition-all active:scale-[0.98] mb-1.5"
+      >
+        {/* Name row */}
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${card.stats.pending > 0 ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} />
+          <span className="font-bold text-white text-xs truncate leading-none">
+            {card.worker.firstName} {card.worker.lastName}
+          </span>
+        </div>
+
+        {/* Route badges */}
+        {card.assignedRoutes.length > 0 && (
+          <div className="flex flex-wrap gap-0.5 mb-1.5 pl-3">
+            {card.assignedRoutes.slice(0, 3).map((route, idx) => (
+              <span
+                key={idx}
+                className="px-1 py-0.5 rounded text-[8px] bg-indigo-900/60 text-indigo-200 border border-indigo-500/30 font-mono"
+              >
+                {route}
+              </span>
+            ))}
+            {card.assignedRoutes.length > 3 && (
+              <span className="px-1 py-0.5 rounded text-[8px] bg-gray-700 text-gray-400">
+                +{card.assignedRoutes.length - 3}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Compact stats grid */}
+        <div className="grid grid-cols-4 gap-0.5 text-center bg-gray-900/50 rounded p-1">
+          <div>
+            <div className="text-[7px] text-gray-500 uppercase leading-none mb-0.5">Steps</div>
+            <div className="text-[10px] font-bold text-white">{card.stats.steps}</div>
+          </div>
+          <div>
+            <div className="text-[7px] text-gray-500 uppercase leading-none mb-0.5">Pend</div>
+            <div className="text-[10px] font-bold text-yellow-400">{card.stats.pending}</div>
+          </div>
+          <div>
+            <div className="text-[7px] text-gray-500 uppercase leading-none mb-0.5">EQ</div>
+            <div className="text-[10px] font-bold text-blue-300">{card.stats.eq.toFixed(1)}</div>
+          </div>
+          <div>
+            <div className="text-[7px] text-gray-500 uppercase leading-none mb-0.5">Up</div>
+            <div className="text-[10px] font-bold text-purple-400">{card.stats.upsellCount}</div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // ─── RENDER ───────────────────────────────────────────────────────────────
 
   const pendingCount = geocodedPins.filter(p => p.status === 'pending').length;
@@ -799,6 +892,55 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   return (
     <div className="absolute inset-0 flex flex-col">
       <div ref={mapContainerRef} className="flex-1" />
+
+      {/* ─── NEW: COLLAPSIBLE SIDEBAR (Aeration only) ──────────────────────── */}
+      {isAerationSeason && (
+        <div
+          className="absolute left-0 top-0 bottom-0 z-20 transition-all duration-300"
+          style={{ width: sidebarOpen ? '20%' : '20px' }}
+        >
+          {/* Sidebar panel - slides in */}
+          <div
+            className="absolute left-0 top-0 bottom-0 bg-gray-900/95 backdrop-blur-sm transition-all duration-300 overflow-hidden"
+            style={{ width: sidebarOpen ? 'calc(100% - 20px)' : '0px' }}
+          >
+            {sidebarOpen && (
+              <div className="h-full flex flex-col">
+                {/* Sidebar header */}
+                <div className="p-2 border-b border-gray-700 flex items-center gap-2 flex-shrink-0 bg-gray-800/80">
+                  <Users size={13} className="text-blue-400 flex-shrink-0" />
+                  <span className="text-xs font-bold text-white">
+                    Team ({workerCardData.length})
+                  </span>
+                </div>
+
+                {/* Scrollable card list */}
+                <div className="flex-1 overflow-y-auto p-2" style={{ scrollbarWidth: 'thin' }}>
+                  {workerCardData.length === 0 ? (
+                    <div className="text-center text-gray-500 text-xs py-6 italic">
+                      No workers found.
+                    </div>
+                  ) : (
+                    workerCardData.map(renderSidebarCard)
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Arrow tab — always visible on right edge of sidebar container */}
+          <button
+            onClick={() => setSidebarOpen(prev => !prev)}
+            className="absolute right-0 top-1/2 -translate-y-1/2 w-5 h-12 bg-gray-800/90 border border-gray-600 rounded-r-md flex items-center justify-center hover:bg-gray-700 transition-colors cursor-pointer shadow-md"
+            title={sidebarOpen ? 'Close team panel' : 'Open team panel'}
+          >
+            {sidebarOpen
+              ? <ChevronLeft size={12} className="text-gray-300" />
+              : <ChevronRight size={12} className="text-gray-300" />
+            }
+          </button>
+        </div>
+      )}
 
       {/* Geocoding progress */}
       {geocodingProgress && (
@@ -836,8 +978,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         <Navigation size={22} className={centerOnLocation ? 'fill-current' : ''} />
       </button>
 
-      {/* Pin legend */}
-      {geocodedPins.length > 0 && !geocodingProgress && (
+      {/* Pin legend — hidden when sidebar is open to avoid overlap */}
+      {geocodedPins.length > 0 && !geocodingProgress && !sidebarOpen && (
         <div className="absolute bottom-6 left-3 z-20 bg-gray-900/90 text-white px-3 py-2 rounded-lg shadow-lg text-[10px] space-y-1 backdrop-blur-sm">
           {pendingCount > 0 && (
             <div className="flex items-center gap-2">
@@ -864,6 +1006,54 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       {!mapLoaded && (
         <div className="absolute inset-0 bg-gray-100 flex items-center justify-center z-10">
           <Loader size={24} className="animate-spin text-blue-500" />
+        </div>
+      )}
+
+      {/* ─── NEW: WORKER JOBS FLOATING MODAL ──────────────────────────────── */}
+      {selectedWorkerForModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0,0,0,0.75)' }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedWorkerForModal(null);
+          }}
+        >
+          <div className="bg-gray-800 rounded-lg border border-gray-700 shadow-2xl w-full max-w-2xl flex flex-col"
+            style={{ maxHeight: '80vh' }}
+          >
+            {/* Modal header */}
+            <div className="p-4 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-base font-bold text-white">
+                  {selectedWorkerForModal.worker.firstName} {selectedWorkerForModal.worker.lastName}
+                </h3>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  #{selectedWorkerForModal.worker.contractorId}
+                  {selectedWorkerForModal.assignedRoutes.length > 0 && (
+                    <span className="ml-2">
+                      · Routes: {selectedWorkerForModal.assignedRoutes.join(', ')}
+                    </span>
+                  )}
+                </p>
+              </div>
+              <button
+                onClick={() => setSelectedWorkerForModal(null)}
+                className="p-1.5 hover:bg-gray-700 rounded-full transition-colors text-gray-400 hover:text-white"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal body — ContractorJobs with full functionality */}
+            <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
+              <ContractorJobs
+                bookings={selectedWorkerForModal.displayBookings}
+                financialStore={selectedWorkerForModal.financialStore}
+                onRefresh={() => {}}
+                seasonType="aeration"
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>
