@@ -127,7 +127,13 @@ const RMLogbook: React.FC = () => {
       setCurrentUser(user);
       
       // Check if digital mapping is enabled for this CC
-      setDigitalMappingEnabled(commandCenterService.currentHasDigitalMapping());
+      const hasMapping = commandCenterService.currentHasDigitalMapping();
+      setDigitalMappingEnabled(hasMapping);
+      
+      // DEFAULT to Map tab when digital mapping is enabled
+      if (hasMapping) {
+        setActiveTab('maps');
+      }
 
       await refreshData();
       await checkLockStatus(user.userId);
@@ -154,10 +160,9 @@ const RMLogbook: React.FC = () => {
 
     console.log('📡 Connecting to Realtime Updates (Filtered)...');
 
-    // Subscribe with filtering for this manager's team
     const unsubscribe = subscribeAsRouteManager(refreshData);
 
-    // Fallback polling - reduced from 10s to 30s since realtime is better now
+    // Fallback polling
     const intervalId = setInterval(refreshData, 30000);
 
     return () => {
@@ -171,35 +176,22 @@ const RMLogbook: React.FC = () => {
   useEffect(() => {
     if (!dailyData || !allSessions || !currentUser) return;
 
-    // 1. Identify "My Team"
     const myTeam = dailyData.workers.filter(w => w.assignedManagerId === currentUser.userId);
     const myTeamIdsSet = new Set(myTeam.map(w => w.contractorId));
 
-    // 2. Identify "My Team's Sessions" (for Steps, EQ, Upsells)
-    // FIX: For team sessions (Lawn Rejuv), check teamWorkerIds array, not just workerId
     const mySessions = allSessions.filter(s => {
-      // Check if primary worker is on my team
       if (myTeamIdsSet.has(s.workerId)) return true;
-      
-      // Check if any team member is on my team (for Lawn Rejuv team sessions)
       if (s.teamWorkerIds && s.teamWorkerIds.length > 0) {
         return s.teamWorkerIds.some(wid => myTeamIdsSet.has(wid));
       }
-      
       return false;
     });
 
-    // 3. Identify "My Routes" (for Unassigned badges)
     const myRoutes = dailyData.routes.filter(r => r.managerId === currentUser.userId);
     const myRouteCodes = new Set(myRoutes.map(r => r.routeCode));
 
-    // --- CALCULATIONS ---
-
-    // A. Worker Count
     const workerCount = myTeam.length;
 
-    // B. Steps (Sum from sessions)
-    // FIX: Use Set to avoid counting same session twice if multiple team members
     const countedSessionIds = new Set<string>();
     let totalSteps = 0;
     let totalTeamEQ = 0;
@@ -216,7 +208,6 @@ const RMLogbook: React.FC = () => {
       }
     });
 
-    // C. Pending (Sum of incomplete bookings assigned to my team)
     const assignedPendingCount = dailyData.pendingBookings.filter(b => 
         b['Contractor Number'] && myTeamIdsSet.has(b['Contractor Number'])
     ).length;
@@ -227,12 +218,9 @@ const RMLogbook: React.FC = () => {
 
     const totalPending = assignedPendingCount + unassignedBookingsCount;
 
-    // D. Avg EQ - For team sessions, divide by number of unique sessions, not workers
-    // This gives a more accurate "avg EQ per cart/worker unit"
     const sessionCount = countedSessionIds.size;
     const avgEQ = sessionCount > 0 ? (totalTeamEQ / sessionCount) : 0;
 
-    // G. Unassigned Routes (Badge)
     const unassignedRoutesCount = myRoutes.filter(r => !r.assignedWorkerIds || r.assignedWorkerIds.length === 0).length;
 
     setStats({
@@ -430,9 +418,7 @@ const RMLogbook: React.FC = () => {
                 managers={dailyData.managers}
                 seasonType={seasonType}
                 teamCarts={dailyData.teamCarts}
-                onRefresh={() => {
-                    refreshData();
-                }} 
+                onRefresh={() => { refreshData(); }} 
               />
             )}
           </div>
@@ -443,6 +429,8 @@ const RMLogbook: React.FC = () => {
             bookings={dailyData.pendingBookings}
             allSessions={allSessions}
             workers={dailyData.workers}
+            currentUser={currentUser}
+            onRefresh={refreshData}
           />
         )}
       </div>
