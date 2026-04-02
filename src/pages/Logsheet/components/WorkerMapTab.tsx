@@ -28,6 +28,8 @@ interface WorkerMapTabProps {
   worker: Worker;
 }
 
+const LOCATION_UPLOAD_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
 const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -47,6 +49,10 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
   const watchIdRef = useRef<number | null>(null);
   const navMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const navArrowElRef = useRef<HTMLDivElement | null>(null);
+
+  // Location broadcasting
+  const lastPositionRef = useRef<{ lat: number; lng: number } | null>(null);
+  const locationUploadIntervalRef = useRef<number | null>(null);
 
   const suppressDuplicateLabels = useCallback(() => {
     const map = mapRef.current;
@@ -123,7 +129,6 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     const map = mapRef.current;
     if (!map || !mapLoaded || !routeMapData.length) return;
 
-    // Remove any previously drawn layers
     loadedIdsRef.current.forEach(id => {
       if (id.startsWith('num-')) {
         const rid = id.replace('num-', '');
@@ -206,7 +211,6 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
       });
     });
 
-    // Fit map to show all routes (only on first load)
     if (allCoords.length && !initialFitDoneRef.current) {
       initialFitDoneRef.current = true;
       setTimeout(() => {
@@ -220,7 +224,7 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     }
   }, [routeMapData, mapLoaded]);
 
-  // GPS watch
+  // GPS watch — stores position in lastPositionRef for DB uploads
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded || !navigator.geolocation) return;
@@ -233,6 +237,8 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
         if (!navMarkerRef.current || !mapRef.current) return;
         const { latitude: lat, longitude: lng, heading } = pos.coords;
         navMarkerRef.current.setLngLat([lng, lat]);
+        // Always keep the latest position stored so the upload interval can use it
+        lastPositionRef.current = { lat, lng };
         if (heading != null && !isNaN(heading) && navArrowElRef.current) {
           navArrowElRef.current.style.transform = `rotate(${heading}deg)`;
         }
@@ -253,7 +259,48 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     };
   }, [mapLoaded]);
 
-  // Force resize once map is loaded — the container may not be fully sized at init time
+  // Location broadcasting — write to worker_locations when follow-me is active
+  useEffect(() => {
+    // Always clear any existing interval first
+    if (locationUploadIntervalRef.current !== null) {
+      clearInterval(locationUploadIntervalRef.current);
+      locationUploadIntervalRef.current = null;
+    }
+
+    if (!centerOnLocation || !worker.commandCenterId) return;
+
+    const upload = async () => {
+      const pos = lastPositionRef.current;
+      if (!pos || !mountedRef.current) return;
+      try {
+        await supabase.from('worker_locations').upsert(
+          {
+            worker_id: worker.contractorId,
+            command_center_id: worker.commandCenterId,
+            lat: pos.lat,
+            lng: pos.lng,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'worker_id' }
+        );
+      } catch (e) {
+        console.error('Failed to upload location:', e);
+      }
+    };
+
+    // Write immediately, then every 5 minutes
+    upload();
+    locationUploadIntervalRef.current = window.setInterval(upload, LOCATION_UPLOAD_INTERVAL_MS);
+
+    return () => {
+      if (locationUploadIntervalRef.current !== null) {
+        clearInterval(locationUploadIntervalRef.current);
+        locationUploadIntervalRef.current = null;
+      }
+    };
+  }, [centerOnLocation, worker.contractorId, worker.commandCenterId]);
+
+  // Force resize once map is loaded
   useEffect(() => {
     if (!mapLoaded) return;
     const t = setTimeout(() => mapRef.current?.resize(), 150);
@@ -293,7 +340,6 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     map.on('load', () => {
       map.resize();
 
-      // Hide noisy labels
       const xh = ['poi-label', 'housenum-label', 'road-number-shield'];
       xh.forEach(id => { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none'); });
 
@@ -318,7 +364,6 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
         if (ihn || fhn || inrl) map.setLayoutProperty(layer.id, 'visibility', 'none');
       });
 
-      // Enhance road labels
       const rll = map.getStyle().layers?.filter(
         (l: any) => l.type === 'symbol' && l.id.toLowerCase().includes('label') && !xh.includes(l.id)
       ) ?? [];
@@ -358,7 +403,6 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
               'text-halo-width': 2,
             },
           };
-          // Only include filter if it's actually defined — Mapbox rejects undefined
           if ((layer as any).filter !== undefined) {
             layerDef.filter = (layer as any).filter;
           }
@@ -374,6 +418,11 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     return () => {
       mountedRef.current = false;
       initialFitDoneRef.current = false;
+      // Clean up location upload interval
+      if (locationUploadIntervalRef.current !== null) {
+        clearInterval(locationUploadIntervalRef.current);
+        locationUploadIntervalRef.current = null;
+      }
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
@@ -390,7 +439,7 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     <div className="relative w-full h-full">
       <div ref={mapContainerRef} className="absolute inset-0" />
 
-      {/* Follow-me button */}
+      {/* Follow-me button — enabling this also broadcasts location to manager */}
       <button
         onClick={handleToggleCenter}
         className={`absolute top-3 left-3 z-20 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-all ${
@@ -398,7 +447,7 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
             ? 'bg-blue-600 text-white ring-2 ring-blue-400 ring-offset-1 ring-offset-gray-900'
             : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
         }`}
-        title={centerOnLocation ? 'Stop following' : 'Follow my location'}
+        title={centerOnLocation ? 'Stop following (location sharing off)' : 'Follow my location (shares position with manager)'}
       >
         <Navigation size={18} className={centerOnLocation ? 'fill-current' : ''} />
       </button>
@@ -410,17 +459,25 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
         </div>
       )}
 
-      {/* Routes loading indicator (map already visible) */}
+      {/* Routes loading indicator */}
       {routesLoading && mapLoaded && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm">
           <Loader size={12} className="animate-spin text-blue-400" /> Loading your routes…
         </div>
       )}
 
-      {/* Status message (no routes / no map data) */}
+      {/* Status message */}
       {!routesLoading && statusMessage && mapLoaded && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-yellow-900/90 text-yellow-300 px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm">
           {statusMessage}
+        </div>
+      )}
+
+      {/* Location sharing indicator */}
+      {centerOnLocation && mapLoaded && (
+        <div className="absolute bottom-6 left-3 z-20 bg-blue-900/90 text-blue-300 px-3 py-1.5 rounded-lg shadow-lg text-[10px] font-medium backdrop-blur-sm flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse inline-block" />
+          Sharing location with manager
         </div>
       )}
     </div>

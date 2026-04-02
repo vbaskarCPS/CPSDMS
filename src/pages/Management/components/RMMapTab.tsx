@@ -13,6 +13,8 @@ import ContractorJobs from './ContractorJobs';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
+// --- INTERFACES ---
+
 interface SavedRoute {
   id: string; area_name: string; route_number: number; route_code: string; route_color: string;
   segments: Array<{ osmId: number; name: string; coordinates: [number, number][] }>;
@@ -23,6 +25,16 @@ interface PinData {
   phone?: string; email?: string; price?: string; paymentMethod?: string;
 }
 interface GeocodedPin extends PinData { lat: number; lng: number; routeColor: string; }
+
+// Worker live location from worker_locations table
+interface WorkerLocation {
+  worker_id: string;
+  command_center_id: string;
+  lat: number;
+  lng: number;
+  updated_at: string;
+}
+
 interface RMMapTabProps {
   managerId: string; routes: RouteData[]; bookings: MasterBooking[];
   allSessions: LogsheetSession[]; workers: Worker[];
@@ -42,6 +54,8 @@ interface AssignModalData {
 }
 type SidebarMode = 'staff' | 'routes';
 type SortOption = 'recent' | 'alpha' | 'steps' | 'equiv' | 'upGross';
+
+// --- HELPERS ---
 
 const geocodeCache = new Map<string, { lat: number; lng: number }>();
 const jobIdCache = new Map<string, { lat: number; lng: number }>();
@@ -68,6 +82,54 @@ function createNavArrow(): HTMLDivElement {
   el.style.cssText = 'transition: transform 0.3s ease;';
   return el;
 }
+
+/**
+ * Border color based on how stale the location data is:
+ * green  = within 10 minutes
+ * yellow = within 1 hour
+ * orange = within 2 hours
+ * red    = 2+ hours
+ */
+function getStalenessColor(updatedAt: string): string {
+  const ageMin = (Date.now() - new Date(updatedAt).getTime()) / 60000;
+  if (ageMin <= 10)  return '#22c55e'; // green
+  if (ageMin <= 60)  return '#eab308'; // yellow
+  if (ageMin <= 120) return '#f97316'; // orange
+  return '#ef4444';                    // red
+}
+
+/**
+ * Create the HTML element for a worker location dot.
+ * Light grey fill, initials centered, colored border = staleness.
+ * Larger than prebook pins (which are ~10px diameter circles).
+ */
+function createWorkerMarkerEl(initials: string, borderColor: string, label: string): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.cssText = [
+    'width:32px',
+    'height:32px',
+    'border-radius:50%',
+    'background:#d1d5db',
+    `border:3px solid ${borderColor}`,
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'font-size:11px',
+    'font-weight:700',
+    'color:#374151',
+    'font-family:system-ui,sans-serif',
+    'box-shadow:0 2px 6px rgba(0,0,0,0.35)',
+    'cursor:default',
+    'user-select:none',
+  ].join(';');
+  el.textContent = initials;
+  el.title = label; // browser tooltip shows full worker name
+  return el;
+}
+
+const WORKER_LOCATION_POLL_MS = 5 * 60 * 1000; // 5 minutes
+
+// --- COMPONENT ---
 
 const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSessions, workers, currentUser, onRefresh }) => {
   const navigate = useNavigate();
@@ -102,6 +164,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
   const sidebarModeRef = useRef<SidebarMode>('staff');
   const routesRef = useRef(routes);
   const bookingsRef = useRef(bookings);
+
+  // Worker location state — tracks live dots from worker_locations table
+  const [workerLocations, setWorkerLocations] = useState<WorkerLocation[]>([]);
+  const workerLocationMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
+
   useEffect(() => { sidebarModeRef.current = sidebarMode; }, [sidebarMode]);
   useEffect(() => { routesRef.current = routes; }, [routes]);
   useEffect(() => { bookingsRef.current = bookings; }, [bookings]);
@@ -211,6 +278,77 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       try { map.setFilter(l.id,names.length?['!',['in',['get','name'],['literal',names]]]:null); } catch{}
     });
   }, []);
+
+  // --- WORKER LOCATION FETCH ---
+
+  const fetchWorkerLocations = useCallback(async () => {
+    const teamIds = workers
+      .filter(w => w.assignedManagerId === managerId)
+      .map(w => w.contractorId);
+    if (!teamIds.length) return;
+    try {
+      const { data } = await supabase
+        .from('worker_locations')
+        .select('*')
+        .in('worker_id', teamIds);
+      if (mountedRef.current) {
+        setWorkerLocations((data || []) as WorkerLocation[]);
+      }
+    } catch (e) {
+      console.error('Failed to fetch worker locations:', e);
+    }
+  }, [workers, managerId]);
+
+  // Poll worker locations every 5 minutes once the map is loaded
+  useEffect(() => {
+    if (!mapLoaded) return;
+    fetchWorkerLocations();
+    const interval = setInterval(fetchWorkerLocations, WORKER_LOCATION_POLL_MS);
+    return () => clearInterval(interval);
+  }, [mapLoaded, fetchWorkerLocations]);
+
+  // --- WORKER LOCATION MARKERS ---
+
+  // Render / update / remove HTML markers whenever worker locations data changes
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+
+    // Track which worker IDs are currently displayed so we can remove stale ones
+    const existingIds = new Set(workerLocationMarkersRef.current.keys());
+
+    workerLocations.forEach(loc => {
+      const worker = workers.find(w => w.contractorId === loc.worker_id);
+      if (!worker) return;
+
+      const initials = `${worker.firstName.charAt(0)}${worker.lastName.charAt(0)}`.toUpperCase();
+      const fullName = `${worker.firstName} ${worker.lastName}`;
+      const borderColor = getStalenessColor(loc.updated_at);
+
+      const existing = workerLocationMarkersRef.current.get(loc.worker_id);
+      if (existing) {
+        // Update position and border color in-place — no flicker
+        existing.setLngLat([loc.lng, loc.lat]);
+        const el = existing.getElement();
+        el.style.borderColor = borderColor;
+        el.title = fullName;
+        existingIds.delete(loc.worker_id);
+      } else {
+        // Create new marker
+        const el = createWorkerMarkerEl(initials, borderColor, fullName);
+        const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+          .setLngLat([loc.lng, loc.lat])
+          .addTo(map);
+        workerLocationMarkersRef.current.set(loc.worker_id, marker);
+      }
+    });
+
+    // Remove markers for workers no longer in the fetched data
+    existingIds.forEach(id => {
+      workerLocationMarkersRef.current.get(id)?.remove();
+      workerLocationMarkersRef.current.delete(id);
+    });
+  }, [workerLocations, mapLoaded, workers]);
 
   // Load route geometry
   useEffect(() => {
@@ -322,7 +460,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     return()=>cleanups.forEach(fn=>fn());
   }, [routeMapData, mapLoaded, myRouteCodes]);
 
-  // Update map pins
+  // Update map pins (prebook/completed dots)
   const updateMapPins = useCallback((map:mapboxgl.Map, geocoded:GeocodedPin[]) => {
     if(pinClickHandlerRef.current){map.off('click','rm-pins-circles',pinClickHandlerRef.current);pinClickHandlerRef.current=null;}
     if(popupRef.current){popupRef.current.remove();popupRef.current=null;}
@@ -353,7 +491,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     map.on('click','rm-pins-circles',clickHandler);
   }, []);
 
-  // Geocode and render pins
+  // Geocode and render prebook/completed pins
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     const batch=++geocodeBatchRef.current, curIds=new Set(pins.map(p=>p.id)), toGeo:PinData[]=[];
@@ -380,7 +518,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     })();
   }, [pins, routeMapData, mapLoaded, routeColorMap, routeCentroid, updateMapPins]);
 
-  // GPS
+  // GPS (RM's own location)
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!navigator.geolocation) return;
     if(!navArrowElRef.current) navArrowElRef.current=createNavArrow();
@@ -438,6 +576,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}
       navMarkerRef.current?.remove();navMarkerRef.current=null;
       if(popupRef.current){popupRef.current.remove();popupRef.current=null;}
+      // Remove all worker location markers
+      workerLocationMarkersRef.current.forEach(m => m.remove());
+      workerLocationMarkersRef.current.clear();
       map.remove();mapRef.current=null;setMapLoaded(false);
     };
   }, [suppressDuplicateLabels]);
@@ -474,7 +615,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     <div className="absolute inset-0 flex flex-col">
       <div ref={mapContainerRef} className="flex-1" />
 
-      {/* Follow-me button — top left */}
+      {/* Follow-me button */}
       <button onClick={handleToggleCenter}
         style={{left:sidebarOpen?'calc(20% + 8px)':'28px'}}
         className={`absolute top-3 z-20 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-all duration-300 ${centerOnLocation?'bg-blue-600 text-white ring-2 ring-blue-400 ring-offset-1 ring-offset-gray-900':'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'}`}
@@ -488,7 +629,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
           <div className="absolute left-0 top-0 bottom-0 bg-gray-900/95 backdrop-blur-sm transition-all duration-300 overflow-hidden" style={{width:sidebarOpen?'calc(100% - 20px)':'0px'}}>
             {sidebarOpen && (
               <div className="h-full flex flex-col">
-                {/* Mode toggle */}
                 <div className="p-2 border-b border-gray-700 flex-shrink-0 bg-gray-800/80">
                   <div className="flex gap-1 bg-gray-900/60 rounded-lg p-0.5">
                     <button onClick={()=>setSidebarMode('staff')} className={`flex-1 flex items-center justify-center gap-1 py-1 rounded-md text-[10px] font-bold transition-all ${sidebarMode==='staff'?'bg-gray-700 text-white':'text-gray-500 hover:text-gray-300'}`}>
@@ -499,7 +639,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
                     </button>
                   </div>
                 </div>
-                {/* Sort (staff only) */}
                 {sidebarMode==='staff' && (
                   <div className="px-2 pt-1.5 pb-1 border-b border-gray-800 flex-shrink-0">
                     <select value={sortBy} onChange={e=>setSortBy(e.target.value as SortOption)} className="w-full bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-[10px] text-white focus:outline-none">
@@ -516,7 +655,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
                     <p className="text-[8px] text-gray-600 text-center italic">Card → jobs · Route on map → assign</p>
                   </div>
                 )}
-                {/* Cards */}
                 <div className="flex-1 overflow-y-auto p-2" style={{scrollbarWidth:'thin'}}>
                   {sidebarMode==='staff' && (
                     sortedWorkerCards.length===0
@@ -572,7 +710,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
               </div>
             )}
           </div>
-          {/* Arrow tab */}
           <button onClick={()=>setSidebarOpen(p=>!p)} className="absolute right-0 top-1/2 -translate-y-1/2 w-5 h-12 bg-gray-800/90 border border-gray-600 rounded-r-md flex items-center justify-center hover:bg-gray-700 transition-colors cursor-pointer shadow-md">
             {sidebarOpen?<ChevronLeft size={12} className="text-gray-300"/>:<ChevronRight size={12} className="text-gray-300"/>}
           </button>
@@ -584,12 +721,22 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       {routesLoading&&!geocodingProgress && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm"><Loader size={12} className="animate-spin text-blue-400"/>Loading routes…</div>}
       {!routesLoading&&!routeMapData.length&&myRouteCodes.length>0&&mapLoaded&&!geocodingProgress && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-yellow-900/90 text-yellow-300 px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm">No map data for your routes</div>}
 
-      {/* Pin legend */}
-      {geocodedPins.length>0&&!geocodingProgress&&!sidebarOpen && (
+      {/* Pin legend + worker dot staleness legend */}
+      {!geocodingProgress && !sidebarOpen && (geocodedPins.length > 0 || workerLocations.length > 0) && (
         <div className="absolute bottom-6 left-3 z-20 bg-gray-900/90 text-white px-3 py-2 rounded-lg shadow-lg text-[10px] space-y-1 backdrop-blur-sm">
           {pendingCount>0&&<div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-400 border-2 border-black inline-block flex-shrink-0"/>Pending ({pendingCount})</div>}
           {completedCount>0&&<div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-400 border-2 border-green-500 inline-block flex-shrink-0"/>Completed ({completedCount})</div>}
           {newSaleCount>0&&<div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-400 border-2 border-yellow-500 inline-block flex-shrink-0"/>New Sale ({newSaleCount})</div>}
+          {workerLocations.length > 0 && (
+            <>
+              {(pendingCount > 0 || completedCount > 0 || newSaleCount > 0) && <div className="border-t border-gray-700 my-1" />}
+              <div className="text-gray-500 text-[9px] uppercase tracking-wider mb-0.5">Workers</div>
+              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-300 border-2 border-green-500 inline-block flex-shrink-0"/>≤ 10 min</div>
+              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-300 border-2 border-yellow-500 inline-block flex-shrink-0"/>≤ 1 hr</div>
+              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-300 border-2 border-orange-500 inline-block flex-shrink-0"/>≤ 2 hr</div>
+              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-300 border-2 border-red-500 inline-block flex-shrink-0"/>2+ hr</div>
+            </>
+          )}
         </div>
       )}
 
