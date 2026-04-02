@@ -664,9 +664,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
                             <div className="flex items-center justify-between mb-1.5">
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${card.stats.pending>0?'bg-yellow-500 animate-pulse':'bg-green-500'}`}/>
-                                <span className="font-bold text-white text-xs truncate cursor-pointer hover:text-blue-300" onClick={()=>setSelectedWorkerForModal(card)}>
-                                  {card.worker.firstName} {card.worker.lastName}
-                                </span>
+                                <div className="flex flex-col min-w-0">
+                                  <span className="font-bold text-white text-xs truncate cursor-pointer hover:text-blue-300" onClick={()=>setSelectedWorkerForModal(card)}>
+                                    {card.worker.firstName} {card.worker.lastName}
+                                  </span>
+                                  <span className="text-[9px] text-gray-500 font-mono">#{card.worker.contractorId}</span>
+                                </div>
                               </div>
                               <div className="flex items-center gap-1 flex-shrink-0">
                                 <button onClick={()=>handleViewLogsheet(card.worker)} className="p-1 rounded hover:bg-gray-700 text-cyan-400 hover:text-cyan-300" title="View logsheet"><Eye size={11}/></button>
