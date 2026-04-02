@@ -329,11 +329,10 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
         const bid = `${layer.id}-point-backup`;
         if (map.getLayer(bid)) return;
         try {
-          map.addLayer({
+          const layerDef: any = {
             id: bid, type: 'symbol',
             source: (layer as any).source ?? 'composite',
             'source-layer': (layer as any)['source-layer'] ?? 'road',
-            filter: (layer as any).filter,
             minzoom: 0, maxzoom: 24,
             layout: {
               ...(layer.layout ?? {}),
@@ -351,7 +350,12 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
               'text-halo-color': '#ffffff',
               'text-halo-width': 2,
             },
-          });
+          };
+          // Only include filter if it's actually defined — Mapbox rejects undefined
+          if ((layer as any).filter !== undefined) {
+            layerDef.filter = (layer as any).filter;
+          }
+          map.addLayer(layerDef);
         } catch {}
       });
 
