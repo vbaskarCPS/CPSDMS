@@ -21,16 +21,19 @@ import {
   Copy,
   Eye,
   ArrowLeft,
+  Map as MapIcon,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem, setStorageItem } from '../../lib/localStorage';
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
+import { commandCenterService } from '../../lib/commandCenterService';
 import { subscribeAsContractor } from '../../lib/realtimeService';
 import { supabase } from '../../lib/supabase';
 import { Worker, SessionStats, MasterBooking, ManagementUser, SeasonType } from '../../types';
 import LogsheetJobCard from './components/LogsheetJobCard';
 import AddContractModal from '../../components/AddContractModal';
+import WorkerMapTab from './components/WorkerMapTab';
 
 // Simple Toast Component
 const Toast: React.FC<{ message: string; show: boolean }> = ({ message, show }) => {
@@ -55,7 +58,7 @@ const TrainingBanner: React.FC = () => (
   </div>
 );
 
-// RM View Mode Banner Component (NEW)
+// RM View Mode Banner Component
 interface RMViewBannerProps {
   workerName: string;
   cartNames: string | null;
@@ -152,7 +155,7 @@ const Dashboard: React.FC = () => {
   // Training mode state
   const [isTrainingMode, setIsTrainingMode] = useState(false);
   
-  // RM View Mode state (NEW)
+  // RM View Mode state
   const [isRMViewMode, setIsRMViewMode] = useState(false);
   const [rmOriginalUser, setRmOriginalUser] = useState<ManagementUser | null>(null);
   const [rmViewCartNames, setRmViewCartNames] = useState<string | null>(null);
@@ -167,10 +170,18 @@ const Dashboard: React.FC = () => {
   // Upsells enabled state
   const [upsellsEnabled, setUpsellsEnabled] = useState(true);
 
+  // Digital mapping / view state
+  const [hasDigitalMapping, setHasDigitalMapping] = useState(false);
+  const [activeView, setActiveView] = useState<'logsheet' | 'map'>('logsheet');
+
   // Data State
   const [stats, setStats] = useState<SessionStats>(sessionService.getEmptyStats());
   const [jobs, setJobs] = useState<MasterBooking[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Computed: show the Route Map tab only for aeration, non-training, non-RM-view sessions
+  // with digital mapping enabled for this command center
+  const showMapTab = hasDigitalMapping && seasonType === 'aeration' && !isTrainingMode && !isRMViewMode;
 
   // Check if this is a team season with teammates
   const hasTeammates = seasonType === 'lawn_rejuv' && teammates.length > 1;
@@ -195,7 +206,6 @@ const Dashboard: React.FC = () => {
     if (isTrainingMode) {
       trainingService.disableTrainingMode();
     }
-    // Clean up RM view mode if active
     if (isRMViewMode) {
       removeStorageItem('rm_original_user');
       removeStorageItem('rm_view_mode');
@@ -204,18 +214,13 @@ const Dashboard: React.FC = () => {
     navigate('/');
   };
 
-  // Return to RM view handler (NEW)
+  // Return to RM view handler
   const handleReturnToRM = () => {
     if (rmOriginalUser) {
-      // Restore the RM as current user
       setStorageItem('current_user', rmOriginalUser);
-      
-      // Clean up view mode flags
       removeStorageItem('rm_original_user');
       removeStorageItem('rm_view_mode');
       removeStorageItem('rm_view_cart_names');
-      
-      // Navigate back to RM logbook
       navigate('/rm-logbook');
     }
   };
@@ -225,18 +230,21 @@ const Dashboard: React.FC = () => {
     const init = async () => {
       setLoading(true);
       
-      // Check if we're in training mode
+      // Check training mode
       const trainingMode = trainingService.isTrainingMode();
       setIsTrainingMode(trainingMode);
       
-      // Check if we're in RM view mode (NEW)
+      // Check RM view mode
       const rmViewMode = getStorageItem<boolean>('rm_view_mode', false);
       const originalUser = getStorageItem<ManagementUser | null>('rm_original_user', null);
       const cartNames = getStorageItem<string | null>('rm_view_cart_names', null);
-      
       setIsRMViewMode(rmViewMode);
       setRmOriginalUser(originalUser);
       setRmViewCartNames(cartNames);
+
+      // Check digital mapping enabled for this command center
+      const cc = commandCenterService.getCurrentCommandCenter();
+      setHasDigitalMapping(cc?.digitalMappingEnabled || false);
       
       const storedWorker = getStorageItem<Worker | null>('current_user', null);
       if (!storedWorker) {
@@ -247,7 +255,7 @@ const Dashboard: React.FC = () => {
 
       try {
         if (trainingMode) {
-          // --- TRAINING MODE: Use trainingService ---
+          // --- TRAINING MODE ---
           const session = await trainingService.startLogsheetSession(storedWorker.contractorId);
           setStats(session.stats);
 
@@ -262,16 +270,12 @@ const Dashboard: React.FC = () => {
             setHasAssignedRoutes(myRoutes.length > 0);
           }
 
-          // Get training manager
           const managerData = trainingService.getManagerById(storedWorker.assignedManagerId || '');
           setManager(managerData);
-
-          setUpsellsEnabled(true); // Always enabled in training
-          setSeasonType('aeration'); // Training is always aeration
+          setUpsellsEnabled(true);
+          setSeasonType('aeration');
         } else {
-          // --- PRODUCTION MODE: Use sessionService ---
-          
-          // Skip lockout check if RM is viewing (they should be able to view locked sessions)
+          // --- PRODUCTION MODE ---
           if (!rmViewMode) {
             const isLockedOut = await sessionService.isWorkerLockedOut(storedWorker.contractorId);
             if (isLockedOut) {
@@ -280,7 +284,6 @@ const Dashboard: React.FC = () => {
             }
           }
 
-          // Get season type
           const currentSeasonType = await sessionService.getSessionSeasonType();
           setSeasonType(currentSeasonType);
 
@@ -297,9 +300,8 @@ const Dashboard: React.FC = () => {
             );
             setHasAssignedRoutes(myRoutes.length > 0);
 
-            // Get teammates for lawn_rejuv season
             if (currentSeasonType === 'lawn_rejuv' && dailySession.teamCarts) {
-              const myCart = dailySession.teamCarts.find(cart => 
+              const myCart = dailySession.teamCarts.find(cart =>
                 cart.workerIds.includes(storedWorker.contractorId)
               );
               if (myCart && myCart.workers) {
@@ -326,8 +328,7 @@ const Dashboard: React.FC = () => {
     init();
   }, [navigate, refreshKey]);
 
-  // --- FORCE LOGOUT LISTENER: Subscribe to session status changes (production only) ---
-  // Skip this listener if RM is viewing - they shouldn't be kicked out
+  // Lockout listener (production only, not RM view)
   useEffect(() => {
     if (!worker || isTrainingMode || isRMViewMode) return;
 
@@ -358,18 +359,13 @@ const Dashboard: React.FC = () => {
   // Realtime subscription (production only)
   useEffect(() => {
     if (!worker || isTrainingMode) return;
-
     const unsubscribe = subscribeAsContractor(() => setRefreshKey((prev) => prev + 1));
-
     return () => unsubscribe();
   }, [worker?.contractorId, isTrainingMode]);
 
   const handleLogout = () => {
     removeStorageItem('current_user');
-    if (isTrainingMode) {
-      trainingService.disableTrainingMode();
-    }
-    // Clean up RM view mode if active
+    if (isTrainingMode) trainingService.disableTrainingMode();
     if (isRMViewMode) {
       removeStorageItem('rm_original_user');
       removeStorageItem('rm_view_mode');
@@ -402,8 +398,8 @@ const Dashboard: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-black pb-20 flex flex-col">
-      {/* RM View Mode Banner (NEW) - Takes priority over Training Banner */}
+    <div className={`min-h-screen bg-black flex flex-col ${activeView === 'logsheet' ? 'pb-20' : ''}`}>
+      {/* RM View Mode Banner */}
       {isRMViewMode && worker && (
         <RMViewBanner
           workerName={`${worker.firstName} ${worker.lastName}`}
@@ -412,191 +408,254 @@ const Dashboard: React.FC = () => {
         />
       )}
 
-      {/* Training Mode Banner - Only show if not in RM view mode */}
+      {/* Training Mode Banner */}
       {isTrainingMode && !isRMViewMode && <TrainingBanner />}
 
       {/* Toast Notification */}
       <Toast message={toastMessage} show={showToast} />
 
+      {/* ── Sticky header ── */}
       <div className="sticky top-0 z-30 bg-black/90 backdrop-blur-md border-b border-gray-800 p-4 pb-2">
-        <div className="flex justify-between items-start mb-2">
-          <div>
-            <div className="flex items-center gap-2 text-white font-bold text-lg">
-              <Calendar size={18} className="text-cps-blue" />
-              {format(new Date(), 'EEE, MMM d')}
-              {seasonType === 'lawn_rejuv' && (
-                <span className="text-[9px] bg-green-900/50 text-green-300 px-1.5 py-0.5 rounded border border-green-700">
-                  LAWN REJUV
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2 text-gray-400 text-xs mt-1">
-              <span>{worker?.firstName} {worker?.lastName}</span>
-              <span className={`px-1.5 rounded border ${isTrainingMode ? 'bg-yellow-900/30 border-yellow-700 text-yellow-400' : isRMViewMode ? 'bg-cyan-900/30 border-cyan-700 text-cyan-400' : 'bg-gray-800 border-gray-700'}`}>
-                #{worker?.contractorId}
-              </span>
-              {/* Team Indicator */}
-              {hasTeammates && (
-                <button
-                  onClick={() => setShowTeamModal(true)}
-                  className="flex items-center gap-1 px-1.5 py-0.5 bg-green-900/30 border border-green-700 rounded text-green-400 hover:bg-green-900/50 transition-colors"
-                >
-                  <Truck size={12} />
-                  <span className="text-[10px] font-bold">{teammates.length}</span>
-                </button>
-              )}
-            </div>
+
+        {/* TOP-LEVEL TAB SWITCHER — only when digital mapping is enabled for aeration */}
+        {showMapTab && (
+          <div className="flex bg-gray-900 rounded-lg p-1 border border-gray-800 mb-3">
+            <button
+              onClick={() => setActiveView('logsheet')}
+              className={`flex-1 py-1.5 rounded-md text-xs font-bold transition-colors flex items-center justify-center gap-1.5 ${
+                activeView === 'logsheet'
+                  ? 'bg-cps-blue text-white shadow'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <FileText size={13} />
+              Logsheet
+            </button>
+            <button
+              onClick={() => setActiveView('map')}
+              className={`flex-1 py-1.5 rounded-md text-xs font-bold transition-colors flex items-center justify-center gap-1.5 ${
+                activeView === 'map'
+                  ? 'bg-green-600 text-white shadow'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <MapIcon size={13} />
+              Route Map
+            </button>
           </div>
-          <div className="flex gap-2">
-            {/* Back to Training Lesson button (training mode only) */}
-            {isTrainingMode && !isRMViewMode && (
-              <button
-                onClick={() => {
-                  const returnPath = sessionStorage.getItem('training_return_path');
-                  trainingService.disableTrainingMode();
-                  sessionStorage.removeItem('training_return_path');
-                  removeStorageItem('current_user');
-                  navigate(returnPath || '/training');
-                }}
-                className="flex items-center gap-1.5 px-3 py-2 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-600/50 text-amber-400 text-xs font-semibold rounded-lg transition-colors"
-              >
-                <GraduationCap size={16} />
-                <span className="hidden sm:inline">Back to Lesson</span>
-              </button>
+        )}
+
+        {/* LOGSHEET-SPECIFIC HEADER CONTENT */}
+        {activeView === 'logsheet' && (
+          <>
+            <div className="flex justify-between items-start mb-2">
+              <div>
+                <div className="flex items-center gap-2 text-white font-bold text-lg">
+                  <Calendar size={18} className="text-cps-blue" />
+                  {format(new Date(), 'EEE, MMM d')}
+                  {seasonType === 'lawn_rejuv' && (
+                    <span className="text-[9px] bg-green-900/50 text-green-300 px-1.5 py-0.5 rounded border border-green-700">
+                      LAWN REJUV
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 text-gray-400 text-xs mt-1">
+                  <span>{worker?.firstName} {worker?.lastName}</span>
+                  <span className={`px-1.5 rounded border ${isTrainingMode ? 'bg-yellow-900/30 border-yellow-700 text-yellow-400' : isRMViewMode ? 'bg-cyan-900/30 border-cyan-700 text-cyan-400' : 'bg-gray-800 border-gray-700'}`}>
+                    #{worker?.contractorId}
+                  </span>
+                  {/* Team Indicator */}
+                  {hasTeammates && (
+                    <button
+                      onClick={() => setShowTeamModal(true)}
+                      className="flex items-center gap-1 px-1.5 py-0.5 bg-green-900/30 border border-green-700 rounded text-green-400 hover:bg-green-900/50 transition-colors"
+                    >
+                      <Truck size={12} />
+                      <span className="text-[10px] font-bold">{teammates.length}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="flex gap-2">
+                {/* Back to Training Lesson button */}
+                {isTrainingMode && !isRMViewMode && (
+                  <button
+                    onClick={() => {
+                      const returnPath = sessionStorage.getItem('training_return_path');
+                      trainingService.disableTrainingMode();
+                      sessionStorage.removeItem('training_return_path');
+                      removeStorageItem('current_user');
+                      navigate(returnPath || '/training');
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-600/50 text-amber-400 text-xs font-semibold rounded-lg transition-colors"
+                  >
+                    <GraduationCap size={16} />
+                    <span className="hidden sm:inline">Back to Lesson</span>
+                  </button>
+                )}
+                {hasAssignedRoutes && (
+                  <button
+                    onClick={() => navigate('/logsheet/new')}
+                    className="p-2 bg-cps-blue text-white rounded-lg shadow-lg hover:bg-blue-600 transition-colors"
+                  >
+                    <Plus size={20} />
+                  </button>
+                )}
+                {upsellsEnabled && (
+                  <button
+                    onClick={() => setShowContractModal(true)}
+                    className="p-2 bg-purple-600 text-white rounded-lg shadow-lg hover:bg-purple-500 transition-colors"
+                  >
+                    <FileText size={20} />
+                  </button>
+                )}
+                <button
+                  onClick={handleLogout}
+                  className="p-2 bg-gray-800 text-red-400 rounded-lg border border-gray-700"
+                >
+                  <LogOut size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Manager Info Row */}
+            {manager && (
+              <div className="flex items-center gap-2 text-xs text-gray-300 mb-3 bg-gray-900/50 rounded-lg px-3 py-2 border border-gray-800">
+                <span className="text-gray-500">Manager:</span>
+                <span className="font-medium text-white">{manager.name}</span>
+                {manager.phone && (
+                  <button
+                    onClick={() => handleCopyPhone(manager.phone!)}
+                    className="flex items-center gap-1.5 ml-2 px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded-md transition-colors border border-gray-700"
+                  >
+                    <Phone size={12} className="text-cps-blue" />
+                    <span className="text-cps-blue font-mono">{manager.phone}</span>
+                  </button>
+                )}
+              </div>
             )}
-            {hasAssignedRoutes && (
+
+            {/* Stats Grid */}
+            <div className="grid grid-cols-5 gap-1.5 mb-4">
+              <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
+                <div className="flex items-center gap-1 text-gray-400 mb-1">
+                  <Clock size={10} />
+                  <span className="text-[9px] uppercase font-bold">Pend</span>
+                </div>
+                <p className="text-lg font-bold text-yellow-400">
+                  {jobs.filter((b) => b.Status !== 'completed').length}
+                </p>
+              </div>
+              <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
+                <div className="flex items-center gap-1 text-gray-400 mb-1">
+                  <Trophy size={10} />
+                  <span className="text-[9px] uppercase font-bold">Steps</span>
+                </div>
+                <p className="text-lg font-bold text-blue-400">{stats.stepCount}</p>
+              </div>
+              <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
+                <div className="flex items-center gap-1 text-gray-400 mb-1">
+                  <Briefcase size={10} />
+                  <span className="text-[9px] uppercase font-bold">EQ</span>
+                </div>
+                <p className="text-lg font-bold text-white">{stats.totalEQ.toFixed(1)}</p>
+              </div>
+              <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
+                <div className="flex items-center gap-1 text-gray-400 mb-1">
+                  <TrendingUp size={10} />
+                  <span className="text-[9px] uppercase font-bold">Upsell</span>
+                </div>
+                <p className="text-lg font-bold text-green-400">{stats.upsellCount}</p>
+              </div>
+              <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
+                <div className="flex items-center gap-1 text-gray-400 mb-1">
+                  <DollarSign size={10} />
+                  <span className="text-[9px] uppercase font-bold">Up Gross</span>
+                </div>
+                <p className="text-lg font-bold text-green-400">${stats.upsellGross.toFixed(0)}</p>
+              </div>
+            </div>
+
+            {/* Filter Tabs */}
+            <div className="flex bg-gray-800 rounded-lg p-1 border border-gray-700 mb-2">
               <button
-                onClick={() => navigate('/logsheet/new')}
-                className="p-2 bg-cps-blue text-white rounded-lg shadow-lg hover:bg-blue-600 transition-colors"
+                onClick={() => handleTabSwitch('pending')}
+                className={`flex-1 py-2 rounded-md text-xs font-bold transition-colors ${
+                  viewFilter === 'pending'
+                    ? 'bg-cps-blue text-white shadow'
+                    : 'text-gray-400 hover:text-white'
+                }`}
               >
-                <Plus size={20} />
+                Pending
               </button>
-            )}
-            {upsellsEnabled && (
               <button
-                onClick={() => setShowContractModal(true)}
-                className="p-2 bg-purple-600 text-white rounded-lg shadow-lg hover:bg-purple-500 transition-colors"
+                onClick={() => handleTabSwitch('not_done')}
+                className={`flex-1 py-2 rounded-md text-xs font-bold transition-colors ${
+                  viewFilter === 'not_done'
+                    ? 'bg-red-900/50 text-red-200'
+                    : 'text-gray-400 hover:text-white'
+                }`}
               >
-                <FileText size={20} />
+                Not Done
               </button>
-            )}
+              <button
+                onClick={() => handleTabSwitch('completed')}
+                className={`flex-1 py-2 rounded-md text-xs font-bold transition-colors ${
+                  viewFilter === 'completed'
+                    ? 'bg-green-700 text-white shadow'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Completed
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* MAP VIEW — minimal header strip showing who's viewing */}
+        {activeView === 'map' && (
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-500">
+              {worker?.firstName} {worker?.lastName} · <span className="text-gray-600">#{worker?.contractorId}</span>
+            </span>
             <button
               onClick={handleLogout}
               className="p-2 bg-gray-800 text-red-400 rounded-lg border border-gray-700"
             >
-              <LogOut size={20} />
+              <LogOut size={18} />
             </button>
           </div>
-        </div>
-
-        {/* Manager Info Row */}
-        {manager && (
-          <div className="flex items-center gap-2 text-xs text-gray-300 mb-3 bg-gray-900/50 rounded-lg px-3 py-2 border border-gray-800">
-            <span className="text-gray-500">Manager:</span>
-            <span className="font-medium text-white">{manager.name}</span>
-            {manager.phone && (
-              <button
-                onClick={() => handleCopyPhone(manager.phone!)}
-                className="flex items-center gap-1.5 ml-2 px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded-md transition-colors border border-gray-700"
-              >
-                <Phone size={12} className="text-cps-blue" />
-                <span className="text-cps-blue font-mono">{manager.phone}</span>
-              </button>
-            )}
-          </div>
-        )}
-
-        <div className="grid grid-cols-5 gap-1.5 mb-4">
-          <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
-            <div className="flex items-center gap-1 text-gray-400 mb-1">
-              <Clock size={10} />
-              <span className="text-[9px] uppercase font-bold">Pend</span>
-            </div>
-            <p className="text-lg font-bold text-yellow-400">
-              {jobs.filter((b) => b.Status !== 'completed').length}
-            </p>
-          </div>
-          <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
-            <div className="flex items-center gap-1 text-gray-400 mb-1">
-              <Trophy size={10} />
-              <span className="text-[9px] uppercase font-bold">Steps</span>
-            </div>
-            <p className="text-lg font-bold text-blue-400">{stats.stepCount}</p>
-          </div>
-          <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
-            <div className="flex items-center gap-1 text-gray-400 mb-1">
-              <Briefcase size={10} />
-              <span className="text-[9px] uppercase font-bold">EQ</span>
-            </div>
-            <p className="text-lg font-bold text-white">{stats.totalEQ.toFixed(1)}</p>
-          </div>
-          <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
-            <div className="flex items-center gap-1 text-gray-400 mb-1">
-              <TrendingUp size={10} />
-              <span className="text-[9px] uppercase font-bold">Upsell</span>
-            </div>
-            <p className="text-lg font-bold text-green-400">{stats.upsellCount}</p>
-          </div>
-          <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex flex-col items-center justify-center">
-            <div className="flex items-center gap-1 text-gray-400 mb-1">
-              <DollarSign size={10} />
-              <span className="text-[9px] uppercase font-bold">Up Gross</span>
-            </div>
-            <p className="text-lg font-bold text-green-400">${stats.upsellGross.toFixed(0)}</p>
-          </div>
-        </div>
-
-        <div className="flex bg-gray-800 rounded-lg p-1 border border-gray-700 mb-2">
-          <button
-            onClick={() => handleTabSwitch('pending')}
-            className={`flex-1 py-2 rounded-md text-xs font-bold transition-colors ${
-              viewFilter === 'pending'
-                ? 'bg-cps-blue text-white shadow'
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Pending
-          </button>
-          <button
-            onClick={() => handleTabSwitch('not_done')}
-            className={`flex-1 py-2 rounded-md text-xs font-bold transition-colors ${
-              viewFilter === 'not_done'
-                ? 'bg-red-900/50 text-red-200'
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Not Done
-          </button>
-          <button
-            onClick={() => handleTabSwitch('completed')}
-            className={`flex-1 py-2 rounded-md text-xs font-bold transition-colors ${
-              viewFilter === 'completed'
-                ? 'bg-green-700 text-white shadow'
-                : 'text-gray-400 hover:text-white'
-            }`}
-          >
-            Completed
-          </button>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
-        {filteredJobs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 text-gray-500">
-            <CheckCircle2 size={48} className="mb-4 opacity-20" />
-            <p>{viewFilter === 'pending' ? 'All caught up!' : 'No jobs found.'}</p>
-          </div>
-        ) : (
-          filteredJobs.map((job) => (
-            <LogsheetJobCard
-              key={job['Booking ID']}
-              job={job}
-              onClick={() => navigate(`/job-detail/${encodeURIComponent(job['Booking ID'])}`)}
-            />
-          ))
         )}
       </div>
 
+      {/* ── LOGSHEET CONTENT ── */}
+      {activeView === 'logsheet' && (
+        <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
+          {filteredJobs.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-48 text-gray-500">
+              <CheckCircle2 size={48} className="mb-4 opacity-20" />
+              <p>{viewFilter === 'pending' ? 'All caught up!' : 'No jobs found.'}</p>
+            </div>
+          ) : (
+            filteredJobs.map((job) => (
+              <LogsheetJobCard
+                key={job['Booking ID']}
+                job={job}
+                onClick={() => navigate(`/job-detail/${encodeURIComponent(job['Booking ID'])}`)}
+              />
+            ))
+          )}
+        </div>
+      )}
+
+      {/* ── MAP CONTENT ── */}
+      {activeView === 'map' && worker && (
+        <div className="flex-1 relative">
+          <WorkerMapTab worker={worker} />
+        </div>
+      )}
+
+      {/* ── MODALS (always rendered regardless of active view) ── */}
       {showContractModal && (
         <AddContractModal
           onClose={() => {
@@ -606,7 +665,6 @@ const Dashboard: React.FC = () => {
         />
       )}
 
-      {/* Team Members Modal */}
       <TeamMembersModal
         isOpen={showTeamModal}
         onClose={() => setShowTeamModal(false)}
