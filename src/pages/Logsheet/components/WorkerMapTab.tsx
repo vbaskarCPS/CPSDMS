@@ -253,6 +253,13 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     };
   }, [mapLoaded]);
 
+  // Force resize once map is loaded — the container may not be fully sized at init time
+  useEffect(() => {
+    if (!mapLoaded) return;
+    const t = setTimeout(() => mapRef.current?.resize(), 150);
+    return () => clearTimeout(t);
+  }, [mapLoaded]);
+
   useEffect(() => { centerOnLocationRef.current = centerOnLocation; }, [centerOnLocation]);
 
   const handleToggleCenter = useCallback(() => {

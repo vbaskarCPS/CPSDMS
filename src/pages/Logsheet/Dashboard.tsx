@@ -398,7 +398,7 @@ const Dashboard: React.FC = () => {
   }
 
   return (
-    <div className={`min-h-screen bg-black flex flex-col ${activeView === 'logsheet' ? 'pb-20' : ''}`}>
+    <div className={`bg-black flex flex-col ${activeView === 'map' ? 'h-screen overflow-hidden' : 'min-h-screen pb-20'}`}>
       {/* RM View Mode Banner */}
       {isRMViewMode && worker && (
         <RMViewBanner
