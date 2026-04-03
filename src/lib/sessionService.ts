@@ -88,8 +88,7 @@ class SessionService {
 
   // --- 1. HELPERS ---
 
-  // Unified mapper to ensure consistency everywhere
-  // CHANGED: added sessionId field from new session_id column
+  // CHANGE 1: added sessionId field from the new session_id column
   private mapDbTransaction(tx: any): SessionTransaction {
     return {
         id: tx.id,
@@ -133,9 +132,14 @@ class SessionService {
 
   /**
    * Recalculates a worker's stats from their transactions and saves to the DB.
+   * Called after any transaction modification to keep stats in sync.
    * 
-   * CHANGED: Now tries session_id-based fetching first (lawn_rejuv post-migration),
-   * falls back to worker_id-based fetching (aeration + old data).
+   * TEAM-AWARE: Automatically detects if worker is part of a team session
+   * and aggregates transactions from ALL team members.
+   *
+   * CHANGE 2: For lawn_rejuv, fetches by session_id first so mid-day cart
+   * reassignments keep transactions with their original cart. Aeration always
+   * uses worker_id (original behaviour, unchanged).
    */
   private async recalculateAndSaveWorkerStats(workerId: string): Promise<void> {
     try {
@@ -143,10 +147,11 @@ class SessionService {
       const date = await this.getDailySessionDate();
       if (!date) return;
 
+      // Get season type and product cost percent for this session
       const seasonType = await this.getSessionSeasonType();
       const productCostPercent = await this.getProductCostPercent();
 
-      // 1. Find the session for this worker
+      // 1. Find the session for this worker (handles both solo and team sessions)
       let sessionData: any = null;
       
       const { data: teamSession } = await supabase
@@ -177,10 +182,9 @@ class SessionService {
       }
 
       // 2. Fetch transactions
-      // Aeration: ALWAYS use worker_id (unchanged from original behaviour)
-      // Lawn rejuv: try session_id first so mid-day cart moves don't bleed
-      //             transactions across carts, fall back to worker_id for
-      //             pre-migration data
+      // AERATION: always use worker_id (original behaviour, no change)
+      // LAWN REJUV: try session_id first so mid-day cart moves keep transactions
+      //   with their original cart; fall back to worker_id for pre-migration data
       let transactions: any[] | null = null;
 
       if (seasonType === 'lawn_rejuv' && sessionData.id) {
@@ -189,13 +193,13 @@ class SessionService {
           .select('*')
           .eq('session_id', sessionData.id)
           .eq('command_center_id', ccId);
-        
+
         if (sessionTx && sessionTx.length > 0) {
           transactions = sessionTx;
         }
       }
 
-      // Always fall back to worker_id (aeration always hits this path)
+      // Aeration always hits this path. Lawn rejuv hits it for pre-migration data.
       if (!transactions || transactions.length === 0) {
         const teamWorkerIds = hasItems(sessionData.team_worker_ids) 
           ? sessionData.team_worker_ids 
@@ -206,16 +210,18 @@ class SessionService {
           .select('*')
           .in('worker_id', teamWorkerIds)
           .eq('command_center_id', ccId);
-        
+
         transactions = workerTx;
       }
 
-      // 3. Map and recalculate
+      // 3. Map to SessionTransaction format
       const cleanFinancials = (transactions || []).map(tx => this.mapDbTransaction(tx));
+
+      // 4. Recalculate stats with region-appropriate tax rate, season config, and product cost
       const taxRate = this.getCurrentTaxRate();
       const newStats = this.recalculateStats(cleanFinancials, taxRate, seasonType, productCostPercent);
 
-      // 4. Save to logsheet_sessions by SESSION ID
+      // 5. Save to logsheet_sessions by SESSION ID (not worker_id)
       const { error } = await supabase
         .from('logsheet_sessions')
         .update({ stats: newStats })
@@ -232,9 +238,13 @@ class SessionService {
 
   /**
    * For team sessions, recalculate stats for the shared session.
+   * Since recalculateAndSaveWorkerStats is now team-aware, we only need to call it once.
    */
   private async recalculateTeamStats(teamWorkerIds: string[]): Promise<void> {
     if (!hasItems(teamWorkerIds)) return;
+    
+    // Just call once with any team member - the method will find the shared session
+    // and aggregate all team transactions
     await this.recalculateAndSaveWorkerStats(teamWorkerIds[0]);
   }
 
@@ -269,6 +279,7 @@ class SessionService {
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
+    // Get season type
     const { data: sessionData } = await supabase
       .from('daily_sessions')
       .select('season_type')
@@ -316,6 +327,7 @@ class SessionService {
       teamId: w.metadata?.teamId,
     }));
 
+    // Build team carts if this is a team season
     let teamCarts: TeamCart[] | undefined;
     if (seasonHasTeams(seasonType)) {
       const teamMap = new Map<string, Worker[]>();
@@ -369,6 +381,9 @@ class SessionService {
     };
   }
 
+  /**
+   * Fetches a manager by their userId
+   */
   public async getManagerById(managerId: string): Promise<ManagementUser | null> {
     const ccId = this.getCCId();
     const { data } = await supabase
@@ -469,6 +484,7 @@ class SessionService {
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
+    // Check if worker is part of a team session
     const { data: teamSession } = await supabase
       .from('logsheet_sessions')
       .select('status')
@@ -481,6 +497,7 @@ class SessionService {
       return teamSession.status;
     }
 
+    // Check individual session
     const { data } = await supabase
       .from('logsheet_sessions')
       .select('status')
@@ -578,6 +595,9 @@ class SessionService {
 
   // --- 2f. TEAM CART HELPERS ---
 
+  /**
+   * Get the team cart for a worker (if in a team season)
+   */
   public async getWorkerTeamCart(workerId: string): Promise<TeamCart | null> {
     const dailySession = await this.getDailySession();
     if (!dailySession || !dailySession.teamCarts) return null;
@@ -587,16 +607,23 @@ class SessionService {
     ) || null;
   }
 
+  /**
+   * Get all team members for a worker
+   */
   public async getTeamMembers(workerId: string): Promise<Worker[]> {
     const cart = await this.getWorkerTeamCart(workerId);
     return cart?.workers || [];
   }
 
+  /**
+   * Get the logsheet session for a worker (handles team sessions)
+   */
   public async getWorkerLogsheetSession(workerId: string): Promise<LogsheetSession | null> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
+    // Check for team session first
     const { data: teamSession } = await supabase
       .from('logsheet_sessions')
       .select('*')
@@ -623,6 +650,7 @@ class SessionService {
       };
     }
 
+    // Check individual session
     const { data } = await supabase
       .from('logsheet_sessions')
       .select('*')
@@ -661,6 +689,7 @@ class SessionService {
     const seasonType = data.seasonType || 'aeration';
     const isTeamSeason = seasonHasTeams(seasonType);
     
+    // Get default product cost percent if not provided in meta
     const defaultProductCost = SEASON_CONFIGS[seasonType].defaultProductCostPercent;
     
     const meta = importMeta || (data as any)._importMeta || { 
@@ -670,6 +699,7 @@ class SessionService {
       productCostPercent: defaultProductCost
     };
     
+    // Ensure productCostPercent is set
     if (meta.productCostPercent === undefined) {
       meta.productCostPercent = defaultProductCost;
     }
@@ -708,7 +738,7 @@ class SessionService {
           silverRate: w.silverRate,
           assignedManagerId: w.assignedManagerId,
           upsellsEnabled: true,
-          teamId: w.teamId,
+          teamId: w.teamId, // Store team ID in metadata
         },
         command_center_id: ccId,
       })),
@@ -751,7 +781,7 @@ class SessionService {
       session_date: data.date,
       data: b,
       command_center_id: ccId,
-      services: b.services,
+      services: b.services, // Store service flags
     }));
 
     const { error: bookingError } = await supabase
@@ -759,7 +789,9 @@ class SessionService {
       .insert(bookingRows);
     if (bookingError) throw bookingError;
 
+    // Create logsheet sessions
     if (isTeamSeason && data.teamCarts) {
+      // Team season: one session per cart
       const logsheetRows = data.teamCarts.map((cart) => {
         const primaryWorker = cart.workers[0];
         const equalSplit = createEqualSplit(cart.workerIds);
@@ -783,6 +815,7 @@ class SessionService {
         .insert(logsheetRows);
       if (lsError) throw lsError;
     } else {
+      // Aeration season: one session per worker
       const logsheetRows = data.workers.map((w) => ({
         id: `sess_${w.contractorId}_${Date.now()}`,
         worker_id: w.contractorId,
@@ -798,8 +831,7 @@ class SessionService {
         .insert(logsheetRows);
       if (lsError) throw lsError;
     }
-
-    // --- PCL CACHE (non-blocking) ---
+  // --- PCL CACHE (non-blocking) ---
     const cc = commandCenterService.getCurrentCommandCenter();
     if (cc?.digitalMappingEnabled && cc.callbookSheetId) {
       const sheetId = cc.callbookSheetId;
@@ -992,18 +1024,17 @@ class SessionService {
 
   /**
    * Reassign a worker between carts mid-session.
-   * 
+   *
    * Transactions stay stamped with their original session_id — they do NOT follow
    * the worker. The new cart starts fresh for that worker.
-   * 
-   * Payout splits reset to equal on all affected carts automatically.
-   * Payout rates ($7 solo / $9 team) update automatically via getPayoutRate()
-   * based on the new cart size — no extra logic needed here.
-   * 
+   * Payout splits reset to equal on all affected carts.
+   * Rates ($7 solo / $9 team) update automatically via getPayoutRate() based
+   * on the new cart size.
+   *
    * Three destination types:
-   *   existing_cart  — move worker into an already-existing cart
-   *   new_solo       — split worker off into their own solo cart
-   *   different_manager — update assignedManagerId + split to solo
+   *   existing_cart     — move worker into an already-existing cart
+   *   new_solo          — split worker off into their own solo cart
+   *   different_manager — update assignedManagerId + create fresh solo cart
    */
   public async reassignWorker(
     workerId: string,
@@ -1051,7 +1082,6 @@ class SessionService {
 
     // 3. Handle destination
     if (destination.type === 'existing_cart') {
-      // Add worker to target session
       const { data: targetSessionData, error } = await supabase
         .from('logsheet_sessions')
         .select('*')
@@ -1065,7 +1095,6 @@ class SessionService {
         ? targetSessionData.team_worker_ids
         : [targetSessionData.worker_id];
 
-      // Avoid duplicates
       if (!existingTargetIds.includes(workerId)) {
         const newTargetTeam = [...existingTargetIds, workerId];
         const newTargetSplit = createEqualSplit(newTargetTeam);
@@ -1082,8 +1111,7 @@ class SessionService {
       }
 
     } else if (destination.type === 'new_solo') {
-      // Create a brand-new solo session for this worker
-      const newSessionRow = {
+      const { error } = await supabase.from('logsheet_sessions').insert({
         id: `sess_${workerId}_${Date.now()}`,
         worker_id: workerId,
         team_worker_ids: [workerId],
@@ -1094,16 +1122,10 @@ class SessionService {
         command_center_id: ccId,
         equiv_split: { [workerId]: 100 },
         upsell_split: { [workerId]: 100 },
-      };
-
-      const { error } = await supabase
-        .from('logsheet_sessions')
-        .insert(newSessionRow);
-
+      });
       if (error) throw error;
 
     } else if (destination.type === 'different_manager') {
-      // Update the worker's manager in the users table
       const { data: user, error: fetchError } = await supabase
         .from('users')
         .select('metadata')
@@ -1113,21 +1135,14 @@ class SessionService {
 
       if (fetchError || !user) throw new Error('Worker not found');
 
-      const newMetadata = {
-        ...user.metadata,
-        assignedManagerId: destination.targetManagerId,
-      };
-
       const { error: updateError } = await supabase
         .from('users')
-        .update({ metadata: newMetadata })
+        .update({ metadata: { ...user.metadata, assignedManagerId: destination.targetManagerId } })
         .eq('user_id', workerId)
         .eq('command_center_id', ccId);
-
       if (updateError) throw updateError;
 
-      // Also create a fresh solo session under the new manager
-      const newSessionRow = {
+      const { error: sessError } = await supabase.from('logsheet_sessions').insert({
         id: `sess_${workerId}_${Date.now()}`,
         worker_id: workerId,
         team_worker_ids: [workerId],
@@ -1138,12 +1153,7 @@ class SessionService {
         command_center_id: ccId,
         equiv_split: { [workerId]: 100 },
         upsell_split: { [workerId]: 100 },
-      };
-
-      const { error: sessError } = await supabase
-        .from('logsheet_sessions')
-        .insert(newSessionRow);
-
+      });
       if (sessError) throw sessError;
     }
   }
@@ -1178,6 +1188,10 @@ class SessionService {
     };
   }
 
+  /**
+   * Authenticate worker - supports team-based authentication
+   * In team seasons, any team member's login accesses the shared cart
+   */
   public async authenticateWorker(contractorId: string, password: string): Promise<Worker | null> {
     const { data } = await supabase
       .from('users')
@@ -1220,8 +1234,9 @@ class SessionService {
   // --- 5. LOGSHEETS & TRANSACTIONS ---
 
   /**
-   * Get assignments for a worker — season-aware.
-   * CHANGED: lawn_rejuv now fetches transactions by session_id first.
+   * Get assignments for a worker - season-aware.
+   * CHANGE 3: lawn_rejuv fetches transactions by session_id first,
+   * falls back to worker_id for old data. Aeration unchanged.
    */
   public async getWorkerAssignments(workerId: string): Promise<MasterBooking[]> {
     const ccId = this.getCCId();
@@ -1231,12 +1246,14 @@ class SessionService {
     const seasonType = await this.getSessionSeasonType();
     const isLawnRejuv = seasonType === 'lawn_rejuv';
 
+    // For Lawn Rejuv, get the worker's session first
     let sessionId: string | null = null;
     if (isLawnRejuv) {
       const session = await this.getWorkerLogsheetSession(workerId);
       sessionId = session?.id || null;
     }
 
+    // Get routes assigned to this worker
     const { data: allRoutes } = await supabase
       .from('routes')
       .select('route_code, assigned_worker_ids')
@@ -1247,6 +1264,7 @@ class SessionService {
       .filter(r => r.assigned_worker_ids && r.assigned_worker_ids.includes(workerId))
       .map(r => r.route_code);
 
+    // Get all non-completed bookings
     const { data: allBookings } = await supabase
       .from('bookings')
       .select('*')
@@ -1254,6 +1272,7 @@ class SessionService {
       .eq('command_center_id', ccId)
       .neq('status', 'completed');
 
+    // Filter bookings based on season type
     let myPending: any[];
     
     if (isLawnRejuv && sessionId) {
@@ -1272,11 +1291,11 @@ class SessionService {
       });
     }
 
-    // Fetch transactions — session_id first for lawn_rejuv, worker_id for aeration
+    // Fetch transactions — session_id for lawn_rejuv, worker_id for aeration
     let myTransactionsData: any[] | null = null;
 
     if (isLawnRejuv && sessionId) {
-      // Try session_id (post-migration)
+      // Try session_id first (post-migration)
       const { data: sessionTx } = await supabase
         .from('transactions')
         .select('*')
@@ -1297,6 +1316,7 @@ class SessionService {
         myTransactionsData = workerTx;
       }
     } else {
+      // Aeration: always use worker_id
       const { data: workerTx } = await supabase
         .from('transactions')
         .select('*')
@@ -1322,7 +1342,7 @@ class SessionService {
       sessionId: b.session_id,
     }));
 
-    const completedMapped = myTransactions.map(tx => {
+    const completedMapped = (myTransactions || []).map(tx => {
         const mapped = this.mapDbTransaction(tx);
         return {
             'Booking ID': mapped.jobId,
@@ -1356,11 +1376,15 @@ class SessionService {
     return [...pendingMapped, ...completedMapped];
   }
 
+  /**
+   * Get bookings assigned to a specific session (for Lawn Rejuv team display)
+   */
   public async getSessionAssignments(sessionId: string): Promise<MasterBooking[]> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return [];
 
+    // Get pending bookings assigned to this session
     const { data: pendingBookings } = await supabase
       .from('bookings')
       .select('*')
@@ -1369,6 +1393,7 @@ class SessionService {
       .eq('session_id', sessionId)
       .neq('status', 'completed');
 
+    // Get the session to find team workers
     const { data: sessionData } = await supabase
       .from('logsheet_sessions')
       .select('team_worker_ids, worker_id')
@@ -1380,9 +1405,8 @@ class SessionService {
       ? sessionData.team_worker_ids 
       : [sessionData?.worker_id].filter(Boolean);
 
-    // Try session_id first (post-migration), fall back to worker_id
+    // Try session_id first, fall back to worker_id
     let transactions: any[] | null = null;
-
     const { data: sessionTx } = await supabase
       .from('transactions')
       .select('*')
@@ -1465,14 +1489,15 @@ class SessionService {
   }
 
   /**
-   * CHANGED: Groups transactions by session_id first (lawn_rejuv post-migration),
-   * falls back to worker_id grouping (aeration + old data).
+   * CHANGE 4: Groups transactions by session_id for lawn_rejuv (post-migration),
+   * falls back to worker_id grouping for aeration and pre-migration data.
    */
   public async getLogsheetSessions(): Promise<LogsheetSession[]> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return [];
     
+    // Get season config for live recalculation
     const seasonType = await this.getSessionSeasonType();
     const productCostPercent = await this.getProductCostPercent();
     const taxRate = this.getCurrentTaxRate();
@@ -1485,11 +1510,11 @@ class SessionService {
     const sessions = sessionsRes.data || [];
     const allTransactions = (transactionsRes.data || []).map(tx => this.mapDbTransaction(tx));
     
-    // Group by session_id (post-migration, lawn_rejuv)
+    // Group by session_id (for lawn_rejuv post-migration transactions)
     const transactionsBySessionId: Record<string, SessionTransaction[]> = {};
-    // Group by worker_id (fallback: aeration + old data)
+    // Group by worker_id (for aeration and pre-migration fallback)
     const transactionsByWorker: Record<string, SessionTransaction[]> = {};
-    
+
     allTransactions.forEach(tx => {
       const sid = (tx as any).sessionId;
       if (sid) {
@@ -1501,16 +1526,15 @@ class SessionService {
     });
     
     return sessions.map((d) => {
-      // Aeration: always use worker_id grouping (unchanged from original behaviour)
-      // Lawn rejuv: try session_id grouping first (post-migration),
-      //             fall back to worker_id for pre-migration data
+      // AERATION: always use worker_id grouping (original behaviour, no change)
+      // LAWN REJUV: use session_id grouping if transactions exist, else worker_id
       const sessionTx = seasonType === 'lawn_rejuv'
         ? (transactionsBySessionId[d.id] || [])
         : [];
-      
+
       let teamTransactions: SessionTransaction[];
       if (sessionTx.length > 0) {
-        // Lawn rejuv post-migration: transactions are stamped with session_id
+        // Lawn rejuv post-migration: transactions stamped with session_id
         teamTransactions = sessionTx;
       } else {
         // Aeration always lands here. Lawn rejuv pre-migration also lands here.
@@ -1544,14 +1568,15 @@ class SessionService {
   }
 
   /**
-   * CHANGED: Fetches financials by session_id first (lawn_rejuv post-migration),
-   * falls back to worker_id (aeration + old data).
+   * CHANGE 5: Fetches financials by session_id for lawn_rejuv (post-migration),
+   * falls back to worker_id for aeration and pre-migration data.
    */
   public async getActiveLogsheetSession(workerId: string): Promise<LogsheetSession | null> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) return null;
 
+    // Check for team session first
     const { data: teamSession } = await supabase
       .from('logsheet_sessions')
       .select('*')
@@ -1570,8 +1595,10 @@ class SessionService {
 
     if (!sessionData) return null;
 
-    // Aeration: ALWAYS use worker_id (unchanged from original behaviour)
-    // Lawn rejuv: try session_id first, fall back to worker_id for pre-migration data
+    const seasonType = await this.getSessionSeasonType();
+
+    // AERATION: always use worker_id (original behaviour, no change)
+    // LAWN REJUV: try session_id first, fall back to worker_id for pre-migration data
     let financialData: any[] | null = null;
 
     if (seasonType === 'lawn_rejuv' && sessionData.id) {
@@ -1586,7 +1613,7 @@ class SessionService {
       }
     }
 
-    // Always fall back to worker_id (aeration always hits this path)
+    // Aeration always hits this path. Lawn rejuv hits it for pre-migration data.
     if (!financialData || financialData.length === 0) {
       const workerIds = hasItems(sessionData.team_worker_ids) 
         ? sessionData.team_worker_ids 
@@ -1604,7 +1631,6 @@ class SessionService {
     const cleanFinancials = (financialData || []).map(tx => this.mapDbTransaction(tx));
     
     const taxRate = this.getCurrentTaxRate();
-    const seasonType = await this.getSessionSeasonType();
     const productCostPercent = await this.getProductCostPercent();
     const liveStats = this.recalculateStats(cleanFinancials, taxRate, seasonType, productCostPercent);
 
@@ -1649,6 +1675,10 @@ class SessionService {
     return this.getActiveLogsheetSession(workerId) as Promise<LogsheetSession>;
   }
 
+  /**
+   * Add net-new workers, managers, routes, and bookings to an already-active session.
+   * Used by the "Add Additional" button in SessionCommandCenter.
+   */
   public async addAdditionalSessionData(
     newData: DailySessionData
   ): Promise<{ managersAdded: number; workersAdded: number; routesAdded: number; bookingsAdded: number }> {
@@ -1659,6 +1689,7 @@ class SessionService {
     const seasonType = await this.getSessionSeasonType();
     const isTeamSeason = seasonHasTeams(seasonType);
 
+    // --- 1. Load existing keys from DB ---
     const [existingUsersRes, existingRoutesRes, existingBookingsRes] = await Promise.all([
       supabase.from('users').select('user_id').eq('command_center_id', ccId),
       supabase.from('routes').select('route_code').eq('session_date', date).eq('command_center_id', ccId),
@@ -1674,6 +1705,7 @@ class SessionService {
       })
     );
 
+    // --- 2. Filter to net-new only ---
     const newManagers = newData.managers.filter(m => !existingUserIds.has(m.userId));
     const newWorkers  = newData.workers.filter(w => !existingUserIds.has(w.contractorId));
     const newRoutes   = newData.routes.filter(r => !existingRouteCodes.has(r.routeCode));
@@ -1683,6 +1715,7 @@ class SessionService {
       return !existingBookingKeys.has(key);
     });
 
+    // --- 3. Upsert net-new managers ---
     if (newManagers.length > 0) {
       const managerRows = newManagers.map(m => ({
         user_id: m.userId,
@@ -1697,6 +1730,7 @@ class SessionService {
       if (error) throw error;
     }
 
+    // --- 4. Upsert net-new workers ---
     if (newWorkers.length > 0) {
       const workerRows = newWorkers.map(w => ({
         user_id: w.contractorId,
@@ -1716,6 +1750,7 @@ class SessionService {
       const { error } = await supabase.from('users').upsert(workerRows, { onConflict: 'user_id' });
       if (error) throw error;
 
+      // --- 5. Create logsheet sessions for new workers ---
       if (isTeamSeason && newData.teamCarts) {
         const newWorkerIdSet = new Set(newWorkers.map(w => w.contractorId));
         const newCarts = newData.teamCarts.filter(cart =>
@@ -1756,6 +1791,7 @@ class SessionService {
       }
     }
 
+    // --- 6. Insert net-new routes ---
     if (newRoutes.length > 0) {
       const routeRows = newRoutes.map(r => ({
         route_code: r.routeCode,
@@ -1769,6 +1805,7 @@ class SessionService {
       if (error) throw error;
     }
 
+    // --- 7. Insert net-new bookings ---
     if (newBookings.length > 0) {
       const bookingRows = newBookings.map(b => ({
         booking_id: b['Booking ID'],
@@ -1821,6 +1858,9 @@ class SessionService {
       .eq('command_center_id', ccId);
   }
 
+  /**
+   * Update team split percentages
+   */
   public async updateTeamSplits(
     sessionId: string, 
     equivSplit: TeamSplitConfig, 
@@ -1840,6 +1880,9 @@ class SessionService {
     if (error) throw error;
   }
 
+  /**
+   * Assign a booking to a worker (Aeration mode)
+   */
   public async assignBookingToWorker(bookingId: string, workerId: string | null): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
@@ -1919,6 +1962,9 @@ class SessionService {
     }
   }
 
+  /**
+   * Assign a booking to a session (Lawn Rejuv team mode)
+   */
   public async assignBookingToSession(bookingId: string, sessionId: string | null): Promise<void> {
     const ccId = this.getCCId();
 
@@ -1934,6 +1980,9 @@ class SessionService {
     }
   }
 
+  /**
+   * Assign multiple bookings to a session (batch operation for Lawn Rejuv)
+   */
   public async assignBookingsToSession(bookingIds: string[], sessionId: string): Promise<void> {
     const ccId = this.getCCId();
 
@@ -1949,11 +1998,17 @@ class SessionService {
     }
   }
 
+  /**
+   * Assign a single worker to a route (legacy method, wraps assignRouteToWorkers)
+   */
   public async assignRouteToWorker(routeCode: string, workerId: string | null): Promise<void> {
     const newAssignedWorkerIds = workerId ? [workerId] : [];
     await this.assignRouteToWorkers(routeCode, newAssignedWorkerIds);
   }
 
+  /**
+   * Assign multiple workers to a route (used for team/cart assignments in Lawn Rejuv)
+   */
   public async assignRouteToWorkers(routeCode: string, workerIds: string[]): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
@@ -1985,6 +2040,9 @@ class SessionService {
     }
   }
 
+  /**
+   * Update the log notes for a booking
+   */
   public async updateBookingNotes(bookingId: string, notes: string): Promise<void> {
     const ccId = this.getCCId();
     const { error } = await supabase
@@ -2086,10 +2144,18 @@ class SessionService {
               mergedSnapshot.firstName = updates.customerName.split(' ')[0] || '';
               mergedSnapshot.lastName = updates.customerName.split(' ').slice(1).join(' ') || '';
           }
-          if (updates.address !== undefined) mergedSnapshot.address = updates.address;
-          if (updates.routeCode !== undefined) mergedSnapshot.routeCode = updates.routeCode;
-          if (updates.serviceType !== undefined) mergedSnapshot.serviceType = updates.serviceType;
-          if (updates.serviceName !== undefined) mergedSnapshot.serviceName = updates.serviceName;
+          if (updates.address !== undefined) {
+              mergedSnapshot.address = updates.address;
+          }
+          if (updates.routeCode !== undefined) {
+              mergedSnapshot.routeCode = updates.routeCode;
+          }
+          if (updates.serviceType !== undefined) {
+              mergedSnapshot.serviceType = updates.serviceType;
+          }
+          if (updates.serviceName !== undefined) {
+              mergedSnapshot.serviceName = updates.serviceName;
+          }
           
           dbPayload.customer_snapshot = mergedSnapshot;
       }
@@ -2108,20 +2174,20 @@ class SessionService {
   }
 
   /**
-   * CHANGED: Now stamps session_id on every new transaction.
-   * This is the key change that makes mid-day cart reassignment work correctly —
-   * transactions stay bound to the cart they were recorded on, not the worker.
+   * CHANGE 6: Stamps session_id on every new transaction so mid-day cart
+   * reassignments keep transactions with their original cart.
+   * Aeration is unaffected — it just gets a session_id too, but recalculation
+   * still uses worker_id for aeration (see recalculateAndSaveWorkerStats).
    */
   public async completeJob(
     transaction: SessionTransaction, 
     jobId: string, 
     workerId: string,
-    teamWorkerIds?: string[]
+    teamWorkerIds?: string[] // For team seasons
   ): Promise<void> {
     const ccId = this.getCCId();
 
-    // Look up the worker's current session to stamp session_id
-    // This is non-blocking — if lookup fails, we proceed without it
+    // Look up the worker's current session to stamp session_id (non-blocking)
     let currentSessionId: string | undefined;
     try {
       const workerSession = await this.getWorkerLogsheetSession(workerId);
@@ -2202,6 +2268,7 @@ class SessionService {
         .eq('command_center_id', ccId);
     }
 
+    // Recalculate stats - the method is now team-aware and will handle everything
     await this.recalculateAndSaveWorkerStats(workerId);
 
     // Send email receipt
@@ -2217,6 +2284,7 @@ class SessionService {
         paymentMethod: transaction.paymentMethod,
         workerName: transaction.workerName || '',
         transactionId: transaction.id,
+        // Template selection fields
         commandCenterId: ccId,
         type: transaction.type,
         refId: transaction.refId,
@@ -2240,6 +2308,7 @@ class SessionService {
     paymentMethod: string;
     workerName: string;
     transactionId: string;
+    // Template selection fields
     commandCenterId: string;
     type: string;
     refId?: string;
@@ -2329,6 +2398,9 @@ class SessionService {
     };
   }
 
+  /**
+   * Season-aware stats recalculation
+   */
   public recalculateStats(
     financials: SessionTransaction[], 
     taxRate: number = 5,
@@ -2339,6 +2411,7 @@ class SessionService {
     const taxDivisor = 1 + taxRate / 100;
     const config = getSeasonConfig(seasonType);
     
+    // Get flat codes for this season
     const flatCodes = config.officeFlats.map(f => f.code);
 
     financials.forEach((tx) => {
@@ -2351,10 +2424,13 @@ class SessionService {
       Object.entries(paymentMap).forEach(([method, amount]) => {
         const val = Number(amount) || 0;
         
-        if (method === 'IOS') return;
+        if (method === 'IOS') {
+          return;
+        }
         
         const addToBucket = (val: number, isProd: boolean) => {
           if (isProd) {
+            // Check for season-appropriate flats
             const isFlat = tx.type === 'Production' && 
               flatCodes.some(code => tx.displayPrice?.startsWith(code));
             
@@ -2394,6 +2470,7 @@ class SessionService {
     stats.prodGross = stats.prodPrepaid + stats.prodBilled + stats.prodCash + stats.prodCheque + 
                       stats.prodETransfer + stats.prodCreditCard + stats.prodFlats + stats.prodPrepaidSplit;
     
+    // Season-aware weighted production calculation
     const prepaidWeight = config.prepaidWeight;
     const billedWeight = config.billedWeight;
     
@@ -2407,10 +2484,12 @@ class SessionService {
         stats.prodFlats + 
         stats.prodPrepaidSplit;
 
+    // Apply tax removal first, then product cost deduction
     const afterTax = weightedProd / taxDivisor;
     const productCostMultiplier = 1 - (productCostPercent / 100);
     stats.prodPayable = afterTax * productCostMultiplier;
     
+    // EQ calculation ALWAYS uses EQ_DIVISOR (25) regardless of season
     stats.totalEQ = stats.prodPayable / EQ_DIVISOR;
     
     stats.upsellGross = stats.upsellBilled + stats.upsellCash + stats.upsellCheque + 
@@ -2422,6 +2501,9 @@ class SessionService {
 
   // --- 9. TEAM PAYOUT CALCULATIONS ---
 
+  /**
+   * Calculate individual worker payouts for a team session.
+   */
   public calculateTeamPayouts(
     session: LogsheetSession,
     workers: Worker[],
@@ -2432,36 +2514,49 @@ class SessionService {
     const teamWorkerIds = session.teamWorkerIds || [session.workerId];
     const teamSize = teamWorkerIds.length;
     
+    // Get splits (default to equal if not set)
     const equivSplit = session.equivSplit || createEqualSplit(teamWorkerIds);
     const upsellSplit = session.upsellSplit || equivSplit;
     
+    // Get the BASE payout rate ($/EQ)
     const basePayoutRate = getPayoutRate(seasonType, teamSize);
+    
+    // Team total EQ (displayed to all workers, but split for calculation)
     const teamTotalEQ = stats.totalEQ;
     
     const breakdowns: WorkerPayoutBreakdown[] = [];
+    
     const workerMap = new Map(workers.map(w => [w.contractorId, w]));
     
     for (const workerId of teamWorkerIds) {
       const worker = workerMap.get(workerId);
       if (!worker) continue;
       
+      // Get split percentages
       const equivPercent = (equivSplit[workerId] || 0) / 100;
       const upsellPercent = (upsellSplit[workerId] || 0) / 100;
       
+      // Calculate assigned EQ (team total * split %)
       const assignedEQ = teamTotalEQ * equivPercent;
       
+      // Get worker's individual rates ($/EQ, NOT percentages)
       const alumniRate = worker.alumniRate || 0;
       const silverRate = worker.silverRate || 0;
       const totalPayoutRate = basePayoutRate + alumniRate + silverRate;
       
+      // Production commission breakdown
       const baseCommission = assignedEQ * basePayoutRate;
       const alumniBonus = assignedEQ * alumniRate;
       const silverBonus = assignedEQ * silverRate;
       const productionCommission = baseCommission + alumniBonus + silverBonus;
       
+      // Upsell commission (10% of upsell payable, split by upsell %)
       const upsellCommission = (stats.upsellPayable || 0) * upsellPercent * 0.10;
+      
+      // IOS commission ($5 per IOS, split by upsell %)
       const iosCommission = (stats.iosCount || 0) * 5 * upsellPercent;
       
+      // Bonuses (with their own split percentages)
       let bonusAmount = 0;
       if (session.bonuses) {
         for (const bonus of session.bonuses) {
@@ -2470,13 +2565,16 @@ class SessionService {
         }
       }
       
+      // Cash/cheque diff is DISPLAY ONLY
       const cashChequeDiff = validation 
         ? (Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0)) * equivPercent
         : 0;
       
+      // Machine rental is $10 PER WORKER (NOT split)
       const machineRentalDeduction = validation?.machineRental ? 10 : 0;
       const deductions = machineRentalDeduction;
       
+      // Final commission
       const finalCommission = productionCommission + upsellCommission + iosCommission + 
                              bonusAmount - deductions;
       
