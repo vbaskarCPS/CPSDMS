@@ -15,6 +15,12 @@ import {
   Users,
   Leaf,
   Eye,
+  // NEW: added for reassign modal
+  Shuffle,
+  Loader,
+  AlertCircle,
+  UserPlus,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
 import { setStorageItem } from '../../../lib/localStorage';
@@ -113,6 +119,15 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
   // Refresh Key
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // --- NEW: REASSIGN MODAL STATE (Lawn Rejuv only) ---
+  const [showReassignModal, setShowReassignModal] = useState(false);
+  const [selectedWorkerToMove, setSelectedWorkerToMove] = useState<WorkerDisplay | null>(null);
+  const [selectedWorkerCart, setSelectedWorkerCart] = useState<CartDisplay | null>(null);
+  const [reassignLoading, setReassignLoading] = useState(false);
+  const [reassignError, setReassignError] = useState<string | null>(null);
+  const [reassignManagerId, setReassignManagerId] = useState('');
+  const [reassignSuccess, setReassignSuccess] = useState<string | null>(null);
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -408,7 +423,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     setRefreshKey(prev => prev + 1);
   };
 
-  // --- VIEW LOGSHEET HANDLER (NEW) ---
+  // --- VIEW LOGSHEET HANDLER ---
   const handleViewLogsheet = (worker: Worker, cartMembers?: Worker[]) => {
     if (!currentUser) {
       console.error('Cannot view logsheet: currentUser not available');
@@ -480,6 +495,74 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     return member.financialStore.length === 0;
   };
 
+  // --- NEW: REASSIGN MODAL HANDLERS ---
+
+  const openReassignModal = () => {
+    setSelectedWorkerToMove(null);
+    setSelectedWorkerCart(null);
+    setReassignError(null);
+    setReassignSuccess(null);
+    setReassignManagerId('');
+    setShowReassignModal(true);
+  };
+
+  const closeReassignModal = () => {
+    setShowReassignModal(false);
+    setSelectedWorkerToMove(null);
+    setSelectedWorkerCart(null);
+    setReassignError(null);
+    setReassignSuccess(null);
+  };
+
+  const selectWorkerToMove = (worker: WorkerDisplay, cart: CartDisplay) => {
+    setSelectedWorkerToMove(worker);
+    setSelectedWorkerCart(cart);
+    setReassignError(null);
+    setReassignSuccess(null);
+    setReassignManagerId('');
+  };
+
+  const handleReassignWorker = async (
+    destination:
+      | { type: 'existing_cart'; targetSessionId: string; label: string }
+      | { type: 'new_solo' }
+      | { type: 'different_manager'; targetManagerId: string }
+  ) => {
+    if (!selectedWorkerToMove) return;
+    setReassignLoading(true);
+    setReassignError(null);
+    setReassignSuccess(null);
+
+    try {
+      await sessionService.reassignWorker(selectedWorkerToMove.contractorId, destination);
+
+      let msg = '';
+      if (destination.type === 'existing_cart') {
+        msg = `${selectedWorkerToMove.firstName} moved to ${destination.label}`;
+      } else if (destination.type === 'new_solo') {
+        msg = `${selectedWorkerToMove.firstName} is now a solo cart`;
+      } else {
+        const mgr = allManagers.find(m => m.userId === destination.targetManagerId);
+        msg = `${selectedWorkerToMove.firstName} moved to ${mgr?.name || 'new manager'}`;
+      }
+
+      setReassignSuccess(msg);
+      setSelectedWorkerToMove(null);
+      setSelectedWorkerCart(null);
+
+      // Reload data to reflect changes
+      handleRefreshData();
+    } catch (err: any) {
+      console.error('Reassign failed:', err);
+      setReassignError(err.message || 'Failed to reassign worker. Please try again.');
+    } finally {
+      setReassignLoading(false);
+    }
+  };
+
+  // Other managers (for moving to different manager)
+  const otherManagers = allManagers.filter(m => m.userId !== managerId && m.role === 'RouteManager');
+
   // --- RENDER: Aeration Worker Card ---
   const renderWorkerCard = (member: WorkerDisplay) => {
     const canModify = isModifiable(member);
@@ -519,7 +602,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
-              {/* View Logsheet Button (NEW) */}
+              {/* View Logsheet Button */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -853,7 +936,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
         {/* View Logsheet + Chevron Button */}
         <div className="absolute top-2 right-1.5 flex items-center gap-1">
-          {/* View Logsheet Button (NEW) */}
+          {/* View Logsheet Button */}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -910,11 +993,21 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
       {teamMembers.length > 0 && (
         <div className="flex justify-between items-center mb-4">
           {isLawnRejuv && (
-            <div className="flex items-center gap-2 text-xs text-green-400">
-              <Leaf size={14} />
-              <span>
-                {carts.length} cart{carts.length !== 1 ? 's' : ''} • {teamMembers.length} workers
-              </span>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 text-xs text-green-400">
+                <Leaf size={14} />
+                <span>
+                  {carts.length} cart{carts.length !== 1 ? 's' : ''} • {teamMembers.length} workers
+                </span>
+              </div>
+              {/* NEW: Reassign Teams button — Lawn Rejuv only */}
+              <button
+                onClick={openReassignModal}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-900/30 hover:bg-orange-900/50 text-orange-300 border border-orange-700/50 text-xs font-bold transition-colors"
+              >
+                <ArrowRightLeft size={13} />
+                Reassign Teams
+              </button>
             </div>
           )}
           <div className={`flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 shadow-sm ${!isLawnRejuv ? 'ml-auto' : ''}`}>
@@ -946,6 +1039,271 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
       {/* Aeration: Render Worker Cards directly */}
       {!isLawnRejuv && sortedTeamMembers.map((member) => renderWorkerCard(member))}
+
+      {/* ============================================================
+          NEW: REASSIGN TEAMS MODAL (Lawn Rejuv only)
+          ============================================================ */}
+      {showReassignModal && isLawnRejuv && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+            
+            {/* Modal Header */}
+            <div className="p-4 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <ArrowRightLeft size={18} className="text-orange-400" />
+                <h3 className="text-lg font-bold text-white">Reassign Teams</h3>
+                <span className="text-xs bg-orange-900/30 text-orange-400 border border-orange-700/50 px-2 py-0.5 rounded">
+                  Transactions stay with original cart
+                </span>
+              </div>
+              <button onClick={closeReassignModal} className="p-1.5 hover:bg-gray-700 rounded-full text-gray-400 hover:text-white">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Success / Error banners */}
+            {reassignSuccess && (
+              <div className="mx-4 mt-3 flex items-center gap-2 bg-green-900/30 border border-green-700/50 rounded-lg px-3 py-2 text-green-300 text-sm">
+                <Check size={16} />
+                {reassignSuccess}
+              </div>
+            )}
+            {reassignError && (
+              <div className="mx-4 mt-3 flex items-center gap-2 bg-red-900/30 border border-red-700/50 rounded-lg px-3 py-2 text-red-300 text-sm">
+                <AlertCircle size={16} />
+                {reassignError}
+              </div>
+            )}
+
+            <div className="flex flex-1 overflow-hidden">
+              
+              {/* LEFT PANEL: Select worker to move */}
+              <div className="w-1/2 border-r border-gray-700 flex flex-col">
+                <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex-shrink-0">
+                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">
+                    {selectedWorkerToMove ? '✓ Worker selected' : '1. Select worker to move'}
+                  </p>
+                </div>
+                <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                  {sortedCarts.map(cart => (
+                    <div
+                      key={cart.sessionId}
+                      className={`rounded-lg border overflow-hidden ${
+                        selectedWorkerCart?.sessionId === cart.sessionId
+                          ? 'border-orange-600/50 bg-orange-900/10'
+                          : 'border-gray-700 bg-gray-800/50'
+                      }`}
+                    >
+                      {/* Cart label */}
+                      <div className="px-3 py-1.5 bg-gray-800/80 border-b border-gray-700/50 flex items-center gap-2">
+                        {cart.members.length > 1 ? (
+                          <>
+                            <Truck size={11} className="text-green-400" />
+                            <span className="text-[10px] text-green-400 font-bold">Cart ({cart.members.length})</span>
+                          </>
+                        ) : (
+                          <span className="text-[10px] text-gray-500 font-bold">Solo</span>
+                        )}
+                        <span className="text-[10px] text-gray-600 font-mono ml-auto">
+                          {cart.aggregatedStats.eq.toFixed(1)} EQ
+                        </span>
+                      </div>
+                      {/* Worker rows */}
+                      {cart.members.map(member => {
+                        const isSelected = selectedWorkerToMove?.contractorId === member.contractorId;
+                        return (
+                          <button
+                            key={member.contractorId}
+                            onClick={() => selectWorkerToMove(member, cart)}
+                            className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors text-sm ${
+                              isSelected
+                                ? 'bg-orange-900/30 text-orange-200'
+                                : 'hover:bg-gray-700/50 text-gray-300'
+                            }`}
+                          >
+                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${
+                              isSelected ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300'
+                            }`}>
+                              {member.firstName.charAt(0)}{member.lastName.charAt(0)}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="font-medium truncate">{member.firstName} {member.lastName}</div>
+                              <div className="text-[10px] text-gray-500 font-mono">#{member.contractorId}</div>
+                            </div>
+                            {isSelected && <Check size={14} className="text-orange-400 ml-auto flex-shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* RIGHT PANEL: Choose destination */}
+              <div className="w-1/2 flex flex-col">
+                <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex-shrink-0">
+                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">
+                    2. Move to...
+                  </p>
+                </div>
+
+                {!selectedWorkerToMove ? (
+                  <div className="flex-1 flex items-center justify-center text-gray-600 text-sm italic p-4 text-center">
+                    Select a worker on the left to see move options
+                  </div>
+                ) : (
+                  <div className="flex-1 overflow-y-auto p-3 space-y-3">
+
+                    {/* Selected worker badge */}
+                    <div className="flex items-center gap-2 bg-orange-900/20 border border-orange-700/40 rounded-lg px-3 py-2">
+                      <div className="w-7 h-7 rounded-full bg-orange-600 flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0">
+                        {selectedWorkerToMove.firstName.charAt(0)}{selectedWorkerToMove.lastName.charAt(0)}
+                      </div>
+                      <div>
+                        <div className="text-sm font-bold text-white">{selectedWorkerToMove.firstName} {selectedWorkerToMove.lastName}</div>
+                        <div className="text-[10px] text-orange-400">
+                          Moving from: {selectedWorkerCart?.members.map(m => m.firstName).join(' & ')}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Option A: Move to existing cart */}
+                    {sortedCarts.filter(c => c.sessionId !== selectedWorkerCart?.sessionId).length > 0 && (
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Join existing cart</p>
+                        <div className="space-y-1">
+                          {sortedCarts
+                            .filter(c => c.sessionId !== selectedWorkerCart?.sessionId)
+                            .map(targetCart => {
+                              const label = targetCart.members.map(m => m.firstName).join(' & ');
+                              const newSize = targetCart.members.length + 1;
+                              const newRate = newSize >= 2 ? '$9/EQ' : '$7/EQ';
+                              return (
+                                <button
+                                  key={targetCart.sessionId}
+                                  disabled={reassignLoading}
+                                  onClick={() => handleReassignWorker({
+                                    type: 'existing_cart',
+                                    targetSessionId: targetCart.sessionId,
+                                    label,
+                                  })}
+                                  className="w-full text-left px-3 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 hover:border-blue-500 rounded-lg transition-colors flex items-center justify-between gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    {targetCart.members.length > 1
+                                      ? <Truck size={14} className="text-green-400 flex-shrink-0" />
+                                      : (
+                                        <div className="w-5 h-5 rounded-full bg-gray-600 flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0">
+                                          {targetCart.members[0]?.firstName.charAt(0)}
+                                        </div>
+                                      )
+                                    }
+                                    <div className="min-w-0">
+                                      <div className="font-medium text-gray-200 truncate">{label}</div>
+                                      <div className="text-[10px] text-gray-500">{targetCart.aggregatedStats.eq.toFixed(1)} EQ</div>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 flex-shrink-0">
+                                    <span className="text-[10px] text-blue-400 bg-blue-900/30 border border-blue-700/50 px-1.5 py-0.5 rounded">
+                                      → {newRate}
+                                    </span>
+                                    {reassignLoading
+                                      ? <Loader size={12} className="animate-spin text-gray-400" />
+                                      : <ArrowRight size={14} className="text-gray-500" />
+                                    }
+                                  </div>
+                                </button>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Option B: Make solo cart */}
+                    <div>
+                      <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Split off</p>
+                      <button
+                        disabled={reassignLoading || selectedWorkerCart?.members.length === 1}
+                        onClick={() => handleReassignWorker({ type: 'new_solo' })}
+                        className="w-full text-left px-3 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 hover:border-yellow-500 rounded-lg transition-colors flex items-center justify-between gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <div className="flex items-center gap-2">
+                          <UserPlus size={14} className="text-yellow-400 flex-shrink-0" />
+                          <div>
+                            <div className="font-medium text-gray-200">Create solo cart</div>
+                            <div className="text-[10px] text-gray-500">New cart, fresh start</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-[10px] text-yellow-400 bg-yellow-900/30 border border-yellow-700/50 px-1.5 py-0.5 rounded">
+                            $7/EQ
+                          </span>
+                          {reassignLoading
+                            ? <Loader size={12} className="animate-spin text-gray-400" />
+                            : <ArrowRight size={14} className="text-gray-500" />
+                          }
+                        </div>
+                      </button>
+                      {selectedWorkerCart?.members.length === 1 && (
+                        <p className="text-[10px] text-gray-600 italic mt-1 pl-1">
+                          Already solo — join a cart instead
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Option C: Move to different manager */}
+                    {otherManagers.length > 0 && (
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Move to different manager</p>
+                        <div className="bg-gray-800 border border-gray-600 rounded-lg p-3 space-y-2">
+                          <select
+                            value={reassignManagerId}
+                            onChange={(e) => setReassignManagerId(e.target.value)}
+                            className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            <option value="">Select manager...</option>
+                            {otherManagers.map(m => (
+                              <option key={m.userId} value={m.userId}>{m.name}</option>
+                            ))}
+                          </select>
+                          <button
+                            disabled={reassignLoading || !reassignManagerId}
+                            onClick={() => handleReassignWorker({
+                              type: 'different_manager',
+                              targetManagerId: reassignManagerId,
+                            })}
+                            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg text-sm font-bold transition-colors disabled:cursor-not-allowed"
+                          >
+                            {reassignLoading
+                              ? <Loader size={14} className="animate-spin" />
+                              : <Shuffle size={14} />
+                            }
+                            Transfer to Manager
+                          </button>
+                          <p className="text-[10px] text-gray-600 italic">
+                            Worker gets a new solo cart under the new manager
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 border-t border-gray-700 flex justify-end flex-shrink-0">
+              <button
+                onClick={closeReassignModal}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

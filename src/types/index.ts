@@ -306,7 +306,7 @@ export interface WorkerPayoutBreakdown {
   assignedEQ: number;               // teamTotalEQ * equivSplitPercent (for CALCULATION)
   
   // Payout Rate Breakdown (all in $/EQ)
-  basePayoutRate: number;           // $8 for teams, $6 for solo
+  basePayoutRate: number;           // $9 for teams, $7 for solo
   alumniRate: number;               // Additional $/EQ for alumni
   silverRate: number;               // Additional $/EQ for silver
   totalPayoutRate: number;          // basePayoutRate + alumniRate + silverRate
@@ -514,14 +514,14 @@ export interface SeasonConfig {
   displayName: string;
   
   // Pricing
-  prepaidWeight: number;      // 0.5 for aeration, 0.7 for lawn_rejuv
+  prepaidWeight: number;      // 0.5 for aeration, 0.6 for lawn_rejuv
   billedWeight: number;       // 0.5 for both
   
   // PAYOUT RATES ($/EQ for commission calculation)
   // NOTE: These are BASE rates. Final rate = base + alumniRate + silverRate
   // alumniRate and silverRate are also $/EQ amounts (not percentages)
-  payoutRateSolo: number;     // $8 for aeration, $6 for lawn_rejuv solo
-  payoutRateTeam: number;     // $8 for aeration, $8 for lawn_rejuv team (2+)
+  payoutRateSolo: number;     // $8 for aeration, $7 for lawn_rejuv solo
+  payoutRateTeam: number;     // $8 for aeration, $9 for lawn_rejuv team (2+)
   
   // Product Cost Deduction (percentage, 0-100)
   // Applied after tax removal: prodPayable = (weightedProd / taxDivisor) * (1 - productCost/100)
@@ -560,12 +560,12 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
   lawn_rejuv: {
     seasonType: 'lawn_rejuv',
     displayName: 'Lawn Rejuvenation Season',
-    prepaidWeight: 0.7,
+    prepaidWeight: 0.6,   // CHANGED: was 0.7
     billedWeight: 0.5,
-    // Payout rates for lawn rejuv: $6/EQ solo, $8/EQ for teams of 2+
+    // Payout rates for lawn rejuv: $7/EQ solo, $9/EQ for teams of 2+
     // Final rate = base + alumniRate + silverRate
-    payoutRateSolo: 6,
-    payoutRateTeam: 8,
+    payoutRateSolo: 7,    // CHANGED: was 6
+    payoutRateTeam: 9,    // CHANGED: was 8
     // 25% product cost deduction for lawn rejuv
     defaultProductCostPercent: 25,
     officeFlats: [
