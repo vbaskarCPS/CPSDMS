@@ -176,11 +176,14 @@ class SessionService {
         return;
       }
 
-      // 2. Fetch transactions — session_id first, fall back to worker_id
-      // This ensures mid-day cart moves don't bleed transactions across carts
+      // 2. Fetch transactions
+      // Aeration: ALWAYS use worker_id (unchanged from original behaviour)
+      // Lawn rejuv: try session_id first so mid-day cart moves don't bleed
+      //             transactions across carts, fall back to worker_id for
+      //             pre-migration data
       let transactions: any[] | null = null;
 
-      if (sessionData.id) {
+      if (seasonType === 'lawn_rejuv' && sessionData.id) {
         const { data: sessionTx } = await supabase
           .from('transactions')
           .select('*')
@@ -192,7 +195,7 @@ class SessionService {
         }
       }
 
-      // Fall back to worker_id grouping (aeration or pre-migration data)
+      // Always fall back to worker_id (aeration always hits this path)
       if (!transactions || transactions.length === 0) {
         const teamWorkerIds = hasItems(sessionData.team_worker_ids) 
           ? sessionData.team_worker_ids 
@@ -1498,15 +1501,19 @@ class SessionService {
     });
     
     return sessions.map((d) => {
-      // Try session_id grouping first
-      const sessionTx = transactionsBySessionId[d.id] || [];
+      // Aeration: always use worker_id grouping (unchanged from original behaviour)
+      // Lawn rejuv: try session_id grouping first (post-migration),
+      //             fall back to worker_id for pre-migration data
+      const sessionTx = seasonType === 'lawn_rejuv'
+        ? (transactionsBySessionId[d.id] || [])
+        : [];
       
       let teamTransactions: SessionTransaction[];
       if (sessionTx.length > 0) {
-        // Post-migration: transactions are stamped with session_id
+        // Lawn rejuv post-migration: transactions are stamped with session_id
         teamTransactions = sessionTx;
       } else {
-        // Fallback: aeration or pre-migration data — group by worker_id
+        // Aeration always lands here. Lawn rejuv pre-migration also lands here.
         const teamWorkerIds = hasItems(d.team_worker_ids) ? d.team_worker_ids : [d.worker_id];
         teamTransactions = [];
         teamWorkerIds.forEach((wid: string) => {
@@ -1563,10 +1570,11 @@ class SessionService {
 
     if (!sessionData) return null;
 
-    // Try session_id first (post-migration), fall back to worker_id
+    // Aeration: ALWAYS use worker_id (unchanged from original behaviour)
+    // Lawn rejuv: try session_id first, fall back to worker_id for pre-migration data
     let financialData: any[] | null = null;
 
-    if (sessionData.id) {
+    if (seasonType === 'lawn_rejuv' && sessionData.id) {
       const { data: sessionTx } = await supabase
         .from('transactions')
         .select('*')
@@ -1578,8 +1586,8 @@ class SessionService {
       }
     }
 
+    // Always fall back to worker_id (aeration always hits this path)
     if (!financialData || financialData.length === 0) {
-      // Fall back to worker_id (aeration or pre-migration data)
       const workerIds = hasItems(sessionData.team_worker_ids) 
         ? sessionData.team_worker_ids 
         : [sessionData.worker_id];
