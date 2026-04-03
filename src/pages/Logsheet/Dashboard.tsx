@@ -22,6 +22,7 @@ import {
   Eye,
   ArrowLeft,
   Map as MapIcon,
+  BookOpen,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem, setStorageItem } from '../../lib/localStorage';
@@ -34,6 +35,7 @@ import { Worker, SessionStats, MasterBooking, ManagementUser, SeasonType } from 
 import LogsheetJobCard from './components/LogsheetJobCard';
 import AddContractModal from '../../components/AddContractModal';
 import WorkerMapTab from './components/WorkerMapTab';
+import WorkerPCLTab from './components/WorkerPCLTab';
 
 // Simple Toast Component
 const Toast: React.FC<{ message: string; show: boolean }> = ({ message, show }) => {
@@ -172,15 +174,18 @@ const Dashboard: React.FC = () => {
 
   // Digital mapping / view state
   const [hasDigitalMapping, setHasDigitalMapping] = useState(false);
-  const [activeView, setActiveView] = useState<'logsheet' | 'map'>('logsheet');
+  const [activeView, setActiveView] = useState<'logsheet' | 'pcl' | 'map'>('logsheet');
+
+  // Worker's assigned route codes (used by PCL tab)
+  const [assignedRouteCodes, setAssignedRouteCodes] = useState<string[]>([]);
 
   // Data State
   const [stats, setStats] = useState<SessionStats>(sessionService.getEmptyStats());
   const [jobs, setJobs] = useState<MasterBooking[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Computed: show the Route Map tab only for aeration, non-training, non-RM-view sessions
-  // with digital mapping enabled for this command center
+  // Show the digital tabs (PCL + Route Map) only for aeration, non-training,
+  // non-RM-view sessions with digital mapping enabled for this command center.
   const showMapTab = hasDigitalMapping && seasonType === 'aeration' && !isTrainingMode && !isRMViewMode;
 
   // Check if this is a team season with teammates
@@ -268,6 +273,7 @@ const Dashboard: React.FC = () => {
               (r: any) => r.assignedWorkerIds && r.assignedWorkerIds.includes(storedWorker.contractorId)
             );
             setHasAssignedRoutes(myRoutes.length > 0);
+            setAssignedRouteCodes(myRoutes.map((r: any) => r.routeCode));
           }
 
           const managerData = trainingService.getManagerById(storedWorker.assignedManagerId || '');
@@ -299,6 +305,7 @@ const Dashboard: React.FC = () => {
               r => r.assignedWorkerIds && r.assignedWorkerIds.includes(storedWorker.contractorId)
             );
             setHasAssignedRoutes(myRoutes.length > 0);
+            setAssignedRouteCodes(myRoutes.map(r => r.routeCode));
 
             if (currentSeasonType === 'lawn_rejuv' && dailySession.teamCarts) {
               const myCart = dailySession.teamCarts.find(cart =>
@@ -417,7 +424,9 @@ const Dashboard: React.FC = () => {
       {/* ── Sticky header ── */}
       <div className="sticky top-0 z-30 bg-black/90 backdrop-blur-md border-b border-gray-800 p-4 pb-2">
 
-        {/* TOP-LEVEL TAB SWITCHER — only when digital mapping is enabled for aeration */}
+        {/* TOP-LEVEL TAB SWITCHER — Logsheet | PCL | Route Map
+            Only visible when digital mapping is enabled, aeration season,
+            not training, not RM view */}
         {showMapTab && (
           <div className="flex bg-gray-900 rounded-lg p-1 border border-gray-800 mb-3">
             <button
@@ -430,6 +439,17 @@ const Dashboard: React.FC = () => {
             >
               <FileText size={13} />
               Logsheet
+            </button>
+            <button
+              onClick={() => setActiveView('pcl')}
+              className={`flex-1 py-1.5 rounded-md text-xs font-bold transition-colors flex items-center justify-center gap-1.5 ${
+                activeView === 'pcl'
+                  ? 'bg-amber-600 text-white shadow'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <BookOpen size={13} />
+              PCL
             </button>
             <button
               onClick={() => setActiveView('map')}
@@ -612,6 +632,22 @@ const Dashboard: React.FC = () => {
           </>
         )}
 
+        {/* PCL VIEW — minimal header strip */}
+        {activeView === 'pcl' && (
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-500">
+              {worker?.firstName} {worker?.lastName} ·{' '}
+              <span className="text-gray-600">#{worker?.contractorId}</span>
+            </span>
+            <button
+              onClick={handleLogout}
+              className="p-2 bg-gray-800 text-red-400 rounded-lg border border-gray-700"
+            >
+              <LogOut size={18} />
+            </button>
+          </div>
+        )}
+
         {/* MAP VIEW — minimal header strip showing who's viewing */}
         {activeView === 'map' && (
           <div className="flex items-center justify-between">
@@ -645,6 +681,13 @@ const Dashboard: React.FC = () => {
               />
             ))
           )}
+        </div>
+      )}
+
+      {/* ── PCL CONTENT ── */}
+      {activeView === 'pcl' && (
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <WorkerPCLTab routeCodes={assignedRouteCodes} />
         </div>
       )}
 

@@ -806,6 +806,24 @@ class SessionService {
         .insert(logsheetRows);
       if (lsError) throw lsError;
     }
+  // --- PCL CACHE (non-blocking) ---
+    // Pre-fetches previous client history from the callbook into Supabase so
+    // workers can view their PCL without needing Google OAuth.
+    const cc = commandCenterService.getCurrentCommandCenter();
+    if (cc?.digitalMappingEnabled && cc.callbookSheetId) {
+      const sheetId = cc.callbookSheetId;
+      const routeCodes = data.routes.map(r => r.routeCode);
+      Promise.all([
+        import('./googleSheetsService'),
+        import('./pclCacheService'),
+      ]).then(([{ googleSheetsService }, { loadAndCachePCL }]) => {
+        const accessToken = googleSheetsService.getAccessToken();
+        if (!accessToken) return;
+        loadAndCachePCL(sheetId, routeCodes, accessToken, ccId).catch(err =>
+          console.warn('[PCL Cache] Non-blocking load failed:', err)
+        );
+      }).catch(err => console.warn('[PCL Cache] Module import failed:', err));
+    }
   }
 
   public async adminResetDailySession(date: string): Promise<void> {
