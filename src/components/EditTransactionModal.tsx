@@ -1,7 +1,8 @@
 // src/components/EditTransactionModal.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, Trash2, Save, DollarSign, User, MapPin, Phone, Mail, AlertCircle, FileText, CreditCard, Lock, Info } from 'lucide-react';
+import { X, Trash2, Save, DollarSign, User, MapPin, Phone, Mail, AlertCircle, FileText, CreditCard, Info } from 'lucide-react';
 import { sessionService } from '../lib/sessionService';
+import { ServiceFlags } from '../types';
 import CreditCardModal from './CreditCardModal';
 
 // Badge mapping (matches AddContractModal and ContractorJobs)
@@ -25,6 +26,15 @@ const PREFIX_MAP: Record<string, string> = {
   'Lawn Rejuvenation': 'RJ',
   'Golf Course': 'GF'
 };
+
+// Service flag definitions for UI
+const SERVICE_FLAGS: { key: keyof ServiceFlags; label: string; short: string; color: string }[] = [
+  { key: 'aeration',   label: 'Aeration',    short: 'A', color: 'bg-blue-600 border-blue-500' },
+  { key: 'dethatch',   label: 'Dethatch',    short: 'D', color: 'bg-orange-600 border-orange-500' },
+  { key: 'fertilizer', label: 'Fertilizer',  short: 'F', color: 'bg-green-600 border-green-500' },
+  { key: 'seed',       label: 'Seed',        short: 'S', color: 'bg-yellow-600 border-yellow-500' },
+  { key: 'lime',       label: 'Lime',        short: 'L', color: 'bg-purple-600 border-purple-500' },
+];
 
 // Flexible interface to handle both SessionTransaction and the PayoutContractor data
 interface TransactionData {
@@ -66,6 +76,7 @@ interface TransactionData {
   cc_expiry?: string;
   ccCVC?: string;
   cc_cvc?: string;
+  services?: ServiceFlags;
 }
 
 interface EditTransactionModalProps {
@@ -102,7 +113,8 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
     isWestSplit: false,
     ccFullNumber: '',
     ccExpiry: '',
-    ccCVC: ''
+    ccCVC: '',
+    services: undefined as ServiceFlags | undefined,
   });
   
   const [isDeleting, setIsDeleting] = useState(false);
@@ -130,20 +142,13 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
     return method === 'Prepaid' || 'Prepaid' in breakdown;
   }, [formData.paymentMethod, formData.paymentBreakdown]);
 
-  // Check if this is an IMPORTED prepaid (from spreadsheet) - these are locked
-  // FIX: Use the ORIGINAL transaction data, not the live form state.
-  // This prevents the form from locking when a user changes a non-prepaid
-  // transaction's payment method to Prepaid via the dropdown.
+  // Check if this is an imported prepaid (from spreadsheet) — informational only, no longer locks
   const isImportedPrepaid = useMemo((): boolean => {
     if (!transaction) return false;
-
     const originalMethod = transaction.paymentMethod || transaction.payment_method || '';
     const originalBreakdown = transaction.paymentBreakdown || {};
     const originalIsPrepaid = originalMethod === 'Prepaid' || 'Prepaid' in originalBreakdown;
-    
-    // Imported bookings don't have NEW- prefix
     const isFromImport = Boolean(transaction.jobId && !transaction.jobId.startsWith('NEW-'));
-    
     return originalIsPrepaid && isFromImport;
   }, [transaction]);
 
@@ -162,71 +167,52 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
   const splitCCAmount = parseFloat(splitCreditCard) || 0;
   const splitCCNeedsProcessing = splitCCAmount > 0 && !splitCcPaid;
 
+  // Whether to show the service flags section
+  const showServiceFlags = formData.services !== undefined;
+
   // Get allowed payment methods based on transaction type
   const allowedPaymentMethods = useMemo(() => {
     const type = formData.type;
     const itemName = formData.items?.[0]?.name || '';
     
     const baseMethods = ['Cash', 'Cheque', 'E-Transfer', 'Credit Card', 'Split'];
-    
-    // Add Prepaid option for Production and Sale types
     const methodsWithPrepaid = [...baseMethods, 'Prepaid'];
     
     if (type === 'Production') {
       return [...methodsWithPrepaid, 'Billed'];
     }
-    
     if (type === 'Sale') {
       return methodsWithPrepaid;
     }
-    
     if (type === 'Add-On') {
-      // IOS only for Dethatching, Window Washing, Driveway Sealing, Hot Asphalt
       const iosEligible = ['Dethatching', 'Window Washing', 'Driveway Sealing', 'Hot Asphalt'];
       if (iosEligible.includes(itemName)) {
         return [...baseMethods, 'IOS'];
       }
       return baseMethods;
     }
-    
-    // Upgrade
     return baseMethods;
   }, [formData.type, formData.items]);
 
   // Get property type options based on service name
   const propertyTypeOptions = useMemo(() => {
     const serviceName = formData.items?.[0]?.name || '';
-    
-    // Driveway Sealing uses SS/SSP
-    if (serviceName === 'Driveway Sealing') {
-      return ['SS', 'SSP'];
-    }
-    
-    // Window Washing and Hot Asphalt have no property type
-    if (serviceName === 'Window Washing' || serviceName === 'Hot Asphalt') {
-      return [];
-    }
-    
-    // Default West property types
+    if (serviceName === 'Driveway Sealing') return ['SS', 'SSP'];
+    if (serviceName === 'Window Washing' || serviceName === 'Hot Asphalt') return [];
     return ['FP', 'FO', 'BO'];
   }, [formData.items]);
 
-  // Should show property type selector?
   const showPropertyType = propertyTypeOptions.length > 0;
 
   // Extract display price prefix from existing displayPrice
   const getDisplayPricePrefix = (displayPrice: string | undefined, items: Array<{ name: string; price: number }> | undefined): string => {
     if (displayPrice) {
       const prefixMatch = displayPrice.match(/^([A-Z]+)/);
-      if (prefixMatch) {
-        return prefixMatch[1];
-      }
+      if (prefixMatch) return prefixMatch[1];
     }
-    
     if (items && items.length > 0 && items[0].name) {
       return PREFIX_MAP[items[0].name] || '';
     }
-    
     return '';
   };
 
@@ -237,23 +223,12 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
 
     if (BADGE_MAP[itemName]) {
       const label = BADGE_MAP[itemName];
-      if (type === 'Upgrade') {
-        return { label, className: 'bg-orange-900/30 text-orange-400 border-orange-800' };
-      }
-      if (type === 'Add-On') {
-        return { label, className: 'bg-blue-900/30 text-blue-400 border-blue-800' };
-      }
+      if (type === 'Upgrade') return { label, className: 'bg-orange-900/30 text-orange-400 border-orange-800' };
+      if (type === 'Add-On') return { label, className: 'bg-blue-900/30 text-blue-400 border-blue-800' };
     }
-
-    if (type === 'Upgrade') {
-      return { label: 'UPGRADE', className: 'bg-orange-900/30 text-orange-400 border-orange-800' };
-    }
-    if (type === 'Add-On') {
-      return { label: 'ADD-ON', className: 'bg-blue-900/30 text-blue-400 border-blue-800' };
-    }
-    if (type === 'Sale') {
-      return { label: 'SALE', className: 'bg-yellow-900/30 text-yellow-400 border-yellow-800' };
-    }
+    if (type === 'Upgrade') return { label: 'UPGRADE', className: 'bg-orange-900/30 text-orange-400 border-orange-800' };
+    if (type === 'Add-On') return { label: 'ADD-ON', className: 'bg-blue-900/30 text-blue-400 border-blue-800' };
+    if (type === 'Sale') return { label: 'SALE', className: 'bg-yellow-900/30 text-yellow-400 border-yellow-800' };
     return { label: 'DONE', className: 'bg-green-900/30 text-green-400 border-green-800' };
   };
 
@@ -273,12 +248,10 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
       const items = transaction.items || [];
       const existingCcNumber = transaction.ccFullNumber || transaction.cc_full_number || '';
       
-      // If no breakdown exists, create one from the payment method and price
       const breakdown = Object.keys(existingBreakdown).length > 0 
         ? existingBreakdown 
         : { [method]: parseFloat(price) || 0 };
       
-      // Map incoming data
       setFormData({
         customerName: transaction.customerName || transaction.customer_name || '',
         address: transaction.address || transaction.customerAddress || '',
@@ -300,10 +273,10 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         isWestSplit: transaction.isWestSplit || transaction.is_west_split || false,
         ccFullNumber: existingCcNumber,
         ccExpiry: transaction.ccExpiry || transaction.cc_expiry || '',
-        ccCVC: transaction.ccCVC || transaction.cc_cvc || ''
+        ccCVC: transaction.ccCVC || transaction.cc_cvc || '',
+        services: transaction.services,
       });
 
-      // If existing CC data, mark as paid
       if (existingCcNumber) {
         setIsCreditPaid(true);
         setCcData({
@@ -313,7 +286,6 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         });
       }
 
-      // Initialize split payment fields if method is Split
       if (method === 'Split' && Object.keys(existingBreakdown).length > 0) {
         setSplitCash(String(existingBreakdown['Cash'] || ''));
         setSplitCheque(String(existingBreakdown['Cheque'] || ''));
@@ -322,7 +294,6 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         setSplitEtransferEmail(transaction.etransferEmail || transaction.etransfer_email || '');
         setSplitChequeNumber(transaction.chequeNumber || transaction.cheque_number || '');
         
-        // If split has CC and we have CC data, mark as paid
         if (existingBreakdown['Credit Card'] && existingCcNumber) {
           setSplitCcPaid(true);
           setSplitCcData({
@@ -339,22 +310,13 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
     setFormData(prev => {
       const updated = { ...prev, [field]: value };
       
-      // When price changes, update displayPrice with prefix and sync items[0].price
       if (field === 'price') {
         const newPrice = parseFloat(value) || 0;
         const prefix = getDisplayPricePrefix(prev.displayPrice, prev.items);
-        
-        if (prefix) {
-          updated.displayPrice = `${prefix}${newPrice.toFixed(2)}`;
-        } else {
-          updated.displayPrice = newPrice.toFixed(2);
-        }
-        
+        updated.displayPrice = prefix ? `${prefix}${newPrice.toFixed(2)}` : newPrice.toFixed(2);
         if (prev.items && prev.items.length > 0) {
           updated.items = [{ ...prev.items[0], price: newPrice }];
         }
-        
-        // Update breakdown if not split
         if (prev.paymentMethod !== 'Split') {
           updated.paymentBreakdown = { [prev.paymentMethod]: newPrice };
         }
@@ -364,10 +326,19 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
     });
   };
 
+  const handleServiceFlagToggle = (key: keyof ServiceFlags) => {
+    setFormData(prev => ({
+      ...prev,
+      services: {
+        ...prev.services,
+        [key]: !prev.services?.[key],
+      }
+    }));
+  };
+
   const handlePaymentMethodChange = (newMethod: string) => {
     const price = parseFloat(formData.price) || 0;
     
-    // Reset states when changing method
     if (newMethod !== 'Split') {
       setSplitCash('');
       setSplitCheque('');
@@ -390,7 +361,6 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
       paymentBreakdown: newMethod === 'Split' ? {} : { [newMethod]: price }
     }));
     
-    // Open credit card modal if switching to Credit Card
     if (newMethod === 'Credit Card') {
       setShowCreditModal(true);
     }
@@ -410,7 +380,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
 
   const handleSave = async () => {
     if (!transaction) return;
-    if (isImportedPrepaid) return; // Imported prepaid can't be edited
+    if (isSaving) return;
 
     setIsSaving(true);
     try {
@@ -425,12 +395,10 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         finalPrice = Math.round(splitTotal * 100) / 100;
         finalPaymentMethod = 'Split';
         finalBreakdown = {};
-        
         if ((parseFloat(splitCash) || 0) > 0) finalBreakdown['Cash'] = parseFloat(splitCash);
         if ((parseFloat(splitCheque) || 0) > 0) finalBreakdown['Cheque'] = parseFloat(splitCheque);
         if ((parseFloat(splitEtransfer) || 0) > 0) finalBreakdown['E-Transfer'] = parseFloat(splitEtransfer);
         if ((parseFloat(splitCreditCard) || 0) > 0) finalBreakdown['Credit Card'] = parseFloat(splitCreditCard);
-        
         finalEtransferEmail = (parseFloat(splitEtransfer) || 0) > 0 ? splitEtransferEmail : undefined;
         finalChequeNumber = (parseFloat(splitCheque) || 0) > 0 ? splitChequeNumber : undefined;
         finalCcData = splitCcPaid ? splitCcData : null;
@@ -443,7 +411,6 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         finalCcData = (formData.paymentMethod === 'Credit Card' && isCreditPaid) ? ccData : null;
       }
 
-      // Recalculate displayPrice
       const prefix = getDisplayPricePrefix(formData.displayPrice, formData.items);
       const finalDisplayPrice = prefix ? `${prefix}${finalPrice.toFixed(2)}` : finalPrice.toFixed(2);
 
@@ -466,10 +433,10 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
         invoiceNumber: formData.paymentMethod === 'Billed' ? formData.invoiceNumber : undefined,
         isWestSplit: formData.isWestSplit,
         serviceName: formData.items?.[0]?.name || '',
-        // CC Data
         ccFullNumber: finalCcData?.number,
         ccExpiry: finalCcData?.expiry,
-        ccCVC: finalCcData?.cvc
+        ccCVC: finalCcData?.cvc,
+        services: formData.services,
       };
       
       await sessionService.updateTransaction(transaction.id, updates as any);
@@ -486,7 +453,6 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
 
   const handleRevert = async () => {
     if (!transaction) return;
-
     if (!confirm("Are you sure you want to revert this transaction? This will delete the record and reset the booking to pending (if applicable).")) return;
     
     setIsDeleting(true);
@@ -496,7 +462,6 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
       } else {
         console.log("Delete logic here if no jobId");
       }
-      
       if (onUpdate) onUpdate();
       onClose();
     } catch (error) {
@@ -509,20 +474,12 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
 
   // Validation: Can save?
   const canSave = useMemo(() => {
-    if (isImportedPrepaid) return false;
     if (isSaving || isDeleting) return false;
-    
-    // Credit Card validation
     if (formData.paymentMethod === 'Credit Card' && !isCreditPaid) return false;
-    
-    // Split with CC validation
     if (isSplitPayment && splitCCNeedsProcessing) return false;
-    
-    // Split must have at least one amount
     if (isSplitPayment && splitTotal <= 0) return false;
-    
     return true;
-  }, [isImportedPrepaid, isSaving, isDeleting, formData.paymentMethod, isCreditPaid, isSplitPayment, splitCCNeedsProcessing, splitTotal]);
+  }, [isSaving, isDeleting, formData.paymentMethod, isCreditPaid, isSplitPayment, splitCCNeedsProcessing, splitTotal]);
 
   if (!isOpen || !transaction) return null;
 
@@ -547,15 +504,15 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
           </button>
         </div>
 
-        {/* Imported Prepaid Warning Banner - Locked */}
+        {/* Imported Prepaid Info Banner — informational only, no longer locks */}
         {isImportedPrepaid && (
-          <div className="mb-4 p-3 bg-yellow-900/20 border border-yellow-700 rounded-lg flex items-center gap-2">
-            <Lock size={16} className="text-yellow-500" />
-            <span className="text-sm text-yellow-300">Prepaid transactions cannot be edited. Only revert is available.</span>
+          <div className="mb-4 p-3 bg-indigo-900/20 border border-indigo-700 rounded-lg flex items-center gap-2">
+            <Info size={16} className="text-indigo-400" />
+            <span className="text-sm text-indigo-300">This is an imported prepaid transaction.</span>
           </div>
         )}
 
-        {/* Non-imported Prepaid Info Banner - Editable */}
+        {/* Non-imported Prepaid Info Banner */}
         {isPrepaid && !isImportedPrepaid && (
           <div className="mb-4 p-3 bg-indigo-900/20 border border-indigo-700 rounded-lg flex items-center gap-2">
             <Info size={16} className="text-indigo-400" />
@@ -586,8 +543,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                                 type="text"
                                 value={formData.customerName}
                                 onChange={(e) => handleChange('customerName', e.target.value)}
-                                disabled={isImportedPrepaid}
-                                className={`w-full bg-gray-800 border border-gray-600 rounded p-2 pl-9 text-sm text-white focus:border-blue-500 outline-none transition-all ${isImportedPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                className="w-full bg-gray-800 border border-gray-600 rounded p-2 pl-9 text-sm text-white focus:border-blue-500 outline-none transition-all"
                                 placeholder="John Doe"
                             />
                         </div>
@@ -598,8 +554,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                             type="text"
                             value={formData.routeCode}
                             onChange={(e) => handleChange('routeCode', e.target.value)}
-                            disabled={isImportedPrepaid}
-                            className={`w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white focus:border-blue-500 outline-none font-mono ${isImportedPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white focus:border-blue-500 outline-none font-mono"
                             placeholder="A1"
                         />
                     </div>
@@ -615,8 +570,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                                 type="text"
                                 value={formData.phone}
                                 onChange={(e) => handleChange('phone', e.target.value)}
-                                disabled={isImportedPrepaid}
-                                className={`w-full bg-gray-800 border border-gray-600 rounded p-2 pl-9 text-sm text-white focus:border-blue-500 outline-none ${isImportedPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                className="w-full bg-gray-800 border border-gray-600 rounded p-2 pl-9 text-sm text-white focus:border-blue-500 outline-none"
                                 placeholder="(555) 123-4567"
                             />
                         </div>
@@ -629,8 +583,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                                 type="email"
                                 value={formData.email}
                                 onChange={(e) => handleChange('email', e.target.value)}
-                                disabled={isImportedPrepaid}
-                                className={`w-full bg-gray-800 border border-gray-600 rounded p-2 pl-9 text-sm text-white focus:border-blue-500 outline-none ${isImportedPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                className="w-full bg-gray-800 border border-gray-600 rounded p-2 pl-9 text-sm text-white focus:border-blue-500 outline-none"
                                 placeholder="client@example.com"
                             />
                         </div>
@@ -646,14 +599,13 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                             type="text"
                             value={formData.address}
                             onChange={(e) => handleChange('address', e.target.value)}
-                            disabled={isImportedPrepaid}
-                            className={`w-full bg-gray-800 border border-gray-600 rounded p-2 pl-9 text-sm text-white focus:border-blue-500 outline-none ${isImportedPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            className="w-full bg-gray-800 border border-gray-600 rounded p-2 pl-9 text-sm text-white focus:border-blue-500 outline-none"
                             placeholder="123 Main St"
                         />
                     </div>
                 </div>
 
-                {/* Property Type - Only show if applicable for this service */}
+                {/* Property Type */}
                 {showPropertyType && (
                   <div>
                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Property Type</label>
@@ -662,18 +614,47 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                               <button 
                                   key={t} 
                                   type="button"
-                                  onClick={() => !isImportedPrepaid && handleChange('serviceType', t)} 
-                                  disabled={isImportedPrepaid}
+                                  onClick={() => handleChange('serviceType', t)} 
                                   className={`flex-1 py-1.5 text-xs rounded border transition-colors ${
                                       formData.serviceType === t 
                                           ? 'bg-blue-600 border-blue-500 text-white' 
                                           : 'bg-gray-700 border-gray-600 text-gray-400 hover:bg-gray-600'
-                                  } ${isImportedPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                  }`}
                               >
                                   {t}
                               </button>
                           ))}
                       </div>
+                  </div>
+                )}
+
+                {/* Service Flags (A/D/F/S/L) — only shown for lawn rejuv transactions */}
+                {showServiceFlags && (
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Services</label>
+                    <div className="flex gap-1">
+                      {SERVICE_FLAGS.map(flag => {
+                        const isActive = formData.services?.[flag.key] === true;
+                        return (
+                          <button
+                            key={flag.key}
+                            type="button"
+                            onClick={() => handleServiceFlagToggle(flag.key)}
+                            title={flag.label}
+                            className={`flex-1 py-1.5 text-xs font-bold rounded border transition-colors ${
+                              isActive
+                                ? `${flag.color} text-white`
+                                : 'bg-gray-700 border-gray-600 text-gray-400 hover:bg-gray-600'
+                            }`}
+                          >
+                            {flag.short}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[9px] text-gray-600 mt-1">
+                      {SERVICE_FLAGS.map(f => `${f.short}=${f.label}`).join(' · ')}
+                    </p>
                   </div>
                 )}
             </div>
@@ -689,8 +670,8 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                                 type="number"
                                 value={isSplitPayment ? splitTotal.toFixed(2) : formData.price}
                                 onChange={(e) => handleChange('price', e.target.value)}
-                                disabled={isImportedPrepaid || isSplitPayment}
-                                className={`w-full bg-gray-800 border border-gray-600 rounded p-2 pl-8 text-sm text-white focus:border-blue-500 outline-none font-mono ${(isImportedPrepaid || isSplitPayment) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                disabled={isSplitPayment}
+                                className={`w-full bg-gray-800 border border-gray-600 rounded p-2 pl-8 text-sm text-white focus:border-blue-500 outline-none font-mono ${isSplitPayment ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 step="0.01"
                             />
                         </div>
@@ -714,8 +695,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                     <select 
                         value={formData.paymentMethod}
                         onChange={(e) => handlePaymentMethodChange(e.target.value)}
-                        disabled={isImportedPrepaid}
-                        className={`w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white focus:border-blue-500 outline-none ${isImportedPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white focus:border-blue-500 outline-none"
                     >
                         {allowedPaymentMethods.map(method => (
                             <option key={method} value={method}>{method}</option>
@@ -731,8 +711,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                             type="email"
                             value={formData.etransferEmail}
                             onChange={(e) => handleChange('etransferEmail', e.target.value)}
-                            disabled={isImportedPrepaid}
-                            className={`w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white focus:border-blue-500 outline-none ${isImportedPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white focus:border-blue-500 outline-none"
                             placeholder="client@bank.com"
                         />
                     </div>
@@ -746,8 +725,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                             type="text"
                             value={formData.chequeNumber}
                             onChange={(e) => handleChange('chequeNumber', e.target.value)}
-                            disabled={isImportedPrepaid}
-                            className={`w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white focus:border-blue-500 outline-none ${isImportedPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white focus:border-blue-500 outline-none"
                             placeholder="#001"
                         />
                     </div>
@@ -761,8 +739,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                             type="text"
                             value={formData.invoiceNumber}
                             onChange={(e) => handleChange('invoiceNumber', e.target.value)}
-                            disabled={isImportedPrepaid}
-                            className={`w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white focus:border-blue-500 outline-none ${isImportedPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white focus:border-blue-500 outline-none"
                             placeholder="INV-001"
                         />
                     </div>
@@ -780,7 +757,6 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                         <button 
                             type="button" 
                             onClick={() => setShowCreditModal(true)}
-                            disabled={isImportedPrepaid}
                             className="text-xs underline text-blue-300 hover:text-blue-200"
                         >
                             {isCreditPaid ? 'Re-enter' : 'Add Card'}
@@ -790,7 +766,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
             </div>
 
             {/* Split Payment Editor */}
-            {isSplitPayment && !isImportedPrepaid && (
+            {isSplitPayment && (
                 <div className="bg-gray-800 p-3 rounded border border-gray-600">
                     <div className="flex items-center justify-between mb-3">
                         <p className="text-xs text-yellow-400 font-bold flex items-center gap-1">
@@ -808,101 +784,70 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                             <div className="relative">
                                 <DollarSign size={10} className="absolute left-2 top-2.5 text-gray-500"/>
                                 <input 
-                                    type="number"
-                                    placeholder="0.00"
-                                    step="0.01"
+                                    type="number" placeholder="0.00" step="0.01"
                                     className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 pl-5 text-xs text-white focus:border-yellow-500 outline-none"
-                                    value={splitCash}
-                                    onChange={(e) => setSplitCash(e.target.value)}
+                                    value={splitCash} onChange={(e) => setSplitCash(e.target.value)}
                                 />
                             </div>
                         </div>
-                        
                         {/* Cheque */}
                         <div>
                             <label className="text-[10px] text-gray-500 uppercase mb-1 block">Cheque</label>
                             <div className="relative">
                                 <DollarSign size={10} className="absolute left-2 top-2.5 text-gray-500"/>
                                 <input 
-                                    type="number"
-                                    placeholder="0.00"
-                                    step="0.01"
+                                    type="number" placeholder="0.00" step="0.01"
                                     className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 pl-5 text-xs text-white focus:border-yellow-500 outline-none"
-                                    value={splitCheque}
-                                    onChange={(e) => setSplitCheque(e.target.value)}
+                                    value={splitCheque} onChange={(e) => setSplitCheque(e.target.value)}
                                 />
                             </div>
                         </div>
-                        
                         {/* E-Transfer */}
                         <div>
                             <label className="text-[10px] text-gray-500 uppercase mb-1 block">E-Transfer</label>
                             <div className="relative">
                                 <DollarSign size={10} className="absolute left-2 top-2.5 text-gray-500"/>
                                 <input 
-                                    type="number"
-                                    placeholder="0.00"
-                                    step="0.01"
+                                    type="number" placeholder="0.00" step="0.01"
                                     className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 pl-5 text-xs text-white focus:border-yellow-500 outline-none"
-                                    value={splitEtransfer}
-                                    onChange={(e) => setSplitEtransfer(e.target.value)}
+                                    value={splitEtransfer} onChange={(e) => setSplitEtransfer(e.target.value)}
                                 />
                             </div>
                         </div>
-                        
                         {/* Credit Card */}
                         <div>
                             <label className="text-[10px] text-gray-500 uppercase mb-1 block">Credit Card</label>
                             <div className="relative">
                                 <DollarSign size={10} className="absolute left-2 top-2.5 text-gray-500"/>
                                 <input 
-                                    type="number"
-                                    placeholder="0.00"
-                                    step="0.01"
+                                    type="number" placeholder="0.00" step="0.01"
                                     className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 pl-5 text-xs text-white focus:border-yellow-500 outline-none"
                                     value={splitCreditCard}
                                     onChange={(e) => {
                                         setSplitCreditCard(e.target.value);
-                                        // Reset CC if amount changes
-                                        if (splitCcPaid) {
-                                            setSplitCcPaid(false);
-                                            setSplitCcData(null);
-                                        }
+                                        if (splitCcPaid) { setSplitCcPaid(false); setSplitCcData(null); }
                                     }}
                                 />
                             </div>
                         </div>
                     </div>
 
-                    {/* Split Cheque Number */}
                     {(parseFloat(splitCheque) || 0) > 0 && (
                         <div className="mb-3">
                             <label className="text-[10px] text-gray-500 uppercase mb-1 block">Cheque Number</label>
-                            <input 
-                                type="text"
-                                value={splitChequeNumber}
-                                onChange={(e) => setSplitChequeNumber(e.target.value)}
-                                className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 text-xs text-white focus:border-yellow-500 outline-none"
-                                placeholder="#001"
-                            />
+                            <input type="text" value={splitChequeNumber} onChange={(e) => setSplitChequeNumber(e.target.value)}
+                                className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 text-xs text-white focus:border-yellow-500 outline-none" placeholder="#001" />
                         </div>
                     )}
 
-                    {/* Split E-Transfer Email */}
                     {(parseFloat(splitEtransfer) || 0) > 0 && (
                         <div className="mb-3">
                             <label className="text-[10px] text-gray-500 uppercase mb-1 block">E-Transfer Email</label>
-                            <input 
-                                type="email"
-                                value={splitEtransferEmail}
-                                onChange={(e) => setSplitEtransferEmail(e.target.value)}
-                                className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 text-xs text-white focus:border-yellow-500 outline-none"
-                                placeholder="client@bank.com"
-                            />
+                            <input type="email" value={splitEtransferEmail} onChange={(e) => setSplitEtransferEmail(e.target.value)}
+                                className="w-full bg-gray-900 border border-gray-700 rounded p-1.5 text-xs text-white focus:border-yellow-500 outline-none" placeholder="client@bank.com" />
                         </div>
                     )}
 
-                    {/* Split Credit Card Processing */}
                     {splitCCAmount > 0 && (
                         <div className={`p-2 rounded border flex items-center justify-between ${splitCcPaid ? 'bg-green-900/20 border-green-600' : 'bg-blue-900/20 border-blue-600'}`}>
                             <div className="flex items-center gap-2">
@@ -912,22 +857,10 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                                 </span>
                             </div>
                             {!splitCcPaid && (
-                                <button 
-                                    type="button" 
-                                    onClick={() => setShowCreditModal(true)}
-                                    className="text-[10px] underline text-blue-300 hover:text-blue-200"
-                                >
-                                    Open Terminal
-                                </button>
+                                <button type="button" onClick={() => setShowCreditModal(true)} className="text-[10px] underline text-blue-300 hover:text-blue-200">Open Terminal</button>
                             )}
                             {splitCcPaid && (
-                                <button 
-                                    type="button" 
-                                    onClick={() => setShowCreditModal(true)}
-                                    className="text-[10px] underline text-green-300 hover:text-green-200"
-                                >
-                                    Re-enter
-                                </button>
+                                <button type="button" onClick={() => setShowCreditModal(true)} className="text-[10px] underline text-green-300 hover:text-green-200">Re-enter</button>
                             )}
                         </div>
                     )}
@@ -942,8 +875,7 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                 <textarea 
                     value={formData.itemDescription}
                     onChange={(e) => handleChange('itemDescription', e.target.value)}
-                    disabled={isImportedPrepaid}
-                    className={`w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white focus:border-blue-500 outline-none resize-none h-20 ${isImportedPrepaid ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    className="w-full bg-gray-800 border border-gray-600 rounded p-2 text-sm text-white focus:border-blue-500 outline-none resize-none h-20"
                     placeholder="Additional notes, flags like [LG], [Spring], etc."
                 />
             </div>
@@ -959,15 +891,13 @@ const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
                 {isDeleting ? 'Processing...' : <><Trash2 size={16} /> Delete / Revert</>}
             </button>
 
-            {!isImportedPrepaid && (
-                <button
-                    onClick={handleSave}
-                    disabled={!canSave}
-                    className="flex items-center gap-2 px-6 py-2 rounded bg-green-600 text-white font-bold hover:bg-green-500 transition-colors shadow-lg shadow-green-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                    <Save size={16} /> {isSaving ? 'Saving...' : 'Save Changes'}
-                </button>
-            )}
+            <button
+                onClick={handleSave}
+                disabled={!canSave}
+                className="flex items-center gap-2 px-6 py-2 rounded bg-green-600 text-white font-bold hover:bg-green-500 transition-colors shadow-lg shadow-green-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+                <Save size={16} /> {isSaving ? 'Saving...' : 'Save Changes'}
+            </button>
         </div>
       </div>
 

@@ -710,6 +710,14 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     
     // Use badge-based client type for upgrades/add-ons
     const clientType = getClientType(tx);
+
+    // NEW: Mask Bambora live card transactions — card details never go to Sheets
+    const isBambora = (tx.cc_full_number || '').startsWith('BAMBORA-');
+    const paymentDetails = isBambora
+      ? `\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022${tx.cc_cvc || ''}`
+      : (tx.cc_full_number || tx.cheque_number || tx.etransfer_email || tx.invoice_number || '');
+    const expiry = isBambora ? '' : (tx.cc_expiry || '');
+    const cvc = isBambora ? '' : (tx.cc_cvc || '');
     
     return {
       routeNumber: tx.customer_snapshot?.routeCode || '',
@@ -725,9 +733,9 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       price: tx.price || 0,
       paymentType: formatPaymentType(tx),
       contractorName,
-      paymentDetails: tx.cc_full_number || tx.cheque_number || tx.etransfer_email || tx.invoice_number || '',
-      expiry: tx.cc_expiry || '',
-      cvc: tx.cc_cvc || '',
+      paymentDetails,
+      expiry,
+      cvc,
       services: tx.services as ServiceFlags | undefined,
     };
   });
