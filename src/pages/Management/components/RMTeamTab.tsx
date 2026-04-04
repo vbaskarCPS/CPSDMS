@@ -15,12 +15,12 @@ import {
   Users,
   Leaf,
   Eye,
-  // NEW: added for reassign modal
   Shuffle,
   Loader,
   AlertCircle,
   UserPlus,
   ArrowRightLeft,
+  UserMinus,
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
 import { setStorageItem } from '../../../lib/localStorage';
@@ -33,10 +33,9 @@ interface RMTeamTabProps {
   allSessions: LogsheetSession[];
   allManagers?: ManagementUser[];
   seasonType?: SeasonType;
-  currentUser?: ManagementUser; // Add this prop to get the RM's user object
+  currentUser?: ManagementUser;
 }
 
-// Worker display data (used for both Aeration cards and Lawn Rejuv member rows)
 interface WorkerDisplay extends Worker {
   displayBookings: MasterBooking[];
   financialStore: any[];
@@ -54,7 +53,6 @@ interface WorkerDisplay extends Worker {
   };
 }
 
-// Cart display for Lawn Rejuv - groups workers sharing a session
 interface CartDisplay {
   sessionId: string;
   teamId: string;
@@ -77,18 +75,14 @@ interface CartDisplay {
 
 type TeamSortOption = 'recent' | 'alpha' | 'steps' | 'equiv' | 'upGross';
 
-// Helper function to format timestamp as "6:30p" or "10:02a"
 const formatTimeShort = (timestamp: string): string => {
   const date = new Date(timestamp);
   let hours = date.getHours();
   const minutes = date.getMinutes();
   const ampm = hours >= 12 ? 'p' : 'a';
-  
   hours = hours % 12;
-  hours = hours ? hours : 12; // 0 should be 12
-  
+  hours = hours ? hours : 12;
   const minutesStr = minutes < 10 ? `0${minutes}` : `${minutes}`;
-  
   return `${hours}:${minutesStr}${ampm}`;
 };
 
@@ -109,18 +103,16 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
   const isLawnRejuv = seasonType === 'lawn_rejuv';
 
-  // Sort State - Default to 'recent'
   const [sortBy, setSortBy] = useState<TeamSortOption>('recent');
 
-  // Management State (Aeration only)
+  // Aeration management state
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [transferModeId, setTransferModeId] = useState<string | null>(null);
   const [selectedTransferManager, setSelectedTransferManager] = useState<string>("");
 
-  // Refresh Key
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // --- NEW: REASSIGN MODAL STATE (Lawn Rejuv only) ---
+  // Reassign modal state (Lawn Rejuv only)
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [selectedWorkerToMove, setSelectedWorkerToMove] = useState<WorkerDisplay | null>(null);
   const [selectedWorkerCart, setSelectedWorkerCart] = useState<CartDisplay | null>(null);
@@ -145,16 +137,12 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   useEffect(() => {
     const loadData = async () => {
       const myTeam = workers.filter((w) => w.assignedManagerId === managerId);
-
       if (isLawnRejuv) {
-        // Lawn Rejuv: Load data by session/cart
         await loadLawnRejuvData(myTeam);
       } else {
-        // Aeration: Load data by individual worker
         await loadAerationData(myTeam);
       }
     };
-
     loadData();
   }, [managerId, workers, allSessions, refreshKey, isLawnRejuv]);
 
@@ -163,9 +151,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     const enriched = await Promise.all(
       myTeam.map(async (w) => {
         const allBookings = await sessionService.getWorkerAssignments(w.contractorId);
-        
-        const pending = allBookings.filter((b) => 
-          b.Completed !== 'x' && 
+
+        const pending = allBookings.filter((b) =>
+          b.Completed !== 'x' &&
           b.Status !== 'completed' &&
           b.Status !== 'cancelled' &&
           b.Status !== 'next_time'
@@ -184,9 +172,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         let lastAddr: string | null = null;
         let lastTimestamp: string | null = null;
         let lastTimeFormatted: string | null = null;
-        
+
         if (financialStore.length > 0) {
-          const sortedTx = [...financialStore].sort((a, b) => 
+          const sortedTx = [...financialStore].sort((a, b) =>
             new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
           );
           lastAddr = sortedTx[0].address;
@@ -200,7 +188,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           ...w,
           upsellsEnabled,
           displayBookings: allBookings,
-          financialStore: financialStore,
+          financialStore,
           assignedRoutes: uniqueRoutes,
           lastActiveAddress: lastAddr,
           lastActiveTimestamp: lastTimestamp,
@@ -216,115 +204,104 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         };
       })
     );
-
     setTeamMembers(enriched);
   };
 
-  // --- LAWN REJUV DATA LOADING (By Session/Cart) ---
+  // --- LAWN REJUV DATA LOADING ---
+  // BUG 1 FIX: Uses allSessions as source of truth instead of w.teamId grouping.
+  //            After a reassignment, sessions reflect the new cart membership
+  //            immediately; worker metadata (teamId) does not.
+  // BUG 3 FIX: Reads stats + financialStore directly from allSessions (already
+  //            loaded by parent), then fetches all bookings in parallel via
+  //            Promise.all — eliminates sequential awaits per worker.
   const loadLawnRejuvData = async (myTeam: Worker[]) => {
-    // Group workers by teamId (cart)
-    const teamMap = new Map<string, Worker[]>();
-    myTeam.forEach(w => {
-      const teamId = w.teamId || w.contractorId;
-      if (!teamMap.has(teamId)) {
-        teamMap.set(teamId, []);
-      }
-      teamMap.get(teamId)!.push(w);
+    const myTeamIds = new Set(myTeam.map(w => w.contractorId));
+    const workerMap = new Map(myTeam.map(w => [w.contractorId, w]));
+
+    // Filter allSessions to those that include at least one of our workers
+    const mySessions = allSessions.filter(session => {
+      const ids = session.teamWorkerIds || [session.workerId];
+      return ids.some(id => myTeamIds.has(id));
     });
 
-    // Build cart displays
-    const cartDisplays: CartDisplay[] = [];
+    // Build all carts in parallel — one Promise per session
+    const cartDisplays = await Promise.all(
+      mySessions.map(async (session) => {
+        const sessionWorkerIds = (session.teamWorkerIds || [session.workerId]).filter(id => myTeamIds.has(id));
+        const teamWorkers = sessionWorkerIds
+          .map(id => workerMap.get(id))
+          .filter(Boolean) as Worker[];
 
-    for (const [teamId, teamWorkers] of teamMap.entries()) {
-      const primaryWorker = teamWorkers[0];
-      
-      // Get the session for this team
-      const session = await sessionService.getActiveLogsheetSession(primaryWorker.contractorId);
-      const sessionId = session?.id || `temp_${teamId}`;
-      
-      // Get shared bookings by session
-      let sharedBookings: MasterBooking[] = [];
-      if (session?.id) {
-        sharedBookings = await sessionService.getSessionAssignments(session.id);
-      } else {
-        // Fallback: get from first worker
-        sharedBookings = await sessionService.getWorkerAssignments(primaryWorker.contractorId);
-      }
+        // Stats and financial store come directly from allSessions — no extra DB call
+        const sharedFinancialStore = session.financialStore || [];
+        const stats = session.stats || sessionService.getEmptyStats();
 
-      const sharedFinancialStore = session?.financialStore || [];
-      const stats = session?.stats || sessionService.getEmptyStats();
+        // Bookings need a fresh fetch (they're not in allSessions)
+        let sharedBookings: MasterBooking[] = [];
+        if (session.id) {
+          sharedBookings = await sessionService.getSessionAssignments(session.id);
+        }
 
-      // Calculate pending
-      const pending = sharedBookings.filter((b) => 
-        b.Completed !== 'x' && 
-        b.Status !== 'completed' &&
-        b.Status !== 'cancelled' &&
-        b.Status !== 'next_time'
-      );
-
-      // Get assigned routes
-      const uniqueRoutes = Array.from(new Set(
-        sharedBookings
-          .map(b => b['Route Number'])
-          .filter(r => r && r !== 'x' && r.trim() !== '')
-      )) as string[];
-
-      // Get last active address and timestamp from financial store
-      let lastAddr: string | null = null;
-      let lastTimestamp: string | null = null;
-      let lastTimeFormatted: string | null = null;
-      
-      if (sharedFinancialStore.length > 0) {
-        const sortedTx = [...sharedFinancialStore].sort((a, b) => 
-          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        const pending = sharedBookings.filter(b =>
+          b.Completed !== 'x' &&
+          b.Status !== 'completed' &&
+          b.Status !== 'cancelled' &&
+          b.Status !== 'next_time'
         );
-        lastAddr = sortedTx[0].address;
-        lastTimestamp = sortedTx[0].timestamp;
-        lastTimeFormatted = formatTimeShort(sortedTx[0].timestamp);
-      }
 
-      // Build worker displays (minimal for cart view)
-      const memberDisplays: WorkerDisplay[] = teamWorkers.map(w => ({
-        ...w,
-        displayBookings: [], // Not used in cart view - we use shared
-        financialStore: [],
-        assignedRoutes: uniqueRoutes,
-        lastActiveAddress: null,
-        lastActiveTimestamp: null,
-        lastActiveTime: null,
-        stats: {
-          steps: 0,
-          gross: 0,
-          eq: 0,
-          pending: 0,
-          upsellCount: 0,
-          upsellGross: 0,
-        },
-      }));
+        const uniqueRoutes = Array.from(new Set(
+          sharedBookings
+            .map(b => b['Route Number'])
+            .filter(r => r && r !== 'x' && r.trim() !== '')
+        )) as string[];
 
-      cartDisplays.push({
-        sessionId,
-        teamId,
-        members: memberDisplays,
-        sharedBookings,
-        sharedFinancialStore,
-        assignedRoutes: uniqueRoutes,
-        lastActiveAddress: lastAddr,
-        lastActiveTimestamp: lastTimestamp,
-        lastActiveTime: lastTimeFormatted,
-        aggregatedStats: {
-          steps: stats.stepCount,
-          gross: stats.upsellGross,
-          eq: stats.totalEQ,
-          pending: pending.length,
-          upsellCount: stats.upsellCount,
-          upsellGross: stats.upsellGross,
-        },
-      });
-    }
+        let lastAddr: string | null = null;
+        let lastTimestamp: string | null = null;
+        let lastTimeFormatted: string | null = null;
+
+        if (sharedFinancialStore.length > 0) {
+          const sortedTx = [...sharedFinancialStore].sort((a, b) =>
+            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+          );
+          lastAddr = sortedTx[0].address;
+          lastTimestamp = sortedTx[0].timestamp;
+          lastTimeFormatted = formatTimeShort(sortedTx[0].timestamp);
+        }
+
+        const memberDisplays: WorkerDisplay[] = teamWorkers.map(w => ({
+          ...w,
+          displayBookings: [],
+          financialStore: [],
+          assignedRoutes: uniqueRoutes,
+          lastActiveAddress: null,
+          lastActiveTimestamp: null,
+          lastActiveTime: null,
+          stats: { steps: 0, gross: 0, eq: 0, pending: 0, upsellCount: 0, upsellGross: 0 },
+        }));
+
+        return {
+          sessionId: session.id,
+          teamId: sessionWorkerIds[0] || session.workerId,
+          members: memberDisplays,
+          sharedBookings,
+          sharedFinancialStore,
+          assignedRoutes: uniqueRoutes,
+          lastActiveAddress: lastAddr,
+          lastActiveTimestamp: lastTimestamp,
+          lastActiveTime: lastTimeFormatted,
+          aggregatedStats: {
+            steps: stats.stepCount,
+            gross: stats.upsellGross,
+            eq: stats.totalEQ,
+            pending: pending.length,
+            upsellCount: stats.upsellCount,
+            upsellGross: stats.upsellGross,
+          },
+        };
+      })
+    );
 
     setCarts(cartDisplays);
-    // Also set teamMembers for the count
     setTeamMembers(myTeam.map(w => ({
       ...w,
       displayBookings: [],
@@ -340,15 +317,12 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   // --- SORTING ---
   const sortedTeamMembers = useMemo(() => {
     const members = [...teamMembers];
-    
     switch (sortBy) {
       case 'recent':
         return members.sort((a, b) => {
-          // Workers with no activity go to bottom
           if (!a.lastActiveTimestamp && !b.lastActiveTimestamp) return 0;
           if (!a.lastActiveTimestamp) return 1;
           if (!b.lastActiveTimestamp) return -1;
-          // Most recent first
           return new Date(b.lastActiveTimestamp).getTime() - new Date(a.lastActiveTimestamp).getTime();
         });
       case 'alpha':
@@ -366,15 +340,12 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
   const sortedCarts = useMemo(() => {
     const cartList = [...carts];
-    
     switch (sortBy) {
       case 'recent':
         return cartList.sort((a, b) => {
-          // Carts with no activity go to bottom
           if (!a.lastActiveTimestamp && !b.lastActiveTimestamp) return 0;
           if (!a.lastActiveTimestamp) return 1;
           if (!b.lastActiveTimestamp) return -1;
-          // Most recent first
           return new Date(b.lastActiveTimestamp).getTime() - new Date(a.lastActiveTimestamp).getTime();
         });
       case 'alpha':
@@ -404,11 +375,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   const toggleCart = (cartId: string) => {
     setExpandedCarts(prev => {
       const next = new Set(prev);
-      if (next.has(cartId)) {
-        next.delete(cartId);
-      } else {
-        next.add(cartId);
-      }
+      if (next.has(cartId)) next.delete(cartId);
+      else next.add(cartId);
       return next;
     });
   };
@@ -423,44 +391,34 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     setRefreshKey(prev => prev + 1);
   };
 
-  // --- VIEW LOGSHEET HANDLER ---
   const handleViewLogsheet = (worker: Worker, cartMembers?: Worker[]) => {
     if (!currentUser) {
       console.error('Cannot view logsheet: currentUser not available');
       return;
     }
-
-    // Store the RM's original user data for return
     setStorageItem('rm_original_user', currentUser);
     setStorageItem('rm_view_mode', true);
-    
-    // If viewing a cart, store the cart member names for the banner
     if (cartMembers && cartMembers.length > 1) {
       const cartNames = cartMembers.map(m => m.firstName).join(' & ');
       setStorageItem('rm_view_cart_names', cartNames);
     } else {
       setStorageItem('rm_view_cart_names', null);
     }
-
-    // Set the worker as the current user (this is what Dashboard reads)
     setStorageItem('current_user', worker);
-
-    // Navigate to the logsheet
     navigate('/logsheet');
   };
 
   const handleTransfer = async (contractorId: string) => {
     if (!selectedTransferManager) return;
-    
     try {
-        await sessionService.transferWorker(contractorId, selectedTransferManager);
-        setTeamMembers((prev) => prev.filter((m) => m.contractorId !== contractorId));
-        setTransferModeId(null);
-        setMenuOpenId(null);
-        setSelectedTransferManager("");
+      await sessionService.transferWorker(contractorId, selectedTransferManager);
+      setTeamMembers((prev) => prev.filter((m) => m.contractorId !== contractorId));
+      setTransferModeId(null);
+      setMenuOpenId(null);
+      setSelectedTransferManager("");
     } catch (error) {
-        console.error("Transfer failed:", error);
-        alert("Failed to transfer contractor. Please try again.");
+      console.error("Transfer failed:", error);
+      alert("Failed to transfer contractor. Please try again.");
     }
   };
 
@@ -480,10 +438,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   const handleToggleUpsells = async (contractorId: string, currentValue: boolean) => {
     try {
       await sessionService.toggleWorkerUpsells(contractorId, !currentValue);
-      setTeamMembers(prev => prev.map(m => 
-        m.contractorId === contractorId 
-          ? { ...m, upsellsEnabled: !currentValue }
-          : m
+      setTeamMembers(prev => prev.map(m =>
+        m.contractorId === contractorId ? { ...m, upsellsEnabled: !currentValue } : m
       ));
     } catch (error) {
       console.error("Failed to toggle upsells:", error);
@@ -495,7 +451,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     return member.financialStore.length === 0;
   };
 
-  // --- NEW: REASSIGN MODAL HANDLERS ---
+  // --- REASSIGN MODAL HANDLERS ---
 
   const openReassignModal = () => {
     setSelectedWorkerToMove(null);
@@ -549,8 +505,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
       setReassignSuccess(msg);
       setSelectedWorkerToMove(null);
       setSelectedWorkerCart(null);
-
-      // Reload data to reflect changes
       handleRefreshData();
     } catch (err: any) {
       console.error('Reassign failed:', err);
@@ -560,21 +514,56 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     }
   };
 
-  // Other managers (for moving to different manager)
+  // BUG 2 FIX: Remove a no-show worker completely from the session.
+  // If they're in a team, first split them off (updates team session),
+  // then delete them entirely so they don't affect cart stats.
+  const handleRemoveWorkerNoShow = async () => {
+    if (!selectedWorkerToMove) return;
+    if (!window.confirm(
+      `Remove ${selectedWorkerToMove.firstName} ${selectedWorkerToMove.lastName} completely?\n\nThis removes them from the session and all stats. Use this for no-shows only.`
+    )) return;
+
+    setReassignLoading(true);
+    setReassignError(null);
+    setReassignSuccess(null);
+
+    try {
+      // If in a team cart, remove from team first (creates a temporary solo session)
+      if (selectedWorkerCart && selectedWorkerCart.members.length > 1) {
+        await sessionService.reassignWorker(
+          selectedWorkerToMove.contractorId,
+          { type: 'new_solo' }
+        );
+      }
+      // Delete the worker and their solo session entirely
+      await sessionService.deleteWorker(selectedWorkerToMove.contractorId);
+
+      setReassignSuccess(`${selectedWorkerToMove.firstName} removed from session`);
+      setSelectedWorkerToMove(null);
+      setSelectedWorkerCart(null);
+      handleRefreshData();
+    } catch (err: any) {
+      console.error('Remove failed:', err);
+      setReassignError(err.message || 'Failed to remove worker. Please try again.');
+    } finally {
+      setReassignLoading(false);
+    }
+  };
+
   const otherManagers = allManagers.filter(m => m.userId !== managerId && m.role === 'RouteManager');
 
   // --- RENDER: Aeration Worker Card ---
   const renderWorkerCard = (member: WorkerDisplay) => {
     const canModify = isModifiable(member);
-    
+
     return (
       <div
         key={member.contractorId}
         className="relative bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 transition-all shadow-sm"
       >
         <div className="p-2 pr-9">
-          {/* TOP ROW: Name + Routes + View Button + Upsell Toggle */}
-          <div 
+          {/* TOP ROW */}
+          <div
             className="flex items-center justify-between mb-1 cursor-pointer"
             onClick={() => toggleItem(member.contractorId)}
           >
@@ -587,7 +576,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               <h3 className="font-bold text-white text-sm whitespace-nowrap">
                 {member.firstName} {member.lastName}
               </h3>
-              
               <div className="flex flex-wrap gap-1 ml-2">
                 {member.assignedRoutes.length > 0 ? (
                   member.assignedRoutes.map((route, idx) => (
@@ -596,37 +584,26 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                     </span>
                   ))
                 ) : member.displayBookings.length > 0 ? (
-                   <span className="text-[9px] text-gray-500 italic">No Rte</span>
+                  <span className="text-[9px] text-gray-500 italic">No Rte</span>
                 ) : null}
               </div>
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
-              {/* View Logsheet Button */}
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleViewLogsheet(member);
-                }}
+                onClick={(e) => { e.stopPropagation(); handleViewLogsheet(member); }}
                 className="p-1 rounded hover:bg-gray-700 transition-colors text-cyan-400 hover:text-cyan-300"
                 title={`View ${member.firstName}'s logsheet`}
               >
                 <Eye size={14} />
               </button>
-
-              {/* Upsell Toggle */}
               <span className={`text-[8px] font-bold ${member.upsellsEnabled !== false ? 'text-purple-400' : 'text-gray-500'}`}>
                 UP
               </span>
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleToggleUpsells(member.contractorId, member.upsellsEnabled !== false);
-                }}
+                onClick={(e) => { e.stopPropagation(); handleToggleUpsells(member.contractorId, member.upsellsEnabled !== false); }}
                 className={`relative inline-flex h-3 w-5 flex-shrink-0 cursor-pointer rounded-full border transition-colors duration-200 ease-in-out focus:outline-none items-center ${
-                  member.upsellsEnabled !== false
-                    ? 'bg-purple-600 border-purple-600'
-                    : 'bg-gray-600 border-gray-600'
+                  member.upsellsEnabled !== false ? 'bg-purple-600 border-purple-600' : 'bg-gray-600 border-gray-600'
                 }`}
               >
                 <span
@@ -638,8 +615,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             </div>
           </div>
 
-          {/* SECOND ROW: Location + Timestamp + Phone + ID */}
-          <div 
+          {/* SECOND ROW */}
+          <div
             className="flex items-center gap-3 pl-4 mb-2 cursor-pointer"
             onClick={() => toggleItem(member.contractorId)}
           >
@@ -648,141 +625,110 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               {member.lastActiveAddress ? (
                 <span className="truncate">
                   {member.lastActiveAddress}
-                  {member.lastActiveTime && (
-                    <span className="text-gray-500"> • {member.lastActiveTime}</span>
-                  )}
+                  {member.lastActiveTime && <span className="text-gray-500"> • {member.lastActiveTime}</span>}
                 </span>
               ) : (
                 <span className="opacity-50 italic">No history</span>
               )}
             </div>
-
             <span className="text-gray-700 text-[10px]">|</span>
-
             <div className="flex items-center gap-2 text-[10px] text-gray-500 font-mono">
               <span>#{member.contractorId}</span>
               {member.cellPhone && (
                 <span
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    copyPhone(member.cellPhone!, member.contractorId);
-                  }}
+                  onClick={(e) => { e.stopPropagation(); copyPhone(member.cellPhone!, member.contractorId); }}
                   className="flex items-center gap-1 text-blue-400 cursor-pointer hover:underline"
                 >
                   <Phone size={9} /> {member.cellPhone}
-                  {copiedId === member.contractorId && (
-                    <Check size={9} className="text-green-400" />
-                  )}
+                  {copiedId === member.contractorId && <Check size={9} className="text-green-400" />}
                 </span>
               )}
             </div>
           </div>
 
-          {/* THIRD ROW: Stats Grid */}
-          <div 
+          {/* STATS GRID */}
+          <div
             className="grid grid-cols-5 gap-1 text-center bg-gray-900/40 p-1 rounded text-[10px] border border-gray-700/30 cursor-pointer"
             onClick={() => toggleItem(member.contractorId)}
           >
-            <div>
-              <div className="text-gray-500 text-[8px] uppercase">Steps</div>
-              <div className="text-white font-bold">{member.stats.steps}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[8px] uppercase">Pend</div>
-              <div className="text-yellow-400 font-bold">{member.stats.pending}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[8px] uppercase">Up Gross</div>
-              <div className="text-green-400 font-bold">${member.stats.gross.toFixed(2)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[8px] uppercase">Upsell</div>
-              <div className="text-purple-400 font-bold">{member.stats.upsellCount}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[8px] uppercase">EQ</div>
-              <div className="text-blue-300 font-bold">{member.stats.eq.toFixed(2)}</div>
-            </div>
+            <div><div className="text-gray-500 text-[8px] uppercase">Steps</div><div className="text-white font-bold">{member.stats.steps}</div></div>
+            <div><div className="text-gray-500 text-[8px] uppercase">Pend</div><div className="text-yellow-400 font-bold">{member.stats.pending}</div></div>
+            <div><div className="text-gray-500 text-[8px] uppercase">Up Gross</div><div className="text-green-400 font-bold">${member.stats.gross.toFixed(2)}</div></div>
+            <div><div className="text-gray-500 text-[8px] uppercase">Upsell</div><div className="text-purple-400 font-bold">{member.stats.upsellCount}</div></div>
+            <div><div className="text-gray-500 text-[8px] uppercase">EQ</div><div className="text-blue-300 font-bold">{member.stats.eq.toFixed(2)}</div></div>
           </div>
         </div>
 
-        {/* Menu Button (Aeration only) */}
+        {/* Menu Button */}
         <div className="absolute top-2 right-1.5">
-           {canModify ? (
-             <div className="relative">
-               <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setMenuOpenId(menuOpenId === member.contractorId ? null : member.contractorId);
-                    setTransferModeId(null);
-                  }}
-                  className={`p-1 rounded hover:bg-gray-700 transition-colors ${menuOpenId === member.contractorId ? 'bg-gray-700 text-white' : 'text-gray-500'}`}
-               >
-                 <MoreVertical size={14} />
-               </button>
-               
-               {menuOpenId === member.contractorId && (
-                 <div ref={menuRef} className="absolute right-0 top-6 w-48 bg-gray-800 border border-gray-600 rounded shadow-xl z-20 overflow-hidden">
-                   {!transferModeId ? (
-                     <div className="flex flex-col">
-                       <button 
-                         onClick={() => setTransferModeId(member.contractorId)}
-                         className="flex items-center gap-2 px-3 py-2 text-xs text-blue-300 hover:bg-gray-700 text-left"
-                       >
-                         <ArrowRight size={14} /> Transfer Contractor
-                       </button>
-                       <button 
-                         onClick={() => handleRemove(member.contractorId)}
-                         className="flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-gray-700 text-left border-t border-gray-700"
-                       >
-                         <Trash2 size={14} /> Remove Contractor
-                       </button>
-                     </div>
-                   ) : (
-                     <div className="p-2 space-y-2">
-                       <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-                         <span>Select Manager</span>
-                         <button onClick={() => setTransferModeId(null)}><X size={12}/></button>
-                       </div>
-                       <select 
-                          className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded p-1 outline-none"
-                          value={selectedTransferManager}
-                          onChange={(e) => setSelectedTransferManager(e.target.value)}
-                       >
-                         <option value="">Select...</option>
-                         {allManagers
-                          .filter(m => m.userId !== managerId)
-                          .map(m => (
-                           <option key={m.userId} value={m.userId}>{m.name}</option>
-                         ))}
-                       </select>
-                       <button 
-                         disabled={!selectedTransferManager}
-                         onClick={() => handleTransfer(member.contractorId)}
-                         className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs py-1 rounded"
-                       >
-                         Confirm
-                       </button>
-                     </div>
-                   )}
-                 </div>
-               )}
-             </div>
-           ) : (
-             <div 
-               className="p-1 cursor-pointer"
-               onClick={() => toggleItem(member.contractorId)}
-             >
-               {expandedItem === member.contractorId ? (
-                  <ChevronUp size={14} className="text-gray-600" />
-               ) : (
-                  <ChevronDown size={14} className="text-gray-600" />
-               )}
-             </div>
-           )}
+          {canModify ? (
+            <div className="relative">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpenId(menuOpenId === member.contractorId ? null : member.contractorId);
+                  setTransferModeId(null);
+                }}
+                className={`p-1 rounded hover:bg-gray-700 transition-colors ${menuOpenId === member.contractorId ? 'bg-gray-700 text-white' : 'text-gray-500'}`}
+              >
+                <MoreVertical size={14} />
+              </button>
+
+              {menuOpenId === member.contractorId && (
+                <div ref={menuRef} className="absolute right-0 top-6 w-48 bg-gray-800 border border-gray-600 rounded shadow-xl z-20 overflow-hidden">
+                  {!transferModeId ? (
+                    <div className="flex flex-col">
+                      <button
+                        onClick={() => setTransferModeId(member.contractorId)}
+                        className="flex items-center gap-2 px-3 py-2 text-xs text-blue-300 hover:bg-gray-700 text-left"
+                      >
+                        <ArrowRight size={14} /> Transfer Contractor
+                      </button>
+                      <button
+                        onClick={() => handleRemove(member.contractorId)}
+                        className="flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-gray-700 text-left border-t border-gray-700"
+                      >
+                        <Trash2 size={14} /> Remove Contractor
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="p-2 space-y-2">
+                      <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
+                        <span>Select Manager</span>
+                        <button onClick={() => setTransferModeId(null)}><X size={12} /></button>
+                      </div>
+                      <select
+                        className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded p-1 outline-none"
+                        value={selectedTransferManager}
+                        onChange={(e) => setSelectedTransferManager(e.target.value)}
+                      >
+                        <option value="">Select...</option>
+                        {allManagers.filter(m => m.userId !== managerId).map(m => (
+                          <option key={m.userId} value={m.userId}>{m.name}</option>
+                        ))}
+                      </select>
+                      <button
+                        disabled={!selectedTransferManager}
+                        onClick={() => handleTransfer(member.contractorId)}
+                        className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs py-1 rounded"
+                      >
+                        Confirm
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="p-1 cursor-pointer" onClick={() => toggleItem(member.contractorId)}>
+              {expandedItem === member.contractorId
+                ? <ChevronUp size={14} className="text-gray-600" />
+                : <ChevronDown size={14} className="text-gray-600" />
+              }
+            </div>
+          )}
         </div>
 
-        {/* Accordion Content - ContractorJobs */}
         {expandedItem === member.contractorId && (
           <div className="mt-1 pt-1 border-t border-gray-700 px-2 pb-2">
             <ContractorJobs
@@ -797,7 +743,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     );
   };
 
-  // --- RENDER: Lawn Rejuv Cart Card (Updated to match Aeration style) ---
+  // --- RENDER: Lawn Rejuv Cart Card ---
   const renderCartCard = (cart: CartDisplay) => {
     const isExpanded = expandedCarts.has(cart.sessionId);
     const isSoloCart = cart.members.length === 1;
@@ -811,8 +757,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         }`}
       >
         <div className="p-2 pr-9">
-          {/* TOP ROW: Cart Badge/Name + Routes */}
-          <div 
+          {/* TOP ROW */}
+          <div
             className="flex items-center justify-between mb-1 cursor-pointer"
             onClick={() => toggleCart(cart.sessionId)}
           >
@@ -822,8 +768,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                   cart.aggregatedStats.pending > 0 ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'
                 }`}
               />
-              
-              {/* Cart identifier */}
               {isSoloCart ? (
                 <h3 className="font-bold text-white text-sm whitespace-nowrap">
                   {primaryWorker?.firstName} {primaryWorker?.lastName}
@@ -839,8 +783,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                   </h3>
                 </div>
               )}
-              
-              {/* Routes */}
               <div className="flex flex-wrap gap-1 ml-2">
                 {cart.assignedRoutes.length > 0 ? (
                   cart.assignedRoutes.slice(0, 3).map((route, idx) => (
@@ -860,8 +802,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             </div>
           </div>
 
-          {/* SECOND ROW: Location + Timestamp + Worker IDs/Phones */}
-          <div 
+          {/* SECOND ROW */}
+          <div
             className="flex items-center gap-3 pl-4 mb-2 cursor-pointer flex-wrap"
             onClick={() => toggleCart(cart.sessionId)}
           >
@@ -870,34 +812,24 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               {cart.lastActiveAddress ? (
                 <span className="truncate">
                   {cart.lastActiveAddress}
-                  {cart.lastActiveTime && (
-                    <span className="text-gray-500"> • {cart.lastActiveTime}</span>
-                  )}
+                  {cart.lastActiveTime && <span className="text-gray-500"> • {cart.lastActiveTime}</span>}
                 </span>
               ) : (
                 <span className="opacity-50 italic">No history</span>
               )}
             </div>
-
             <span className="text-gray-700 text-[10px]">|</span>
-
-            {/* Worker IDs and Phones */}
             <div className="flex items-center gap-3 text-[10px] text-gray-500 font-mono flex-wrap">
               {cart.members.map((member, idx) => (
                 <span key={member.contractorId} className="flex items-center gap-1">
                   <span>#{member.contractorId}</span>
                   {member.cellPhone && (
                     <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        copyPhone(member.cellPhone!, member.contractorId);
-                      }}
+                      onClick={(e) => { e.stopPropagation(); copyPhone(member.cellPhone!, member.contractorId); }}
                       className="flex items-center gap-1 text-blue-400 cursor-pointer hover:underline"
                     >
                       <Phone size={9} /> {member.cellPhone}
-                      {copiedId === member.contractorId && (
-                        <Check size={9} className="text-green-400" />
-                      )}
+                      {copiedId === member.contractorId && <Check size={9} className="text-green-400" />}
                     </span>
                   )}
                   {idx < cart.members.length - 1 && <span className="text-gray-700 mx-1">•</span>}
@@ -906,51 +838,25 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             </div>
           </div>
 
-          {/* THIRD ROW: Stats Grid - MATCHING AERATION STYLE */}
-          <div 
+          {/* STATS GRID */}
+          <div
             className="grid grid-cols-5 gap-1 text-center bg-gray-900/40 p-1 rounded text-[10px] border border-gray-700/30 cursor-pointer"
             onClick={() => toggleCart(cart.sessionId)}
           >
-            <div>
-              <div className="text-gray-500 text-[8px] uppercase">Steps</div>
-              <div className="text-white font-bold">{cart.aggregatedStats.steps}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[8px] uppercase">Pend</div>
-              <div className="text-yellow-400 font-bold">{cart.aggregatedStats.pending}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[8px] uppercase">Up Gross</div>
-              <div className="text-green-400 font-bold">${cart.aggregatedStats.upsellGross.toFixed(2)}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[8px] uppercase">Upsell</div>
-              <div className="text-purple-400 font-bold">{cart.aggregatedStats.upsellCount}</div>
-            </div>
-            <div>
-              <div className="text-gray-500 text-[8px] uppercase">EQ</div>
-              <div className="text-blue-300 font-bold">{cart.aggregatedStats.eq.toFixed(2)}</div>
-            </div>
+            <div><div className="text-gray-500 text-[8px] uppercase">Steps</div><div className="text-white font-bold">{cart.aggregatedStats.steps}</div></div>
+            <div><div className="text-gray-500 text-[8px] uppercase">Pend</div><div className="text-yellow-400 font-bold">{cart.aggregatedStats.pending}</div></div>
+            <div><div className="text-gray-500 text-[8px] uppercase">Up Gross</div><div className="text-green-400 font-bold">${cart.aggregatedStats.upsellGross.toFixed(2)}</div></div>
+            <div><div className="text-gray-500 text-[8px] uppercase">Upsell</div><div className="text-purple-400 font-bold">{cart.aggregatedStats.upsellCount}</div></div>
+            <div><div className="text-gray-500 text-[8px] uppercase">EQ</div><div className="text-blue-300 font-bold">{cart.aggregatedStats.eq.toFixed(2)}</div></div>
           </div>
         </div>
 
-        {/* View Logsheet + Chevron Button */}
+        {/* View + Chevron */}
         <div className="absolute top-2 right-1.5 flex items-center gap-1">
-          {/* View Logsheet Button */}
           <button
             onClick={(e) => {
               e.stopPropagation();
-              // Use the primary worker but pass all cart members for the banner
-              const workersForCart = cart.members.map(m => ({
-                ...m,
-                displayBookings: [],
-                financialStore: [],
-                assignedRoutes: [],
-                lastActiveAddress: null,
-                lastActiveTimestamp: null,
-                lastActiveTime: null,
-                stats: { steps: 0, gross: 0, eq: 0, pending: 0, upsellCount: 0, upsellGross: 0 },
-              } as Worker));
+              const workersForCart = cart.members.map(m => ({ ...m } as Worker));
               handleViewLogsheet(primaryWorker, workersForCart);
             }}
             className="p-1 rounded hover:bg-gray-700 transition-colors text-cyan-400 hover:text-cyan-300"
@@ -958,20 +864,14 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           >
             <Eye size={14} />
           </button>
-
-          <div 
-            className="p-1 cursor-pointer"
-            onClick={() => toggleCart(cart.sessionId)}
-          >
-            {isExpanded ? (
-              <ChevronUp size={14} className="text-gray-600" />
-            ) : (
-              <ChevronDown size={14} className="text-gray-600" />
-            )}
+          <div className="p-1 cursor-pointer" onClick={() => toggleCart(cart.sessionId)}>
+            {isExpanded
+              ? <ChevronUp size={14} className="text-gray-600" />
+              : <ChevronDown size={14} className="text-gray-600" />
+            }
           </div>
         </div>
 
-        {/* Expanded Content - Shared ContractorJobs */}
         {isExpanded && (
           <div className="mt-1 pt-1 border-t border-gray-700 px-2 pb-2">
             <ContractorJobs
@@ -989,18 +889,15 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   // --- MAIN RENDER ---
   return (
     <div className="space-y-2 max-w-4xl mx-auto pb-10">
-      {/* Header with Sort */}
+      {/* Header */}
       {teamMembers.length > 0 && (
         <div className="flex justify-between items-center mb-4">
           {isLawnRejuv && (
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2 text-xs text-green-400">
                 <Leaf size={14} />
-                <span>
-                  {carts.length} cart{carts.length !== 1 ? 's' : ''} • {teamMembers.length} workers
-                </span>
+                <span>{carts.length} cart{carts.length !== 1 ? 's' : ''} • {teamMembers.length} workers</span>
               </div>
-              {/* NEW: Reassign Teams button — Lawn Rejuv only */}
               <button
                 onClick={openReassignModal}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-900/30 hover:bg-orange-900/50 text-orange-300 border border-orange-700/50 text-xs font-bold transition-colors"
@@ -1012,8 +909,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           )}
           <div className={`flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 shadow-sm ${!isLawnRejuv ? 'ml-auto' : ''}`}>
             <span className="text-xs text-gray-400 font-medium">Sort by:</span>
-            <select 
-              value={sortBy} 
+            <select
+              value={sortBy}
               onChange={(e) => setSortBy(e.target.value as TeamSortOption)}
               className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cps-blue cursor-pointer"
             >
@@ -1034,20 +931,17 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         </div>
       )}
 
-      {/* Lawn Rejuv: Render Cart Cards */}
       {isLawnRejuv && sortedCarts.map((cart) => renderCartCard(cart))}
-
-      {/* Aeration: Render Worker Cards directly */}
       {!isLawnRejuv && sortedTeamMembers.map((member) => renderWorkerCard(member))}
 
       {/* ============================================================
-          NEW: REASSIGN TEAMS MODAL (Lawn Rejuv only)
+          REASSIGN TEAMS MODAL (Lawn Rejuv only)
           ============================================================ */}
       {showReassignModal && isLawnRejuv && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
           <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
-            
-            {/* Modal Header */}
+
+            {/* Header */}
             <div className="p-4 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-2">
                 <ArrowRightLeft size={18} className="text-orange-400" />
@@ -1061,23 +955,21 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               </button>
             </div>
 
-            {/* Success / Error banners */}
+            {/* Banners */}
             {reassignSuccess && (
               <div className="mx-4 mt-3 flex items-center gap-2 bg-green-900/30 border border-green-700/50 rounded-lg px-3 py-2 text-green-300 text-sm">
-                <Check size={16} />
-                {reassignSuccess}
+                <Check size={16} />{reassignSuccess}
               </div>
             )}
             {reassignError && (
               <div className="mx-4 mt-3 flex items-center gap-2 bg-red-900/30 border border-red-700/50 rounded-lg px-3 py-2 text-red-300 text-sm">
-                <AlertCircle size={16} />
-                {reassignError}
+                <AlertCircle size={16} />{reassignError}
               </div>
             )}
 
             <div className="flex flex-1 overflow-hidden">
-              
-              {/* LEFT PANEL: Select worker to move */}
+
+              {/* LEFT PANEL: Select worker */}
               <div className="w-1/2 border-r border-gray-700 flex flex-col">
                 <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex-shrink-0">
                   <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">
@@ -1094,7 +986,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                           : 'border-gray-700 bg-gray-800/50'
                       }`}
                     >
-                      {/* Cart label */}
                       <div className="px-3 py-1.5 bg-gray-800/80 border-b border-gray-700/50 flex items-center gap-2">
                         {cart.members.length > 1 ? (
                           <>
@@ -1108,7 +999,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                           {cart.aggregatedStats.eq.toFixed(1)} EQ
                         </span>
                       </div>
-                      {/* Worker rows */}
                       {cart.members.map(member => {
                         const isSelected = selectedWorkerToMove?.contractorId === member.contractorId;
                         return (
@@ -1116,9 +1006,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                             key={member.contractorId}
                             onClick={() => selectWorkerToMove(member, cart)}
                             className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors text-sm ${
-                              isSelected
-                                ? 'bg-orange-900/30 text-orange-200'
-                                : 'hover:bg-gray-700/50 text-gray-300'
+                              isSelected ? 'bg-orange-900/30 text-orange-200' : 'hover:bg-gray-700/50 text-gray-300'
                             }`}
                           >
                             <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${
@@ -1142,9 +1030,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               {/* RIGHT PANEL: Choose destination */}
               <div className="w-1/2 flex flex-col">
                 <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex-shrink-0">
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">
-                    2. Move to...
-                  </p>
+                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">2. Move to...</p>
                 </div>
 
                 {!selectedWorkerToMove ? (
@@ -1162,12 +1048,12 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                       <div>
                         <div className="text-sm font-bold text-white">{selectedWorkerToMove.firstName} {selectedWorkerToMove.lastName}</div>
                         <div className="text-[10px] text-orange-400">
-                          Moving from: {selectedWorkerCart?.members.map(m => m.firstName).join(' & ')}
+                          From: {selectedWorkerCart?.members.map(m => m.firstName).join(' & ')}
                         </div>
                       </div>
                     </div>
 
-                    {/* Option A: Move to existing cart */}
+                    {/* Option A: Join existing cart */}
                     {sortedCarts.filter(c => c.sessionId !== selectedWorkerCart?.sessionId).length > 0 && (
                       <div>
                         <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Join existing cart</p>
@@ -1192,11 +1078,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                                   <div className="flex items-center gap-2 min-w-0">
                                     {targetCart.members.length > 1
                                       ? <Truck size={14} className="text-green-400 flex-shrink-0" />
-                                      : (
-                                        <div className="w-5 h-5 rounded-full bg-gray-600 flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0">
-                                          {targetCart.members[0]?.firstName.charAt(0)}
-                                        </div>
-                                      )
+                                      : <div className="w-5 h-5 rounded-full bg-gray-600 flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0">{targetCart.members[0]?.firstName.charAt(0)}</div>
                                     }
                                     <div className="min-w-0">
                                       <div className="font-medium text-gray-200 truncate">{label}</div>
@@ -1204,13 +1086,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-2 flex-shrink-0">
-                                    <span className="text-[10px] text-blue-400 bg-blue-900/30 border border-blue-700/50 px-1.5 py-0.5 rounded">
-                                      → {newRate}
-                                    </span>
-                                    {reassignLoading
-                                      ? <Loader size={12} className="animate-spin text-gray-400" />
-                                      : <ArrowRight size={14} className="text-gray-500" />
-                                    }
+                                    <span className="text-[10px] text-blue-400 bg-blue-900/30 border border-blue-700/50 px-1.5 py-0.5 rounded">→ {newRate}</span>
+                                    {reassignLoading ? <Loader size={12} className="animate-spin text-gray-400" /> : <ArrowRight size={14} className="text-gray-500" />}
                                   </div>
                                 </button>
                               );
@@ -1219,7 +1096,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                       </div>
                     )}
 
-                    {/* Option B: Make solo cart */}
+                    {/* Option B: Split to solo */}
                     <div>
                       <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Split off</p>
                       <button
@@ -1235,23 +1112,16 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                           </div>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
-                          <span className="text-[10px] text-yellow-400 bg-yellow-900/30 border border-yellow-700/50 px-1.5 py-0.5 rounded">
-                            $7/EQ
-                          </span>
-                          {reassignLoading
-                            ? <Loader size={12} className="animate-spin text-gray-400" />
-                            : <ArrowRight size={14} className="text-gray-500" />
-                          }
+                          <span className="text-[10px] text-yellow-400 bg-yellow-900/30 border border-yellow-700/50 px-1.5 py-0.5 rounded">$7/EQ</span>
+                          {reassignLoading ? <Loader size={12} className="animate-spin text-gray-400" /> : <ArrowRight size={14} className="text-gray-500" />}
                         </div>
                       </button>
                       {selectedWorkerCart?.members.length === 1 && (
-                        <p className="text-[10px] text-gray-600 italic mt-1 pl-1">
-                          Already solo — join a cart instead
-                        </p>
+                        <p className="text-[10px] text-gray-600 italic mt-1 pl-1">Already solo — join a cart instead</p>
                       )}
                     </div>
 
-                    {/* Option C: Move to different manager */}
+                    {/* Option C: Different manager */}
                     {otherManagers.length > 0 && (
                       <div>
                         <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Move to different manager</p>
@@ -1268,31 +1138,45 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                           </select>
                           <button
                             disabled={reassignLoading || !reassignManagerId}
-                            onClick={() => handleReassignWorker({
-                              type: 'different_manager',
-                              targetManagerId: reassignManagerId,
-                            })}
+                            onClick={() => handleReassignWorker({ type: 'different_manager', targetManagerId: reassignManagerId })}
                             className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg text-sm font-bold transition-colors disabled:cursor-not-allowed"
                           >
-                            {reassignLoading
-                              ? <Loader size={14} className="animate-spin" />
-                              : <Shuffle size={14} />
-                            }
+                            {reassignLoading ? <Loader size={14} className="animate-spin" /> : <Shuffle size={14} />}
                             Transfer to Manager
                           </button>
-                          <p className="text-[10px] text-gray-600 italic">
-                            Worker gets a new solo cart under the new manager
-                          </p>
+                          <p className="text-[10px] text-gray-600 italic">Worker gets a new solo cart under the new manager</p>
                         </div>
                       </div>
                     )}
+
+                    {/* Option D: Remove (No-Show) — BUG 2 FIX */}
+                    <div>
+                      <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">No-show</p>
+                      <button
+                        disabled={reassignLoading}
+                        onClick={handleRemoveWorkerNoShow}
+                        className="w-full text-left px-3 py-2.5 bg-gray-800 hover:bg-red-900/20 border border-gray-600 hover:border-red-700 rounded-lg transition-colors flex items-center justify-between gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <div className="flex items-center gap-2">
+                          <UserMinus size={14} className="text-red-400 flex-shrink-0" />
+                          <div>
+                            <div className="font-medium text-red-300">Remove from session</div>
+                            <div className="text-[10px] text-gray-500">Removes worker & stats entirely</div>
+                          </div>
+                        </div>
+                        {reassignLoading
+                          ? <Loader size={12} className="animate-spin text-gray-400" />
+                          : <Trash2 size={14} className="text-red-500 flex-shrink-0" />
+                        }
+                      </button>
+                    </div>
 
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Modal Footer */}
+            {/* Footer */}
             <div className="p-3 border-t border-gray-700 flex justify-end flex-shrink-0">
               <button
                 onClick={closeReassignModal}
