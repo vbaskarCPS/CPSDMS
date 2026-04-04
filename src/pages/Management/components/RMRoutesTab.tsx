@@ -11,7 +11,7 @@ import {
   getSeasonConfig,
   EQ_DIVISOR 
 } from '../../../lib/commandCenterService';
-import { RouteData, MasterBooking, Worker, ManagementUser, SeasonType, TeamCart } from '../../../types';
+import { RouteData, MasterBooking, Worker, ManagementUser, SeasonType, TeamCart, LogsheetSession } from '../../../types';
 import PendingJobModal from '../../../components/PendingJobModal';
 
 interface RMRoutesTabProps {
@@ -22,6 +22,7 @@ interface RMRoutesTabProps {
   managers: ManagementUser[];
   seasonType?: SeasonType;
   teamCarts?: TeamCart[];
+  allSessions?: LogsheetSession[]; // CHANGE 1: new prop — source of truth for cart membership
   onRefresh: () => void;
 }
 
@@ -51,6 +52,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   managers,
   seasonType = 'aeration',
   teamCarts = [],
+  allSessions = [],
   onRefresh,
 }) => {
   const isLawnRejuv = seasonType === 'lawn_rejuv';
@@ -263,21 +265,32 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     });
   }, [contractors, workerRouteMap, isLawnRejuv]);
 
+  // CHANGE 2: Build contractorsByCart from allSessions instead of worker.teamId.
+  // After a reassignment, logsheet_sessions reflects the new cart membership
+  // immediately. worker.teamId (metadata) never changes mid-session.
   const contractorsByCart = useMemo(() => {
     if (!isLawnRejuv) return null;
     
+    const myTeamIds = new Set(contractors.map(w => w.contractorId));
+    const workerMap = new Map(contractors.map(w => [w.contractorId, w]));
     const cartMap = new Map<string, Worker[]>();
-    
-    contractors.forEach(worker => {
-      const teamId = worker.teamId || worker.contractorId;
-      if (!cartMap.has(teamId)) {
-        cartMap.set(teamId, []);
-      }
-      cartMap.get(teamId)!.push(worker);
+
+    allSessions.forEach(session => {
+      const sessionWorkerIds = (session.teamWorkerIds || [session.workerId])
+        .filter(id => myTeamIds.has(id));
+      if (sessionWorkerIds.length === 0) return;
+
+      const sessionWorkers = sessionWorkerIds
+        .map(id => workerMap.get(id))
+        .filter(Boolean) as Worker[];
+      if (sessionWorkers.length === 0) return;
+
+      // Key by session's primary workerId — stable, unique per cart
+      cartMap.set(session.workerId, sessionWorkers);
     });
-    
+
     return cartMap;
-  }, [contractors, isLawnRejuv]);
+  }, [contractors, allSessions, isLawnRejuv]);
 
   // --- 4. ACTIONS ---
 
@@ -891,7 +904,8 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                 <AlertCircle size={16} /> Unassign {assignModalData.type === 'ROUTE' ? 'Route' : 'Job'}
               </button>
 
-              {/* Lawn Rejuv: Group by Cart */}
+              {/* CHANGE 3: Assignment modal now iterates contractorsByCart which is
+                  built from allSessions — reflects post-reassignment membership */}
               {isLawnRejuv && contractorsByCart ? (
                 Array.from(contractorsByCart.entries()).map(([cartId, cartWorkers]) => {
                   const isSoloCart = cartWorkers.length === 1;
@@ -933,7 +947,9 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                             </>
                           ) : (
                             <>
-                              <span className="font-medium text-green-300">Cart: {cartId}</span>
+                              <span className="font-medium text-green-300">
+                                {cartWorkers.map(w => w.firstName).join(' & ')}
+                              </span>
                               <span className="text-[10px] text-gray-400">
                                 {cartWorkers.map(w => `${w.firstName} ${w.lastName[0]}.`).join(', ')}
                               </span>
