@@ -418,6 +418,7 @@ const RMLogbook: React.FC = () => {
                 managers={dailyData.managers}
                 seasonType={seasonType}
                 teamCarts={dailyData.teamCarts}
+                allSessions={allSessions}
                 onRefresh={() => { refreshData(); }} 
               />
             )}
