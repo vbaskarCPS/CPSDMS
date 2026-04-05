@@ -439,6 +439,16 @@ class SessionService {
     if (error) throw error;
   }
 
+  // --- NEW: Check if live card processing is enabled for this session ---
+  public async getSessionLiveCardEnabled(): Promise<boolean> {
+    try {
+      const meta = await this.getSessionImportMeta();
+      return meta?.liveCardProcessingEnabled ?? false;
+    } catch {
+      return false;
+    }
+  }
+
   // --- 2c. UPSELL CONTROL ---
 
   public async getWorkerUpsellsEnabled(workerId: string): Promise<boolean> {

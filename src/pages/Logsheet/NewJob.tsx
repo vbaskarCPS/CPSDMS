@@ -15,6 +15,7 @@ import {
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
 import CreditCardModal from '../../components/CreditCardModal';
+import BamboraLiveModal from '../../components/BamboraLiveModal';
 import EtransferProtocolModal from '../../components/EtransferProtocolModal';
 import AddContractModal from '../../components/AddContractModal';
 import { 
@@ -121,6 +122,9 @@ const NewJob: React.FC = () => {
 
   // --- Season type state (for Lawn Rejuv support) ---
   const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
+
+  // NEW: Live Card Processing flag (production only, stays false in training)
+  const [liveCardEnabled, setLiveCardEnabled] = useState(false);
 
   // --- Form State ---
   const [routeCode, setRouteCode] = useState('');
@@ -321,7 +325,7 @@ const NewJob: React.FC = () => {
       
       // Get region and tax rate
       if (trainingMode) {
-        // Training is always West, aeration season
+        // Training is always West, aeration season — liveCardEnabled stays false
         setRegion('West');
         setTaxRate(5);
         setSeasonType('aeration');
@@ -343,6 +347,14 @@ const NewJob: React.FC = () => {
           }
         } catch (err) {
           console.warn('Could not get season type, defaulting to aeration');
+        }
+
+        // NEW: Get live card processing setting from session
+        try {
+          const liveCard = await sessionService.getSessionLiveCardEnabled();
+          setLiveCardEnabled(liveCard);
+        } catch (err) {
+          console.warn('Could not get live card status, defaulting to false');
         }
       }
       
@@ -960,30 +972,57 @@ const NewJob: React.FC = () => {
         </form>
       </div>
 
+      {/* Credit Card / Bambora Live Terminal */}
       {showCreditModal && (
-          <CreditCardModal 
-              amount={isSplitPayment ? splitAmounts.creditCard : amount} 
-              clientName={`${firstName} ${lastName}`} 
-              onClose={() => setShowCreditModal(false)} 
-              onProcess={(details) => { 
-                  if (isSplitPayment) {
-                    setSplitCcPaid(true);
-                    setSplitCcData({
-                      number: details.number,
-                      expiry: details.expiry,
-                      cvc: details.cvc
-                    });
-                  } else {
-                    setIsCreditPaid(true); 
-                    setCcData({
-                        number: details.number,
-                        expiry: details.expiry,
-                        cvc: details.cvc
-                    });
-                  }
-                  setShowCreditModal(false); 
-              }} 
+        liveCardEnabled ? (
+          <BamboraLiveModal
+            amount={isSplitPayment ? splitAmounts.creditCard : amount}
+            clientName={`${firstName} ${lastName}`}
+            onClose={() => setShowCreditModal(false)}
+            onProcess={(details) => {
+              if (isSplitPayment) {
+                setSplitCcPaid(true);
+                setSplitCcData({
+                  number: `BAMBORA-${details.bamboraTransactionId}`,
+                  expiry: details.authCode,
+                  cvc: details.last4,
+                });
+              } else {
+                setIsCreditPaid(true);
+                setCcData({
+                  number: `BAMBORA-${details.bamboraTransactionId}`,
+                  expiry: details.authCode,
+                  cvc: details.last4,
+                });
+              }
+              setShowCreditModal(false);
+            }}
           />
+        ) : (
+          <CreditCardModal 
+            amount={isSplitPayment ? splitAmounts.creditCard : amount} 
+            clientName={`${firstName} ${lastName}`} 
+            onClose={() => setShowCreditModal(false)} 
+            onProcess={(details) => { 
+              if (isSplitPayment) {
+                setSplitCcPaid(true);
+                setSplitCcData({
+                  number: details.number,
+                  expiry: details.expiry,
+                  cvc: details.cvc
+                });
+              } else {
+                setIsCreditPaid(true); 
+                setCcData({
+                  number: details.number,
+                  expiry: details.expiry,
+                  cvc: details.cvc
+                });
+              }
+              setShowCreditModal(false); 
+            }} 
+          />
+        )
       )}
 
       {/* DIRECT UPGRADE MODAL */}

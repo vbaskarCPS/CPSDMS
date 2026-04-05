@@ -19,6 +19,7 @@ import {
   SERVICE_FLAG_LABELS 
 } from '../../types';
 import CreditCardModal from '../../components/CreditCardModal';
+import BamboraLiveModal from '../../components/BamboraLiveModal';
 import EtransferProtocolModal from '../../components/EtransferProtocolModal';
 import AddContractModal from '../../components/AddContractModal';
 import { 
@@ -134,6 +135,9 @@ const JobDetail: React.FC = () => {
 
   // Season type state (for Lawn Rejuv support)
   const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
+
+  // NEW: Live Card Processing flag (production only, stays false in training)
+  const [liveCardEnabled, setLiveCardEnabled] = useState(false);
 
   // Form Fields
   const [firstName, setFirstName] = useState('');
@@ -317,7 +321,7 @@ const JobDetail: React.FC = () => {
 
       // Get region and tax rate
       if (trainingMode) {
-        // Training is always West, aeration season
+        // Training is always West, aeration season — liveCardEnabled stays false
         setRegion('West');
         setTaxRate(5);
         setSeasonType('aeration');
@@ -334,6 +338,14 @@ const JobDetail: React.FC = () => {
           setSeasonType(currentSeasonType);
         } catch (err) {
           console.warn('Could not get season type, defaulting to aeration');
+        }
+
+        // NEW: Get live card processing setting from session
+        try {
+          const liveCard = await sessionService.getSessionLiveCardEnabled();
+          setLiveCardEnabled(liveCard);
+        } catch (err) {
+          console.warn('Could not get live card status, defaulting to false');
         }
       }
 
@@ -959,7 +971,32 @@ const JobDetail: React.FC = () => {
         </div>
       )}
 
-      {showCreditModal && <CreditCardModal amount={isSplitPayment ? splitCreditCard : String(price)} clientName={`${firstName} ${lastName}`} onClose={() => setShowCreditModal(false)} onProcess={(details) => { setIsCreditPaid(true); setShowCreditModal(false); setCcData(details); }} />}
+      {/* Credit Card / Bambora Live Terminal */}
+      {showCreditModal && (
+        liveCardEnabled ? (
+          <BamboraLiveModal
+            amount={isSplitPayment ? splitCreditCard : String(price)}
+            clientName={`${firstName} ${lastName}`}
+            onClose={() => setShowCreditModal(false)}
+            onProcess={(details) => {
+              setIsCreditPaid(true);
+              setShowCreditModal(false);
+              setCcData({
+                number: `BAMBORA-${details.bamboraTransactionId}`,
+                expiry: details.authCode,
+                cvc: details.last4,
+              });
+            }}
+          />
+        ) : (
+          <CreditCardModal
+            amount={isSplitPayment ? splitCreditCard : String(price)}
+            clientName={`${firstName} ${lastName}`}
+            onClose={() => setShowCreditModal(false)}
+            onProcess={(details) => { setIsCreditPaid(true); setShowCreditModal(false); setCcData(details); }}
+          />
+        )
+      )}
 
       {/* DIRECT UPGRADE MODAL */}
       {showUpgradeModal && (

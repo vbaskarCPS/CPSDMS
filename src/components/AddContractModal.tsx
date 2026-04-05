@@ -7,6 +7,7 @@ import { MasterBooking, Worker, SessionTransaction, SeasonType, ServiceFlags, SE
 import { sessionService } from '../lib/sessionService';
 import { trainingService } from '../lib/trainingService';
 import CreditCardModal from './CreditCardModal';
+import BamboraLiveModal from './BamboraLiveModal';
 import EtransferProtocolModal from './EtransferProtocolModal';
 import { 
   formatPhoneNumber, 
@@ -154,6 +155,9 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const [ccData, setCcData] = useState<{ number: string, expiry: string, cvc: string } | null>(null);
   const [showCreditModal, setShowCreditModal] = useState(false);
   const [isCreditPaid, setIsCreditPaid] = useState(false);
+
+  // NEW: Live Card Processing flag (loaded from session meta, production only)
+  const [liveCardEnabled, setLiveCardEnabled] = useState(false);
 
   // E-Transfer Protocol Modal
   const [showEtransferProtocol, setShowEtransferProtocol] = useState(false);
@@ -361,9 +365,13 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       setUsingSavedCard(false);
     }
     
-    // Auto-apply saved card when Credit Card is selected
+    // Credit Card selected:
+    // Live card mode → always open terminal, never auto-apply saved card
+    // Manual mode → auto-apply saved card if available, else open terminal
     if (value === 'Credit Card') {
-      if (savedCard) {
+      if (liveCardEnabled) {
+        setShowCreditModal(true);
+      } else if (savedCard) {
         applySavedCard(savedCard);
       } else {
         setShowCreditModal(true);
@@ -403,6 +411,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
         setRegion('West');
         setTaxRate(5);
         setSeasonType('aeration');
+        // liveCardEnabled stays false in training — no real Bambora
         
         // Get routes from training service
         const dailySession = await trainingService.getDailySession();
@@ -459,6 +468,14 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
           setSeasonType(currentSeasonType);
         } catch (err) {
           console.warn("Could not get season type, defaulting to aeration");
+        }
+
+        // NEW: Get live card processing setting from session
+        try {
+          const liveCard = await sessionService.getSessionLiveCardEnabled();
+          setLiveCardEnabled(liveCard);
+        } catch (err) {
+          console.warn('Could not get live card status, defaulting to false');
         }
 
         try {
@@ -576,9 +593,11 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
         hasSprinkler: false
       });
       
-      // Check for saved card (for existing booking)
-      const card = findSavedCardByAddress(address);
-      setSavedCard(card);
+      // Check for saved card (only in manual mode — live card never uses saved cards)
+      if (!liveCardEnabled) {
+        const card = findSavedCardByAddress(address);
+        setSavedCard(card);
+      }
       
       setStep('ENTER_DETAILS');
     } else if (directUpgradeClient) {
@@ -631,13 +650,17 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     });
     setPaymentInfo(prev => ({ ...prev, amount: '' }));
     
-    // Reset CC state and check for saved card
+    // Reset CC state and check for saved card (only in manual mode)
     setIsCreditPaid(false);
     setCcData(null);
     setUsingSavedCard(false);
     
-    const card = findSavedCardByAddress(address);
-    setSavedCard(card);
+    if (!liveCardEnabled) {
+      const card = findSavedCardByAddress(address);
+      setSavedCard(card);
+    } else {
+      setSavedCard(null);
+    }
     
     setPhoneError(null);
     setEmailError(null);
@@ -791,7 +814,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
           const currentMethodKey = isIOS ? 'IOS' : paymentInfo.method;
           paymentBreakdown[currentMethodKey] = inputAmount;
           
-          isPrepaidSplit = true; 
+          isPrepaidSplit = true;
         } 
         else if (isUpgrade && bookingForPrepaidCheck) {
           finalTotal = inputAmount;
@@ -917,12 +940,12 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     }
   };
 
-  // Auto-apply saved card when split CC amount is entered
+  // Auto-apply saved card when split CC amount is entered — only in manual mode
   useEffect(() => {
-    if (isSplitPayment && splitCCAmount > 0 && savedCard && !isCreditPaid) {
+    if (isSplitPayment && splitCCAmount > 0 && savedCard && !isCreditPaid && !liveCardEnabled) {
       applySavedCard(savedCard);
     }
-  }, [splitCCAmount, savedCard, isSplitPayment]);
+  }, [splitCCAmount, savedCard, isSplitPayment, liveCardEnabled]);
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
@@ -1157,7 +1180,11 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                       <option value="">-- Select --</option>
                       <option value="Cash">Cash</option>
                       <option value="Cheque">Cheque</option>
-                      <option value="Credit Card">Credit Card{savedCard ? ` (•••• ${savedCard.lastFour})` : ''}</option>
+                      <option value="Credit Card">
+                        {liveCardEnabled
+                          ? 'Credit Card (Live Terminal)'
+                          : `Credit Card${savedCard ? ` (•••• ${savedCard.lastFour})` : ''}`}
+                      </option>
                       <option value="E-Transfer">E-Transfer</option>
                       <option value="Split Payment">Split Payment</option>
                       {supportsIOS && <option value="IOS">Invoice On Site</option>}
@@ -1273,7 +1300,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                       <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block flex items-center gap-1">
                           Credit Card
-                          {savedCard && <span className="text-green-400">(•••• {savedCard.lastFour})</span>}
+                          {!liveCardEnabled && savedCard && <span className="text-green-400">(•••• {savedCard.lastFour})</span>}
+                          {liveCardEnabled && <span className="text-purple-400">(Live)</span>}
                         </label>
                         <div className="relative">
                           <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
@@ -1390,25 +1418,44 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
         )}
       </div>
 
+      {/* Credit Card / Bambora Live Terminal */}
       {showCreditModal && (
-        <CreditCardModal 
-          amount={isSplitPayment ? splitCreditCard : paymentInfo.amount}
-          clientName={`${formData.firstName} ${formData.lastName}`}
-          onClose={() => setShowCreditModal(false)} 
-          onProcess={(details) => {
-            setIsCreditPaid(true);
-            setShowCreditModal(false);
-            setUsingSavedCard(false); // Manual entry, not using saved card
-            setCcData({
-              number: details.number,
-              expiry: details.expiry,
-              cvc: details.cvc
-            });
-            if (!isSplitPayment) {
-              setFormData(prev => ({ ...prev, notes: `${prev.notes} [CC Paid]`.trim() }));
-            }
-          }}
-        />
+        liveCardEnabled ? (
+          <BamboraLiveModal
+            amount={isSplitPayment ? splitCreditCard : paymentInfo.amount}
+            clientName={`${formData.firstName} ${formData.lastName}`}
+            onClose={() => setShowCreditModal(false)}
+            onProcess={(details) => {
+              setIsCreditPaid(true);
+              setShowCreditModal(false);
+              setUsingSavedCard(false);
+              setCcData({
+                number: `BAMBORA-${details.bamboraTransactionId}`,
+                expiry: details.authCode,
+                cvc: details.last4,
+              });
+            }}
+          />
+        ) : (
+          <CreditCardModal 
+            amount={isSplitPayment ? splitCreditCard : paymentInfo.amount}
+            clientName={`${formData.firstName} ${formData.lastName}`}
+            onClose={() => setShowCreditModal(false)} 
+            onProcess={(details) => {
+              setIsCreditPaid(true);
+              setShowCreditModal(false);
+              setUsingSavedCard(false);
+              setCcData({
+                number: details.number,
+                expiry: details.expiry,
+                cvc: details.cvc
+              });
+              if (!isSplitPayment) {
+                setFormData(prev => ({ ...prev, notes: `${prev.notes} [CC Paid]`.trim() }));
+              }
+            }}
+          />
+        )
       )}
 
       {/* E-Transfer Protocol Modal */}

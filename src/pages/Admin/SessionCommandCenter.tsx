@@ -30,6 +30,7 @@ import {
   Map as MapIcon,
   BookOpen,
   PlusCircle,
+  CreditCard,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
@@ -115,6 +116,9 @@ const SessionCommandCenter: React.FC = () => {
   // Email Settings
   const [emailEnabled, setEmailEnabled] = useState(true);
 
+  // NEW: Live Card Processing toggle
+  const [liveCardEnabled, setLiveCardEnabled] = useState(false);
+
   // --- ADD ADDITIONAL STATE ---
   const [showAddAdditional, setShowAddAdditional] = useState(false);
   const [addAdditionalLoading, setAddAdditionalLoading] = useState(false);
@@ -197,6 +201,11 @@ const SessionCommandCenter: React.FC = () => {
         if (meta?.productCostPercent !== undefined) {
           setProductCostPercent(meta.productCostPercent);
         }
+
+        // NEW: Load live card setting from meta
+        if (meta?.liveCardProcessingEnabled !== undefined) {
+          setLiveCardEnabled(meta.liveCardProcessingEnabled);
+        }
         
         // Load logsheet sessions for validation check
         const sessions = await sessionService.getLogsheetSessions();
@@ -254,6 +263,7 @@ const SessionCommandCenter: React.FC = () => {
         sheetsExported: false,
         seasonType: selectedSeasonType,
         productCostPercent: productCostPercent,
+        liveCardProcessingEnabled: liveCardEnabled, // NEW
       } as ImportMeta;
       data.seasonType = selectedSeasonType;
       setPreviewData(data);
@@ -309,6 +319,7 @@ const SessionCommandCenter: React.FC = () => {
       // Update the import meta with the custom product cost percent
       if ((data as any)._importMeta) {
         (data as any)._importMeta.productCostPercent = productCostPercent;
+        (data as any)._importMeta.liveCardProcessingEnabled = liveCardEnabled; // NEW
       }
       
       setPreviewData(data);
@@ -390,6 +401,9 @@ const SessionCommandCenter: React.FC = () => {
         
         // Ensure productCostPercent is set
         meta.productCostPercent = productCostPercent;
+
+        // NEW: Stamp live card setting into meta
+        meta.liveCardProcessingEnabled = liveCardEnabled;
         
         // Ensure season type is set
         previewData.seasonType = selectedSeasonType;
@@ -464,6 +478,7 @@ const SessionCommandCenter: React.FC = () => {
         setDateTab('');
         setSelectedSeasonType('aeration');
         setProductCostPercent(SEASON_CONFIGS['aeration'].defaultProductCostPercent);
+        setLiveCardEnabled(false); // NEW: reset on close
       } catch (err) {
         alert('Error: ' + err);
       } finally {
@@ -622,6 +637,13 @@ const SessionCommandCenter: React.FC = () => {
               <span className="text-xs px-2 py-0.5 rounded border bg-orange-900/30 text-orange-400 border-orange-700/50 flex items-center gap-1">
                 <Package size={12} />
                 {importMeta.productCostPercent}% Product Cost
+              </span>
+            )}
+            {/* NEW: Live Cards badge for active session */}
+            {importMeta?.liveCardProcessingEnabled && (
+              <span className="text-xs px-2 py-0.5 rounded border bg-purple-900/30 text-purple-400 border-purple-700/50 flex items-center gap-1">
+                <CreditCard size={12} />
+                Live Cards
               </span>
             )}
             {importMeta?.source === 'sheets' && importMeta.dateTab && (
@@ -1116,9 +1138,10 @@ const SessionCommandCenter: React.FC = () => {
                           </div>
                         )}
 
-                        {/* EMAIL TOGGLE + START SESSION */}
+                        {/* EMAIL TOGGLE + LIVE CARD TOGGLE + START SESSION */}
                         {previewData && !currentSession && (
                             <div className="mt-8 space-y-4">
+                                {/* Email receipts toggle */}
                                 <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700">
                                   <label className="flex items-start gap-3 cursor-pointer group">
                                     <input 
@@ -1135,6 +1158,33 @@ const SessionCommandCenter: React.FC = () => {
                                       <p className="text-xs text-gray-400 leading-relaxed">
                                         Automatically email receipts to customers when jobs are completed during this session.
                                         {!emailEnabled && ' (Currently disabled - no emails will be sent)'}
+                                      </p>
+                                    </div>
+                                  </label>
+                                </div>
+
+                                {/* NEW: Live Card Processing toggle */}
+                                <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700">
+                                  <label className="flex items-start gap-3 cursor-pointer group">
+                                    <input 
+                                      type="checkbox" 
+                                      checked={liveCardEnabled}
+                                      onChange={(e) => setLiveCardEnabled(e.target.checked)}
+                                      className="w-5 h-5 mt-0.5 accent-purple-500 cursor-pointer flex-shrink-0"
+                                    />
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-2 text-white font-medium mb-1">
+                                        <CreditCard size={16} className={liveCardEnabled ? 'text-purple-400' : 'text-gray-500'} />
+                                        <span>Live Card Processing</span>
+                                        {liveCardEnabled && (
+                                          <span className="text-[10px] bg-purple-900/50 text-purple-300 px-1.5 py-0.5 rounded border border-purple-700">
+                                            BAMBORA LIVE
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-xs text-gray-400 leading-relaxed">
+                                        Workers will use a live Bambora terminal to charge cards in real-time. Card details are never stored — only the masked last 4 digits go to Google Sheets.
+                                        {!liveCardEnabled && ' (Currently disabled - card details captured manually)'}
                                       </p>
                                     </div>
                                   </label>
