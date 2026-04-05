@@ -94,6 +94,7 @@ const BamboraLiveModal: React.FC<BamboraLiveModalProps> = ({
 
   const handleCharge = () => {
     if (!checkoutRef.current) return;
+    if (status === 'processing' || status === 'approved') return; // Guard against double-click
     setStatus('processing');
     setMessage('');
 
