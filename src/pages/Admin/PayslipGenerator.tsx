@@ -1,700 +1,593 @@
-// src/pages/Admin/PayslipGenerator.tsx
-import React, { useState, useEffect } from 'react';
-import {
-  ChevronLeft, ChevronRight, ChevronDown, ArrowLeft, Download,
-  Loader, AlertCircle, Plus, Trash2, CheckCircle,
-  Users, FileSpreadsheet,
-} from 'lucide-react';
-import { googleSheetsService } from '../../lib/googleSheetsService';
-import { commandCenterService } from '../../lib/commandCenterService';
-import {
-  generatePayslipsXLSX,
-  parsePayoutStatsRows,
-  WorkerPayslipUI,
-  ExtraItem,
-} from '../../lib/payslipExport';
+// src/lib/payslipExport.ts
+import jsPDF from 'jspdf';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface WorkerSettings {
+export interface PayslipDayRow {
+  date: string;
+  manager: string;
+  steps: number;
+  equiv: number;
+  totalPrepay: number;
+  payoutRate: number;
+  aerComm: number;
+  upsellComm: number;
+  machRent: number;
+  deductions: number;
+  dailyBonus: number;
+  totalPayout: number;
+}
+
+export interface ExtraItem {
+  id: string;
+  label: string;
+  amount: number;
+}
+
+export interface WorkerPayslipData {
+  contractorId: string;
+  firstName: string;
+  lastName: string;
   is120Program: boolean;
+  days: PayslipDayRow[];
   hotels: number;
   advances: number;
   travelPkg: number;
   extraDeductions: ExtraItem[];
   additions: ExtraItem[];
-  batchId: string;   // empty string = unassigned
 }
 
-interface Batch {
-  id: string;
-  name: string;
+export interface WorkerPayslipUI {
+  contractorId: string;
+  firstName: string;
+  lastName: string;
+  days: PayslipDayRow[];
 }
 
-// ─── Date helpers ─────────────────────────────────────────────────────────────
-
-const MONTH_ABBR  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-
-function sortKey(s: string): number {
-  const months: Record<string, number> = {
-    Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,
-    Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12,
-  };
-  return (months[s.slice(0, 3)] || 0) * 100 + parseInt(s.slice(3), 10);
+export interface HiddenFields {
+  hotels: boolean;
+  advances: boolean;
+  travelPkg: boolean;
 }
 
-function mmmdd(month: number, day: number): string {
-  return `${MONTH_ABBR[month]}${String(day).padStart(2, '0')}`;
-}
+// ─── Payout Stats column indices (0-based) ───────────────────────────────────
 
-function calendarDays(start: string, end: string): number {
-  const year = new Date().getFullYear();
-  const sm = MONTH_ABBR.indexOf(start.slice(0, 3));
-  const em = MONTH_ABBR.indexOf(end.slice(0, 3));
-  const a = new Date(year, sm, parseInt(start.slice(3), 10));
-  const b = new Date(year, em, parseInt(end.slice(3), 10));
-  return Math.round((b.getTime() - a.getTime()) / 86400000) + 1;
-}
-
-function defaultSettings(): WorkerSettings {
-  return { is120Program: false, hotels: 0, advances: 0, travelPkg: 0, extraDeductions: [], additions: [], batchId: '' };
-}
-
-function makeBatchId(): string {
-  return `batch_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-}
-
-// ─── Component ────────────────────────────────────────────────────────────────
-
-interface Props { onBack: () => void; }
-
-const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
-  const cc = commandCenterService.getCurrentCommandCenter();
-
-  const [step, setStep] = useState<'setup' | 'workers'>('setup');
-  const [isGoogleConnected, setIsGoogleConnected] = useState(() => googleSheetsService.isAuthenticated());
-  const [sheetsLoading, setSheetsLoading] = useState(false);
-  const [statsLoading, setStatsLoading] = useState(false);
-  const [allRows, setAllRows] = useState<any[][]>([]);
-  const [availableDates, setAvailableDates] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-
-  // Calendar
-  const [viewMonth, setViewMonth] = useState(new Date().getMonth());
-  const [startDate, setStartDate] = useState<string | null>(null);
-  const [endDate, setEndDate] = useState<string | null>(null);
-
-  // Workers
-  const [workerList, setWorkerList] = useState<WorkerPayslipUI[]>([]);
-  const [workerSettings, setWorkerSettings] = useState<Map<string, WorkerSettings>>(new Map());
-  const [expandedWorkers, setExpandedWorkers] = useState<Set<string>>(new Set());
-  const [isExporting, setIsExporting] = useState(false);
-
-  // Global defaults
-  const [stdHotels, setStdHotels] = useState<number>(0);
-  const [stdAdvances, setStdAdvances] = useState<number>(0);
-
-  // Batches — start with 2
-  const [batches, setBatches] = useState<Batch[]>([
-    { id: makeBatchId(), name: 'Batch 1' },
-    { id: makeBatchId(), name: 'Batch 2' },
-  ]);
-
-  useEffect(() => {
-    if (isGoogleConnected && allRows.length === 0) loadPayoutStats();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGoogleConnected]);
-
-  // ─── Batch helpers ────────────────────────────────────────────────────────
-
-  const addBatch = () => {
-    setBatches(prev => [...prev, { id: makeBatchId(), name: `Batch ${prev.length + 1}` }]);
-  };
-
-  const removeBatch = (id: string) => {
-    setBatches(prev => prev.filter(b => b.id !== id));
-    // Unassign any worker that was in this batch
-    setWorkerSettings(prev => {
-      const next = new Map(prev);
-      next.forEach((s, wid) => {
-        if (s.batchId === id) next.set(wid, { ...s, batchId: '' });
-      });
-      return next;
-    });
-  };
-
-  const renameBatch = (id: string, name: string) => {
-    setBatches(prev => prev.map(b => b.id === id ? { ...b, name } : b));
-  };
-
-  // Workers with no batchId assigned
-  const unassignedCount = workerList.filter(w => !(workerSettings.get(w.contractorId)?.batchId)).length;
-  const canExport = unassignedCount === 0 && workerList.length > 0;
-
-  // ─── Google / data loading ────────────────────────────────────────────────
-
-  const handleConnectGoogle = async () => {
-    setSheetsLoading(true);
-    setError(null);
-    try {
-      const ok = await googleSheetsService.authenticate();
-      setIsGoogleConnected(ok);
-      if (!ok) setError('Failed to connect to Google.');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Connection failed.');
-    } finally { setSheetsLoading(false); }
-  };
-
-  const loadPayoutStats = async () => {
-    setStatsLoading(true);
-    setError(null);
-    try {
-      const rows = await googleSheetsService.readWorkerbookRange("'Payout Stats'!A:AH");
-      setAllRows(rows);
-      const dates = new Set<string>();
-      for (let i = 1; i < rows.length; i++) {
-        const v = rows[i]?.[0];
-        if (v) {
-          const d = String(v).trim();
-          if (/^[A-Z][a-z]{2}\d{2}$/.test(d)) dates.add(d);
-        }
-      }
-      setAvailableDates(dates);
-      if (dates.size > 0) {
-        const sorted = Array.from(dates).sort((a, b) => sortKey(a) - sortKey(b));
-        const m = MONTH_ABBR.indexOf(sorted[0].slice(0, 3));
-        if (m >= 0) setViewMonth(m);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load Payout Stats.');
-    } finally { setStatsLoading(false); }
-  };
-
-  const handleDateClick = (d: string) => {
-    if (!availableDates.has(d)) return;
-    if (!startDate || (startDate && endDate)) {
-      setStartDate(d); setEndDate(null);
-    } else {
-      const dk = sortKey(d);
-      const sk = sortKey(startDate);
-      if (dk < sk) { setEndDate(startDate); setStartDate(d); }
-      else { setEndDate(d); }
-    }
-  };
-
-  const handleLoadWorkers = () => {
-    if (!startDate || !endDate) return;
-    const workers = parsePayoutStatsRows(allRows, startDate, endDate);
-    workers.sort((a, b) => {
-      const last = a.lastName.localeCompare(b.lastName);
-      return last !== 0 ? last : a.firstName.localeCompare(b.firstName);
-    });
-    setWorkerList(workers);
-    const s = new Map<string, WorkerSettings>();
-    workers.forEach(w => s.set(w.contractorId, {
-      ...defaultSettings(),
-      hotels: stdHotels,
-      advances: stdAdvances,
-    }));
-    setWorkerSettings(s);
-    setStep('workers');
-  };
-
-  // ─── Worker settings helpers ──────────────────────────────────────────────
-
-  const updateSetting = <K extends keyof WorkerSettings>(id: string, field: K, value: WorkerSettings[K]) => {
-    setWorkerSettings(prev => {
-      const next = new Map(prev);
-      next.set(id, { ...(next.get(id) || defaultSettings()), [field]: value });
-      return next;
-    });
-  };
-
-  const addItem = (id: string, type: 'extraDeductions' | 'additions') => {
-    setWorkerSettings(prev => {
-      const next = new Map(prev);
-      const cur = next.get(id) || defaultSettings();
-      next.set(id, { ...cur, [type]: [...cur[type], { id: `${Date.now()}`, label: '', amount: 0 }] });
-      return next;
-    });
-  };
-
-  const updateItem = (id: string, type: 'extraDeductions' | 'additions', itemId: string, field: 'label' | 'amount', value: string | number) => {
-    setWorkerSettings(prev => {
-      const next = new Map(prev);
-      const cur = next.get(id) || defaultSettings();
-      next.set(id, { ...cur, [type]: cur[type].map(x => x.id === itemId ? { ...x, [field]: value } : x) });
-      return next;
-    });
-  };
-
-  const removeItem = (id: string, type: 'extraDeductions' | 'additions', itemId: string) => {
-    setWorkerSettings(prev => {
-      const next = new Map(prev);
-      const cur = next.get(id) || defaultSettings();
-      next.set(id, { ...cur, [type]: cur[type].filter(x => x.id !== itemId) });
-      return next;
-    });
-  };
-
-  // ─── Export ───────────────────────────────────────────────────────────────
-
-  const handleExport = async () => {
-    if (!startDate || !endDate || !cc || !canExport) return;
-    setIsExporting(true);
-    setError(null);
-    try {
-      const daysInRange = calendarDays(startDate, endDate);
-
-      // Fire one XLSX download per batch
-      for (const batch of batches) {
-        const batchWorkers = workerList
-          .filter(w => workerSettings.get(w.contractorId)?.batchId === batch.id)
-          .map(w => ({ ...w, ...(workerSettings.get(w.contractorId) || defaultSettings()) }));
-
-        if (batchWorkers.length === 0) continue;
-
-        await generatePayslipsXLSX(
-          batchWorkers,
-          startDate,
-          endDate,
-          cc.displayName,
-          daysInRange,
-          batch.name,
-        );
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Export failed.');
-    } finally { setIsExporting(false); }
-  };
-
-  // ─── Calendar ────────────────────────────────────────────────────────────
-
-  const renderCalendar = () => {
-    const year = new Date().getFullYear();
-    const daysInMonth = new Date(year, viewMonth + 1, 0).getDate();
-    const firstDow = new Date(year, viewMonth, 1).getDay();
-    const sk = startDate ? sortKey(startDate) : null;
-    const ek = endDate ? sortKey(endDate) : null;
-
-    const cells: React.ReactNode[] = [];
-    for (let i = 0; i < firstDow; i++) cells.push(<div key={`e${i}`} />);
-
-    for (let day = 1; day <= daysInMonth; day++) {
-      const ds = mmmdd(viewMonth, day);
-      const has = availableDates.has(ds);
-      const dk = sortKey(ds);
-      const isStart = startDate === ds;
-      const isEnd = endDate === ds;
-      const inRange = sk !== null && ek !== null && dk >= sk && dk <= ek;
-
-      let cls = 'flex items-center justify-center h-8 w-8 text-sm select-none transition-colors rounded ';
-      if (!has) cls += 'text-gray-600 cursor-default';
-      else if (isStart || isEnd) cls += 'bg-green-600 text-white font-bold cursor-pointer rounded-full';
-      else if (inRange) cls += 'bg-green-900/40 text-green-300 cursor-pointer';
-      else cls += 'text-white hover:bg-gray-700 cursor-pointer';
-
-      cells.push(
-        <div key={day} onClick={() => has && handleDateClick(ds)} className={cls}>{day}</div>
-      );
-    }
-
-    return (
-      <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 w-full max-w-sm mx-auto">
-        <div className="flex items-center justify-between mb-4">
-          <button onClick={() => setViewMonth(m => m === 0 ? 11 : m - 1)} className="p-1.5 hover:bg-gray-700 rounded transition-colors">
-            <ChevronLeft size={18} className="text-gray-400" />
-          </button>
-          <span className="font-bold text-white text-sm">{MONTH_NAMES[viewMonth]} {year}</span>
-          <button onClick={() => setViewMonth(m => m === 11 ? 0 : m + 1)} className="p-1.5 hover:bg-gray-700 rounded transition-colors">
-            <ChevronRight size={18} className="text-gray-400" />
-          </button>
-        </div>
-        <div className="grid grid-cols-7 gap-1 mb-2">
-          {['Su','Mo','Tu','We','Th','Fr','Sa'].map(d => (
-            <div key={d} className="text-center text-xs text-gray-500 font-medium">{d}</div>
-          ))}
-        </div>
-        <div className="grid grid-cols-7 gap-1">{cells}</div>
-        <div className="mt-3 flex gap-4 text-xs text-gray-500">
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-600 inline-block" />Has data</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-gray-600 inline-block" />No data</span>
-        </div>
-        <div className="mt-3 p-2.5 bg-gray-900/60 rounded-lg min-h-[36px] text-center text-xs">
-          {startDate && endDate ? (
-            <span className="text-green-400 font-medium">
-              {startDate} → {endDate}
-              <span className="text-gray-400 ml-2">
-                ({calendarDays(startDate, endDate)} days · {calendarDays(startDate, endDate) > 7 ? '16-row / 2 per page' : '8-row / 3 per page'})
-              </span>
-            </span>
-          ) : startDate ? (
-            <span className="text-yellow-400">Click end date to complete range</span>
-          ) : (
-            <span className="text-gray-500">Click a date to start selection</span>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  // ─── Worker row ───────────────────────────────────────────────────────────
-
-  const calcFinalPay = (w: WorkerPayslipUI, s: WorkerSettings): number => {
-    const earnedComm = w.days.reduce((sum, d) => sum + d.totalPayout, 0);
-    const daysWorked = w.days.length;
-    const gi = s.is120Program ? Math.max(earnedComm, daysWorked * 120) : earnedComm;
-    const totalDeductions = s.hotels + s.advances + s.travelPkg +
-      s.extraDeductions.reduce((sum, d) => sum + d.amount, 0);
-    const totalAdditions = s.additions.reduce((sum, a) => sum + a.amount, 0);
-    return Math.round((gi - totalDeductions + totalAdditions) * 100) / 100;
-  };
-
-  const toggleExpanded = (id: string) => {
-    setExpandedWorkers(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  };
-
-  const renderWorker = (w: WorkerPayslipUI) => {
-    const s = workerSettings.get(w.contractorId) || defaultSettings();
-    const isExpanded = expandedWorkers.has(w.contractorId);
-    const finalPay = calcFinalPay(w, s);
-    const totalEquiv = w.days.reduce((sum, d) => sum + d.equiv, 0);
-    const isUnassigned = !s.batchId;
-    const iCls = "bg-gray-900 border border-gray-600 rounded py-0.5 pl-4 pr-1 text-xs text-white w-16 focus:ring-1 focus:ring-blue-500 focus:outline-none";
-    const $ = "absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-500 text-xs pointer-events-none";
-
-    return (
-      <div key={w.contractorId} className={`rounded-lg border overflow-hidden ${isUnassigned ? 'bg-gray-800 border-red-700/60' : 'bg-gray-800 border-gray-700'}`}>
-
-        {/* LINE 1: Name + days + EQ + final pay */}
-        <div className="flex items-center gap-2 px-3 py-1.5 cursor-pointer select-none"
-          onClick={() => toggleExpanded(w.contractorId)}>
-          <ChevronDown size={13} className={`text-gray-400 transition-transform flex-shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
-          <span className="font-bold text-white text-xs">{w.contractorId} — {w.firstName} {w.lastName}</span>
-          <span className="text-xs text-gray-500 bg-gray-700/60 px-1.5 rounded flex-shrink-0">{w.days.length}d</span>
-          {s.is120Program && <span className="text-xs text-green-400 bg-green-900/20 border border-green-700/40 px-1.5 rounded flex-shrink-0">$120</span>}
-          <span className="ml-auto text-xs text-gray-400 flex-shrink-0">{totalEquiv.toFixed(2)}EQ</span>
-          <span className={`font-bold text-sm flex-shrink-0 ${finalPay >= 0 ? 'text-green-400' : 'text-red-400'}`}>${finalPay.toFixed(2)}</span>
-        </div>
-
-        {/* LINE 2: All inputs + batch dropdown */}
-        <div className="flex items-center gap-2 px-3 pb-1.5 flex-wrap">
-          {/* $120 checkbox */}
-          <label className="flex items-center gap-1 cursor-pointer select-none flex-shrink-0">
-            <input type="checkbox" checked={s.is120Program}
-              onChange={e => updateSetting(w.contractorId, 'is120Program', e.target.checked)}
-              className="w-3 h-3 accent-green-500" />
-            <span className={`text-xs ${s.is120Program ? 'text-green-400' : 'text-gray-500'}`}>$120</span>
-          </label>
-          <span className="text-gray-700 text-xs">|</span>
-          {/* Hotels */}
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <span className="text-xs text-gray-500">Hotels</span>
-            <div className="relative"><span className={$}>$</span><input type="number" min="0" placeholder="0" value={s.hotels||''} onChange={e=>updateSetting(w.contractorId,'hotels',parseFloat(e.target.value)||0)} className={iCls}/></div>
-          </div>
-          {/* Advances */}
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <span className="text-xs text-gray-500">Adv</span>
-            <div className="relative"><span className={$}>$</span><input type="number" min="0" placeholder="0" value={s.advances||''} onChange={e=>updateSetting(w.contractorId,'advances',parseFloat(e.target.value)||0)} className={iCls}/></div>
-          </div>
-          {/* Travel */}
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <span className="text-xs text-gray-500">Travel</span>
-            <div className="relative"><span className={$}>$</span><input type="number" min="0" placeholder="0" value={s.travelPkg||''} onChange={e=>updateSetting(w.contractorId,'travelPkg',parseFloat(e.target.value)||0)} className={iCls}/></div>
-          </div>
-          {/* Batch dropdown */}
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <span className="text-xs text-gray-500">Batch</span>
-            <select
-              value={s.batchId}
-              onChange={e => updateSetting(w.contractorId, 'batchId', e.target.value)}
-              className={`bg-gray-900 border rounded py-0.5 px-1.5 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none ${
-                isUnassigned ? 'border-red-600 text-red-400' : 'border-gray-600 text-white'
-              }`}
-            >
-              <option value="">— Assign —</option>
-              {batches.map(b => (
-                <option key={b.id} value={b.id}>{b.name}</option>
-              ))}
-            </select>
-          </div>
-          {/* Extra deductions inline */}
-          {s.extraDeductions.map(item => (
-            <div key={item.id} className="flex items-center gap-1 flex-shrink-0">
-              <input type="text" placeholder="Label" value={item.label} onChange={e=>updateItem(w.contractorId,'extraDeductions',item.id,'label',e.target.value)}
-                className="w-16 bg-gray-900 border border-red-900/50 rounded py-0.5 px-1.5 text-xs text-white focus:ring-1 focus:ring-red-500 focus:outline-none"/>
-              <div className="relative"><span className={$}>$</span><input type="number" min="0" placeholder="0" value={item.amount||''} onChange={e=>updateItem(w.contractorId,'extraDeductions',item.id,'amount',parseFloat(e.target.value)||0)} className={iCls}/></div>
-              <button onClick={()=>removeItem(w.contractorId,'extraDeductions',item.id)} className="text-red-400 hover:text-red-300 flex-shrink-0"><Trash2 size={11}/></button>
-            </div>
-          ))}
-          {/* Additions inline */}
-          {s.additions.map(item => (
-            <div key={item.id} className="flex items-center gap-1 flex-shrink-0">
-              <input type="text" placeholder="Label" value={item.label} onChange={e=>updateItem(w.contractorId,'additions',item.id,'label',e.target.value)}
-                className="w-16 bg-gray-900 border border-green-900/50 rounded py-0.5 px-1.5 text-xs text-white focus:ring-1 focus:ring-green-500 focus:outline-none"/>
-              <div className="relative"><span className={$}>$</span><input type="number" min="0" placeholder="0" value={item.amount||''} onChange={e=>updateItem(w.contractorId,'additions',item.id,'amount',parseFloat(e.target.value)||0)} className={iCls}/></div>
-              <button onClick={()=>removeItem(w.contractorId,'additions',item.id)} className="text-red-400 hover:text-red-300 flex-shrink-0"><Trash2 size={11}/></button>
-            </div>
-          ))}
-          <button onClick={()=>addItem(w.contractorId,'extraDeductions')} className="flex items-center gap-0.5 text-xs text-red-400 hover:text-red-300 flex-shrink-0 ml-auto"><Plus size={11}/>Ded</button>
-          <button onClick={()=>addItem(w.contractorId,'additions')} className="flex items-center gap-0.5 text-xs text-green-400 hover:text-green-300 flex-shrink-0"><Plus size={11}/>Add</button>
-        </div>
-
-        {/* Expanded: daily breakdown table */}
-        {isExpanded && (
-          <div className="border-t border-gray-700 px-3 pt-2 pb-3">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-gray-300">
-                <thead>
-                  <tr className="text-gray-500 border-b border-gray-700">
-                    <th className="text-left py-1 pr-3 font-medium">Date</th>
-                    <th className="text-left py-1 pr-3 font-medium">Manager</th>
-                    <th className="text-right py-1 pr-3 font-medium">Steps</th>
-                    <th className="text-right py-1 pr-3 font-medium">EQ</th>
-                    <th className="text-right py-1 pr-3 font-medium">Prepay</th>
-                    <th className="text-right py-1 pr-3 font-medium">Rate</th>
-                    <th className="text-right py-1 pr-3 font-medium">Comm</th>
-                    <th className="text-right py-1 pr-3 font-medium">Mach</th>
-                    <th className="text-right py-1 pr-3 font-medium">Deduct</th>
-                    <th className="text-right py-1 font-medium">Bonus</th>
-                    <th className="text-right py-1 pl-3 font-medium text-white">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {w.days.map((d, i) => (
-                    <tr key={i} className="border-b border-gray-700/50 last:border-0">
-                      <td className="py-1 pr-3">{d.date}</td>
-                      <td className="py-1 pr-3">{d.manager}</td>
-                      <td className="py-1 pr-3 text-right">{d.steps}</td>
-                      <td className="py-1 pr-3 text-right">{d.equiv.toFixed(2)}</td>
-                      <td className="py-1 pr-3 text-right">{d.totalPrepay ? `$${d.totalPrepay.toFixed(2)}` : '—'}</td>
-                      <td className="py-1 pr-3 text-right">${d.payoutRate}</td>
-                      <td className="py-1 pr-3 text-right">${d.aerComm.toFixed(2)}</td>
-                      <td className="py-1 pr-3 text-right">{d.machRent ? `$${d.machRent}` : '—'}</td>
-                      <td className="py-1 pr-3 text-right">{d.deductions ? `$${d.deductions}` : '—'}</td>
-                      <td className="py-1 text-right">{d.dailyBonus ? `$${d.dailyBonus}` : '—'}</td>
-                      <td className="py-1 pl-3 text-right font-bold text-white">${d.totalPayout.toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // ─── Render ───────────────────────────────────────────────────────────────
-
-  return (
-    <div className="space-y-4 animate-fade-in">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <button onClick={step === 'workers' ? () => setStep('setup') : onBack}
-          className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors text-sm">
-          <ArrowLeft size={16} />
-          {step === 'workers' ? 'Back to Calendar' : 'Back to Session'}
-        </button>
-        <div className="flex items-center gap-2">
-          <FileSpreadsheet size={18} className="text-green-400" />
-          <span className="font-bold text-white">Generate Payslips</span>
-          {startDate && endDate && (
-            <span className="text-xs bg-green-900/30 text-green-400 border border-green-700/50 px-2 py-0.5 rounded ml-1">
-              {startDate} → {endDate}
-            </span>
-          )}
-        </div>
-        {step === 'workers' ? (
-          <button
-            onClick={handleExport}
-            disabled={isExporting || !canExport}
-            title={!canExport ? `${unassignedCount} worker(s) not yet assigned to a batch` : ''}
-            className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors">
-            {isExporting ? <Loader size={16} className="animate-spin" /> : <Download size={16} />}
-            Export XLSX
-          </button>
-        ) : <div className="w-28" />}
-      </div>
-
-      {error && (
-        <div className="flex items-center gap-2 bg-red-900/20 border border-red-700/50 rounded-lg p-3 text-red-400 text-sm">
-          <AlertCircle size={16} className="flex-shrink-0" />{error}
-        </div>
-      )}
-
-      {/* ── STEP 1: SETUP ── */}
-      {step === 'setup' && (
-        <div className="space-y-6">
-          {!isGoogleConnected ? (
-            <div className="bg-gray-800 rounded-xl border border-gray-700 p-6 max-w-sm mx-auto text-center">
-              <p className="text-gray-400 text-sm mb-4">Connect to Google Sheets to load Payout Stats data.</p>
-              <button onClick={handleConnectGoogle} disabled={sheetsLoading}
-                className="w-full bg-white hover:bg-gray-100 text-gray-800 py-3 px-4 rounded-lg font-medium flex items-center justify-center gap-3 transition-colors disabled:opacity-50">
-                {sheetsLoading ? <Loader className="animate-spin" size={20} /> : (
-                  <>
-                    <svg width="20" height="20" viewBox="0 0 24 24">
-                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                    </svg>
-                    Connect to Google
-                  </>
-                )}
-              </button>
-            </div>
-          ) : statsLoading ? (
-            <div className="flex flex-col items-center justify-center py-12 gap-3 text-gray-400">
-              <Loader className="animate-spin" size={28} />
-              <span className="text-sm">Loading Payout Stats…</span>
-            </div>
-          ) : availableDates.size === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 gap-3 text-gray-400">
-              <AlertCircle size={28} className="opacity-40" />
-              <span className="text-sm">No data found in Payout Stats.</span>
-              <button onClick={loadPayoutStats} className="text-xs text-blue-400 hover:text-blue-300 underline">Retry</button>
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center justify-center gap-2 text-green-400 text-xs">
-                <CheckCircle size={14} />
-                <span>Connected · {availableDates.size} dates loaded from Payout Stats</span>
-              </div>
-              {renderCalendar()}
-              <div className="flex justify-center">
-                <button onClick={handleLoadWorkers} disabled={!startDate || !endDate}
-                  className="bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-8 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors">
-                  <Users size={18} /> Load Workers
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* ── STEP 2: WORKERS ── */}
-      {step === 'workers' && (
-        <div className="space-y-2">
-
-          {/* Summary bar */}
-          <div className="flex items-center justify-between bg-gray-800 rounded-lg border border-gray-700 px-4 py-2.5">
-            <span className="text-sm text-gray-400">
-              <span className="text-white font-bold">{workerList.length}</span> workers ·{' '}
-              {startDate && endDate && (calendarDays(startDate, endDate) > 7 ? '16-row blocks · 2 per page' : '8-row blocks · 3 per page')}
-            </span>
-            <span className="text-xs text-gray-500 truncate ml-4">
-              {cc?.displayName} {startDate} - {endDate} Payslips.xlsx
-            </span>
-          </div>
-
-          {/* Global defaults bar */}
-          <div className="flex items-center gap-4 bg-gray-800/60 border border-gray-700 rounded-lg px-4 py-2">
-            <span className="text-xs text-gray-400 font-medium flex-shrink-0">Defaults:</span>
-            <div className="flex items-center gap-1.5 flex-shrink-0">
-              <span className="text-xs text-gray-400">Std Hotels</span>
-              <div className="relative">
-                <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-500 text-xs pointer-events-none">$</span>
-                <input type="number" min="0" placeholder="0" value={stdHotels || ''}
-                  onChange={e => {
-                    const val = parseFloat(e.target.value) || 0;
-                    setStdHotels(val);
-                    setWorkerSettings(prev => {
-                      const next = new Map(prev);
-                      next.forEach((s, id) => next.set(id, { ...s, hotels: val }));
-                      return next;
-                    });
-                  }}
-                  className="w-20 bg-gray-900 border border-gray-600 rounded py-1 pl-4 pr-1 text-xs text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5 flex-shrink-0">
-              <span className="text-xs text-gray-400">Std Advances</span>
-              <div className="relative">
-                <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-500 text-xs pointer-events-none">$</span>
-                <input type="number" min="0" placeholder="0" value={stdAdvances || ''}
-                  onChange={e => {
-                    const val = parseFloat(e.target.value) || 0;
-                    setStdAdvances(val);
-                    setWorkerSettings(prev => {
-                      const next = new Map(prev);
-                      next.forEach((s, id) => next.set(id, { ...s, advances: val }));
-                      return next;
-                    });
-                  }}
-                  className="w-20 bg-gray-900 border border-gray-600 rounded py-1 pl-4 pr-1 text-xs text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
-              </div>
-            </div>
-            <span className="text-xs text-gray-600 ml-1">— updates all workers instantly</span>
-          </div>
-
-          {/* Batch setup bar */}
-          <div className="flex items-center gap-3 bg-gray-800/60 border border-gray-700 rounded-lg px-4 py-2 flex-wrap">
-            <span className="text-xs text-gray-400 font-medium flex-shrink-0">Batches:</span>
-            {batches.map((batch, idx) => (
-              <div key={batch.id} className="flex items-center gap-1 flex-shrink-0">
-                <input
-                  type="text"
-                  value={batch.name}
-                  onChange={e => renameBatch(batch.id, e.target.value)}
-                  className="w-24 bg-gray-900 border border-gray-600 rounded py-0.5 px-2 text-xs text-white focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                  placeholder={`Batch ${idx + 1}`}
-                />
-                {batches.length > 1 && (
-                  <button onClick={() => removeBatch(batch.id)} className="text-gray-600 hover:text-red-400 transition-colors">
-                    <Trash2 size={11} />
-                  </button>
-                )}
-              </div>
-            ))}
-            <button
-              onClick={addBatch}
-              className="flex items-center gap-0.5 text-xs text-blue-400 hover:text-blue-300 flex-shrink-0 transition-colors">
-              <Plus size={11} /> Add Batch
-            </button>
-            <span className="text-xs text-gray-600 ml-1">— one file exported per batch</span>
-          </div>
-
-          {/* Unassigned warning banner */}
-          {workerList.length > 0 && unassignedCount > 0 && (
-            <div className="flex items-center gap-2 bg-red-900/20 border border-red-700/50 rounded-lg px-4 py-2.5 text-red-400 text-xs">
-              <AlertCircle size={14} className="flex-shrink-0" />
-              <span>
-                <span className="font-bold">{unassignedCount} worker{unassignedCount !== 1 ? 's' : ''}</span> not assigned to a batch — assign all workers before exporting.
-              </span>
-            </div>
-          )}
-
-          {workerList.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-gray-500 gap-2">
-              <AlertCircle size={32} className="opacity-30" />
-              <p className="text-sm">No workers found for this date range.</p>
-            </div>
-          ) : (
-            workerList.map(w => renderWorker(w))
-          )}
-
-          {workerList.length > 0 && (
-            <div className="flex justify-center pt-2 pb-4">
-              <button
-                onClick={handleExport}
-                disabled={isExporting || !canExport}
-                title={!canExport ? `${unassignedCount} worker(s) not yet assigned to a batch` : ''}
-                className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-8 py-3 rounded-lg font-bold transition-colors">
-                {isExporting ? <Loader size={18} className="animate-spin" /> : <Download size={18} />}
-                Export XLSX
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+const PS = {
+  date: 0, contractorId: 1, firstName: 2, lastName: 3, manager: 4,
+  stepCount: 5, totalEQ: 17, totalPrepay: 25, payoutRate: 26,
+  aerComm: 27, upsellComm: 28, machRent: 30, deductions: 31,
+  dailyBonus: 32, totalPayout: 33,
 };
 
-export default PayslipGenerator;
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function sortKey(s: string): number {
+  const m: Record<string, number> = {
+    Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12,
+  };
+  return (m[s.slice(0, 3)] || 0) * 100 + parseInt(s.slice(3), 10);
+}
+
+function fmtDate(s: string): string {
+  return `${parseInt(s.slice(3), 10)}-${s.slice(0, 3)}`;
+}
+
+function r2(v: number): number { return Math.round(v * 100) / 100; }
+
+function curr(v: number): string {
+  const abs = Math.abs(v);
+  const str = abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return v < 0 ? `-$${str}` : `$${str}`;
+}
+
+function num2(v: number): string {
+  return v.toFixed(2);
+}
+
+// ─── Parse Payout Stats (unchanged) ──────────────────────────────────────────
+
+export function parsePayoutStatsRows(
+  rows: any[][], startDate: string, endDate: string
+): WorkerPayslipUI[] {
+  const sk = sortKey(startDate), ek = sortKey(endDate);
+  const map = new Map<string, WorkerPayslipUI>();
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row[PS.date] || !row[PS.contractorId]) continue;
+    const ds = String(row[PS.date]).trim();
+    const dk = sortKey(ds);
+    if (dk < sk || dk > ek) continue;
+    const id = String(row[PS.contractorId]).trim();
+    if (!map.has(id)) {
+      map.set(id, {
+        contractorId: id,
+        firstName: String(row[PS.firstName] || '').trim(),
+        lastName:  String(row[PS.lastName]  || '').trim(),
+        days: [],
+      });
+    }
+    map.get(id)!.days.push({
+      date:        ds,
+      manager:     String(row[PS.manager]     || '').trim(),
+      steps:       Number(row[PS.stepCount])  || 0,
+      equiv:       Number(row[PS.totalEQ])    || 0,
+      totalPrepay: Number(row[PS.totalPrepay])|| 0,
+      payoutRate:  Number(row[PS.payoutRate]) || 0,
+      aerComm:     Number(row[PS.aerComm])    || 0,
+      upsellComm:  Number(row[PS.upsellComm])|| 0,
+      machRent:    Number(row[PS.machRent])   || 0,
+      deductions:  Number(row[PS.deductions]) || 0,
+      dailyBonus:  Number(row[PS.dailyBonus]) || 0,
+      totalPayout: Number(row[PS.totalPayout])|| 0,
+    });
+  }
+
+  map.forEach(w => w.days.sort((a, b) => sortKey(a.date) - sortKey(b.date)));
+  return Array.from(map.values()).sort((a, b) => a.contractorId.localeCompare(b.contractorId));
+}
+
+// ─── PDF Layout Constants ─────────────────────────────────────────────────────
+
+const PW = 612;               // Letter width in pt
+const PH = 792;               // Letter height in pt
+const ML = 18;                 // Margin left
+const MR = 18;                 // Margin right
+const MT = 18;                 // Margin top
+const MB = 18;                 // Margin bottom
+const CW = PW - ML - MR;      // Content width = 576
+
+// Payslip row heights
+const H_NAME = 26;
+const H_HDR  = 32;
+const H_DATA = 17;
+const H_SUM  = 18;
+const H_GAP  = 10;
+
+// Payslip columns (11 visible — UPSELL COMM hidden, same as Excel)
+interface ColDef {
+  label: string;
+  w: number;
+  color: string;        // header fill hex
+  align: 'left' | 'center' | 'right';
+}
+
+const COLS: ColDef[] = [
+  { label: 'DATE',           w: 45,  color: '#CC0000', align: 'left'   },
+  { label: 'ROUTE\nMANAGER', w: 75,  color: '#CC0000', align: 'center' },
+  { label: 'AER\nSTEPS',     w: 45,  color: '#B6D7A8', align: 'right'  },
+  { label: 'EQUIV',          w: 45,  color: '#666666', align: 'right'  },
+  { label: 'TOTAL\nPREPAY',  w: 55,  color: '#666666', align: 'center' },
+  { label: 'PAYOUT\nRATE',   w: 45,  color: '#666666', align: 'center' },
+  { label: 'AER\nCOMM',      w: 45,  color: '#666666', align: 'right'  },
+  { label: 'MACH\nRENT',     w: 50,  color: '#CC0000', align: 'right'  },
+  { label: 'DEDUC-\nTIONS',  w: 45,  color: '#CC0000', align: 'right'  },
+  { label: 'DAILY\nBONUS',   w: 45,  color: '#CC0000', align: 'right'  },
+  { label: 'TOTAL\nPAYOUT',  w: 81,  color: '#660000', align: 'right'  },
+];
+
+// ─── PDF drawing helpers ──────────────────────────────────────────────────────
+
+function hexToRGB(hex: string): [number, number, number] {
+  const h = hex.replace('#', '');
+  return [
+    parseInt(h.substring(0, 2), 16),
+    parseInt(h.substring(2, 4), 16),
+    parseInt(h.substring(4, 6), 16),
+  ];
+}
+
+function drawRect(doc: jsPDF, x: number, y: number, w: number, h: number, color: string) {
+  const [r, g, b] = hexToRGB(color);
+  doc.setFillColor(r, g, b);
+  doc.rect(x, y, w, h, 'F');
+}
+
+function drawText(
+  doc: jsPDF, text: string,
+  x: number, y: number, w: number, h: number,
+  opts: {
+    align?: 'left' | 'center' | 'right';
+    color?: string;
+    size?: number;
+    bold?: boolean;
+    wrap?: boolean;
+  } = {}
+) {
+  const { align = 'left', color = '#000000', size = 8, bold = false, wrap = false } = opts;
+  const [r, g, b] = hexToRGB(color);
+  doc.setTextColor(r, g, b);
+  doc.setFontSize(size);
+  doc.setFont('helvetica', bold ? 'bold' : 'normal');
+
+  const lines = wrap ? text.split('\n') : [text];
+  const lineH = size * 1.15;
+  const totalTextH = lines.length * lineH;
+  const startY = y + (h - totalTextH) / 2 + size * 0.8;
+
+  const pad = 3;
+  lines.forEach((line, i) => {
+    const ly = startY + i * lineH;
+    let lx: number;
+    if (align === 'center') lx = x + w / 2;
+    else if (align === 'right') lx = x + w - pad;
+    else lx = x + pad;
+    doc.text(line, lx, ly, { align });
+  });
+}
+
+function drawBorder(
+  doc: jsPDF, x: number, y: number, w: number, h: number,
+  lineWidth: number = 1.5
+) {
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(lineWidth);
+  doc.rect(x, y, w, h, 'S');
+}
+
+function drawLine(
+  doc: jsPDF, x1: number, y1: number, x2: number, y2: number,
+  lineWidth: number = 0.5
+) {
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(lineWidth);
+  doc.line(x1, y1, x2, y2);
+}
+
+// ─── Sign-Out List ────────────────────────────────────────────────────────────
+
+function renderSignOutList(
+  doc: jsPDF,
+  workers: WorkerPayslipData[],
+  startDate: string,
+  endDate: string,
+  hiddenFields: HiddenFields,
+  batchName?: string,
+) {
+  const sorted = [...workers].sort((a, b) => {
+    const last = a.lastName.localeCompare(b.lastName);
+    return last !== 0 ? last : a.firstName.localeCompare(b.firstName);
+  });
+
+  const ROWS_PER_PAGE = 25;
+  const pages = Math.ceil(sorted.length / ROWS_PER_PAGE);
+
+  // Column layout for sign-out
+  const soColX = ML;
+  const soCols = [
+    { label: '#',              w: 28  },
+    { label: 'CONTRACTOR ID',  w: 80  },
+    { label: 'NAME',           w: 155 },
+    { label: 'AMOUNT',         w: 75  },
+    { label: 'DATE',           w: 95  },
+    { label: 'SIGNATURE',      w: 143 },
+  ];
+
+  const TITLE_H = 36;
+  const SUB_H = 18;
+  const SO_HDR_H = 22;
+  const availH = PH - MT - MB - TITLE_H - SUB_H - SO_HDR_H;
+  const SO_ROW_H = Math.min(Math.floor(availH / ROWS_PER_PAGE), 27);
+
+  for (let page = 0; page < pages; page++) {
+    if (page > 0) doc.addPage();
+
+    let y = MT;
+
+    // Title
+    const title = batchName
+      ? `Sign-Out Sheet — ${batchName} — ${startDate} → ${endDate}`
+      : `Sign-Out Sheet — ${startDate} → ${endDate}`;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.setTextColor(0, 0, 0);
+    doc.text(title, PW / 2, y + 20, { align: 'center' });
+    y += TITLE_H;
+
+    // Subtitle
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(100, 100, 100);
+    doc.text(`Page ${page + 1} of ${pages}`, PW / 2, y + 11, { align: 'center' });
+    y += SUB_H;
+
+    // Header row
+    let hx = soColX;
+    drawRect(doc, ML, y, CW, SO_HDR_H, '#1A1A1A');
+    soCols.forEach(col => {
+      drawText(doc, col.label, hx, y, col.w, SO_HDR_H, {
+        align: 'center', color: '#FFFFFF', size: 8, bold: true,
+      });
+      hx += col.w;
+    });
+    y += SO_HDR_H;
+
+    // Data rows
+    const startIdx = page * ROWS_PER_PAGE;
+    const endIdx = Math.min(startIdx + ROWS_PER_PAGE, sorted.length);
+
+    for (let i = startIdx; i < endIdx; i++) {
+      const w = sorted[i];
+      const rowNum = i + 1;
+      const bgColor = (i - startIdx) % 2 === 0 ? '#F5F5F5' : '#FFFFFF';
+      drawRect(doc, ML, y, CW, SO_ROW_H, bgColor);
+
+      // Compute final pay for this worker
+      const earnedComm = r2(w.days.reduce((s, d) => s + d.totalPayout, 0));
+      const daysWorked = w.days.length;
+      const gi = w.is120Program ? r2(Math.max(earnedComm, daysWorked * 120)) : earnedComm;
+      const hotelsVal = hiddenFields.hotels ? 0 : w.hotels;
+      const advancesVal = hiddenFields.advances ? 0 : w.advances;
+      const travelVal = hiddenFields.travelPkg ? 0 : w.travelPkg;
+      const finalPay = r2(
+        gi - hotelsVal - advancesVal - travelVal
+        - w.extraDeductions.reduce((s, d) => s + d.amount, 0)
+        + w.additions.reduce((s, a) => s + a.amount, 0)
+      );
+
+      let cx = soColX;
+      // #
+      drawText(doc, String(rowNum), cx, y, soCols[0].w, SO_ROW_H, { align: 'center', size: 8 });
+      cx += soCols[0].w;
+      // Contractor ID
+      drawText(doc, w.contractorId, cx, y, soCols[1].w, SO_ROW_H, { align: 'center', size: 8 });
+      cx += soCols[1].w;
+      // Name (Last, First)
+      drawText(doc, `${w.lastName}, ${w.firstName}`, cx, y, soCols[2].w, SO_ROW_H, { align: 'left', size: 8 });
+      cx += soCols[2].w;
+      // Amount
+      drawText(doc, curr(finalPay), cx, y, soCols[3].w, SO_ROW_H, { align: 'right', size: 8, bold: true });
+      cx += soCols[3].w;
+      // Date — blank line
+      const dateLineY = y + SO_ROW_H - 6;
+      drawLine(doc, cx + 8, dateLineY, cx + soCols[4].w - 8, dateLineY, 0.5);
+      cx += soCols[4].w;
+      // Signature — blank line
+      drawLine(doc, cx + 8, dateLineY, cx + soCols[5].w - 8, dateLineY, 0.5);
+
+      // Row border
+      drawLine(doc, ML, y + SO_ROW_H, ML + CW, y + SO_ROW_H, 0.25);
+      y += SO_ROW_H;
+    }
+
+    // Outer border around table
+    const tableTop = MT + TITLE_H + SUB_H;
+    const tableH = SO_HDR_H + (endIdx - startIdx) * SO_ROW_H;
+    drawBorder(doc, ML, tableTop, CW, tableH, 1);
+  }
+}
+
+// ─── Payslip Rendering ───────────────────────────────────────────────────────
+
+function drawPayslip(
+  doc: jsPDF,
+  worker: WorkerPayslipData,
+  y: number,
+  maxData: number,
+  hiddenFields: HiddenFields,
+) {
+  const x = ML;
+
+  // ── Compute financials ──
+  const earnedComm   = r2(worker.days.reduce((s, d) => s + d.totalPayout, 0));
+  const daysWorked   = worker.days.length;
+  const trainingBump = worker.is120Program ? r2(Math.max(0, daysWorked * 120 - earnedComm)) : 0;
+  const gi           = worker.is120Program ? r2(Math.max(earnedComm, daysWorked * 120)) : earnedComm;
+  const hotelsVal    = hiddenFields.hotels ? 0 : worker.hotels;
+  const advancesVal  = hiddenFields.advances ? 0 : worker.advances;
+  const travelVal    = hiddenFields.travelPkg ? 0 : worker.travelPkg;
+  const finalPay     = r2(
+    gi - hotelsVal - advancesVal - travelVal
+    - worker.extraDeductions.reduce((s, d) => s + d.amount, 0)
+    + worker.additions.reduce((s, a) => s + a.amount, 0)
+  );
+
+  // ── Row 1: Name banner ──
+  drawRect(doc, x, y, CW, H_NAME, '#1A1A1A');
+  drawText(
+    doc,
+    `${worker.contractorId} - ${worker.firstName} ${worker.lastName}`,
+    x, y, CW, H_NAME,
+    { align: 'center', color: '#FFFFFF', size: 14, bold: true }
+  );
+  // Thick border top + sides
+  drawLine(doc, x, y, x + CW, y, 2);
+  drawLine(doc, x, y, x, y + H_NAME, 2);
+  drawLine(doc, x + CW, y, x + CW, y + H_NAME, 2);
+  y += H_NAME;
+
+  // ── Row 2: Column headers ──
+  let cx = x;
+  COLS.forEach(col => {
+    drawRect(doc, cx, y, col.w, H_HDR, col.color);
+    // Header text color: white for all except green bg gets dark text
+    const textColor = col.color === '#B6D7A8' ? '#000000' : '#FFFFFF';
+    drawText(doc, col.label, cx, y, col.w, H_HDR, {
+      align: 'center', color: textColor, size: 7, bold: true, wrap: true,
+    });
+    cx += col.w;
+  });
+  // Side borders
+  drawLine(doc, x, y, x, y + H_HDR, 2);
+  drawLine(doc, x + CW, y, x + CW, y + H_HDR, 2);
+  y += H_HDR;
+
+  // ── Data rows ──
+  for (let i = 0; i < maxData; i++) {
+    const d = worker.days[i];
+
+    // Alternating subtle background
+    if (i % 2 === 1) {
+      drawRect(doc, x, y, CW, H_DATA, '#F9F9F9');
+    }
+
+    if (d) {
+      const vals: { text: string; align: 'left' | 'center' | 'right' }[] = [
+        { text: fmtDate(d.date),     align: 'left'   },
+        { text: d.manager,           align: 'left'   },
+        { text: String(d.steps),     align: 'center' },
+        { text: num2(d.equiv),       align: 'right'  },
+        { text: d.totalPrepay ? curr(r2(d.totalPrepay)) : '', align: 'right' },
+        { text: String(d.payoutRate),align: 'center' },
+        { text: curr(r2(d.aerComm)), align: 'right'  },
+        { text: d.machRent ? curr(d.machRent) : '',     align: 'right' },
+        { text: d.deductions ? curr(d.deductions) : '', align: 'right' },
+        { text: d.dailyBonus ? curr(d.dailyBonus) : '', align: 'right' },
+        { text: curr(r2(d.totalPayout)), align: 'right' },
+      ];
+
+      let dx = x;
+      vals.forEach((v, ci) => {
+        drawText(doc, v.text, dx, y, COLS[ci].w, H_DATA, {
+          align: v.align, size: 7, color: '#000000',
+        });
+        dx += COLS[ci].w;
+      });
+    }
+
+    // Side borders
+    drawLine(doc, x, y, x, y + H_DATA, 2);
+    drawLine(doc, x + CW, y, x + CW, y + H_DATA, 2);
+
+    // Thin bottom line
+    drawLine(doc, x, y + H_DATA, x + CW, y + H_DATA, 0.15);
+    y += H_DATA;
+  }
+
+  // ── Summary section ──
+  // Build right-side rows (always visible: Earned Income, Final Pay; conditionally others)
+  const rightRows: { label: string; value: number; isFinal: boolean }[] = [];
+  rightRows.push({ label: 'Earned Income', value: gi, isFinal: false });
+  if (!hiddenFields.hotels)   rightRows.push({ label: 'Hotels',     value: hotelsVal,    isFinal: false });
+  if (!hiddenFields.advances) rightRows.push({ label: 'Advances',   value: advancesVal,  isFinal: false });
+  if (!hiddenFields.travelPkg)rightRows.push({ label: 'Travel Pkg', value: travelVal,    isFinal: false });
+  rightRows.push({ label: 'Final Pay:', value: finalPay, isFinal: true });
+
+  // Build left-side items
+  const leftItems: { label: string; value: number }[] = [];
+  if (worker.is120Program) {
+    leftItems.push({ label: 'Earned Commission', value: earnedComm });
+    leftItems.push({ label: 'Training Bump',     value: trainingBump });
+  }
+  worker.extraDeductions.forEach(d => leftItems.push({ label: d.label || 'Deduction', value: d.amount }));
+  worker.additions.forEach(a       => leftItems.push({ label: a.label || 'Addition',  value: a.amount }));
+
+  const nSummary = rightRows.length;
+
+  // Summary x positions — right half of table
+  // COLS indices: 0=DATE 1=MGR 2=STEPS 3=EQUIV 4=PREPAY 5=RATE 6=AER 7=MACH 8=DED 9=BONUS 10=TOTAL
+  let sumStartX = x;
+  for (let c = 0; c < 5; c++) sumStartX += COLS[c].w;
+  // sumStartX is now at RATE column
+
+  const leftLabelX = sumStartX;                           // RATE col start
+  const leftLabelW = COLS[5].w + COLS[6].w;               // RATE + AER width
+  const leftValueX = leftLabelX + leftLabelW;             // MACH col start
+  const leftValueW = COLS[7].w;                           // MACH width
+  const rightLabelX = leftValueX + leftValueW;            // DED col start
+  const rightLabelW = COLS[8].w + COLS[9].w;              // DED + BONUS width
+  const rightValueX = rightLabelX + rightLabelW;          // TOTAL col start
+  const rightValueW = COLS[10].w;                         // TOTAL width
+  const sumTotalW = leftLabelW + leftValueW + rightLabelW + rightValueW;
+
+  for (let i = 0; i < nSummary; i++) {
+    const right = rightRows[i];
+    const left  = leftItems[i];
+    const isFinal = right.isFinal;
+    const sumBg = isFinal ? '#BFBFBF' : '#D9D9D9';
+
+    // Fill summary area
+    drawRect(doc, sumStartX, y, sumTotalW, H_SUM, sumBg);
+
+    // Left side items (lighter bg)
+    if (left) {
+      drawRect(doc, leftLabelX, y, leftLabelW, H_SUM, '#F2F2F2');
+      drawRect(doc, leftValueX, y, leftValueW, H_SUM, '#F2F2F2');
+      drawText(doc, left.label, leftLabelX, y, leftLabelW, H_SUM, {
+        align: 'right', size: 8, color: '#000000',
+      });
+      drawText(doc, curr(left.value), leftValueX, y, leftValueW, H_SUM, {
+        align: 'right', size: 8, bold: true, color: '#000000',
+      });
+    }
+
+    // Right side
+    drawText(doc, right.label, rightLabelX, y, rightLabelW, H_SUM, {
+      align: 'right', size: isFinal ? 9 : 8, bold: isFinal, color: '#000000',
+    });
+    drawText(doc, curr(right.value), rightValueX, y, rightValueW, H_SUM, {
+      align: 'right', size: isFinal ? 10 : 9, bold: true, color: '#000000',
+    });
+
+    // Side borders on left + right of payslip
+    drawLine(doc, x, y, x, y + H_SUM, 2);
+    drawLine(doc, x + CW, y, x + CW, y + H_SUM, 2);
+
+    // Summary block borders (medium weight)
+    if (i === 0)           drawLine(doc, sumStartX, y, sumStartX + sumTotalW, y, 1);
+    if (i === nSummary - 1) drawLine(doc, sumStartX, y + H_SUM, sumStartX + sumTotalW, y + H_SUM, 1);
+    drawLine(doc, sumStartX, y, sumStartX, y + H_SUM, 1);
+    drawLine(doc, sumStartX + sumTotalW, y, sumStartX + sumTotalW, y + H_SUM, 1);
+
+    y += H_SUM;
+  }
+
+  // Bottom border of entire payslip
+  drawLine(doc, x, y, x + CW, y, 2);
+}
+
+// ─── Payslip block height calculation ─────────────────────────────────────────
+
+function payslipBlockHeight(maxData: number, nSummaryRows: number): number {
+  return H_NAME + H_HDR + maxData * H_DATA + nSummaryRows * H_SUM + H_GAP;
+}
+
+// ─── Main export function ─────────────────────────────────────────────────────
+
+export async function generatePayslipsPDF(
+  workers: WorkerPayslipData[],
+  startDate: string,
+  endDate: string,
+  ccDisplayName: string,
+  totalDaysInRange: number,
+  hiddenFields: HiddenFields,
+  batchName?: string,
+): Promise<void> {
+  const isLong  = totalDaysInRange > 7;
+  const maxData = isLong ? 16 : 8;
+
+  // Count summary rows
+  let nSummary = 2; // Earned Income + Final Pay always present
+  if (!hiddenFields.hotels)    nSummary++;
+  if (!hiddenFields.advances)  nSummary++;
+  if (!hiddenFields.travelPkg) nSummary++;
+
+  const blockH  = payslipBlockHeight(maxData, nSummary);
+  const usableH = PH - MT - MB;
+  const perPage = Math.max(1, Math.floor(usableH / blockH));
+
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+
+  // ── Sign-out list (first pages) ──
+  renderSignOutList(doc, workers, startDate, endDate, hiddenFields, batchName);
+
+  // ── Payslips ──
+  let y = MT;
+  let onPage = 0;
+
+  workers.forEach((worker, wi) => {
+    if (onPage >= perPage || wi === 0) {
+      doc.addPage();
+      y = MT;
+      onPage = 0;
+    }
+
+    drawPayslip(doc, worker, y, maxData, hiddenFields);
+    y += blockH;
+    onPage++;
+  });
+
+  // ── Save / download ──
+  const filePrefix = batchName ? `${batchName}_` : '';
+  doc.save(`${filePrefix}${ccDisplayName} ${startDate} - ${endDate} Payslips.pdf`);
+}
