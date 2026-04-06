@@ -435,7 +435,8 @@ export interface SessionTransaction {
 }
 
 // Changed 'gross' to 'upGross' for clarity - sorts by upsell gross only
-export type SortOption = 'standard' | 'alpha' | 'steps' | 'upGross' | 'equiv' | 'upsell' | 'commission';
+// 'bonusEquiv' sorts team carts by EQ ÷ team-size multiplier (fair cross-team comparison)
+export type SortOption = 'standard' | 'alpha' | 'steps' | 'upGross' | 'equiv' | 'upsell' | 'commission' | 'bonusEquiv';
 
 // --- EMAIL TEMPLATES ---
 

@@ -960,11 +960,14 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       switch (sortOption) {
         case 'steps':
           return b.sharedStats.stepCount - a.sharedStats.stepCount;
-        case 'equiv': {
-          // Sort by raw EQ × size multiplier, highest first
-          // Displayed EQ number is never changed — only sort order
-          const aScore = a.sharedStats.totalEQ * getEquivMultiplier(a.workers.length);
-          const bScore = b.sharedStats.totalEQ * getEquivMultiplier(b.workers.length);
+        case 'equiv':
+          // Raw team EQ, highest first
+          return b.sharedStats.totalEQ - a.sharedStats.totalEQ;
+        case 'bonusEquiv': {
+          // Adjusted EQ: divide by team-size multiplier so solo and teams are fairly ranked
+          // Solo ÷1.0, duo ÷1.5, trio ÷2.0, quad ÷2.5 — highest score to top
+          const aScore = a.sharedStats.totalEQ / getEquivMultiplier(a.workers.length);
+          const bScore = b.sharedStats.totalEQ / getEquivMultiplier(b.workers.length);
           return bScore - aScore;
         }
         case 'upGross':

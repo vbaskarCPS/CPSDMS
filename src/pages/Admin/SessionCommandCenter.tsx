@@ -1388,6 +1388,7 @@ const SessionCommandCenter: React.FC = () => {
                   <option value="upGross">Sort by Up Gross</option>
                   <option value="upsell">Sort by Upsells</option>
                   <option value="equiv">Sort by EQ</option>
+                  <option value="bonusEquiv">Bonus EQ</option>
                   <option value="commission">Sort by Payout</option>
                 </select>
               </div>
