@@ -92,6 +92,22 @@ interface BonusWinner {
   finalCommission: number;
 }
 
+// --- NEW: Per-worker payout breakdown inside a rejuv cart bonus winner ---
+interface RejuvWorkerPayout {
+  worker: Worker;
+  commission: number;
+  bonusShare: number;
+}
+
+// --- NEW: Rejuv bonus winner — cart-level, with per-worker breakdown ---
+interface RejuvBonusWinner {
+  cartWorkers: Worker[];
+  teamSize: number;
+  bonus: Bonus;
+  teamTotalEQ: number;
+  workerPayouts: RejuvWorkerPayout[];
+}
+
 // Team cart with full worker and session data for Lawn Rejuv
 interface TeamCartDisplay {
   teamId: string;
@@ -101,10 +117,27 @@ interface TeamCartDisplay {
   sharedStats: {
     stepCount: number;
     upsellGross: number;
-    totalEQ: number;  // Team total EQ - displayed to all workers
+    totalEQ: number;
   };
   isValidated: boolean;
   totalCommission: number;
+}
+
+// --- NEW: Equiv sort multiplier per team size ---
+// Solo=1.0, Team of 2=1.5, Team of 3=2.0, Team of 4=2.5, etc.
+function getEquivMultiplier(teamSize: number): number {
+  if (teamSize <= 1) return 1.0;
+  return 1.0 + (teamSize - 1) * 0.5;
+}
+
+// --- NEW: Badge thresholds per team size ---
+// Solo(1): green=30, gold=40, silver=60
+// Team(2): green=40, gold=60, silver=100
+// Superteam(3+): green=60, gold=100, silver=teamSize*50
+function getRejuvThresholds(teamSize: number): { green: number; gold: number; silver: number } {
+  if (teamSize === 1) return { green: 30, gold: 40, silver: 60 };
+  if (teamSize === 2) return { green: 40, gold: 60, silver: 100 };
+  return { green: 60, gold: 100, silver: teamSize * 50 };
 }
 
 // Dynamic sizing based on total bonus count and column count
@@ -136,7 +169,6 @@ type SizeConfig = {
 };
 
 function getSizeConfig(totalBonuses: number, columnCount: number): SizeConfig {
-  // Special handling for 4 columns - need extra compact sizing
   if (columnCount === 4) {
     if (totalBonuses <= 8) {
       return {
@@ -194,8 +226,7 @@ function getSizeConfig(totalBonuses: number, columnCount: number): SizeConfig {
       };
     }
   }
-  
-  // 3 columns
+
   if (columnCount === 3) {
     if (totalBonuses <= 9) {
       return {
@@ -253,8 +284,7 @@ function getSizeConfig(totalBonuses: number, columnCount: number): SizeConfig {
       };
     }
   }
-  
-  // 2 columns
+
   if (columnCount === 2) {
     if (totalBonuses <= 6) {
       return {
@@ -312,8 +342,7 @@ function getSizeConfig(totalBonuses: number, columnCount: number): SizeConfig {
       };
     }
   }
-  
-  // 1 column - most space
+
   if (totalBonuses <= 4) {
     return {
       headerPadding: 'p-6',
@@ -371,23 +400,57 @@ function getSizeConfig(totalBonuses: number, columnCount: number): SizeConfig {
   }
 }
 
-function checkBonusQualification(transactions: SessionTransaction[]): BonusQualification {
+// --- UPDATED: isRejuv flag switches to old money vs new money ratio ---
+function checkBonusQualification(transactions: SessionTransaction[], isRejuv = false): BonusQualification {
+  if (isRejuv) {
+    // Old money = Production (office flats/prepaids)
+    // New money = Upgrade, Sale, Add-On
+    const oldMoneyTxs = transactions.filter(tx => tx.type === 'Production');
+    const newMoneyTxs = transactions.filter(tx => tx.type === 'Upgrade' || tx.type === 'Sale' || tx.type === 'Add-On');
+
+    const oldMoneyCount = oldMoneyTxs.length;
+    const newMoneyCount = newMoneyTxs.length;
+
+    // 1:1 — new money must be >= old money
+    const ratioPass = newMoneyCount >= oldMoneyCount;
+
+    // Details check on new money transactions
+    const detailsPossible = newMoneyTxs.length * 2;
+    let detailsCollected = 0;
+    newMoneyTxs.forEach(tx => {
+      if (tx.customerPhone && tx.customerPhone.trim() !== '') detailsCollected++;
+      if (tx.customerEmail && tx.customerEmail.trim() !== '') detailsCollected++;
+    });
+    const detailsPass = detailsPossible === 0 ? false : detailsCollected >= detailsPossible * 0.8;
+
+    return {
+      qualified: ratioPass && detailsPass,
+      ratioPass,
+      detailsPass,
+      prebookCount: oldMoneyCount,
+      salesCount: newMoneyCount,
+      detailsCollected,
+      detailsPossible,
+    };
+  }
+
+  // Original aeration logic unchanged
   const prebookCount = transactions.filter(tx => tx.type === 'Production').length;
   const salesCount = transactions.filter(tx => tx.type === 'Upgrade' || tx.type === 'Sale').length;
-  
+
   const ratioPass = salesCount > 0 && salesCount >= prebookCount;
-  
+
   const upgradesAndSales = transactions.filter(tx => tx.type === 'Upgrade' || tx.type === 'Sale');
   const detailsPossible = upgradesAndSales.length * 2;
-  
+
   let detailsCollected = 0;
   upgradesAndSales.forEach(tx => {
     if (tx.customerPhone && tx.customerPhone.trim() !== '') detailsCollected++;
     if (tx.customerEmail && tx.customerEmail.trim() !== '') detailsCollected++;
   });
-  
-  const detailsPass = detailsPossible === 0 ? false : (detailsCollected >= detailsPossible * 0.8);
-  
+
+  const detailsPass = detailsPossible === 0 ? false : detailsCollected >= detailsPossible * 0.8;
+
   return {
     qualified: ratioPass && detailsPass,
     ratioPass,
@@ -395,30 +458,39 @@ function checkBonusQualification(transactions: SessionTransaction[]): BonusQuali
     prebookCount,
     salesCount,
     detailsCollected,
-    detailsPossible
+    detailsPossible,
   };
 }
 
-// Achievement badge with EQ overlaid on top
-function AchievementBadge({ eq, sizeClass, containerClass, textClass }: { 
-  eq: number; 
-  sizeClass: string; 
+// --- UPDATED: accepts thresholds prop for rejuv badge unlocks ---
+function AchievementBadge({
+  eq,
+  thresholds,
+  sizeClass,
+  containerClass,
+  textClass,
+}: {
+  eq: number;
+  thresholds?: { green: number; gold: number; silver: number };
+  sizeClass: string;
   containerClass: string;
   textClass: string;
 }): React.ReactNode {
+  const t = thresholds || { green: 30, gold: 40, silver: 50 };
+
   let icon = null;
   let bgColor = 'bg-gray-700';
   let textColor = 'text-blue-300';
-  
-  if (eq >= 50) {
+
+  if (eq >= t.silver) {
     icon = <img src={SilverHatIcon} alt="Silver Hat" className={`${sizeClass} object-contain`} />;
     bgColor = 'bg-purple-900/50';
     textColor = 'text-purple-200';
-  } else if (eq >= 40) {
+  } else if (eq >= t.gold) {
     icon = <img src={GoldJerseyIcon} alt="Gold Jersey" className={`${sizeClass} object-contain`} />;
     bgColor = 'bg-yellow-900/50';
     textColor = 'text-yellow-200';
-  } else if (eq >= 30) {
+  } else if (eq >= t.green) {
     icon = <img src={GreenJacketIcon} alt="Green Jacket" className={`${sizeClass} object-contain`} />;
     bgColor = 'bg-green-900/50';
     textColor = 'text-green-200';
@@ -427,7 +499,7 @@ function AchievementBadge({ eq, sizeClass, containerClass, textClass }: {
   return (
     <div className={`relative ${containerClass} flex items-center justify-center rounded-lg ${bgColor}`}>
       {icon}
-      <div className={`absolute inset-0 flex items-center justify-center`}>
+      <div className="absolute inset-0 flex items-center justify-center">
         <span className={`${textClass} font-black ${textColor} drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]`}>
           {eq.toFixed(1)}
           <span className="text-[0.6em] ml-0.5">EQ</span>
@@ -454,11 +526,11 @@ function getMedalEmoji(placing: number | 'other' | undefined): string {
 
 function formatDateForDisplay(dateStr: string): string {
   const date = new Date(dateStr + 'T12:00:00');
-  return date.toLocaleDateString('en-US', { 
+  return date.toLocaleDateString('en-US', {
     weekday: 'long',
-    year: 'numeric', 
-    month: 'long', 
-    day: 'numeric' 
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
   });
 }
 
@@ -473,41 +545,35 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const [loading, setLoading] = useState(true);
 
   const [items, setItems] = useState<{ worker: Worker; session: LogsheetSession }[]>([]);
-  
-  // Season type state
+
   const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
   const isTeamSeason = seasonHasTeams(seasonType);
 
   const [showBonusModal, setShowBonusModal] = useState(false);
   const [selectedSession, setSelectedSession] = useState<LogsheetSession | null>(null);
   const [selectedWorkerName, setSelectedWorkerName] = useState<string>('');
-  // For team seasons, track team members for split
   const [selectedTeamWorkers, setSelectedTeamWorkers] = useState<Worker[]>([]);
-  
+
   const [showScreenshotModal, setShowScreenshotModal] = useState(false);
-  
+
   const [bonusStep, setBonusStep] = useState<'type' | 'details'>('type');
   const [selectedBonusType, setSelectedBonusType] = useState<BonusType | null>(null);
   const [bonusPlacing, setBonusPlacing] = useState<number | 'other' | ''>('');
   const [bonusCustomDesc, setBonusCustomDesc] = useState('');
   const [bonusAmount, setBonusAmount] = useState('');
-  // Bonus split percentages for team seasons
   const [bonusSplitPercentages, setBonusSplitPercentages] = useState<Record<string, number>>({});
 
   const loadData = async () => {
     setLoading(true);
     try {
-      // Get season type
       const currentSeasonType = await sessionService.getSessionSeasonType();
       setSeasonType(currentSeasonType);
-      
+
       const allSessions = await sessionService.getLogsheetSessions();
 
       const merged = allSessions
         .map((session) => {
-          const worker = workers.find(
-            (w) => w.contractorId === session.workerId
-          );
+          const worker = workers.find((w) => w.contractorId === session.workerId);
           if (!worker) return null;
           return { worker, session };
         })
@@ -527,22 +593,20 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     }
   }, [date, workers]);
 
-  // Build team carts for lawn_rejuv season - FIXED VERSION
   const teamCartsDisplay = useMemo<TeamCartDisplay[]>(() => {
     if (!isTeamSeason) return [];
-    
+
     const cartMap = new Map<string, TeamCartDisplay>();
-    
+
     items.forEach(({ worker, session }) => {
-      // Use session.id as the cart identifier since team members share a session
       const cartKey = session.id;
-      
+
       if (!cartMap.has(cartKey)) {
         const isValidated = session.validation?.isValidated || false;
-        // FIXED: Use validated actualTotalEQ if available, otherwise stats.totalEQ
-        // This is the TEAM TOTAL EQ that should be displayed to all workers
-        const eq = isValidated ? (session.validation?.actualTotalEQ || 0) : (session.stats?.totalEQ || 0);
-        
+        const eq = isValidated
+          ? session.validation?.actualTotalEQ || 0
+          : session.stats?.totalEQ || 0;
+
         cartMap.set(cartKey, {
           teamId: cartKey,
           sessionId: session.id,
@@ -551,33 +615,29 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           sharedStats: {
             stepCount: session.stats?.stepCount || 0,
             upsellGross: session.stats?.upsellGross || 0,
-            totalEQ: eq,  // Team total EQ - displayed to all workers
+            totalEQ: eq,
           },
           isValidated,
           totalCommission: session.validation?.finalCommission || 0,
         });
       }
-      
+
       const cart = cartMap.get(cartKey)!;
-      
-      // Add primary worker
-      if (!cart.workers.find(w => w.contractorId === worker.contractorId)) {
+
+      if (!cart.workers.find((w) => w.contractorId === worker.contractorId)) {
         cart.workers.push(worker);
       }
-      
-      // Also add all team workers from session.teamWorkerIds
+
       if (session.teamWorkerIds && session.teamWorkerIds.length > 0) {
-        session.teamWorkerIds.forEach(wid => {
-          if (!cart.workers.find(w => w.contractorId === wid)) {
-            const teamWorker = workers.find(w => w.contractorId === wid);
-            if (teamWorker) {
-              cart.workers.push(teamWorker);
-            }
+        session.teamWorkerIds.forEach((wid) => {
+          if (!cart.workers.find((w) => w.contractorId === wid)) {
+            const teamWorker = workers.find((w) => w.contractorId === wid);
+            if (teamWorker) cart.workers.push(teamWorker);
           }
         });
       }
     });
-    
+
     return Array.from(cartMap.values());
   }, [items, isTeamSeason, workers]);
 
@@ -599,10 +659,9 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
     let totalEQ = 0;
 
-    // For team seasons, aggregate from team carts to avoid double counting
     if (isTeamSeason) {
       stats.workerCount = teamCartsDisplay.reduce((sum, cart) => sum + cart.workers.length, 0);
-      
+
       teamCartsDisplay.forEach((cart) => {
         const session = cart.session;
         if (!session) return;
@@ -611,15 +670,21 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         const isValidated = v?.isValidated || false;
 
         stats.totalSteps += s.stepCount || 0;
-        
-        const prodCash = isValidated ? (v?.actualProdCash || 0) : (s.prodCash || 0);
-        const prodCheque = isValidated ? (v?.actualProdCheque || 0) : (s.prodCheque || 0);
-        const prodGrossCalc = (s.prodPrepaid || 0) + (s.prodBilled || 0) + prodCash + prodCheque + 
-                             (s.prodETransfer || 0) + (s.prodCreditCard || 0) + 
-                             (s.prodFlats || 0) + (s.prodPrepaidSplit || 0);
+
+        const prodCash = isValidated ? v?.actualProdCash || 0 : s.prodCash || 0;
+        const prodCheque = isValidated ? v?.actualProdCheque || 0 : s.prodCheque || 0;
+        const prodGrossCalc =
+          (s.prodPrepaid || 0) +
+          (s.prodBilled || 0) +
+          prodCash +
+          prodCheque +
+          (s.prodETransfer || 0) +
+          (s.prodCreditCard || 0) +
+          (s.prodFlats || 0) +
+          (s.prodPrepaidSplit || 0);
         stats.prodGross += prodGrossCalc;
 
-        const eq = isValidated ? (v?.actualTotalEQ || 0) : (s.totalEQ || 0);
+        const eq = isValidated ? v?.actualTotalEQ || 0 : s.totalEQ || 0;
         totalEQ += eq;
 
         stats.upsellCount += s.upsellCount || 0;
@@ -629,14 +694,16 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         stats.totalCheque += prodCheque + (s.upsellCheque || 0);
         stats.totalETransfer += (s.prodETransfer || 0) + (s.upsellETransfer || 0);
         stats.totalCreditCard += (s.prodCreditCard || 0) + (s.upsellCreditCard || 0);
-        stats.totalPrepaid += (s.prodFlats || 0) + (s.prodPrepaid || 0) + 
-                             (s.prodPrepaidSplit || 0) + (s.upsellPrepaid || 0);
+        stats.totalPrepaid +=
+          (s.prodFlats || 0) +
+          (s.prodPrepaid || 0) +
+          (s.prodPrepaidSplit || 0) +
+          (s.upsellPrepaid || 0);
         stats.totalBilled += s.prodBilled || 0;
       });
-      
+
       stats.avgEQ = teamCartsDisplay.length > 0 ? totalEQ / teamCartsDisplay.length : 0;
     } else {
-      // Aeration season - aggregate from individual workers
       items.forEach(({ session }) => {
         const s = session.stats;
         const v = session.validation;
@@ -644,14 +711,20 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
         stats.totalSteps += s.stepCount || 0;
 
-        const prodCash = isValidated ? (v?.actualProdCash || 0) : (s.prodCash || 0);
-        const prodCheque = isValidated ? (v?.actualProdCheque || 0) : (s.prodCheque || 0);
-        const prodGrossCalc = (s.prodPrepaid || 0) + (s.prodBilled || 0) + prodCash + prodCheque + 
-                             (s.prodETransfer || 0) + (s.prodCreditCard || 0) + 
-                             (s.prodFlats || 0) + (s.prodPrepaidSplit || 0);
+        const prodCash = isValidated ? v?.actualProdCash || 0 : s.prodCash || 0;
+        const prodCheque = isValidated ? v?.actualProdCheque || 0 : s.prodCheque || 0;
+        const prodGrossCalc =
+          (s.prodPrepaid || 0) +
+          (s.prodBilled || 0) +
+          prodCash +
+          prodCheque +
+          (s.prodETransfer || 0) +
+          (s.prodCreditCard || 0) +
+          (s.prodFlats || 0) +
+          (s.prodPrepaidSplit || 0);
         stats.prodGross += prodGrossCalc;
 
-        const eq = isValidated ? (v?.actualTotalEQ || 0) : (s.totalEQ || 0);
+        const eq = isValidated ? v?.actualTotalEQ || 0 : s.totalEQ || 0;
         totalEQ += eq;
 
         stats.upsellCount += s.upsellCount || 0;
@@ -661,8 +734,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         stats.totalCheque += prodCheque + (s.upsellCheque || 0);
         stats.totalETransfer += (s.prodETransfer || 0) + (s.upsellETransfer || 0);
         stats.totalCreditCard += (s.prodCreditCard || 0) + (s.upsellCreditCard || 0);
-        stats.totalPrepaid += (s.prodFlats || 0) + (s.prodPrepaid || 0) + 
-                             (s.prodPrepaidSplit || 0) + (s.upsellPrepaid || 0);
+        stats.totalPrepaid +=
+          (s.prodFlats || 0) +
+          (s.prodPrepaid || 0) +
+          (s.prodPrepaidSplit || 0) +
+          (s.upsellPrepaid || 0);
         stats.totalBilled += s.prodBilled || 0;
       });
 
@@ -672,64 +748,47 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     return stats;
   }, [items, teamCartsDisplay, isTeamSeason]);
 
+  // Aeration bonus winners (unchanged)
   const bonusWinners = useMemo(() => {
     const winners: {
       performanceEQ: BonusWinner[];
       totalUpsell: BonusWinner[];
       rookie: BonusWinner[];
       other: BonusWinner[];
-    } = {
-      performanceEQ: [],
-      totalUpsell: [],
-      rookie: [],
-      other: []
-    };
+    } = { performanceEQ: [], totalUpsell: [], rookie: [], other: [] };
 
     items.forEach(({ worker, session }) => {
       if (!session.bonuses || session.bonuses.length === 0) return;
-      
+
       const isValidated = session.validation?.isValidated || false;
-      const eq = isValidated ? (session.validation?.actualTotalEQ || 0) : session.stats.totalEQ;
+      const eq = isValidated ? session.validation?.actualTotalEQ || 0 : session.stats.totalEQ;
       const finalCommission = session.validation?.finalCommission || 0;
       const upsellGross = session.stats.upsellGross || 0;
 
-      session.bonuses.forEach(bonus => {
+      session.bonuses.forEach((bonus) => {
         const winnerData: BonusWinner = {
           firstName: worker.firstName,
           lastName: worker.lastName,
           bonus,
           eq,
           upsellGross,
-          finalCommission
+          finalCommission,
         };
 
         switch (bonus.type) {
-          case 'Performance EQ':
-            winners.performanceEQ.push(winnerData);
-            break;
-          case 'Total Upsell':
-            winners.totalUpsell.push(winnerData);
-            break;
-          case 'Rookie':
-            winners.rookie.push(winnerData);
-            break;
-          case 'Other':
-            winners.other.push(winnerData);
-            break;
+          case 'Performance EQ': winners.performanceEQ.push(winnerData); break;
+          case 'Total Upsell': winners.totalUpsell.push(winnerData); break;
+          case 'Rookie': winners.rookie.push(winnerData); break;
+          case 'Other': winners.other.push(winnerData); break;
         }
       });
     });
 
-    // Sort by placing first, then by EQ descending for ties
     const sortByPlacingThenEQ = (a: BonusWinner, b: BonusWinner) => {
-      const aPlacing = typeof a.bonus.placing === 'number' ? a.bonus.placing : 999;
-      const bPlacing = typeof b.bonus.placing === 'number' ? b.bonus.placing : 999;
-      
-      if (aPlacing === bPlacing) {
-        return b.eq - a.eq;
-      }
-      
-      return aPlacing - bPlacing;
+      const aP = typeof a.bonus.placing === 'number' ? a.bonus.placing : 999;
+      const bP = typeof b.bonus.placing === 'number' ? b.bonus.placing : 999;
+      if (aP === bP) return b.eq - a.eq;
+      return aP - bP;
     };
 
     winners.performanceEQ.sort(sortByPlacingThenEQ);
@@ -739,26 +798,96 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     return winners;
   }, [items]);
 
+  // --- NEW: Rejuv bonus winners — cart-level with per-worker breakdown ---
+  const rejuvBonusWinners = useMemo(() => {
+    const winners: {
+      performanceEQ: RejuvBonusWinner[];
+      totalUpsell: RejuvBonusWinner[];
+      rookie: RejuvBonusWinner[];
+      other: RejuvBonusWinner[];
+    } = { performanceEQ: [], totalUpsell: [], rookie: [], other: [] };
+
+    if (!isTeamSeason) return winners;
+
+    teamCartsDisplay.forEach((cart) => {
+      const session = cart.session;
+      if (!session.bonuses || session.bonuses.length === 0) return;
+
+      const teamSize = cart.workers.length;
+      const teamTotalEQ = cart.sharedStats.totalEQ;
+      const totalCommission = cart.totalCommission;
+
+      session.bonuses.forEach((bonus) => {
+        // Per-worker breakdown using equiv split percentages
+        const workerPayouts: RejuvWorkerPayout[] = cart.workers.map((w) => {
+          const equivPercent =
+            (session.equivSplit?.[w.contractorId] ?? 100 / teamSize) / 100;
+          const commission = totalCommission * equivPercent;
+
+          // Bonus split: use bonus.splitPercentages if set, else fall back to equivSplit
+          const bonusSplitPercent =
+            bonus.splitPercentages?.[w.contractorId] ?? equivPercent * 100;
+          const bonusShare = bonus.amount * (bonusSplitPercent / 100);
+
+          return { worker: w, commission, bonusShare };
+        });
+
+        const winnerData: RejuvBonusWinner = {
+          cartWorkers: cart.workers,
+          teamSize,
+          bonus,
+          teamTotalEQ,
+          workerPayouts,
+        };
+
+        switch (bonus.type) {
+          case 'Performance EQ': winners.performanceEQ.push(winnerData); break;
+          case 'Total Upsell': winners.totalUpsell.push(winnerData); break;
+          case 'Rookie': winners.rookie.push(winnerData); break;
+          case 'Other': winners.other.push(winnerData); break;
+        }
+      });
+    });
+
+    const sortByPlacing = (a: RejuvBonusWinner, b: RejuvBonusWinner) => {
+      const aP = typeof a.bonus.placing === 'number' ? a.bonus.placing : 999;
+      const bP = typeof b.bonus.placing === 'number' ? b.bonus.placing : 999;
+      if (aP === bP) return b.teamTotalEQ - a.teamTotalEQ;
+      return aP - bP;
+    };
+
+    winners.performanceEQ.sort(sortByPlacing);
+    winners.totalUpsell.sort(sortByPlacing);
+    winners.rookie.sort(sortByPlacing);
+
+    return winners;
+  }, [teamCartsDisplay, isTeamSeason]);
+
+  // Use the right winners set depending on season
+  const activeBonusWinners = isTeamSeason ? rejuvBonusWinners : bonusWinners;
+
   const totalBonusCount = useMemo(() => {
     return (
-      bonusWinners.performanceEQ.length +
-      bonusWinners.totalUpsell.length +
-      bonusWinners.rookie.length +
-      bonusWinners.other.length
+      activeBonusWinners.performanceEQ.length +
+      activeBonusWinners.totalUpsell.length +
+      activeBonusWinners.rookie.length +
+      activeBonusWinners.other.length
     );
-  }, [bonusWinners]);
+  }, [activeBonusWinners]);
 
-  // Count active columns
   const activeColumns = useMemo(() => {
     return [
-      bonusWinners.performanceEQ.length > 0,
-      bonusWinners.totalUpsell.length > 0,
-      bonusWinners.rookie.length > 0,
-      bonusWinners.other.length > 0
+      activeBonusWinners.performanceEQ.length > 0,
+      activeBonusWinners.totalUpsell.length > 0,
+      activeBonusWinners.rookie.length > 0,
+      activeBonusWinners.other.length > 0,
     ].filter(Boolean).length;
-  }, [bonusWinners]);
+  }, [activeBonusWinners]);
 
-  const sizeConfig = useMemo(() => getSizeConfig(totalBonusCount, activeColumns), [totalBonusCount, activeColumns]);
+  const sizeConfig = useMemo(
+    () => getSizeConfig(totalBonusCount, activeColumns),
+    [totalBonusCount, activeColumns]
+  );
 
   const hasBonuses = totalBonusCount > 0;
 
@@ -777,8 +906,10 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     return [...filtered].sort((a, b) => {
       switch (sortOption) {
         case 'standard': {
-          const aManager = managers.find(m => m.userId === a.worker.assignedManagerId)?.name || 'ZZZ';
-          const bManager = managers.find(m => m.userId === b.worker.assignedManagerId)?.name || 'ZZZ';
+          const aManager =
+            managers.find((m) => m.userId === a.worker.assignedManagerId)?.name || 'ZZZ';
+          const bManager =
+            managers.find((m) => m.userId === b.worker.assignedManagerId)?.name || 'ZZZ';
           if (aManager !== bManager) return aManager.localeCompare(bManager);
           const lastNameCompare = a.worker.lastName.localeCompare(b.worker.lastName);
           if (lastNameCompare !== 0) return lastNameCompare;
@@ -798,27 +929,29 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         case 'upGross':
           return (b.session.stats.upsellGross || 0) - (a.session.stats.upsellGross || 0);
         case 'commission':
-          const payA = a.session.validation?.finalCommission || 0;
-          const payB = b.session.validation?.finalCommission || 0;
-          return payB - payA;
+          return (
+            (b.session.validation?.finalCommission || 0) -
+            (a.session.validation?.finalCommission || 0)
+          );
         default:
           return 0;
       }
     });
   }, [items, searchTerm, sortOption, managers]);
 
-  // Sort team carts for lawn_rejuv
+  // --- UPDATED: equiv case now uses multiplier for rejuv sort ---
   const sortedTeamCarts = useMemo(() => {
     if (!isTeamSeason) return [];
-    
+
     let filtered = teamCartsDisplay;
     if (searchTerm) {
       const lower = searchTerm.toLowerCase();
-      filtered = filtered.filter(cart => 
-        cart.workers.some(w => 
-          w.firstName.toLowerCase().includes(lower) ||
-          w.lastName.toLowerCase().includes(lower) ||
-          w.contractorId.includes(lower)
+      filtered = filtered.filter((cart) =>
+        cart.workers.some(
+          (w) =>
+            w.firstName.toLowerCase().includes(lower) ||
+            w.lastName.toLowerCase().includes(lower) ||
+            w.contractorId.includes(lower)
         )
       );
     }
@@ -827,60 +960,68 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       switch (sortOption) {
         case 'steps':
           return b.sharedStats.stepCount - a.sharedStats.stepCount;
-        case 'equiv':
-          return b.sharedStats.totalEQ - a.sharedStats.totalEQ;
+        case 'equiv': {
+          // Sort by raw EQ × size multiplier, highest first
+          // Displayed EQ number is never changed — only sort order
+          const aScore = a.sharedStats.totalEQ * getEquivMultiplier(a.workers.length);
+          const bScore = b.sharedStats.totalEQ * getEquivMultiplier(b.workers.length);
+          return bScore - aScore;
+        }
         case 'upGross':
           return b.sharedStats.upsellGross - a.sharedStats.upsellGross;
         case 'commission':
           return b.totalCommission - a.totalCommission;
-        default:
-          // Sort by first worker's last name
+        default: {
           const aName = a.workers[0]?.lastName || '';
           const bName = b.workers[0]?.lastName || '';
           return aName.localeCompare(bName);
+        }
       }
     });
   }, [teamCartsDisplay, searchTerm, sortOption, isTeamSeason]);
 
   const groupedByManager = useMemo(() => {
     if (sortOption !== 'standard' || isTeamSeason) return null;
-    
-    const groups: Record<string, { 
-      manager: ManagementUser | null; 
-      items: typeof sortedItems;
-      stats: ManagerGroupStats;
-    }> = {};
-    
-    sortedItems.forEach(item => {
+
+    const groups: Record<
+      string,
+      {
+        manager: ManagementUser | null;
+        items: typeof sortedItems;
+        stats: ManagerGroupStats;
+      }
+    > = {};
+
+    sortedItems.forEach((item) => {
       const managerId = item.worker.assignedManagerId || 'unassigned';
       if (!groups[managerId]) {
-        const manager = managers.find(m => m.userId === managerId) || null;
-        groups[managerId] = { 
-          manager, 
+        const manager = managers.find((m) => m.userId === managerId) || null;
+        groups[managerId] = {
+          manager,
           items: [],
-          stats: { totalSteps: 0, totalUpsellGross: 0, avgEQ: 0, avgCommission: 0 }
+          stats: { totalSteps: 0, totalUpsellGross: 0, avgEQ: 0, avgCommission: 0 },
         };
       }
       groups[managerId].items.push(item);
     });
 
-    Object.values(groups).forEach(group => {
+    Object.values(groups).forEach((group) => {
       let totalEQ = 0;
       let totalCommission = 0;
-      
+
       group.items.forEach(({ session }) => {
         const v = session.validation;
         const isValidated = v?.isValidated || false;
-        
+
         group.stats.totalSteps += session.stats.stepCount || 0;
         group.stats.totalUpsellGross += session.stats.upsellGross || 0;
-        
-        const eq = isValidated ? (v?.actualTotalEQ || 0) : (session.stats.totalEQ || 0);
+
+        const eq = isValidated ? v?.actualTotalEQ || 0 : session.stats.totalEQ || 0;
         totalEQ += eq;
-        
+
         totalCommission += v?.finalCommission || 0;
       });
-      
+
       const workerCount = group.items.length;
       group.stats.avgEQ = workerCount > 0 ? totalEQ / workerCount : 0;
       group.stats.avgCommission = workerCount > 0 ? totalCommission / workerCount : 0;
@@ -893,7 +1034,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     });
   }, [sortedItems, sortOption, managers, isTeamSeason]);
 
-  const handleOpenBonusModal = (session: LogsheetSession, workerName: string, teamWorkers?: Worker[]) => {
+  const handleOpenBonusModal = (
+    session: LogsheetSession,
+    workerName: string,
+    teamWorkers?: Worker[]
+  ) => {
     setSelectedSession(session);
     setSelectedWorkerName(workerName);
     setSelectedTeamWorkers(teamWorkers || []);
@@ -902,15 +1047,14 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     setBonusPlacing('');
     setBonusCustomDesc('');
     setBonusAmount('');
-    
-    // Initialize bonus split percentages for team
+
     if (teamWorkers && teamWorkers.length > 1) {
-      const equalSplit = createEqualSplit(teamWorkers.map(w => w.contractorId));
+      const equalSplit = createEqualSplit(teamWorkers.map((w) => w.contractorId));
       setBonusSplitPercentages(equalSplit);
     } else {
       setBonusSplitPercentages({});
     }
-    
+
     setShowBonusModal(true);
   };
 
@@ -947,9 +1091,9 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       id: Date.now(),
       type: selectedBonusType,
       amount: amt,
-      placing: selectedBonusType !== 'Other' ? bonusPlacing as number | 'other' : undefined,
-      customDescription: selectedBonusType === 'Other' || bonusPlacing === 'other' ? bonusCustomDesc : undefined,
-      // Include split percentages for team seasons
+      placing: selectedBonusType !== 'Other' ? (bonusPlacing as number | 'other') : undefined,
+      customDescription:
+        selectedBonusType === 'Other' || bonusPlacing === 'other' ? bonusCustomDesc : undefined,
       splitPercentages: selectedTeamWorkers.length > 1 ? bonusSplitPercentages : undefined,
     };
 
@@ -959,10 +1103,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     const newPay = currentPay + amt;
 
     const updatedValidation = selectedSession.validation
-      ? {
-          ...selectedSession.validation,
-          finalCommission: newPay,
-        }
+      ? { ...selectedSession.validation, finalCommission: newPay }
       : undefined;
 
     await sessionService.updateLogsheetSession(selectedSession.id, {
@@ -977,19 +1118,16 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const handleRemoveBonus = async (bonusId: number) => {
     if (!selectedSession) return;
 
-    const bonusToRemove = selectedSession.bonuses?.find(b => b.id === bonusId);
+    const bonusToRemove = selectedSession.bonuses?.find((b) => b.id === bonusId);
     if (!bonusToRemove) return;
 
-    const updatedBonuses = (selectedSession.bonuses || []).filter(b => b.id !== bonusId);
+    const updatedBonuses = (selectedSession.bonuses || []).filter((b) => b.id !== bonusId);
 
     const currentPay = selectedSession.validation?.finalCommission || 0;
     const newPay = currentPay - bonusToRemove.amount;
 
     const updatedValidation = selectedSession.validation
-      ? {
-          ...selectedSession.validation,
-          finalCommission: newPay,
-        }
+      ? { ...selectedSession.validation, finalCommission: newPay }
       : undefined;
 
     await sessionService.updateLogsheetSession(selectedSession.id, {
@@ -1002,31 +1140,30 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   };
 
   const formatBonusDisplay = (bonus: Bonus): string => {
-    if (bonus.type === 'Other') {
-      return bonus.customDescription || 'Other';
-    }
-    
-    if (bonus.placing === 'other') {
-      return `${bonus.type} - ${bonus.customDescription}`;
-    }
-    
+    if (bonus.type === 'Other') return bonus.customDescription || 'Other';
+    if (bonus.placing === 'other') return `${bonus.type} - ${bonus.customDescription}`;
     return `${bonus.type} - ${getPlacingSuffix(bonus.placing)} Place`;
   };
+
+  // --- UPDATED: passes isTeamSeason so rejuv uses old/new money ratio ---
+  const selectedQualification = selectedSession
+    ? checkBonusQualification(selectedSession.financialStore || [], isTeamSeason)
+    : null;
 
   if (loading)
     return (
       <div className="p-10 text-center flex-1 flex items-center justify-center">
-        <Loader className="inline animate-spin text-cps-blue" /> 
+        <Loader className="inline animate-spin text-cps-blue" />
         <span className="ml-2 text-gray-400">Loading Payouts...</span>
       </div>
     );
 
-  // --- RENDER TEAM CART (Lawn Rejuv) - Shows all workers grouped ---
-  // FIXED: Now displays team total EQ for reference
+  // --- RENDER TEAM CART (Lawn Rejuv) ---
+  // UPDATED: checkBonusQualification now gets isTeamSeason flag
   const renderTeamCart = (cart: TeamCartDisplay) => {
     const { session, workers: cartWorkers, sharedStats, isValidated, totalCommission } = cart;
     const bonusTotal = (session.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
-    const qualification = checkBonusQualification(session.financialStore || []);
+    const qualification = checkBonusQualification(session.financialStore || [], true);
     const isSoloCart = cartWorkers.length === 1;
 
     return (
@@ -1034,22 +1171,21 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         key={cart.teamId}
         className={`bg-gray-800 border-2 ${isSoloCart ? 'border-gray-700' : 'border-green-700/50'} rounded-lg overflow-hidden mb-2`}
       >
-        {/* Cart Header - Shared Stats */}
-        <div className={`px-3 py-2 ${isSoloCart ? 'bg-gray-750' : 'bg-green-900/20'} border-b ${isSoloCart ? 'border-gray-700' : 'border-green-700/30'} flex items-center justify-between`}>
+        <div
+          className={`px-3 py-2 ${isSoloCart ? 'bg-gray-750' : 'bg-green-900/20'} border-b ${isSoloCart ? 'border-gray-700' : 'border-green-700/30'} flex items-center justify-between`}
+        >
           <div className="flex items-center gap-3">
-            {/* Team indicator */}
             {!isSoloCart && (
               <div className="flex items-center gap-1 bg-green-900/40 px-2 py-1 rounded border border-green-700/50">
                 <Truck size={12} className="text-green-400" />
                 <span className="text-green-400 font-bold text-[10px]">{cartWorkers.length}</span>
               </div>
             )}
-            
-            {/* Validation Status */}
+
             <span
               className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 ${
-                isValidated 
-                  ? 'bg-green-900/30 text-green-400 border border-green-800' 
+                isValidated
+                  ? 'bg-green-900/30 text-green-400 border border-green-800'
                   : 'bg-yellow-900/30 text-yellow-500 border border-yellow-800'
               }`}
             >
@@ -1058,7 +1194,6 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
             </span>
           </div>
 
-          {/* Shared Stats - FIXED: Shows team total EQ */}
           <div className="flex items-center gap-4 text-gray-400 text-xs">
             <div className="text-center">
               <span className="text-[9px] text-gray-600 uppercase block leading-none">Steps</span>
@@ -1072,31 +1207,36 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
               <span className="text-[9px] text-gray-600 uppercase block leading-none">
                 {isSoloCart ? 'EQ' : 'Team EQ'}
               </span>
-              <span className="font-mono font-bold text-blue-300">{sharedStats.totalEQ.toFixed(2)}</span>
+              <span className="font-mono font-bold text-blue-300">
+                {sharedStats.totalEQ.toFixed(2)}
+              </span>
             </div>
             {isValidated && (
               <div className="text-center">
                 <span className="text-[9px] text-gray-600 uppercase block leading-none">
                   {isSoloCart ? 'Total' : 'Team Total'}
                 </span>
-                <span className="font-mono font-bold text-green-400">${totalCommission.toFixed(2)}</span>
+                <span className="font-mono font-bold text-green-400">
+                  ${totalCommission.toFixed(2)}
+                </span>
               </div>
             )}
-            
-            {/* Bonus Button - at cart level */}
+
             {isValidated && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  const teamName = cartWorkers.map(w => `${w.firstName} ${w.lastName}`).join(', ');
+                  const teamName = cartWorkers
+                    .map((w) => `${w.firstName} ${w.lastName}`)
+                    .join(', ');
                   handleOpenBonusModal(session, teamName, cartWorkers);
                 }}
                 className={`px-2 py-1 rounded text-[9px] font-bold flex items-center gap-1 transition-colors ${
-                  bonusTotal > 0 
-                    ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-700 hover:bg-yellow-900/50' 
+                  bonusTotal > 0
+                    ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-700 hover:bg-yellow-900/50'
                     : qualification.qualified
-                      ? 'bg-blue-900/30 text-blue-400 border border-blue-800 hover:bg-blue-900/50'
-                      : 'bg-red-900/30 text-red-400 border border-red-800 hover:bg-red-900/50'
+                    ? 'bg-blue-900/30 text-blue-400 border border-blue-800 hover:bg-blue-900/50'
+                    : 'bg-red-900/30 text-red-400 border border-red-800 hover:bg-red-900/50'
                 }`}
               >
                 {bonusTotal > 0 ? (
@@ -1113,14 +1253,12 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           </div>
         </div>
 
-        {/* Worker Rows */}
         <div className="divide-y divide-gray-700/50">
-          {cartWorkers.map((worker, idx) => {
-            // FIXED: Calculate individual commission using split percentages
-            // For display, we show the worker's split portion
+          {cartWorkers.map((worker) => {
             let workerCommission = 0;
             if (isValidated) {
-              const equivSplitPercent = session.equivSplit?.[worker.contractorId] || (100 / cartWorkers.length);
+              const equivSplitPercent =
+                session.equivSplit?.[worker.contractorId] || 100 / cartWorkers.length;
               workerCommission = totalCommission * (equivSplitPercent / 100);
             }
 
@@ -1130,14 +1268,12 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                 onClick={() => navigate(`/admin/payout/${worker.contractorId}?date=${date}`)}
                 className="px-3 py-2 flex items-center gap-2 hover:bg-gray-750 transition-colors cursor-pointer group text-xs"
               >
-                {/* Status indicator */}
                 <div
                   className={`w-0.5 h-5 rounded-full flex-shrink-0 ${
                     isValidated ? 'bg-green-500' : 'bg-yellow-500'
                   }`}
                 />
 
-                {/* Worker Name */}
                 <div className="font-bold text-gray-200 min-w-[140px] truncate hover:text-white">
                   {worker.firstName} {worker.lastName}
                 </div>
@@ -1146,7 +1282,6 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                   #{worker.contractorId}
                 </span>
 
-                {/* Split percentage indicator for teams */}
                 {!isSoloCart && session.equivSplit && (
                   <span className="text-gray-500 text-[10px]">
                     ({session.equivSplit[worker.contractorId] || 0}%)
@@ -1155,10 +1290,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
                 <div className="flex-1" />
 
-                {/* Individual Commission (when validated) */}
                 {isValidated && (
                   <div className="text-center min-w-[70px]">
-                    <span className="text-[9px] text-gray-600 uppercase block leading-none">Comm</span>
+                    <span className="text-[9px] text-gray-600 uppercase block leading-none">
+                      Comm
+                    </span>
                     <span className="font-mono font-bold text-green-400">
                       ${workerCommission.toFixed(2)}
                     </span>
@@ -1177,14 +1313,20 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     );
   };
 
-  // --- RENDER WORKER ROW (Aeration - unchanged from old version) ---
-  const renderWorkerRow = ({ worker, session }: { worker: Worker; session: LogsheetSession }) => {
+  // --- RENDER WORKER ROW (Aeration — unchanged) ---
+  const renderWorkerRow = ({
+    worker,
+    session,
+  }: {
+    worker: Worker;
+    session: LogsheetSession;
+  }) => {
     const isValidated = session.validation?.isValidated || false;
     const payAmount = session.validation?.finalCommission ?? 0;
-    const eq = isValidated ? (session.validation?.actualTotalEQ || 0) : session.stats.totalEQ;
+    const eq = isValidated ? session.validation?.actualTotalEQ || 0 : session.stats.totalEQ;
     const bonusTotal = (session.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
-    
-    const qualification = checkBonusQualification(session.financialStore || []);
+
+    const qualification = checkBonusQualification(session.financialStore || [], false);
 
     return (
       <div
@@ -1197,7 +1339,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           }`}
         />
 
-        <div 
+        <div
           onClick={() => navigate(`/admin/payout/${worker.contractorId}?date=${date}`)}
           className="font-bold text-gray-200 min-w-[120px] truncate cursor-pointer hover:text-white"
         >
@@ -1212,8 +1354,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
         <span
           className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 min-w-[55px] justify-center ${
-            isValidated 
-              ? 'bg-green-900/30 text-green-400 border border-green-800' 
+            isValidated
+              ? 'bg-green-900/30 text-green-400 border border-green-800'
               : 'bg-yellow-900/30 text-yellow-500 border border-yellow-800'
           }`}
         >
@@ -1238,11 +1380,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           </div>
           <div className="text-center min-w-[55px]">
             <span className="text-[9px] text-gray-600 uppercase block leading-none">Comm</span>
-            <span
-              className={`font-mono font-bold ${
-                isValidated ? 'text-green-400' : 'text-gray-500'
-              }`}
-            >
+            <span className={`font-mono font-bold ${isValidated ? 'text-green-400' : 'text-gray-500'}`}>
               ${payAmount.toFixed(2)}
             </span>
           </div>
@@ -1256,11 +1394,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                 handleOpenBonusModal(session, `${worker.firstName} ${worker.lastName}`);
               }}
               className={`px-2 py-1 rounded text-[9px] font-bold flex items-center gap-1 transition-colors ${
-                bonusTotal > 0 
-                  ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-700 hover:bg-yellow-900/50' 
+                bonusTotal > 0
+                  ? 'bg-yellow-900/30 text-yellow-400 border border-yellow-700 hover:bg-yellow-900/50'
                   : qualification.qualified
-                    ? 'bg-blue-900/30 text-blue-400 border border-blue-800 hover:bg-blue-900/50'
-                    : 'bg-red-900/30 text-red-400 border border-red-800 hover:bg-red-900/50'
+                  ? 'bg-blue-900/30 text-blue-400 border border-blue-800 hover:bg-blue-900/50'
+                  : 'bg-red-900/30 text-red-400 border border-red-800 hover:bg-red-900/50'
               }`}
             >
               {bonusTotal > 0 ? (
@@ -1287,32 +1425,88 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     );
   };
 
-  const selectedQualification = selectedSession 
-    ? checkBonusQualification(selectedSession.financialStore || [])
-    : null;
+  // --- HELPER: render a rejuv winner row in the screenshot modal ---
+  const renderRejuvWinnerRow = (winner: RejuvBonusWinner, idx: number) => {
+    const thresholds = getRejuvThresholds(winner.teamSize);
+    const isSolo = winner.teamSize === 1;
+
+    return (
+      <div
+        key={idx}
+        className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-start ${sizeConfig.rowGap}`}
+      >
+        {/* Medal + placing */}
+        <div className={`flex flex-col items-center flex-shrink-0 ${sizeConfig.minWidthMedal}`}>
+          <span className={sizeConfig.medalSize}>{getMedalEmoji(winner.bonus.placing)}</span>
+          <span className={`text-white font-bold ${sizeConfig.placingText}`}>
+            {winner.bonus.placing === 'other'
+              ? winner.bonus.customDescription
+              : getPlacingSuffix(winner.bonus.placing)}
+          </span>
+        </div>
+
+        {/* EQ Badge with correct team thresholds */}
+        <AchievementBadge
+          eq={winner.teamTotalEQ}
+          thresholds={thresholds}
+          sizeClass={sizeConfig.achievementSize}
+          containerClass={sizeConfig.achievementContainer}
+          textClass={sizeConfig.eqOverlayText}
+        />
+
+        {/* Per-worker breakdown */}
+        <div className="flex-1 min-w-0 space-y-1">
+          {winner.workerPayouts.map((wp) => (
+            <div
+              key={wp.worker.contractorId}
+              className="flex items-center justify-between gap-2 py-0.5"
+            >
+              <div className="min-w-0 flex-1">
+                <span className={`${sizeConfig.firstNameText} font-bold text-white leading-tight block truncate`}>
+                  {wp.worker.firstName}{' '}
+                  <span className={`${sizeConfig.lastNameText} text-gray-400`}>
+                    {wp.worker.lastName}
+                  </span>
+                </span>
+              </div>
+              <div className="flex items-center gap-3 flex-shrink-0">
+                {wp.bonusShare > 0 && (
+                  <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
+                    +${wp.bonusShare.toFixed(0)}
+                  </span>
+                )}
+                <span className={`${sizeConfig.payoutText} font-black text-green-400`}>
+                  ${wp.commission.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="flex flex-col h-full">
       {/* --- STATS HEADER --- */}
       <div className="border-b border-gray-700 bg-gray-900/50">
-        {/* Season indicator for lawn_rejuv */}
         {isTeamSeason && (
           <div className="px-3 py-1.5 bg-green-900/30 border-b border-green-700/50 flex items-center gap-2">
             <Truck size={14} className="text-green-400" />
             <span className="text-green-400 text-xs font-bold">LAWN REJUVENATION SEASON</span>
-            <span className="text-green-300 text-xs">({teamCartsDisplay.length} carts, {aggregatedStats.workerCount} workers)</span>
+            <span className="text-green-300 text-xs">
+              ({teamCartsDisplay.length} carts, {aggregatedStats.workerCount} workers)
+            </span>
           </div>
         )}
-        
+
         <div className="grid grid-cols-6 gap-px bg-gray-700">
           <div className="bg-gray-800 p-2 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <Users size={10} />
-              <span className="text-[9px] uppercase font-bold">{isTeamSeason ? 'Workers' : 'Workers'}</span>
+              <span className="text-[9px] uppercase font-bold">Workers</span>
             </div>
-            <div className="text-lg font-bold text-blue-300">
-              {aggregatedStats.workerCount}
-            </div>
+            <div className="text-lg font-bold text-blue-300">{aggregatedStats.workerCount}</div>
           </div>
           <div className="bg-gray-800 p-2 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
@@ -1326,16 +1520,23 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
               <DollarSign size={10} />
               <span className="text-[9px] uppercase font-bold">Prod Gross</span>
             </div>
-            <div className="text-lg font-bold text-green-400">${aggregatedStats.prodGross.toFixed(2)}</div>
+            <div className="text-lg font-bold text-green-400">
+              ${aggregatedStats.prodGross.toFixed(2)}
+            </div>
           </div>
           <div className="bg-gray-800 p-2 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <span className="text-[9px] uppercase font-bold">Avg EQ</span>
             </div>
-            <div className={`text-lg font-bold ${
-              aggregatedStats.avgEQ >= 3 ? 'text-green-400' : 
-              aggregatedStats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
-            }`}>
+            <div
+              className={`text-lg font-bold ${
+                aggregatedStats.avgEQ >= 3
+                  ? 'text-green-400'
+                  : aggregatedStats.avgEQ >= 2
+                  ? 'text-yellow-400'
+                  : 'text-red-400'
+              }`}
+            >
               {aggregatedStats.avgEQ.toFixed(2)}
             </div>
           </div>
@@ -1349,8 +1550,10 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <span className="text-[9px] uppercase font-bold">Up Gross</span>
             </div>
-            <div className="text-lg font-bold text-purple-300">${aggregatedStats.upsellGross.toFixed(2)}</div>
-            
+            <div className="text-lg font-bold text-purple-300">
+              ${aggregatedStats.upsellGross.toFixed(2)}
+            </div>
+
             {hasBonuses && (
               <button
                 onClick={() => setShowScreenshotModal(true)}
@@ -1369,47 +1572,58 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
               <Banknote size={9} />
               <span className="text-[8px] uppercase font-bold">Cash</span>
             </div>
-            <div className="text-sm font-bold text-green-300 font-mono">${aggregatedStats.totalCash.toFixed(2)}</div>
+            <div className="text-sm font-bold text-green-300 font-mono">
+              ${aggregatedStats.totalCash.toFixed(2)}
+            </div>
           </div>
           <div className="bg-gray-800/80 p-1.5 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <Receipt size={9} />
               <span className="text-[8px] uppercase font-bold">Cheque</span>
             </div>
-            <div className="text-sm font-bold text-blue-300 font-mono">${aggregatedStats.totalCheque.toFixed(2)}</div>
+            <div className="text-sm font-bold text-blue-300 font-mono">
+              ${aggregatedStats.totalCheque.toFixed(2)}
+            </div>
           </div>
           <div className="bg-gray-800/80 p-1.5 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <span className="text-[8px] uppercase font-bold">E-Trans</span>
             </div>
-            <div className="text-sm font-bold text-cyan-300 font-mono">${aggregatedStats.totalETransfer.toFixed(2)}</div>
+            <div className="text-sm font-bold text-cyan-300 font-mono">
+              ${aggregatedStats.totalETransfer.toFixed(2)}
+            </div>
           </div>
           <div className="bg-gray-800/80 p-1.5 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <CreditCard size={9} />
               <span className="text-[8px] uppercase font-bold">CC</span>
             </div>
-            <div className="text-sm font-bold text-orange-300 font-mono">${aggregatedStats.totalCreditCard.toFixed(2)}</div>
+            <div className="text-sm font-bold text-orange-300 font-mono">
+              ${aggregatedStats.totalCreditCard.toFixed(2)}
+            </div>
           </div>
           <div className="bg-gray-800/80 p-1.5 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <Wallet size={9} />
               <span className="text-[8px] uppercase font-bold">Prepaid</span>
             </div>
-            <div className="text-sm font-bold text-indigo-300 font-mono">${aggregatedStats.totalPrepaid.toFixed(2)}</div>
+            <div className="text-sm font-bold text-indigo-300 font-mono">
+              ${aggregatedStats.totalPrepaid.toFixed(2)}
+            </div>
           </div>
           <div className="bg-gray-800/80 p-1.5 text-center">
             <div className="flex items-center justify-center gap-1 text-gray-500 mb-0.5">
               <span className="text-[8px] uppercase font-bold">Billed</span>
             </div>
-            <div className="text-sm font-bold text-gray-400 font-mono">${aggregatedStats.totalBilled.toFixed(2)}</div>
+            <div className="text-sm font-bold text-gray-400 font-mono">
+              ${aggregatedStats.totalBilled.toFixed(2)}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* --- WORKER/CART LIST --- */}
+      {/* --- WORKER / CART LIST --- */}
       <div className="flex-1 overflow-y-auto p-3 custom-scrollbar space-y-1">
-        {/* Team Season (Lawn Rejuv): Show grouped carts */}
         {isTeamSeason && (
           <>
             {sortedTeamCarts.length === 0 && (
@@ -1418,14 +1632,12 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                 <p>No active sessions found for this date.</p>
               </div>
             )}
-            
             <div className="space-y-2">
-              {sortedTeamCarts.map(cart => renderTeamCart(cart))}
+              {sortedTeamCarts.map((cart) => renderTeamCart(cart))}
             </div>
           </>
         )}
 
-        {/* Aeration Season: Show individual workers (unchanged from old version) */}
         {!isTeamSeason && (
           <>
             {sortedItems.length === 0 && (
@@ -1435,57 +1647,58 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
               </div>
             )}
 
-            {sortOption === 'standard' && groupedByManager && groupedByManager.map(([managerId, group]) => (
-              <div key={managerId} className="mb-3">
-                <div className="sticky top-0 z-10 bg-gray-700 border border-gray-600 py-1.5 px-2 rounded flex items-center gap-2 text-xs mb-1">
-                  <div className="w-0.5 h-5 rounded-full flex-shrink-0 bg-blue-500" />
-
-                  <div className="font-bold text-white min-w-[120px] truncate uppercase tracking-wide">
-                    {group.manager?.name || 'Unassigned'}
+            {sortOption === 'standard' &&
+              groupedByManager &&
+              groupedByManager.map(([managerId, group]) => (
+                <div key={managerId} className="mb-3">
+                  <div className="sticky top-0 z-10 bg-gray-700 border border-gray-600 py-1.5 px-2 rounded flex items-center gap-2 text-xs mb-1">
+                    <div className="w-0.5 h-5 rounded-full flex-shrink-0 bg-blue-500" />
+                    <div className="font-bold text-white min-w-[120px] truncate uppercase tracking-wide">
+                      {group.manager?.name || 'Unassigned'}
+                    </div>
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 min-w-[55px] justify-center bg-blue-900/30 text-blue-400 border border-blue-800">
+                      <Users size={8} />
+                      {group.items.length}
+                    </span>
+                    <div className="flex-1" />
+                    <div className="flex items-center gap-3 text-gray-400">
+                      <div className="text-center min-w-[40px]">
+                        <span className="text-[9px] text-gray-500 uppercase block leading-none">Steps</span>
+                        <span className="font-bold text-white">{group.stats.totalSteps}</span>
+                      </div>
+                      <div className="text-center min-w-[50px]">
+                        <span className="text-[9px] text-gray-500 uppercase block leading-none">Upsell</span>
+                        <span className="font-bold text-purple-300">
+                          ${group.stats.totalUpsellGross.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="text-center min-w-[40px]">
+                        <span className="text-[9px] text-gray-500 uppercase block leading-none">Avg EQ</span>
+                        <span
+                          className={`font-mono font-bold ${
+                            group.stats.avgEQ >= 3
+                              ? 'text-green-400'
+                              : group.stats.avgEQ >= 2
+                              ? 'text-yellow-400'
+                              : 'text-red-400'
+                          }`}
+                        >
+                          {group.stats.avgEQ.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="text-center min-w-[55px]">
+                        <span className="text-[9px] text-gray-500 uppercase block leading-none">Avg Comm</span>
+                        <span className="font-mono font-bold text-green-400">
+                          ${group.stats.avgCommission.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="ml-2 min-w-[70px]" />
+                    <div className="w-[14px]" />
                   </div>
-
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 min-w-[55px] justify-center bg-blue-900/30 text-blue-400 border border-blue-800">
-                    <Users size={8} />
-                    {group.items.length}
-                  </span>
-
-                  <div className="flex-1" />
-
-                  <div className="flex items-center gap-3 text-gray-400">
-                    <div className="text-center min-w-[40px]">
-                      <span className="text-[9px] text-gray-500 uppercase block leading-none">Steps</span>
-                      <span className="font-bold text-white">{group.stats.totalSteps}</span>
-                    </div>
-                    <div className="text-center min-w-[50px]">
-                      <span className="text-[9px] text-gray-500 uppercase block leading-none">Upsell</span>
-                      <span className="font-bold text-purple-300">${group.stats.totalUpsellGross.toFixed(2)}</span>
-                    </div>
-                    <div className="text-center min-w-[40px]">
-                      <span className="text-[9px] text-gray-500 uppercase block leading-none">Avg EQ</span>
-                      <span className={`font-mono font-bold ${
-                        group.stats.avgEQ >= 3 ? 'text-green-400' : 
-                        group.stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
-                      }`}>
-                        {group.stats.avgEQ.toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="text-center min-w-[55px]">
-                      <span className="text-[9px] text-gray-500 uppercase block leading-none">Avg Comm</span>
-                      <span className="font-mono font-bold text-green-400">
-                        ${group.stats.avgCommission.toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="ml-2 min-w-[70px]" />
-                  <div className="w-[14px]" />
+                  <div className="space-y-1">{group.items.map(renderWorkerRow)}</div>
                 </div>
-                
-                <div className="space-y-1">
-                  {group.items.map(renderWorkerRow)}
-                </div>
-              </div>
-            ))}
+              ))}
 
             {sortOption !== 'standard' && sortedItems.map(renderWorkerRow)}
           </>
@@ -1496,7 +1709,6 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       {showBonusModal && selectedSession && (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 animate-fade-in">
           <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-lg border border-gray-700 max-h-[90vh] flex flex-col">
-            
             <div className="p-4 border-b border-gray-700 flex justify-between items-center flex-shrink-0">
               <div>
                 <h3 className="text-lg font-bold text-white flex items-center gap-2">
@@ -1515,31 +1727,52 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
             </div>
 
             {selectedQualification && (
-              <div className={`mx-4 mt-4 p-3 rounded-lg border ${
-                selectedQualification.qualified 
-                  ? 'bg-green-900/20 border-green-700/50' 
-                  : 'bg-red-900/20 border-red-700/50'
-              }`}>
+              <div
+                className={`mx-4 mt-4 p-3 rounded-lg border ${
+                  selectedQualification.qualified
+                    ? 'bg-green-900/20 border-green-700/50'
+                    : 'bg-red-900/20 border-red-700/50'
+                }`}
+              >
                 <div className="flex items-center gap-2 mb-2">
                   {selectedQualification.qualified ? (
                     <Check size={16} className="text-green-400" />
                   ) : (
                     <AlertTriangle size={16} className="text-red-400" />
                   )}
-                  <span className={`text-sm font-bold ${
-                    selectedQualification.qualified ? 'text-green-400' : 'text-red-400'
-                  }`}>
-                    {selectedQualification.qualified ? 'Qualified for Bonus' : 'Not Qualified for Bonus'}
+                  <span
+                    className={`text-sm font-bold ${
+                      selectedQualification.qualified ? 'text-green-400' : 'text-red-400'
+                    }`}
+                  >
+                    {selectedQualification.qualified
+                      ? 'Qualified for Bonus'
+                      : 'Not Qualified for Bonus'}
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className={`flex items-center gap-1 ${selectedQualification.ratioPass ? 'text-green-400' : 'text-red-400'}`}>
+                  <div
+                    className={`flex items-center gap-1 ${
+                      selectedQualification.ratioPass ? 'text-green-400' : 'text-red-400'
+                    }`}
+                  >
                     {selectedQualification.ratioPass ? <Check size={12} /> : <X size={12} />}
-                    <span>Ratio: {selectedQualification.salesCount} Sales vs {selectedQualification.prebookCount} Prebooks</span>
+                    <span>
+                      {isTeamSeason
+                        ? `New vs Old: ${selectedQualification.salesCount} new / ${selectedQualification.prebookCount} old`
+                        : `Ratio: ${selectedQualification.salesCount} Sales vs ${selectedQualification.prebookCount} Prebooks`}
+                    </span>
                   </div>
-                  <div className={`flex items-center gap-1 ${selectedQualification.detailsPass ? 'text-green-400' : 'text-red-400'}`}>
+                  <div
+                    className={`flex items-center gap-1 ${
+                      selectedQualification.detailsPass ? 'text-green-400' : 'text-red-400'
+                    }`}
+                  >
                     {selectedQualification.detailsPass ? <Check size={12} /> : <X size={12} />}
-                    <span>Details: {selectedQualification.detailsCollected}/{selectedQualification.detailsPossible} (80% req)</span>
+                    <span>
+                      Details: {selectedQualification.detailsCollected}/
+                      {selectedQualification.detailsPossible} (80% req)
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1550,11 +1783,16 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                 <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Assigned Bonuses</h4>
                 <div className="space-y-2 max-h-32 overflow-y-auto">
                   {selectedSession.bonuses.map((bonus) => (
-                    <div key={bonus.id} className="flex items-center justify-between bg-gray-900/50 p-2 rounded border border-gray-700">
+                    <div
+                      key={bonus.id}
+                      className="flex items-center justify-between bg-gray-900/50 p-2 rounded border border-gray-700"
+                    >
                       <div className="flex items-center gap-2">
                         <Trophy size={14} className="text-yellow-400" />
                         <span className="text-sm text-white">{formatBonusDisplay(bonus)}</span>
-                        <span className="text-sm font-bold text-green-400">${bonus.amount.toFixed(2)}</span>
+                        <span className="text-sm font-bold text-green-400">
+                          ${bonus.amount.toFixed(2)}
+                        </span>
                       </div>
                       <button
                         onClick={() => handleRemoveBonus(bonus.id)}
@@ -1569,10 +1807,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
             )}
 
             <div className="flex-1 overflow-y-auto p-4">
-              
               {bonusStep === 'type' && (
                 <div>
-                  <h4 className="text-xs font-bold text-gray-400 uppercase mb-3">Select Bonus Type</h4>
+                  <h4 className="text-xs font-bold text-gray-400 uppercase mb-3">
+                    Select Bonus Type
+                  </h4>
                   <div className="grid grid-cols-2 gap-3">
                     <button
                       onClick={() => handleSelectBonusType('Performance EQ')}
@@ -1631,7 +1870,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
               {bonusStep === 'details' && selectedBonusType && (
                 <div className="space-y-4">
-                  <button 
+                  <button
                     onClick={handleBackToTypeSelection}
                     className="text-sm text-gray-400 hover:text-white flex items-center gap-1"
                   >
@@ -1639,10 +1878,18 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                   </button>
 
                   <div className="flex items-center gap-2 p-3 bg-gray-900 rounded-lg border border-gray-700">
-                    {selectedBonusType === 'Performance EQ' && <TrendingUp size={20} className="text-blue-400" />}
-                    {selectedBonusType === 'Total Upsell' && <DollarSign size={20} className="text-purple-400" />}
-                    {selectedBonusType === 'Rookie' && <Star size={20} className="text-yellow-400" />}
-                    {selectedBonusType === 'Other' && <Sparkles size={20} className="text-gray-400" />}
+                    {selectedBonusType === 'Performance EQ' && (
+                      <TrendingUp size={20} className="text-blue-400" />
+                    )}
+                    {selectedBonusType === 'Total Upsell' && (
+                      <DollarSign size={20} className="text-purple-400" />
+                    )}
+                    {selectedBonusType === 'Rookie' && (
+                      <Star size={20} className="text-yellow-400" />
+                    )}
+                    {selectedBonusType === 'Other' && (
+                      <Sparkles size={20} className="text-gray-400" />
+                    )}
                     <span className="font-bold text-white">{selectedBonusType}</span>
                   </div>
 
@@ -1653,13 +1900,17 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                         value={bonusPlacing}
                         onChange={(e) => {
                           const val = e.target.value;
-                          setBonusPlacing(val === 'other' ? 'other' : val === '' ? '' : parseInt(val));
+                          setBonusPlacing(
+                            val === 'other' ? 'other' : val === '' ? '' : parseInt(val)
+                          );
                         }}
                         className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
                       >
                         <option value="">Select placing...</option>
-                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
-                          <option key={n} value={n}>{n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`} Place</option>
+                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                          <option key={n} value={n}>
+                            {n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`} Place
+                          </option>
                         ))}
                         <option value="other">Other</option>
                       </select>
@@ -1669,13 +1920,19 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                   {(selectedBonusType === 'Other' || bonusPlacing === 'other') && (
                     <div>
                       <label className="text-xs text-gray-400 block mb-2">
-                        {selectedBonusType === 'Other' ? 'Bonus Description' : 'Custom Placing Description'}
+                        {selectedBonusType === 'Other'
+                          ? 'Bonus Description'
+                          : 'Custom Placing Description'}
                       </label>
                       <input
                         type="text"
                         value={bonusCustomDesc}
                         onChange={(e) => setBonusCustomDesc(e.target.value)}
-                        placeholder={selectedBonusType === 'Other' ? 'e.g., Team spirit award' : 'e.g., 11th place'}
+                        placeholder={
+                          selectedBonusType === 'Other'
+                            ? 'e.g., Team spirit award'
+                            : 'e.g., 11th place'
+                        }
                         className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
                       />
                     </div>
@@ -1698,7 +1955,6 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                     </div>
                   </div>
 
-                  {/* Team bonus split section */}
                   {selectedTeamWorkers.length > 1 && (
                     <div>
                       <label className="text-xs text-gray-400 block mb-2 flex items-center gap-2">
@@ -1706,8 +1962,11 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                         Team Bonus Split (%)
                       </label>
                       <div className="space-y-2 bg-gray-900/50 p-3 rounded-lg border border-gray-700">
-                        {selectedTeamWorkers.map(worker => (
-                          <div key={worker.contractorId} className="flex items-center justify-between gap-3">
+                        {selectedTeamWorkers.map((worker) => (
+                          <div
+                            key={worker.contractorId}
+                            className="flex items-center justify-between gap-3"
+                          >
                             <span className="text-sm text-white flex-1">
                               {worker.firstName} {worker.lastName}
                             </span>
@@ -1719,9 +1978,9 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                                 value={bonusSplitPercentages[worker.contractorId] || 0}
                                 onChange={(e) => {
                                   const val = parseFloat(e.target.value) || 0;
-                                  setBonusSplitPercentages(prev => ({
+                                  setBonusSplitPercentages((prev) => ({
                                     ...prev,
-                                    [worker.contractorId]: Math.min(100, Math.max(0, val))
+                                    [worker.contractorId]: Math.min(100, Math.max(0, val)),
                                   }));
                                 }}
                                 className="w-16 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-white text-sm text-right"
@@ -1732,12 +1991,18 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                         ))}
                         <div className="flex items-center justify-between pt-2 border-t border-gray-700">
                           <span className="text-xs text-gray-500">Total:</span>
-                          <span className={`text-sm font-bold ${
-                            Object.values(bonusSplitPercentages).reduce((a, b) => a + b, 0) === 100
-                              ? 'text-green-400'
-                              : 'text-red-400'
-                          }`}>
-                            {Object.values(bonusSplitPercentages).reduce((a, b) => a + b, 0).toFixed(0)}%
+                          <span
+                            className={`text-sm font-bold ${
+                              Object.values(bonusSplitPercentages).reduce((a, b) => a + b, 0) ===
+                              100
+                                ? 'text-green-400'
+                                : 'text-red-400'
+                            }`}
+                          >
+                            {Object.values(bonusSplitPercentages)
+                              .reduce((a, b) => a + b, 0)
+                              .toFixed(0)}
+                            %
                           </span>
                         </div>
                       </div>
@@ -1752,12 +2017,13 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                 <button
                   onClick={handleAddBonus}
                   disabled={
-                    !bonusAmount || 
+                    !bonusAmount ||
                     parseFloat(bonusAmount) <= 0 ||
                     (selectedBonusType !== 'Other' && !bonusPlacing) ||
                     (selectedBonusType === 'Other' && !bonusCustomDesc.trim()) ||
                     (bonusPlacing === 'other' && !bonusCustomDesc.trim()) ||
-                    (selectedTeamWorkers.length > 1 && Object.values(bonusSplitPercentages).reduce((a, b) => a + b, 0) !== 100)
+                    (selectedTeamWorkers.length > 1 &&
+                      Object.values(bonusSplitPercentages).reduce((a, b) => a + b, 0) !== 100)
                   }
                   className="w-full py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg font-bold shadow-lg transition-all flex items-center justify-center gap-2"
                 >
@@ -1765,26 +2031,27 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                 </button>
               </div>
             )}
-
           </div>
         </div>
       )}
 
       {/* --- BONUS SCREENSHOT MODAL --- */}
       {showScreenshotModal && (
-        <div 
+        <div
           className="fixed inset-0 bg-gray-900 z-50 flex flex-col h-screen overflow-hidden"
           style={{ fontFamily: "'Quicksand', 'Nunito', sans-serif" }}
         >
           {/* Clickable Dark Red Header */}
-          <div 
+          <div
             onClick={() => setShowScreenshotModal(false)}
             className={`bg-gradient-to-r from-red-900 via-red-800 to-red-900 ${sizeConfig.headerPadding} shadow-2xl cursor-pointer hover:from-red-800 hover:via-red-700 hover:to-red-800 transition-colors flex-shrink-0`}
           >
             <div className="max-w-full mx-auto px-4 flex items-center gap-4">
               <div className={sizeConfig.headerTrophy}>🏆</div>
               <div>
-                <h1 className={`${sizeConfig.headerTitle} font-black text-white tracking-tight drop-shadow-lg`}>
+                <h1
+                  className={`${sizeConfig.headerTitle} font-black text-white tracking-tight drop-shadow-lg`}
+                >
                   BONUSES FOR
                 </h1>
                 <p className={`${sizeConfig.headerDate} font-bold text-red-200 mt-1`}>
@@ -1794,12 +2061,12 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
             </div>
           </div>
 
-          {/* Content - Horizontal Columns */}
+          {/* Content — Horizontal Columns */}
           <div className="flex-1 overflow-hidden p-4">
             <div className={`h-full flex ${sizeConfig.columnGap}`}>
-            
+
               {/* Performance EQ Column */}
-              {bonusWinners.performanceEQ.length > 0 && (
+              {activeBonusWinners.performanceEQ.length > 0 && (
                 <div className="flex-1 min-w-0 flex flex-col">
                   <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
                     <div className="p-1.5 rounded-full bg-blue-500/20 border-2 border-blue-400">
@@ -1810,57 +2077,57 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                     </h2>
                   </div>
                   <div className={`${sizeConfig.rowMargin} flex-1 overflow-hidden`}>
-                    {bonusWinners.performanceEQ.map((winner, idx) => (
-                      <div 
-                        key={idx} 
-                        className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
-                      >
-                        <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
-                          <span className={sizeConfig.medalSize}>{getMedalEmoji(winner.bonus.placing)}</span>
-                          <span className={`text-white font-bold ${sizeConfig.placingText}`}>
-                            {winner.bonus.placing === 'other' 
-                              ? winner.bonus.customDescription 
-                              : getPlacingSuffix(winner.bonus.placing)}
-                          </span>
-                        </div>
-
-                        {/* Stacked Name */}
-                        <div className="flex-1 min-w-0">
-                          <p className={`${sizeConfig.firstNameText} font-bold text-white leading-tight`}>
-                            {winner.firstName}
-                          </p>
-                          <p className={`${sizeConfig.lastNameText} font-medium text-gray-400 leading-tight`}>
-                            {winner.lastName}
-                          </p>
-                        </div>
-
-                        {/* Achievement Badge with EQ Overlay */}
-                        <AchievementBadge 
-                          eq={winner.eq} 
-                          sizeClass={sizeConfig.achievementSize}
-                          containerClass={sizeConfig.achievementContainer}
-                          textClass={sizeConfig.eqOverlayText}
-                        />
-
-                        <div className={`text-center ${sizeConfig.minWidthBonus}`}>
-                          <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
-                            +${winner.bonus.amount.toFixed(0)}
-                          </span>
-                        </div>
-
-                        <div className={`text-right ${sizeConfig.minWidthPayout}`}>
-                          <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
-                            ${winner.finalCommission.toFixed(2)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
+                    {isTeamSeason
+                      ? (activeBonusWinners.performanceEQ as RejuvBonusWinner[]).map(
+                          (winner, idx) => renderRejuvWinnerRow(winner, idx)
+                        )
+                      : (activeBonusWinners.performanceEQ as BonusWinner[]).map((winner, idx) => (
+                          <div
+                            key={idx}
+                            className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
+                          >
+                            <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
+                              <span className={sizeConfig.medalSize}>
+                                {getMedalEmoji(winner.bonus.placing)}
+                              </span>
+                              <span className={`text-white font-bold ${sizeConfig.placingText}`}>
+                                {winner.bonus.placing === 'other'
+                                  ? winner.bonus.customDescription
+                                  : getPlacingSuffix(winner.bonus.placing)}
+                              </span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className={`${sizeConfig.firstNameText} font-bold text-white leading-tight`}>
+                                {winner.firstName}
+                              </p>
+                              <p className={`${sizeConfig.lastNameText} font-medium text-gray-400 leading-tight`}>
+                                {winner.lastName}
+                              </p>
+                            </div>
+                            <AchievementBadge
+                              eq={winner.eq}
+                              sizeClass={sizeConfig.achievementSize}
+                              containerClass={sizeConfig.achievementContainer}
+                              textClass={sizeConfig.eqOverlayText}
+                            />
+                            <div className={`text-center ${sizeConfig.minWidthBonus}`}>
+                              <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
+                                +${winner.bonus.amount.toFixed(0)}
+                              </span>
+                            </div>
+                            <div className={`text-right ${sizeConfig.minWidthPayout}`}>
+                              <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
+                                ${winner.finalCommission.toFixed(2)}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
                   </div>
                 </div>
               )}
 
               {/* Total Upsell Column */}
-              {bonusWinners.totalUpsell.length > 0 && (
+              {activeBonusWinners.totalUpsell.length > 0 && (
                 <div className="flex-1 min-w-0 flex flex-col">
                   <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
                     <div className="p-1.5 rounded-full bg-purple-500/20 border-2 border-purple-400">
@@ -1871,55 +2138,56 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                     </h2>
                   </div>
                   <div className={`${sizeConfig.rowMargin} flex-1 overflow-hidden`}>
-                    {bonusWinners.totalUpsell.map((winner, idx) => (
-                      <div 
-                        key={idx} 
-                        className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
-                      >
-                        <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
-                          <span className={sizeConfig.medalSize}>{getMedalEmoji(winner.bonus.placing)}</span>
-                          <span className={`text-white font-bold ${sizeConfig.placingText}`}>
-                            {winner.bonus.placing === 'other' 
-                              ? winner.bonus.customDescription 
-                              : getPlacingSuffix(winner.bonus.placing)}
-                          </span>
-                        </div>
-
-                        {/* Stacked Name */}
-                        <div className="flex-1 min-w-0">
-                          <p className={`${sizeConfig.firstNameText} font-bold text-white leading-tight`}>
-                            {winner.firstName}
-                          </p>
-                          <p className={`${sizeConfig.lastNameText} font-medium text-gray-400 leading-tight`}>
-                            {winner.lastName}
-                          </p>
-                        </div>
-
-                        <div className="text-center">
-                          <span className={`${sizeConfig.upsellText} font-black text-purple-300`}>
-                            ${winner.upsellGross.toFixed(0)}
-                          </span>
-                        </div>
-
-                        <div className={`text-center ${sizeConfig.minWidthBonus}`}>
-                          <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
-                            +${winner.bonus.amount.toFixed(0)}
-                          </span>
-                        </div>
-
-                        <div className={`text-right ${sizeConfig.minWidthPayout}`}>
-                          <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
-                            ${winner.finalCommission.toFixed(2)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
+                    {isTeamSeason
+                      ? (activeBonusWinners.totalUpsell as RejuvBonusWinner[]).map(
+                          (winner, idx) => renderRejuvWinnerRow(winner, idx)
+                        )
+                      : (activeBonusWinners.totalUpsell as BonusWinner[]).map((winner, idx) => (
+                          <div
+                            key={idx}
+                            className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
+                          >
+                            <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
+                              <span className={sizeConfig.medalSize}>
+                                {getMedalEmoji(winner.bonus.placing)}
+                              </span>
+                              <span className={`text-white font-bold ${sizeConfig.placingText}`}>
+                                {winner.bonus.placing === 'other'
+                                  ? winner.bonus.customDescription
+                                  : getPlacingSuffix(winner.bonus.placing)}
+                              </span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className={`${sizeConfig.firstNameText} font-bold text-white leading-tight`}>
+                                {winner.firstName}
+                              </p>
+                              <p className={`${sizeConfig.lastNameText} font-medium text-gray-400 leading-tight`}>
+                                {winner.lastName}
+                              </p>
+                            </div>
+                            <div className="text-center">
+                              <span className={`${sizeConfig.upsellText} font-black text-purple-300`}>
+                                ${winner.upsellGross.toFixed(0)}
+                              </span>
+                            </div>
+                            <div className={`text-center ${sizeConfig.minWidthBonus}`}>
+                              <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
+                                +${winner.bonus.amount.toFixed(0)}
+                              </span>
+                            </div>
+                            <div className={`text-right ${sizeConfig.minWidthPayout}`}>
+                              <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
+                                ${winner.finalCommission.toFixed(2)}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
                   </div>
                 </div>
               )}
 
               {/* Rookie Column */}
-              {bonusWinners.rookie.length > 0 && (
+              {activeBonusWinners.rookie.length > 0 && (
                 <div className="flex-1 min-w-0 flex flex-col">
                   <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
                     <div className="p-1.5 rounded-full bg-yellow-500/20 border-2 border-yellow-400">
@@ -1930,57 +2198,57 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                     </h2>
                   </div>
                   <div className={`${sizeConfig.rowMargin} flex-1 overflow-hidden`}>
-                    {bonusWinners.rookie.map((winner, idx) => (
-                      <div 
-                        key={idx} 
-                        className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
-                      >
-                        <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
-                          <span className={sizeConfig.medalSize}>{getMedalEmoji(winner.bonus.placing)}</span>
-                          <span className={`text-white font-bold ${sizeConfig.placingText}`}>
-                            {winner.bonus.placing === 'other' 
-                              ? winner.bonus.customDescription 
-                              : getPlacingSuffix(winner.bonus.placing)}
-                          </span>
-                        </div>
-
-                        {/* Stacked Name */}
-                        <div className="flex-1 min-w-0">
-                          <p className={`${sizeConfig.firstNameText} font-bold text-white leading-tight`}>
-                            {winner.firstName}
-                          </p>
-                          <p className={`${sizeConfig.lastNameText} font-medium text-gray-400 leading-tight`}>
-                            {winner.lastName}
-                          </p>
-                        </div>
-
-                        {/* Achievement Badge with EQ Overlay */}
-                        <AchievementBadge 
-                          eq={winner.eq} 
-                          sizeClass={sizeConfig.achievementSize}
-                          containerClass={sizeConfig.achievementContainer}
-                          textClass={sizeConfig.eqOverlayText}
-                        />
-
-                        <div className={`text-center ${sizeConfig.minWidthBonus}`}>
-                          <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
-                            +${winner.bonus.amount.toFixed(0)}
-                          </span>
-                        </div>
-
-                        <div className={`text-right ${sizeConfig.minWidthPayout}`}>
-                          <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
-                            ${winner.finalCommission.toFixed(2)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
+                    {isTeamSeason
+                      ? (activeBonusWinners.rookie as RejuvBonusWinner[]).map(
+                          (winner, idx) => renderRejuvWinnerRow(winner, idx)
+                        )
+                      : (activeBonusWinners.rookie as BonusWinner[]).map((winner, idx) => (
+                          <div
+                            key={idx}
+                            className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
+                          >
+                            <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
+                              <span className={sizeConfig.medalSize}>
+                                {getMedalEmoji(winner.bonus.placing)}
+                              </span>
+                              <span className={`text-white font-bold ${sizeConfig.placingText}`}>
+                                {winner.bonus.placing === 'other'
+                                  ? winner.bonus.customDescription
+                                  : getPlacingSuffix(winner.bonus.placing)}
+                              </span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className={`${sizeConfig.firstNameText} font-bold text-white leading-tight`}>
+                                {winner.firstName}
+                              </p>
+                              <p className={`${sizeConfig.lastNameText} font-medium text-gray-400 leading-tight`}>
+                                {winner.lastName}
+                              </p>
+                            </div>
+                            <AchievementBadge
+                              eq={winner.eq}
+                              sizeClass={sizeConfig.achievementSize}
+                              containerClass={sizeConfig.achievementContainer}
+                              textClass={sizeConfig.eqOverlayText}
+                            />
+                            <div className={`text-center ${sizeConfig.minWidthBonus}`}>
+                              <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
+                                +${winner.bonus.amount.toFixed(0)}
+                              </span>
+                            </div>
+                            <div className={`text-right ${sizeConfig.minWidthPayout}`}>
+                              <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
+                                ${winner.finalCommission.toFixed(2)}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
                   </div>
                 </div>
               )}
 
               {/* Other Bonuses Column */}
-              {bonusWinners.other.length > 0 && (
+              {activeBonusWinners.other.length > 0 && (
                 <div className="flex-1 min-w-0 flex flex-col">
                   <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
                     <div className="p-1.5 rounded-full bg-gray-500/20 border-2 border-gray-400">
@@ -1991,46 +2259,45 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                     </h2>
                   </div>
                   <div className={`${sizeConfig.rowMargin} flex-1 overflow-hidden`}>
-                    {bonusWinners.other.map((winner, idx) => (
-                      <div 
-                        key={idx} 
-                        className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
-                      >
-                        <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
-                          <span className={sizeConfig.medalSize}>🏆</span>
-                        </div>
-
-                        {/* Stacked: Description + Name */}
-                        <div className="flex-1 min-w-0">
-                          <p className={`${sizeConfig.placingText} font-bold text-amber-400 leading-tight truncate`}>
-                            {winner.bonus.customDescription || 'Other'}
-                          </p>
-                          <p className={`${sizeConfig.firstNameText} font-bold text-white leading-tight`}>
-                            {winner.firstName}
-                          </p>
-                          <p className={`${sizeConfig.lastNameText} font-medium text-gray-400 leading-tight`}>
-                            {winner.lastName}
-                          </p>
-                        </div>
-
-                        <div className={`text-center ${sizeConfig.minWidthBonus}`}>
-                          <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
-                            +${winner.bonus.amount.toFixed(0)}
-                          </span>
-                        </div>
-
-                        <div className={`text-right ${sizeConfig.minWidthPayout}`}>
-                          <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
-                            ${winner.finalCommission.toFixed(2)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
+                    {isTeamSeason
+                      ? (activeBonusWinners.other as RejuvBonusWinner[]).map(
+                          (winner, idx) => renderRejuvWinnerRow(winner, idx)
+                        )
+                      : (activeBonusWinners.other as BonusWinner[]).map((winner, idx) => (
+                          <div
+                            key={idx}
+                            className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
+                          >
+                            <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
+                              <span className={sizeConfig.medalSize}>🏆</span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className={`${sizeConfig.placingText} font-bold text-amber-400 leading-tight truncate`}>
+                                {winner.bonus.customDescription || 'Other'}
+                              </p>
+                              <p className={`${sizeConfig.firstNameText} font-bold text-white leading-tight`}>
+                                {winner.firstName}
+                              </p>
+                              <p className={`${sizeConfig.lastNameText} font-medium text-gray-400 leading-tight`}>
+                                {winner.lastName}
+                              </p>
+                            </div>
+                            <div className={`text-center ${sizeConfig.minWidthBonus}`}>
+                              <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
+                                +${winner.bonus.amount.toFixed(0)}
+                              </span>
+                            </div>
+                            <div className={`text-right ${sizeConfig.minWidthPayout}`}>
+                              <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
+                                ${winner.finalCommission.toFixed(2)}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
                   </div>
                 </div>
               )}
 
-              {/* No Bonuses Message */}
               {!hasBonuses && (
                 <div className="flex-1 flex items-center justify-center text-gray-500">
                   <div className="text-center">
@@ -2039,7 +2306,6 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                   </div>
                 </div>
               )}
-
             </div>
           </div>
         </div>
