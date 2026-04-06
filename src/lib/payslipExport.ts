@@ -138,11 +138,11 @@ const MB = 18;                 // Margin bottom
 const CW = PW - ML - MR;      // Content width = 576
 
 // Payslip row heights
-const H_NAME = 26;
-const H_HDR  = 32;
-const H_DATA = 17;
-const H_SUM  = 18;
-const H_GAP  = 10;
+const H_NAME = 20;
+const H_HDR  = 26;
+const H_DATA = 15;
+const H_SUM  = 16;
+const H_GAP  = 4;
 
 // Payslip columns (11 visible — UPSELL COMM hidden, same as Excel)
 interface ColDef {
