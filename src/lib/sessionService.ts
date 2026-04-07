@@ -2495,9 +2495,12 @@ class SessionService {
         stats.prodPrepaidSplit;
 
     // Apply tax removal first, then product cost deduction
+    // Flats bypass product cost (office already factored it in)
     const afterTax = weightedProd / taxDivisor;
+    const flatsAfterTax = stats.prodFlats / taxDivisor;
+    const nonFlatsAfterTax = afterTax - flatsAfterTax;
     const productCostMultiplier = 1 - (productCostPercent / 100);
-    stats.prodPayable = afterTax * productCostMultiplier;
+    stats.prodPayable = (nonFlatsAfterTax * productCostMultiplier) + flatsAfterTax;
     
     // EQ calculation ALWAYS uses EQ_DIVISOR (25) regardless of season
     stats.totalEQ = stats.prodPayable / EQ_DIVISOR;

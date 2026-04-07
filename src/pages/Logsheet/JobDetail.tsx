@@ -528,8 +528,11 @@ const JobDetail: React.FC = () => {
         rawPrice = (price || '').toString().trim().toUpperCase();
         priceVal = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
 
+        // Map office flat codes to their dollar values
         if (rawPrice.startsWith('RJ') || rawPrice.startsWith('SP')) {
           priceVal = 52.5;
+        } else if (rawPrice.startsWith('FSL')) {
+          priceVal = 157.5;
         }
         
         finalPaymentMethod = isPrepaid ? 'Prepaid' : paymentMethod;
