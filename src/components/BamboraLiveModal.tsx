@@ -14,7 +14,19 @@ interface BamboraLiveModalProps {
   }) => void;
 }
 
-type ModalStatus = 'loading' | 'ready' | 'processing' | 'approved' | 'declined' | 'error';
+type ModalStatus = 'loading' | 'ready' | 'processing' | 'verifying' | 'approved' | 'declined' | 'error';
+
+// Generate a unique key per charge attempt
+function generateIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    const r = (Math.random() * 16) | 0,
+      v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
 
 const BamboraLiveModal: React.FC<BamboraLiveModalProps> = ({
   amount,
@@ -27,6 +39,10 @@ const BamboraLiveModal: React.FC<BamboraLiveModalProps> = ({
   const [last4, setLast4] = useState('');
   const [authCode, setAuthCode] = useState('');
   const checkoutRef = useRef<any>(null);
+
+  // Each time the user clicks Charge, we generate a new key.
+  // Stored in a ref so it survives the async flow.
+  const idempotencyKeyRef = useRef<string>('');
 
   const displayAmount = parseFloat(amount || '0').toFixed(2);
   const merchantId = (import.meta as any).env?.VITE_BAMBORA_MERCHANT_ID || '117586112';
@@ -94,9 +110,12 @@ const BamboraLiveModal: React.FC<BamboraLiveModalProps> = ({
 
   const handleCharge = () => {
     if (!checkoutRef.current) return;
-    if (status === 'processing' || status === 'approved') return; // Guard against double-click
+    if (status === 'processing' || status === 'verifying' || status === 'approved') return;
     setStatus('processing');
     setMessage('');
+
+    // Generate a fresh idempotency key for this charge attempt
+    idempotencyKeyRef.current = generateIdempotencyKey();
 
     checkoutRef.current.createToken((result: any) => {
       if (result.error) {
@@ -112,6 +131,7 @@ const BamboraLiveModal: React.FC<BamboraLiveModalProps> = ({
     const nameParts = clientName.trim().split(' ');
     const firstName = nameParts[0] || 'Customer';
     const lastName = nameParts.slice(1).join(' ') || '';
+    const currentKey = idempotencyKeyRef.current;
 
     try {
       const { data, error } = await supabase.functions.invoke('bambora-charge', {
@@ -120,33 +140,88 @@ const BamboraLiveModal: React.FC<BamboraLiveModalProps> = ({
           amount: displayAmount,
           firstName,
           lastName,
+          idempotencyKey: currentKey,
         },
       });
 
       if (error) throw error;
 
       if (data?.approved) {
-        setLast4(data.last4 || '');
-        setAuthCode(data.authCode || '');
-        setStatus('approved');
-
-        // Brief green screen, then auto-complete
-        setTimeout(() => {
-          onProcess({
-            bamboraTransactionId: data.transactionId || '',
-            last4: data.last4 || '',
-            authCode: data.authCode || '',
-          });
-        }, 1500);
+        handleApproved(data);
       } else {
         setStatus('declined');
         setMessage(data?.message || 'Card was declined. Please try a different payment method.');
       }
     } catch (err: any) {
-      console.error('Bambora charge error:', err);
-      setStatus('error');
-      setMessage(err.message || 'An unexpected error occurred. Please close and try again.');
+      console.error('Bambora charge error — verifying with server:', err);
+      // DO NOT show error yet — verify if the charge actually went through
+      await verifyCharge(currentKey);
     }
+  };
+
+  const verifyCharge = async (key: string) => {
+    setStatus('verifying');
+    setMessage('');
+
+    // Wait a moment for the server to finish writing the result
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    // Try up to 3 times with a delay between each
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(`🔍 Verification attempt ${attempt} for key: ${key}`);
+
+        const { data, error } = await supabase.functions.invoke('bambora-check', {
+          body: { idempotencyKey: key },
+        });
+
+        if (error) throw error;
+
+        if (data?.status === 'approved' && data?.approved) {
+          console.log('✅ Verification confirmed: charge went through!');
+          handleApproved(data);
+          return;
+        }
+
+        if (data?.status === 'declined' || data?.status === 'error') {
+          console.log('❌ Verification confirmed: charge did NOT go through');
+          setStatus('declined');
+          setMessage(data?.message || 'Card was declined. Please try a different payment method.');
+          return;
+        }
+
+        // If still "processing" or "not_found", wait and retry
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+      } catch (checkErr) {
+        console.error(`Verification attempt ${attempt} failed:`, checkErr);
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+      }
+    }
+
+    // After 3 attempts, still no definitive answer
+    setStatus('error');
+    setMessage(
+      'Could not confirm whether the charge went through. Please check with your manager before trying again to avoid a double charge.'
+    );
+  };
+
+  const handleApproved = (data: any) => {
+    setLast4(data.last4 || '');
+    setAuthCode(data.authCode || '');
+    setStatus('approved');
+
+    // Brief green screen, then auto-complete
+    setTimeout(() => {
+      onProcess({
+        bamboraTransactionId: data.transactionId || '',
+        last4: data.last4 || '',
+        authCode: data.authCode || '',
+      });
+    }, 1500);
   };
 
   const isDeclinedOrError = status === 'declined' || status === 'error';
@@ -163,7 +238,7 @@ const BamboraLiveModal: React.FC<BamboraLiveModalProps> = ({
           </h3>
           <button
             onClick={onClose}
-            disabled={status === 'processing' || status === 'approved'}
+            disabled={status === 'processing' || status === 'verifying' || status === 'approved'}
             className="p-1.5 hover:bg-gray-700 rounded-full text-gray-400 hover:text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
             <X size={18} />
@@ -230,6 +305,17 @@ const BamboraLiveModal: React.FC<BamboraLiveModalProps> = ({
             )}
           </button>
         </div>
+
+        {/* Verifying state — shown when response was lost and we're checking */}
+        {status === 'verifying' && (
+          <div className="flex flex-col items-center justify-center py-8 gap-3">
+            <Loader className="animate-spin text-yellow-400" size={32} />
+            <p className="text-yellow-300 text-sm font-bold">Verifying charge…</p>
+            <p className="text-gray-400 text-xs text-center leading-relaxed px-4">
+              Connection was interrupted. Checking if the charge went through — please do not close this window.
+            </p>
+          </div>
+        )}
 
         {/* Approved screen */}
         {status === 'approved' && (
