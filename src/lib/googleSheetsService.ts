@@ -64,6 +64,7 @@ export interface ImportMeta {
   seasonType?: SeasonType;
   productCostPercent?: number;
   liveCardProcessingEnabled?: boolean; // NEW: enables Bambora live card terminal for workers
+  noTaxOnCash?: boolean; // NEW: when true, prodCash and upsellCash skip tax divisor (Rejuv only)
 }
 
 class GoogleSheetsService {
@@ -906,6 +907,9 @@ class GoogleSheetsService {
       teamId?: string;
       equivSplitPercent?: number;
       upsellSplitPercent?: number;
+      // NEW: Rejuv-specific columns (AI-AL)
+      teamSize?: number;
+      productCostPercent?: number;
     }>
   ): Promise<void> {
     if (stats.length === 0) return;
@@ -948,9 +952,14 @@ class GoogleSheetsService {
         s.upsellComm,       // AC: Upsell Commission
         s.iosComm,          // AD: IOS Commission
         s.machineRental,    // AE: Machine Rental
-        s.deductions,       // AF: Deductions
+        s.deductions,       // AF: Deductions (custom only, excludes machine rental)
         s.bonuses,          // AG: Bonuses
         s.finalPay,         // AH: Final Pay
+        // NEW: Rejuv-specific columns
+        s.teamSize ?? '',               // AI: Team of
+        s.equivSplitPercent ?? '',      // AJ: Prod %
+        s.upsellSplitPercent ?? '',     // AK: Upsell %
+        s.productCostPercent ?? '',     // AL: Product Cost
       ];
     });
 

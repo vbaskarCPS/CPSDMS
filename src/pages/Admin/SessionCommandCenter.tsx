@@ -31,6 +31,7 @@ import {
   BookOpen,
   PlusCircle,
   CreditCard,
+  Banknote,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
@@ -119,6 +120,9 @@ const SessionCommandCenter: React.FC = () => {
   // NEW: Live Card Processing toggle
   const [liveCardEnabled, setLiveCardEnabled] = useState(false);
 
+  // NEW: No Tax on Cash toggle (Rejuv only, default ON)
+  const [noTaxOnCash, setNoTaxOnCash] = useState(true);
+
   // --- ADD ADDITIONAL STATE ---
   const [showAddAdditional, setShowAddAdditional] = useState(false);
   const [addAdditionalLoading, setAddAdditionalLoading] = useState(false);
@@ -206,6 +210,11 @@ const SessionCommandCenter: React.FC = () => {
         if (meta?.liveCardProcessingEnabled !== undefined) {
           setLiveCardEnabled(meta.liveCardProcessingEnabled);
         }
+
+        // NEW: Load no-tax-on-cash setting from meta
+        if (meta?.noTaxOnCash !== undefined) {
+          setNoTaxOnCash(meta.noTaxOnCash);
+        }
         
         // Load logsheet sessions for validation check
         const sessions = await sessionService.getLogsheetSessions();
@@ -263,7 +272,8 @@ const SessionCommandCenter: React.FC = () => {
         sheetsExported: false,
         seasonType: selectedSeasonType,
         productCostPercent: productCostPercent,
-        liveCardProcessingEnabled: liveCardEnabled, // NEW
+        liveCardProcessingEnabled: liveCardEnabled,
+        noTaxOnCash: selectedSeasonType === 'lawn_rejuv' ? noTaxOnCash : undefined,
       } as ImportMeta;
       data.seasonType = selectedSeasonType;
       setPreviewData(data);
@@ -319,7 +329,8 @@ const SessionCommandCenter: React.FC = () => {
       // Update the import meta with the custom product cost percent
       if ((data as any)._importMeta) {
         (data as any)._importMeta.productCostPercent = productCostPercent;
-        (data as any)._importMeta.liveCardProcessingEnabled = liveCardEnabled; // NEW
+        (data as any)._importMeta.liveCardProcessingEnabled = liveCardEnabled;
+        (data as any)._importMeta.noTaxOnCash = selectedSeasonType === 'lawn_rejuv' ? noTaxOnCash : undefined;
       }
       
       setPreviewData(data);
@@ -404,6 +415,9 @@ const SessionCommandCenter: React.FC = () => {
 
         // NEW: Stamp live card setting into meta
         meta.liveCardProcessingEnabled = liveCardEnabled;
+
+        // NEW: Stamp no-tax-on-cash into meta (Rejuv only)
+        meta.noTaxOnCash = selectedSeasonType === 'lawn_rejuv' ? noTaxOnCash : undefined;
         
         // Ensure season type is set
         previewData.seasonType = selectedSeasonType;
@@ -478,7 +492,8 @@ const SessionCommandCenter: React.FC = () => {
         setDateTab('');
         setSelectedSeasonType('aeration');
         setProductCostPercent(SEASON_CONFIGS['aeration'].defaultProductCostPercent);
-        setLiveCardEnabled(false); // NEW: reset on close
+        setLiveCardEnabled(false);
+        setNoTaxOnCash(true); // Reset to default ON
       } catch (err) {
         alert('Error: ' + err);
       } finally {
@@ -644,6 +659,13 @@ const SessionCommandCenter: React.FC = () => {
               <span className="text-xs px-2 py-0.5 rounded border bg-purple-900/30 text-purple-400 border-purple-700/50 flex items-center gap-1">
                 <CreditCard size={12} />
                 Live Cards
+              </span>
+            )}
+            {/* NEW: No Tax on Cash badge for active session */}
+            {importMeta?.noTaxOnCash && (
+              <span className="text-xs px-2 py-0.5 rounded border bg-green-900/30 text-green-400 border-green-700/50 flex items-center gap-1">
+                <Banknote size={12} />
+                No Tax Cash
               </span>
             )}
             {importMeta?.source === 'sheets' && importMeta.dateTab && (
@@ -1138,7 +1160,7 @@ const SessionCommandCenter: React.FC = () => {
                           </div>
                         )}
 
-                        {/* EMAIL TOGGLE + LIVE CARD TOGGLE + START SESSION */}
+                        {/* EMAIL TOGGLE + LIVE CARD TOGGLE + NO TAX ON CASH TOGGLE + START SESSION */}
                         {previewData && !currentSession && (
                             <div className="mt-8 space-y-4">
                                 {/* Email receipts toggle */}
@@ -1189,6 +1211,35 @@ const SessionCommandCenter: React.FC = () => {
                                     </div>
                                   </label>
                                 </div>
+
+                                {/* NEW: No Tax on Cash toggle (Rejuv only) */}
+                                {selectedSeasonType === 'lawn_rejuv' && (
+                                  <div className="bg-gray-900/50 rounded-lg p-4 border border-green-700/30">
+                                    <label className="flex items-start gap-3 cursor-pointer group">
+                                      <input 
+                                        type="checkbox" 
+                                        checked={noTaxOnCash}
+                                        onChange={(e) => setNoTaxOnCash(e.target.checked)}
+                                        className="w-5 h-5 mt-0.5 accent-green-500 cursor-pointer flex-shrink-0"
+                                      />
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-2 text-white font-medium mb-1">
+                                          <Banknote size={16} className={noTaxOnCash ? 'text-green-400' : 'text-gray-500'} />
+                                          <span>No Tax on Cash</span>
+                                          {noTaxOnCash && (
+                                            <span className="text-[10px] bg-green-900/50 text-green-300 px-1.5 py-0.5 rounded border border-green-700">
+                                              REJUV
+                                            </span>
+                                          )}
+                                        </div>
+                                        <p className="text-xs text-gray-400 leading-relaxed">
+                                          Cash payments (prodCash and upsellCash) bypass the tax divisor when calculating production payable and upsell payable. All other payment methods still have tax removed.
+                                          {!noTaxOnCash && ' (Currently disabled - all payment methods taxed equally)'}
+                                        </p>
+                                      </div>
+                                    </label>
+                                  </div>
+                                )}
 
                                 <div className="flex justify-end">
                                     <button 

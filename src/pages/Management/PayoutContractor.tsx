@@ -169,6 +169,9 @@ const PayoutContractor: React.FC = () => {
   const [productCostPercent, setProductCostPercent] = useState<number>(0);
   const [taxRate, setTaxRate] = useState<number>(5);
 
+  // NEW: No Tax on Cash flag
+  const [noTaxOnCash, setNoTaxOnCash] = useState(false);
+
   // Cash/Cheque form state
   const [cashBills, setCashBills] = useState('');
   const [cashChange, setCashChange] = useState('');
@@ -212,6 +215,10 @@ const PayoutContractor: React.FC = () => {
         
         const currentTaxRate = commandCenterService.getCurrentTaxRate();
         setTaxRate(currentTaxRate);
+
+        // NEW: Get no-tax-on-cash flag
+        const noTaxOnCashFlag = await sessionService.getSessionNoTaxOnCash();
+        setNoTaxOnCash(noTaxOnCashFlag);
 
         const daily = await sessionService.getDailySession();
         
@@ -389,7 +396,12 @@ const PayoutContractor: React.FC = () => {
 
   const prodCashDiff = actualProdCash - stats.prodCash;
   const prodChequeDiff = actualProdCheque - stats.prodCheque;
-  const deltaEQ = ((prodCashDiff + prodChequeDiff) / taxDivisor) * productCostMultiplier / EQ_DIVISOR;
+  
+  // FIXED: When noTaxOnCash is on, cash portion of delta skips tax divisor
+  const deltaEQ = noTaxOnCash
+    ? (prodCashDiff + (prodChequeDiff / taxDivisor)) * productCostMultiplier / EQ_DIVISOR
+    : ((prodCashDiff + prodChequeDiff) / taxDivisor) * productCostMultiplier / EQ_DIVISOR;
+  
   const actualTotalEQ = stats.totalEQ + deltaEQ;
 
   // 3. Season-aware Payout Rate

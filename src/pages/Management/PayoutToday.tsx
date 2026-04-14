@@ -815,14 +815,24 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
       const teamSize = cart.workers.length;
       const teamTotalEQ = cart.sharedStats.totalEQ;
-      const totalCommission = cart.totalCommission;
+
+      // Use calculateTeamPayouts for accurate per-worker commission
+      const payoutBreakdowns = sessionService.calculateTeamPayouts(
+        session,
+        cart.workers,
+        seasonType
+      );
+      const payoutMap = new Map(payoutBreakdowns.map(p => [p.workerId, p]));
 
       session.bonuses.forEach((bonus) => {
-        // Per-worker breakdown using equiv split percentages
+        // Per-worker breakdown using real calculateTeamPayouts results
         const workerPayouts: RejuvWorkerPayout[] = cart.workers.map((w) => {
           const equivPercent =
             (session.equivSplit?.[w.contractorId] ?? 100 / teamSize) / 100;
-          const commission = totalCommission * equivPercent;
+
+          // Real per-worker finalCommission from calculateTeamPayouts
+          const payout = payoutMap.get(w.contractorId);
+          const commission = payout?.finalCommission || 0;
 
           // Bonus split: use bonus.splitPercentages if set, else fall back to equivSplit
           const bonusSplitPercent =
@@ -861,7 +871,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     winners.rookie.sort(sortByPlacing);
 
     return winners;
-  }, [teamCartsDisplay, isTeamSeason]);
+  }, [teamCartsDisplay, isTeamSeason, seasonType]);
 
   // Use the right winners set depending on season
   const activeBonusWinners = isTeamSeason ? rejuvBonusWinners : bonusWinners;

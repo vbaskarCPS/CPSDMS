@@ -150,6 +150,7 @@ class SessionService {
       // Get season type and product cost percent for this session
       const seasonType = await this.getSessionSeasonType();
       const productCostPercent = await this.getProductCostPercent();
+      const noTaxOnCash = await this.getSessionNoTaxOnCash();
 
       // 1. Find the session for this worker (handles both solo and team sessions)
       let sessionData: any = null;
@@ -217,9 +218,9 @@ class SessionService {
       // 3. Map to SessionTransaction format
       const cleanFinancials = (transactions || []).map(tx => this.mapDbTransaction(tx));
 
-      // 4. Recalculate stats with region-appropriate tax rate, season config, and product cost
+      // 4. Recalculate stats with region-appropriate tax rate, season config, product cost, and noTaxOnCash
       const taxRate = this.getCurrentTaxRate();
-      const newStats = this.recalculateStats(cleanFinancials, taxRate, seasonType, productCostPercent);
+      const newStats = this.recalculateStats(cleanFinancials, taxRate, seasonType, productCostPercent, noTaxOnCash);
 
       // 5. Save to logsheet_sessions by SESSION ID (not worker_id)
       const { error } = await supabase
@@ -444,6 +445,16 @@ class SessionService {
     try {
       const meta = await this.getSessionImportMeta();
       return meta?.liveCardProcessingEnabled ?? false;
+    } catch {
+      return false;
+    }
+  }
+
+  // --- NEW: Check if no-tax-on-cash is enabled for this session (Rejuv only) ---
+  public async getSessionNoTaxOnCash(): Promise<boolean> {
+    try {
+      const meta = await this.getSessionImportMeta();
+      return meta?.noTaxOnCash ?? false;
     } catch {
       return false;
     }
@@ -1510,6 +1521,7 @@ class SessionService {
     // Get season config for live recalculation
     const seasonType = await this.getSessionSeasonType();
     const productCostPercent = await this.getProductCostPercent();
+    const noTaxOnCash = await this.getSessionNoTaxOnCash();
     const taxRate = this.getCurrentTaxRate();
     
     const [sessionsRes, transactionsRes] = await Promise.all([
@@ -1557,7 +1569,7 @@ class SessionService {
         });
       }
 
-      const liveStats = this.recalculateStats(teamTransactions, taxRate, seasonType, productCostPercent);
+      const liveStats = this.recalculateStats(teamTransactions, taxRate, seasonType, productCostPercent, noTaxOnCash);
 
       return {
         id: d.id,
@@ -1606,6 +1618,7 @@ class SessionService {
     if (!sessionData) return null;
 
     const seasonType = await this.getSessionSeasonType();
+    const noTaxOnCash = await this.getSessionNoTaxOnCash();
 
     // AERATION: always use worker_id (original behaviour, no change)
     // LAWN REJUV: try session_id first, fall back to worker_id for pre-migration data
@@ -1642,7 +1655,7 @@ class SessionService {
     
     const taxRate = this.getCurrentTaxRate();
     const productCostPercent = await this.getProductCostPercent();
-    const liveStats = this.recalculateStats(cleanFinancials, taxRate, seasonType, productCostPercent);
+    const liveStats = this.recalculateStats(cleanFinancials, taxRate, seasonType, productCostPercent, noTaxOnCash);
 
     return {
       id: sessionData.id,
@@ -2409,13 +2422,15 @@ class SessionService {
   }
 
   /**
-   * Season-aware stats recalculation
+   * Season-aware stats recalculation.
+   * When noTaxOnCash is true, prodCash and upsellCash bypass the tax divisor.
    */
   public recalculateStats(
     financials: SessionTransaction[], 
     taxRate: number = 5,
     seasonType: SeasonType = 'aeration',
-    productCostPercent: number = 0
+    productCostPercent: number = 0,
+    noTaxOnCash: boolean = false
   ): SessionStats {
     const stats = this.getEmptyStats();
     const taxDivisor = 1 + taxRate / 100;
@@ -2484,21 +2499,24 @@ class SessionService {
     const prepaidWeight = config.prepaidWeight;
     const billedWeight = config.billedWeight;
     
-    const weightedProd = 
+    // Build taxable weighted total — cash excluded if noTaxOnCash
+    const taxableWeighted = 
         (stats.prodPrepaid * prepaidWeight) + 
         (stats.prodBilled * billedWeight) + 
-        stats.prodCash + 
+        (noTaxOnCash ? 0 : stats.prodCash) +
         stats.prodCheque + 
         stats.prodETransfer + 
         stats.prodCreditCard + 
         stats.prodFlats + 
         stats.prodPrepaidSplit;
 
-    // Apply tax removal first, then product cost deduction
+    // Apply tax removal to taxable portion, then add cash back untaxed
+    const afterTax = taxableWeighted / taxDivisor;
+    const totalAfterTax = noTaxOnCash ? afterTax + stats.prodCash : afterTax;
+
     // Flats bypass product cost (office already factored it in)
-    const afterTax = weightedProd / taxDivisor;
     const flatsAfterTax = stats.prodFlats / taxDivisor;
-    const nonFlatsAfterTax = afterTax - flatsAfterTax;
+    const nonFlatsAfterTax = totalAfterTax - flatsAfterTax;
     const productCostMultiplier = 1 - (productCostPercent / 100);
     stats.prodPayable = (nonFlatsAfterTax * productCostMultiplier) + flatsAfterTax;
     
@@ -2507,7 +2525,14 @@ class SessionService {
     
     stats.upsellGross = stats.upsellBilled + stats.upsellCash + stats.upsellCheque + 
                         stats.upsellETransfer + stats.upsellCreditCard + stats.upsellPrepaid;
-    stats.upsellPayable = stats.upsellGross / taxDivisor;
+
+    // Upsell payable — cash excluded from tax if noTaxOnCash
+    if (noTaxOnCash && stats.upsellCash > 0) {
+      const upsellNonCash = stats.upsellGross - stats.upsellCash;
+      stats.upsellPayable = (upsellNonCash / taxDivisor) + stats.upsellCash;
+    } else {
+      stats.upsellPayable = stats.upsellGross / taxDivisor;
+    }
 
     return stats;
   }
@@ -2516,6 +2541,7 @@ class SessionService {
 
   /**
    * Calculate individual worker payouts for a team session.
+   * Now reads per-worker machine rentals and deductions from validation when available.
    */
   public calculateTeamPayouts(
     session: LogsheetSession,
@@ -2583,13 +2609,21 @@ class SessionService {
         ? (Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0)) * equivPercent
         : 0;
       
-      // Machine rental is $10 PER WORKER (NOT split)
-      const machineRentalDeduction = validation?.machineRental ? 10 : 0;
-      const deductions = machineRentalDeduction;
+      // Per-worker machine rental: check workerMachineRentals first, fall back to legacy
+      const hasMachineRental = validation?.workerMachineRentals?.[workerId] !== undefined
+        ? validation.workerMachineRentals[workerId]
+        : (validation?.machineRental ?? false);
+      const machineRentalDeduction = hasMachineRental ? 10 : 0;
       
-      // Final commission
+      // Per-worker custom deductions (separate from machine rental)
+      const otherDeductions = validation?.workerDeductions?.[workerId] || 0;
+      
+      // Deductions = custom deductions only (NOT machine rental — that's separate)
+      const deductions = otherDeductions;
+      
+      // Final commission = everything minus machine rental AND custom deductions
       const finalCommission = productionCommission + upsellCommission + iosCommission + 
-                             bonusAmount - deductions;
+                             bonusAmount - machineRentalDeduction - deductions;
       
       breakdowns.push({
         workerId,
