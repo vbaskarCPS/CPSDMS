@@ -256,21 +256,21 @@ function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: stri
 }
 
 /**
- * Create a pulsing dot element for a contractor's most recent completion pin.
- * Inner dot is 14px to fully cover the underlying map pin (10px + 2.5px stroke).
- * Injects its own CSS keyframes once.
+ * Create ONLY a pulsing ring overlay — no inner dot.
+ * The underlying map circle-layer pin stays untouched (same size, fill, border).
+ * This ring just emanates outward from the pin to draw attention.
  */
-function createPulsingDot(color: string): HTMLDivElement {
-  // Inject keyframes once
+function createPulsingRing(color: string): HTMLDivElement {
   if (!document.getElementById('rm-pulse-keyframes')) {
     const style = document.createElement('style');
     style.id = 'rm-pulse-keyframes';
-    style.textContent = `@keyframes rmPulse{0%{transform:scale(1);opacity:.6}100%{transform:scale(1.7);opacity:0}}`;
+    style.textContent = `@keyframes rmPulse{0%{transform:scale(1);opacity:.7}100%{transform:scale(2.5);opacity:0}}`;
     document.head.appendChild(style);
   }
   const el = document.createElement('div');
-  el.style.cssText = 'width:24px;height:24px;position:relative;pointer-events:none;';
-  el.innerHTML = `<div style="position:absolute;inset:0;border-radius:50%;background:${color};opacity:.4;animation:rmPulse 2s ease-out infinite;"></div><div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:${color};box-shadow:0 0 0 3px rgba(0,0,0,0.6);"></div>`;
+  // Size matches the underlying pin (~15px with stroke)
+  el.style.cssText = 'width:15px;height:15px;position:relative;pointer-events:none;';
+  el.innerHTML = `<div style="position:absolute;inset:0;border-radius:50%;border:2.5px solid ${color};animation:rmPulse 1.8s ease-out infinite;"></div>`;
   return el;
 }
 
@@ -726,7 +726,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
 
     mostRecentCompletionPins.forEach(pin => {
       const color = pin.routeColor || '#22c55e';
-      const el = createPulsingDot(color);
+      const el = createPulsingRing(color);
       const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
         .setLngLat([pin.lng, pin.lat])
         .addTo(map);
@@ -753,7 +753,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
 
       // --- On-route detection (only when follow-me is ON) ---
       if (centerOnLocationRef.current) {
-        const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, managerId, 100);
+        const rmd = routeMapDataRef.current;
+        const rts = routesRef.current;
+        const wcd = workerCardDataRef.current;
+        const nearest = findNearestAssignedRoute(lat, lng, rmd, rts, managerId, 100);
+        const card = nearest ? wcd.find(c => c.worker.contractorId === nearest.workerId) : null;
+        console.log(`[OnRoute] pos=${lat.toFixed(5)},${lng.toFixed(5)} routeMapData=${rmd.length} routes=${rts.length} cards=${wcd.length}`, nearest ? `HIT route=${nearest.routeCode} worker=${nearest.workerId} cardFound=${!!card}` : 'NO_MATCH');
         if (nearest) {
           if (onRouteWorkerIdRef.current !== nearest.workerId) {
             onRouteWorkerIdRef.current = nearest.workerId;
@@ -809,7 +814,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       rll.forEach((layer:any)=>{
         try{map.setLayerZoomRange(layer.id,0,24);map.setLayoutProperty(layer.id,'text-allow-overlap',false);map.setLayoutProperty(layer.id,'text-ignore-placement',false);map.setLayoutProperty(layer.id,'text-size',13);map.setLayoutProperty(layer.id,'text-font',['DIN Pro Bold','Arial Unicode MS Bold']);map.setPaintProperty(layer.id,'text-color','#111111');map.setPaintProperty(layer.id,'text-halo-color','#ffffff');map.setPaintProperty(layer.id,'text-halo-width',2);}catch{}
         const bid=`${layer.id}-point-backup`; if(map.getLayer(bid)) return;
-        try{map.addLayer({id:bid,type:'symbol',source:(layer as any).source??'composite','source-layer':(layer as any)['source-layer']??'road',filter:(layer as any).filter,minzoom:0,maxzoom:24,layout:{...(layer.layout??{}),'symbol-placement':'point','text-optional':true,'text-allow-overlap':false,'text-ignore-placement':false,'text-padding':5,'text-size':11,'text-font':['DIN Pro Medium','Arial Unicode MS Regular']},paint:{...(layer.paint??{}),'text-color':'#111111','text-halo-color':'#ffffff','text-halo-width':2}});}catch{}
+        try{map.addLayer({id:bid,type:'symbol',source:(layer as any).source??'composite','source-layer':(layer as any)['source-layer']??'road',...((layer as any).filter?{filter:(layer as any).filter}:{}),minzoom:0,maxzoom:24,layout:{...(layer.layout??{}),'symbol-placement':'point','text-optional':true,'text-allow-overlap':false,'text-ignore-placement':false,'text-padding':5,'text-size':11,'text-font':['DIN Pro Medium','Arial Unicode MS Regular']},paint:{...(layer.paint??{}),'text-color':'#111111','text-halo-color':'#ffffff','text-halo-width':2}});}catch{}
       });
       map.on('idle',suppressDuplicateLabels);
       setMapLoaded(true);
