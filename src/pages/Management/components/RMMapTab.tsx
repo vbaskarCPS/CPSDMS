@@ -256,19 +256,23 @@ function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: stri
 }
 
 /**
- * Create a pulsing ring overlay — single flat div, semi-transparent fill.
- * Expands outward from the underlying pin. No inner dot needed;
- * the map circle-layer pin shows through the semi-transparent fill.
+ * Create a pulsing ring overlay for the most recent completion pin.
+ * IMPORTANT: Animation must be on a CHILD div, not the marker element itself,
+ * because Mapbox applies CSS to the direct element that can block animations.
+ * Outer wrapper is 15px (matching pin size) for accurate anchor:'center' alignment.
  */
 function createPulsingRing(color: string): HTMLDivElement {
-  if (!document.getElementById('rm-pulse-keyframes')) {
-    const style = document.createElement('style');
-    style.id = 'rm-pulse-keyframes';
-    style.textContent = `@keyframes rmPulse{0%{transform:scale(1);opacity:.5}100%{transform:scale(2.5);opacity:0}}`;
-    document.head.appendChild(style);
+  // Always overwrite keyframes (prevents stale cached animations across deploys)
+  let pulseStyle = document.getElementById('rm-pulse-keyframes') as HTMLStyleElement | null;
+  if (!pulseStyle) {
+    pulseStyle = document.createElement('style');
+    pulseStyle.id = 'rm-pulse-keyframes';
+    document.head.appendChild(pulseStyle);
   }
+  pulseStyle.textContent = `@keyframes rmPulse{0%{transform:scale(1);opacity:.5}100%{transform:scale(2.5);opacity:0}}`;
   const el = document.createElement('div');
-  el.style.cssText = 'width:15px;height:15px;border-radius:50%;background:' + color + ';animation:rmPulse 1.8s ease-out infinite;pointer-events:none;';
+  el.style.cssText = 'width:15px;height:15px;pointer-events:none;overflow:visible;position:relative;';
+  el.innerHTML = `<div style="width:100%;height:100%;border-radius:50%;background:${color};animation:rmPulse 1.8s ease-out infinite;"></div>`;
   return el;
 }
 
@@ -990,7 +994,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       {/* TEMP DEBUG BANNER — remove after tablet issue is resolved */}
       {centerOnLocation && (
         <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 bg-black/80 text-green-400 px-3 py-1 rounded-full shadow-lg text-[10px] font-mono backdrop-blur-sm whitespace-nowrap">
-          {debugGps}
+          {debugGps} | BTN:{onRouteWorkerCard?'✅':'❌'} | Pulses:{mostRecentCompletionPins.length}
         </div>
       )}
 
