@@ -257,9 +257,8 @@ function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: stri
 
 /**
  * Create a pulsing ring overlay for the most recent completion pin.
- * IMPORTANT: Animation must be on a CHILD div, not the marker element itself,
- * because Mapbox applies CSS to the direct element that can block animations.
- * Outer wrapper is 15px (matching pin size) for accurate anchor:'center' alignment.
+ * Uses a 0×0 wrapper so anchor:'center' places it at the exact coordinate,
+ * then the visible ring uses negative margins to center itself perfectly.
  */
 function createPulsingRing(color: string): HTMLDivElement {
   // Always overwrite keyframes (prevents stale cached animations across deploys)
@@ -271,8 +270,8 @@ function createPulsingRing(color: string): HTMLDivElement {
   }
   pulseStyle.textContent = `@keyframes rmPulse{0%{transform:scale(1);opacity:.5}100%{transform:scale(2.5);opacity:0}}`;
   const el = document.createElement('div');
-  el.style.cssText = 'width:15px;height:15px;pointer-events:none;overflow:visible;position:relative;';
-  el.innerHTML = `<div style="width:100%;height:100%;border-radius:50%;background:${color};animation:rmPulse 1.8s ease-out infinite;"></div>`;
+  el.style.cssText = 'width:0;height:0;overflow:visible;pointer-events:none;';
+  el.innerHTML = `<div style="width:15px;height:15px;margin-left:-7.5px;margin-top:-7.5px;border-radius:50%;background:${color};animation:rmPulse 1.8s ease-out infinite;"></div>`;
   return el;
 }
 
@@ -762,7 +761,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
         const rts = routesRef.current;
         const wcd = workerCardDataRef.current;
         const nearest = findNearestAssignedRoute(lat, lng, rmd, rts, managerId, 100);
-        const card = nearest ? wcd.find(c => c.worker.contractorId === nearest.workerId) : null;
+        const card = nearest ? wcd.find(c => c.worker.contractorId === nearest.workerId) || null : null;
         // Update on-screen debug banner
         if (nearest) {
           const w = card?.worker;
@@ -770,24 +769,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
         } else {
           setDebugGps(`GPS ✅ ±${acc}m | Route: none nearby | maps=${rmd.length} rts=${rts.length} cards=${wcd.length}`);
         }
-        if (nearest) {
-          if (onRouteWorkerIdRef.current !== nearest.workerId) {
-            onRouteWorkerIdRef.current = nearest.workerId;
-            const card = workerCardDataRef.current.find(c => c.worker.contractorId === nearest.workerId);
-            setOnRouteWorkerCard(card || null);
-          }
-        } else {
-          if (onRouteWorkerIdRef.current !== null) {
-            onRouteWorkerIdRef.current = null;
-            setOnRouteWorkerCard(null);
-          }
-        }
+        // Always set state — no skip optimization (avoids race where ref is set but card was null)
+        onRouteWorkerIdRef.current = nearest?.workerId || null;
+        setOnRouteWorkerCard(card);
       } else {
         setDebugGps(`GPS ✅ ±${acc}m | Follow: OFF`);
-        if (onRouteWorkerIdRef.current !== null) {
-          onRouteWorkerIdRef.current = null;
-          setOnRouteWorkerCard(null);
-        }
+        onRouteWorkerIdRef.current = null;
+        setOnRouteWorkerCard(null);
       }
     },err=>{
       const msgs: Record<number,string> = {1:'❌ Denied',2:'❌ Unavailable',3:'⏳ Timeout (retrying…)'};
@@ -1023,7 +1011,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       {onRouteWorkerCard && (
         <button
           onClick={() => setSelectedWorkerForModal(onRouteWorkerCard)}
-          className="absolute bottom-6 right-3 z-20 bg-gray-900/95 backdrop-blur-sm text-white rounded-lg shadow-2xl border border-gray-600 px-3 py-2.5 flex items-center gap-3 hover:border-blue-500 active:scale-[0.97] transition-all max-w-[280px]"
+          className="absolute bottom-20 right-3 z-40 bg-gray-900/95 backdrop-blur-sm text-white rounded-lg shadow-2xl border border-gray-600 px-3 py-2.5 flex items-center gap-3 hover:border-blue-500 active:scale-[0.97] transition-all max-w-[280px]"
         >
           {/* Red flag icon — shown on far left if any flag triggered */}
           {onRouteRedFlags.hasFlag && (
