@@ -256,19 +256,19 @@ function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: stri
 }
 
 /**
- * Create ONLY a pulsing ring overlay — no inner dot.
- * Single flat div (no nesting) so Mapbox anchor:'center' aligns it perfectly
- * on top of the underlying map circle-layer pin.
+ * Create a pulsing ring overlay — single flat div, semi-transparent fill.
+ * Expands outward from the underlying pin. No inner dot needed;
+ * the map circle-layer pin shows through the semi-transparent fill.
  */
 function createPulsingRing(color: string): HTMLDivElement {
   if (!document.getElementById('rm-pulse-keyframes')) {
     const style = document.createElement('style');
     style.id = 'rm-pulse-keyframes';
-    style.textContent = `@keyframes rmPulse{0%{transform:scale(1);opacity:.7}100%{transform:scale(2.5);opacity:0}}`;
+    style.textContent = `@keyframes rmPulse{0%{transform:scale(1);opacity:.5}100%{transform:scale(2.5);opacity:0}}`;
     document.head.appendChild(style);
   }
   const el = document.createElement('div');
-  el.style.cssText = 'width:15px;height:15px;border-radius:50%;border:2.5px solid ' + color + ';animation:rmPulse 1.8s ease-out infinite;pointer-events:none;box-sizing:border-box;margin:0;padding:0;';
+  el.style.cssText = 'width:15px;height:15px;border-radius:50%;background:' + color + ';animation:rmPulse 1.8s ease-out infinite;pointer-events:none;';
   return el;
 }
 
@@ -321,6 +321,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
   const routeMapDataRef = useRef<SavedRoute[]>([]);
   const workerCardDataRef = useRef<WorkerCardData[]>([]);
 
+  // --- TEMP DEBUG: On-screen GPS/route status (remove after debugging) ---
+  const [debugGps, setDebugGps] = useState('GPS: waiting…');
   useEffect(() => { sidebarModeRef.current = sidebarMode; }, [sidebarMode]);
   useEffect(() => { routesRef.current = routes; }, [routes]);
   useEffect(() => { bookingsRef.current = bookings; }, [bookings]);
@@ -745,7 +747,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     watchIdRef.current=navigator.geolocation.watchPosition(pos=>{
       if(!navMarkerRef.current||!mapRef.current) return;
       const{latitude:lat,longitude:lng,heading}=pos.coords;
-      console.log(`[GPS] Fix: ${lat.toFixed(5)},${lng.toFixed(5)} accuracy=${pos.coords.accuracy?.toFixed(0)}m follow=${centerOnLocationRef.current}`);
+      const acc = pos.coords.accuracy?.toFixed(0) || '?';
       navMarkerRef.current.setLngLat([lng,lat]);
       if(heading!=null&&!isNaN(heading)&&navArrowElRef.current) navArrowElRef.current.style.transform=`rotate(${heading}deg)`;
       if(centerOnLocationRef.current) mapRef.current.easeTo({center:[lng,lat],duration:1000});
@@ -757,7 +759,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
         const wcd = workerCardDataRef.current;
         const nearest = findNearestAssignedRoute(lat, lng, rmd, rts, managerId, 100);
         const card = nearest ? wcd.find(c => c.worker.contractorId === nearest.workerId) : null;
-        console.log(`[OnRoute] pos=${lat.toFixed(5)},${lng.toFixed(5)} routeMapData=${rmd.length} routes=${rts.length} cards=${wcd.length}`, nearest ? `HIT route=${nearest.routeCode} worker=${nearest.workerId} cardFound=${!!card}` : 'NO_MATCH');
+        // Update on-screen debug banner
+        if (nearest) {
+          const w = card?.worker;
+          setDebugGps(`GPS ✅ ±${acc}m | Route: ${nearest.routeCode} → ${w ? w.firstName + ' ' + w.lastName.charAt(0) + '.' : '??'} | Follow: ON`);
+        } else {
+          setDebugGps(`GPS ✅ ±${acc}m | Route: none nearby | maps=${rmd.length} rts=${rts.length} cards=${wcd.length}`);
+        }
         if (nearest) {
           if (onRouteWorkerIdRef.current !== nearest.workerId) {
             onRouteWorkerIdRef.current = nearest.workerId;
@@ -770,15 +778,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
             setOnRouteWorkerCard(null);
           }
         }
-      } else if (onRouteWorkerIdRef.current !== null) {
-        // Follow-me turned off mid-watch — clear on-route state
-        onRouteWorkerIdRef.current = null;
-        setOnRouteWorkerCard(null);
+      } else {
+        setDebugGps(`GPS ✅ ±${acc}m | Follow: OFF`);
+        if (onRouteWorkerIdRef.current !== null) {
+          onRouteWorkerIdRef.current = null;
+          setOnRouteWorkerCard(null);
+        }
       }
     },err=>{
-      // Code 1=DENIED, 2=UNAVAILABLE, 3=TIMEOUT
-      if(err.code===3) console.log('[GPS] Timeout — retrying (normal on mobile)');
-      else console.warn('GPS error:',err.code,err.message);
+      const msgs: Record<number,string> = {1:'❌ Denied',2:'❌ Unavailable',3:'⏳ Timeout (retrying…)'};
+      setDebugGps(`GPS ${msgs[err.code]||'❌ Error '+err.code}`);
     },{enableHighAccuracy:true,maximumAge:15000,timeout:30000});
     return()=>{if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}navMarkerRef.current?.remove();navMarkerRef.current=null;};
   }, [mapLoaded]);
@@ -977,6 +986,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       {geocodingProgress && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm"><Loader size={12} className="animate-spin text-blue-400"/>Geocoding {geocodingProgress.current}/{geocodingProgress.total}…</div>}
       {routesLoading&&!geocodingProgress && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm"><Loader size={12} className="animate-spin text-blue-400"/>Loading routes…</div>}
       {!routesLoading&&!routeMapData.length&&myRouteCodes.length>0&&mapLoaded&&!geocodingProgress && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-yellow-900/90 text-yellow-300 px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm">No map data for your routes</div>}
+
+      {/* TEMP DEBUG BANNER — remove after tablet issue is resolved */}
+      {centerOnLocation && (
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 bg-black/80 text-green-400 px-3 py-1 rounded-full shadow-lg text-[10px] font-mono backdrop-blur-sm whitespace-nowrap">
+          {debugGps}
+        </div>
+      )}
 
       {/* Pin legend + worker dot staleness legend */}
       {!geocodingProgress && !sidebarOpen && (geocodedPins.length > 0 || workerLocations.length > 0) && (
