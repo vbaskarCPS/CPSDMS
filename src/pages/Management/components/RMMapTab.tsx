@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { Loader, Navigation, ChevronLeft, ChevronRight, X, Users, Eye, Phone, MapPin, AlertCircle, LayoutList } from 'lucide-react';
+import { Loader, Navigation, ChevronLeft, ChevronRight, X, Users, Eye, Phone, MapPin, AlertCircle, LayoutList, AlertTriangle } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { sessionService } from '../../../lib/sessionService';
 import { getSeasonConfig, EQ_DIVISOR } from '../../../lib/commandCenterService';
@@ -127,6 +127,120 @@ function createWorkerMarkerEl(initials: string, borderColor: string, label: stri
   return el;
 }
 
+// --- NEW HELPERS: On-route detection, red flags, pulsing dot ---
+
+/** Quick haversine distance in meters between two lat/lng points */
+function approxDistanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * Find the nearest route segment that has exactly 1 assigned worker.
+ * Returns { routeCode, workerId } or null if none within threshold.
+ */
+function findNearestAssignedRoute(
+  lat: number, lng: number,
+  routeMapData: SavedRoute[],
+  routes: RouteData[],
+  managerId: string,
+  threshold: number = 50
+): { routeCode: string; workerId: string } | null {
+  let best: { routeCode: string; workerId: string; dist: number } | null = null;
+
+  for (const rmd of routeMapData) {
+    const rd = routes.find(r => r.routeCode === rmd.route_code && r.managerId === managerId);
+    if (!rd) continue;
+    if (!rd.assignedWorkerIds || rd.assignedWorkerIds.length !== 1) continue;
+    const workerId = rd.assignedWorkerIds[0];
+
+    for (const seg of rmd.segments || []) {
+      for (const coord of seg.coordinates || []) {
+        const [cLng, cLat] = coord;
+        const dist = approxDistanceMeters(lat, lng, cLat, cLng);
+        if (dist <= threshold && (!best || dist < best.dist)) {
+          best = { routeCode: rmd.route_code, workerId, dist };
+        }
+      }
+    }
+  }
+
+  return best ? { routeCode: best.routeCode, workerId: best.workerId } : null;
+}
+
+/**
+ * Compute red flag conditions for a contractor:
+ * 1. < 50% contact details on first 5 new sales
+ * 2. < 70% contact details on sales #6+
+ * 3. Any pricing under minimums (FO/BO < $50, FP < $60)
+ */
+function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: string[] } {
+  const flags: string[] = [];
+
+  // "Sales" = new door sales only (type 'Sale'), not prebooks ('Production')
+  const sales = financialStore.filter((tx: any) => tx.type === 'Sale');
+
+  if (sales.length > 0) {
+    const first5 = sales.slice(0, 5);
+    const after5 = sales.slice(5);
+
+    // First 5 sales: need >= 50% contact fill
+    const first5Filled = first5.reduce((n: number, tx: any) => {
+      if (tx.customerPhone?.trim()) n++;
+      if (tx.customerEmail?.trim()) n++;
+      return n;
+    }, 0);
+    if (first5Filled / (first5.length * 2) < 0.5) {
+      flags.push('contacts_first5');
+    }
+
+    // Sales #6+: need >= 70% contact fill
+    if (after5.length > 0) {
+      const after5Filled = after5.reduce((n: number, tx: any) => {
+        if (tx.customerPhone?.trim()) n++;
+        if (tx.customerEmail?.trim()) n++;
+        return n;
+      }, 0);
+      if (after5Filled / (after5.length * 2) < 0.7) {
+        flags.push('contacts_after5');
+      }
+    }
+  }
+
+  // Pricing check on all completed regular jobs (Production + Sale)
+  const completedJobs = financialStore.filter((tx: any) => tx.type === 'Production' || tx.type === 'Sale');
+  for (const tx of completedJobs) {
+    const st = tx.serviceType;
+    const price = typeof tx.price === 'number' ? tx.price : parseFloat(String(tx.price || '0'));
+    if (!st || !price) continue;
+    if ((st === 'FO' || st === 'BO') && price < 50) { flags.push('pricing'); break; }
+    if (st === 'FP' && price < 60) { flags.push('pricing'); break; }
+  }
+
+  return { hasFlag: flags.length > 0, flags };
+}
+
+/**
+ * Create a pulsing dot element for the most recent completion pin.
+ * Injects its own CSS keyframes once.
+ */
+function createPulsingDot(color: string): HTMLDivElement {
+  // Inject keyframes once
+  if (!document.getElementById('rm-pulse-keyframes')) {
+    const style = document.createElement('style');
+    style.id = 'rm-pulse-keyframes';
+    style.textContent = `@keyframes rmPulse{0%{transform:scale(1);opacity:.6}100%{transform:scale(3.5);opacity:0}}`;
+    document.head.appendChild(style);
+  }
+  const el = document.createElement('div');
+  el.style.cssText = 'width:20px;height:20px;position:relative;pointer-events:none;';
+  el.innerHTML = `<div style="position:absolute;inset:0;border-radius:50%;background:${color};opacity:.4;animation:rmPulse 2s ease-out infinite;"></div><div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:10px;height:10px;border-radius:50%;background:${color};border:2px solid #22c55e;"></div>`;
+  return el;
+}
+
 const WORKER_LOCATION_POLL_MS = 5 * 60 * 1000; // 5 minutes
 
 // --- COMPONENT ---
@@ -169,9 +283,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
   const [workerLocations, setWorkerLocations] = useState<WorkerLocation[]>([]);
   const workerLocationMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
 
+  // --- NEW STATE: On-route button + pulsing dot ---
+  const [onRouteWorkerCard, setOnRouteWorkerCard] = useState<WorkerCardData | null>(null);
+  const onRouteWorkerIdRef = useRef<string | null>(null);
+  const pulsingMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const routeMapDataRef = useRef<SavedRoute[]>([]);
+  const workerCardDataRef = useRef<WorkerCardData[]>([]);
+
   useEffect(() => { sidebarModeRef.current = sidebarMode; }, [sidebarMode]);
   useEffect(() => { routesRef.current = routes; }, [routes]);
   useEffect(() => { bookingsRef.current = bookings; }, [bookings]);
+  useEffect(() => { routeMapDataRef.current = routeMapData; }, [routeMapData]);
 
   const myRouteCodes = useMemo(() => routes.filter(r => r.managerId === managerId).map(r => r.routeCode), [routes, managerId]);
   const myTeamIds = useMemo(() => new Set(workers.filter(w => w.assignedManagerId === managerId).map(w => w.contractorId)), [workers, managerId]);
@@ -200,6 +322,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
         stats: { steps: st?.stepCount||0, pending, eq: st?.totalEQ||0, upsellCount: st?.upsellCount||0, upsellGross: st?.upsellGross||0 } };
     });
   }, [workers, managerId, allSessions, bookings, isAerationSeason, workerLastActive]);
+
+  // Keep workerCardData ref fresh for use in GPS callback
+  useEffect(() => { workerCardDataRef.current = workerCardData; }, [workerCardData]);
+
+  // Keep on-route card data fresh when sessions refresh
+  useEffect(() => {
+    if (!onRouteWorkerIdRef.current) return;
+    const updated = workerCardData.find(c => c.worker.contractorId === onRouteWorkerIdRef.current);
+    if (updated) setOnRouteWorkerCard(updated);
+  }, [workerCardData]);
 
   const sortedWorkerCards = useMemo<WorkerCardData[]>(() => {
     const c = [...workerCardData];
@@ -265,6 +397,32 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     routeMapData.forEach(r=>r.segments?.forEach(seg=>{if(!seg.coordinates?.length) return; const mi=Math.floor(seg.coordinates.length/2); const [lng,lat]=seg.coordinates[mi]; sLat+=lat;sLng+=lng;n++;}));
     return n?{lat:sLat/n,lng:sLng/n}:null;
   }, [routeMapData]);
+
+  // --- NEW MEMO: Most recent completion pin (for pulsing dot) ---
+  const mostRecentCompletionPin = useMemo<GeocodedPin | null>(() => {
+    let latestTimestamp: string | null = null;
+    let latestJobId: string | null = null;
+
+    allSessions.forEach(s => {
+      (s.financialStore || []).forEach((tx: any) => {
+        if (tx.type === 'Upgrade' || tx.type === 'Add-On') return;
+        if (!tx.timestamp || !tx.jobId) return;
+        if (!latestTimestamp || tx.timestamp > latestTimestamp) {
+          latestTimestamp = tx.timestamp;
+          latestJobId = tx.jobId;
+        }
+      });
+    });
+
+    if (!latestJobId) return null;
+    return geocodedPins.find(p => p.id === latestJobId && (p.status === 'completed' || p.status === 'new_sale')) || null;
+  }, [allSessions, geocodedPins]);
+
+  // --- NEW MEMO: Red flags for on-route worker ---
+  const onRouteRedFlags = useMemo(() => {
+    if (!onRouteWorkerCard) return { hasFlag: false, flags: [] as string[] };
+    return computeRedFlags(onRouteWorkerCard.financialStore);
+  }, [onRouteWorkerCard]);
 
   const suppressDuplicateLabels = useCallback(() => {
     const map=mapRef.current; if(!map) return;
@@ -518,7 +676,31 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     })();
   }, [pins, routeMapData, mapLoaded, routeColorMap, routeCentroid, updateMapPins]);
 
-  // GPS (RM's own location)
+  // --- NEW EFFECT: Pulsing dot on most recent completion ---
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+
+    // Always remove old pulsing marker first
+    pulsingMarkerRef.current?.remove();
+    pulsingMarkerRef.current = null;
+
+    if (!mostRecentCompletionPin) return;
+
+    const color = mostRecentCompletionPin.routeColor || '#22c55e';
+    const el = createPulsingDot(color);
+    const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+      .setLngLat([mostRecentCompletionPin.lng, mostRecentCompletionPin.lat])
+      .addTo(map);
+    pulsingMarkerRef.current = marker;
+
+    return () => {
+      pulsingMarkerRef.current?.remove();
+      pulsingMarkerRef.current = null;
+    };
+  }, [mostRecentCompletionPin, mapLoaded]);
+
+  // GPS (RM's own location) — MODIFIED to include on-route detection
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!navigator.geolocation) return;
     if(!navArrowElRef.current) navArrowElRef.current=createNavArrow();
@@ -529,15 +711,38 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       navMarkerRef.current.setLngLat([lng,lat]);
       if(heading!=null&&!isNaN(heading)&&navArrowElRef.current) navArrowElRef.current.style.transform=`rotate(${heading}deg)`;
       if(centerOnLocationRef.current) mapRef.current.easeTo({center:[lng,lat],duration:1000});
+
+      // --- On-route detection (only when follow-me is ON) ---
+      if (centerOnLocationRef.current) {
+        const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, managerId, 50);
+        if (nearest) {
+          if (onRouteWorkerIdRef.current !== nearest.workerId) {
+            onRouteWorkerIdRef.current = nearest.workerId;
+            const card = workerCardDataRef.current.find(c => c.worker.contractorId === nearest.workerId);
+            setOnRouteWorkerCard(card || null);
+          }
+        } else {
+          if (onRouteWorkerIdRef.current !== null) {
+            onRouteWorkerIdRef.current = null;
+            setOnRouteWorkerCard(null);
+          }
+        }
+      } else if (onRouteWorkerIdRef.current !== null) {
+        // Follow-me turned off mid-watch — clear on-route state
+        onRouteWorkerIdRef.current = null;
+        setOnRouteWorkerCard(null);
+      }
     },err=>console.warn('GPS:',err.code),{enableHighAccuracy:true,maximumAge:3000,timeout:15000});
     return()=>{if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}navMarkerRef.current?.remove();navMarkerRef.current=null;};
   }, [mapLoaded]);
 
   useEffect(()=>{centerOnLocationRef.current=centerOnLocation;},[centerOnLocation]);
 
+  // MODIFIED: Also clears on-route state when follow-me is turned off
   const handleToggleCenter=useCallback(()=>{
     setCenterOnLocation(prev=>{const nv=!prev;centerOnLocationRef.current=nv;
       if(nv&&navMarkerRef.current&&mapRef.current){const ll=navMarkerRef.current.getLngLat();if(ll.lng!==0||ll.lat!==0) mapRef.current.easeTo({center:[ll.lng,ll.lat],duration:800});}
+      if(!nv){ onRouteWorkerIdRef.current=null; setOnRouteWorkerCard(null); }
       return nv;});
   },[]);
 
@@ -576,6 +781,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}
       navMarkerRef.current?.remove();navMarkerRef.current=null;
       if(popupRef.current){popupRef.current.remove();popupRef.current=null;}
+      // Remove pulsing marker
+      pulsingMarkerRef.current?.remove();pulsingMarkerRef.current=null;
       // Remove all worker location markers
       workerLocationMarkersRef.current.forEach(m => m.remove());
       workerLocationMarkersRef.current.clear();
@@ -744,6 +951,30 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       )}
 
       {!mapLoaded && <div className="absolute inset-0 bg-gray-100 flex items-center justify-center z-10"><Loader size={24} className="animate-spin text-blue-500"/></div>}
+
+      {/* --- NEW: On-route contractor button (bottom right) --- */}
+      {onRouteWorkerCard && (
+        <button
+          onClick={() => setSelectedWorkerForModal(onRouteWorkerCard)}
+          className="absolute bottom-6 right-3 z-20 bg-gray-900/95 backdrop-blur-sm text-white rounded-lg shadow-2xl border border-gray-600 px-3 py-2.5 flex items-center gap-3 hover:border-blue-500 active:scale-[0.97] transition-all max-w-[280px]"
+        >
+          {/* Red flag icon — shown on far left if any flag triggered */}
+          {onRouteRedFlags.hasFlag && (
+            <AlertTriangle size={20} className="text-red-500 flex-shrink-0 animate-pulse" />
+          )}
+          <div className="flex flex-col items-start min-w-0">
+            <span className="font-bold text-sm leading-tight truncate w-full">
+              {onRouteWorkerCard.worker.firstName} {onRouteWorkerCard.worker.lastName}
+            </span>
+            <div className="flex items-center gap-2 text-[10px] mt-0.5">
+              <span className="text-gray-400">Steps: <span className="text-white font-bold">{onRouteWorkerCard.stats.steps}</span></span>
+              <span className="text-gray-400">Pend: <span className="text-yellow-400 font-bold">{onRouteWorkerCard.stats.pending}</span></span>
+              <span className="text-gray-400">EQ: <span className="text-blue-300 font-bold">{onRouteWorkerCard.stats.eq.toFixed(1)}</span></span>
+              <span className="text-gray-400">Up: <span className="text-purple-400 font-bold">{onRouteWorkerCard.stats.upsellCount}</span></span>
+            </div>
+          </div>
+        </button>
+      )}
 
       {/* Worker jobs modal */}
       {selectedWorkerForModal && (
