@@ -129,17 +129,38 @@ function createWorkerMarkerEl(initials: string, borderColor: string, label: stri
 
 // --- NEW HELPERS: On-route detection, red flags, pulsing dot ---
 
-/** Quick haversine distance in meters between two lat/lng points */
-function approxDistanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371000;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLng = (lng2 - lng1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+/**
+ * Perpendicular distance in meters from a point to a line segment.
+ * Projects lat/lng to local flat-earth meters (accurate at short range).
+ * This detects you even if you're BETWEEN two coordinate points on a road.
+ */
+function distToSegmentMeters(
+  lat: number, lng: number,
+  lat1: number, lng1: number,
+  lat2: number, lng2: number
+): number {
+  const cosLat = Math.cos(lat * Math.PI / 180);
+  const mPerDegLat = 111320;
+  const mPerDegLng = 111320 * cosLat;
+
+  // Convert to local meters relative to segment start
+  const px = (lng - lng1) * mPerDegLng;
+  const py = (lat - lat1) * mPerDegLat;
+  const bx = (lng2 - lng1) * mPerDegLng;
+  const by = (lat2 - lat1) * mPerDegLat;
+
+  const lenSq = bx * bx + by * by;
+  if (lenSq === 0) return Math.sqrt(px * px + py * py); // zero-length segment
+  const t = Math.max(0, Math.min(1, (px * bx + py * by) / lenSq));
+  const cx = t * bx;
+  const cy = t * by;
+  return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
 }
 
 /**
  * Find the nearest route segment that has exactly 1 assigned worker.
+ * Uses point-to-line-segment distance so you're detected anywhere along
+ * the road, not just near individual coordinate dots.
  * Returns { routeCode, workerId } or null if none within threshold.
  */
 function findNearestAssignedRoute(
@@ -158,9 +179,20 @@ function findNearestAssignedRoute(
     const workerId = rd.assignedWorkerIds[0];
 
     for (const seg of rmd.segments || []) {
-      for (const coord of seg.coordinates || []) {
-        const [cLng, cLat] = coord;
-        const dist = approxDistanceMeters(lat, lng, cLat, cLng);
+      const coords = seg.coordinates || [];
+      // Check distance to each line segment between consecutive points
+      for (let i = 0; i < coords.length - 1; i++) {
+        const [lng1, lat1] = coords[i];
+        const [lng2, lat2] = coords[i + 1];
+        const dist = distToSegmentMeters(lat, lng, lat1, lng1, lat2, lng2);
+        if (dist <= threshold && (!best || dist < best.dist)) {
+          best = { routeCode: rmd.route_code, workerId, dist };
+        }
+      }
+      // Handle single-point segments
+      if (coords.length === 1) {
+        const [cLng, cLat] = coords[0];
+        const dist = distToSegmentMeters(lat, lng, cLat, cLng, cLat, cLng);
         if (dist <= threshold && (!best || dist < best.dist)) {
           best = { routeCode: rmd.route_code, workerId, dist };
         }
@@ -224,7 +256,8 @@ function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: stri
 }
 
 /**
- * Create a pulsing dot element for the most recent completion pin.
+ * Create a pulsing dot element for a contractor's most recent completion pin.
+ * Inner dot is 14px to fully cover the underlying map pin (10px + 2.5px stroke).
  * Injects its own CSS keyframes once.
  */
 function createPulsingDot(color: string): HTMLDivElement {
@@ -232,12 +265,12 @@ function createPulsingDot(color: string): HTMLDivElement {
   if (!document.getElementById('rm-pulse-keyframes')) {
     const style = document.createElement('style');
     style.id = 'rm-pulse-keyframes';
-    style.textContent = `@keyframes rmPulse{0%{transform:scale(1);opacity:.6}100%{transform:scale(3.5);opacity:0}}`;
+    style.textContent = `@keyframes rmPulse{0%{transform:scale(1);opacity:.6}100%{transform:scale(1.7);opacity:0}}`;
     document.head.appendChild(style);
   }
   const el = document.createElement('div');
-  el.style.cssText = 'width:20px;height:20px;position:relative;pointer-events:none;';
-  el.innerHTML = `<div style="position:absolute;inset:0;border-radius:50%;background:${color};opacity:.4;animation:rmPulse 2s ease-out infinite;"></div><div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:10px;height:10px;border-radius:50%;background:${color};border:2px solid #22c55e;"></div>`;
+  el.style.cssText = 'width:24px;height:24px;position:relative;pointer-events:none;';
+  el.innerHTML = `<div style="position:absolute;inset:0;border-radius:50%;background:${color};opacity:.4;animation:rmPulse 2s ease-out infinite;"></div><div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:${color};box-shadow:0 0 0 3px rgba(0,0,0,0.6);"></div>`;
   return el;
 }
 
@@ -286,7 +319,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
   // --- NEW STATE: On-route button + pulsing dot ---
   const [onRouteWorkerCard, setOnRouteWorkerCard] = useState<WorkerCardData | null>(null);
   const onRouteWorkerIdRef = useRef<string | null>(null);
-  const pulsingMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const pulsingMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const routeMapDataRef = useRef<SavedRoute[]>([]);
   const workerCardDataRef = useRef<WorkerCardData[]>([]);
 
@@ -399,23 +432,29 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
   }, [routeMapData]);
 
   // --- NEW MEMO: Most recent completion pin (for pulsing dot) ---
-  const mostRecentCompletionPin = useMemo<GeocodedPin | null>(() => {
-    let latestTimestamp: string | null = null;
-    let latestJobId: string | null = null;
+  // --- NEW MEMO: Most recent completion pin PER WORKER (for pulsing dots) ---
+  const mostRecentCompletionPins = useMemo<GeocodedPin[]>(() => {
+    // Find the latest transaction per worker/session
+    const latestByWorker = new Map<string, { jobId: string; timestamp: string }>();
 
     allSessions.forEach(s => {
+      const wid = s.workerId;
       (s.financialStore || []).forEach((tx: any) => {
         if (tx.type === 'Upgrade' || tx.type === 'Add-On') return;
         if (!tx.timestamp || !tx.jobId) return;
-        if (!latestTimestamp || tx.timestamp > latestTimestamp) {
-          latestTimestamp = tx.timestamp;
-          latestJobId = tx.jobId;
+        const existing = latestByWorker.get(wid);
+        if (!existing || tx.timestamp > existing.timestamp) {
+          latestByWorker.set(wid, { jobId: tx.jobId, timestamp: tx.timestamp });
         }
       });
     });
 
-    if (!latestJobId) return null;
-    return geocodedPins.find(p => p.id === latestJobId && (p.status === 'completed' || p.status === 'new_sale')) || null;
+    const result: GeocodedPin[] = [];
+    latestByWorker.forEach(({ jobId }) => {
+      const pin = geocodedPins.find(p => p.id === jobId && (p.status === 'completed' || p.status === 'new_sale'));
+      if (pin) result.push(pin);
+    });
+    return result;
   }, [allSessions, geocodedPins]);
 
   // --- NEW MEMO: Red flags for on-route worker ---
@@ -676,29 +715,29 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     })();
   }, [pins, routeMapData, mapLoaded, routeColorMap, routeCentroid, updateMapPins]);
 
-  // --- NEW EFFECT: Pulsing dot on most recent completion ---
+  // --- NEW EFFECT: Pulsing dot on each contractor's most recent completion ---
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
-    // Always remove old pulsing marker first
-    pulsingMarkerRef.current?.remove();
-    pulsingMarkerRef.current = null;
+    // Remove old pulsing markers
+    pulsingMarkersRef.current.forEach(m => m.remove());
+    pulsingMarkersRef.current = [];
 
-    if (!mostRecentCompletionPin) return;
-
-    const color = mostRecentCompletionPin.routeColor || '#22c55e';
-    const el = createPulsingDot(color);
-    const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
-      .setLngLat([mostRecentCompletionPin.lng, mostRecentCompletionPin.lat])
-      .addTo(map);
-    pulsingMarkerRef.current = marker;
+    mostRecentCompletionPins.forEach(pin => {
+      const color = pin.routeColor || '#22c55e';
+      const el = createPulsingDot(color);
+      const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+        .setLngLat([pin.lng, pin.lat])
+        .addTo(map);
+      pulsingMarkersRef.current.push(marker);
+    });
 
     return () => {
-      pulsingMarkerRef.current?.remove();
-      pulsingMarkerRef.current = null;
+      pulsingMarkersRef.current.forEach(m => m.remove());
+      pulsingMarkersRef.current = [];
     };
-  }, [mostRecentCompletionPin, mapLoaded]);
+  }, [mostRecentCompletionPins, mapLoaded]);
 
   // GPS (RM's own location) — MODIFIED to include on-route detection
   useEffect(() => {
@@ -714,7 +753,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
 
       // --- On-route detection (only when follow-me is ON) ---
       if (centerOnLocationRef.current) {
-        const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, managerId, 50);
+        const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, managerId, 100);
         if (nearest) {
           if (onRouteWorkerIdRef.current !== nearest.workerId) {
             onRouteWorkerIdRef.current = nearest.workerId;
@@ -782,7 +821,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       navMarkerRef.current?.remove();navMarkerRef.current=null;
       if(popupRef.current){popupRef.current.remove();popupRef.current=null;}
       // Remove pulsing marker
-      pulsingMarkerRef.current?.remove();pulsingMarkerRef.current=null;
+      pulsingMarkersRef.current.forEach(m => m.remove());pulsingMarkersRef.current=[];
       // Remove all worker location markers
       workerLocationMarkersRef.current.forEach(m => m.remove());
       workerLocationMarkersRef.current.clear();
