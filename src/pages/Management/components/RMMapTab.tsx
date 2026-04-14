@@ -257,8 +257,8 @@ function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: stri
 
 /**
  * Create ONLY a pulsing ring overlay — no inner dot.
- * The underlying map circle-layer pin stays untouched (same size, fill, border).
- * This ring just emanates outward from the pin to draw attention.
+ * Single flat div (no nesting) so Mapbox anchor:'center' aligns it perfectly
+ * on top of the underlying map circle-layer pin.
  */
 function createPulsingRing(color: string): HTMLDivElement {
   if (!document.getElementById('rm-pulse-keyframes')) {
@@ -268,9 +268,7 @@ function createPulsingRing(color: string): HTMLDivElement {
     document.head.appendChild(style);
   }
   const el = document.createElement('div');
-  // Size matches the underlying pin (~15px with stroke)
-  el.style.cssText = 'width:15px;height:15px;position:relative;pointer-events:none;';
-  el.innerHTML = `<div style="position:absolute;inset:0;border-radius:50%;border:2.5px solid ${color};animation:rmPulse 1.8s ease-out infinite;"></div>`;
+  el.style.cssText = 'width:15px;height:15px;border-radius:50%;border:2.5px solid ' + color + ';animation:rmPulse 1.8s ease-out infinite;pointer-events:none;box-sizing:border-box;margin:0;padding:0;';
   return el;
 }
 
@@ -747,6 +745,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     watchIdRef.current=navigator.geolocation.watchPosition(pos=>{
       if(!navMarkerRef.current||!mapRef.current) return;
       const{latitude:lat,longitude:lng,heading}=pos.coords;
+      console.log(`[GPS] Fix: ${lat.toFixed(5)},${lng.toFixed(5)} accuracy=${pos.coords.accuracy?.toFixed(0)}m follow=${centerOnLocationRef.current}`);
       navMarkerRef.current.setLngLat([lng,lat]);
       if(heading!=null&&!isNaN(heading)&&navArrowElRef.current) navArrowElRef.current.style.transform=`rotate(${heading}deg)`;
       if(centerOnLocationRef.current) mapRef.current.easeTo({center:[lng,lat],duration:1000});
