@@ -776,7 +776,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
         onRouteWorkerIdRef.current = null;
         setOnRouteWorkerCard(null);
       }
-    },err=>console.warn('GPS:',err.code),{enableHighAccuracy:true,maximumAge:3000,timeout:15000});
+    },err=>{
+      // Code 1=DENIED, 2=UNAVAILABLE, 3=TIMEOUT
+      if(err.code===3) console.log('[GPS] Timeout — retrying (normal on mobile)');
+      else console.warn('GPS error:',err.code,err.message);
+    },{enableHighAccuracy:true,maximumAge:15000,timeout:30000});
     return()=>{if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}navMarkerRef.current?.remove();navMarkerRef.current=null;};
   }, [mapLoaded]);
 
