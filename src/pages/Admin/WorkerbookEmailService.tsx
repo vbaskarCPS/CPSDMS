@@ -14,18 +14,21 @@ import {
   Users,
   MessageSquare,
   Smartphone,
+  UserX,
+  UserMinus,
 } from 'lucide-react';
 import {
   WorkerbookEmailTemplate,
   WorkerbookTextTemplate,
   DEFAULT_REGULAR_TEMPLATE,
   DEFAULT_ROOKIE_TEMPLATE,
-  DEFAULT_TEXT_CELL_TEMPLATE,
-  DEFAULT_TEXT_ALT_TEMPLATE,
+  DEFAULT_TEXT_TEMPLATE,
+  DEFAULT_NS_TEXT_TEMPLATE,
+  DEFAULT_WDR_TEXT_TEMPLATE,
   loadWorkerbookTemplates,
-  loadWorkerbookTextTemplates,
+  loadAllTextTemplates,
   saveWorkerbookTemplate,
-  saveWorkerbookTextTemplate,
+  saveStatusTextTemplate,
   buildWorkerbookEmailHtml,
   buildTextMessage,
 } from '../../lib/workerbookEmailService';
@@ -35,7 +38,7 @@ interface Props {
   onBack: () => void;
 }
 
-type TemplateTab = 'regular' | 'rookie' | 'text_cell' | 'text_alt';
+type TemplateTab = 'regular' | 'rookie' | 'text' | 'text_ns' | 'text_wdr';
 
 const SAMPLE_DATA = {
   contractorId: 'H1001',
@@ -70,7 +73,7 @@ const BODY_VARS = [
   { placeholder: '{{confirmButton}}', description: 'Green "Confirm My Shift" button — links to confirmation page' },
 ];
 
-// Variable reference shown in the text editor
+// Variable reference shown in text editors
 const TEXT_VARS = [
   { placeholder: '{{firstName}}',          description: 'Contractor first name' },
   { placeholder: '{{lastName}}',           description: 'Last name' },
@@ -90,8 +93,9 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
 
   const [regular, setRegular]   = useState<WorkerbookEmailTemplate>({ ...DEFAULT_REGULAR_TEMPLATE });
   const [rookie,  setRookie]    = useState<WorkerbookEmailTemplate>({ ...DEFAULT_ROOKIE_TEMPLATE });
-  const [textCell, setTextCell] = useState<WorkerbookTextTemplate>({ ...DEFAULT_TEXT_CELL_TEMPLATE });
-  const [textAlt,  setTextAlt]  = useState<WorkerbookTextTemplate>({ ...DEFAULT_TEXT_ALT_TEMPLATE });
+  const [textWorkerbook, setTextWorkerbook] = useState<WorkerbookTextTemplate>({ ...DEFAULT_TEXT_TEMPLATE });
+  const [textNs,  setTextNs]    = useState<WorkerbookTextTemplate>({ ...DEFAULT_NS_TEXT_TEMPLATE });
+  const [textWdr, setTextWdr]   = useState<WorkerbookTextTemplate>({ ...DEFAULT_WDR_TEXT_TEMPLATE });
 
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
@@ -102,22 +106,27 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
   useEffect(() => {
     Promise.all([
       loadWorkerbookTemplates(),
-      loadWorkerbookTextTemplates(),
+      loadAllTextTemplates(),
     ])
       .then(([emails, texts]) => {
         setRegular(emails.regular);
         setRookie(emails.rookie);
-        setTextCell(texts.cell);
-        setTextAlt(texts.alt);
+        setTextWorkerbook(texts.workerbook);
+        setTextNs(texts.ns);
+        setTextWdr(texts.wdr);
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
 
-  const isTextTab = activeTab === 'text_cell' || activeTab === 'text_alt';
+  const isTextTab = activeTab === 'text' || activeTab === 'text_ns' || activeTab === 'text_wdr';
 
   const currentEmailTemplate = activeTab === 'regular' ? regular : rookie;
-  const currentTextTemplate  = activeTab === 'text_cell' ? textCell : textAlt;
+
+  const currentTextTemplate =
+    activeTab === 'text_ns'  ? textNs  :
+    activeTab === 'text_wdr' ? textWdr :
+                               textWorkerbook;
 
   const updateEmail = (patch: Partial<WorkerbookEmailTemplate>) => {
     if (activeTab === 'regular') setRegular({ ...regular, ...patch });
@@ -125,8 +134,9 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
   };
 
   const updateText = (patch: Partial<WorkerbookTextTemplate>) => {
-    if (activeTab === 'text_cell') setTextCell({ ...textCell, ...patch });
-    else if (activeTab === 'text_alt') setTextAlt({ ...textAlt, ...patch });
+    if (activeTab === 'text')      setTextWorkerbook({ ...textWorkerbook, ...patch });
+    else if (activeTab === 'text_ns')  setTextNs({ ...textNs, ...patch });
+    else if (activeTab === 'text_wdr') setTextWdr({ ...textWdr, ...patch });
   };
 
   const handleSave = async () => {
@@ -135,8 +145,9 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
     try {
       await saveWorkerbookTemplate('workerbook_regular', regular);
       await saveWorkerbookTemplate('workerbook_rookie', rookie);
-      await saveWorkerbookTextTemplate('workerbook_text_cell', textCell);
-      await saveWorkerbookTextTemplate('workerbook_text_alt', textAlt);
+      await saveStatusTextTemplate('workerbook_text', textWorkerbook);
+      await saveStatusTextTemplate('workerbook_text_ns', textNs);
+      await saveStatusTextTemplate('workerbook_text_wdr', textWdr);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (err: any) {
@@ -167,6 +178,22 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
     'w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm ' +
     'focus:ring-2 focus:ring-blue-500 focus:outline-none';
 
+  // Colour themes per tab — for subtle visual cue in the header & preview
+  const textTabTheme =
+    activeTab === 'text_ns'  ? { text: 'text-red-400',   bg: 'bg-red-900/20',   border: 'border-red-700/40',   bubble: 'bg-red-600' } :
+    activeTab === 'text_wdr' ? { text: 'text-amber-400', bg: 'bg-amber-900/20', border: 'border-amber-700/40', bubble: 'bg-amber-600' } :
+                               { text: 'text-green-400', bg: 'bg-green-900/20', border: 'border-green-700/40', bubble: 'bg-green-600' };
+
+  const textTabLabel =
+    activeTab === 'text_ns'  ? 'NS Callback Text' :
+    activeTab === 'text_wdr' ? 'WDR Callback Text' :
+                               'Workerbook Day-Of Text';
+
+  const textTabHint =
+    activeTab === 'text_ns'  ? 'Sent when calling back contractors on the NS (no-show) tab.' :
+    activeTab === 'text_wdr' ? 'Sent when calling back contractors on the WDR (worked didn\'t rebook) tab.' :
+                               'Sent from the workerbook day view for day-of shift reminders.';
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -186,7 +213,7 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
             </button>
             <div>
               <h1 className="text-lg font-bold">Workerbook Templates</h1>
-              <p className="text-xs text-gray-400">{currentCC?.displayName} — Day-of shift emails &amp; texts</p>
+              <p className="text-xs text-gray-400">{currentCC?.displayName} — Emails &amp; text messages</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -256,26 +283,37 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
                 Rookie Email
               </button>
               <button
-                onClick={() => setActiveTab('text_cell')}
+                onClick={() => setActiveTab('text')}
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                  activeTab === 'text_cell'
+                  activeTab === 'text'
                     ? 'bg-green-600 text-white'
                     : 'bg-gray-800 text-gray-400 hover:text-white border border-gray-700'
                 }`}
               >
                 <MessageSquare size={14} />
-                Text — Cell
+                Workerbook Text
               </button>
               <button
-                onClick={() => setActiveTab('text_alt')}
+                onClick={() => setActiveTab('text_ns')}
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                  activeTab === 'text_alt'
+                  activeTab === 'text_ns'
+                    ? 'bg-red-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:text-white border border-gray-700'
+                }`}
+              >
+                <UserX size={14} />
+                NS Text
+              </button>
+              <button
+                onClick={() => setActiveTab('text_wdr')}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                  activeTab === 'text_wdr'
                     ? 'bg-amber-600 text-white'
                     : 'bg-gray-800 text-gray-400 hover:text-white border border-gray-700'
                 }`}
               >
-                <MessageSquare size={14} />
-                Text — Alt
+                <UserMinus size={14} />
+                WDR Text
               </button>
             </div>
 
@@ -405,13 +443,13 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
               </div>
             )}
 
-            {/* TEXT EDITOR — shown for text_cell/text_alt tabs */}
+            {/* TEXT EDITOR — shown for text/text_ns/text_wdr tabs */}
             {isTextTab && (
               <div className="space-y-4">
                 <div className="bg-gray-800 rounded-xl border border-gray-700 p-4">
-                  <h3 className="font-bold text-sm text-gray-300 mb-2 flex items-center gap-2">
-                    <MessageSquare size={14} className={activeTab === 'text_cell' ? 'text-green-400' : 'text-amber-400'} />
-                    {activeTab === 'text_cell' ? 'Cell Phone Text Message' : 'Alt Phone Text Message'}
+                  <h3 className={`font-bold text-sm text-gray-300 mb-2 flex items-center gap-2`}>
+                    <MessageSquare size={14} className={textTabTheme.text} />
+                    {textTabLabel}
                   </h3>
                   <textarea
                     rows={8}
@@ -456,14 +494,8 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
                     </div>
                   </div>
 
-                  <div className={`mt-2 text-xs border rounded p-2 ${
-                    activeTab === 'text_cell'
-                      ? 'text-green-300 bg-green-900/20 border-green-700/40'
-                      : 'text-amber-300 bg-amber-900/20 border-amber-700/40'
-                  }`}>
-                    💬 Tap the 💬 icon next to a {activeTab === 'text_cell' ? 'cell' : 'alt'} phone number
-                    on the Workerbook to open your messaging app with this template pre-filled.
-                    You still hit <strong>Send</strong> manually.
+                  <div className={`mt-2 text-xs border rounded p-2 ${textTabTheme.text} ${textTabTheme.bg} ${textTabTheme.border}`}>
+                    💬 {textTabHint} Same message is used for both cell and alt phones.
                   </div>
                 </div>
               </div>
@@ -475,10 +507,11 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
             <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden sticky top-20">
               <div className="bg-gray-900 px-4 py-2 border-b border-gray-700 flex items-center justify-between">
                 <span className="text-sm font-medium text-gray-400">
-                  {activeTab === 'regular'   && 'Regular Email Preview'}
-                  {activeTab === 'rookie'    && 'Rookie Email Preview'}
-                  {activeTab === 'text_cell' && 'Cell Text Preview'}
-                  {activeTab === 'text_alt'  && 'Alt Text Preview'}
+                  {activeTab === 'regular'  && 'Regular Email Preview'}
+                  {activeTab === 'rookie'   && 'Rookie Email Preview'}
+                  {activeTab === 'text'     && 'Workerbook Text Preview'}
+                  {activeTab === 'text_ns'  && 'NS Callback Text Preview'}
+                  {activeTab === 'text_wdr' && 'WDR Callback Text Preview'}
                 </span>
                 <span className="text-xs text-gray-500">Sample data shown</span>
               </div>
@@ -502,7 +535,7 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
                       <Smartphone size={14} />
                       <span>To: {SAMPLE_DATA.firstName} {SAMPLE_DATA.lastName}</span>
                     </div>
-                    <div className="bg-green-600 text-white rounded-2xl rounded-br-sm px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-lg">
+                    <div className={`${textTabTheme.bubble} text-white rounded-2xl rounded-br-sm px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words shadow-lg`}>
                       {previewText()}
                     </div>
                     <div className="text-right text-[11px] text-gray-500 mt-1 mr-2">Delivered</div>

@@ -24,6 +24,8 @@ export interface CommandCenter {
   // Digital Mapping
   digitalMappingEnabled?: boolean;
   callbookSheetId?: string;
+  // Workerbook Run (Google Apps Script Web App URL for runMoveLogic)
+  workerbookRunUrl?: string;
 }
 
 export interface CommandCenterWithPassword extends CommandCenter {
@@ -372,6 +374,7 @@ class CommandCenterService {
     jobFairsSlug?: string;
     digitalMappingEnabled?: boolean;
     callbookSheetId?: string;
+    workerbookRunUrl?: string;
   }): Promise<CommandCenter> {
     // Validate username uniqueness across all login types
     const isAvailable = await this.isUsernameAvailable(cc.username);
@@ -407,6 +410,7 @@ class CommandCenterService {
         job_fairs_slug: cc.jobFairsEnabled ? cc.jobFairsSlug : null,
         digital_mapping_enabled: cc.digitalMappingEnabled || false,
         callbook_sheet_id: cc.callbookSheetId || null,
+        workerbook_run_url: cc.workerbookRunUrl || null,
       })
       .select()
       .single();
@@ -431,6 +435,7 @@ class CommandCenterService {
     jobFairsSlug: string;
     digitalMappingEnabled: boolean;
     callbookSheetId: string;
+    workerbookRunUrl: string;
   }>): Promise<CommandCenter> {
     // If username is being changed, check availability
     if (updates.username) {
@@ -472,6 +477,9 @@ class CommandCenterService {
     if (updates.digitalMappingEnabled !== undefined) dbUpdates.digital_mapping_enabled = updates.digitalMappingEnabled;
     if (updates.callbookSheetId !== undefined) {
       dbUpdates.callbook_sheet_id = updates.digitalMappingEnabled ? updates.callbookSheetId : null;
+    }
+    if (updates.workerbookRunUrl !== undefined) {
+      dbUpdates.workerbook_run_url = updates.workerbookRunUrl || null;
     }
 
     const { data, error } = await supabase
@@ -680,6 +688,7 @@ class CommandCenterService {
       jobFairsSlug: data.job_fairs_slug,
       digitalMappingEnabled: data.digital_mapping_enabled || false,
       callbookSheetId: data.callbook_sheet_id || undefined,
+      workerbookRunUrl: data.workerbook_run_url || undefined,
     };
   }
 }

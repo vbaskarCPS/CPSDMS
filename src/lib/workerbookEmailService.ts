@@ -51,6 +51,9 @@ export interface WorkerbookTextTemplate {
   bodyText: string;
 }
 
+// Identifies which text-template context we're saving/loading
+export type StatusTextTemplateType = 'workerbook_text' | 'workerbook_text_ns' | 'workerbook_text_wdr';
+
 // ─── DATE FORMATTING ──────────────────────────────────────────────────────────
 
 /**
@@ -114,17 +117,26 @@ export const DEFAULT_ROOKIE_TEMPLATE: WorkerbookEmailTemplate = {
   signatureEmail: '',
 };
 
-export const DEFAULT_TEXT_CELL_TEMPLATE: WorkerbookTextTemplate = {
+// Workerbook day-of text — single unified template (used for both cell and alt).
+export const DEFAULT_TEXT_TEMPLATE: WorkerbookTextTemplate = {
   bodyText:
     'Hi {{firstName}}, reminder about your shift {{dateFriendly}}. ' +
     'Shuttle #{{shuttle}} - {{shuttleDescription}} at {{pickupTime}}. ' +
     'Reply YES to confirm. - Property Stars',
 };
 
-export const DEFAULT_TEXT_ALT_TEMPLATE: WorkerbookTextTemplate = {
+// NS (no-show) callback template
+export const DEFAULT_NS_TEXT_TEMPLATE: WorkerbookTextTemplate = {
   bodyText:
-    'Hi, trying to reach {{firstName}} {{lastName}} about their shift {{dateFriendly}}. ' +
-    'Please have them reply to confirm or call us back. - Property Stars',
+    "Hi {{firstName}}, we noticed you missed your shift. We'd love to get you back on the schedule. " +
+    'Reply with a day that works for you. - Property Stars',
+};
+
+// WDR (worked didn't rebook) follow-up template
+export const DEFAULT_WDR_TEXT_TEMPLATE: WorkerbookTextTemplate = {
+  bodyText:
+    'Hi {{firstName}}, hope your first shift went well! Ready to pick up another day? ' +
+    'Reply with a day that works for you. - Property Stars',
 };
 
 // ─── TEMPLATE PERSISTENCE ─────────────────────────────────────────────────────
@@ -206,53 +218,126 @@ export async function saveWorkerbookTemplate(
 
 // ─── TEXT TEMPLATE PERSISTENCE ────────────────────────────────────────────────
 
-export async function loadWorkerbookTextTemplates(): Promise<{
-  cell: WorkerbookTextTemplate;
-  alt:  WorkerbookTextTemplate;
-}> {
+/**
+ * Load the unified workerbook text template.
+ *
+ * Backward-compatible: if the new 'workerbook_text' key doesn't exist yet,
+ * falls back to the legacy 'workerbook_text_cell' key (from the cell/alt
+ * split we used to have). Cell wins over alt per Vijay's preference.
+ */
+export async function loadWorkerbookTextTemplate(): Promise<WorkerbookTextTemplate> {
   const ccId = commandCenterService.getCurrentCommandCenterId();
-  if (!ccId) return {
-    cell: { ...DEFAULT_TEXT_CELL_TEMPLATE },
-    alt:  { ...DEFAULT_TEXT_ALT_TEMPLATE },
-  };
+  if (!ccId) return { ...DEFAULT_TEXT_TEMPLATE };
 
   try {
     const { data } = await supabase
       .from('email_templates')
       .select('template_type, content_structure')
       .eq('command_center_id', ccId)
-      .in('template_type', ['workerbook_text_cell', 'workerbook_text_alt']);
+      .in('template_type', ['workerbook_text', 'workerbook_text_cell']);
 
-    const mapTemplate = (row: any, def: WorkerbookTextTemplate): WorkerbookTextTemplate => ({
-      bodyText: (row?.content_structure as any)?.bodyText || def.bodyText,
-    });
+    // Prefer the unified 'workerbook_text' if it exists
+    const unified = data?.find(t => t.template_type === 'workerbook_text');
+    if (unified) {
+      return {
+        bodyText: (unified.content_structure as any)?.bodyText || DEFAULT_TEXT_TEMPLATE.bodyText,
+      };
+    }
 
-    const cellRow = data?.find(t => t.template_type === 'workerbook_text_cell');
-    const altRow  = data?.find(t => t.template_type === 'workerbook_text_alt');
+    // Fallback to the legacy 'workerbook_text_cell' for migration
+    const legacy = data?.find(t => t.template_type === 'workerbook_text_cell');
+    if (legacy) {
+      return {
+        bodyText: (legacy.content_structure as any)?.bodyText || DEFAULT_TEXT_TEMPLATE.bodyText,
+      };
+    }
 
-    return {
-      cell: mapTemplate(cellRow, DEFAULT_TEXT_CELL_TEMPLATE),
-      alt:  mapTemplate(altRow,  DEFAULT_TEXT_ALT_TEMPLATE),
-    };
+    return { ...DEFAULT_TEXT_TEMPLATE };
   } catch {
-    return {
-      cell: { ...DEFAULT_TEXT_CELL_TEMPLATE },
-      alt:  { ...DEFAULT_TEXT_ALT_TEMPLATE },
-    };
+    return { ...DEFAULT_TEXT_TEMPLATE };
   }
 }
 
-export async function saveWorkerbookTextTemplate(
-  type: 'workerbook_text_cell' | 'workerbook_text_alt',
+/**
+ * Save the unified workerbook text template.
+ */
+export async function saveWorkerbookTextTemplate(template: WorkerbookTextTemplate): Promise<void> {
+  await saveStatusTextTemplate('workerbook_text', template);
+}
+
+/**
+ * Load the NS callback text template.
+ */
+export async function loadNsTextTemplate(): Promise<WorkerbookTextTemplate> {
+  return loadStatusTextTemplateByType('workerbook_text_ns', DEFAULT_NS_TEXT_TEMPLATE);
+}
+
+/**
+ * Load the WDR callback text template.
+ */
+export async function loadWdrTextTemplate(): Promise<WorkerbookTextTemplate> {
+  return loadStatusTextTemplateByType('workerbook_text_wdr', DEFAULT_WDR_TEXT_TEMPLATE);
+}
+
+/**
+ * Load all three text templates (workerbook, NS, WDR) in one shot.
+ */
+export async function loadAllTextTemplates(): Promise<{
+  workerbook: WorkerbookTextTemplate;
+  ns: WorkerbookTextTemplate;
+  wdr: WorkerbookTextTemplate;
+}> {
+  const [workerbook, ns, wdr] = await Promise.all([
+    loadWorkerbookTextTemplate(),
+    loadNsTextTemplate(),
+    loadWdrTextTemplate(),
+  ]);
+  return { workerbook, ns, wdr };
+}
+
+async function loadStatusTextTemplateByType(
+  type: StatusTextTemplateType,
+  def: WorkerbookTextTemplate,
+): Promise<WorkerbookTextTemplate> {
+  const ccId = commandCenterService.getCurrentCommandCenterId();
+  if (!ccId) return { ...def };
+
+  try {
+    const { data } = await supabase
+      .from('email_templates')
+      .select('content_structure')
+      .eq('command_center_id', ccId)
+      .eq('template_type', type)
+      .maybeSingle();
+
+    return {
+      bodyText: (data?.content_structure as any)?.bodyText || def.bodyText,
+    };
+  } catch {
+    return { ...def };
+  }
+}
+
+/**
+ * Save any of the three text templates by type.
+ */
+export async function saveStatusTextTemplate(
+  type: StatusTextTemplateType,
   template: WorkerbookTextTemplate,
 ): Promise<void> {
   const ccId = commandCenterService.getCurrentCommandCenterId();
   if (!ccId) return;
 
+  const names: Record<StatusTextTemplateType, string> = {
+    workerbook_text:     'Workerbook Day-Of Text',
+    workerbook_text_ns:  'Workerbook NS Callback Text',
+    workerbook_text_wdr: 'Workerbook WDR Callback Text',
+  };
+
   const payload = {
     command_center_id: ccId,
     template_type:     type,
-    template_name:     type === 'workerbook_text_cell' ? 'Workerbook Text — Cell' : 'Workerbook Text — Alt',
+    template_name:     names[type],
     subject:           '',
     html_content:      '',
     content_structure: { bodyText: template.bodyText },
@@ -298,6 +383,9 @@ export async function cleanOldWorkerbookEmailLogs(): Promise<void> {
       'workerbook_day_of_rookie',
       'workerbook_text_cell',
       'workerbook_text_alt',
+      'workerbook_text',
+      'workerbook_text_ns',
+      'workerbook_text_wdr',
     ])
     .lt('sent_at', cutoff.toISOString());
 }
@@ -305,33 +393,96 @@ export async function cleanOldWorkerbookEmailLogs(): Promise<void> {
 // ─── TEXT TRACKING ────────────────────────────────────────────────────────────
 
 /**
- * Returns a Set of keys like "H1001:cell" or "H1001:alt" indicating
- * which contractor+phone combinations have been texted today.
+ * Text tracking context — which screen the text was sent from.
+ */
+export type TextContext = 'workerbook' | 'ns' | 'wdr';
+
+/**
+ * Returns a Set of keys like "H1001:cell:workerbook" or "H1001:alt:ns"
+ * indicating which contractor+phone+context combinations have been texted today.
+ *
+ * Preserves backward compatibility with the old cell/alt split logs.
  */
 export async function getTextedTodayMap(): Promise<Set<string>> {
   const today = new Date().toISOString().split('T')[0];
   const { data } = await supabase
     .from('email_logs')
     .select('recipient_email, email_type')
-    .in('email_type', ['workerbook_text_cell', 'workerbook_text_alt'])
+    .in('email_type', [
+      'workerbook_text_cell',
+      'workerbook_text_alt',
+      'workerbook_text',
+      'workerbook_text_ns',
+      'workerbook_text_wdr',
+    ])
     .gte('sent_at', `${today}T00:00:00Z`);
 
   const set = new Set<string>();
   for (const row of data || []) {
-    // recipient_email holds the contractor ID for text logs
-    const phoneType = row.email_type === 'workerbook_text_cell' ? 'cell' : 'alt';
-    set.add(`${row.recipient_email}:${phoneType}`);
+    // recipient_email holds the contractor ID for text logs.
+    // We store it as "CN_ID:phoneType:context"
+    // For backward compat, the old "workerbook_text_cell"/"workerbook_text_alt"
+    // rows get mapped to workerbook context.
+    const t = row.email_type;
+    let phoneType: 'cell' | 'alt' = 'cell';
+    let context: TextContext = 'workerbook';
+
+    if (t === 'workerbook_text_cell') { phoneType = 'cell'; context = 'workerbook'; }
+    else if (t === 'workerbook_text_alt') { phoneType = 'alt'; context = 'workerbook'; }
+    else if (t === 'workerbook_text') {
+      // Modern unified logs encode phone type in the recipient_email suffix:
+      // e.g., "H1001:cell" or "H1001:alt"
+      const parts = String(row.recipient_email || '').split(':');
+      if (parts.length >= 2 && (parts[1] === 'cell' || parts[1] === 'alt')) {
+        phoneType = parts[1] as 'cell' | 'alt';
+        set.add(`${parts[0]}:${phoneType}:workerbook`);
+        continue;
+      }
+      phoneType = 'cell';
+      context = 'workerbook';
+    }
+    else if (t === 'workerbook_text_ns') {
+      const parts = String(row.recipient_email || '').split(':');
+      if (parts.length >= 2 && (parts[1] === 'cell' || parts[1] === 'alt')) {
+        set.add(`${parts[0]}:${parts[1]}:ns`);
+        continue;
+      }
+      context = 'ns';
+    }
+    else if (t === 'workerbook_text_wdr') {
+      const parts = String(row.recipient_email || '').split(':');
+      if (parts.length >= 2 && (parts[1] === 'cell' || parts[1] === 'alt')) {
+        set.add(`${parts[0]}:${parts[1]}:wdr`);
+        continue;
+      }
+      context = 'wdr';
+    }
+
+    set.add(`${row.recipient_email}:${phoneType}:${context}`);
   }
   return set;
 }
 
+/**
+ * Record that a text was sent (user tapped the SMS button).
+ * context: 'workerbook' | 'ns' | 'wdr'
+ * phoneType: 'cell' | 'alt'
+ */
 export async function logTextSent(
   contractorId: string,
   phoneType: 'cell' | 'alt',
+  context: TextContext = 'workerbook',
 ): Promise<void> {
-  const emailType = phoneType === 'cell' ? 'workerbook_text_cell' : 'workerbook_text_alt';
+  const emailType =
+    context === 'ns'  ? 'workerbook_text_ns' :
+    context === 'wdr' ? 'workerbook_text_wdr' :
+                        'workerbook_text';
+
+  // Encode phoneType into the recipient_email key so we can split in getTextedTodayMap
+  const key = `${contractorId}:${phoneType}`;
+
   await supabase.from('email_logs').insert({
-    recipient_email: contractorId,
+    recipient_email: key,
     email_type:      emailType,
     status:          'sent',
   });
@@ -678,4 +829,4 @@ export async function sendWorkerbookEmail(
   } catch (err: any) {
     return { success: false, error: err.message || 'Failed to send' };
   }
-} 
+}

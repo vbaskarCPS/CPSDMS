@@ -25,6 +25,7 @@ import {
   Eye,
   CreditCard,
   BookOpen,
+  Zap,
 } from 'lucide-react';
 import {
   commandCenterService,
@@ -65,6 +66,7 @@ const CommandCenterCreator: React.FC = () => {
     jobFairsSlug: '',
     digitalMappingEnabled: false,
     callbookUrl: '',
+    workerbookRunUrl: '',
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
@@ -102,6 +104,7 @@ const CommandCenterCreator: React.FC = () => {
       jobFairsSlug: '',
       digitalMappingEnabled: false,
       callbookUrl: '',
+      workerbookRunUrl: '',
     });
     setFormErrors({});
     setEditingCC(null);
@@ -130,6 +133,7 @@ const CommandCenterCreator: React.FC = () => {
       jobFairsSlug: cc.jobFairsSlug || '',
       digitalMappingEnabled: cc.digitalMappingEnabled || false,
       callbookUrl: cbUrl,
+      workerbookRunUrl: cc.workerbookRunUrl || '',
     });
     setFormErrors({});
     setShowModal(true);
@@ -180,6 +184,14 @@ const CommandCenterCreator: React.FC = () => {
       }
     }
 
+    // Workerbook Run URL is optional, but if provided, must look like a script URL
+    if (formData.workerbookRunUrl.trim()) {
+      const url = formData.workerbookRunUrl.trim();
+      if (!url.startsWith('https://script.google.com/') || !url.includes('/exec')) {
+        errors.workerbookRunUrl = 'Must be a Google Apps Script Web App URL (ends in /exec)';
+      }
+    }
+
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -208,6 +220,7 @@ const CommandCenterCreator: React.FC = () => {
           jobFairsSlug: formData.jobFairsEnabled ? formData.jobFairsSlug : '',
           digitalMappingEnabled: formData.digitalMappingEnabled,
           callbookSheetId: callbookSheetId || '',
+          workerbookRunUrl: formData.workerbookRunUrl.trim(),
         };
         
         if (formData.password.trim()) {
@@ -227,6 +240,7 @@ const CommandCenterCreator: React.FC = () => {
           jobFairsSlug: formData.jobFairsEnabled ? formData.jobFairsSlug : '',
           digitalMappingEnabled: formData.digitalMappingEnabled,
           callbookSheetId,
+          workerbookRunUrl: formData.workerbookRunUrl.trim() || undefined,
         });
       }
 
@@ -438,6 +452,12 @@ const CommandCenterCreator: React.FC = () => {
                   <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-900/50 text-blue-300 flex items-center gap-1">
                     <MapIcon size={10} />
                     Digital Map
+                  </span>
+                )}
+                {cc.workerbookRunUrl && (
+                  <span className="px-2 py-0.5 rounded text-xs font-medium bg-yellow-900/50 text-yellow-300 flex items-center gap-1">
+                    <Zap size={10} />
+                    WB Run
                   </span>
                 )}
               </div>
@@ -739,6 +759,34 @@ const CommandCenterCreator: React.FC = () => {
                 {workerbookIdPreview && (
                   <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
                     <Check size={12} /><span>{workerbookIdPreview}</span>
+                  </p>
+                )}
+              </div>
+
+              {/* WORKERBOOK RUN URL (Apps Script Web App) */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">
+                  Workerbook Run URL <span className="text-gray-500">(optional — Google Apps Script Web App)</span>
+                </label>
+                <div className="relative">
+                  <Zap className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+                  <input
+                    type="text"
+                    value={formData.workerbookRunUrl}
+                    onChange={(e) => setFormData({ ...formData, workerbookRunUrl: e.target.value })}
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    className={`w-full bg-gray-900 border rounded-lg py-2 pl-10 pr-3 text-white focus:ring-2 focus:outline-none text-sm ${
+                      formErrors.workerbookRunUrl ? 'border-red-500 focus:ring-red-500' : 'border-gray-600 focus:ring-yellow-500'
+                    }`}
+                  />
+                </div>
+                {formErrors.workerbookRunUrl && <p className="text-red-400 text-xs mt-1">{formErrors.workerbookRunUrl}</p>}
+                <p className="text-gray-500 text-xs mt-1">
+                  The Web App URL deployed from <code className="text-gray-400">RunLogic.gs</code>. Required for the Move-to NS/WDR/Q/F buttons in the Digital Workerbook.
+                </p>
+                {formData.workerbookRunUrl.trim() && !formErrors.workerbookRunUrl && (
+                  <p className="text-yellow-400 text-xs mt-1 flex items-center gap-1">
+                    <Check size={12} /><span>Looks like a valid script URL</span>
                   </p>
                 )}
               </div>

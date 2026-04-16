@@ -17,6 +17,13 @@ import {
   CloudUpload,
   Bus,
   MessageSquare,
+  UserX,
+  UserMinus,
+  UserCheck,
+  Flame,
+  CalendarDays,
+  Home,
+  Zap,
 } from 'lucide-react';
 import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import { commandCenterService } from '../../lib/commandCenterService';
@@ -26,7 +33,7 @@ import {
   WorkerbookTextTemplate,
   WorkerbookConfirmation,
   loadWorkerbookTemplates,
-  loadWorkerbookTextTemplates,
+  loadAllTextTemplates,
   getEmailedTodaySet,
   cleanOldWorkerbookEmailLogs,
   sendWorkerbookEmail,
@@ -36,6 +43,7 @@ import {
   logTextSent,
   buildTextMessage,
   buildSmsLink,
+  TextContext,
 } from '../../lib/workerbookEmailService';
 import {
   PhoneType,
@@ -45,6 +53,23 @@ import {
 } from '../../lib/workerbookNaService';
 import { pushShuttleRoster } from '../../lib/shuttleRosterService';
 import WorkerbookEmailService from './WorkerbookEmailService';
+import {
+  getDatedTabs,
+  loadAllDayCounts,
+  groupTabsByMonth,
+  buildMonthGrid,
+  getTodayTabName as getCalendarTodayTabName,
+  MonthGroup,
+  DayCount,
+  CalendarProgress,
+} from '../../lib/workerbookCalendarService';
+import {
+  loadStatusRoster,
+  loadAllStatusCounts,
+  StatusContractor,
+  StatusTabName,
+} from '../../lib/workerbookStatusRosterService';
+import { triggerRunLogic, isRunInFlight } from '../../lib/workerbookRunService';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -68,6 +93,8 @@ interface WBContractor {
 }
 
 type DotColor = 'green' | 'silver' | 'gold' | null;
+type WBView = 'calendar' | 'day' | 'status';
+type MoveTargetContext = 'day' | 'status';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -122,6 +149,28 @@ function sortContractors(
     if (lastCmp !== 0) return lastCmp;
     return a.firstName.localeCompare(b.firstName);
   });
+}
+
+/** Convert a StatusContractor into a WBContractor-shaped object for reuse in the day-view card renderer. */
+function statusToWB(c: StatusContractor): WBContractor {
+  return {
+    rowNum:    c.rowNum,
+    shuttle:   c.shuttle,
+    cnId:      c.cnId,
+    firstName: c.firstName,
+    lastName:  c.lastName,
+    cellPhone: c.cellPhone,
+    altPhone:  c.altPhone,
+    email:     c.email,
+    manager:   c.manager,
+    team:      c.team,
+    confirmed: false,
+    showed:    false,
+    nextDay:   c.nextDay,
+    days:      c.days,
+    ns:        c.ns,
+    notes:     c.notes,
+  };
 }
 
 // ─── CONFIRM BUTTON ───────────────────────────────────────────────────────────
@@ -181,11 +230,16 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   const [isConnected, setIsConnected]   = useState(() => dialerSheetsService.isAuthenticated());
   const [connecting, setConnecting]     = useState(false);
 
+  // View state: calendar landing vs. day vs. status roster
+  const [view, setView] = useState<WBView>('calendar');
+  const [activeStatusTab, setActiveStatusTab] = useState<StatusTabName | null>(null);
+
   const [allTabs, setAllTabs]           = useState<string[]>([]);
   const [tabIndex, setTabIndex]         = useState(0);
   const selectedTab                     = allTabs[tabIndex] ?? '';
 
   const [contractors, setContractors]   = useState<WBContractor[]>([]);
+  const [statusRoster, setStatusRoster] = useState<StatusContractor[]>([]);
   const [loading, setLoading]           = useState(false);
   const [error, setError]               = useState<string | null>(null);
 
@@ -193,7 +247,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   const [emailedToday, setEmailedToday] = useState<Set<string>>(new Set());
   const [templates, setTemplates]       = useState<{ regular: WorkerbookEmailTemplate; rookie: WorkerbookEmailTemplate } | null>(null);
-  const [textTemplates, setTextTemplates] = useState<{ cell: WorkerbookTextTemplate; alt: WorkerbookTextTemplate } | null>(null);
+  const [textTemplates, setTextTemplates] = useState<{ workerbook: WorkerbookTextTemplate; ns: WorkerbookTextTemplate; wdr: WorkerbookTextTemplate } | null>(null);
   const [textedToday, setTextedToday]   = useState<Set<string>>(new Set());
   const [sendingFor, setSendingFor]     = useState<string | null>(null);
   const [sendingAll, setSendingAll]     = useState(false);
@@ -209,7 +263,9 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   const [showEmailService, setShowEmailService] = useState(false);
   const [moveTarget, setMoveTarget]             = useState<WBContractor | null>(null);
+  const [moveTargetContext, setMoveTargetContext] = useState<MoveTargetContext>('day');
   const [moveToDate, setMoveToDate]             = useState('');
+  const [moveToDestination, setMoveToDestination] = useState<string>(''); // raw value to write (Apr17 | NS | WDR | Q | F)
   const [movingTo, setMovingTo]                 = useState(false);
   const [confirmingFor, setConfirmingFor]       = useState<string | null>(null);
 
@@ -217,13 +273,24 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   const [pushingToShuttles, setPushingToShuttles] = useState(false);
 
+  // Calendar landing page state
+  const [monthGroups, setMonthGroups] = useState<MonthGroup[]>([]);
+  const [calendarCounts, setCalendarCounts] = useState<Map<string, DayCount>>(new Map());
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarProgress, setCalendarProgress] = useState<CalendarProgress | null>(null);
+  const [statusCounts, setStatusCounts] = useState<Record<StatusTabName, number>>({ NS: 0, WDR: 0, Q: 0, F: 0 });
+
+  // Run (GS Web App) state
+  const [runError, setRunError]         = useState<string | null>(null);
+  const [runSuccess, setRunSuccess]     = useState<string | null>(null);
+
   // ─── INIT ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     onboardingService.getShuttlePoints().then(setShuttlePoints).catch(() => {});
     getEmailedTodaySet().then(setEmailedToday).catch(() => {});
     loadWorkerbookTemplates().then(setTemplates).catch(() => {});
-    loadWorkerbookTextTemplates().then(setTextTemplates).catch(() => {});
+    loadAllTextTemplates().then(setTextTemplates).catch(() => {});
     getTextedTodayMap().then(setTextedToday).catch(() => {});
     cleanOldWorkerbookEmailLogs().catch(() => {});
   }, []);
@@ -231,37 +298,81 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   useEffect(() => {
     if (!showEmailService) {
       loadWorkerbookTemplates().then(setTemplates).catch(() => {});
-      loadWorkerbookTextTemplates().then(setTextTemplates).catch(() => {});
+      loadAllTextTemplates().then(setTextTemplates).catch(() => {});
     }
   }, [showEmailService]);
 
+  // Load calendar when connected + on calendar view
   useEffect(() => {
-    if (isConnected) loadDateTabs();
-  }, [isConnected]);
+    if (isConnected && view === 'calendar' && currentCC) {
+      loadCalendar();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected, view, currentCC]);
 
+  // Load a day's contractors when entering day view
   useEffect(() => {
-    if (selectedTab && isConnected) { loadContractors(); setCellColors(new Map()); }
-  }, [selectedTab, isConnected]);
+    if (view === 'day' && selectedTab && isConnected) {
+      loadContractors();
+      setCellColors(new Map());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, selectedTab, isConnected]);
 
+  // Load confirmations + NA counts for the currently viewed day
   useEffect(() => {
-    if (selectedTab && currentCC) {
+    if (view === 'day' && selectedTab && currentCC) {
       loadConfirmations();
       loadNaCounts();
     }
-  }, [selectedTab, currentCC]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, selectedTab, currentCC]);
+
+  // Load status roster + NA counts when entering NS/WDR view
+  useEffect(() => {
+    if (view === 'status' && activeStatusTab && isConnected && currentCC) {
+      loadStatusRosterData(activeStatusTab);
+      loadNaCountsForStatusTab(activeStatusTab);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, activeStatusTab, isConnected, currentCC]);
 
   // ─── DATA LOADING ──────────────────────────────────────────────────────────
 
-  const loadDateTabs = useCallback(async () => {
+  const loadCalendar = useCallback(async () => {
     if (!currentCC) return;
+    setCalendarLoading(true);
     setError(null);
+    setCalendarProgress(null);
     try {
-      const tabs = await dialerSheetsService.getSheetTabs(currentCC.workerbookSheetId);
-      const dated = tabs.map(t => t.title).filter(t => DATED_TAB_RE.test(t));
+      // 1. Get all dated tab names (sorted chronologically)
+      const dated = await getDatedTabs(currentCC.workerbookSheetId);
       setAllTabs(dated);
-      const todayIdx = dated.indexOf(getTodayTabName());
+      const todayIdx = dated.indexOf(getCalendarTodayTabName());
       setTabIndex(todayIdx >= 0 ? todayIdx : Math.max(0, dated.length - 1));
-    } catch (err: any) { setError(err.message || 'Failed to load tabs'); }
+
+      // 2. Fire the status tab counts in parallel (fast, 4 calls)
+      loadAllStatusCounts(currentCC.workerbookSheetId)
+        .then(setStatusCounts)
+        .catch(() => {});
+
+      // 3. Load day counts for every tab, sequentially with progress
+      const counts = await loadAllDayCounts(
+        currentCC.workerbookSheetId,
+        dated,
+        (p) => setCalendarProgress(p),
+      );
+      setCalendarCounts(counts);
+
+      // 4. Group into months
+      const groups = groupTabsByMonth(dated, counts);
+      setMonthGroups(groups);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load calendar');
+    } finally {
+      setCalendarLoading(false);
+      setCalendarProgress(null);
+    }
   }, [currentCC]);
 
   const loadContractors = useCallback(async () => {
@@ -291,6 +402,54 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
       setNaCounters(map);
     } catch { /* non-fatal */ }
   }, [currentCC, selectedTab]);
+
+  const loadNaCountsForStatusTab = useCallback(async (tabName: StatusTabName) => {
+    if (!currentCC) return;
+    try {
+      const map = await getNaCountsForTab(currentCC.id, tabName);
+      setNaCounters(map);
+    } catch { /* non-fatal */ }
+  }, [currentCC]);
+
+  const loadStatusRosterData = useCallback(async (tabName: StatusTabName) => {
+    if (!currentCC) return;
+    setLoading(true); setError(null);
+    try {
+      const roster = await loadStatusRoster(currentCC.workerbookSheetId, tabName);
+      setStatusRoster(roster);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load ' + tabName + ' roster');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentCC]);
+
+  // ─── VIEW NAVIGATION ───────────────────────────────────────────────────────
+
+  const backToCalendar = () => {
+    setView('calendar');
+    setActiveStatusTab(null);
+    setStatusRoster([]);
+    setContractors([]);
+    setEmailError(null);
+    setEmailSuccess(null);
+    setError(null);
+    setRunError(null);
+    setRunSuccess(null);
+  };
+
+  const openDayView = (tabName: string) => {
+    const idx = allTabs.indexOf(tabName);
+    if (idx >= 0) setTabIndex(idx);
+    setView('day');
+    setError(null);
+  };
+
+  const openStatusView = (tabName: StatusTabName) => {
+    setActiveStatusTab(tabName);
+    setView('status');
+    setError(null);
+  };
 
   // ─── GOOGLE CONNECT ────────────────────────────────────────────────────────
 
@@ -332,6 +491,12 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   const handlePhoneDial = async (c: WBContractor, phoneType: PhoneType, phoneNumber: string) => {
     if (!currentCC) return;
+    // Which tab are we operating on? (dated tab OR status tab)
+    const tabForNa = view === 'status' ? (activeStatusTab ?? '') : selectedTab;
+    if (!tabForNa) {
+      window.location.href = 'tel:' + phoneNumber;
+      return;
+    }
     const key = c.cnId + ':' + phoneType;
     setNaCounters(prev => {
       const next = new Map(prev);
@@ -340,7 +505,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     });
     window.location.href = 'tel:' + phoneNumber;
     try {
-      const newCount = await incrementNaCount(currentCC.id, c.cnId, selectedTab, phoneType);
+      const newCount = await incrementNaCount(currentCC.id, c.cnId, tabForNa, phoneType);
       setNaCounters(prev => {
         const next = new Map(prev);
         next.set(key, newCount);
@@ -359,20 +524,25 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   // ─── TEXT MESSAGE ──────────────────────────────────────────────────────────
 
-  const handleSendText = async (c: WBContractor, phoneType: 'cell' | 'alt') => {
+  const handleSendText = async (c: WBContractor, phoneType: 'cell' | 'alt', context: TextContext) => {
     if (!textTemplates) return;
     const phoneNumber = phoneType === 'cell' ? c.cellPhone : c.altPhone;
     if (!phoneNumber) return;
 
-    const template = phoneType === 'cell' ? textTemplates.cell : textTemplates.alt;
+    const template =
+      context === 'ns'  ? textTemplates.ns :
+      context === 'wdr' ? textTemplates.wdr :
+                          textTemplates.workerbook;
+
     const shuttlePt = getShuttlePoint(c.shuttle);
+    const dateForMessage = view === 'day' ? selectedTab : (c.nextDay || '');
 
     const messageBody = buildTextMessage(
       template,
       {
         firstName:    c.firstName,
         lastName:     c.lastName,
-        date:         selectedTab,
+        date:         dateForMessage,
         shuttle:      c.shuttle || undefined,
         days:         c.days,
         contractorId: c.cnId,
@@ -383,7 +553,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     const smsLink = buildSmsLink(phoneNumber, messageBody);
 
     // Optimistically mark as texted so the button turns green immediately
-    const key = c.cnId + ':' + phoneType;
+    const key = c.cnId + ':' + phoneType + ':' + context;
     setTextedToday(prev => new Set([...prev, key]));
 
     // Open the device messaging app
@@ -391,9 +561,8 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
     // Log to Supabase so refresh persists the state
     try {
-      await logTextSent(c.cnId, phoneType);
+      await logTextSent(c.cnId, phoneType, context);
     } catch {
-      // If the log fails, remove from set so it doesn't lie
       setTextedToday(prev => {
         const next = new Set(prev);
         next.delete(key);
@@ -440,18 +609,88 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   // ─── MOVE TO ───────────────────────────────────────────────────────────────
 
-  const handleMoveTo = async () => {
-    if (!currentCC || !moveTarget || !moveToDate) return;
+  const openMoveModal = (c: WBContractor, context: MoveTargetContext) => {
+    setMoveTarget(c);
+    setMoveTargetContext(context);
+    setMoveToDate('');
+    setMoveToDestination('');
+    setRunError(null);
+    setRunSuccess(null);
+  };
+
+  const handleMoveApply = async () => {
+    if (!currentCC || !moveTarget) return;
+    if (!moveToDestination) {
+      setRunError('Pick a destination (a date or one of NS / WDR / Q / F).');
+      return;
+    }
+
+    // Which SOURCE tab are we writing to column L on?
+    const sourceTab = moveTargetContext === 'status'
+      ? (activeStatusTab ?? '')
+      : selectedTab;
+
+    if (!sourceTab) {
+      setRunError('Unable to determine the source tab.');
+      return;
+    }
+
+    // Single-flight guard — the run service also checks, but check here for a clean message
+    if (isRunInFlight(currentCC.id)) {
+      setRunError('Another move is already running. Please wait for it to finish.');
+      return;
+    }
+
     setMovingTo(true);
-    const mmmdd = toMmmDD(moveToDate);
+    setRunError(null);
+    setRunSuccess(null);
+
     try {
+      // Step 1: write the destination into column L on the source tab
       await dialerSheetsService.sheetsUpdate(
-        currentCC.workerbookSheetId, "'" + selectedTab + "'!L" + moveTarget.rowNum, [[mmmdd]],
+        currentCC.workerbookSheetId,
+        "'" + sourceTab + "'!L" + moveTarget.rowNum,
+        [[moveToDestination]],
       );
-      setContractors(prev => prev.map(p => p.rowNum === moveTarget.rowNum ? { ...p, nextDay: mmmdd } : p));
-      setMoveTarget(null); setMoveToDate('');
-    } catch (err: any) { setError(err.message || 'Failed to move contractor'); }
-    finally { setMovingTo(false); }
+
+      // Step 2: trigger runMoveLogic via the deployed Web App URL
+      const result = await triggerRunLogic(
+        currentCC.id,
+        currentCC.workerbookRunUrl,
+        sourceTab,
+      );
+
+      if (!result.success) {
+        // The column-L write already happened. We leave it there — user can hit Run in Sheets
+        // manually, or retry from here. Set an error so they know.
+        setRunError('Destination written to Sheets, but auto-Run failed: ' + (result.error || 'unknown error'));
+        return;
+      }
+
+      setRunSuccess(
+        'Moved ' + moveTarget.firstName + ' ' + moveTarget.lastName +
+        ' → ' + moveToDestination,
+      );
+      setTimeout(() => setRunSuccess(null), 4000);
+
+      // Close modal and refresh the current view
+      setMoveTarget(null);
+      setMoveToDate('');
+      setMoveToDestination('');
+
+      // Refresh the appropriate view so the moved row no longer shows
+      if (moveTargetContext === 'status' && activeStatusTab) {
+        await loadStatusRosterData(activeStatusTab);
+        // Also refresh the status counts for the calendar landing
+        loadAllStatusCounts(currentCC.workerbookSheetId).then(setStatusCounts).catch(() => {});
+      } else {
+        await loadContractors();
+      }
+    } catch (err: any) {
+      setRunError(err.message || 'Failed to move contractor');
+    } finally {
+      setMovingTo(false);
+    }
   };
 
   // ─── PUSH TO SHUTTLES ─────────────────────────────────────────────────────
@@ -460,9 +699,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     if (!currentCC || !selectedTab || !contractors.length) return;
     setPushingToShuttles(true); setError(null);
     try {
-      // Compute email-confirmed IDs at call time
       const emailConfIds = new Set(confirmations.map(c => c.contractorId));
-
       const rosterData = contractors.map(c => ({
         contractorId:  c.cnId,
         firstName:     c.firstName,
@@ -474,7 +711,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
       await pushShuttleRoster(currentCC.id, selectedTab, rosterData);
 
-      // Open the public shuttle page in a new tab
       const ccUsername = (currentCC as any).username;
       if (ccUsername) {
         window.open('/' + ccUsername + '-shuttle', '_blank');
@@ -606,14 +842,13 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     );
   }
 
-  // ─── DERIVED STATE ─────────────────────────────────────────────────────────
+  // ─── DERIVED STATE (for day view) ──────────────────────────────────────────
 
   const emailConfirmedIds = new Set(confirmations.map(c => c.contractorId));
   const unsyncedCount     = confirmations.filter(c => !c.syncedToSheets).length;
   const pendingEmailCount = contractors.filter(c => c.email && !emailedToday.has(c.email.toLowerCase())).length;
 
   const sorted = sortContractors(contractors, emailConfirmedIds);
-
   const confirmedGroup   = sorted.filter(c => c.confirmed || emailConfirmedIds.has(c.cnId));
   const unconfirmedGroup = sorted.filter(c => !c.confirmed && !emailConfirmedIds.has(c.cnId));
 
@@ -621,14 +856,20 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     green: 'bg-green-400', silver: 'bg-gray-400', gold: 'bg-yellow-400',
   };
 
+  const currentTextContext: TextContext =
+    view === 'status' && activeStatusTab === 'NS'  ? 'ns'  :
+    view === 'status' && activeStatusTab === 'WDR' ? 'wdr' :
+                                                      'workerbook';
+
   // ─── TEXT BUTTON HELPER ────────────────────────────────────────────────────
 
   const renderTextButton = (c: WBContractor, phoneType: 'cell' | 'alt') => {
-    const texted = textedToday.has(c.cnId + ':' + phoneType);
+    const key = c.cnId + ':' + phoneType + ':' + currentTextContext;
+    const texted = textedToday.has(key);
     const disabled = !textTemplates;
     return (
       <button
-        onClick={() => handleSendText(c, phoneType)}
+        onClick={() => handleSendText(c, phoneType, currentTextContext)}
         disabled={disabled}
         title={texted ? 'Texted today — tap to resend' : 'Send text message'}
         className={
@@ -644,9 +885,9 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     );
   };
 
-  // ─── CARD RENDERER ─────────────────────────────────────────────────────────
+  // ─── CARD RENDERER (shared between day view and status view) ───────────────
 
-  const renderCard = (c: WBContractor) => {
+  const renderCard = (c: WBContractor, opts: { showEmailActions: boolean; showConfirm: boolean; moveContext: MoveTargetContext }) => {
     const dotColor       = cellColors.get(c.rowNum) ?? null;
     const shuttlePt      = getShuttlePoint(c.shuttle);
     const isEmailed      = !!(c.email && emailedToday.has(c.email.toLowerCase()));
@@ -660,15 +901,12 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
     return (
       <div
-        key={c.rowNum}
-        className={'bg-gray-800 rounded-xl border p-4 md:px-4 md:py-3 transition-colors ' + (isConfirmed ? 'border-green-700/50' : 'border-gray-700')}
+        key={c.rowNum + ':' + c.cnId}
+        className={'bg-gray-800 rounded-xl border p-4 md:px-4 md:py-3 transition-colors ' + (isConfirmed && opts.showConfirm ? 'border-green-700/50' : 'border-gray-700')}
       >
 
-        {/* ═════════════════════════════════════════════════════════════════
-            PHONE LAYOUT: sections stacked (< 768px only — hidden on md+)
-           ═════════════════════════════════════════════════════════════════ */}
+        {/* PHONE LAYOUT */}
         <div className="md:hidden space-y-3">
-          {/* Row 1: dot + CN + rookie badge + name */}
           <div className="flex items-center gap-2 min-w-0">
             {dotColor && <div className={'w-2.5 h-2.5 rounded-full flex-shrink-0 ' + dotClass[dotColor]} />}
             <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded font-mono flex-shrink-0">
@@ -684,7 +922,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             </span>
           </div>
 
-          {/* Row 2: Days / NS / Team pills */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className={'text-xs px-2.5 py-1 rounded ' + (isRookie ? 'bg-purple-900/30 text-purple-300 border border-purple-700/40' : 'bg-gray-700 text-gray-300')}>
               {'Days: ' + c.days}
@@ -701,32 +938,36 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             )}
           </div>
 
-          {/* Row 3: Email button + Confirm button (side by side, full width) */}
-          <div className="flex items-center gap-2">
-            {c.email ? (
-              <button
-                onClick={() => handleSendEmail(c)}
-                disabled={isSending || sendingAll}
-                className={'flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors flex-1 disabled:opacity-50 ' + (isEmailed ? 'bg-green-900/30 text-green-400 border border-green-700/50 hover:bg-green-900/50' : 'bg-blue-900/30 text-blue-400 border border-blue-700/50 hover:bg-blue-900/50')}
-              >
-                {isSending ? <Loader size={14} className="animate-spin" /> : isEmailed ? <CheckCircle size={14} /> : <Mail size={14} />}
-                {isEmailed ? 'Sent' : 'Email'}
-              </button>
-            ) : (
-              <span className="text-xs text-gray-600 flex-1 text-center py-2.5">No email on file</span>
-            )}
+          {(opts.showEmailActions || opts.showConfirm) && (
+            <div className="flex items-center gap-2">
+              {opts.showEmailActions && (
+                c.email ? (
+                  <button
+                    onClick={() => handleSendEmail(c)}
+                    disabled={isSending || sendingAll}
+                    className={'flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors flex-1 disabled:opacity-50 ' + (isEmailed ? 'bg-green-900/30 text-green-400 border border-green-700/50 hover:bg-green-900/50' : 'bg-blue-900/30 text-blue-400 border border-blue-700/50 hover:bg-blue-900/50')}
+                  >
+                    {isSending ? <Loader size={14} className="animate-spin" /> : isEmailed ? <CheckCircle size={14} /> : <Mail size={14} />}
+                    {isEmailed ? 'Sent' : 'Email'}
+                  </button>
+                ) : (
+                  <span className="text-xs text-gray-600 flex-1 text-center py-2.5">No email on file</span>
+                )
+              )}
 
-            <div className="flex-1">
-              <ConfirmButton
-                confirmed={c.confirmed}
-                emailConfirmed={emailConfirmed}
-                loading={isConfirming}
-                onClick={() => handleToggleConfirm(c)}
-              />
+              {opts.showConfirm && (
+                <div className="flex-1">
+                  <ConfirmButton
+                    confirmed={c.confirmed}
+                    emailConfirmed={emailConfirmed}
+                    loading={isConfirming}
+                    onClick={() => handleToggleConfirm(c)}
+                  />
+                </div>
+              )}
             </div>
-          </div>
+          )}
 
-          {/* Row 4: Cell phone + text button (full width) */}
           {c.cellPhone && (
             <div className="flex items-center gap-2">
               <button
@@ -745,7 +986,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
-          {/* Row 5: Alt phone + text button (full width) */}
           {c.altPhone && (
             <div className="flex items-center gap-2">
               <button
@@ -765,7 +1005,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
-          {/* Row 6: Email address (own line) */}
           {c.email && (
             <button
               onClick={() => { window.location.href = 'mailto:' + c.email; }}
@@ -776,7 +1015,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             </button>
           )}
 
-          {/* Row 7: Shuttle info (own line, full description visible) */}
           {c.shuttle && (
             <div className={'flex items-start gap-2 px-3 py-2.5 rounded-lg text-sm ' + (shuttlePt ? 'bg-blue-900/20 border border-blue-700/40 text-blue-300' : 'bg-gray-900 border border-gray-700 text-gray-500')}>
               <span className="flex-shrink-0">🚐</span>
@@ -793,39 +1031,30 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
-          {/* Row 8: Move To button (own line) */}
           <button
-            onClick={() => { setMoveTarget(c); setMoveToDate(''); }}
+            onClick={() => openMoveModal(c, opts.moveContext)}
             className="flex items-center justify-center gap-2 px-3 py-2.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-400 hover:text-white transition-colors w-full"
           >
             <Calendar size={14} />
-            {c.nextDay ? 'Next Day: ' + c.nextDay : 'Move To Next Day'}
+            {c.nextDay ? 'Next: ' + c.nextDay : 'Move / Status'}
           </button>
         </div>
 
-        {/* ═════════════════════════════════════════════════════════════════
-            TABLET LAYOUT: original compact layout (≥ 768px only)
-            Identical to the pre-mobile version of the card.
-           ═════════════════════════════════════════════════════════════════ */}
+        {/* TABLET LAYOUT */}
         <div className="hidden md:block">
-          {/* LINE 1 */}
           <div className="flex items-center gap-2 min-w-0">
             {dotColor && <div className={'w-2 h-2 rounded-full flex-shrink-0 ' + dotClass[dotColor]} />}
-
             <span className="text-[11px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded font-mono flex-shrink-0">
               {c.cnId}
             </span>
-
             {isRookie && (
               <span className="text-[10px] bg-purple-900/50 text-purple-300 px-1.5 py-0.5 rounded border border-purple-700/50 flex-shrink-0">
                 ROOKIE
               </span>
             )}
-
             <span className="font-bold text-white text-sm truncate flex-1 min-w-0">
               {c.firstName + ' ' + c.lastName}
             </span>
-
             <span className={'text-[11px] px-2 py-0.5 rounded flex-shrink-0 ' + (isRookie ? 'bg-purple-900/30 text-purple-300 border border-purple-700/40' : 'bg-gray-700 text-gray-300')}>
               {'Days: ' + c.days}
             </span>
@@ -840,30 +1069,32 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               </span>
             )}
 
-            {c.email ? (
-              <button
-                onClick={() => handleSendEmail(c)}
-                disabled={isSending || sendingAll}
-                className={'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex-shrink-0 disabled:opacity-50 ' + (isEmailed ? 'bg-green-900/30 text-green-400 border border-green-700/50 hover:bg-green-900/50' : 'bg-blue-900/30 text-blue-400 border border-blue-700/50 hover:bg-blue-900/50')}
-              >
-                {isSending ? <Loader size={11} className="animate-spin" /> : isEmailed ? <CheckCircle size={11} /> : <Mail size={11} />}
-                {isEmailed ? 'Sent' : 'Email'}
-              </button>
-            ) : (
-              <span className="text-[10px] text-gray-600 flex-shrink-0">No email</span>
+            {opts.showEmailActions && (
+              c.email ? (
+                <button
+                  onClick={() => handleSendEmail(c)}
+                  disabled={isSending || sendingAll}
+                  className={'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex-shrink-0 disabled:opacity-50 ' + (isEmailed ? 'bg-green-900/30 text-green-400 border border-green-700/50 hover:bg-green-900/50' : 'bg-blue-900/30 text-blue-400 border border-blue-700/50 hover:bg-blue-900/50')}
+                >
+                  {isSending ? <Loader size={11} className="animate-spin" /> : isEmailed ? <CheckCircle size={11} /> : <Mail size={11} />}
+                  {isEmailed ? 'Sent' : 'Email'}
+                </button>
+              ) : (
+                <span className="text-[10px] text-gray-600 flex-shrink-0">No email</span>
+              )
             )}
 
-            <ConfirmButton
-              confirmed={c.confirmed}
-              emailConfirmed={emailConfirmed}
-              loading={isConfirming}
-              onClick={() => handleToggleConfirm(c)}
-            />
+            {opts.showConfirm && (
+              <ConfirmButton
+                confirmed={c.confirmed}
+                emailConfirmed={emailConfirmed}
+                loading={isConfirming}
+                onClick={() => handleToggleConfirm(c)}
+              />
+            )}
           </div>
 
-          {/* LINE 2 */}
           <div className="flex items-center gap-2 mt-2 flex-wrap">
-
             {c.cellPhone && (
               <div className="flex items-center gap-1 flex-shrink-0">
                 <button
@@ -922,10 +1153,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             )}
 
             <button
-              onClick={() => { setMoveTarget(c); setMoveToDate(''); }}
+              onClick={() => openMoveModal(c, opts.moveContext)}
               className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-white transition-colors flex-shrink-0 ml-auto"
             >
-              <Calendar size={11} /> {c.nextDay || 'Move To'}
+              <Calendar size={11} /> {c.nextDay || 'Move'}
             </button>
           </div>
         </div>
@@ -933,7 +1164,364 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     );
   };
 
+  // ─── CALENDAR VIEW ─────────────────────────────────────────────────────────
+
+  const renderCalendarView = () => {
+    const todayTabName = getCalendarTodayTabName();
+    const progressText = calendarProgress
+      ? 'Loading ' + calendarProgress.loaded + ' of ' + calendarProgress.total + ' tabs' + (calendarProgress.currentTab ? ' (' + calendarProgress.currentTab + ')' : '')
+      : '';
+    const progressPct = calendarProgress && calendarProgress.total > 0
+      ? Math.round((calendarProgress.loaded / calendarProgress.total) * 100)
+      : 0;
+
+    return (
+      <>
+        {/* Status tiles — NS and WDR */}
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <button
+            onClick={() => openStatusView('NS')}
+            className="bg-red-900/20 hover:bg-red-900/40 border border-red-800/60 rounded-xl p-5 text-left transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-red-900/60 rounded-lg flex items-center justify-center border border-red-700/60">
+                <UserX className="text-red-400" size={24} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-red-400/80 font-semibold tracking-wide uppercase">No Shows</div>
+                <div className="text-2xl font-bold text-white">{statusCounts.NS}</div>
+                <div className="text-xs text-gray-400">Tap to call back</div>
+              </div>
+            </div>
+          </button>
+
+          <button
+            onClick={() => openStatusView('WDR')}
+            className="bg-amber-900/20 hover:bg-amber-900/40 border border-amber-800/60 rounded-xl p-5 text-left transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-amber-900/60 rounded-lg flex items-center justify-center border border-amber-700/60">
+                <UserMinus className="text-amber-400" size={24} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-amber-400/80 font-semibold tracking-wide uppercase">Worked, Didn't Rebook</div>
+                <div className="text-2xl font-bold text-white">{statusCounts.WDR}</div>
+                <div className="text-xs text-gray-400">Tap to call back</div>
+              </div>
+            </div>
+          </button>
+        </div>
+
+        {/* Loading progress bar */}
+        {calendarLoading && calendarProgress && (
+          <div className="bg-gray-800 rounded-xl border border-gray-700 p-4 mb-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Loader className="animate-spin text-blue-400" size={16} />
+              <span className="text-sm text-gray-300">{progressText}</span>
+              <span className="ml-auto text-sm font-bold text-blue-400">{progressPct}%</span>
+            </div>
+            <div className="w-full bg-gray-900 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-blue-500 h-full transition-all duration-150"
+                style={{ width: progressPct + '%' }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Month grids */}
+        {!calendarLoading && monthGroups.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-20 text-gray-500">
+            <CalendarDays size={48} className="mb-3 opacity-20" />
+            <p className="font-medium">No dated tabs found in your workbook</p>
+            <p className="text-sm mt-1">Expected tabs like "Apr16", "May01", etc.</p>
+          </div>
+        )}
+
+        <div className="space-y-6">
+          {monthGroups.map((month) => {
+            const cells = buildMonthGrid(month);
+            return (
+              <div key={month.year + '-' + month.monthIndex} className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+                <div className="bg-gray-900 px-4 py-2 border-b border-gray-700">
+                  <h3 className="font-bold text-white">{month.monthName} {month.year}</h3>
+                </div>
+
+                {/* Weekday headers */}
+                <div className="grid grid-cols-7 gap-1 p-2 border-b border-gray-700 text-[10px] text-gray-500 font-semibold uppercase tracking-wide text-center">
+                  <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                </div>
+
+                {/* Day cells */}
+                <div className="grid grid-cols-7 gap-1 p-2">
+                  {cells.map((cell, idx) => {
+                    if (cell.day === 0) {
+                      return <div key={idx} className="aspect-square" />;
+                    }
+                    const count = cell.count;
+                    const tabName = count?.tabName || '';
+                    const isToday = tabName === todayTabName;
+                    const hasBookings = (count?.booked ?? 0) > 0;
+
+                    // Is this day in the past?
+                    const now = new Date();
+                    const cellDate = new Date(month.year, month.monthIndex, cell.day);
+                    const isPast = cellDate < new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+                    const clickable = !!tabName;
+
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => clickable && openDayView(tabName)}
+                        disabled={!clickable}
+                        className={
+                          'aspect-square rounded-lg border transition-colors p-1 flex flex-col items-center justify-start text-center ' +
+                          (isToday ? 'border-blue-400 bg-blue-900/30 ' :
+                           hasBookings ? 'border-gray-600 bg-gray-900 hover:bg-gray-700 hover:border-gray-500 ' :
+                                         'border-gray-800 bg-gray-900/30 hover:bg-gray-800 ') +
+                          (isPast && !hasBookings ? 'opacity-50 ' : '') +
+                          (!clickable ? 'cursor-default ' : '')
+                        }
+                      >
+                        <span className={'text-xs font-bold ' + (isToday ? 'text-blue-300' : 'text-gray-300')}>{cell.day}</span>
+                        {hasBookings && (
+                          <>
+                            <span className="text-[9px] md:text-[10px] text-green-400 font-bold leading-tight mt-0.5">
+                              Bkd: {count!.booked}
+                            </span>
+                            {count!.rookies > 0 && (
+                              <span className="text-[9px] md:text-[10px] text-purple-400 leading-tight">
+                                1st: {count!.rookies}
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </>
+    );
+  };
+
+  // ─── STATUS ROSTER VIEW (NS/WDR) ───────────────────────────────────────────
+
+  const renderStatusView = () => {
+    if (!activeStatusTab) return null;
+
+    const isNS = activeStatusTab === 'NS';
+    const themeColor = isNS ? 'red' : 'amber';
+    const themeLabel = isNS ? 'No Shows' : "Worked, Didn't Rebook";
+
+    return (
+      <>
+        <div className={'rounded-xl border p-4 mb-4 ' + (isNS ? 'bg-red-900/10 border-red-800/40' : 'bg-amber-900/10 border-amber-800/40')}>
+          <div className="flex items-center gap-3">
+            {isNS ? <UserX className={'text-' + themeColor + '-400'} size={24} /> : <UserMinus className={'text-' + themeColor + '-400'} size={24} />}
+            <div>
+              <h2 className={'text-lg font-bold text-' + themeColor + '-300'}>{themeLabel}</h2>
+              <p className="text-xs text-gray-400">
+                {statusRoster.length} contractor{statusRoster.length !== 1 ? 's' : ''} — call to get them back on the schedule
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader className="animate-spin text-blue-400" size={32} />
+          </div>
+        ) : statusRoster.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-gray-500">
+            <CheckCircle size={48} className="mb-3 opacity-20" />
+            <p className="font-medium">No contractors on this tab</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {statusRoster.map(sc => renderCard(statusToWB(sc), {
+              showEmailActions: false,
+              showConfirm: false,
+              moveContext: 'status',
+            }))}
+          </div>
+        )}
+      </>
+    );
+  };
+
+  // ─── DAY VIEW ──────────────────────────────────────────────────────────────
+
+  const renderDayView = () => (
+    <>
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader className="animate-spin text-blue-400" size={32} />
+        </div>
+      ) : contractors.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-20 text-gray-500">
+          <AlertCircle size={48} className="mb-3 opacity-20" />
+          <p className="font-medium">{'No contractors on ' + (selectedTab || 'this date')}</p>
+          <p className="text-sm mt-1">This tab may be empty or not yet populated.</p>
+        </div>
+      ) : (
+        <>
+          {confirmedGroup.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 px-1">
+                <span className="text-xs font-bold text-green-400 uppercase tracking-wide">
+                  {'Confirmed (' + confirmedGroup.length + ')'}
+                </span>
+                <div className="flex-1 h-px bg-green-800/40" />
+              </div>
+              {confirmedGroup.map(c => renderCard(c, { showEmailActions: true, showConfirm: true, moveContext: 'day' }))}
+            </div>
+          )}
+
+          {confirmedGroup.length > 0 && unconfirmedGroup.length > 0 && (
+            <div className="h-3" />
+          )}
+
+          {unconfirmedGroup.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 px-1">
+                <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+                  {'Pending (' + unconfirmedGroup.length + ')'}
+                </span>
+                <div className="flex-1 h-px bg-gray-700/60" />
+              </div>
+              {unconfirmedGroup.map(c => renderCard(c, { showEmailActions: true, showConfirm: true, moveContext: 'day' }))}
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+
+  // ─── HEADER ────────────────────────────────────────────────────────────────
+
+  const renderHeader = () => {
+    if (view === 'calendar') {
+      return (
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <button onClick={onBack} className="p-2 hover:bg-gray-700 rounded-lg transition-colors">
+              <ArrowLeft size={20} />
+            </button>
+            <h1 className="text-lg font-bold flex items-center gap-2">
+              <CalendarDays size={20} className="text-blue-400" />
+              Digital Workerbook
+            </h1>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={loadCalendar} disabled={calendarLoading}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors disabled:opacity-50">
+              <RefreshCw size={14} className={calendarLoading ? 'animate-spin' : ''} /> Refresh
+            </button>
+            <button onClick={() => setShowEmailService(true)}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors">
+              <Settings size={14} /> Templates
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (view === 'status') {
+      return (
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <button onClick={backToCalendar} className="p-2 hover:bg-gray-700 rounded-lg transition-colors" title="Back to Calendar">
+              <Home size={20} />
+            </button>
+            <h1 className="text-lg font-bold flex items-center gap-2">
+              {activeStatusTab === 'NS' ? <UserX size={20} className="text-red-400" /> : <UserMinus size={20} className="text-amber-400" />}
+              {activeStatusTab}
+              {statusRoster.length > 0 && (
+                <span className="text-xs font-normal text-gray-500 ml-1">({statusRoster.length})</span>
+              )}
+            </h1>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={() => activeStatusTab && loadStatusRosterData(activeStatusTab)}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors">
+              <RefreshCw size={14} /> Refresh
+            </button>
+            <button onClick={() => setShowEmailService(true)}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors">
+              <Settings size={14} /> Templates
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // view === 'day'
+    return (
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <button onClick={backToCalendar} className="p-2 hover:bg-gray-700 rounded-lg transition-colors" title="Back to Calendar">
+            <Home size={20} />
+          </button>
+          <div className="flex items-center gap-1 bg-gray-900 rounded-lg border border-gray-700 px-1">
+            <button onClick={() => setTabIndex(i => Math.max(0, i - 1))} disabled={tabIndex === 0}
+                    className="p-1.5 text-gray-400 hover:text-white disabled:opacity-30 transition-colors">
+              <ChevronLeft size={18} />
+            </button>
+            <span className="px-3 py-1 text-sm font-bold text-white min-w-[60px] text-center">
+              {selectedTab || '—'}
+            </span>
+            <button onClick={() => setTabIndex(i => Math.min(allTabs.length - 1, i + 1))} disabled={tabIndex >= allTabs.length - 1}
+                    className="p-1.5 text-gray-400 hover:text-white disabled:opacity-30 transition-colors">
+              <ChevronRight size={18} />
+            </button>
+          </div>
+          {contractors.length > 0 && (
+            <span className="text-xs text-gray-500">{contractors.length + ' contractors'}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={handlePushToShuttles} disabled={pushingToShuttles || !contractors.length}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50">
+            {pushingToShuttles ? <Loader size={14} className="animate-spin" /> : <Bus size={14} />}
+            Push to Shuttles
+          </button>
+          <button onClick={handleRefreshColors} disabled={loadingColors || !contractors.length}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors disabled:opacity-50">
+            <RefreshCw size={14} className={loadingColors ? 'animate-spin' : ''} /> Colors
+          </button>
+          <button onClick={loadNaCounts} disabled={!contractors.length || !currentCC}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors disabled:opacity-50">
+            <RefreshCw size={14} /> NA
+          </button>
+          <button onClick={() => setShowEmailService(true)}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors">
+            <Settings size={14} /> Templates
+          </button>
+          {unsyncedCount > 0 && (
+            <button onClick={handleSyncConfirmations} disabled={syncingConfirm}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-green-700 hover:bg-green-600 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50">
+              {syncingConfirm ? <Loader size={14} className="animate-spin" /> : <CloudUpload size={14} />}
+              {'Sync Confirmations (' + unsyncedCount + ')'}
+            </button>
+          )}
+          <button onClick={handleEmailAll} disabled={sendingAll || pendingEmailCount === 0 || !templates}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50">
+            {sendingAll ? <Loader size={14} className="animate-spin" /> : <Send size={14} />}
+            {'Email All' + (pendingEmailCount > 0 ? ' (' + pendingEmailCount + ')' : '')}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   // ─── MAIN VIEW ─────────────────────────────────────────────────────────────
+
+  const runUrlConfigured = !!(currentCC?.workerbookRunUrl && currentCC.workerbookRunUrl.trim());
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
@@ -941,60 +1529,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
       {/* Header */}
       <div className="bg-gray-800 border-b border-gray-700 sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 py-3">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex items-center gap-3">
-              <button onClick={onBack} className="p-2 hover:bg-gray-700 rounded-lg transition-colors">
-                <ArrowLeft size={20} />
-              </button>
-              <div className="flex items-center gap-1 bg-gray-900 rounded-lg border border-gray-700 px-1">
-                <button onClick={() => setTabIndex(i => Math.max(0, i - 1))} disabled={tabIndex === 0}
-                        className="p-1.5 text-gray-400 hover:text-white disabled:opacity-30 transition-colors">
-                  <ChevronLeft size={18} />
-                </button>
-                <span className="px-3 py-1 text-sm font-bold text-white min-w-[60px] text-center">
-                  {selectedTab || '—'}
-                </span>
-                <button onClick={() => setTabIndex(i => Math.min(allTabs.length - 1, i + 1))} disabled={tabIndex >= allTabs.length - 1}
-                        className="p-1.5 text-gray-400 hover:text-white disabled:opacity-30 transition-colors">
-                  <ChevronRight size={18} />
-                </button>
-              </div>
-              {contractors.length > 0 && (
-                <span className="text-xs text-gray-500">{contractors.length + ' contractors'}</span>
-              )}
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <button onClick={handlePushToShuttles} disabled={pushingToShuttles || !contractors.length}
-                      className="flex items-center gap-1.5 px-3 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50">
-                {pushingToShuttles ? <Loader size={14} className="animate-spin" /> : <Bus size={14} />}
-                Push to Shuttles
-              </button>
-              <button onClick={handleRefreshColors} disabled={loadingColors || !contractors.length}
-                      className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors disabled:opacity-50">
-                <RefreshCw size={14} className={loadingColors ? 'animate-spin' : ''} /> Colors
-              </button>
-              <button onClick={loadNaCounts} disabled={!contractors.length || !currentCC}
-                      className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors disabled:opacity-50">
-                <RefreshCw size={14} /> NA
-              </button>
-              <button onClick={() => setShowEmailService(true)}
-                      className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors">
-                <Settings size={14} /> Templates
-              </button>
-              {unsyncedCount > 0 && (
-                <button onClick={handleSyncConfirmations} disabled={syncingConfirm}
-                        className="flex items-center gap-1.5 px-3 py-2 bg-green-700 hover:bg-green-600 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50">
-                  {syncingConfirm ? <Loader size={14} className="animate-spin" /> : <CloudUpload size={14} />}
-                  {'Sync Confirmations (' + unsyncedCount + ')'}
-                </button>
-              )}
-              <button onClick={handleEmailAll} disabled={sendingAll || pendingEmailCount === 0 || !templates}
-                      className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50">
-                {sendingAll ? <Loader size={14} className="animate-spin" /> : <Send size={14} />}
-                {'Email All' + (pendingEmailCount > 0 ? ' (' + pendingEmailCount + ')' : '')}
-              </button>
-            </div>
-          </div>
+          {renderHeader()}
         </div>
       </div>
 
@@ -1005,96 +1540,152 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             <CheckCircle size={16} /> {syncResult}
           </div>
         )}
+        {runSuccess && (
+          <div className="bg-green-900/30 border border-green-700 rounded-lg p-3 flex items-center gap-2 text-green-400 text-sm">
+            <Zap size={16} /> {runSuccess}
+          </div>
+        )}
         {emailSuccess && (
           <div className="bg-green-900/30 border border-green-700 rounded-lg p-3 flex items-center gap-2 text-green-400 text-sm">
             <CheckCircle size={16} /> {emailSuccess}
           </div>
         )}
-        {(error || emailError) && (
+        {(error || emailError || runError) && (
           <div className="bg-red-900/30 border border-red-700 rounded-lg p-3 flex items-center gap-2 text-red-400 text-sm">
-            <AlertCircle size={16} /> {error || emailError}
-            <button onClick={() => { setError(null); setEmailError(null); }} className="ml-auto"><X size={14} /></button>
+            <AlertCircle size={16} /> {error || emailError || runError}
+            <button onClick={() => { setError(null); setEmailError(null); setRunError(null); }} className="ml-auto"><X size={14} /></button>
           </div>
         )}
       </div>
 
-      {/* Cards */}
+      {/* Body */}
       <div className="max-w-5xl mx-auto p-4 space-y-2">
-        {loading ? (
-          <div className="flex items-center justify-center py-20">
-            <Loader className="animate-spin text-blue-400" size={32} />
-          </div>
-        ) : contractors.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-gray-500">
-            <AlertCircle size={48} className="mb-3 opacity-20" />
-            <p className="font-medium">{'No contractors on ' + (selectedTab || 'this date')}</p>
-            <p className="text-sm mt-1">This tab may be empty or not yet populated.</p>
-          </div>
-        ) : (
-          <>
-            {confirmedGroup.length > 0 && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 px-1">
-                  <span className="text-xs font-bold text-green-400 uppercase tracking-wide">
-                    {'Confirmed (' + confirmedGroup.length + ')'}
-                  </span>
-                  <div className="flex-1 h-px bg-green-800/40" />
-                </div>
-                {confirmedGroup.map(renderCard)}
-              </div>
-            )}
-
-            {confirmedGroup.length > 0 && unconfirmedGroup.length > 0 && (
-              <div className="h-3" />
-            )}
-
-            {unconfirmedGroup.length > 0 && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 px-1">
-                  <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">
-                    {'Pending (' + unconfirmedGroup.length + ')'}
-                  </span>
-                  <div className="flex-1 h-px bg-gray-700/60" />
-                </div>
-                {unconfirmedGroup.map(renderCard)}
-              </div>
-            )}
-          </>
-        )}
+        {view === 'calendar' && renderCalendarView()}
+        {view === 'day'      && renderDayView()}
+        {view === 'status'   && renderStatusView()}
       </div>
 
-      {/* Move To Modal */}
+      {/* Move-To / Status Modal */}
       {moveTarget && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-sm">
+          <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="p-4 border-b border-gray-700 flex items-center justify-between">
               <div>
-                <h3 className="font-bold text-white">Move to Next Day</h3>
+                <h3 className="font-bold text-white">Move / Set Status</h3>
                 <p className="text-xs text-gray-400 mt-0.5">{moveTarget.firstName + ' ' + moveTarget.lastName + ' · ' + moveTarget.cnId}</p>
               </div>
               <button onClick={() => setMoveTarget(null)} className="text-gray-400 hover:text-white"><X size={18} /></button>
             </div>
+
             <div className="p-4 space-y-4">
               {moveTarget.nextDay && (
                 <div className="text-xs text-gray-400 bg-gray-900 rounded p-2">
                   Currently: <strong className="text-white">{moveTarget.nextDay}</strong>
                 </div>
               )}
+
+              {!runUrlConfigured && (
+                <div className="text-xs text-amber-300 bg-amber-900/20 border border-amber-700/40 rounded p-2 flex items-start gap-2">
+                  <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+                  <div>
+                    <strong>No Workerbook Run URL configured.</strong> The "Apply" button will write to column L but can't auto-trigger the move.
+                    Ask your admin to set the URL in Super Admin → Edit Command Center.
+                  </div>
+                </div>
+              )}
+
+              {/* Date option */}
               <div>
-                <label className="block text-sm text-gray-400 mb-2">Select date</label>
-                <input type="date" value={moveToDate} onChange={e => setMoveToDate(e.target.value)}
-                       className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm" />
-                {moveToDate && (
-                  <p className="text-xs text-blue-400 mt-1">Will write: <strong>{toMmmDD(moveToDate)}</strong></p>
+                <label className="block text-sm text-gray-400 mb-2">Move to a date</label>
+                <input
+                  type="date"
+                  value={moveToDate}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setMoveToDate(val);
+                    setMoveToDestination(val ? toMmmDD(val) : '');
+                  }}
+                  className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm"
+                />
+                {moveToDate && moveToDestination && !['NS','WDR','Q','F'].includes(moveToDestination) && (
+                  <p className="text-xs text-blue-400 mt-1">Will write: <strong>{moveToDestination}</strong></p>
                 )}
               </div>
+
+              {/* Divider */}
+              <div className="flex items-center gap-2 text-xs text-gray-600">
+                <div className="flex-1 h-px bg-gray-700" />
+                <span>OR</span>
+                <div className="flex-1 h-px bg-gray-700" />
+              </div>
+
+              {/* Status buttons */}
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">Set a status</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => { setMoveToDestination('NS'); setMoveToDate(''); }}
+                    className={
+                      'flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg text-sm font-bold transition-all border ' +
+                      (moveToDestination === 'NS'
+                        ? 'bg-red-600 border-red-500 text-white'
+                        : 'bg-red-900/20 border-red-800/60 text-red-300 hover:bg-red-900/40')
+                    }
+                  >
+                    <UserX size={14} /> NS (No Show)
+                  </button>
+                  <button
+                    onClick={() => { setMoveToDestination('WDR'); setMoveToDate(''); }}
+                    className={
+                      'flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg text-sm font-bold transition-all border ' +
+                      (moveToDestination === 'WDR'
+                        ? 'bg-amber-600 border-amber-500 text-white'
+                        : 'bg-amber-900/20 border-amber-800/60 text-amber-300 hover:bg-amber-900/40')
+                    }
+                  >
+                    <UserMinus size={14} /> WDR
+                  </button>
+                  <button
+                    onClick={() => { setMoveToDestination('Q'); setMoveToDate(''); }}
+                    className={
+                      'flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg text-sm font-bold transition-all border ' +
+                      (moveToDestination === 'Q'
+                        ? 'bg-purple-600 border-purple-500 text-white'
+                        : 'bg-purple-900/20 border-purple-800/60 text-purple-300 hover:bg-purple-900/40')
+                    }
+                  >
+                    <UserCheck size={14} /> Q (Quit)
+                  </button>
+                  <button
+                    onClick={() => { setMoveToDestination('F'); setMoveToDate(''); }}
+                    className={
+                      'flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg text-sm font-bold transition-all border ' +
+                      (moveToDestination === 'F'
+                        ? 'bg-orange-600 border-orange-500 text-white'
+                        : 'bg-orange-900/20 border-orange-800/60 text-orange-300 hover:bg-orange-900/40')
+                    }
+                  >
+                    <Flame size={14} /> F (Fired)
+                  </button>
+                </div>
+              </div>
+
+              {moveToDestination && (
+                <div className="bg-gray-900 border border-gray-700 rounded-lg p-3 text-sm text-gray-300">
+                  Will write <code className="bg-gray-800 px-1.5 py-0.5 rounded text-blue-300 font-mono">{moveToDestination}</code> to column L, then trigger the Run script to execute the move.
+                </div>
+              )}
             </div>
+
             <div className="p-4 border-t border-gray-700 flex justify-end gap-2">
               <button onClick={() => setMoveTarget(null)} className="px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors">Cancel</button>
-              <button onClick={handleMoveTo} disabled={!moveToDate || movingTo}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 transition-colors">
-                {movingTo ? <Loader size={14} className="animate-spin" /> : <Calendar size={14} />}
-                Confirm Move
+              <button
+                onClick={handleMoveApply}
+                disabled={!moveToDestination || movingTo}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
+              >
+                {movingTo ? <Loader size={14} className="animate-spin" /> : <Zap size={14} />}
+                {movingTo ? 'Running move...' : 'Apply & Run'}
               </button>
             </div>
           </div>
