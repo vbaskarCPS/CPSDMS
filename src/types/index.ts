@@ -573,6 +573,6 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
       { code: 'FSL', value: 157.5 },
     ],
     hasUpgrades: false,
-    availableAddOns: ['grub', 'rejuv_after_care'], // Only these two in lawn_rejuv
+    availableAddOns: ['star_plan_pro_rejuv', 'chafer_beetle', 'star_plan_protection_plus'],
   },
 };
