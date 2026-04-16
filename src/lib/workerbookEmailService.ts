@@ -46,6 +46,11 @@ export interface WorkerbookConfirmation {
   syncedToSheets: boolean;
 }
 
+// Text template type — simpler than email (no subject, no signature, etc.)
+export interface WorkerbookTextTemplate {
+  bodyText: string;
+}
+
 // ─── DATE FORMATTING ──────────────────────────────────────────────────────────
 
 /**
@@ -107,6 +112,19 @@ export const DEFAULT_ROOKIE_TEMPLATE: WorkerbookEmailTemplate = {
   signatureTitle: '',
   signaturePhone: '',
   signatureEmail: '',
+};
+
+export const DEFAULT_TEXT_CELL_TEMPLATE: WorkerbookTextTemplate = {
+  bodyText:
+    'Hi {{firstName}}, reminder about your shift {{dateFriendly}}. ' +
+    'Shuttle #{{shuttle}} - {{shuttleDescription}} at {{pickupTime}}. ' +
+    'Reply YES to confirm. - Property Stars',
+};
+
+export const DEFAULT_TEXT_ALT_TEMPLATE: WorkerbookTextTemplate = {
+  bodyText:
+    'Hi, trying to reach {{firstName}} {{lastName}} about their shift {{dateFriendly}}. ' +
+    'Please have them reply to confirm or call us back. - Property Stars',
 };
 
 // ─── TEMPLATE PERSISTENCE ─────────────────────────────────────────────────────
@@ -186,6 +204,76 @@ export async function saveWorkerbookTemplate(
   }
 }
 
+// ─── TEXT TEMPLATE PERSISTENCE ────────────────────────────────────────────────
+
+export async function loadWorkerbookTextTemplates(): Promise<{
+  cell: WorkerbookTextTemplate;
+  alt:  WorkerbookTextTemplate;
+}> {
+  const ccId = commandCenterService.getCurrentCommandCenterId();
+  if (!ccId) return {
+    cell: { ...DEFAULT_TEXT_CELL_TEMPLATE },
+    alt:  { ...DEFAULT_TEXT_ALT_TEMPLATE },
+  };
+
+  try {
+    const { data } = await supabase
+      .from('email_templates')
+      .select('template_type, content_structure')
+      .eq('command_center_id', ccId)
+      .in('template_type', ['workerbook_text_cell', 'workerbook_text_alt']);
+
+    const mapTemplate = (row: any, def: WorkerbookTextTemplate): WorkerbookTextTemplate => ({
+      bodyText: (row?.content_structure as any)?.bodyText || def.bodyText,
+    });
+
+    const cellRow = data?.find(t => t.template_type === 'workerbook_text_cell');
+    const altRow  = data?.find(t => t.template_type === 'workerbook_text_alt');
+
+    return {
+      cell: mapTemplate(cellRow, DEFAULT_TEXT_CELL_TEMPLATE),
+      alt:  mapTemplate(altRow,  DEFAULT_TEXT_ALT_TEMPLATE),
+    };
+  } catch {
+    return {
+      cell: { ...DEFAULT_TEXT_CELL_TEMPLATE },
+      alt:  { ...DEFAULT_TEXT_ALT_TEMPLATE },
+    };
+  }
+}
+
+export async function saveWorkerbookTextTemplate(
+  type: 'workerbook_text_cell' | 'workerbook_text_alt',
+  template: WorkerbookTextTemplate,
+): Promise<void> {
+  const ccId = commandCenterService.getCurrentCommandCenterId();
+  if (!ccId) return;
+
+  const payload = {
+    command_center_id: ccId,
+    template_type:     type,
+    template_name:     type === 'workerbook_text_cell' ? 'Workerbook Text — Cell' : 'Workerbook Text — Alt',
+    subject:           '',
+    html_content:      '',
+    content_structure: { bodyText: template.bodyText },
+    is_active:  true,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data: existing } = await supabase
+    .from('email_templates')
+    .select('id')
+    .eq('command_center_id', ccId)
+    .eq('template_type', type)
+    .maybeSingle();
+
+  if (existing) {
+    await supabase.from('email_templates').update(payload).eq('id', existing.id);
+  } else {
+    await supabase.from('email_templates').insert(payload);
+  }
+}
+
 // ─── EMAIL TRACKING ───────────────────────────────────────────────────────────
 
 export async function getEmailedTodaySet(): Promise<Set<string>> {
@@ -205,8 +293,48 @@ export async function cleanOldWorkerbookEmailLogs(): Promise<void> {
   await supabase
     .from('email_logs')
     .delete()
-    .in('email_type', ['workerbook_day_of_regular', 'workerbook_day_of_rookie'])
+    .in('email_type', [
+      'workerbook_day_of_regular',
+      'workerbook_day_of_rookie',
+      'workerbook_text_cell',
+      'workerbook_text_alt',
+    ])
     .lt('sent_at', cutoff.toISOString());
+}
+
+// ─── TEXT TRACKING ────────────────────────────────────────────────────────────
+
+/**
+ * Returns a Set of keys like "H1001:cell" or "H1001:alt" indicating
+ * which contractor+phone combinations have been texted today.
+ */
+export async function getTextedTodayMap(): Promise<Set<string>> {
+  const today = new Date().toISOString().split('T')[0];
+  const { data } = await supabase
+    .from('email_logs')
+    .select('recipient_email, email_type')
+    .in('email_type', ['workerbook_text_cell', 'workerbook_text_alt'])
+    .gte('sent_at', `${today}T00:00:00Z`);
+
+  const set = new Set<string>();
+  for (const row of data || []) {
+    // recipient_email holds the contractor ID for text logs
+    const phoneType = row.email_type === 'workerbook_text_cell' ? 'cell' : 'alt';
+    set.add(`${row.recipient_email}:${phoneType}`);
+  }
+  return set;
+}
+
+export async function logTextSent(
+  contractorId: string,
+  phoneType: 'cell' | 'alt',
+): Promise<void> {
+  const emailType = phoneType === 'cell' ? 'workerbook_text_cell' : 'workerbook_text_alt';
+  await supabase.from('email_logs').insert({
+    recipient_email: contractorId,
+    email_type:      emailType,
+    status:          'sent',
+  });
 }
 
 // ─── CONFIRMATIONS ────────────────────────────────────────────────────────────
@@ -462,6 +590,50 @@ export function buildWorkerbookEmailHtml(
   </table>
 </body>
 </html>`;
+}
+
+// ─── TEXT MESSAGE BUILDER ─────────────────────────────────────────────────────
+
+/**
+ * Build the plain-text SMS body with all variables replaced.
+ * Used both for preview in the template editor and for the actual sms: link.
+ */
+export function buildTextMessage(
+  template: WorkerbookTextTemplate,
+  data: {
+    firstName: string;
+    lastName: string;
+    date: string;
+    shuttle?: string;
+    days: number;
+    contractorId: string;
+  },
+  shuttlePoint: ShuttlePoint | null,
+): string {
+  const dateFriendly = formatDateForEmail(data.date);
+  const vars: Record<string, string> = {
+    firstName:          data.firstName,
+    lastName:           data.lastName,
+    fullName:           `${data.firstName} ${data.lastName}`.trim(),
+    date:               data.date,
+    dateFriendly,
+    contractorId:       data.contractorId,
+    days:               String(data.days),
+    shuttle:            data.shuttle || '',
+    shuttleDescription: shuttlePoint?.description || '',
+    pickupTime:         shuttlePoint?.pickupTime  || '',
+  };
+  return replaceVars(template.bodyText, vars);
+}
+
+/**
+ * Build the sms: URL that opens the device messaging app.
+ * Samsung/Android use ?body= while iOS uses &body=, but on Android both work.
+ */
+export function buildSmsLink(phoneNumber: string, body: string): string {
+  // Strip anything that isn't a digit or plus sign from the phone
+  const cleanPhone = phoneNumber.replace(/[^\d+]/g, '');
+  return `sms:${cleanPhone}?body=${encodeURIComponent(body)}`;
 }
 
 // ─── SEND ─────────────────────────────────────────────────────────────────────

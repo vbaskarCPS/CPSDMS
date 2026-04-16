@@ -16,19 +16,26 @@ import {
   X,
   CloudUpload,
   Bus,
+  MessageSquare,
 } from 'lucide-react';
 import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import { commandCenterService } from '../../lib/commandCenterService';
 import { onboardingService, ShuttlePoint } from '../../lib/onboardingService';
 import {
   WorkerbookEmailTemplate,
+  WorkerbookTextTemplate,
   WorkerbookConfirmation,
   loadWorkerbookTemplates,
+  loadWorkerbookTextTemplates,
   getEmailedTodaySet,
   cleanOldWorkerbookEmailLogs,
   sendWorkerbookEmail,
   getConfirmationsForDateTab,
   markConfirmationSynced,
+  getTextedTodayMap,
+  logTextSent,
+  buildTextMessage,
+  buildSmsLink,
 } from '../../lib/workerbookEmailService';
 import {
   PhoneType,
@@ -186,6 +193,8 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   const [emailedToday, setEmailedToday] = useState<Set<string>>(new Set());
   const [templates, setTemplates]       = useState<{ regular: WorkerbookEmailTemplate; rookie: WorkerbookEmailTemplate } | null>(null);
+  const [textTemplates, setTextTemplates] = useState<{ cell: WorkerbookTextTemplate; alt: WorkerbookTextTemplate } | null>(null);
+  const [textedToday, setTextedToday]   = useState<Set<string>>(new Set());
   const [sendingFor, setSendingFor]     = useState<string | null>(null);
   const [sendingAll, setSendingAll]     = useState(false);
   const [emailError, setEmailError]     = useState<string | null>(null);
@@ -214,11 +223,16 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     onboardingService.getShuttlePoints().then(setShuttlePoints).catch(() => {});
     getEmailedTodaySet().then(setEmailedToday).catch(() => {});
     loadWorkerbookTemplates().then(setTemplates).catch(() => {});
+    loadWorkerbookTextTemplates().then(setTextTemplates).catch(() => {});
+    getTextedTodayMap().then(setTextedToday).catch(() => {});
     cleanOldWorkerbookEmailLogs().catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (!showEmailService) loadWorkerbookTemplates().then(setTemplates).catch(() => {});
+    if (!showEmailService) {
+      loadWorkerbookTemplates().then(setTemplates).catch(() => {});
+      loadWorkerbookTextTemplates().then(setTextTemplates).catch(() => {});
+    }
   }, [showEmailService]);
 
   useEffect(() => {
@@ -338,6 +352,51 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         const current = prev.get(key) ?? 1;
         if (current <= 1) next.delete(key);
         else next.set(key, current - 1);
+        return next;
+      });
+    }
+  };
+
+  // ─── TEXT MESSAGE ──────────────────────────────────────────────────────────
+
+  const handleSendText = async (c: WBContractor, phoneType: 'cell' | 'alt') => {
+    if (!textTemplates) return;
+    const phoneNumber = phoneType === 'cell' ? c.cellPhone : c.altPhone;
+    if (!phoneNumber) return;
+
+    const template = phoneType === 'cell' ? textTemplates.cell : textTemplates.alt;
+    const shuttlePt = getShuttlePoint(c.shuttle);
+
+    const messageBody = buildTextMessage(
+      template,
+      {
+        firstName:    c.firstName,
+        lastName:     c.lastName,
+        date:         selectedTab,
+        shuttle:      c.shuttle || undefined,
+        days:         c.days,
+        contractorId: c.cnId,
+      },
+      shuttlePt,
+    );
+
+    const smsLink = buildSmsLink(phoneNumber, messageBody);
+
+    // Optimistically mark as texted so the button turns green immediately
+    const key = c.cnId + ':' + phoneType;
+    setTextedToday(prev => new Set([...prev, key]));
+
+    // Open the device messaging app
+    window.location.href = smsLink;
+
+    // Log to Supabase so refresh persists the state
+    try {
+      await logTextSent(c.cnId, phoneType);
+    } catch {
+      // If the log fails, remove from set so it doesn't lie
+      setTextedToday(prev => {
+        const next = new Set(prev);
+        next.delete(key);
         return next;
       });
     }
@@ -562,6 +621,28 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     green: 'bg-green-400', silver: 'bg-gray-400', gold: 'bg-yellow-400',
   };
 
+  // ─── TEXT BUTTON HELPER ────────────────────────────────────────────────────
+
+  const renderTextButton = (c: WBContractor, phoneType: 'cell' | 'alt') => {
+    const texted = textedToday.has(c.cnId + ':' + phoneType);
+    const disabled = !textTemplates;
+    return (
+      <button
+        onClick={() => handleSendText(c, phoneType)}
+        disabled={disabled}
+        title={texted ? 'Texted today — tap to resend' : 'Send text message'}
+        className={
+          'flex items-center justify-center p-1.5 rounded-lg border transition-colors flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed ' +
+          (texted
+            ? 'bg-green-900/40 border-green-700/60 text-green-400 hover:bg-green-900/60'
+            : 'bg-gray-900 border-gray-700 text-gray-400 hover:text-blue-300 hover:border-blue-700/50')
+        }
+      >
+        {texted ? <CheckCircle size={12} /> : <MessageSquare size={12} />}
+      </button>
+    );
+  };
+
   // ─── CARD RENDERER ─────────────────────────────────────────────────────────
 
   const renderCard = (c: WBContractor) => {
@@ -638,34 +719,40 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         <div className="flex items-center gap-2 mt-2 flex-wrap">
 
           {c.cellPhone && (
-            <button
-              onClick={() => handlePhoneDial(c, 'cell', c.cellPhone)}
-              className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-blue-400 hover:text-blue-300 transition-colors flex-shrink-0"
-            >
-              <Phone size={11} />
-              {c.cellPhone}
-              {naCell > 0 && (
-                <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
-                  {'NA x' + naCell}
-                </span>
-              )}
-            </button>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button
+                onClick={() => handlePhoneDial(c, 'cell', c.cellPhone)}
+                className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-blue-400 hover:text-blue-300 transition-colors"
+              >
+                <Phone size={11} />
+                {c.cellPhone}
+                {naCell > 0 && (
+                  <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                    {'NA x' + naCell}
+                  </span>
+                )}
+              </button>
+              {renderTextButton(c, 'cell')}
+            </div>
           )}
 
           {c.altPhone && (
-            <button
-              onClick={() => handlePhoneDial(c, 'alt', c.altPhone)}
-              className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-blue-300 transition-colors flex-shrink-0"
-            >
-              <Phone size={11} className="text-gray-600" />
-              {c.altPhone}
-              <span className="text-gray-600 ml-0.5">Alt</span>
-              {naAlt > 0 && (
-                <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
-                  {'NA x' + naAlt}
-                </span>
-              )}
-            </button>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button
+                onClick={() => handlePhoneDial(c, 'alt', c.altPhone)}
+                className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-blue-300 transition-colors"
+              >
+                <Phone size={11} className="text-gray-600" />
+                {c.altPhone}
+                <span className="text-gray-600 ml-0.5">Alt</span>
+                {naAlt > 0 && (
+                  <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                    {'NA x' + naAlt}
+                  </span>
+                )}
+              </button>
+              {renderTextButton(c, 'alt')}
+            </div>
           )}
 
           {c.email && (
@@ -745,7 +832,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               </button>
               <button onClick={() => setShowEmailService(true)}
                       className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors">
-                <Settings size={14} /> Email Service
+                <Settings size={14} /> Templates
               </button>
               {unsyncedCount > 0 && (
                 <button onClick={handleSyncConfirmations} disabled={syncingConfirm}
