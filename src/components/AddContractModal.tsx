@@ -63,11 +63,17 @@ const CONTRACT_RECIPES: ContractRecipe[] = [
   
   // West Add-Ons (Aeration only)
   { id: 'dethatch', name: 'Dethatching', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: true, seasonOnly: 'aeration' },
+  { id: 'grub', name: 'Grub Control', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, seasonOnly: 'aeration',
+    questions: [{ id: 'timing', label: 'Timing', options: ['Spring', 'Fall', 'Both'] }]
+  },
   
-  // West Add-Ons (Both seasons)
-  { id: 'rejuv_after_care', name: 'Rejuvenation After Care', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false },
-  { id: 'grub', name: 'Grub Control', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, 
-    questions: [{ id: 'timing', label: 'Timing', options: ['Spring', 'Fall', 'Both'] }] 
+  // West Add-Ons (Lawn Rejuv only)
+  { id: 'star_plan_pro_rejuv', name: 'Star Plan Pro', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, badge: 'SP PRO', seasonOnly: 'lawn_rejuv' },
+  { id: 'chafer_beetle', name: 'European Chafer Beetle Protection Plan', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, badge: 'GRUB', seasonOnly: 'lawn_rejuv',
+    questions: [{ id: 'timing', label: 'Timing', options: ['Spring', 'Fall', 'Both'] }]
+  },
+  { id: 'star_plan_protection_plus', name: 'Star Plan Protection Plus', type: 'Add-On', region: 'West', propertyTypes: ['FP', 'FO', 'BO'], hasIOS: false, badge: 'SPPP', seasonOnly: 'lawn_rejuv',
+    questions: [{ id: 'timing', label: 'Timing', options: ['Spring', 'Fall', 'Both'] }]
   },
   
   // Central Add-Ons
@@ -211,7 +217,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
       // Check season restriction
       if (r.seasonOnly && r.seasonOnly !== seasonType) return false;
       
-      // For lawn_rejuv, only allow grub and rejuv_after_care
+      // For lawn_rejuv, only allow configured add-ons
       if (seasonType === 'lawn_rejuv') {
         const allowedAddOns = getAvailableAddOns(seasonType);
         if (r.type === 'Upgrade') return false; // No upgrades in lawn_rejuv
@@ -986,7 +992,7 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                 <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-3 text-sm text-green-300 flex items-center gap-2">
                   <Leaf size={16} />
                   <span>
-                    <strong>Lawn Rejuvenation Season:</strong> Only Grub Control and After Care add-ons are available. No upgrades.
+                    <strong>Lawn Rejuvenation Season:</strong> Star Plan Pro, European Chafer Beetle Protection, and Star Plan Protection Plus add-ons are available. No upgrades.
                   </span>
                 </div>
               )}
@@ -1014,7 +1020,10 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                   displayedRecipes.map(recipe => (
                     <button key={recipe.id} onClick={() => handleRecipeSelect(recipe)} className="bg-gray-800 p-4 rounded-lg border border-gray-700 hover:bg-gray-750 hover:border-cps-blue transition-all text-left group">
                       <h3 className="font-bold text-white group-hover:text-cps-blue mb-1">{recipe.name}</h3>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${recipe.type === 'Upgrade' ? 'bg-purple-900/30 text-purple-300' : 'bg-blue-900/30 text-blue-300'}`}>{recipe.type}</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${recipe.type === 'Upgrade' ? 'bg-purple-900/30 text-purple-300' : 'bg-blue-900/30 text-blue-300'}`}>{recipe.type}</span>
+                        {recipe.badge && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 border border-gray-600 font-mono font-bold">{recipe.badge}</span>}
+                      </div>
                     </button>
                   ))
                 )}

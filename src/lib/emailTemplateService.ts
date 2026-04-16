@@ -491,10 +491,14 @@ class EmailTemplateService {
     
     // Check for add-on types
     if (type === 'Add-On') {
-      // West add-ons
+      // West add-ons (Aeration season)
       if (refId === 'dethatch') return 'addon_dethatch';
       if (refId === 'rejuv_after_care') return 'addon_rejuv_after_care';
       if (refId === 'grub') return 'addon_grub';
+      // West add-ons (Lawn Rejuv season) - reuse existing templates
+      if (refId === 'star_plan_pro_rejuv') return 'addon_rejuv_after_care';
+      if (refId === 'chafer_beetle') return 'addon_grub';
+      // star_plan_protection_plus has no dedicated template - falls through to production below
       // Central add-ons
       if (refId === 'window_washing') return 'addon_window_washing';
       // East add-ons

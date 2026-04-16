@@ -16,7 +16,10 @@ const getCCId = (): string => {
 };
 
 /**
- * Badge map for upgrade/add-on item names to short display codes
+ * Badge map for upgrade/add-on item names to short display codes.
+ * Used by getClientType() as a fallback when refId doesn't match the new Rejuv overrides.
+ * NOTE: The three new Rejuv add-ons (star_plan_pro_rejuv, chafer_beetle, star_plan_protection_plus)
+ * are handled BEFORE this map is consulted — via refId lookup. See getClientType().
  */
 const BADGE_MAP: Record<string, string> = {
   'Star Plan Pro': 'SP PRO',
@@ -31,18 +34,45 @@ const BADGE_MAP: Record<string, string> = {
 };
 
 /**
- * Get client type from transaction, using badge abbreviations for upgrades/add-ons
+ * refId-based badge map for the new Lawn Rejuv add-ons.
+ * Takes priority over BADGE_MAP to resolve name collisions between seasons.
+ * (Aeration "Star Plan Pro" Upgrade shares a display name with Rejuv "Star Plan Pro" Add-On,
+ * but they're different products that should export with different badges.)
+ */
+const REJUV_REFID_BADGE_MAP: Record<string, string> = {
+  'star_plan_pro_rejuv': 'AC',
+  'chafer_beetle': 'GRUB',
+  'star_plan_protection_plus': 'SPPP',
+};
+
+/**
+ * Get client type from transaction, using badge abbreviations for upgrades/add-ons.
+ *
+ * Priority order:
+ * 1. Production → "Existing"
+ * 2. Sale → "New"
+ * 3. Upgrade/Add-On:
+ *    a. Check REJUV_REFID_BADGE_MAP first (new Lawn Rejuv add-ons by refId) — PRIORITY
+ *    b. Fall back to BADGE_MAP by item name
+ *    c. Fall back to tx.type ("Upgrade" or "Add-On")
+ * 4. Default → "Existing"
  */
 function getClientType(tx: any): string {
   if (tx.type === 'Production') return 'Existing';
   if (tx.type === 'Sale') return 'New';
   if (tx.type === 'Upgrade' || tx.type === 'Add-On') {
+    // PRIORITY 1: Check new Rejuv add-ons by refId (resolves season collisions)
+    if (tx.ref_id && REJUV_REFID_BADGE_MAP[tx.ref_id]) {
+      return REJUV_REFID_BADGE_MAP[tx.ref_id];
+    }
+    // PRIORITY 2: Fall back to name-based BADGE_MAP
     if (tx.items && Array.isArray(tx.items) && tx.items.length > 0) {
       const itemName = tx.items[0]?.name;
       if (itemName && BADGE_MAP[itemName]) {
         return BADGE_MAP[itemName];
       }
     }
+    // PRIORITY 3: Fall back to transaction type
     return tx.type;
   }
   return 'Existing';
