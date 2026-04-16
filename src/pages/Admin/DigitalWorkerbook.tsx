@@ -138,7 +138,7 @@ const ConfirmButton: React.FC<ConfirmButtonProps> = ({ confirmed, emailConfirmed
 
   if (loading) {
     return (
-      <button disabled className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-gray-700 text-gray-400 cursor-not-allowed flex-shrink-0">
+      <button disabled className="flex items-center justify-center gap-1.5 px-3 py-2 md:py-1.5 rounded-lg text-xs font-bold bg-gray-700 text-gray-400 cursor-not-allowed w-full md:w-auto md:flex-shrink-0">
         <Loader size={12} className="animate-spin" /> Confirming...
       </button>
     );
@@ -149,7 +149,7 @@ const ConfirmButton: React.FC<ConfirmButtonProps> = ({ confirmed, emailConfirmed
       <button
         onClick={onClick}
         className={
-          'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex-shrink-0 bg-green-600 text-white hover:bg-green-500 ' +
+          'flex items-center justify-center gap-1.5 px-3 py-2 md:py-1.5 rounded-lg text-xs font-bold transition-all w-full md:w-auto md:flex-shrink-0 bg-green-600 text-white hover:bg-green-500 ' +
           (emailConfirmed ? 'ring-2 ring-yellow-400 ring-offset-1 ring-offset-gray-800' : '')
         }
       >
@@ -162,7 +162,7 @@ const ConfirmButton: React.FC<ConfirmButtonProps> = ({ confirmed, emailConfirmed
   return (
     <button
       onClick={onClick}
-      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors bg-blue-600 text-white hover:bg-blue-500 flex-shrink-0"
+      className="flex items-center justify-center gap-1.5 px-3 py-2 md:py-1.5 rounded-lg text-xs font-bold transition-colors w-full md:w-auto md:flex-shrink-0 bg-blue-600 text-white hover:bg-blue-500"
     >
       Confirm
     </button>
@@ -632,13 +632,14 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         disabled={disabled}
         title={texted ? 'Texted today — tap to resend' : 'Send text message'}
         className={
-          'flex items-center justify-center p-1.5 rounded-lg border transition-colors flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed ' +
+          'flex items-center justify-center p-2.5 md:p-1.5 rounded-lg border transition-colors flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed ' +
           (texted
             ? 'bg-green-900/40 border-green-700/60 text-green-400 hover:bg-green-900/60'
             : 'bg-gray-900 border-gray-700 text-gray-400 hover:text-blue-300 hover:border-blue-700/50')
         }
       >
-        {texted ? <CheckCircle size={12} /> : <MessageSquare size={12} />}
+        {texted ? <CheckCircle size={14} className="md:hidden" /> : <MessageSquare size={14} className="md:hidden" />}
+        {texted ? <CheckCircle size={12} className="hidden md:block" /> : <MessageSquare size={12} className="hidden md:block" />}
       </button>
     );
   };
@@ -660,74 +661,82 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     return (
       <div
         key={c.rowNum}
-        className={'bg-gray-800 rounded-xl border px-4 py-3 transition-colors ' + (isConfirmed ? 'border-green-700/50' : 'border-gray-700')}
+        className={'bg-gray-800 rounded-xl border p-4 md:px-4 md:py-3 transition-colors ' + (isConfirmed ? 'border-green-700/50' : 'border-gray-700')}
       >
-        {/* LINE 1 */}
-        <div className="flex items-center gap-2 min-w-0">
-          {dotColor && <div className={'w-2 h-2 rounded-full flex-shrink-0 ' + dotClass[dotColor]} />}
 
-          <span className="text-[11px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded font-mono flex-shrink-0">
-            {c.cnId}
-          </span>
-
-          {isRookie && (
-            <span className="text-[10px] bg-purple-900/50 text-purple-300 px-1.5 py-0.5 rounded border border-purple-700/50 flex-shrink-0">
-              ROOKIE
+        {/* ═════════════════════════════════════════════════════════════════
+            PHONE LAYOUT: sections stacked (< 768px only — hidden on md+)
+           ═════════════════════════════════════════════════════════════════ */}
+        <div className="md:hidden space-y-3">
+          {/* Row 1: dot + CN + rookie badge + name */}
+          <div className="flex items-center gap-2 min-w-0">
+            {dotColor && <div className={'w-2.5 h-2.5 rounded-full flex-shrink-0 ' + dotClass[dotColor]} />}
+            <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded font-mono flex-shrink-0">
+              {c.cnId}
             </span>
-          )}
-
-          <span className="font-bold text-white text-sm truncate flex-1 min-w-0">
-            {c.firstName + ' ' + c.lastName}
-          </span>
-
-          <span className={'text-[11px] px-2 py-0.5 rounded flex-shrink-0 ' + (isRookie ? 'bg-purple-900/30 text-purple-300 border border-purple-700/40' : 'bg-gray-700 text-gray-300')}>
-            {'Days: ' + c.days}
-          </span>
-          {c.ns > 0 && (
-            <span className="text-[11px] px-2 py-0.5 rounded bg-red-900/30 text-red-300 border border-red-700/40 flex-shrink-0">
-              {'NS: ' + c.ns}
+            {isRookie && (
+              <span className="text-[10px] bg-purple-900/50 text-purple-300 px-2 py-0.5 rounded border border-purple-700/50 flex-shrink-0">
+                ROOKIE
+              </span>
+            )}
+            <span className="font-bold text-white text-base flex-1 min-w-0 truncate">
+              {c.firstName + ' ' + c.lastName}
             </span>
-          )}
-          {c.team && (
-            <span className="text-[11px] px-2 py-0.5 rounded bg-gray-700 text-gray-400 flex-shrink-0">
-              {c.team}
+          </div>
+
+          {/* Row 2: Days / NS / Team pills */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={'text-xs px-2.5 py-1 rounded ' + (isRookie ? 'bg-purple-900/30 text-purple-300 border border-purple-700/40' : 'bg-gray-700 text-gray-300')}>
+              {'Days: ' + c.days}
             </span>
-          )}
+            {c.ns > 0 && (
+              <span className="text-xs px-2.5 py-1 rounded bg-red-900/30 text-red-300 border border-red-700/40">
+                {'NS: ' + c.ns}
+              </span>
+            )}
+            {c.team && (
+              <span className="text-xs px-2.5 py-1 rounded bg-gray-700 text-gray-400">
+                {c.team}
+              </span>
+            )}
+          </div>
 
-          {c.email ? (
-            <button
-              onClick={() => handleSendEmail(c)}
-              disabled={isSending || sendingAll}
-              className={'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex-shrink-0 disabled:opacity-50 ' + (isEmailed ? 'bg-green-900/30 text-green-400 border border-green-700/50 hover:bg-green-900/50' : 'bg-blue-900/30 text-blue-400 border border-blue-700/50 hover:bg-blue-900/50')}
-            >
-              {isSending ? <Loader size={11} className="animate-spin" /> : isEmailed ? <CheckCircle size={11} /> : <Mail size={11} />}
-              {isEmailed ? 'Sent' : 'Email'}
-            </button>
-          ) : (
-            <span className="text-[10px] text-gray-600 flex-shrink-0">No email</span>
-          )}
+          {/* Row 3: Email button + Confirm button (side by side, full width) */}
+          <div className="flex items-center gap-2">
+            {c.email ? (
+              <button
+                onClick={() => handleSendEmail(c)}
+                disabled={isSending || sendingAll}
+                className={'flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors flex-1 disabled:opacity-50 ' + (isEmailed ? 'bg-green-900/30 text-green-400 border border-green-700/50 hover:bg-green-900/50' : 'bg-blue-900/30 text-blue-400 border border-blue-700/50 hover:bg-blue-900/50')}
+              >
+                {isSending ? <Loader size={14} className="animate-spin" /> : isEmailed ? <CheckCircle size={14} /> : <Mail size={14} />}
+                {isEmailed ? 'Sent' : 'Email'}
+              </button>
+            ) : (
+              <span className="text-xs text-gray-600 flex-1 text-center py-2.5">No email on file</span>
+            )}
 
-          <ConfirmButton
-            confirmed={c.confirmed}
-            emailConfirmed={emailConfirmed}
-            loading={isConfirming}
-            onClick={() => handleToggleConfirm(c)}
-          />
-        </div>
+            <div className="flex-1">
+              <ConfirmButton
+                confirmed={c.confirmed}
+                emailConfirmed={emailConfirmed}
+                loading={isConfirming}
+                onClick={() => handleToggleConfirm(c)}
+              />
+            </div>
+          </div>
 
-        {/* LINE 2 */}
-        <div className="flex items-center gap-2 mt-2 flex-wrap">
-
+          {/* Row 4: Cell phone + text button (full width) */}
           {c.cellPhone && (
-            <div className="flex items-center gap-1 flex-shrink-0">
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => handlePhoneDial(c, 'cell', c.cellPhone)}
-                className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                className="flex items-center gap-2 px-3 py-2.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-blue-400 hover:text-blue-300 transition-colors flex-1 min-w-0"
               >
-                <Phone size={11} />
-                {c.cellPhone}
+                <Phone size={14} className="flex-shrink-0" />
+                <span className="font-medium">{c.cellPhone}</span>
                 {naCell > 0 && (
-                  <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                  <span className="ml-auto bg-orange-900/50 text-orange-300 border border-orange-700/50 px-2 py-0.5 rounded text-xs font-bold">
                     {'NA x' + naCell}
                   </span>
                 )}
@@ -736,17 +745,18 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
+          {/* Row 5: Alt phone + text button (full width) */}
           {c.altPhone && (
-            <div className="flex items-center gap-1 flex-shrink-0">
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => handlePhoneDial(c, 'alt', c.altPhone)}
-                className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-blue-300 transition-colors"
+                className="flex items-center gap-2 px-3 py-2.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-400 hover:text-blue-300 transition-colors flex-1 min-w-0"
               >
-                <Phone size={11} className="text-gray-600" />
-                {c.altPhone}
-                <span className="text-gray-600 ml-0.5">Alt</span>
+                <Phone size={14} className="text-gray-600 flex-shrink-0" />
+                <span className="font-medium">{c.altPhone}</span>
+                <span className="text-gray-600 text-xs">Alt</span>
                 {naAlt > 0 && (
-                  <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                  <span className="ml-auto bg-orange-900/50 text-orange-300 border border-orange-700/50 px-2 py-0.5 rounded text-xs font-bold">
                     {'NA x' + naAlt}
                   </span>
                 )}
@@ -755,32 +765,169 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
+          {/* Row 6: Email address (own line) */}
           {c.email && (
             <button
               onClick={() => { window.location.href = 'mailto:' + c.email; }}
-              className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-400 transition-colors min-w-0 flex-1 truncate"
+              className="flex items-center gap-2 text-sm text-gray-500 hover:text-blue-400 transition-colors w-full min-w-0"
             >
-              <Mail size={10} className="flex-shrink-0" />
+              <Mail size={13} className="flex-shrink-0" />
               <span className="truncate">{c.email}</span>
             </button>
           )}
 
+          {/* Row 7: Shuttle info (own line, full description visible) */}
           {c.shuttle && (
-            <div className={'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs flex-shrink-0 ' + (getShuttlePoint(c.shuttle) ? 'bg-blue-900/20 border border-blue-700/40 text-blue-300' : 'bg-gray-900 border border-gray-700 text-gray-500')}>
-              {'🚐 '}
-              {getShuttlePoint(c.shuttle)
-                ? <><strong>{getShuttlePoint(c.shuttle)!.description}</strong>{getShuttlePoint(c.shuttle)!.pickupTime && ' · ' + getShuttlePoint(c.shuttle)!.pickupTime}</>
-                : 'Shuttle #' + c.shuttle + ' — not configured'
-              }
+            <div className={'flex items-start gap-2 px-3 py-2.5 rounded-lg text-sm ' + (shuttlePt ? 'bg-blue-900/20 border border-blue-700/40 text-blue-300' : 'bg-gray-900 border border-gray-700 text-gray-500')}>
+              <span className="flex-shrink-0">🚐</span>
+              {shuttlePt ? (
+                <div className="min-w-0">
+                  <strong className="block">{shuttlePt.description}</strong>
+                  {shuttlePt.pickupTime && (
+                    <span className="text-xs opacity-80">Pickup: {shuttlePt.pickupTime}</span>
+                  )}
+                </div>
+              ) : (
+                'Shuttle #' + c.shuttle + ' — not configured'
+              )}
             </div>
           )}
 
+          {/* Row 8: Move To button (own line) */}
           <button
             onClick={() => { setMoveTarget(c); setMoveToDate(''); }}
-            className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-white transition-colors flex-shrink-0 ml-auto"
+            className="flex items-center justify-center gap-2 px-3 py-2.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-400 hover:text-white transition-colors w-full"
           >
-            <Calendar size={11} /> {c.nextDay || 'Move To'}
+            <Calendar size={14} />
+            {c.nextDay ? 'Next Day: ' + c.nextDay : 'Move To Next Day'}
           </button>
+        </div>
+
+        {/* ═════════════════════════════════════════════════════════════════
+            TABLET LAYOUT: original compact layout (≥ 768px only)
+            Identical to the pre-mobile version of the card.
+           ═════════════════════════════════════════════════════════════════ */}
+        <div className="hidden md:block">
+          {/* LINE 1 */}
+          <div className="flex items-center gap-2 min-w-0">
+            {dotColor && <div className={'w-2 h-2 rounded-full flex-shrink-0 ' + dotClass[dotColor]} />}
+
+            <span className="text-[11px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded font-mono flex-shrink-0">
+              {c.cnId}
+            </span>
+
+            {isRookie && (
+              <span className="text-[10px] bg-purple-900/50 text-purple-300 px-1.5 py-0.5 rounded border border-purple-700/50 flex-shrink-0">
+                ROOKIE
+              </span>
+            )}
+
+            <span className="font-bold text-white text-sm truncate flex-1 min-w-0">
+              {c.firstName + ' ' + c.lastName}
+            </span>
+
+            <span className={'text-[11px] px-2 py-0.5 rounded flex-shrink-0 ' + (isRookie ? 'bg-purple-900/30 text-purple-300 border border-purple-700/40' : 'bg-gray-700 text-gray-300')}>
+              {'Days: ' + c.days}
+            </span>
+            {c.ns > 0 && (
+              <span className="text-[11px] px-2 py-0.5 rounded bg-red-900/30 text-red-300 border border-red-700/40 flex-shrink-0">
+                {'NS: ' + c.ns}
+              </span>
+            )}
+            {c.team && (
+              <span className="text-[11px] px-2 py-0.5 rounded bg-gray-700 text-gray-400 flex-shrink-0">
+                {c.team}
+              </span>
+            )}
+
+            {c.email ? (
+              <button
+                onClick={() => handleSendEmail(c)}
+                disabled={isSending || sendingAll}
+                className={'flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors flex-shrink-0 disabled:opacity-50 ' + (isEmailed ? 'bg-green-900/30 text-green-400 border border-green-700/50 hover:bg-green-900/50' : 'bg-blue-900/30 text-blue-400 border border-blue-700/50 hover:bg-blue-900/50')}
+              >
+                {isSending ? <Loader size={11} className="animate-spin" /> : isEmailed ? <CheckCircle size={11} /> : <Mail size={11} />}
+                {isEmailed ? 'Sent' : 'Email'}
+              </button>
+            ) : (
+              <span className="text-[10px] text-gray-600 flex-shrink-0">No email</span>
+            )}
+
+            <ConfirmButton
+              confirmed={c.confirmed}
+              emailConfirmed={emailConfirmed}
+              loading={isConfirming}
+              onClick={() => handleToggleConfirm(c)}
+            />
+          </div>
+
+          {/* LINE 2 */}
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+
+            {c.cellPhone && (
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => handlePhoneDial(c, 'cell', c.cellPhone)}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                >
+                  <Phone size={11} />
+                  {c.cellPhone}
+                  {naCell > 0 && (
+                    <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                      {'NA x' + naCell}
+                    </span>
+                  )}
+                </button>
+                {renderTextButton(c, 'cell')}
+              </div>
+            )}
+
+            {c.altPhone && (
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => handlePhoneDial(c, 'alt', c.altPhone)}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-blue-300 transition-colors"
+                >
+                  <Phone size={11} className="text-gray-600" />
+                  {c.altPhone}
+                  <span className="text-gray-600 ml-0.5">Alt</span>
+                  {naAlt > 0 && (
+                    <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                      {'NA x' + naAlt}
+                    </span>
+                  )}
+                </button>
+                {renderTextButton(c, 'alt')}
+              </div>
+            )}
+
+            {c.email && (
+              <button
+                onClick={() => { window.location.href = 'mailto:' + c.email; }}
+                className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-400 transition-colors min-w-0 flex-1 truncate"
+              >
+                <Mail size={10} className="flex-shrink-0" />
+                <span className="truncate">{c.email}</span>
+              </button>
+            )}
+
+            {c.shuttle && (
+              <div className={'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs flex-shrink-0 ' + (shuttlePt ? 'bg-blue-900/20 border border-blue-700/40 text-blue-300' : 'bg-gray-900 border border-gray-700 text-gray-500')}>
+                {'🚐 '}
+                {shuttlePt
+                  ? <><strong>{shuttlePt.description}</strong>{shuttlePt.pickupTime && ' · ' + shuttlePt.pickupTime}</>
+                  : 'Shuttle #' + c.shuttle + ' — not configured'
+                }
+              </div>
+            )}
+
+            <button
+              onClick={() => { setMoveTarget(c); setMoveToDate(''); }}
+              className="flex items-center gap-1 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-400 hover:text-white transition-colors flex-shrink-0 ml-auto"
+            >
+              <Calendar size={11} /> {c.nextDay || 'Move To'}
+            </button>
+          </div>
         </div>
       </div>
     );
