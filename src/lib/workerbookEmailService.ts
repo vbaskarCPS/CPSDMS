@@ -678,4 +678,4 @@ export async function sendWorkerbookEmail(
   } catch (err: any) {
     return { success: false, error: err.message || 'Failed to send' };
   }
-}
+} 
