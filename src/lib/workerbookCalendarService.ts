@@ -7,8 +7,9 @@
 //   Booked = rows where column B (CN#) is non-empty AND column L is not "To:*" AND column L is not "NS"
 //   Rookies = booked rows where column O (Days) is 0
 //
-// Results are returned fresh every call (no caching) — per Vijay's request.
-// A progress callback lets the UI show "Loading X of N tabs".
+// Uses a single batchGet API call to fetch ALL tabs at once — avoids the
+// Google Sheets 300-reads-per-minute quota limit that killed the old
+// sequential approach.
 
 import { dialerSheetsService } from './dialerSheetsService';
 
@@ -92,8 +93,10 @@ function countBookedFromRows(rows: any[][]): { booked: number; rookies: number }
 }
 
 /**
- * Load booking counts for ALL dated tabs in the workbook, sequentially.
- * Calls onProgress before each tab fetch so the UI can show a progress bar.
+ * Load booking counts for ALL dated tabs in ONE API call (batchGet).
+ *
+ * Progress callback fires once at 0% and once at 100% — since we do a
+ * single batched call, there's no intermediate progress to report.
  *
  * Returns a Map keyed by tab name (e.g. "Apr16") -> DayCount.
  */
@@ -103,31 +106,40 @@ export async function loadAllDayCounts(
   onProgress?: (p: CalendarProgress) => void,
 ): Promise<Map<string, DayCount>> {
   const counts = new Map<string, DayCount>();
+  if (tabNames.length === 0) return counts;
 
-  for (let i = 0; i < tabNames.length; i++) {
-    const tabName = tabNames[i];
+  // Start progress
+  if (onProgress) {
+    onProgress({ loaded: 0, total: tabNames.length, currentTab: 'Fetching all tabs...' });
+  }
 
-    if (onProgress) {
-      onProgress({ loaded: i, total: tabNames.length, currentTab: tabName });
-    }
+  // Build ranges — we only need columns B, L, O so fetch A3:O200 (as before)
+  const ranges = tabNames.map(tab => "'" + tab + "'!A3:O200");
 
-    try {
-      // Fetch columns A-O (shuttle through days). That gives us B, L, O without
-      // pulling email/phone/notes which we don't need here. Using A3:O200.
-      const rows = await dialerSheetsService.sheetsGet(
-        spreadsheetId,
-        "'" + tabName + "'!A3:O200",
-      );
-      const { booked, rookies } = countBookedFromRows(rows);
-      const dayOfMonth = parseInt(tabName.slice(3), 10);
-      counts.set(tabName, { tabName, dayOfMonth, booked, rookies });
-    } catch {
-      // Non-fatal: if one tab fails to load, show 0 for that day rather than
-      // blowing up the whole calendar.
+  let allRows: any[][][] = [];
+  try {
+    allRows = await dialerSheetsService.sheetsBatchGet(spreadsheetId, ranges);
+  } catch (err) {
+    // If the batched call fails for any reason, return zero counts for all
+    // tabs rather than crashing the whole calendar. The refresh button can
+    // be used to retry.
+    for (const tabName of tabNames) {
       const dayOfMonth = parseInt(tabName.slice(3), 10);
       counts.set(tabName, { tabName, dayOfMonth, booked: 0, rookies: 0 });
     }
+    if (onProgress) {
+      onProgress({ loaded: tabNames.length, total: tabNames.length, currentTab: '' });
+    }
+    throw err;
   }
+
+  // Process results — they come back in the same order as the input ranges
+  tabNames.forEach((tabName, i) => {
+    const rows = allRows[i] || [];
+    const { booked, rookies } = countBookedFromRows(rows);
+    const dayOfMonth = parseInt(tabName.slice(3), 10);
+    counts.set(tabName, { tabName, dayOfMonth, booked, rookies });
+  });
 
   if (onProgress) {
     onProgress({ loaded: tabNames.length, total: tabNames.length, currentTab: '' });
@@ -180,9 +192,6 @@ export function groupTabsByMonth(
 
 /**
  * Build a full calendar grid for a month (with blank cells for padding).
- * Returns an array where each entry is either:
- *   - { day: number, count?: DayCount } for a real day
- *   - { day: 0 } for padding cells (before month start / after month end)
  */
 export interface CalendarCell {
   day: number;         // 0 for padding, else 1-31

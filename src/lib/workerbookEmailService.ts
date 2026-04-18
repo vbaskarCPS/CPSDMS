@@ -52,7 +52,12 @@ export interface WorkerbookTextTemplate {
 }
 
 // Identifies which text-template context we're saving/loading
-export type StatusTextTemplateType = 'workerbook_text' | 'workerbook_text_ns' | 'workerbook_text_wdr';
+export type StatusTextTemplateType =
+  | 'workerbook_text'
+  | 'workerbook_text_ns'
+  | 'workerbook_text_wdr'
+  | 'workerbook_text_snow'
+  | 'workerbook_text_tnb';
 
 // ─── DATE FORMATTING ──────────────────────────────────────────────────────────
 
@@ -136,6 +141,20 @@ export const DEFAULT_NS_TEXT_TEMPLATE: WorkerbookTextTemplate = {
 export const DEFAULT_WDR_TEXT_TEMPLATE: WorkerbookTextTemplate = {
   bodyText:
     'Hi {{firstName}}, hope your first shift went well! Ready to pick up another day? ' +
+    'Reply with a day that works for you. - Property Stars',
+};
+
+// SNOW callback template
+export const DEFAULT_SNOW_TEXT_TEMPLATE: WorkerbookTextTemplate = {
+  bodyText:
+    "Hi {{firstName}}, hope you're doing well! We'd love to have you back on a day that works for you. " +
+    'Reply with your availability. - Property Stars',
+};
+
+// TNB callback template
+export const DEFAULT_TNB_TEXT_TEMPLATE: WorkerbookTextTemplate = {
+  bodyText:
+    "Hi {{firstName}}, touching base to see if you're ready to jump back on the schedule. " +
     'Reply with a day that works for you. - Property Stars',
 };
 
@@ -280,19 +299,37 @@ export async function loadWdrTextTemplate(): Promise<WorkerbookTextTemplate> {
 }
 
 /**
- * Load all three text templates (workerbook, NS, WDR) in one shot.
+ * Load the SNOW callback text template.
+ */
+export async function loadSnowTextTemplate(): Promise<WorkerbookTextTemplate> {
+  return loadStatusTextTemplateByType('workerbook_text_snow', DEFAULT_SNOW_TEXT_TEMPLATE);
+}
+
+/**
+ * Load the TNB callback text template.
+ */
+export async function loadTnbTextTemplate(): Promise<WorkerbookTextTemplate> {
+  return loadStatusTextTemplateByType('workerbook_text_tnb', DEFAULT_TNB_TEXT_TEMPLATE);
+}
+
+/**
+ * Load all five text templates (workerbook, NS, WDR, SNOW, TNB) in one shot.
  */
 export async function loadAllTextTemplates(): Promise<{
   workerbook: WorkerbookTextTemplate;
   ns: WorkerbookTextTemplate;
   wdr: WorkerbookTextTemplate;
+  snow: WorkerbookTextTemplate;
+  tnb: WorkerbookTextTemplate;
 }> {
-  const [workerbook, ns, wdr] = await Promise.all([
+  const [workerbook, ns, wdr, snow, tnb] = await Promise.all([
     loadWorkerbookTextTemplate(),
     loadNsTextTemplate(),
     loadWdrTextTemplate(),
+    loadSnowTextTemplate(),
+    loadTnbTextTemplate(),
   ]);
-  return { workerbook, ns, wdr };
+  return { workerbook, ns, wdr, snow, tnb };
 }
 
 async function loadStatusTextTemplateByType(
@@ -319,7 +356,7 @@ async function loadStatusTextTemplateByType(
 }
 
 /**
- * Save any of the three text templates by type.
+ * Save any of the status text templates by type.
  */
 export async function saveStatusTextTemplate(
   type: StatusTextTemplateType,
@@ -329,9 +366,11 @@ export async function saveStatusTextTemplate(
   if (!ccId) return;
 
   const names: Record<StatusTextTemplateType, string> = {
-    workerbook_text:     'Workerbook Day-Of Text',
-    workerbook_text_ns:  'Workerbook NS Callback Text',
-    workerbook_text_wdr: 'Workerbook WDR Callback Text',
+    workerbook_text:      'Workerbook Day-Of Text',
+    workerbook_text_ns:   'Workerbook NS Callback Text',
+    workerbook_text_wdr:  'Workerbook WDR Callback Text',
+    workerbook_text_snow: 'Workerbook SNOW Callback Text',
+    workerbook_text_tnb:  'Workerbook TNB Callback Text',
   };
 
   const payload = {
@@ -386,6 +425,8 @@ export async function cleanOldWorkerbookEmailLogs(): Promise<void> {
       'workerbook_text',
       'workerbook_text_ns',
       'workerbook_text_wdr',
+      'workerbook_text_snow',
+      'workerbook_text_tnb',
     ])
     .lt('sent_at', cutoff.toISOString());
 }
@@ -395,7 +436,7 @@ export async function cleanOldWorkerbookEmailLogs(): Promise<void> {
 /**
  * Text tracking context — which screen the text was sent from.
  */
-export type TextContext = 'workerbook' | 'ns' | 'wdr';
+export type TextContext = 'workerbook' | 'ns' | 'wdr' | 'snow' | 'tnb';
 
 /**
  * Returns a Set of keys like "H1001:cell:workerbook" or "H1001:alt:ns"
@@ -414,15 +455,13 @@ export async function getTextedTodayMap(): Promise<Set<string>> {
       'workerbook_text',
       'workerbook_text_ns',
       'workerbook_text_wdr',
+      'workerbook_text_snow',
+      'workerbook_text_tnb',
     ])
     .gte('sent_at', `${today}T00:00:00Z`);
 
   const set = new Set<string>();
   for (const row of data || []) {
-    // recipient_email holds the contractor ID for text logs.
-    // We store it as "CN_ID:phoneType:context"
-    // For backward compat, the old "workerbook_text_cell"/"workerbook_text_alt"
-    // rows get mapped to workerbook context.
     const t = row.email_type;
     let phoneType: 'cell' | 'alt' = 'cell';
     let context: TextContext = 'workerbook';
@@ -430,12 +469,9 @@ export async function getTextedTodayMap(): Promise<Set<string>> {
     if (t === 'workerbook_text_cell') { phoneType = 'cell'; context = 'workerbook'; }
     else if (t === 'workerbook_text_alt') { phoneType = 'alt'; context = 'workerbook'; }
     else if (t === 'workerbook_text') {
-      // Modern unified logs encode phone type in the recipient_email suffix:
-      // e.g., "H1001:cell" or "H1001:alt"
       const parts = String(row.recipient_email || '').split(':');
       if (parts.length >= 2 && (parts[1] === 'cell' || parts[1] === 'alt')) {
-        phoneType = parts[1] as 'cell' | 'alt';
-        set.add(`${parts[0]}:${phoneType}:workerbook`);
+        set.add(`${parts[0]}:${parts[1]}:workerbook`);
         continue;
       }
       phoneType = 'cell';
@@ -457,6 +493,22 @@ export async function getTextedTodayMap(): Promise<Set<string>> {
       }
       context = 'wdr';
     }
+    else if (t === 'workerbook_text_snow') {
+      const parts = String(row.recipient_email || '').split(':');
+      if (parts.length >= 2 && (parts[1] === 'cell' || parts[1] === 'alt')) {
+        set.add(`${parts[0]}:${parts[1]}:snow`);
+        continue;
+      }
+      context = 'snow';
+    }
+    else if (t === 'workerbook_text_tnb') {
+      const parts = String(row.recipient_email || '').split(':');
+      if (parts.length >= 2 && (parts[1] === 'cell' || parts[1] === 'alt')) {
+        set.add(`${parts[0]}:${parts[1]}:tnb`);
+        continue;
+      }
+      context = 'tnb';
+    }
 
     set.add(`${row.recipient_email}:${phoneType}:${context}`);
   }
@@ -465,7 +517,7 @@ export async function getTextedTodayMap(): Promise<Set<string>> {
 
 /**
  * Record that a text was sent (user tapped the SMS button).
- * context: 'workerbook' | 'ns' | 'wdr'
+ * context: 'workerbook' | 'ns' | 'wdr' | 'snow' | 'tnb'
  * phoneType: 'cell' | 'alt'
  */
 export async function logTextSent(
@@ -474,11 +526,12 @@ export async function logTextSent(
   context: TextContext = 'workerbook',
 ): Promise<void> {
   const emailType =
-    context === 'ns'  ? 'workerbook_text_ns' :
-    context === 'wdr' ? 'workerbook_text_wdr' :
-                        'workerbook_text';
+    context === 'ns'   ? 'workerbook_text_ns' :
+    context === 'wdr'  ? 'workerbook_text_wdr' :
+    context === 'snow' ? 'workerbook_text_snow' :
+    context === 'tnb'  ? 'workerbook_text_tnb' :
+                         'workerbook_text';
 
-  // Encode phoneType into the recipient_email key so we can split in getTextedTodayMap
   const key = `${contractorId}:${phoneType}`;
 
   await supabase.from('email_logs').insert({
@@ -668,13 +721,10 @@ export function buildWorkerbookEmailHtml(
   const hasShuttlePlaceholder = template.bodyIntro.includes('{{shuttlePoint}}');
   const hasConfirmPlaceholder = template.bodyIntro.includes('{{confirmButton}}');
 
-  // Step 1: swap {{shuttlePoint}} / {{confirmButton}} for plain sentinels
-  // so they don't get mangled by the paragraph pass
   let bodyText = template.bodyIntro;
   bodyText = bodyText.replace(/\{\{shuttlePoint\}\}/g, SENTINEL_SHUTTLE);
   bodyText = bodyText.replace(/\{\{confirmButton\}\}/g, SENTINEL_CONFIRM);
 
-  // Step 2: replace all plain text variables
   const textVars: Record<string, string> = {
     firstName:    data.firstName,
     lastName:     data.lastName,
@@ -686,8 +736,6 @@ export function buildWorkerbookEmailHtml(
   };
   bodyText = replaceVars(bodyText, textVars);
 
-  // Step 3: convert newline-delimited lines to <p> tags.
-  // Sentinels are plain strings so they come through wrapped in <p> — we'll strip that next.
   const paragraphed = bodyText
     .split('\n')
     .map(line => line.trim()
@@ -695,7 +743,6 @@ export function buildWorkerbookEmailHtml(
       : '')
     .join('');
 
-  // Step 4: replace sentinel <p> wrappers with real HTML blocks
   const shuttleHtml = buildShuttleBlock(data.shuttle, shuttlePoint);
   const confirmHtml = buildConfirmBlock(confirmUrl, dateFriendly);
 
@@ -718,16 +765,12 @@ export function buildWorkerbookEmailHtml(
           </td>
         </tr>
 
-        <!-- Body -->
         <tr><td style="padding:30px 30px 10px 30px;">${introHtml}</td></tr>
 
-        <!-- Shuttle section — only auto-appended if {{shuttlePoint}} NOT in body -->
         ${!hasShuttlePlaceholder ? buildShuttleSection(data.shuttle, shuttlePoint) : ''}
 
-        <!-- Rookie training — always auto-appended for rookies -->
         ${data.isRookie ? buildTrainingSection(data.contractorId, data.firstName) : ''}
 
-        <!-- Confirm button — only auto-appended if {{confirmButton}} NOT in body -->
         ${!hasConfirmPlaceholder ? buildConfirmSection(confirmUrl, dateFriendly) : ''}
 
         ${buildSignature(template)}
@@ -779,10 +822,8 @@ export function buildTextMessage(
 
 /**
  * Build the sms: URL that opens the device messaging app.
- * Samsung/Android use ?body= while iOS uses &body=, but on Android both work.
  */
 export function buildSmsLink(phoneNumber: string, body: string): string {
-  // Strip anything that isn't a digit or plus sign from the phone
   const cleanPhone = phoneNumber.replace(/[^\d+]/g, '');
   return `sms:${cleanPhone}?body=${encodeURIComponent(body)}`;
 }

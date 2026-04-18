@@ -24,6 +24,8 @@ import {
   CalendarDays,
   Home,
   Zap,
+  Snowflake,
+  Clock,
 } from 'lucide-react';
 import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import { commandCenterService } from '../../lib/commandCenterService';
@@ -69,7 +71,7 @@ import {
   StatusContractor,
   StatusTabName,
 } from '../../lib/workerbookStatusRosterService';
-import { triggerRunLogic, isRunInFlight } from '../../lib/workerbookRunService';
+import { moveContractorRow, isRunInFlight } from '../../lib/workerbookRunService';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -97,14 +99,6 @@ type WBView = 'calendar' | 'day' | 'status';
 type MoveTargetContext = 'day' | 'status';
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
-
-const DATED_TAB_RE = /^[A-Z][a-z]{2}\d{2}$/;
-
-function getTodayTabName(): string {
-  const d = new Date();
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  return months[d.getMonth()] + String(d.getDate()).padStart(2, '0');
-}
 
 function toMmmDD(dateInput: string): string {
   const parts = dateInput.split('-').map(Number);
@@ -151,7 +145,6 @@ function sortContractors(
   });
 }
 
-/** Convert a StatusContractor into a WBContractor-shaped object for reuse in the day-view card renderer. */
 function statusToWB(c: StatusContractor): WBContractor {
   return {
     rowNum:    c.rowNum,
@@ -230,7 +223,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   const [isConnected, setIsConnected]   = useState(() => dialerSheetsService.isAuthenticated());
   const [connecting, setConnecting]     = useState(false);
 
-  // View state: calendar landing vs. day vs. status roster
   const [view, setView] = useState<WBView>('calendar');
   const [activeStatusTab, setActiveStatusTab] = useState<StatusTabName | null>(null);
 
@@ -247,7 +239,13 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   const [emailedToday, setEmailedToday] = useState<Set<string>>(new Set());
   const [templates, setTemplates]       = useState<{ regular: WorkerbookEmailTemplate; rookie: WorkerbookEmailTemplate } | null>(null);
-  const [textTemplates, setTextTemplates] = useState<{ workerbook: WorkerbookTextTemplate; ns: WorkerbookTextTemplate; wdr: WorkerbookTextTemplate } | null>(null);
+  const [textTemplates, setTextTemplates] = useState<{
+    workerbook: WorkerbookTextTemplate;
+    ns: WorkerbookTextTemplate;
+    wdr: WorkerbookTextTemplate;
+    snow: WorkerbookTextTemplate;
+    tnb: WorkerbookTextTemplate;
+  } | null>(null);
   const [textedToday, setTextedToday]   = useState<Set<string>>(new Set());
   const [sendingFor, setSendingFor]     = useState<string | null>(null);
   const [sendingAll, setSendingAll]     = useState(false);
@@ -265,7 +263,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   const [moveTarget, setMoveTarget]             = useState<WBContractor | null>(null);
   const [moveTargetContext, setMoveTargetContext] = useState<MoveTargetContext>('day');
   const [moveToDate, setMoveToDate]             = useState('');
-  const [moveToDestination, setMoveToDestination] = useState<string>(''); // raw value to write (Apr17 | NS | WDR | Q | F)
+  const [moveToDestination, setMoveToDestination] = useState<string>('');
   const [movingTo, setMovingTo]                 = useState(false);
   const [confirmingFor, setConfirmingFor]       = useState<string | null>(null);
 
@@ -273,14 +271,14 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   const [pushingToShuttles, setPushingToShuttles] = useState(false);
 
-  // Calendar landing page state
   const [monthGroups, setMonthGroups] = useState<MonthGroup[]>([]);
   const [calendarCounts, setCalendarCounts] = useState<Map<string, DayCount>>(new Map());
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [calendarProgress, setCalendarProgress] = useState<CalendarProgress | null>(null);
-  const [statusCounts, setStatusCounts] = useState<Record<StatusTabName, number>>({ NS: 0, WDR: 0, Q: 0, F: 0 });
+  const [statusCounts, setStatusCounts] = useState<Record<StatusTabName, number>>({
+    NS: 0, WDR: 0, SNOW: 0, TNB: 0, Q: 0, F: 0,
+  });
 
-  // Run (GS Web App) state
   const [runError, setRunError]         = useState<string | null>(null);
   const [runSuccess, setRunSuccess]     = useState<string | null>(null);
 
@@ -302,7 +300,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     }
   }, [showEmailService]);
 
-  // Load calendar when connected + on calendar view
   useEffect(() => {
     if (isConnected && view === 'calendar' && currentCC) {
       loadCalendar();
@@ -310,7 +307,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, view, currentCC]);
 
-  // Load a day's contractors when entering day view
   useEffect(() => {
     if (view === 'day' && selectedTab && isConnected) {
       loadContractors();
@@ -319,7 +315,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, selectedTab, isConnected]);
 
-  // Load confirmations + NA counts for the currently viewed day
   useEffect(() => {
     if (view === 'day' && selectedTab && currentCC) {
       loadConfirmations();
@@ -328,7 +323,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, selectedTab, currentCC]);
 
-  // Load status roster + NA counts when entering NS/WDR view
   useEffect(() => {
     if (view === 'status' && activeStatusTab && isConnected && currentCC) {
       loadStatusRosterData(activeStatusTab);
@@ -345,18 +339,15 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     setError(null);
     setCalendarProgress(null);
     try {
-      // 1. Get all dated tab names (sorted chronologically)
       const dated = await getDatedTabs(currentCC.workerbookSheetId);
       setAllTabs(dated);
       const todayIdx = dated.indexOf(getCalendarTodayTabName());
       setTabIndex(todayIdx >= 0 ? todayIdx : Math.max(0, dated.length - 1));
 
-      // 2. Fire the status tab counts in parallel (fast, 4 calls)
       loadAllStatusCounts(currentCC.workerbookSheetId)
         .then(setStatusCounts)
         .catch(() => {});
 
-      // 3. Load day counts for every tab, sequentially with progress
       const counts = await loadAllDayCounts(
         currentCC.workerbookSheetId,
         dated,
@@ -364,7 +355,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
       );
       setCalendarCounts(counts);
 
-      // 4. Group into months
       const groups = groupTabsByMonth(dated, counts);
       setMonthGroups(groups);
     } catch (err: any) {
@@ -491,7 +481,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   const handlePhoneDial = async (c: WBContractor, phoneType: PhoneType, phoneNumber: string) => {
     if (!currentCC) return;
-    // Which tab are we operating on? (dated tab OR status tab)
     const tabForNa = view === 'status' ? (activeStatusTab ?? '') : selectedTab;
     if (!tabForNa) {
       window.location.href = 'tel:' + phoneNumber;
@@ -530,9 +519,11 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     if (!phoneNumber) return;
 
     const template =
-      context === 'ns'  ? textTemplates.ns :
-      context === 'wdr' ? textTemplates.wdr :
-                          textTemplates.workerbook;
+      context === 'ns'   ? textTemplates.ns :
+      context === 'wdr'  ? textTemplates.wdr :
+      context === 'snow' ? textTemplates.snow :
+      context === 'tnb'  ? textTemplates.tnb :
+                           textTemplates.workerbook;
 
     const shuttlePt = getShuttlePoint(c.shuttle);
     const dateForMessage = view === 'day' ? selectedTab : (c.nextDay || '');
@@ -552,14 +543,11 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
     const smsLink = buildSmsLink(phoneNumber, messageBody);
 
-    // Optimistically mark as texted so the button turns green immediately
     const key = c.cnId + ':' + phoneType + ':' + context;
     setTextedToday(prev => new Set([...prev, key]));
 
-    // Open the device messaging app
     window.location.href = smsLink;
 
-    // Log to Supabase so refresh persists the state
     try {
       await logTextSent(c.cnId, phoneType, context);
     } catch {
@@ -621,11 +609,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   const handleMoveApply = async () => {
     if (!currentCC || !moveTarget) return;
     if (!moveToDestination) {
-      setRunError('Pick a destination (a date or one of NS / WDR / Q / F).');
+      setRunError('Pick a destination (a date or a status).');
       return;
     }
 
-    // Which SOURCE tab are we writing to column L on?
     const sourceTab = moveTargetContext === 'status'
       ? (activeStatusTab ?? '')
       : selectedTab;
@@ -635,7 +622,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
       return;
     }
 
-    // Single-flight guard — the run service also checks, but check here for a clean message
     if (isRunInFlight(currentCC.id)) {
       setRunError('Another move is already running. Please wait for it to finish.');
       return;
@@ -646,24 +632,16 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     setRunSuccess(null);
 
     try {
-      // Step 1: write the destination into column L on the source tab
-      await dialerSheetsService.sheetsUpdate(
-        currentCC.workerbookSheetId,
-        "'" + sourceTab + "'!L" + moveTarget.rowNum,
-        [[moveToDestination]],
-      );
-
-      // Step 2: trigger runMoveLogic via the deployed Web App URL
-      const result = await triggerRunLogic(
+      const result = await moveContractorRow(
         currentCC.id,
-        currentCC.workerbookRunUrl,
+        currentCC.workerbookSheetId,
         sourceTab,
+        moveTarget.rowNum,
+        moveToDestination,
       );
 
       if (!result.success) {
-        // The column-L write already happened. We leave it there — user can hit Run in Sheets
-        // manually, or retry from here. Set an error so they know.
-        setRunError('Destination written to Sheets, but auto-Run failed: ' + (result.error || 'unknown error'));
+        setRunError(result.error || 'Move failed.');
         return;
       }
 
@@ -673,15 +651,12 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
       );
       setTimeout(() => setRunSuccess(null), 4000);
 
-      // Close modal and refresh the current view
       setMoveTarget(null);
       setMoveToDate('');
       setMoveToDestination('');
 
-      // Refresh the appropriate view so the moved row no longer shows
       if (moveTargetContext === 'status' && activeStatusTab) {
         await loadStatusRosterData(activeStatusTab);
-        // Also refresh the status counts for the calendar landing
         loadAllStatusCounts(currentCC.workerbookSheetId).then(setStatusCounts).catch(() => {});
       } else {
         await loadContractors();
@@ -857,8 +832,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   };
 
   const currentTextContext: TextContext =
-    view === 'status' && activeStatusTab === 'NS'  ? 'ns'  :
-    view === 'status' && activeStatusTab === 'WDR' ? 'wdr' :
+    view === 'status' && activeStatusTab === 'NS'   ? 'ns'   :
+    view === 'status' && activeStatusTab === 'WDR'  ? 'wdr'  :
+    view === 'status' && activeStatusTab === 'SNOW' ? 'snow' :
+    view === 'status' && activeStatusTab === 'TNB'  ? 'tnb'  :
                                                       'workerbook';
 
   // ─── TEXT BUTTON HELPER ────────────────────────────────────────────────────
@@ -885,7 +862,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     );
   };
 
-  // ─── CARD RENDERER (shared between day view and status view) ───────────────
+  // ─── CARD RENDERER ─────────────────────────────────────────────────────────
 
   const renderCard = (c: WBContractor, opts: { showEmailActions: boolean; showConfirm: boolean; moveContext: MoveTargetContext }) => {
     const dotColor       = cellColors.get(c.rowNum) ?? null;
@@ -904,22 +881,15 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         key={c.rowNum + ':' + c.cnId}
         className={'bg-gray-800 rounded-xl border p-4 md:px-4 md:py-3 transition-colors ' + (isConfirmed && opts.showConfirm ? 'border-green-700/50' : 'border-gray-700')}
       >
-
         {/* PHONE LAYOUT */}
         <div className="md:hidden space-y-3">
           <div className="flex items-center gap-2 min-w-0">
             {dotColor && <div className={'w-2.5 h-2.5 rounded-full flex-shrink-0 ' + dotClass[dotColor]} />}
-            <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded font-mono flex-shrink-0">
-              {c.cnId}
-            </span>
+            <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded font-mono flex-shrink-0">{c.cnId}</span>
             {isRookie && (
-              <span className="text-[10px] bg-purple-900/50 text-purple-300 px-2 py-0.5 rounded border border-purple-700/50 flex-shrink-0">
-                ROOKIE
-              </span>
+              <span className="text-[10px] bg-purple-900/50 text-purple-300 px-2 py-0.5 rounded border border-purple-700/50 flex-shrink-0">ROOKIE</span>
             )}
-            <span className="font-bold text-white text-base flex-1 min-w-0 truncate">
-              {c.firstName + ' ' + c.lastName}
-            </span>
+            <span className="font-bold text-white text-base flex-1 min-w-0 truncate">{c.firstName + ' ' + c.lastName}</span>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
@@ -927,14 +897,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               {'Days: ' + c.days}
             </span>
             {c.ns > 0 && (
-              <span className="text-xs px-2.5 py-1 rounded bg-red-900/30 text-red-300 border border-red-700/40">
-                {'NS: ' + c.ns}
-              </span>
+              <span className="text-xs px-2.5 py-1 rounded bg-red-900/30 text-red-300 border border-red-700/40">{'NS: ' + c.ns}</span>
             )}
             {c.team && (
-              <span className="text-xs px-2.5 py-1 rounded bg-gray-700 text-gray-400">
-                {c.team}
-              </span>
+              <span className="text-xs px-2.5 py-1 rounded bg-gray-700 text-gray-400">{c.team}</span>
             )}
           </div>
 
@@ -977,9 +943,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                 <Phone size={14} className="flex-shrink-0" />
                 <span className="font-medium">{c.cellPhone}</span>
                 {naCell > 0 && (
-                  <span className="ml-auto bg-orange-900/50 text-orange-300 border border-orange-700/50 px-2 py-0.5 rounded text-xs font-bold">
-                    {'NA x' + naCell}
-                  </span>
+                  <span className="ml-auto bg-orange-900/50 text-orange-300 border border-orange-700/50 px-2 py-0.5 rounded text-xs font-bold">{'NA x' + naCell}</span>
                 )}
               </button>
               {renderTextButton(c, 'cell')}
@@ -996,9 +960,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                 <span className="font-medium">{c.altPhone}</span>
                 <span className="text-gray-600 text-xs">Alt</span>
                 {naAlt > 0 && (
-                  <span className="ml-auto bg-orange-900/50 text-orange-300 border border-orange-700/50 px-2 py-0.5 rounded text-xs font-bold">
-                    {'NA x' + naAlt}
-                  </span>
+                  <span className="ml-auto bg-orange-900/50 text-orange-300 border border-orange-700/50 px-2 py-0.5 rounded text-xs font-bold">{'NA x' + naAlt}</span>
                 )}
               </button>
               {renderTextButton(c, 'alt')}
@@ -1044,29 +1006,19 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
         <div className="hidden md:block">
           <div className="flex items-center gap-2 min-w-0">
             {dotColor && <div className={'w-2 h-2 rounded-full flex-shrink-0 ' + dotClass[dotColor]} />}
-            <span className="text-[11px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded font-mono flex-shrink-0">
-              {c.cnId}
-            </span>
+            <span className="text-[11px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded font-mono flex-shrink-0">{c.cnId}</span>
             {isRookie && (
-              <span className="text-[10px] bg-purple-900/50 text-purple-300 px-1.5 py-0.5 rounded border border-purple-700/50 flex-shrink-0">
-                ROOKIE
-              </span>
+              <span className="text-[10px] bg-purple-900/50 text-purple-300 px-1.5 py-0.5 rounded border border-purple-700/50 flex-shrink-0">ROOKIE</span>
             )}
-            <span className="font-bold text-white text-sm truncate flex-1 min-w-0">
-              {c.firstName + ' ' + c.lastName}
-            </span>
+            <span className="font-bold text-white text-sm truncate flex-1 min-w-0">{c.firstName + ' ' + c.lastName}</span>
             <span className={'text-[11px] px-2 py-0.5 rounded flex-shrink-0 ' + (isRookie ? 'bg-purple-900/30 text-purple-300 border border-purple-700/40' : 'bg-gray-700 text-gray-300')}>
               {'Days: ' + c.days}
             </span>
             {c.ns > 0 && (
-              <span className="text-[11px] px-2 py-0.5 rounded bg-red-900/30 text-red-300 border border-red-700/40 flex-shrink-0">
-                {'NS: ' + c.ns}
-              </span>
+              <span className="text-[11px] px-2 py-0.5 rounded bg-red-900/30 text-red-300 border border-red-700/40 flex-shrink-0">{'NS: ' + c.ns}</span>
             )}
             {c.team && (
-              <span className="text-[11px] px-2 py-0.5 rounded bg-gray-700 text-gray-400 flex-shrink-0">
-                {c.team}
-              </span>
+              <span className="text-[11px] px-2 py-0.5 rounded bg-gray-700 text-gray-400 flex-shrink-0">{c.team}</span>
             )}
 
             {opts.showEmailActions && (
@@ -1104,9 +1056,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                   <Phone size={11} />
                   {c.cellPhone}
                   {naCell > 0 && (
-                    <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
-                      {'NA x' + naCell}
-                    </span>
+                    <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">{'NA x' + naCell}</span>
                   )}
                 </button>
                 {renderTextButton(c, 'cell')}
@@ -1123,9 +1073,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                   {c.altPhone}
                   <span className="text-gray-600 ml-0.5">Alt</span>
                   {naAlt > 0 && (
-                    <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">
-                      {'NA x' + naAlt}
-                    </span>
+                    <span className="ml-1 bg-orange-900/50 text-orange-300 border border-orange-700/50 px-1.5 py-0.5 rounded text-[10px] font-bold">{'NA x' + naAlt}</span>
                   )}
                 </button>
                 {renderTextButton(c, 'alt')}
@@ -1168,16 +1116,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   const renderCalendarView = () => {
     const todayTabName = getCalendarTodayTabName();
-    const progressText = calendarProgress
-      ? 'Loading ' + calendarProgress.loaded + ' of ' + calendarProgress.total + ' tabs' + (calendarProgress.currentTab ? ' (' + calendarProgress.currentTab + ')' : '')
-      : '';
-    const progressPct = calendarProgress && calendarProgress.total > 0
-      ? Math.round((calendarProgress.loaded / calendarProgress.total) * 100)
-      : 0;
 
     return (
       <>
-        {/* Status tiles — NS and WDR */}
+        {/* Status tiles — 2x2 grid: NS+WDR top, SNOW+TNB bottom */}
         <div className="grid grid-cols-2 gap-3 mb-4">
           <button
             onClick={() => openStatusView('NS')}
@@ -1210,21 +1152,48 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               </div>
             </div>
           </button>
+
+          <button
+            onClick={() => openStatusView('SNOW')}
+            className="bg-sky-900/20 hover:bg-sky-900/40 border border-sky-800/60 rounded-xl p-5 text-left transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-sky-900/60 rounded-lg flex items-center justify-center border border-sky-700/60">
+                <Snowflake className="text-sky-400" size={24} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-sky-400/80 font-semibold tracking-wide uppercase">SNOW</div>
+                <div className="text-2xl font-bold text-white">{statusCounts.SNOW}</div>
+                <div className="text-xs text-gray-400">Tap to call back</div>
+              </div>
+            </div>
+          </button>
+
+          <button
+            onClick={() => openStatusView('TNB')}
+            className="bg-purple-900/20 hover:bg-purple-900/40 border border-purple-800/60 rounded-xl p-5 text-left transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-purple-900/60 rounded-lg flex items-center justify-center border border-purple-700/60">
+                <Clock className="text-purple-400" size={24} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-purple-400/80 font-semibold tracking-wide uppercase">TNB</div>
+                <div className="text-2xl font-bold text-white">{statusCounts.TNB}</div>
+                <div className="text-xs text-gray-400">Tap to call back</div>
+              </div>
+            </div>
+          </button>
         </div>
 
-        {/* Loading progress bar */}
-        {calendarLoading && calendarProgress && (
+        {/* Loading indicator */}
+        {calendarLoading && (
           <div className="bg-gray-800 rounded-xl border border-gray-700 p-4 mb-4">
-            <div className="flex items-center gap-2 mb-2">
+            <div className="flex items-center gap-2">
               <Loader className="animate-spin text-blue-400" size={16} />
-              <span className="text-sm text-gray-300">{progressText}</span>
-              <span className="ml-auto text-sm font-bold text-blue-400">{progressPct}%</span>
-            </div>
-            <div className="w-full bg-gray-900 rounded-full h-2 overflow-hidden">
-              <div
-                className="bg-blue-500 h-full transition-all duration-150"
-                style={{ width: progressPct + '%' }}
-              />
+              <span className="text-sm text-gray-300">
+                {calendarProgress?.currentTab || 'Loading calendar...'}
+              </span>
             </div>
           </div>
         )}
@@ -1247,12 +1216,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                   <h3 className="font-bold text-white">{month.monthName} {month.year}</h3>
                 </div>
 
-                {/* Weekday headers */}
                 <div className="grid grid-cols-7 gap-1 p-2 border-b border-gray-700 text-[10px] text-gray-500 font-semibold uppercase tracking-wide text-center">
                   <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
                 </div>
 
-                {/* Day cells */}
                 <div className="grid grid-cols-7 gap-1 p-2">
                   {cells.map((cell, idx) => {
                     if (cell.day === 0) {
@@ -1263,7 +1230,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                     const isToday = tabName === todayTabName;
                     const hasBookings = (count?.booked ?? 0) > 0;
 
-                    // Is this day in the past?
                     const now = new Date();
                     const cellDate = new Date(month.year, month.monthIndex, cell.day);
                     const isPast = cellDate < new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -1309,22 +1275,29 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     );
   };
 
-  // ─── STATUS ROSTER VIEW (NS/WDR) ───────────────────────────────────────────
+  // ─── STATUS ROSTER VIEW ────────────────────────────────────────────────────
 
   const renderStatusView = () => {
     if (!activeStatusTab) return null;
 
-    const isNS = activeStatusTab === 'NS';
-    const themeColor = isNS ? 'red' : 'amber';
-    const themeLabel = isNS ? 'No Shows' : "Worked, Didn't Rebook";
+    const themeMap: Record<StatusTabName, { text: string; bg: string; border: string; label: string; Icon: any }> = {
+      NS:   { text: 'text-red-300',    bg: 'bg-red-900/10',    border: 'border-red-800/40',    label: 'No Shows',                   Icon: UserX },
+      WDR:  { text: 'text-amber-300',  bg: 'bg-amber-900/10',  border: 'border-amber-800/40',  label: "Worked, Didn't Rebook",      Icon: UserMinus },
+      SNOW: { text: 'text-sky-300',    bg: 'bg-sky-900/10',    border: 'border-sky-800/40',    label: 'SNOW',                       Icon: Snowflake },
+      TNB:  { text: 'text-purple-300', bg: 'bg-purple-900/10', border: 'border-purple-800/40', label: 'TNB',                        Icon: Clock },
+      Q:    { text: 'text-gray-300',   bg: 'bg-gray-900/10',   border: 'border-gray-800/40',   label: 'Quit',                       Icon: UserCheck },
+      F:    { text: 'text-orange-300', bg: 'bg-orange-900/10', border: 'border-orange-800/40', label: 'Fired',                      Icon: Flame },
+    };
+    const theme = themeMap[activeStatusTab];
+    const Icon = theme.Icon;
 
     return (
       <>
-        <div className={'rounded-xl border p-4 mb-4 ' + (isNS ? 'bg-red-900/10 border-red-800/40' : 'bg-amber-900/10 border-amber-800/40')}>
+        <div className={'rounded-xl border p-4 mb-4 ' + theme.bg + ' ' + theme.border}>
           <div className="flex items-center gap-3">
-            {isNS ? <UserX className={'text-' + themeColor + '-400'} size={24} /> : <UserMinus className={'text-' + themeColor + '-400'} size={24} />}
+            <Icon className={theme.text} size={24} />
             <div>
-              <h2 className={'text-lg font-bold text-' + themeColor + '-300'}>{themeLabel}</h2>
+              <h2 className={'text-lg font-bold ' + theme.text}>{theme.label}</h2>
               <p className="text-xs text-gray-400">
                 {statusRoster.length} contractor{statusRoster.length !== 1 ? 's' : ''} — call to get them back on the schedule
               </p>
@@ -1432,6 +1405,17 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     }
 
     if (view === 'status') {
+      const headerThemeMap: Record<StatusTabName, { Icon: any; color: string }> = {
+        NS:   { Icon: UserX,      color: 'text-red-400' },
+        WDR:  { Icon: UserMinus,  color: 'text-amber-400' },
+        SNOW: { Icon: Snowflake,  color: 'text-sky-400' },
+        TNB:  { Icon: Clock,      color: 'text-purple-400' },
+        Q:    { Icon: UserCheck,  color: 'text-gray-400' },
+        F:    { Icon: Flame,      color: 'text-orange-400' },
+      };
+      const t = headerThemeMap[activeStatusTab!];
+      const Icon = t.Icon;
+
       return (
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
@@ -1439,7 +1423,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               <Home size={20} />
             </button>
             <h1 className="text-lg font-bold flex items-center gap-2">
-              {activeStatusTab === 'NS' ? <UserX size={20} className="text-red-400" /> : <UserMinus size={20} className="text-amber-400" />}
+              <Icon size={20} className={t.color} />
               {activeStatusTab}
               {statusRoster.length > 0 && (
                 <span className="text-xs font-normal text-gray-500 ml-1">({statusRoster.length})</span>
@@ -1521,8 +1505,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
   // ─── MAIN VIEW ─────────────────────────────────────────────────────────────
 
-  const runUrlConfigured = !!(currentCC?.workerbookRunUrl && currentCC.workerbookRunUrl.trim());
-
   return (
     <div className="min-h-screen bg-gray-900 text-white">
 
@@ -1584,16 +1566,6 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                 </div>
               )}
 
-              {!runUrlConfigured && (
-                <div className="text-xs text-amber-300 bg-amber-900/20 border border-amber-700/40 rounded p-2 flex items-start gap-2">
-                  <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
-                  <div>
-                    <strong>No Workerbook Run URL configured.</strong> The "Apply" button will write to column L but can't auto-trigger the move.
-                    Ask your admin to set the URL in Super Admin → Edit Command Center.
-                  </div>
-                </div>
-              )}
-
               {/* Date option */}
               <div>
                 <label className="block text-sm text-gray-400 mb-2">Move to a date</label>
@@ -1607,8 +1579,8 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                   }}
                   className="w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm"
                 />
-                {moveToDate && moveToDestination && !['NS','WDR','Q','F'].includes(moveToDestination) && (
-                  <p className="text-xs text-blue-400 mt-1">Will write: <strong>{moveToDestination}</strong></p>
+                {moveToDate && moveToDestination && !['NS','WDR','SNOW','TNB','Q','F'].includes(moveToDestination) && (
+                  <p className="text-xs text-blue-400 mt-1">Will move to tab: <strong>{moveToDestination}</strong></p>
                 )}
               </div>
 
@@ -1619,7 +1591,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                 <div className="flex-1 h-px bg-gray-700" />
               </div>
 
-              {/* Status buttons */}
+              {/* Status buttons — 2x3 grid */}
               <div>
                 <label className="block text-sm text-gray-400 mb-2">Set a status</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -1646,12 +1618,34 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                     <UserMinus size={14} /> WDR
                   </button>
                   <button
+                    onClick={() => { setMoveToDestination('SNOW'); setMoveToDate(''); }}
+                    className={
+                      'flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg text-sm font-bold transition-all border ' +
+                      (moveToDestination === 'SNOW'
+                        ? 'bg-sky-600 border-sky-500 text-white'
+                        : 'bg-sky-900/20 border-sky-800/60 text-sky-300 hover:bg-sky-900/40')
+                    }
+                  >
+                    <Snowflake size={14} /> SNOW
+                  </button>
+                  <button
+                    onClick={() => { setMoveToDestination('TNB'); setMoveToDate(''); }}
+                    className={
+                      'flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg text-sm font-bold transition-all border ' +
+                      (moveToDestination === 'TNB'
+                        ? 'bg-purple-600 border-purple-500 text-white'
+                        : 'bg-purple-900/20 border-purple-800/60 text-purple-300 hover:bg-purple-900/40')
+                    }
+                  >
+                    <Clock size={14} /> TNB
+                  </button>
+                  <button
                     onClick={() => { setMoveToDestination('Q'); setMoveToDate(''); }}
                     className={
                       'flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg text-sm font-bold transition-all border ' +
                       (moveToDestination === 'Q'
-                        ? 'bg-purple-600 border-purple-500 text-white'
-                        : 'bg-purple-900/20 border-purple-800/60 text-purple-300 hover:bg-purple-900/40')
+                        ? 'bg-gray-600 border-gray-500 text-white'
+                        : 'bg-gray-900/60 border-gray-800 text-gray-300 hover:bg-gray-800')
                     }
                   >
                     <UserCheck size={14} /> Q (Quit)
@@ -1672,7 +1666,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
               {moveToDestination && (
                 <div className="bg-gray-900 border border-gray-700 rounded-lg p-3 text-sm text-gray-300">
-                  Will write <code className="bg-gray-800 px-1.5 py-0.5 rounded text-blue-300 font-mono">{moveToDestination}</code> to column L, then trigger the Run script to execute the move.
+                  Will copy row to <code className="bg-gray-800 px-1.5 py-0.5 rounded text-blue-300 font-mono">{moveToDestination}</code> tab (with formatting preserved) and delete from source.
                 </div>
               )}
             </div>
@@ -1685,7 +1679,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
               >
                 {movingTo ? <Loader size={14} className="animate-spin" /> : <Zap size={14} />}
-                {movingTo ? 'Running move...' : 'Apply & Run'}
+                {movingTo ? 'Moving...' : 'Apply'}
               </button>
             </div>
           </div>

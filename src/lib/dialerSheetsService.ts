@@ -212,6 +212,39 @@ class DialerSheetsService {
   }
 
   /**
+   * GET multiple ranges in a single API call.
+   * Returns an array of range values in the SAME order as the input ranges.
+   * Each entry is a 2D array (rows x columns). Empty tabs return [].
+   *
+   * This is the quota-friendly way to load many tabs at once — instead of
+   * N separate API calls, use one batchGet with N ranges.
+   */
+  public async sheetsBatchGet(spreadsheetId: string, ranges: string[]): Promise<any[][][]> {
+    if (ranges.length === 0) return [];
+
+    const token = await this.ensureFreshToken();
+
+    // Build query string with repeated ranges=X parameters
+    const params = ranges.map(r => 'ranges=' + encodeURIComponent(r)).join('&');
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?${params}`;
+
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || 'Failed to batch fetch sheet data');
+    }
+
+    const data = await response.json();
+    const valueRanges: Array<{ range: string; values?: any[][] }> = data.valueRanges || [];
+
+    // Return in the same order as the input ranges, empty arrays for missing
+    return ranges.map((_, idx) => valueRanges[idx]?.values || []);
+  }
+
+  /**
    * PUT (overwrite) values in a range in any spreadsheet.
    */
   public async sheetsUpdate(spreadsheetId: string, range: string, values: any[][]): Promise<void> {

@@ -16,6 +16,8 @@ import {
   Smartphone,
   UserX,
   UserMinus,
+  Snowflake,
+  Clock,
 } from 'lucide-react';
 import {
   WorkerbookEmailTemplate,
@@ -25,6 +27,8 @@ import {
   DEFAULT_TEXT_TEMPLATE,
   DEFAULT_NS_TEXT_TEMPLATE,
   DEFAULT_WDR_TEXT_TEMPLATE,
+  DEFAULT_SNOW_TEXT_TEMPLATE,
+  DEFAULT_TNB_TEXT_TEMPLATE,
   loadWorkerbookTemplates,
   loadAllTextTemplates,
   saveWorkerbookTemplate,
@@ -38,7 +42,7 @@ interface Props {
   onBack: () => void;
 }
 
-type TemplateTab = 'regular' | 'rookie' | 'text' | 'text_ns' | 'text_wdr';
+type TemplateTab = 'regular' | 'rookie' | 'text' | 'text_ns' | 'text_wdr' | 'text_snow' | 'text_tnb';
 
 const SAMPLE_DATA = {
   contractorId: 'H1001',
@@ -61,7 +65,6 @@ const SAMPLE_SHUTTLE = {
   googleMapsUrl: 'https://maps.google.com',
 };
 
-// Variable reference shown in the email editor
 const BODY_VARS = [
   { placeholder: '{{firstName}}',     description: 'Contractor first name' },
   { placeholder: '{{lastName}}',      description: 'Last name' },
@@ -73,7 +76,6 @@ const BODY_VARS = [
   { placeholder: '{{confirmButton}}', description: 'Green "Confirm My Shift" button — links to confirmation page' },
 ];
 
-// Variable reference shown in text editors
 const TEXT_VARS = [
   { placeholder: '{{firstName}}',          description: 'Contractor first name' },
   { placeholder: '{{lastName}}',           description: 'Last name' },
@@ -94,8 +96,10 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
   const [regular, setRegular]   = useState<WorkerbookEmailTemplate>({ ...DEFAULT_REGULAR_TEMPLATE });
   const [rookie,  setRookie]    = useState<WorkerbookEmailTemplate>({ ...DEFAULT_ROOKIE_TEMPLATE });
   const [textWorkerbook, setTextWorkerbook] = useState<WorkerbookTextTemplate>({ ...DEFAULT_TEXT_TEMPLATE });
-  const [textNs,  setTextNs]    = useState<WorkerbookTextTemplate>({ ...DEFAULT_NS_TEXT_TEMPLATE });
-  const [textWdr, setTextWdr]   = useState<WorkerbookTextTemplate>({ ...DEFAULT_WDR_TEXT_TEMPLATE });
+  const [textNs,   setTextNs]   = useState<WorkerbookTextTemplate>({ ...DEFAULT_NS_TEXT_TEMPLATE });
+  const [textWdr,  setTextWdr]  = useState<WorkerbookTextTemplate>({ ...DEFAULT_WDR_TEXT_TEMPLATE });
+  const [textSnow, setTextSnow] = useState<WorkerbookTextTemplate>({ ...DEFAULT_SNOW_TEXT_TEMPLATE });
+  const [textTnb,  setTextTnb]  = useState<WorkerbookTextTemplate>({ ...DEFAULT_TNB_TEXT_TEMPLATE });
 
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
@@ -114,19 +118,28 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
         setTextWorkerbook(texts.workerbook);
         setTextNs(texts.ns);
         setTextWdr(texts.wdr);
+        setTextSnow(texts.snow);
+        setTextTnb(texts.tnb);
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
 
-  const isTextTab = activeTab === 'text' || activeTab === 'text_ns' || activeTab === 'text_wdr';
+  const isTextTab =
+    activeTab === 'text' ||
+    activeTab === 'text_ns' ||
+    activeTab === 'text_wdr' ||
+    activeTab === 'text_snow' ||
+    activeTab === 'text_tnb';
 
   const currentEmailTemplate = activeTab === 'regular' ? regular : rookie;
 
   const currentTextTemplate =
-    activeTab === 'text_ns'  ? textNs  :
-    activeTab === 'text_wdr' ? textWdr :
-                               textWorkerbook;
+    activeTab === 'text_ns'   ? textNs  :
+    activeTab === 'text_wdr'  ? textWdr :
+    activeTab === 'text_snow' ? textSnow :
+    activeTab === 'text_tnb'  ? textTnb :
+                                textWorkerbook;
 
   const updateEmail = (patch: Partial<WorkerbookEmailTemplate>) => {
     if (activeTab === 'regular') setRegular({ ...regular, ...patch });
@@ -134,9 +147,11 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
   };
 
   const updateText = (patch: Partial<WorkerbookTextTemplate>) => {
-    if (activeTab === 'text')      setTextWorkerbook({ ...textWorkerbook, ...patch });
-    else if (activeTab === 'text_ns')  setTextNs({ ...textNs, ...patch });
-    else if (activeTab === 'text_wdr') setTextWdr({ ...textWdr, ...patch });
+    if (activeTab === 'text')           setTextWorkerbook({ ...textWorkerbook, ...patch });
+    else if (activeTab === 'text_ns')   setTextNs({ ...textNs, ...patch });
+    else if (activeTab === 'text_wdr')  setTextWdr({ ...textWdr, ...patch });
+    else if (activeTab === 'text_snow') setTextSnow({ ...textSnow, ...patch });
+    else if (activeTab === 'text_tnb')  setTextTnb({ ...textTnb, ...patch });
   };
 
   const handleSave = async () => {
@@ -145,9 +160,11 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
     try {
       await saveWorkerbookTemplate('workerbook_regular', regular);
       await saveWorkerbookTemplate('workerbook_rookie', rookie);
-      await saveStatusTextTemplate('workerbook_text', textWorkerbook);
-      await saveStatusTextTemplate('workerbook_text_ns', textNs);
-      await saveStatusTextTemplate('workerbook_text_wdr', textWdr);
+      await saveStatusTextTemplate('workerbook_text',      textWorkerbook);
+      await saveStatusTextTemplate('workerbook_text_ns',   textNs);
+      await saveStatusTextTemplate('workerbook_text_wdr',  textWdr);
+      await saveStatusTextTemplate('workerbook_text_snow', textSnow);
+      await saveStatusTextTemplate('workerbook_text_tnb',  textTnb);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (err: any) {
@@ -178,21 +195,27 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
     'w-full bg-gray-900 border border-gray-600 rounded-lg py-2 px-3 text-white text-sm ' +
     'focus:ring-2 focus:ring-blue-500 focus:outline-none';
 
-  // Colour themes per tab — for subtle visual cue in the header & preview
+  // Colour themes per tab
   const textTabTheme =
-    activeTab === 'text_ns'  ? { text: 'text-red-400',   bg: 'bg-red-900/20',   border: 'border-red-700/40',   bubble: 'bg-red-600' } :
-    activeTab === 'text_wdr' ? { text: 'text-amber-400', bg: 'bg-amber-900/20', border: 'border-amber-700/40', bubble: 'bg-amber-600' } :
-                               { text: 'text-green-400', bg: 'bg-green-900/20', border: 'border-green-700/40', bubble: 'bg-green-600' };
+    activeTab === 'text_ns'   ? { text: 'text-red-400',    bg: 'bg-red-900/20',    border: 'border-red-700/40',    bubble: 'bg-red-600' } :
+    activeTab === 'text_wdr'  ? { text: 'text-amber-400',  bg: 'bg-amber-900/20',  border: 'border-amber-700/40',  bubble: 'bg-amber-600' } :
+    activeTab === 'text_snow' ? { text: 'text-sky-400',    bg: 'bg-sky-900/20',    border: 'border-sky-700/40',    bubble: 'bg-sky-600' } :
+    activeTab === 'text_tnb'  ? { text: 'text-purple-400', bg: 'bg-purple-900/20', border: 'border-purple-700/40', bubble: 'bg-purple-600' } :
+                                { text: 'text-green-400',  bg: 'bg-green-900/20',  border: 'border-green-700/40',  bubble: 'bg-green-600' };
 
   const textTabLabel =
-    activeTab === 'text_ns'  ? 'NS Callback Text' :
-    activeTab === 'text_wdr' ? 'WDR Callback Text' :
-                               'Workerbook Day-Of Text';
+    activeTab === 'text_ns'   ? 'NS Callback Text' :
+    activeTab === 'text_wdr'  ? 'WDR Callback Text' :
+    activeTab === 'text_snow' ? 'SNOW Callback Text' :
+    activeTab === 'text_tnb'  ? 'TNB Callback Text' :
+                                'Workerbook Day-Of Text';
 
   const textTabHint =
-    activeTab === 'text_ns'  ? 'Sent when calling back contractors on the NS (no-show) tab.' :
-    activeTab === 'text_wdr' ? 'Sent when calling back contractors on the WDR (worked didn\'t rebook) tab.' :
-                               'Sent from the workerbook day view for day-of shift reminders.';
+    activeTab === 'text_ns'   ? 'Sent when calling back contractors on the NS (no-show) tab.' :
+    activeTab === 'text_wdr'  ? 'Sent when calling back contractors on the WDR (worked didn\'t rebook) tab.' :
+    activeTab === 'text_snow' ? 'Sent when calling back contractors on the SNOW tab.' :
+    activeTab === 'text_tnb'  ? 'Sent when calling back contractors on the TNB tab.' :
+                                'Sent from the workerbook day view for day-of shift reminders.';
 
   if (loading) {
     return (
@@ -315,6 +338,28 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
                 <UserMinus size={14} />
                 WDR Text
               </button>
+              <button
+                onClick={() => setActiveTab('text_snow')}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                  activeTab === 'text_snow'
+                    ? 'bg-sky-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:text-white border border-gray-700'
+                }`}
+              >
+                <Snowflake size={14} />
+                SNOW Text
+              </button>
+              <button
+                onClick={() => setActiveTab('text_tnb')}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                  activeTab === 'text_tnb'
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:text-white border border-gray-700'
+                }`}
+              >
+                <Clock size={14} />
+                TNB Text
+              </button>
             </div>
 
             {/* EMAIL EDITOR — shown for regular/rookie tabs */}
@@ -348,7 +393,6 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
                     placeholder="Write the email body here..."
                   />
 
-                  {/* Variable reference table */}
                   <div className="mt-3 bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
                     <div className="px-3 py-2 bg-gray-700/50 text-xs font-bold text-gray-400 uppercase tracking-wide">
                       Available Placeholders
@@ -443,7 +487,7 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
               </div>
             )}
 
-            {/* TEXT EDITOR — shown for text/text_ns/text_wdr tabs */}
+            {/* TEXT EDITOR — shown for all text tabs */}
             {isTextTab && (
               <div className="space-y-4">
                 <div className="bg-gray-800 rounded-xl border border-gray-700 p-4">
@@ -458,7 +502,6 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
                     className={inputClass + ' resize-y font-mono text-xs leading-relaxed'}
                     placeholder="Write the text message body here..."
                   />
-                  {/* Character counter */}
                   <div className="mt-2 flex items-center justify-between text-xs">
                     <span className="text-gray-500">
                       {currentTextTemplate.bodyText.length} characters
@@ -473,7 +516,6 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
                     </span>
                   </div>
 
-                  {/* Variable reference table */}
                   <div className="mt-3 bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
                     <div className="px-3 py-2 bg-gray-700/50 text-xs font-bold text-gray-400 uppercase tracking-wide">
                       Available Placeholders
@@ -507,11 +549,13 @@ const WorkerbookEmailService: React.FC<Props> = ({ onBack }) => {
             <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden sticky top-20">
               <div className="bg-gray-900 px-4 py-2 border-b border-gray-700 flex items-center justify-between">
                 <span className="text-sm font-medium text-gray-400">
-                  {activeTab === 'regular'  && 'Regular Email Preview'}
-                  {activeTab === 'rookie'   && 'Rookie Email Preview'}
-                  {activeTab === 'text'     && 'Workerbook Text Preview'}
-                  {activeTab === 'text_ns'  && 'NS Callback Text Preview'}
-                  {activeTab === 'text_wdr' && 'WDR Callback Text Preview'}
+                  {activeTab === 'regular'   && 'Regular Email Preview'}
+                  {activeTab === 'rookie'    && 'Rookie Email Preview'}
+                  {activeTab === 'text'      && 'Workerbook Text Preview'}
+                  {activeTab === 'text_ns'   && 'NS Callback Text Preview'}
+                  {activeTab === 'text_wdr'  && 'WDR Callback Text Preview'}
+                  {activeTab === 'text_snow' && 'SNOW Callback Text Preview'}
+                  {activeTab === 'text_tnb'  && 'TNB Callback Text Preview'}
                 </span>
                 <span className="text-xs text-gray-500">Sample data shown</span>
               </div>
