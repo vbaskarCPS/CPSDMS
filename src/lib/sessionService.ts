@@ -335,8 +335,9 @@ class SessionService {
     }));
 
     const pendingBookings = (bookingsRes.data || []).map((b) => ({
-      ...b.customer_details,
-      'Booking ID': b.booking_id,
+      ...b.data,                                // spread stored JSONB FIRST (extras like Gate, etc.)
+      ...b.customer_details,                    // then customer details
+      'Booking ID': b.booking_id,               // then live column values — these WIN
       'Route Number': b.route_number,
       'Contractor Number': b.contractor_id,
       Price: String(b.price || ''), 
@@ -346,7 +347,6 @@ class SessionService {
       commandCenterId: b.command_center_id,
       services: b.services,
       sessionId: b.session_id,
-      ...b.data,
     }));
 
     return {
