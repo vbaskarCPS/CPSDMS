@@ -61,7 +61,7 @@ const PendingJobModal: React.FC<PendingJobModalProps> = ({
   const [notes, setNotes] = useState(job['Log Sheet Notes'] || '');
   const [originalNotes] = useState(job['Log Sheet Notes'] || '');
 
-  // NEW: Route code state — lets the user correct misfiled prebooks without re-exporting
+  // Route code state — lets the user correct misfiled prebooks without re-exporting
   const originalRouteCode = job['Route Number'] || '';
   const [routeCode, setRouteCode] = useState(originalRouteCode);
 
@@ -110,18 +110,31 @@ const PendingJobModal: React.FC<PendingJobModalProps> = ({
     }
   };
 
-  // Helper: persist any pending field edits. Returns true on success, false on error.
+  // DEBUG VERSION — heavy console logging to trace where the save chain breaks
   const saveFieldChanges = async (): Promise<boolean> => {
+    console.log('[PendingJob] saveFieldChanges CALLED', {
+      hasNotesChanged,
+      hasRouteChanged,
+      bookingId: job['Booking ID'],
+      currentRoute: originalRouteCode,
+      newRoute: routeCode.trim().toUpperCase(),
+      jobObject: job,
+    });
     try {
       if (hasNotesChanged) {
+        console.log('[PendingJob] Calling updateBookingNotes...');
         await sessionService.updateBookingNotes(job['Booking ID'], notes);
+        console.log('[PendingJob] updateBookingNotes RETURNED');
       }
       if (hasRouteChanged) {
+        console.log('[PendingJob] Calling updateBookingRoute...');
         await sessionService.updateBookingRoute(job['Booking ID'], routeCode.trim().toUpperCase());
+        console.log('[PendingJob] updateBookingRoute RETURNED');
       }
+      console.log('[PendingJob] saveFieldChanges SUCCESS, returning true');
       return true;
     } catch (err) {
-      console.error('Failed to save field changes:', err);
+      console.error('[PendingJob] saveFieldChanges FAILED:', err);
       setError('Failed to save changes. Please try again.');
       return false;
     }
@@ -129,13 +142,19 @@ const PendingJobModal: React.FC<PendingJobModalProps> = ({
 
   // Save notes and/or route code (no status change)
   const handleSaveChanges = async () => {
-    if (!hasAnyChange || saving) return;
+    console.log('[PendingJob] handleSaveChanges TRIGGERED', { hasAnyChange, saving });
+    if (!hasAnyChange || saving) {
+      console.warn('[PendingJob] handleSaveChanges BAILED: hasAnyChange=', hasAnyChange, 'saving=', saving);
+      return;
+    }
     
     setSaving(true);
     setError(null);
     
     const ok = await saveFieldChanges();
+    console.log('[PendingJob] handleSaveChanges got ok=', ok);
     if (ok) {
+      console.log('[PendingJob] Calling onUpdate() + onClose()');
       onUpdate();
       onClose();
     } else {
