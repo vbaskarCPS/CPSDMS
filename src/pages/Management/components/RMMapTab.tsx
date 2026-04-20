@@ -27,7 +27,6 @@ interface PinData {
 interface GeocodedPin extends PinData { lat: number; lng: number; routeColor: string; }
 interface GeocodedHistorical extends HistoricalProperty { lat: number; lng: number; }
 
-// Worker live location from worker_locations table
 interface WorkerLocation {
   worker_id: string;
   command_center_id: string;
@@ -58,9 +57,7 @@ type SortOption = 'recent' | 'alpha' | 'steps' | 'equiv' | 'upGross';
 
 // --- HELPERS ---
 
-// In-memory caches — hydrated from Supabase on mount, persist for the session lifetime
 const geocodeCache = new Map<string, { lat: number; lng: number }>();
-// jobIdCache now stores the ADDRESS alongside coords so address edits invalidate the cache
 const jobIdCache = new Map<string, { address: string; lat: number; lng: number }>();
 const makeCacheKey = (a: string) => a.trim().toLowerCase().replace(/\s+/g, ' ');
 const esc = (s: string) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -95,8 +92,7 @@ function getStalenessColor(updatedAt: string): string {
 }
 
 /**
- * Worker location dot — HALVED from 32px → 16px per spec.
- * Initials font 11 → 7, border 3 → 2, shadow softened.
+ * Worker location dot — 16px (halved from 32px).
  */
 function createWorkerMarkerEl(initials: string, borderColor: string, label: string): HTMLDivElement {
   const el = document.createElement('div');
@@ -222,7 +218,7 @@ function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: stri
 }
 
 /**
- * Pulsing ring — UNCHANGED at 15px per spec.
+ * Pulsing ring — UNCHANGED at 15px.
  */
 function createPulsingRing(color: string): HTMLDivElement {
   let pulseStyle = document.getElementById('rm-pulse-keyframes') as HTMLStyleElement | null;
@@ -285,10 +281,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
   const routeMapDataRef = useRef<SavedRoute[]>([]);
   const workerCardDataRef = useRef<WorkerCardData[]>([]);
 
-  // --- NEW: Historical properties (purple dots) ---
+  // Historical properties (black X markers)
   const [historicalProps, setHistoricalProps] = useState<HistoricalProperty[]>([]);
   const [geocodedHistorical, setGeocodedHistorical] = useState<GeocodedHistorical[]>([]);
-  const knownHistoricalRef = useRef<Map<string, GeocodedHistorical>>(new Map()); // key = route::address
+  const knownHistoricalRef = useRef<Map<string, GeocodedHistorical>>(new Map());
   const historicalBatchRef = useRef(0);
   const [geocodeCacheHydrated, setGeocodeCacheHydrated] = useState(false);
 
@@ -505,8 +501,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
   }, [workerLocations, mapLoaded, workers]);
 
   // --- GEOCODE CACHE HYDRATION (one-shot on mount) ---
-  // Pulls every cached geocode for this session from Supabase into the in-memory map.
-  // Saves a huge number of Mapbox calls on map reload.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -528,7 +522,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     return () => { cancelled = true; };
   }, []);
 
-  // --- HISTORICAL PROPERTIES FETCH (one-shot when route codes known) ---
+  // --- HISTORICAL PROPERTIES FETCH ---
   useEffect(() => {
     if (!myRouteCodes.length) { setHistoricalProps([]); return; }
     let cancelled = false;
@@ -617,7 +611,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     }
   }, [routeMapData, routes, workers, mapLoaded, myRouteCodes]);
 
-  // Route opacity — FAINTER unassigned in Staff view per Vijay's spec
+  // Route opacity — fainter unassigned in Staff view
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     routeMapData.forEach(route=>{
@@ -626,10 +620,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       const isAssigned = !!rp?.assignedWorkerIds?.length;
 
       if (sidebarMode === 'routes' && myRouteCodes.includes(route.route_code)) {
-        // Routes view: assigned bold, unassigned ghosted so you can see what still needs clicking
         map.setPaintProperty(lid, 'line-opacity', isAssigned ? 0.9 : 0.3);
       } else {
-        // Staff view (and default): unassigned routes go FAINTER so assigned carts pop
         map.setPaintProperty(lid, 'line-opacity', isAssigned ? 0.75 : 0.4);
       }
     });
@@ -661,7 +653,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     return()=>cleanups.forEach(fn=>fn());
   }, [routeMapData, mapLoaded, myRouteCodes]);
 
-  // Update map pins (prebook/completed/new-sale dots) — SIZE HALVED to 2/3 per spec
+  // Update map pins — radius 3.33 (2/3 size), stroke 1.67
   const updateMapPins = useCallback((map:mapboxgl.Map, geocoded:GeocodedPin[]) => {
     if(pinClickHandlerRef.current){map.off('click','rm-pins-circles',pinClickHandlerRef.current);pinClickHandlerRef.current=null;}
     if(popupRef.current){popupRef.current.remove();popupRef.current=null;}
@@ -692,7 +684,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     map.on('click','rm-pins-circles',clickHandler);
   }, []);
 
-  // Update historical purple dots layer — radius 1.67 per spec, not clickable
+  // Update historical X markers — bold black X's, not clickable, ~8px on screen
   const updateHistoricalPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedHistorical[]) => {
     const gj: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
@@ -708,31 +700,32 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     } else {
       map.addSource('rm-historical-src', { type: 'geojson', data: gj });
       map.addLayer({
-        id: 'rm-historical-circles',
-        type: 'circle',
+        id: 'rm-historical-symbols',
+        type: 'symbol',
         source: 'rm-historical-src',
+        layout: {
+          'icon-image': 'rm-historical-x',
+          'icon-size': 0.5,                // scales the 16px @2x icon down to ~8px on screen
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+        },
         paint: {
-          'circle-color': '#a855f7',              // purple-500
-          'circle-radius': 1.67,                   // half of the new prebook size
-          'circle-stroke-color': '#ffffff',
-          'circle-stroke-width': 0.5,
-          'circle-opacity': 0,                     // start hidden, toggled by sidebarMode effect
+          'icon-opacity': 0,               // start hidden, toggled by sidebarMode effect
         },
       });
-      // Intentionally NO click/hover handlers — purple dots are reference-only
+      // Intentionally NO click/hover handlers — reference-only
     }
   }, []);
 
-  // Toggle purple dot visibility based on sidebarMode (Routes view only)
+  // Toggle historical X visibility based on sidebarMode (Routes view only)
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapLoaded || !map.getLayer('rm-historical-circles')) return;
-    const opacity = sidebarMode === 'routes' ? 0.75 : 0;
-    map.setPaintProperty('rm-historical-circles', 'circle-opacity', opacity);
+    if (!map || !mapLoaded || !map.getLayer('rm-historical-symbols')) return;
+    const opacity = sidebarMode === 'routes' ? 0.85 : 0;
+    map.setPaintProperty('rm-historical-symbols', 'icon-opacity', opacity);
   }, [sidebarMode, mapLoaded, geocodedHistorical]);
 
   // Geocode and render prebook/completed pins
-  // MODIFIED: jobIdCache now checks address match; writes fresh geocodes to Supabase
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length||!geocodeCacheHydrated) return;
     const batch=++geocodeBatchRef.current, curIds=new Set(pins.map(p=>p.id)), toGeo:PinData[]=[];
@@ -740,7 +733,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       const addrKey = makeCacheKey(pin.address);
       const ac = geocodeCache.get(addrKey);
       const ic = jobIdCache.get(pin.id);
-      // Only use jobIdCache if address still matches (handles address edits)
       const icValid = ic && makeCacheKey(ic.address) === addrKey;
       const cached = ac || (icValid ? { lat: ic!.lat, lng: ic!.lng } : undefined);
 
@@ -764,7 +756,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
           geocodeCache.set(addrKey, coord);
           jobIdCache.set(pin.id, { address: pin.address, lat: coord.lat, lng: coord.lng });
           knownPinsRef.current.set(pin.id,{...pin,lat:coord.lat,lng:coord.lng,routeColor:routeColorMap.get(pin.routeCode)||'#888888'});
-          // Fire-and-forget persist to Supabase
           sessionService.saveGeocode(pin.address, coord.lat, coord.lng).catch(()=>{});
         }
         if(geocodeBatchRef.current!==batch||!mountedRef.current) return;
@@ -776,7 +767,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     })();
   }, [pins, routeMapData, mapLoaded, routeColorMap, routeCentroid, updateMapPins, geocodeCacheHydrated]);
 
-  // Geocode historical properties (purple dots) — uses same cache, writes to same Supabase store
+  // Geocode historical properties — same cache flow
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded || !geocodeCacheHydrated) return;
@@ -822,7 +813,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
           sessionService.saveGeocode(h.address, coord.lat, coord.lng).catch(()=>{});
         }
         if (historicalBatchRef.current !== batch || !mountedRef.current) return;
-        // Throttle to avoid rate-limiting Mapbox. 2,594 rows × 80ms ≈ 3.5 min worst case.
         if (i < toGeo.length - 1) await new Promise(r => setTimeout(r, 80));
       }
       if (historicalBatchRef.current !== batch || !mountedRef.current) return;
@@ -889,7 +879,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       return nv;});
   },[]);
 
-  // Map init
+  // Map init — also registers the historical X icon
   useEffect(() => {
     mountedRef.current=true;
     if(!mapContainerRef.current||mapRef.current) return;
@@ -916,6 +906,32 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
         try{map.addLayer({id:bid,type:'symbol',source:(layer as any).source??'composite','source-layer':(layer as any)['source-layer']??'road',...((layer as any).filter?{filter:(layer as any).filter}:{}),minzoom:0,maxzoom:24,layout:{...(layer.layout??{}),'symbol-placement':'point','text-optional':true,'text-allow-overlap':false,'text-ignore-placement':false,'text-padding':5,'text-size':11,'text-font':['DIN Pro Medium','Arial Unicode MS Regular']},paint:{...(layer.paint??{}),'text-color':'#111111','text-halo-color':'#ffffff','text-halo-width':2}});}catch{}
       });
       map.on('idle',suppressDuplicateLabels);
+
+      // Register the historical-property X marker as a Mapbox image
+      // 16x16 canvas rendered at pixelRatio:2 → displays as 8x8 on screen
+      const xCanvasSize = 16;
+      const xCanvas = document.createElement('canvas');
+      xCanvas.width = xCanvasSize;
+      xCanvas.height = xCanvasSize;
+      const ctx = xCanvas.getContext('2d');
+      if (ctx) {
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3;                  // at 2x pixel ratio, renders ~1.5px on screen
+        ctx.lineCap = 'round';
+        const pad = 3;
+        ctx.beginPath();
+        ctx.moveTo(pad, pad);
+        ctx.lineTo(xCanvasSize - pad, xCanvasSize - pad);
+        ctx.moveTo(xCanvasSize - pad, pad);
+        ctx.lineTo(pad, xCanvasSize - pad);
+        ctx.stroke();
+
+        const imgData = ctx.getImageData(0, 0, xCanvasSize, xCanvasSize);
+        if (!map.hasImage('rm-historical-x')) {
+          map.addImage('rm-historical-x', imgData, { pixelRatio: 2 });
+        }
+      }
+
       setMapLoaded(true);
     });
     mapRef.current=map;
@@ -1080,7 +1096,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
           {completedCount>0&&<div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-400 border-2 border-green-500 inline-block flex-shrink-0"/>Completed ({completedCount})</div>}
           {newSaleCount>0&&<div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-400 border-2 border-yellow-500 inline-block flex-shrink-0"/>New Sale ({newSaleCount})</div>}
           {sidebarMode === 'routes' && historicalCount > 0 && (
-            <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-purple-500 inline-block flex-shrink-0"/>Previously done ({historicalCount})</div>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 inline-flex items-center justify-center flex-shrink-0 text-black font-black text-[11px] leading-none" style={{ fontFamily: 'system-ui, sans-serif' }}>✕</span>
+              <span>Previously done ({historicalCount})</span>
+            </div>
           )}
           {workerLocations.length > 0 && (
             <>
