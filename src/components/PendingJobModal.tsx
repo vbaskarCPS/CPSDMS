@@ -10,7 +10,8 @@ import {
   FileText,
   Copy,
   Loader,
-  AlertCircle
+  AlertCircle,
+  Route
 } from 'lucide-react';
 import { MasterBooking, SeasonType, ServiceFlags } from '../types';
 import { sessionService } from '../lib/sessionService';
@@ -59,15 +60,27 @@ const PendingJobModal: React.FC<PendingJobModalProps> = ({
 }) => {
   const [notes, setNotes] = useState(job['Log Sheet Notes'] || '');
   const [originalNotes] = useState(job['Log Sheet Notes'] || '');
+
+  // NEW: Route code state — lets the user correct misfiled prebooks without re-exporting
+  const originalRouteCode = job['Route Number'] || '';
+  const [routeCode, setRouteCode] = useState(originalRouteCode);
+
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Reset route code state if the underlying job changes (e.g. modal reused for a different booking)
+  useEffect(() => {
+    setRouteCode(job['Route Number'] || '');
+  }, [job]);
 
   const isLawnRejuv = seasonType === 'lawn_rejuv';
   const isPending = !job.Status || job.Status === 'pending';
   const isNextTime = job.Status === 'next_time';
   const isCancelled = job.Status === 'cancelled';
   const hasNotesChanged = notes !== originalNotes;
+  const hasRouteChanged = routeCode.trim() !== originalRouteCode.trim() && routeCode.trim() !== '';
+  const hasAnyChange = hasNotesChanged || hasRouteChanged;
 
   // Get status display info
   const getStatusBadge = () => {
@@ -97,25 +110,40 @@ const PendingJobModal: React.FC<PendingJobModalProps> = ({
     }
   };
 
-  // Save notes only
-  const handleSaveNotes = async () => {
-    if (!hasNotesChanged || saving) return;
+  // Helper: persist any pending field edits. Returns true on success, false on error.
+  const saveFieldChanges = async (): Promise<boolean> => {
+    try {
+      if (hasNotesChanged) {
+        await sessionService.updateBookingNotes(job['Booking ID'], notes);
+      }
+      if (hasRouteChanged) {
+        await sessionService.updateBookingRoute(job['Booking ID'], routeCode.trim().toUpperCase());
+      }
+      return true;
+    } catch (err) {
+      console.error('Failed to save field changes:', err);
+      setError('Failed to save changes. Please try again.');
+      return false;
+    }
+  };
+
+  // Save notes and/or route code (no status change)
+  const handleSaveChanges = async () => {
+    if (!hasAnyChange || saving) return;
     
     setSaving(true);
     setError(null);
     
-    try {
-      await sessionService.updateBookingNotes(job['Booking ID'], notes);
+    const ok = await saveFieldChanges();
+    if (ok) {
       onUpdate();
       onClose();
-    } catch (err) {
-      console.error('Failed to save notes:', err);
-      setError('Failed to save notes. Please try again.');
+    } else {
       setSaving(false);
     }
   };
 
-  // Update status
+  // Update status (also saves pending notes/route changes first)
   const handleStatusChange = async (status: 'next_time' | 'cancelled') => {
     if (saving) return;
     
@@ -123,9 +151,13 @@ const PendingJobModal: React.FC<PendingJobModalProps> = ({
     setError(null);
     
     try {
-      // Save notes first if changed
-      if (hasNotesChanged) {
-        await sessionService.updateBookingNotes(job['Booking ID'], notes);
+      // Save field edits first so they aren't lost
+      if (hasAnyChange) {
+        const ok = await saveFieldChanges();
+        if (!ok) {
+          setSaving(false);
+          return;
+        }
       }
       
       await sessionService.updateBookingStatus(job['Booking ID'], status);
@@ -159,7 +191,7 @@ const PendingJobModal: React.FC<PendingJobModalProps> = ({
             <div>
               <h3 className="font-bold text-white text-lg">Job Details</h3>
               <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
-                <span className="font-mono bg-gray-800 px-1.5 py-0.5 rounded">{job['Route Number'] || '--'}</span>
+                <span className="font-mono bg-gray-800 px-1.5 py-0.5 rounded">{originalRouteCode || '--'}</span>
                 <span>•</span>
                 <span className="truncate max-w-[180px]">{job['Booking ID']}</span>
               </div>
@@ -246,6 +278,32 @@ const PendingJobModal: React.FC<PendingJobModalProps> = ({
             </div>
           </div>
 
+          {/* Route Code Editor */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-gray-400 uppercase flex items-center gap-1.5">
+                <Route size={12} />
+                Route Code
+              </label>
+              {hasRouteChanged && (
+                <span className="text-[10px] text-yellow-400">Unsaved change</span>
+              )}
+            </div>
+            <input
+              type="text"
+              value={routeCode}
+              onChange={(e) => setRouteCode(e.target.value.toUpperCase())}
+              disabled={saving}
+              placeholder="e.g. WIN01"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono placeholder-gray-600 focus:outline-none focus:border-cps-blue transition-colors"
+            />
+            {hasRouteChanged && (
+              <p className="text-[10px] text-gray-500 italic">
+                Moves this prebook to route <span className="text-yellow-400 font-bold font-mono">{routeCode}</span>. Worker assignment is not changed.
+              </p>
+            )}
+          </div>
+
           {/* Notes Section */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -265,9 +323,9 @@ const PendingJobModal: React.FC<PendingJobModalProps> = ({
               className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 placeholder-gray-500 resize-none focus:outline-none focus:border-cps-blue transition-colors min-h-[100px]"
             />
             
-            {hasNotesChanged && (
+            {hasAnyChange && (
               <button
-                onClick={handleSaveNotes}
+                onClick={handleSaveChanges}
                 disabled={saving}
                 className="w-full py-2 bg-cps-blue hover:bg-blue-600 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
@@ -279,7 +337,7 @@ const PendingJobModal: React.FC<PendingJobModalProps> = ({
                 ) : (
                   <>
                     <Check size={14} />
-                    Save Notes
+                    Save Changes
                   </>
                 )}
               </button>

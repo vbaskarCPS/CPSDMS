@@ -23,6 +23,7 @@ import {
   SeasonType,
   ServiceFlags,
   TeamCart,
+  HistoricalProperty,
   SEASON_CONFIGS
 } from '../types';
 import { formatPhoneNumber, normalizeEmail } from './validationUtils';
@@ -63,8 +64,8 @@ export interface ImportMeta {
   sheetsExported?: boolean;
   seasonType?: SeasonType;
   productCostPercent?: number;
-  liveCardProcessingEnabled?: boolean; // NEW: enables Bambora live card terminal for workers
-  noTaxOnCash?: boolean; // NEW: when true, prodCash and upsellCash skip tax divisor (Rejuv only)
+  liveCardProcessingEnabled?: boolean; // enables Bambora live card terminal for workers
+  noTaxOnCash?: boolean; // when true, prodCash and upsellCash skip tax divisor (Rejuv only)
 }
 
 class GoogleSheetsService {
@@ -145,8 +146,6 @@ class GoogleSheetsService {
   }
 
   // Returns the current OAuth access token, or null if not authenticated.
-  // Used by features (like Write Routes) that need to call the Sheets API
-  // on behalf of the user against arbitrary spreadsheets.
   public getAccessToken(): string | null {
     return this.accessToken;
   }
@@ -298,6 +297,59 @@ class GoogleSheetsService {
     };
   }
 
+  /**
+   * Read the Logsheets tab from Masterbookings, filter to the provided route codes,
+   * and return HistoricalProperty[] objects. Used by RMMapTab for the purple dots layer.
+   *
+   * Column order (zero-based indices):
+   *  0 Route#, 1 First, 2 Last, 3 Street#, 4 StreetName, 5 Phone, 6 Email,
+   *  7 ClientType, 8 PropertyType, 9 Notes, 10 Price, 11 PaymentType, 12 Contractor
+   *
+   * Rows with no Route# or no address are skipped silently.
+   */
+  private async readLogsheetsForRoutes(routeCodes: string[]): Promise<HistoricalProperty[]> {
+    const config = this.getConfig();
+    const routeSet = new Set(routeCodes);
+    const rows = await this.sheetsGet(
+      config.spreadsheets.masterbookings,
+      `'${SHEET_TABS.logsheets}'!A:M`
+    );
+
+    const results: HistoricalProperty[] = [];
+
+    // Row 0 is the header, start from row 1
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const routeCode = (row[0] ?? '').toString().trim();
+      if (!routeCode || !routeSet.has(routeCode)) continue;
+
+      const streetNum  = (row[3] ?? '').toString().trim();
+      const streetName = (row[4] ?? '').toString().trim();
+      const address    = `${streetNum} ${streetName}`.trim();
+      if (!address) continue;
+
+      const firstName = (row[1] ?? '').toString().trim();
+      const lastName  = (row[2] ?? '').toString().trim();
+      const fullName  = `${firstName} ${lastName}`.trim();
+
+      results.push({
+        routeCode,
+        address,
+        customerName: fullName || undefined,
+        phone:        (row[5] ?? '').toString().trim() || undefined,
+        email:        (row[6] ?? '').toString().trim() || undefined,
+        clientType:   (row[7] ?? '').toString().trim() || undefined,
+        propertyType: (row[8] ?? '').toString().trim() || undefined,
+        notes:        (row[9] ?? '').toString().trim() || undefined,
+        price:        (row[10] ?? '').toString().trim() || undefined,
+        paymentType:  (row[11] ?? '').toString().trim() || undefined,
+        contractorName: (row[12] ?? '').toString().trim() || undefined,
+      });
+    }
+
+    return results;
+  }
+
   // --- PUBLIC UTILITY METHODS ---
 
   public serviceFlagsToString(services?: ServiceFlags): string {
@@ -350,8 +402,6 @@ class GoogleSheetsService {
 
   /**
    * Get the numeric sheet ID for a named tab in the Masterbookings spreadsheet.
-   * The formatting API requires numeric IDs — tab names alone are not enough.
-   * @param tabName - e.g. 'Bookings'
    */
   public async getMasterbookingsTabSheetId(tabName: string): Promise<number | null> {
     if (!this.accessToken) {
@@ -377,11 +427,7 @@ class GoogleSheetsService {
   }
 
   /**
-   * Paint cell K (email column, 0-based index 10) a light red background
-   * in the Masterbookings Bookings tab for a given 1-based sheet row number.
-   * Called when a DMB confirmation email fails to send.
-   * @param sheetId   - Numeric sheet ID of the Bookings tab
-   * @param rowNumber - 1-based sheet row number
+   * Paint cell K (email column, 0-based index 10) a light red background.
    */
   public async highlightBookingEmailCell(
     sheetId: number,
@@ -395,14 +441,14 @@ class GoogleSheetsService {
       repeatCell: {
         range: {
           sheetId,
-          startRowIndex: rowNumber - 1,  // 0-based
+          startRowIndex: rowNumber - 1,
           endRowIndex:   rowNumber,
-          startColumnIndex: 10,          // Column K (0-based)
+          startColumnIndex: 10,
           endColumnIndex:   11,
         },
         cell: {
           userEnteredFormat: {
-            backgroundColor: { red: 1.0, green: 0.8, blue: 0.8 }, // #FFCCCC light red
+            backgroundColor: { red: 1.0, green: 0.8, blue: 0.8 },
           },
         },
         fields: 'userEnteredFormat.backgroundColor',
@@ -426,11 +472,7 @@ class GoogleSheetsService {
   }
 
   /**
-   * Highlight the email cell (column K) for a specific row in the Bookings tab
-   * with a light red background to flag a failed email send.
-   * Non-fatal — logs a warning on failure but does not throw.
-   * @param numericSheetId - pre-fetched via getMasterbookingsTabSheetId('Bookings')
-   * @param rowNumber      - 1-based sheet row number
+   * Highlight the email cell (column K) with a light red background. Non-fatal.
    */
   public async highlightFailedEmailCell(numericSheetId: number, rowNumber: number): Promise<void> {
     if (!this.accessToken) return;
@@ -450,14 +492,13 @@ class GoogleSheetsService {
             repeatCell: {
               range: {
                 sheetId: numericSheetId,
-                startRowIndex: rowNumber - 1, // 0-based
+                startRowIndex: rowNumber - 1,
                 endRowIndex: rowNumber,
-                startColumnIndex: 10,         // Column K (email)
+                startColumnIndex: 10,
                 endColumnIndex: 11,
               },
               cell: {
                 userEnteredFormat: {
-                  // Light red #FFCCCC
                   backgroundColor: { red: 1.0, green: 0.8, blue: 0.8 },
                 },
               },
@@ -476,12 +517,13 @@ class GoogleSheetsService {
 
   /**
    * Import session data from Google Sheets.
-   * @param dateTab - The date tab name (e.g., "Feb01")
-   * @param seasonType - The season type ('aeration' or 'lawn_rejuv')
+   * When the current CC has digitalMappingEnabled, also reads the Logsheets tab
+   * and attaches matching historical properties for the purple-dot map layer.
    */
   public async importSessionData(dateTab: string, seasonType: SeasonType = 'aeration'): Promise<DailySessionData> {
     const config = this.getConfig();
     const ccId = commandCenterService.getCurrentCommandCenterId();
+    const currentCC = commandCenterService.getCurrentCommandCenter();
     const isTeamSeason = seasonHasTeams(seasonType);
     const seasonConfig = SEASON_CONFIGS[seasonType];
     const useServiceFlags = seasonUsesServiceFlags(seasonType);
@@ -499,8 +541,6 @@ class GoogleSheetsService {
     const feedColumns = getFeedColumnsConfig(seasonType);
 
     // FIXED: Use DATE_TAB_COLUMNS range (A:W) instead of the old hardcoded A:K.
-    // Date tabs have a different column layout than the Contractors tab —
-    // columns start at A (Shuttle) with no empty column A prefix.
     const workerbookRange = `'${dateTab}'!${DATE_TAB_COLUMNS.range}`;
 
     const [routesData, bookingsData, workersData, managersData] = await Promise.all([
@@ -572,9 +612,6 @@ class GoogleSheetsService {
     }
 
     // --- PROCESS WORKERS ---
-    // FIXED: Use DATE_TAB_COLUMNS.mapping for date tabs instead of WORKERBOOK_COLUMNS.mapping.
-    // Date tabs start at column A (Shuttle) whereas the Contractors tab has an empty column A,
-    // so all indices are shifted left by 1 on date tabs.
     const workers: Worker[] = [];
     const dateTabColMap = DATE_TAB_COLUMNS.mapping;
 
@@ -686,6 +723,20 @@ class GoogleSheetsService {
       seasonType,
       teamCarts,
     };
+
+    // --- HISTORICAL PROPERTIES (digital-mapping CCs only) ---
+    // Non-blocking: if the Logsheets tab is missing or unreadable, we log a warning
+    // and return without historical props. The rest of the import is unaffected.
+    if (currentCC?.digitalMappingEnabled && routes.length > 0) {
+      try {
+        const routeCodes = routes.map(r => r.routeCode);
+        const historical = await this.readLogsheetsForRoutes(routeCodes);
+        result.historicalProperties = historical;
+        console.log(`[GoogleSheets] Loaded ${historical.length} historical properties for ${routeCodes.length} routes`);
+      } catch (err) {
+        console.warn('[GoogleSheets] Could not load Logsheets tab (historical properties will be empty):', err);
+      }
+    }
 
     (result as any)._importMeta = {
       source: 'sheets',
@@ -907,7 +958,6 @@ class GoogleSheetsService {
       teamId?: string;
       equivSplitPercent?: number;
       upsellSplitPercent?: number;
-      // NEW: Rejuv-specific columns (AI-AL)
       teamSize?: number;
       productCostPercent?: number;
     }>
@@ -921,45 +971,44 @@ class GoogleSheetsService {
       const rateValue = s.totalPayoutRate ?? s.payoutRate ?? 0;
       
       return [
-        dateTab,            // A: Date
-        s.contractorId,     // B: Contractor ID
-        s.firstName,        // C: First Name
-        s.lastName,         // D: Last Name
-        s.manager,          // E: Manager
-        s.stepCount,        // F: Step Count
-        s.iosCount,         // G: IOSCount
-        s.prodBilled,       // H: prodBilled
-        s.prodCash,         // I: prodCash
-        s.prodCheque,       // J: prodCheque
-        s.prodCreditCard,   // K: prodCreditCard
-        s.prodETransfer,    // L: prodETransfer
-        s.prodFlats,        // M: ProdFlats
-        s.prodPrepaid,      // N: prodPrepaid
-        s.prodPrepaidSplit, // O: prodPrepaidSplit
-        s.prodGross,        // P: ProdGross
-        s.prodPayable,      // Q: ProdPayable
-        eqValue,            // R: totalEQ
-        s.upsellCount,      // S: upsellCount
-        s.upsellCash,       // T: upsellCash
-        s.upsellCheque,     // U: upsellCheque
-        s.upsellCreditCard, // V: upsellCreditCard
-        s.upsellETransfer,  // W: upsellETransfer
-        s.upsellPrepaid,    // X: upsellPrepaid
-        s.upsellGross,      // Y: upsellGross
-        s.upsellPayable,    // Z: upsellPayable
-        rateValue,          // AA: Payout rate
-        s.productionComm,   // AB: Production Comm.
-        s.upsellComm,       // AC: Upsell Commission
-        s.iosComm,          // AD: IOS Commission
-        s.machineRental,    // AE: Machine Rental
-        s.deductions,       // AF: Deductions (custom only, excludes machine rental)
-        s.bonuses,          // AG: Bonuses
-        s.finalPay,         // AH: Final Pay
-        // NEW: Rejuv-specific columns
-        s.teamSize ?? '',               // AI: Team of
-        s.equivSplitPercent ?? '',      // AJ: Prod %
-        s.upsellSplitPercent ?? '',     // AK: Upsell %
-        s.productCostPercent ?? '',     // AL: Product Cost
+        dateTab,
+        s.contractorId,
+        s.firstName,
+        s.lastName,
+        s.manager,
+        s.stepCount,
+        s.iosCount,
+        s.prodBilled,
+        s.prodCash,
+        s.prodCheque,
+        s.prodCreditCard,
+        s.prodETransfer,
+        s.prodFlats,
+        s.prodPrepaid,
+        s.prodPrepaidSplit,
+        s.prodGross,
+        s.prodPayable,
+        eqValue,
+        s.upsellCount,
+        s.upsellCash,
+        s.upsellCheque,
+        s.upsellCreditCard,
+        s.upsellETransfer,
+        s.upsellPrepaid,
+        s.upsellGross,
+        s.upsellPayable,
+        rateValue,
+        s.productionComm,
+        s.upsellComm,
+        s.iosComm,
+        s.machineRental,
+        s.deductions,
+        s.bonuses,
+        s.finalPay,
+        s.teamSize ?? '',
+        s.equivSplitPercent ?? '',
+        s.upsellSplitPercent ?? '',
+        s.productCostPercent ?? '',
       ];
     });
 
@@ -984,10 +1033,6 @@ class GoogleSheetsService {
 
   // --- TRAINING COLOUR METHODS ---
 
-  /**
-   * Fetch all tab names and their numeric sheet IDs from the workerbook.
-   * The formatting API requires numeric IDs — tab names alone aren't enough.
-   */
   private async sheetsGetSpreadsheetMetadata(): Promise<{ sheetId: number; title: string }[]> {
     if (!this.accessToken) {
       throw new Error('Not authenticated. Call authenticate() first.');
@@ -1013,10 +1058,6 @@ class GoogleSheetsService {
     }));
   }
 
-  /**
-   * Read multiple ranges from the workerbook in one API call.
-   * Chunked at 50 ranges per request to stay under Google's limit.
-   */
   private async sheetsBatchGetValues(
     ranges: string[]
   ): Promise<{ values: any[][] }[]> {
@@ -1053,11 +1094,6 @@ class GoogleSheetsService {
     return results;
   }
 
-  /**
-   * Apply cell background colour formatting to the workerbook.
-   * Uses the spreadsheet batchUpdate endpoint (separate from the values batchUpdate).
-   * Chunked at 1000 requests per call to stay within API limits.
-   */
   private async sheetsFormatBatchUpdate(requests: any[]): Promise<void> {
     if (!this.accessToken) {
       throw new Error('Not authenticated. Call authenticate() first.');
@@ -1088,64 +1124,40 @@ class GoogleSheetsService {
     }
   }
 
-  /**
-   * Apply training status colours to every CN# cell across all workerbook tabs.
-   *
-   * Colour legend:
-   *   Gold        (#FFD966) — Level 2 fully complete
-   *   Light grey  (#D9D9D9) — Level 1 fully complete (regardless of L2 status)
-   *   Light green (#C6EFCE) — At least 1 module complete, Level 1 not yet finished
-   *   White                 — No training progress recorded
-   *
-   * Tabs covered:
-   *   - Contractors tab        → CN# in column C (index 2)
-   *   - All MmmDD date tabs    → CN# in column B (index 1)
-   *   - WL, NS, WDR, TNB, Q, F, SNOW → CN# in column B (index 1)
-   *
-   * @param colorMap  Map of contractorId → training status
-   * @returns         Number of cells that received a non-white colour
-   */
   public async applyTrainingColorsToWorkerbook(
     colorMap: Map<string, 'none' | 'started' | 'level1' | 'level2'>
   ): Promise<number> {
-    // RGB values on Google's 0–1 scale
     const COLORS = {
-      level2:  { red: 1.0,   green: 0.851, blue: 0.4   }, // #FFD966 gold
-      level1:  { red: 0.851, green: 0.851, blue: 0.851  }, // #D9D9D9 light grey
-      started: { red: 0.776, green: 0.937, blue: 0.808  }, // #C6EFCE light green
-      none:    { red: 1.0,   green: 1.0,   blue: 1.0    }, // white (clear)
+      level2:  { red: 1.0,   green: 0.851, blue: 0.4   },
+      level1:  { red: 0.851, green: 0.851, blue: 0.851  },
+      started: { red: 0.776, green: 0.937, blue: 0.808  },
+      none:    { red: 1.0,   green: 1.0,   blue: 1.0    },
     };
 
     const SPECIAL_TABS = new Set(['WL', 'NS', 'WDR', 'TNB', 'Q', 'F', 'SNOW']);
 
-    // 1. Get all sheet metadata (tab name → numeric sheetId)
     const sheetMeta = await this.sheetsGetSpreadsheetMetadata();
     const sheetIdMap = new Map<string, number>();
     sheetMeta.forEach(s => sheetIdMap.set(s.title, s.sheetId));
 
-    // 2. Decide which tabs to process and which column CN# lives in
-    //    cnColIndex is 0-based: column B = 1, column C = 2
     const tabsToProcess: { title: string; cnColIndex: number }[] = [];
 
     for (const sheet of sheetMeta) {
       const { title } = sheet;
       if (title === 'Contractors') {
-        tabsToProcess.push({ title, cnColIndex: 2 }); // Column C
+        tabsToProcess.push({ title, cnColIndex: 2 });
       } else if (SPECIAL_TABS.has(title) || isValidDateTab(title)) {
-        tabsToProcess.push({ title, cnColIndex: 1 }); // Column B
+        tabsToProcess.push({ title, cnColIndex: 1 });
       }
     }
 
-    // 3. Build one range per tab to read its CN# column (rows 3 onwards)
     const ranges = tabsToProcess.map(t => {
       const col = t.cnColIndex === 2 ? 'C' : 'B';
       return `'${t.title}'!${col}3:${col}2000`;
     });
 
-    // 4. Read all CN# columns in one (chunked) batch call
     const valueResults = await this.sheetsBatchGetValues(ranges);
 
-    // 5. Build one formatting request per non-empty CN# cell
     const formatRequests: any[] = [];
     let coloured = 0;
 
@@ -1163,7 +1175,6 @@ class GoogleSheetsService {
         const status = colorMap.get(cn) ?? 'none';
         const bgColor = COLORS[status];
 
-        // Sheet row index is 0-based; data starts at spreadsheet row 3 = index 2
         const sheetRowIndex = rowIdx + 2;
 
         formatRequests.push({
@@ -1188,7 +1199,6 @@ class GoogleSheetsService {
       }
     }
 
-    // 6. Fire all formatting requests in one (chunked) batch
     if (formatRequests.length > 0) {
       await this.sheetsFormatBatchUpdate(formatRequests);
     }

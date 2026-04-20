@@ -8,7 +8,7 @@ import { supabase } from '../../../lib/supabase';
 import { sessionService } from '../../../lib/sessionService';
 import { getSeasonConfig, EQ_DIVISOR } from '../../../lib/commandCenterService';
 import { setStorageItem } from '../../../lib/localStorage';
-import { RouteData, MasterBooking, LogsheetSession, Worker, ManagementUser } from '../../../types';
+import { RouteData, MasterBooking, LogsheetSession, Worker, ManagementUser, HistoricalProperty } from '../../../types';
 import ContractorJobs from './ContractorJobs';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -25,6 +25,7 @@ interface PinData {
   phone?: string; email?: string; price?: string; paymentMethod?: string;
 }
 interface GeocodedPin extends PinData { lat: number; lng: number; routeColor: string; }
+interface GeocodedHistorical extends HistoricalProperty { lat: number; lng: number; }
 
 // Worker live location from worker_locations table
 interface WorkerLocation {
@@ -57,9 +58,11 @@ type SortOption = 'recent' | 'alpha' | 'steps' | 'equiv' | 'upGross';
 
 // --- HELPERS ---
 
+// In-memory caches — hydrated from Supabase on mount, persist for the session lifetime
 const geocodeCache = new Map<string, { lat: number; lng: number }>();
-const jobIdCache = new Map<string, { lat: number; lng: number }>();
-const makeCacheKey = (a: string) => a.trim().toLowerCase();
+// jobIdCache now stores the ADDRESS alongside coords so address edits invalidate the cache
+const jobIdCache = new Map<string, { address: string; lat: number; lng: number }>();
+const makeCacheKey = (a: string) => a.trim().toLowerCase().replace(/\s+/g, ' ');
 const esc = (s: string) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
 async function geocodeAddress(addr: string, pLat?: number, pLng?: number): Promise<{ lat: number; lng: number } | null> {
@@ -83,57 +86,42 @@ function createNavArrow(): HTMLDivElement {
   return el;
 }
 
-/**
- * Border color based on how stale the location data is:
- * green  = within 10 minutes
- * yellow = within 1 hour
- * orange = within 2 hours
- * red    = 2+ hours
- */
 function getStalenessColor(updatedAt: string): string {
   const ageMin = (Date.now() - new Date(updatedAt).getTime()) / 60000;
-  if (ageMin <= 10)  return '#22c55e'; // green
-  if (ageMin <= 60)  return '#eab308'; // yellow
-  if (ageMin <= 120) return '#f97316'; // orange
-  return '#ef4444';                    // red
+  if (ageMin <= 10)  return '#22c55e';
+  if (ageMin <= 60)  return '#eab308';
+  if (ageMin <= 120) return '#f97316';
+  return '#ef4444';
 }
 
 /**
- * Create the HTML element for a worker location dot.
- * Light grey fill, initials centered, colored border = staleness.
- * Larger than prebook pins (which are ~10px diameter circles).
+ * Worker location dot — HALVED from 32px → 16px per spec.
+ * Initials font 11 → 7, border 3 → 2, shadow softened.
  */
 function createWorkerMarkerEl(initials: string, borderColor: string, label: string): HTMLDivElement {
   const el = document.createElement('div');
   el.style.cssText = [
-    'width:32px',
-    'height:32px',
+    'width:16px',
+    'height:16px',
     'border-radius:50%',
     'background:#d1d5db',
-    `border:3px solid ${borderColor}`,
+    `border:2px solid ${borderColor}`,
     'display:flex',
     'align-items:center',
     'justify-content:center',
-    'font-size:11px',
+    'font-size:7px',
     'font-weight:700',
     'color:#374151',
     'font-family:system-ui,sans-serif',
-    'box-shadow:0 2px 6px rgba(0,0,0,0.35)',
+    'box-shadow:0 1px 3px rgba(0,0,0,0.35)',
     'cursor:default',
     'user-select:none',
   ].join(';');
   el.textContent = initials;
-  el.title = label; // browser tooltip shows full worker name
+  el.title = label;
   return el;
 }
 
-// --- NEW HELPERS: On-route detection, red flags, pulsing dot ---
-
-/**
- * Perpendicular distance in meters from a point to a line segment.
- * Projects lat/lng to local flat-earth meters (accurate at short range).
- * This detects you even if you're BETWEEN two coordinate points on a road.
- */
 function distToSegmentMeters(
   lat: number, lng: number,
   lat1: number, lng1: number,
@@ -142,27 +130,18 @@ function distToSegmentMeters(
   const cosLat = Math.cos(lat * Math.PI / 180);
   const mPerDegLat = 111320;
   const mPerDegLng = 111320 * cosLat;
-
-  // Convert to local meters relative to segment start
   const px = (lng - lng1) * mPerDegLng;
   const py = (lat - lat1) * mPerDegLat;
   const bx = (lng2 - lng1) * mPerDegLng;
   const by = (lat2 - lat1) * mPerDegLat;
-
   const lenSq = bx * bx + by * by;
-  if (lenSq === 0) return Math.sqrt(px * px + py * py); // zero-length segment
+  if (lenSq === 0) return Math.sqrt(px * px + py * py);
   const t = Math.max(0, Math.min(1, (px * bx + py * by) / lenSq));
   const cx = t * bx;
   const cy = t * by;
   return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
 }
 
-/**
- * Find the nearest route segment that has exactly 1 assigned worker.
- * Uses point-to-line-segment distance so you're detected anywhere along
- * the road, not just near individual coordinate dots.
- * Returns { routeCode, workerId } or null if none within threshold.
- */
 function findNearestAssignedRoute(
   lat: number, lng: number,
   routeMapData: SavedRoute[],
@@ -180,7 +159,6 @@ function findNearestAssignedRoute(
 
     for (const seg of rmd.segments || []) {
       const coords = seg.coordinates || [];
-      // Check distance to each line segment between consecutive points
       for (let i = 0; i < coords.length - 1; i++) {
         const [lng1, lat1] = coords[i];
         const [lng2, lat2] = coords[i + 1];
@@ -189,7 +167,6 @@ function findNearestAssignedRoute(
           best = { routeCode: rmd.route_code, workerId, dist };
         }
       }
-      // Handle single-point segments
       if (coords.length === 1) {
         const [cLng, cLat] = coords[0];
         const dist = distToSegmentMeters(lat, lng, cLat, cLng, cLat, cLng);
@@ -203,23 +180,14 @@ function findNearestAssignedRoute(
   return best ? { routeCode: best.routeCode, workerId: best.workerId } : null;
 }
 
-/**
- * Compute red flag conditions for a contractor:
- * 1. < 50% contact details on first 5 new sales
- * 2. < 70% contact details on sales #6+
- * 3. Any pricing under minimums (FO/BO < $50, FP < $60)
- */
 function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: string[] } {
   const flags: string[] = [];
-
-  // "Sales" = new door sales only (type 'Sale'), not prebooks ('Production')
   const sales = financialStore.filter((tx: any) => tx.type === 'Sale');
 
   if (sales.length > 0) {
     const first5 = sales.slice(0, 5);
     const after5 = sales.slice(5);
 
-    // First 5 sales: need >= 50% contact fill
     const first5Filled = first5.reduce((n: number, tx: any) => {
       if (tx.customerPhone?.trim()) n++;
       if (tx.customerEmail?.trim()) n++;
@@ -229,7 +197,6 @@ function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: stri
       flags.push('contacts_first5');
     }
 
-    // Sales #6+: need >= 70% contact fill
     if (after5.length > 0) {
       const after5Filled = after5.reduce((n: number, tx: any) => {
         if (tx.customerPhone?.trim()) n++;
@@ -242,7 +209,6 @@ function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: stri
     }
   }
 
-  // Pricing check on all completed regular jobs (Production + Sale)
   const completedJobs = financialStore.filter((tx: any) => tx.type === 'Production' || tx.type === 'Sale');
   for (const tx of completedJobs) {
     const st = tx.serviceType;
@@ -256,12 +222,9 @@ function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: stri
 }
 
 /**
- * Create a pulsing ring overlay for the most recent completion pin.
- * Uses a 0×0 wrapper so anchor:'center' places it at the exact coordinate,
- * then the visible ring uses negative margins to center itself perfectly.
+ * Pulsing ring — UNCHANGED at 15px per spec.
  */
 function createPulsingRing(color: string): HTMLDivElement {
-  // Always overwrite keyframes (prevents stale cached animations across deploys)
   let pulseStyle = document.getElementById('rm-pulse-keyframes') as HTMLStyleElement | null;
   if (!pulseStyle) {
     pulseStyle = document.createElement('style');
@@ -275,7 +238,7 @@ function createPulsingRing(color: string): HTMLDivElement {
   return el;
 }
 
-const WORKER_LOCATION_POLL_MS = 5 * 60 * 1000; // 5 minutes
+const WORKER_LOCATION_POLL_MS = 5 * 60 * 1000;
 
 // --- COMPONENT ---
 
@@ -313,16 +276,22 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
   const routesRef = useRef(routes);
   const bookingsRef = useRef(bookings);
 
-  // Worker location state — tracks live dots from worker_locations table
   const [workerLocations, setWorkerLocations] = useState<WorkerLocation[]>([]);
   const workerLocationMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
 
-  // --- NEW STATE: On-route button + pulsing dot ---
   const [onRouteWorkerCard, setOnRouteWorkerCard] = useState<WorkerCardData | null>(null);
   const onRouteWorkerIdRef = useRef<string | null>(null);
   const pulsingMarkersRef = useRef<mapboxgl.Marker[]>([]);
   const routeMapDataRef = useRef<SavedRoute[]>([]);
   const workerCardDataRef = useRef<WorkerCardData[]>([]);
+
+  // --- NEW: Historical properties (purple dots) ---
+  const [historicalProps, setHistoricalProps] = useState<HistoricalProperty[]>([]);
+  const [geocodedHistorical, setGeocodedHistorical] = useState<GeocodedHistorical[]>([]);
+  const knownHistoricalRef = useRef<Map<string, GeocodedHistorical>>(new Map()); // key = route::address
+  const historicalBatchRef = useRef(0);
+  const [geocodeCacheHydrated, setGeocodeCacheHydrated] = useState(false);
+
   useEffect(() => { sidebarModeRef.current = sidebarMode; }, [sidebarMode]);
   useEffect(() => { routesRef.current = routes; }, [routes]);
   useEffect(() => { bookingsRef.current = bookings; }, [bookings]);
@@ -356,10 +325,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     });
   }, [workers, managerId, allSessions, bookings, isAerationSeason, workerLastActive]);
 
-  // Keep workerCardData ref fresh for use in GPS callback
   useEffect(() => { workerCardDataRef.current = workerCardData; }, [workerCardData]);
 
-  // Keep on-route card data fresh when sessions refresh
   useEffect(() => {
     if (!onRouteWorkerIdRef.current) return;
     const updated = workerCardData.find(c => c.worker.contractorId === onRouteWorkerIdRef.current);
@@ -431,10 +398,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     return n?{lat:sLat/n,lng:sLng/n}:null;
   }, [routeMapData]);
 
-  // --- NEW MEMO: Most recent completion pin (for pulsing dot) ---
-  // --- NEW MEMO: Most recent completion pin PER WORKER (for pulsing dots) ---
   const mostRecentCompletionPins = useMemo<GeocodedPin[]>(() => {
-    // Find the latest transaction per worker/session
     const latestByWorker = new Map<string, { jobId: string; timestamp: string }>();
 
     allSessions.forEach(s => {
@@ -457,7 +421,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     return result;
   }, [allSessions, geocodedPins]);
 
-  // --- NEW MEMO: Red flags for on-route worker ---
   const onRouteRedFlags = useMemo(() => {
     if (!onRouteWorkerCard) return { hasFlag: false, flags: [] as string[] };
     return computeRedFlags(onRouteWorkerCard.financialStore);
@@ -496,7 +459,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     }
   }, [workers, managerId]);
 
-  // Poll worker locations every 5 minutes once the map is loaded
   useEffect(() => {
     if (!mapLoaded) return;
     fetchWorkerLocations();
@@ -506,12 +468,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
 
   // --- WORKER LOCATION MARKERS ---
 
-  // Render / update / remove HTML markers whenever worker locations data changes
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
-    // Track which worker IDs are currently displayed so we can remove stale ones
     const existingIds = new Set(workerLocationMarkersRef.current.keys());
 
     workerLocations.forEach(loc => {
@@ -524,14 +484,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
 
       const existing = workerLocationMarkersRef.current.get(loc.worker_id);
       if (existing) {
-        // Update position and border color in-place — no flicker
         existing.setLngLat([loc.lng, loc.lat]);
         const el = existing.getElement();
         el.style.borderColor = borderColor;
         el.title = fullName;
         existingIds.delete(loc.worker_id);
       } else {
-        // Create new marker
         const el = createWorkerMarkerEl(initials, borderColor, fullName);
         const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
           .setLngLat([loc.lng, loc.lat])
@@ -540,12 +498,52 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       }
     });
 
-    // Remove markers for workers no longer in the fetched data
     existingIds.forEach(id => {
       workerLocationMarkersRef.current.get(id)?.remove();
       workerLocationMarkersRef.current.delete(id);
     });
   }, [workerLocations, mapLoaded, workers]);
+
+  // --- GEOCODE CACHE HYDRATION (one-shot on mount) ---
+  // Pulls every cached geocode for this session from Supabase into the in-memory map.
+  // Saves a huge number of Mapbox calls on map reload.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cache = await sessionService.getAllGeocodeCache();
+        if (cancelled) return;
+        cache.forEach((coords, key) => {
+          if (!geocodeCache.has(key)) {
+            geocodeCache.set(key, coords);
+          }
+        });
+        console.log(`[Geocode] Hydrated ${cache.size} cached entries from Supabase`);
+      } catch (err) {
+        console.warn('[Geocode] Hydration failed (continuing without):', err);
+      } finally {
+        if (!cancelled) setGeocodeCacheHydrated(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // --- HISTORICAL PROPERTIES FETCH (one-shot when route codes known) ---
+  useEffect(() => {
+    if (!myRouteCodes.length) { setHistoricalProps([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const props = await sessionService.getHistoricalPropertiesForRoutes(myRouteCodes);
+        if (cancelled) return;
+        setHistoricalProps(props);
+        console.log(`[HistoricalProps] Loaded ${props.length} properties for ${myRouteCodes.length} routes`);
+      } catch (err) {
+        console.warn('[HistoricalProps] Fetch failed:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [myRouteCodes.join(',')]);
 
   // Load route geometry
   useEffect(() => {
@@ -619,19 +617,25 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     }
   }, [routeMapData, routes, workers, mapLoaded, myRouteCodes]);
 
-  // Route opacity
+  // Route opacity — FAINTER unassigned in Staff view per Vijay's spec
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     routeMapData.forEach(route=>{
       const lid=`rm-line-${route.id}`; if(!map.getLayer(lid)) return;
-      if(sidebarMode==='routes'&&myRouteCodes.includes(route.route_code)){
-        const rp=routes.find(r=>r.routeCode===route.route_code);
-        map.setPaintProperty(lid,'line-opacity',rp?.assignedWorkerIds?.length?0.9:0.3);
-      } else { map.setPaintProperty(lid,'line-opacity',0.75); }
+      const rp=routes.find(r=>r.routeCode===route.route_code);
+      const isAssigned = !!rp?.assignedWorkerIds?.length;
+
+      if (sidebarMode === 'routes' && myRouteCodes.includes(route.route_code)) {
+        // Routes view: assigned bold, unassigned ghosted so you can see what still needs clicking
+        map.setPaintProperty(lid, 'line-opacity', isAssigned ? 0.9 : 0.3);
+      } else {
+        // Staff view (and default): unassigned routes go FAINTER so assigned carts pop
+        map.setPaintProperty(lid, 'line-opacity', isAssigned ? 0.75 : 0.4);
+      }
     });
   }, [sidebarMode, routeMapData, routes, mapLoaded, myRouteCodes]);
 
-  // Route click handlers (stable via refs)
+  // Route click handlers
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     const cleanups:Array<()=>void>=[];
@@ -657,7 +661,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     return()=>cleanups.forEach(fn=>fn());
   }, [routeMapData, mapLoaded, myRouteCodes]);
 
-  // Update map pins (prebook/completed dots)
+  // Update map pins (prebook/completed/new-sale dots) — SIZE HALVED to 2/3 per spec
   const updateMapPins = useCallback((map:mapboxgl.Map, geocoded:GeocodedPin[]) => {
     if(pinClickHandlerRef.current){map.off('click','rm-pins-circles',pinClickHandlerRef.current);pinClickHandlerRef.current=null;}
     if(popupRef.current){popupRef.current.remove();popupRef.current=null;}
@@ -666,7 +670,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     if(src){src.setData(gj);}
     else{
       map.addSource('rm-pins-src',{type:'geojson',data:gj});
-      map.addLayer({id:'rm-pins-circles',type:'circle',source:'rm-pins-src',paint:{'circle-color':['get','routeColor'],'circle-radius':5,'circle-stroke-color':['match',['get','status'],'completed','#22c55e','new_sale','#eab308','#000000'],'circle-stroke-width':2.5,'circle-opacity':0.95}});
+      map.addLayer({id:'rm-pins-circles',type:'circle',source:'rm-pins-src',paint:{'circle-color':['get','routeColor'],'circle-radius':3.33,'circle-stroke-color':['match',['get','status'],'completed','#22c55e','new_sale','#eab308','#000000'],'circle-stroke-width':1.67,'circle-opacity':0.95}});
       map.on('mouseenter','rm-pins-circles',()=>{map.getCanvas().style.cursor='pointer';});
       map.on('mouseleave','rm-pins-circles',()=>{map.getCanvas().style.cursor='';});
     }
@@ -688,13 +692,63 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     map.on('click','rm-pins-circles',clickHandler);
   }, []);
 
-  // Geocode and render prebook/completed pins
+  // Update historical purple dots layer — radius 1.67 per spec, not clickable
+  const updateHistoricalPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedHistorical[]) => {
+    const gj: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: geocoded.map(h => ({
+        type: 'Feature' as const,
+        properties: { routeCode: h.routeCode },
+        geometry: { type: 'Point' as const, coordinates: [h.lng, h.lat] }
+      }))
+    };
+    const src = map.getSource('rm-historical-src') as mapboxgl.GeoJSONSource;
+    if (src) {
+      src.setData(gj);
+    } else {
+      map.addSource('rm-historical-src', { type: 'geojson', data: gj });
+      map.addLayer({
+        id: 'rm-historical-circles',
+        type: 'circle',
+        source: 'rm-historical-src',
+        paint: {
+          'circle-color': '#a855f7',              // purple-500
+          'circle-radius': 1.67,                   // half of the new prebook size
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 0.5,
+          'circle-opacity': 0,                     // start hidden, toggled by sidebarMode effect
+        },
+      });
+      // Intentionally NO click/hover handlers — purple dots are reference-only
+    }
+  }, []);
+
+  // Toggle purple dot visibility based on sidebarMode (Routes view only)
   useEffect(() => {
-    const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !map.getLayer('rm-historical-circles')) return;
+    const opacity = sidebarMode === 'routes' ? 0.75 : 0;
+    map.setPaintProperty('rm-historical-circles', 'circle-opacity', opacity);
+  }, [sidebarMode, mapLoaded, geocodedHistorical]);
+
+  // Geocode and render prebook/completed pins
+  // MODIFIED: jobIdCache now checks address match; writes fresh geocodes to Supabase
+  useEffect(() => {
+    const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length||!geocodeCacheHydrated) return;
     const batch=++geocodeBatchRef.current, curIds=new Set(pins.map(p=>p.id)), toGeo:PinData[]=[];
     pins.forEach(pin=>{
-      const ac=geocodeCache.get(makeCacheKey(pin.address)), ic=jobIdCache.get(pin.id), cached=ac||ic;
-      if(cached){if(!ac)geocodeCache.set(makeCacheKey(pin.address),cached);if(!ic)jobIdCache.set(pin.id,cached);knownPinsRef.current.set(pin.id,{...pin,lat:cached.lat,lng:cached.lng,routeColor:routeColorMap.get(pin.routeCode)||'#888888'});}
+      const addrKey = makeCacheKey(pin.address);
+      const ac = geocodeCache.get(addrKey);
+      const ic = jobIdCache.get(pin.id);
+      // Only use jobIdCache if address still matches (handles address edits)
+      const icValid = ic && makeCacheKey(ic.address) === addrKey;
+      const cached = ac || (icValid ? { lat: ic!.lat, lng: ic!.lng } : undefined);
+
+      if(cached){
+        if(!ac) geocodeCache.set(addrKey, cached);
+        jobIdCache.set(pin.id, { address: pin.address, lat: cached.lat, lng: cached.lng });
+        knownPinsRef.current.set(pin.id,{...pin,lat:cached.lat,lng:cached.lng,routeColor:routeColorMap.get(pin.routeCode)||'#888888'});
+      }
       else toGeo.push(pin);
     });
     knownPinsRef.current.forEach((ep,id)=>{if(!curIds.has(id)&&ep.status==='pending') knownPinsRef.current.set(id,{...ep,status:'completed'});});
@@ -705,7 +759,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       for(let i=0;i<toGeo.length;i++){
         if(geocodeBatchRef.current!==batch||!mountedRef.current) return;
         const pin=toGeo[i], coord=await geocodeAddress(pin.address,routeCentroid?.lat,routeCentroid?.lng);
-        if(coord){geocodeCache.set(makeCacheKey(pin.address),coord);jobIdCache.set(pin.id,coord);knownPinsRef.current.set(pin.id,{...pin,lat:coord.lat,lng:coord.lng,routeColor:routeColorMap.get(pin.routeCode)||'#888888'});}
+        if(coord){
+          const addrKey = makeCacheKey(pin.address);
+          geocodeCache.set(addrKey, coord);
+          jobIdCache.set(pin.id, { address: pin.address, lat: coord.lat, lng: coord.lng });
+          knownPinsRef.current.set(pin.id,{...pin,lat:coord.lat,lng:coord.lng,routeColor:routeColorMap.get(pin.routeCode)||'#888888'});
+          // Fire-and-forget persist to Supabase
+          sessionService.saveGeocode(pin.address, coord.lat, coord.lng).catch(()=>{});
+        }
         if(geocodeBatchRef.current!==batch||!mountedRef.current) return;
         setGeocodingProgress({current:i+1,total:toGeo.length});
         if(i<toGeo.length-1) await new Promise(r=>setTimeout(r,80));
@@ -713,14 +774,69 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       if(geocodeBatchRef.current!==batch||!mountedRef.current) return;
       const fp=Array.from(knownPinsRef.current.values());setGeocodedPins(fp);updateMapPins(map,fp);setGeocodingProgress(null);
     })();
-  }, [pins, routeMapData, mapLoaded, routeColorMap, routeCentroid, updateMapPins]);
+  }, [pins, routeMapData, mapLoaded, routeColorMap, routeCentroid, updateMapPins, geocodeCacheHydrated]);
 
-  // --- NEW EFFECT: Pulsing dot on each contractor's most recent completion ---
+  // Geocode historical properties (purple dots) — uses same cache, writes to same Supabase store
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !geocodeCacheHydrated) return;
+    if (!historicalProps.length) {
+      knownHistoricalRef.current.clear();
+      setGeocodedHistorical([]);
+      if (map.getSource('rm-historical-src')) {
+        updateHistoricalPins(map, []);
+      }
+      return;
+    }
+
+    const batch = ++historicalBatchRef.current;
+    const toGeo: HistoricalProperty[] = [];
+
+    historicalProps.forEach(h => {
+      const addrKey = makeCacheKey(h.address);
+      const cached = geocodeCache.get(addrKey);
+      const uniqueKey = `${h.routeCode}::${addrKey}`;
+      if (cached) {
+        knownHistoricalRef.current.set(uniqueKey, { ...h, lat: cached.lat, lng: cached.lng });
+      } else {
+        toGeo.push(h);
+      }
+    });
+
+    const snap = Array.from(knownHistoricalRef.current.values());
+    setGeocodedHistorical(snap);
+    updateHistoricalPins(map, snap);
+
+    if (!toGeo.length) return;
+
+    (async () => {
+      for (let i = 0; i < toGeo.length; i++) {
+        if (historicalBatchRef.current !== batch || !mountedRef.current) return;
+        const h = toGeo[i];
+        const coord = await geocodeAddress(h.address, routeCentroid?.lat, routeCentroid?.lng);
+        if (coord) {
+          const addrKey = makeCacheKey(h.address);
+          geocodeCache.set(addrKey, coord);
+          const uniqueKey = `${h.routeCode}::${addrKey}`;
+          knownHistoricalRef.current.set(uniqueKey, { ...h, lat: coord.lat, lng: coord.lng });
+          sessionService.saveGeocode(h.address, coord.lat, coord.lng).catch(()=>{});
+        }
+        if (historicalBatchRef.current !== batch || !mountedRef.current) return;
+        // Throttle to avoid rate-limiting Mapbox. 2,594 rows × 80ms ≈ 3.5 min worst case.
+        if (i < toGeo.length - 1) await new Promise(r => setTimeout(r, 80));
+      }
+      if (historicalBatchRef.current !== batch || !mountedRef.current) return;
+      const fp = Array.from(knownHistoricalRef.current.values());
+      setGeocodedHistorical(fp);
+      updateHistoricalPins(map, fp);
+    })();
+  }, [historicalProps, mapLoaded, geocodeCacheHydrated, routeCentroid, updateHistoricalPins]);
+
+  // Pulsing dot on each contractor's most recent completion
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
-    // Remove old pulsing markers
     pulsingMarkersRef.current.forEach(m => m.remove());
     pulsingMarkersRef.current = [];
 
@@ -739,7 +855,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
     };
   }, [mostRecentCompletionPins, mapLoaded]);
 
-  // GPS (RM's own location) — MODIFIED to include on-route detection
+  // GPS (RM's own location) — with on-route detection
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!navigator.geolocation) return;
     if(!navArrowElRef.current) navArrowElRef.current=createNavArrow();
@@ -751,7 +867,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       if(heading!=null&&!isNaN(heading)&&navArrowElRef.current) navArrowElRef.current.style.transform=`rotate(${heading}deg)`;
       if(centerOnLocationRef.current) mapRef.current.easeTo({center:[lng,lat],duration:1000});
 
-      // --- On-route detection (only when follow-me is ON) ---
       if (centerOnLocationRef.current) {
         const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, managerId, 100);
         const card = nearest ? workerCardDataRef.current.find(c => c.worker.contractorId === nearest.workerId) || null : null;
@@ -767,7 +882,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
 
   useEffect(()=>{centerOnLocationRef.current=centerOnLocation;},[centerOnLocation]);
 
-  // MODIFIED: Also clears on-route state when follow-me is turned off
   const handleToggleCenter=useCallback(()=>{
     setCenterOnLocation(prev=>{const nv=!prev;centerOnLocationRef.current=nv;
       if(nv&&navMarkerRef.current&&mapRef.current){const ll=navMarkerRef.current.getLngLat();if(ll.lng!==0||ll.lat!==0) mapRef.current.easeTo({center:[ll.lng,ll.lat],duration:800});}
@@ -810,9 +924,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}
       navMarkerRef.current?.remove();navMarkerRef.current=null;
       if(popupRef.current){popupRef.current.remove();popupRef.current=null;}
-      // Remove pulsing marker
       pulsingMarkersRef.current.forEach(m => m.remove());pulsingMarkersRef.current=[];
-      // Remove all worker location markers
       workerLocationMarkersRef.current.forEach(m => m.remove());
       workerLocationMarkersRef.current.clear();
       map.remove();mapRef.current=null;setMapLoaded(false);
@@ -846,6 +958,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
   const pendingCount=geocodedPins.filter(p=>p.status==='pending').length;
   const completedCount=geocodedPins.filter(p=>p.status==='completed').length;
   const newSaleCount=geocodedPins.filter(p=>p.status==='new_sale').length;
+  const historicalCount = geocodedHistorical.length;
 
   return (
     <div className="absolute inset-0 flex flex-col">
@@ -960,12 +1073,15 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
       {routesLoading&&!geocodingProgress && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm"><Loader size={12} className="animate-spin text-blue-400"/>Loading routes…</div>}
       {!routesLoading&&!routeMapData.length&&myRouteCodes.length>0&&mapLoaded&&!geocodingProgress && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-yellow-900/90 text-yellow-300 px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm">No map data for your routes</div>}
 
-      {/* Pin legend + worker dot staleness legend */}
-      {!geocodingProgress && !sidebarOpen && (geocodedPins.length > 0 || workerLocations.length > 0) && (
+      {/* Pin legend */}
+      {!geocodingProgress && !sidebarOpen && (geocodedPins.length > 0 || workerLocations.length > 0 || historicalCount > 0) && (
         <div className="absolute bottom-6 left-3 z-20 bg-gray-900/90 text-white px-3 py-2 rounded-lg shadow-lg text-[10px] space-y-1 backdrop-blur-sm">
           {pendingCount>0&&<div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-400 border-2 border-black inline-block flex-shrink-0"/>Pending ({pendingCount})</div>}
           {completedCount>0&&<div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-400 border-2 border-green-500 inline-block flex-shrink-0"/>Completed ({completedCount})</div>}
           {newSaleCount>0&&<div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-400 border-2 border-yellow-500 inline-block flex-shrink-0"/>New Sale ({newSaleCount})</div>}
+          {sidebarMode === 'routes' && historicalCount > 0 && (
+            <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-purple-500 inline-block flex-shrink-0"/>Previously done ({historicalCount})</div>
+          )}
           {workerLocations.length > 0 && (
             <>
               {(pendingCount > 0 || completedCount > 0 || newSaleCount > 0) && <div className="border-t border-gray-700 my-1" />}
@@ -981,13 +1097,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
 
       {!mapLoaded && <div className="absolute inset-0 bg-gray-100 flex items-center justify-center z-10"><Loader size={24} className="animate-spin text-blue-500"/></div>}
 
-      {/* --- NEW: On-route contractor button (bottom right) --- */}
+      {/* On-route contractor button */}
       {onRouteWorkerCard && (
         <button
           onClick={() => setSelectedWorkerForModal(onRouteWorkerCard)}
           className="absolute bottom-20 right-3 z-40 bg-gray-900/95 backdrop-blur-sm text-white rounded-xl shadow-2xl border border-gray-600 px-6 py-5 flex items-center gap-4 hover:border-blue-500 active:scale-[0.97] transition-all max-w-[420px]"
         >
-          {/* Red flag icon — shown on far left if any flag triggered */}
           {onRouteRedFlags.hasFlag && (
             <AlertTriangle size={32} className="text-red-500 flex-shrink-0 animate-pulse" />
           )}

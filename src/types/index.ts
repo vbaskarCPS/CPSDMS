@@ -46,6 +46,8 @@ export interface CommandCenter {
   // Job Fairs
   jobFairsEnabled?: boolean;
   jobFairsSlug?: string;
+  // Digital Mapping (enables logsheet purple dots + PCL cache + digital master bookings)
+  digitalMappingEnabled?: boolean;
 }
 
 // --- JOB FAIR TYPES ---
@@ -171,6 +173,21 @@ export interface TeamCart {
   logsheetSessionId?: string;
 }
 
+// --- HISTORICAL PROPERTY (Purple dots on RMMap — previously-serviced addresses) ---
+export interface HistoricalProperty {
+  routeCode: string;
+  address: string;          // "Street# StreetName" assembled at import time
+  customerName?: string;
+  phone?: string;
+  email?: string;
+  clientType?: string;      // 'New' | 'Existing' | 'DWS'
+  propertyType?: string;    // 'FP' | 'BO' | 'FO' | 'SS' | 'SSP'
+  notes?: string;
+  price?: string;
+  paymentType?: string;
+  contractorName?: string;
+}
+
 // --- DATA FEED STRUCTURE ---
 
 export interface RouteData {
@@ -194,6 +211,9 @@ export interface DailySessionData {
   
   // --- TEAM CARTS (Lawn Rejuv only) ---
   teamCarts?: TeamCart[]; // Grouped workers by teamId
+  
+  // --- HISTORICAL PROPERTIES (digital mapping enabled CCs only) ---
+  historicalProperties?: HistoricalProperty[]; // Read from Logsheets tab at upload time
 }
 
 // --- PAYOUT VALIDATION ---
