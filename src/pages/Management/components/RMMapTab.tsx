@@ -705,7 +705,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({ managerId, routes, bookings, allSes
         source: 'rm-historical-src',
         layout: {
           'icon-image': 'rm-historical-x',
-          'icon-size': 0.5,                // scales the 16px @2x icon down to ~8px on screen
+          'icon-size': 1.0,                // scales the 16px @2x icon down to ~8px on screen
           'icon-allow-overlap': true,
           'icon-ignore-placement': true,
         },
