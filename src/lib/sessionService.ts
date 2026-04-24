@@ -2561,7 +2561,12 @@ class SessionService {
     
     const basePayoutRate = getPayoutRate(seasonType, teamSize);
     
-    const teamTotalEQ = stats.totalEQ;
+    // FIXED: Use validated actual EQ when available, else fall back to projected stats EQ.
+    // This matches PayoutContractor's logic so the bonus screenshot numbers agree with
+    // the finalized payout page exactly.
+    const teamTotalEQ = (validation?.isValidated && typeof validation.actualTotalEQ === 'number')
+      ? validation.actualTotalEQ
+      : stats.totalEQ;
     
     const breakdowns: WorkerPayoutBreakdown[] = [];
     
@@ -2597,19 +2602,31 @@ class SessionService {
         }
       }
       
+      // cashChequeDiff is DISPLAY ONLY — it's already baked into actualTotalEQ via deltaEQ
+      // on the finalized payout page, so we do NOT subtract it here from the commission.
       const cashChequeDiff = validation 
         ? (Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0)) * equivPercent
         : 0;
       
-      const hasMachineRental = validation?.workerMachineRentals?.[workerId] !== undefined
-        ? validation.workerMachineRentals[workerId]
-        : (validation?.machineRental ?? false);
+      // FIXED: Default machine rental to TRUE when undefined (matches PayoutContractor).
+      // If per-worker flag is set, use it. Otherwise fall back to the legacy team-level flag
+      // if it's explicitly set; otherwise assume true.
+      let hasMachineRental: boolean;
+      if (validation?.workerMachineRentals?.[workerId] !== undefined) {
+        hasMachineRental = validation.workerMachineRentals[workerId];
+      } else if (validation?.machineRental !== undefined) {
+        hasMachineRental = validation.machineRental;
+      } else {
+        hasMachineRental = true;
+      }
       const machineRentalDeduction = hasMachineRental ? 10 : 0;
       
       const otherDeductions = validation?.workerDeductions?.[workerId] || 0;
       
       const deductions = otherDeductions;
       
+      // FIXED: finalCommission no longer subtracts cashChequeDiff — that variance is
+      // already reflected in actualTotalEQ via deltaEQ on the finalized page.
       const finalCommission = productionCommission + upsellCommission + iosCommission + 
                              bonusAmount - machineRentalDeduction - deductions;
       

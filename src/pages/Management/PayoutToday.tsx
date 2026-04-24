@@ -23,7 +23,25 @@ import {
   AlertTriangle,
   Camera,
   Truck,
+  GripVertical,
 } from 'lucide-react';
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import type {
   Worker,
   SortOption,
@@ -90,6 +108,8 @@ interface BonusWinner {
   eq: number;
   upsellGross: number;
   finalCommission: number;
+  // Session id needed for drag/reorder persistence
+  sessionId: string;
 }
 
 // --- NEW: Per-worker payout breakdown inside a rejuv cart bonus winner ---
@@ -106,6 +126,8 @@ interface RejuvBonusWinner {
   bonus: Bonus;
   teamTotalEQ: number;
   workerPayouts: RejuvWorkerPayout[];
+  // Session id needed for drag/reorder persistence
+  sessionId: string;
 }
 
 // Team cart with full worker and session data for Lawn Rejuv
@@ -331,7 +353,8 @@ function getSizeConfig(totalBonuses: number, columnCount: number): SizeConfig {
         firstNameText: 'text-lg',
         lastNameText: 'text-sm',
         achievementSize: 'w-14 h-14',
-        achievementContainer: 'w-18 h-18',
+        // FIXED: w-18 h-18 doesn't exist in Tailwind — bumped to w-20 h-20
+        achievementContainer: 'w-20 h-20',
         eqOverlayText: 'text-sm',
         upsellText: 'text-sm',
         bonusText: 'text-sm',
@@ -387,8 +410,10 @@ function getSizeConfig(totalBonuses: number, columnCount: number): SizeConfig {
       placingText: 'text-sm',
       firstNameText: 'text-xl',
       lastNameText: 'text-base',
-      achievementSize: 'w-18 h-18',
-      achievementContainer: 'w-22 h-22',
+      // FIXED: w-18 h-18 doesn't exist in Tailwind — bumped to w-20 h-20
+      achievementSize: 'w-20 h-20',
+      // FIXED: w-22 h-22 doesn't exist in Tailwind — bumped to w-24 h-24
+      achievementContainer: 'w-24 h-24',
       eqOverlayText: 'text-base',
       upsellText: 'text-base',
       bonusText: 'text-base',
@@ -534,6 +559,39 @@ function formatDateForDisplay(dateStr: string): string {
   });
 }
 
+// --- DND: Sortable wrapper for "Other" column cards ---
+// Each card in the Other column gets wrapped in this so it can be dragged.
+// The whole card is grabbable (cursor-grab), lifts slightly when dragging.
+function SortableOtherCard({
+  id,
+  children,
+}: {
+  id: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 50 : 'auto',
+    position: 'relative',
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className={isDragging ? 'cursor-grabbing' : 'cursor-grab'}
+    >
+      {children}
+    </div>
+  );
+}
+
 const PayoutToday: React.FC<PayoutTodayProps> = ({
   date,
   sortOption,
@@ -562,6 +620,17 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const [bonusCustomDesc, setBonusCustomDesc] = useState('');
   const [bonusAmount, setBonusAmount] = useState('');
   const [bonusSplitPercentages, setBonusSplitPercentages] = useState<Record<string, number>>({});
+
+  // DND sensors — pointer for mouse/touch, keyboard for accessibility.
+  // 5px drag distance required before activating, so simple clicks don't start drags.
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 5 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   const loadData = async () => {
     setLoading(true);
@@ -773,6 +842,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           eq,
           upsellGross,
           finalCommission,
+          sessionId: session.id,
         };
 
         switch (bonus.type) {
@@ -791,9 +861,19 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       return aP - bP;
     };
 
+    // NEW: Other column sorts by manual sortOrder (drag-to-reorder),
+    // falling back to bonus id for stable ordering. Lower sortOrder = higher on list.
+    const sortByManualOrder = (a: BonusWinner, b: BonusWinner) => {
+      const aSO = a.bonus.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      const bSO = b.bonus.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      if (aSO !== bSO) return aSO - bSO;
+      return a.bonus.id - b.bonus.id;
+    };
+
     winners.performanceEQ.sort(sortByPlacingThenEQ);
     winners.totalUpsell.sort(sortByPlacingThenEQ);
     winners.rookie.sort(sortByPlacingThenEQ);
+    winners.other.sort(sortByManualOrder);
 
     return winners;
   }, [items]);
@@ -848,6 +928,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           bonus,
           teamTotalEQ,
           workerPayouts,
+          sessionId: session.id,
         };
 
         switch (bonus.type) {
@@ -866,9 +947,19 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       return aP - bP;
     };
 
+    // NEW: Other column sorts by manual sortOrder (drag-to-reorder),
+    // falling back to bonus id for stable ordering.
+    const sortByManualOrder = (a: RejuvBonusWinner, b: RejuvBonusWinner) => {
+      const aSO = a.bonus.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      const bSO = b.bonus.sortOrder ?? Number.MAX_SAFE_INTEGER;
+      if (aSO !== bSO) return aSO - bSO;
+      return a.bonus.id - b.bonus.id;
+    };
+
     winners.performanceEQ.sort(sortByPlacing);
     winners.totalUpsell.sort(sortByPlacing);
     winners.rookie.sort(sortByPlacing);
+    winners.other.sort(sortByManualOrder);
 
     return winners;
   }, [teamCartsDisplay, isTeamSeason, seasonType]);
@@ -900,6 +991,61 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   );
 
   const hasBonuses = totalBonusCount > 0;
+
+  // --- NEW: Drag-end handler for "Other" column reordering ---
+  // Assigns a new sortOrder to each reordered bonus based on its new index,
+  // groups the updates by session, and saves each session's bonuses array back.
+  const handleOtherDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const currentOther = activeBonusWinners.other as (BonusWinner | RejuvBonusWinner)[];
+    const oldIds = currentOther.map((w) => `bonus-${w.bonus.id}`);
+    const oldIndex = oldIds.indexOf(String(active.id));
+    const newIndex = oldIds.indexOf(String(over.id));
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    const reordered = arrayMove(currentOther, oldIndex, newIndex);
+
+    // Group new sort orders by sessionId so we can update each session's
+    // bonuses array in a single DB write per affected session.
+    const updatesBySession: Record<string, Record<number, number>> = {};
+    reordered.forEach((winner, idx) => {
+      const sid = winner.sessionId;
+      if (!updatesBySession[sid]) updatesBySession[sid] = {};
+      updatesBySession[sid][winner.bonus.id] = idx;
+    });
+
+    try {
+      const allSessions = isTeamSeason
+        ? teamCartsDisplay.map((c) => c.session)
+        : items.map((i) => i.session);
+
+      const savePromises: Promise<void>[] = [];
+      for (const [sid, newOrders] of Object.entries(updatesBySession)) {
+        const sess = allSessions.find((s) => s.id === sid);
+        if (!sess || !sess.bonuses) continue;
+
+        // Apply new sortOrder only to 'Other' bonuses that got reordered.
+        // Bonuses of other types on this session are left untouched.
+        const updatedBonuses: Bonus[] = sess.bonuses.map((b) => {
+          if (b.type === 'Other' && newOrders[b.id] !== undefined) {
+            return { ...b, sortOrder: newOrders[b.id] };
+          }
+          return b;
+        });
+
+        savePromises.push(
+          sessionService.updateLogsheetSession(sid, { bonuses: updatedBonuses })
+        );
+      }
+
+      await Promise.all(savePromises);
+      await loadData();
+    } catch (err) {
+      console.error('Failed to persist bonus reorder:', err);
+    }
+  };
 
   const sortedItems = useMemo(() => {
     let filtered = items;
@@ -2260,7 +2406,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                 </div>
               )}
 
-              {/* Other Bonuses Column */}
+              {/* Other Bonuses Column — DRAG-TO-REORDER ENABLED */}
               {activeBonusWinners.other.length > 0 && (
                 <div className="flex-1 min-w-0 flex flex-col">
                   <div className={`flex items-center gap-2 ${sizeConfig.sectionMargin} flex-shrink-0`}>
@@ -2270,43 +2416,62 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                     <h2 className={`${sizeConfig.sectionTitle} font-black text-gray-400 uppercase tracking-wide`}>
                       Other
                     </h2>
+                    <span className="text-[10px] text-gray-500 italic ml-auto flex items-center gap-1">
+                      <GripVertical size={10} /> drag to reorder
+                    </span>
                   </div>
                   <div className={`${sizeConfig.rowMargin} flex-1 overflow-hidden`}>
-                    {isTeamSeason
-                      ? (activeBonusWinners.other as RejuvBonusWinner[]).map(
-                          (winner, idx) => renderRejuvWinnerRow(winner, idx)
-                        )
-                      : (activeBonusWinners.other as BonusWinner[]).map((winner, idx) => (
-                          <div
-                            key={idx}
-                            className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
-                          >
-                            <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
-                              <span className={sizeConfig.medalSize}>🏆</span>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className={`${sizeConfig.placingText} font-bold text-amber-400 leading-tight truncate`}>
-                                {winner.bonus.customDescription || 'Other'}
-                              </p>
-                              <p className={`${sizeConfig.firstNameText} font-bold text-white leading-tight`}>
-                                {winner.firstName}
-                              </p>
-                              <p className={`${sizeConfig.lastNameText} font-medium text-gray-400 leading-tight`}>
-                                {winner.lastName}
-                              </p>
-                            </div>
-                            <div className={`text-center ${sizeConfig.minWidthBonus}`}>
-                              <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
-                                +${winner.bonus.amount.toFixed(0)}
-                              </span>
-                            </div>
-                            <div className={`text-right ${sizeConfig.minWidthPayout}`}>
-                              <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
-                                ${winner.finalCommission.toFixed(2)}
-                              </p>
-                            </div>
-                          </div>
-                        ))}
+                    <DndContext
+                      sensors={dndSensors}
+                      collisionDetection={closestCenter}
+                      onDragEnd={handleOtherDragEnd}
+                    >
+                      <SortableContext
+                        items={(activeBonusWinners.other as (BonusWinner | RejuvBonusWinner)[]).map(
+                          (w) => `bonus-${w.bonus.id}`
+                        )}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        {isTeamSeason
+                          ? (activeBonusWinners.other as RejuvBonusWinner[]).map((winner, idx) => (
+                              <SortableOtherCard key={winner.bonus.id} id={`bonus-${winner.bonus.id}`}>
+                                {renderRejuvWinnerRow(winner, idx)}
+                              </SortableOtherCard>
+                            ))
+                          : (activeBonusWinners.other as BonusWinner[]).map((winner, idx) => (
+                              <SortableOtherCard key={winner.bonus.id} id={`bonus-${winner.bonus.id}`}>
+                                <div
+                                  className={`bg-gray-800/80 rounded-xl border border-gray-700 ${sizeConfig.rowPadding} flex items-center ${sizeConfig.rowGap}`}
+                                >
+                                  <div className={`flex flex-col items-center ${sizeConfig.minWidthMedal}`}>
+                                    <span className={sizeConfig.medalSize}>🏆</span>
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <p className={`${sizeConfig.placingText} font-bold text-amber-400 leading-tight truncate`}>
+                                      {winner.bonus.customDescription || 'Other'}
+                                    </p>
+                                    <p className={`${sizeConfig.firstNameText} font-bold text-white leading-tight`}>
+                                      {winner.firstName}
+                                    </p>
+                                    <p className={`${sizeConfig.lastNameText} font-medium text-gray-400 leading-tight`}>
+                                      {winner.lastName}
+                                    </p>
+                                  </div>
+                                  <div className={`text-center ${sizeConfig.minWidthBonus}`}>
+                                    <span className={`${sizeConfig.bonusText} font-bold text-yellow-400`}>
+                                      +${winner.bonus.amount.toFixed(0)}
+                                    </span>
+                                  </div>
+                                  <div className={`text-right ${sizeConfig.minWidthPayout}`}>
+                                    <p className={`${sizeConfig.payoutText} font-black text-green-400`}>
+                                      ${winner.finalCommission.toFixed(2)}
+                                    </p>
+                                  </div>
+                                </div>
+                              </SortableOtherCard>
+                            ))}
+                      </SortableContext>
+                    </DndContext>
                   </div>
                 </div>
               )}

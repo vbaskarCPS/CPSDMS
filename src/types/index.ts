@@ -137,6 +137,8 @@ export interface Bonus {
     customDescription?: string;       // For 'Other' type OR when placing is 'other'
     // For team seasons: how to split this bonus among team members
     splitPercentages?: Record<string, number>; // workerId -> percentage (0-100)
+    // Manual sort order (used by "Other" column in bonus screenshot — lower number = higher on list)
+    sortOrder?: number;
 }
 
 export interface Worker {
