@@ -80,10 +80,14 @@ export function sortContacts(contacts: ContactEntry[]): ContactEntry[] {
   });
 }
 
-// ─── FILTER TO ACTIVE ONLY ───────────────────────────────────────────────────
+// ─── FILTER TO ACTIVE ONLY (with always-include tab override) ────────────────
 
-export function filterActive(contacts: ContactEntry[]): ContactEntry[] {
-  return contacts.filter(c => c.isActive);
+export function filterActive(
+  contacts: ContactEntry[],
+  alwaysIncludeTabs: string[] = [],
+): ContactEntry[] {
+  const alwaysSet = new Set(alwaysIncludeTabs);
+  return contacts.filter(c => c.isActive || alwaysSet.has(c.tabName));
 }
 
 // ─── SEARCH FILTER (NAME OR PHONE) ───────────────────────────────────────────
@@ -164,4 +168,43 @@ export function dedupeForSave(contacts: ContactEntry[]): ContactEntry[] {
     if (!existing.isActive && c.isActive) map.set(c.cnId, c);
   }
   return Array.from(map.values());
+}
+
+// ─── SAVED-CONTACTS TRACKING (LOCALSTORAGE) ──────────────────────────────────
+
+const SAVED_CONTACTS_KEY = 'workerbook_saved_contact_ids';
+
+export function getSavedContactIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SAVED_CONTACTS_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter(x => typeof x === 'string'));
+  } catch {
+    return new Set();
+  }
+}
+
+export function markContactsAsSaved(cnIds: string[], mode: 'add' | 'remove' = 'add'): Set<string> {
+  const current = getSavedContactIds();
+  if (mode === 'add') {
+    cnIds.forEach(id => { if (id) current.add(id); });
+  } else {
+    cnIds.forEach(id => current.delete(id));
+  }
+  try {
+    localStorage.setItem(SAVED_CONTACTS_KEY, JSON.stringify(Array.from(current)));
+  } catch {
+    // localStorage might be full or disabled — non-fatal
+  }
+  return current;
+}
+
+export function clearAllSavedContacts(): void {
+  try {
+    localStorage.removeItem(SAVED_CONTACTS_KEY);
+  } catch {
+    // non-fatal
+  }
 }

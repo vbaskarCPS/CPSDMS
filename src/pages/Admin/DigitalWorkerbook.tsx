@@ -83,6 +83,8 @@ import {
   filterActive,
   downloadVCardBundle,
   dedupeForSave,
+  getSavedContactIds,
+  markContactsAsSaved,
 } from '../../lib/workerbookContactsService';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -109,6 +111,9 @@ interface WBContractor {
 type DotColor = 'green' | 'silver' | 'gold' | null;
 type WBView = 'calendar' | 'day' | 'status';
 type MoveTargetContext = 'day' | 'status';
+
+// Tabs where contractors should appear in Contacts/Search regardless of rebook status
+const ALWAYS_INCLUDE_TABS: string[] = ['NS', 'WDR'];
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -308,6 +313,11 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   const [scrollToCnId, setScrollToCnId] = useState<string | null>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
 
+  // Saved-contacts tracking
+  const [savedContactIds, setSavedContactIds] = useState<Set<string>>(new Set());
+  const [hideAlreadySaved, setHideAlreadySaved] = useState(true);
+  const [confirmMarkAll, setConfirmMarkAll] = useState(false);
+
   // ─── INIT ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -317,6 +327,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     loadAllTextTemplates().then(setTextTemplates).catch(() => {});
     getTextedTodayMap().then(setTextedToday).catch(() => {});
     cleanOldWorkerbookEmailLogs().catch(() => {});
+    setSavedContactIds(getSavedContactIds());
   }, []);
 
   useEffect(() => {
@@ -502,10 +513,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     setError(null);
   };
 
-  // ─── SEARCH / JUMP TO CONTRACTOR (ACTIVE ONLY) ─────────────────────────────
+  // ─── SEARCH / JUMP TO CONTRACTOR (ACTIVE + NS/WDR SAFETY NET) ──────────────
 
   const calendarSearchResults = calendarSearchQuery.trim()
-    ? filterActive(searchContacts(allContacts, calendarSearchQuery)).slice(0, 25)
+    ? filterActive(searchContacts(allContacts, calendarSearchQuery), ALWAYS_INCLUDE_TABS).slice(0, 25)
     : [];
 
   const handleSearchSelect = (entry: ContactEntry) => {
@@ -522,12 +533,20 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     }
   };
 
-  // ─── CONTACTS MODAL (ACTIVE ONLY) ──────────────────────────────────────────
+  // ─── CONTACTS MODAL ────────────────────────────────────────────────────────
 
-  const activeContacts = filterActive(allContacts);
-  const contactsFiltered = contactsSearchQuery.trim()
-    ? filterActive(searchContacts(allContacts, contactsSearchQuery))
+  const activeContacts = filterActive(allContacts, ALWAYS_INCLUDE_TABS);
+
+  const contactsBeforeSavedFilter = contactsSearchQuery.trim()
+    ? filterActive(searchContacts(allContacts, contactsSearchQuery), ALWAYS_INCLUDE_TABS)
     : activeContacts;
+
+  const contactsFiltered = hideAlreadySaved
+    ? contactsBeforeSavedFilter.filter(c => !savedContactIds.has(c.cnId))
+    : contactsBeforeSavedFilter;
+
+  const newCount   = contactsBeforeSavedFilter.filter(c => !savedContactIds.has(c.cnId)).length;
+  const savedCount = contactsBeforeSavedFilter.filter(c =>  savedContactIds.has(c.cnId)).length;
 
   const toggleContactSelect = (key: string) => {
     setSelectedContactKeys(prev => {
@@ -560,12 +579,31 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
       (currentCC?.displayName || 'contacts').replace(/\s+/g, '_').toLowerCase() +
       '_' + deduped.length;
     downloadVCardBundle(deduped, currentCC?.displayName ?? 'Property Stars', filename);
+
+    // Mark these contractors as saved
+    const idsToMark = deduped.map(c => c.cnId);
+    const updated = markContactsAsSaved(idsToMark, 'add');
+    setSavedContactIds(new Set(updated));
+    setSelectedContactKeys(new Set());
+  };
+
+  const handleUnmarkSaved = (cnId: string) => {
+    const updated = markContactsAsSaved([cnId], 'remove');
+    setSavedContactIds(new Set(updated));
+  };
+
+  const handleMarkAllAsSaved = () => {
+    const idsToMark = activeContacts.map(c => c.cnId);
+    const updated = markContactsAsSaved(idsToMark, 'add');
+    setSavedContactIds(new Set(updated));
+    setConfirmMarkAll(false);
   };
 
   const closeContactsModal = () => {
     setShowContactsModal(false);
     setSelectedContactKeys(new Set());
     setContactsSearchQuery('');
+    setConfirmMarkAll(false);
   };
 
   // ─── GOOGLE CONNECT ────────────────────────────────────────────────────────
@@ -1889,13 +1927,15 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                 <Users size={20} className="text-purple-400" />
                 <div>
                   <h3 className="font-bold text-white">Save Contacts to Phone</h3>
-                  <p className="text-xs text-gray-400 mt-0.5">{activeContacts.length} active · select and download as vCard</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {newCount} new · {savedCount} already saved
+                  </p>
                 </div>
               </div>
               <button onClick={closeContactsModal} className="text-gray-400 hover:text-white"><X size={18} /></button>
             </div>
 
-            {/* Search + Select All */}
+            {/* Search + Toggle Row */}
             <div className="p-3 border-b border-gray-700 space-y-2">
               <div className="bg-gray-900 rounded-lg border border-gray-700 flex items-center gap-2 px-3 py-2">
                 <Search size={14} className="text-gray-400 flex-shrink-0" />
@@ -1910,6 +1950,44 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                   <button onClick={() => setContactsSearchQuery('')} className="text-gray-500 hover:text-white">
                     <X size={14} />
                   </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 flex-wrap">
+                <button
+                  onClick={() => setHideAlreadySaved(prev => !prev)}
+                  className={'flex items-center gap-1.5 text-xs px-2 py-1 rounded border transition-colors ' +
+                    (hideAlreadySaved
+                      ? 'bg-purple-900/30 border-purple-700/60 text-purple-300'
+                      : 'bg-gray-900 border-gray-700 text-gray-400 hover:text-white')}
+                >
+                  <CheckCircle size={12} className={hideAlreadySaved ? 'opacity-100' : 'opacity-30'} />
+                  Hide already saved
+                </button>
+
+                {!confirmMarkAll ? (
+                  <button
+                    onClick={() => setConfirmMarkAll(true)}
+                    className="text-xs text-amber-400 hover:text-amber-300 underline transition-colors"
+                  >
+                    Mark all as already saved
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="text-amber-400">Confirm: mark {activeContacts.length} as saved?</span>
+                    <button
+                      onClick={handleMarkAllAsSaved}
+                      className="px-2 py-0.5 bg-amber-600 hover:bg-amber-500 text-white rounded transition-colors"
+                    >
+                      Yes
+                    </button>
+                    <button
+                      onClick={() => setConfirmMarkAll(false)}
+                      className="px-2 py-0.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -1936,34 +2014,58 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               ) : contactsFiltered.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-gray-500 p-6">
                   <Users size={48} className="mb-3 opacity-20" />
-                  <p className="text-sm">No active matches</p>
+                  <p className="text-sm">
+                    {hideAlreadySaved && savedCount > 0
+                      ? 'No new contractors — everyone is already saved'
+                      : 'No active matches'}
+                  </p>
                 </div>
               ) : (
                 <div className="divide-y divide-gray-700/60">
                   {contactsFiltered.map((entry, idx) => {
                     const key = entry.cnId + '::' + entry.tabName;
                     const checked = selectedContactKeys.has(key);
+                    const isSaved = savedContactIds.has(entry.cnId);
                     return (
-                      <button
+                      <div
                         key={key + '::' + idx}
-                        onClick={() => toggleContactSelect(key)}
-                        className={'w-full text-left p-3 transition-colors flex items-center gap-3 ' + (checked ? 'bg-purple-900/20 hover:bg-purple-900/30' : 'hover:bg-gray-700/50')}
+                        className={'w-full p-3 transition-colors flex items-center gap-3 ' + (checked ? 'bg-purple-900/20' : 'hover:bg-gray-700/50')}
                       >
-                        <div className={'w-5 h-5 rounded border-2 flex-shrink-0 flex items-center justify-center transition-colors ' + (checked ? 'bg-purple-600 border-purple-500' : 'border-gray-600')}>
+                        <button
+                          onClick={() => toggleContactSelect(key)}
+                          className={'w-5 h-5 rounded border-2 flex-shrink-0 flex items-center justify-center transition-colors ' + (checked ? 'bg-purple-600 border-purple-500' : 'border-gray-600 hover:border-gray-400')}
+                        >
                           {checked && <CheckCircle size={14} className="text-white" />}
-                        </div>
-                        <div className="flex-1 min-w-0">
+                        </button>
+                        <button
+                          onClick={() => toggleContactSelect(key)}
+                          className="flex-1 min-w-0 text-left"
+                        >
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-bold text-white text-sm">{entry.firstName} {entry.lastName}</span>
                             <span className="text-[10px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded font-mono">{entry.cnId}</span>
                             <span className="text-[10px] bg-green-900/40 text-green-300 px-1.5 py-0.5 rounded border border-green-700/40">{entry.tabName}</span>
+                            {isSaved && (
+                              <span className="text-[10px] bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded border border-blue-700/40 flex items-center gap-1">
+                                <CheckCircle size={9} /> Saved
+                              </span>
+                            )}
                           </div>
                           <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
                             {entry.cellPhone && <span>📱 {entry.cellPhone}</span>}
                             {entry.altPhone && <span className="text-gray-500">☎️ {entry.altPhone}</span>}
                           </div>
-                        </div>
-                      </button>
+                        </button>
+                        {isSaved && (
+                          <button
+                            onClick={() => handleUnmarkSaved(entry.cnId)}
+                            className="text-[10px] text-gray-500 hover:text-amber-400 underline transition-colors flex-shrink-0"
+                            title="Remove from already-saved list"
+                          >
+                            Unmark
+                          </button>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
