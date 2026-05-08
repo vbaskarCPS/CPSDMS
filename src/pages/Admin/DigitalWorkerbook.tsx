@@ -80,6 +80,7 @@ import {
   loadAllContacts,
   sortContacts,
   searchContacts,
+  filterActive,
   downloadVCardBundle,
   dedupeForSave,
 } from '../../lib/workerbookContactsService';
@@ -501,10 +502,10 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     setError(null);
   };
 
-  // ─── SEARCH / JUMP TO CONTRACTOR ───────────────────────────────────────────
+  // ─── SEARCH / JUMP TO CONTRACTOR (ACTIVE ONLY) ─────────────────────────────
 
   const calendarSearchResults = calendarSearchQuery.trim()
-    ? searchContacts(allContacts, calendarSearchQuery).slice(0, 25)
+    ? filterActive(searchContacts(allContacts, calendarSearchQuery)).slice(0, 25)
     : [];
 
   const handleSearchSelect = (entry: ContactEntry) => {
@@ -521,11 +522,12 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     }
   };
 
-  // ─── CONTACTS MODAL ────────────────────────────────────────────────────────
+  // ─── CONTACTS MODAL (ACTIVE ONLY) ──────────────────────────────────────────
 
+  const activeContacts = filterActive(allContacts);
   const contactsFiltered = contactsSearchQuery.trim()
-    ? searchContacts(allContacts, contactsSearchQuery)
-    : allContacts;
+    ? filterActive(searchContacts(allContacts, contactsSearchQuery))
+    : activeContacts;
 
   const toggleContactSelect = (key: string) => {
     setSelectedContactKeys(prev => {
@@ -1274,7 +1276,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
           {calendarSearchOpen && calendarSearchQuery.trim() && (
             <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-xl shadow-2xl z-20 max-h-96 overflow-y-auto">
               {calendarSearchResults.length === 0 ? (
-                <div className="p-4 text-sm text-gray-500 text-center">No matches</div>
+                <div className="p-4 text-sm text-gray-500 text-center">No active matches</div>
               ) : (
                 calendarSearchResults.map((entry, idx) => (
                   <button
@@ -1287,7 +1289,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                       {entry.cellPhone && (
                         <span className="text-xs text-blue-300">· {entry.cellPhone}</span>
                       )}
-                      <span className={'text-xs px-1.5 py-0.5 rounded font-mono ml-auto ' + (entry.isActive ? 'bg-green-900/40 text-green-300 border border-green-700/40' : 'bg-gray-900 text-gray-500 border border-gray-700')}>
+                      <span className="text-xs px-1.5 py-0.5 rounded font-mono ml-auto bg-green-900/40 text-green-300 border border-green-700/40">
                         {entry.tabName}
                       </span>
                     </div>
@@ -1578,7 +1580,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               {contactsLoading && allContacts.length === 0
                 ? <Loader size={14} className="animate-spin" />
                 : <Users size={14} />}
-              Contacts {allContacts.length > 0 && '(' + allContacts.length + ')'}
+              Contacts {activeContacts.length > 0 && '(' + activeContacts.length + ')'}
             </button>
             <button onClick={loadCalendar} disabled={calendarLoading}
                     className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors disabled:opacity-50">
@@ -1887,7 +1889,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                 <Users size={20} className="text-purple-400" />
                 <div>
                   <h3 className="font-bold text-white">Save Contacts to Phone</h3>
-                  <p className="text-xs text-gray-400 mt-0.5">{allContacts.length} entries · select and download as vCard</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{activeContacts.length} active · select and download as vCard</p>
                 </div>
               </div>
               <button onClick={closeContactsModal} className="text-gray-400 hover:text-white"><X size={18} /></button>
@@ -1934,7 +1936,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
               ) : contactsFiltered.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-gray-500 p-6">
                   <Users size={48} className="mb-3 opacity-20" />
-                  <p className="text-sm">No matches</p>
+                  <p className="text-sm">No active matches</p>
                 </div>
               ) : (
                 <div className="divide-y divide-gray-700/60">
@@ -1954,11 +1956,7 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-bold text-white text-sm">{entry.firstName} {entry.lastName}</span>
                             <span className="text-[10px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded font-mono">{entry.cnId}</span>
-                            {entry.isActive ? (
-                              <span className="text-[10px] bg-green-900/40 text-green-300 px-1.5 py-0.5 rounded border border-green-700/40">ACTIVE · {entry.tabName}</span>
-                            ) : (
-                              <span className="text-[10px] bg-gray-900 text-gray-500 px-1.5 py-0.5 rounded border border-gray-700">{entry.tabName}</span>
-                            )}
+                            <span className="text-[10px] bg-green-900/40 text-green-300 px-1.5 py-0.5 rounded border border-green-700/40">{entry.tabName}</span>
                           </div>
                           <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
                             {entry.cellPhone && <span>📱 {entry.cellPhone}</span>}

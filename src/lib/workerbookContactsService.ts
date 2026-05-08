@@ -80,6 +80,12 @@ export function sortContacts(contacts: ContactEntry[]): ContactEntry[] {
   });
 }
 
+// ─── FILTER TO ACTIVE ONLY ───────────────────────────────────────────────────
+
+export function filterActive(contacts: ContactEntry[]): ContactEntry[] {
+  return contacts.filter(c => c.isActive);
+}
+
 // ─── SEARCH FILTER (NAME OR PHONE) ───────────────────────────────────────────
 
 export function searchContacts(
