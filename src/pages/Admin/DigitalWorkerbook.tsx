@@ -1,5 +1,5 @@
 // src/pages/Admin/DigitalWorkerbook.tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ArrowLeft,
   ChevronLeft,
@@ -26,6 +26,9 @@ import {
   Zap,
   Snowflake,
   Clock,
+  Search,
+  Users,
+  Download,
 } from 'lucide-react';
 import { dialerSheetsService } from '../../lib/dialerSheetsService';
 import { commandCenterService } from '../../lib/commandCenterService';
@@ -72,6 +75,14 @@ import {
   StatusTabName,
 } from '../../lib/workerbookStatusRosterService';
 import { moveContractorRow, isRunInFlight } from '../../lib/workerbookRunService';
+import {
+  ContactEntry,
+  loadAllContacts,
+  sortContacts,
+  searchContacts,
+  downloadVCardBundle,
+  dedupeForSave,
+} from '../../lib/workerbookContactsService';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -282,6 +293,20 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   const [runError, setRunError]         = useState<string | null>(null);
   const [runSuccess, setRunSuccess]     = useState<string | null>(null);
 
+  // ─── CONTACTS / SEARCH STATE ───────────────────────────────────────────────
+
+  const [allContacts, setAllContacts]       = useState<ContactEntry[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [showContactsModal, setShowContactsModal] = useState(false);
+  const [selectedContactKeys, setSelectedContactKeys] = useState<Set<string>>(new Set());
+  const [contactsSearchQuery, setContactsSearchQuery] = useState('');
+
+  const [calendarSearchQuery, setCalendarSearchQuery] = useState('');
+  const [calendarSearchOpen, setCalendarSearchOpen] = useState(false);
+
+  const [scrollToCnId, setScrollToCnId] = useState<string | null>(null);
+  const cardRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+
   // ─── INIT ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -331,6 +356,23 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, activeStatusTab, isConnected, currentCC]);
 
+  // Scroll-to-contractor after day view loads
+  useEffect(() => {
+    if (view !== 'day' || !scrollToCnId || loading || contractors.length === 0) return;
+    const timer = setTimeout(() => {
+      const node = cardRefs.current.get(scrollToCnId);
+      if (node) {
+        node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        node.classList.add('ring-2', 'ring-yellow-400', 'ring-offset-2', 'ring-offset-gray-900');
+        setTimeout(() => {
+          node.classList.remove('ring-2', 'ring-yellow-400', 'ring-offset-2', 'ring-offset-gray-900');
+        }, 2500);
+      }
+      setScrollToCnId(null);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [view, scrollToCnId, loading, contractors]);
+
   // ─── DATA LOADING ──────────────────────────────────────────────────────────
 
   const loadCalendar = useCallback(async () => {
@@ -357,11 +399,29 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
       const groups = groupTabsByMonth(dated, counts);
       setMonthGroups(groups);
+
+      // Kick off background contacts load — calendar UI is already done
+      loadContactsBackground(dated);
     } catch (err: any) {
       setError(err.message || 'Failed to load calendar');
     } finally {
       setCalendarLoading(false);
       setCalendarProgress(null);
+    }
+  }, [currentCC]);
+
+  const loadContactsBackground = useCallback(async (datedTabs: string[]) => {
+    if (!currentCC) return;
+    setContactsLoading(true);
+    try {
+      const statusTabs: StatusTabName[] = ['NS', 'WDR', 'SNOW', 'TNB', 'Q', 'F'];
+      const allTabsToScan = [...datedTabs, ...statusTabs];
+      const contacts = await loadAllContacts(currentCC.workerbookSheetId, allTabsToScan);
+      setAllContacts(sortContacts(contacts));
+    } catch {
+      // non-fatal — Contacts/Search just won't have data
+    } finally {
+      setContactsLoading(false);
     }
   }, [currentCC]);
 
@@ -439,6 +499,71 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     setActiveStatusTab(tabName);
     setView('status');
     setError(null);
+  };
+
+  // ─── SEARCH / JUMP TO CONTRACTOR ───────────────────────────────────────────
+
+  const calendarSearchResults = calendarSearchQuery.trim()
+    ? searchContacts(allContacts, calendarSearchQuery).slice(0, 25)
+    : [];
+
+  const handleSearchSelect = (entry: ContactEntry) => {
+    setCalendarSearchQuery('');
+    setCalendarSearchOpen(false);
+    // status tab vs dated tab
+    const statusTabs: StatusTabName[] = ['NS', 'WDR', 'SNOW', 'TNB', 'Q', 'F'];
+    if (statusTabs.includes(entry.tabName as StatusTabName)) {
+      setScrollToCnId(entry.cnId);
+      openStatusView(entry.tabName as StatusTabName);
+    } else {
+      setScrollToCnId(entry.cnId);
+      openDayView(entry.tabName);
+    }
+  };
+
+  // ─── CONTACTS MODAL ────────────────────────────────────────────────────────
+
+  const contactsFiltered = contactsSearchQuery.trim()
+    ? searchContacts(allContacts, contactsSearchQuery)
+    : allContacts;
+
+  const toggleContactSelect = (key: string) => {
+    setSelectedContactKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleSelectAllVisible = () => {
+    const visibleKeys = contactsFiltered.map(c => c.cnId + '::' + c.tabName);
+    const allSelected = visibleKeys.every(k => selectedContactKeys.has(k));
+    setSelectedContactKeys(prev => {
+      const next = new Set(prev);
+      if (allSelected) {
+        visibleKeys.forEach(k => next.delete(k));
+      } else {
+        visibleKeys.forEach(k => next.add(k));
+      }
+      return next;
+    });
+  };
+
+  const handleSaveSelectedContacts = () => {
+    const selected = allContacts.filter(c => selectedContactKeys.has(c.cnId + '::' + c.tabName));
+    if (!selected.length) return;
+    const deduped = dedupeForSave(selected);
+    const filename =
+      'workerbook_' +
+      (currentCC?.displayName || 'contacts').replace(/\s+/g, '_').toLowerCase() +
+      '_' + deduped.length;
+    downloadVCardBundle(deduped, currentCC?.displayName ?? 'Property Stars', filename);
+  };
+
+  const closeContactsModal = () => {
+    setShowContactsModal(false);
+    setSelectedContactKeys(new Set());
+    setContactsSearchQuery('');
   };
 
   // ─── GOOGLE CONNECT ────────────────────────────────────────────────────────
@@ -879,7 +1004,8 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
     return (
       <div
         key={c.rowNum + ':' + c.cnId}
-        className={'bg-gray-800 rounded-xl border p-4 md:px-4 md:py-3 transition-colors ' + (isConfirmed && opts.showConfirm ? 'border-green-700/50' : 'border-gray-700')}
+        ref={(el) => { cardRefs.current.set(c.cnId, el); }}
+        className={'bg-gray-800 rounded-xl border p-4 md:px-4 md:py-3 transition-all ' + (isConfirmed && opts.showConfirm ? 'border-green-700/50' : 'border-gray-700')}
       >
         {/* PHONE LAYOUT */}
         <div className="md:hidden space-y-3">
@@ -1119,6 +1245,59 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
 
     return (
       <>
+        {/* Search bar — TOP of calendar */}
+        <div className="relative mb-4">
+          <div className="bg-gray-800 rounded-xl border border-gray-700 flex items-center gap-2 px-3 py-2">
+            <Search size={16} className="text-gray-400 flex-shrink-0" />
+            <input
+              type="text"
+              value={calendarSearchQuery}
+              onChange={e => { setCalendarSearchQuery(e.target.value); setCalendarSearchOpen(true); }}
+              onFocus={() => setCalendarSearchOpen(true)}
+              placeholder={contactsLoading ? 'Loading contractors…' : 'Search by name or phone…'}
+              disabled={contactsLoading && allContacts.length === 0}
+              className="flex-1 bg-transparent text-white text-sm placeholder-gray-500 focus:outline-none disabled:opacity-50"
+            />
+            {calendarSearchQuery && (
+              <button
+                onClick={() => { setCalendarSearchQuery(''); setCalendarSearchOpen(false); }}
+                className="text-gray-500 hover:text-white flex-shrink-0"
+              >
+                <X size={16} />
+              </button>
+            )}
+            {contactsLoading && (
+              <Loader size={14} className="animate-spin text-blue-400 flex-shrink-0" />
+            )}
+          </div>
+
+          {calendarSearchOpen && calendarSearchQuery.trim() && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-xl shadow-2xl z-20 max-h-96 overflow-y-auto">
+              {calendarSearchResults.length === 0 ? (
+                <div className="p-4 text-sm text-gray-500 text-center">No matches</div>
+              ) : (
+                calendarSearchResults.map((entry, idx) => (
+                  <button
+                    key={entry.cnId + '::' + entry.tabName + '::' + idx}
+                    onClick={() => handleSearchSelect(entry)}
+                    className="w-full text-left px-3 py-2.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-b-0 transition-colors"
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-white text-sm">{entry.firstName} {entry.lastName}</span>
+                      {entry.cellPhone && (
+                        <span className="text-xs text-blue-300">· {entry.cellPhone}</span>
+                      )}
+                      <span className={'text-xs px-1.5 py-0.5 rounded font-mono ml-auto ' + (entry.isActive ? 'bg-green-900/40 text-green-300 border border-green-700/40' : 'bg-gray-900 text-gray-500 border border-gray-700')}>
+                        {entry.tabName}
+                      </span>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Status tiles — 2x2 grid: NS+WDR top, SNOW+TNB bottom */}
         <div className="grid grid-cols-2 gap-3 mb-4">
           <button
@@ -1391,6 +1570,16 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
             </h1>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setShowContactsModal(true)}
+              disabled={contactsLoading && allContacts.length === 0}
+              className="flex items-center gap-1.5 px-3 py-2 bg-purple-700 hover:bg-purple-600 text-white rounded-lg border border-purple-600 text-xs transition-colors disabled:opacity-50"
+            >
+              {contactsLoading && allContacts.length === 0
+                ? <Loader size={14} className="animate-spin" />
+                : <Users size={14} />}
+              Contacts {allContacts.length > 0 && '(' + allContacts.length + ')'}
+            </button>
             <button onClick={loadCalendar} disabled={calendarLoading}
                     className="flex items-center gap-1.5 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg border border-gray-600 text-xs transition-colors disabled:opacity-50">
               <RefreshCw size={14} className={calendarLoading ? 'animate-spin' : ''} /> Refresh
@@ -1504,6 +1693,9 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
   };
 
   // ─── MAIN VIEW ─────────────────────────────────────────────────────────────
+
+  const visibleSelectedCount = contactsFiltered.filter(c => selectedContactKeys.has(c.cnId + '::' + c.tabName)).length;
+  const allVisibleSelected = contactsFiltered.length > 0 && visibleSelectedCount === contactsFiltered.length;
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
@@ -1681,6 +1873,122 @@ const DigitalWorkerbook: React.FC<Props> = ({ onBack }) => {
                 {movingTo ? <Loader size={14} className="animate-spin" /> : <Zap size={14} />}
                 {movingTo ? 'Moving...' : 'Apply'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Contacts Modal */}
+      {showContactsModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-2xl h-[90vh] flex flex-col">
+            <div className="p-4 border-b border-gray-700 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Users size={20} className="text-purple-400" />
+                <div>
+                  <h3 className="font-bold text-white">Save Contacts to Phone</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">{allContacts.length} entries · select and download as vCard</p>
+                </div>
+              </div>
+              <button onClick={closeContactsModal} className="text-gray-400 hover:text-white"><X size={18} /></button>
+            </div>
+
+            {/* Search + Select All */}
+            <div className="p-3 border-b border-gray-700 space-y-2">
+              <div className="bg-gray-900 rounded-lg border border-gray-700 flex items-center gap-2 px-3 py-2">
+                <Search size={14} className="text-gray-400 flex-shrink-0" />
+                <input
+                  type="text"
+                  value={contactsSearchQuery}
+                  onChange={e => setContactsSearchQuery(e.target.value)}
+                  placeholder="Filter by name or phone…"
+                  className="flex-1 bg-transparent text-white text-sm placeholder-gray-500 focus:outline-none"
+                />
+                {contactsSearchQuery && (
+                  <button onClick={() => setContactsSearchQuery('')} className="text-gray-500 hover:text-white">
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={toggleSelectAllVisible}
+                  className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                >
+                  {allVisibleSelected ? 'Deselect all visible' : 'Select all visible'} ({contactsFiltered.length})
+                </button>
+                <span className="text-xs text-gray-500">
+                  {selectedContactKeys.size} selected
+                </span>
+              </div>
+            </div>
+
+            {/* List */}
+            <div className="flex-1 overflow-y-auto">
+              {contactsLoading && allContacts.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                  <Loader className="animate-spin mb-3 text-blue-400" size={32} />
+                  <p className="text-sm">Loading contractors from all tabs…</p>
+                </div>
+              ) : contactsFiltered.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-500 p-6">
+                  <Users size={48} className="mb-3 opacity-20" />
+                  <p className="text-sm">No matches</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-gray-700/60">
+                  {contactsFiltered.map((entry, idx) => {
+                    const key = entry.cnId + '::' + entry.tabName;
+                    const checked = selectedContactKeys.has(key);
+                    return (
+                      <button
+                        key={key + '::' + idx}
+                        onClick={() => toggleContactSelect(key)}
+                        className={'w-full text-left p-3 transition-colors flex items-center gap-3 ' + (checked ? 'bg-purple-900/20 hover:bg-purple-900/30' : 'hover:bg-gray-700/50')}
+                      >
+                        <div className={'w-5 h-5 rounded border-2 flex-shrink-0 flex items-center justify-center transition-colors ' + (checked ? 'bg-purple-600 border-purple-500' : 'border-gray-600')}>
+                          {checked && <CheckCircle size={14} className="text-white" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-white text-sm">{entry.firstName} {entry.lastName}</span>
+                            <span className="text-[10px] bg-gray-700 text-gray-400 px-1.5 py-0.5 rounded font-mono">{entry.cnId}</span>
+                            {entry.isActive ? (
+                              <span className="text-[10px] bg-green-900/40 text-green-300 px-1.5 py-0.5 rounded border border-green-700/40">ACTIVE · {entry.tabName}</span>
+                            ) : (
+                              <span className="text-[10px] bg-gray-900 text-gray-500 px-1.5 py-0.5 rounded border border-gray-700">{entry.tabName}</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
+                            {entry.cellPhone && <span>📱 {entry.cellPhone}</span>}
+                            {entry.altPhone && <span className="text-gray-500">☎️ {entry.altPhone}</span>}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-gray-700 flex items-center justify-between gap-2">
+              <div className="text-xs text-gray-400">
+                {selectedContactKeys.size > 0
+                  ? 'Tap Download — open the .vcf from your notification to save to Contacts'
+                  : 'Select contractors to download'}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={closeContactsModal} className="px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors">Close</button>
+                <button
+                  onClick={handleSaveSelectedContacts}
+                  disabled={selectedContactKeys.size === 0}
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
+                >
+                  <Download size={14} /> Download ({selectedContactKeys.size})
+                </button>
+              </div>
             </div>
           </div>
         </div>
