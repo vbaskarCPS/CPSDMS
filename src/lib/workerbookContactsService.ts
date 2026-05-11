@@ -23,48 +23,62 @@ export interface LoadProgress {
   tabName: string;
 }
 
-// ─── FETCH ALL CONTRACTORS ACROSS ALL TABS ───────────────────────────────────
+// ─── FETCH ALL CONTRACTORS ACROSS ALL TABS (BATCHED) ─────────────────────────
+//
+// Uses ONE sheetsBatchGet call instead of looping with sheetsGet per tab.
+// Cuts API requests from ~50+ down to 1, eliminating quota-cap problems.
+//
 
 export async function loadAllContacts(
   sheetId: string,
   tabs: string[],
   onProgress?: (p: LoadProgress) => void,
 ): Promise<ContactEntry[]> {
+  if (tabs.length === 0) return [];
+
+  // Build all ranges up front, in the same order as tabs
+  const ranges = tabs.map(t => "'" + t + "'!A3:S500");
+
+  onProgress?.({ current: 0, total: tabs.length, tabName: 'Fetching all tabs…' });
+
+  let allTabRows: any[][][];
+  try {
+    allTabRows = await dialerSheetsService.sheetsBatchGet(sheetId, ranges);
+  } catch (err) {
+    console.warn('[workerbookContactsService] batchGet failed:', err);
+    return [];
+  }
+
   const results: ContactEntry[] = [];
 
+  // Walk results in tab order — batchGet returns ranges in same order as input
   for (let i = 0; i < tabs.length; i++) {
     const tabName = tabs[i];
+    const rows = allTabRows[i] || [];
+
     onProgress?.({ current: i + 1, total: tabs.length, tabName });
 
-    try {
-      const rows = await dialerSheetsService.sheetsGet(
-        sheetId, "'" + tabName + "'!A3:S200",
-      );
+    rows.forEach(row => {
+      const cnId = String(row[1] ?? '').trim();
+      if (!cnId) return;
 
-      rows.forEach(row => {
-        const cnId = String(row[1] ?? '').trim();
-        if (!cnId) return;
+      const nextDay = String(row[11] ?? '').trim();
+      const isActive = !nextDay.toLowerCase().startsWith('to:');
 
-        const nextDay = String(row[11] ?? '').trim();
-        const isActive = !nextDay.toLowerCase().startsWith('to:');
-
-        results.push({
-          cnId,
-          firstName: String(row[2]  ?? '').trim(),
-          lastName:  String(row[3]  ?? '').trim(),
-          cellPhone: String(row[4]  ?? '').trim(),
-          altPhone:  String(row[16] ?? '').trim(),
-          email:     String(row[17] ?? '').trim(),
-          shuttle:   String(row[0]  ?? '').trim(),
-          team:      String(row[8]  ?? '').trim(),
-          tabName,
-          isActive,
-          nextDay,
-        });
+      results.push({
+        cnId,
+        firstName: String(row[2]  ?? '').trim(),
+        lastName:  String(row[3]  ?? '').trim(),
+        cellPhone: String(row[4]  ?? '').trim(),
+        altPhone:  String(row[16] ?? '').trim(),
+        email:     String(row[17] ?? '').trim(),
+        shuttle:   String(row[0]  ?? '').trim(),
+        team:      String(row[8]  ?? '').trim(),
+        tabName,
+        isActive,
+        nextDay,
       });
-    } catch {
-      // skip tabs that fail — don't break the whole load
-    }
+    });
   }
 
   return results;
