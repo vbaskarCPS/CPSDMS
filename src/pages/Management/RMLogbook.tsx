@@ -1,7 +1,7 @@
 // src/pages/Management/RMLogbook.tsx
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock, Lock, Unlock, Leaf } from 'lucide-react';
+import { Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock, Lock, Unlock, Leaf, CreditCard } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { ManagementUser, DailySessionData, LogsheetSession, SeasonType } from '../../types';
 import { sessionService } from '../../lib/sessionService';
@@ -11,6 +11,7 @@ import { subscribeAsRouteManager } from '../../lib/realtimeService';
 import RMTeamTab from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
 import RMMapTab from './components/RMMapTab';
+import BamboraTransactionsModal from '../../components/BamboraTransactionsModal';
 
 export interface TabStats {
   totalSteps: number;
@@ -37,6 +38,9 @@ const RMLogbook: React.FC = () => {
   
   // Digital Mapping State
   const [digitalMappingEnabled, setDigitalMappingEnabled] = useState(false);
+
+  // Bambora Transactions Modal State
+  const [showTransactionsModal, setShowTransactionsModal] = useState(false);
   
   // Initialize Stats
   const [stats, setStats] = useState<TabStats>({
@@ -267,8 +271,17 @@ const RMLogbook: React.FC = () => {
             )}
           </div>
 
-          {/* Right: Lock Button + Tabs */}
+          {/* Right: Transactions Button + Lock Button + Tabs */}
           <div className="flex items-center gap-2">
+            {/* Bambora Transactions Button */}
+            <button
+              onClick={() => setShowTransactionsModal(true)}
+              className="flex items-center justify-center w-9 h-9 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white transition-all"
+              title="View Today's Card Transactions"
+            >
+              <CreditCard size={16} />
+            </button>
+
             {/* Lock Toggle Button */}
             <button
               onClick={handleToggleLock}
@@ -435,6 +448,14 @@ const RMLogbook: React.FC = () => {
           />
         )}
       </div>
+
+      {/* Bambora Transactions Modal */}
+      {showTransactionsModal && (
+        <BamboraTransactionsModal
+          sessionDate={dailyData.date}
+          onClose={() => setShowTransactionsModal(false)}
+        />
+      )}
     </div>
   );
 };
