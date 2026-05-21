@@ -1,7 +1,7 @@
 // src/pages/Logsheet/NewJob.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap, Info } from 'lucide-react';
+import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap, Info, Shovel } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { commandCenterService, getTaxRateForRegion, Region } from '../../lib/commandCenterService';
 import { 
@@ -47,6 +47,38 @@ function capitalizeWords(value: string): string {
         .join('-')
     )
     .join(' ');
+}
+
+// --- HELPER: Get the property type button list for a given season ---
+// Aeration & Lawn Rejuv use FP/FO/BO. Sealing uses SS/SSP (Ramp is in the enum
+// but reserved for a separate future plan).
+// TODO: When Central 'cleaning' season ships, add its property types here.
+function getPropertyTypesForSeason(seasonType: SeasonType): string[] {
+  if (seasonType === 'sealing') return ['SS', 'SSP'];
+  return ['FP', 'FO', 'BO'];
+}
+
+// --- HELPER: Get the default property type for a given season ---
+function getDefaultPropertyTypeForSeason(seasonType: SeasonType): string {
+  if (seasonType === 'sealing') return 'SS';
+  return 'FP';
+}
+
+// --- HELPER: Get the transaction item/service name for a given season ---
+// TODO: When 'cleaning' season ships, return 'Cleaning' for it.
+function getItemNameForSeason(seasonType: SeasonType): string {
+  if (seasonType === 'lawn_rejuv') return 'Lawn Rejuvenation';
+  if (seasonType === 'sealing') return 'Sealing';
+  return 'Aeration';
+}
+
+// --- HELPER: Build the seasonId stamp for a transaction ---
+// Format: `<region>-<season-slug>` (e.g. 'west-aeration', 'east-sealing', 'west-lawn-rejuv')
+function buildSeasonId(region: Region, seasonType: SeasonType): string {
+  const regionSlug = region.toLowerCase();
+  if (seasonType === 'lawn_rejuv') return `${regionSlug}-lawn-rejuv`;
+  if (seasonType === 'sealing') return `${regionSlug}-sealing`;
+  return `${regionSlug}-aeration`;
 }
 
 // --- SERVICE TOGGLE COLORS (Lawn Rejuv) ---
@@ -120,10 +152,10 @@ const NewJob: React.FC = () => {
   const [region, setRegion] = useState<Region>('West');
   const [taxRate, setTaxRate] = useState(5);
 
-  // --- Season type state (for Lawn Rejuv support) ---
+  // --- Season type state (supports aeration | lawn_rejuv | sealing) ---
   const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
 
-  // NEW: Live Card Processing flag (production only, stays false in training)
+  // Live Card Processing flag (production only, stays false in training)
   const [liveCardEnabled, setLiveCardEnabled] = useState(false);
 
   // --- Form State ---
@@ -196,6 +228,13 @@ const NewJob: React.FC = () => {
 
   // --- COMPUTED: Can show upgrade button (West only, Aeration season only) ---
   const canShowUpgradeButton = region === 'West' && seasonType === 'aeration';
+
+  // --- COMPUTED: Property type list for the current season ---
+  const propertyTypeOptions = getPropertyTypesForSeason(seasonType);
+
+  // --- COMPUTED: Does this season hide the upsell-style "Services" header? ---
+  // Lawn Rejuv and Sealing both use the simpler "Pricing" label.
+  const seasonUsesPricingOnlyLabel = seasonType === 'lawn_rejuv' || seasonType === 'sealing';
 
   // --- COMPUTED: Get customer address for E-Transfer protocol ---
   const getCustomerAddress = (): string => {
@@ -341,15 +380,18 @@ const NewJob: React.FC = () => {
           const currentSeasonType = await sessionService.getSessionSeasonType();
           setSeasonType(currentSeasonType);
           
-          // Default price to 0 for lawn_rejuv
-          if (currentSeasonType === 'lawn_rejuv') {
+          // Default property type based on season
+          setPropertyType(getDefaultPropertyTypeForSeason(currentSeasonType));
+          
+          // Default price to 0 for lawn_rejuv and sealing (worker fills in manually)
+          if (currentSeasonType === 'lawn_rejuv' || currentSeasonType === 'sealing') {
             setAmount('0');
           }
         } catch (err) {
           console.warn('Could not get season type, defaulting to aeration');
         }
 
-        // NEW: Get live card processing setting from session
+        // Get live card processing setting from session
         try {
           const liveCard = await sessionService.getSessionLiveCardEnabled();
           setLiveCardEnabled(liveCard);
@@ -536,6 +578,7 @@ const NewJob: React.FC = () => {
       
       const newTransactionId = generateUUID();
       const placeholderJobId = `NEW-${Date.now()}`;
+      const itemName = getItemNameForSeason(seasonType);
 
       const transactionData: SessionTransaction = {
           id: newTransactionId,
@@ -555,7 +598,7 @@ const NewJob: React.FC = () => {
           price: transactionPrice,
           displayPrice: isSplitPayment ? transactionPrice.toFixed(2) : amount, 
           type: 'Sale',
-          items: [{ name: seasonType === 'lawn_rejuv' ? 'Lawn Rejuvenation' : 'Aeration', price: transactionPrice }],
+          items: [{ name: itemName, price: transactionPrice }],
           paymentMethod: finalPaymentMethod,
           paymentBreakdown: paymentBreakdown,
           isPaid: finalPaymentMethod !== 'Billed',
@@ -567,7 +610,7 @@ const NewJob: React.FC = () => {
           itemDescription: 'New Sale',
           serviceType: propertyType as any, 
           region: region, 
-          seasonId: `${region.toLowerCase()}-${seasonType === 'lawn_rejuv' ? 'lawn-rejuv' : 'aeration'}`,
+          seasonId: buildSeasonId(region, seasonType),
           isWestSplit: false,
           
           // Include services for Lawn Rejuv season
@@ -617,9 +660,16 @@ const NewJob: React.FC = () => {
                 <GraduationCap size={10}/> Training
               </span>
             )}
+            {/* Season badge — 3-way branch: lawn_rejuv | sealing | (none for aeration) */}
+            {/* TODO: Add a 'cleaning' branch here once Central Cleaning ships. */}
             {seasonType === 'lawn_rejuv' && (
               <span className="bg-green-900/30 text-green-400 text-[10px] px-1.5 py-0.5 rounded border border-green-700">
                 LAWN REJUV
+              </span>
+            )}
+            {seasonType === 'sealing' && (
+              <span className="bg-slate-800 text-slate-300 text-[10px] px-1.5 py-0.5 rounded border border-slate-600 flex items-center gap-1">
+                <Shovel size={10}/> SEALING
               </span>
             )}
           </div>
@@ -710,14 +760,14 @@ const NewJob: React.FC = () => {
 
             <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-700/50">
                 <h3 className="text-sm font-bold text-gray-300 uppercase mb-3">
-                  {seasonType === 'lawn_rejuv' ? 'Pricing' : 'Services & Pricing'}
+                  {seasonUsesPricingOnlyLabel ? 'Pricing' : 'Services & Pricing'}
                 </h3>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">
                           Total Amount ($)
-                          {seasonType === 'lawn_rejuv' && (
+                          {seasonUsesPricingOnlyLabel && (
                             <span className="text-gray-600 font-normal ml-1">(Default: $0 for manual)</span>
                           )}
                         </label>
@@ -743,7 +793,7 @@ const NewJob: React.FC = () => {
                     <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Property Type</label>
                         <div className="flex bg-gray-700 rounded-md border border-gray-600 overflow-hidden">
-                            {['FP', 'FO', 'BO'].map(type => (
+                            {propertyTypeOptions.map(type => (
                                 <button key={type} type="button" onClick={() => setPropertyType(type)} className={`flex-1 py-2 text-xs font-bold transition-colors ${propertyType === type ? 'bg-cps-blue text-white' : 'text-gray-400 hover:bg-gray-600'}`}>{type}</button>
                             ))}
                         </div>

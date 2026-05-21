@@ -22,6 +22,7 @@ import {
   Building2,
   Leaf,
   Wind,
+  Shovel,
   Package,
   UserPlus,
   GraduationCap,
@@ -120,7 +121,7 @@ const SessionCommandCenter: React.FC = () => {
   // NEW: Live Card Processing toggle
   const [liveCardEnabled, setLiveCardEnabled] = useState(false);
 
-  // NEW: No Tax on Cash toggle (Rejuv only, default ON)
+  // No Tax on Cash toggle (Rejuv + Sealing, default ON)
   const [noTaxOnCash, setNoTaxOnCash] = useState(true);
 
   // --- ADD ADDITIONAL STATE ---
@@ -133,13 +134,18 @@ const SessionCommandCenter: React.FC = () => {
     bookingsAdded: number;
   } | null>(null);
 
-  // --- SEASON TYPE STATE (West Region Only) ---
+  // --- SEASON TYPE STATE ---
+  // West picker: Aeration + Rejuv
+  // East picker: Aeration + Sealing
+  // Central: no picker, defaults silently to Aeration
+  // TODO: When Central Cleaning ships, Central will also show a picker (Aeration + Cleaning).
   const [selectedSeasonType, setSelectedSeasonType] = useState<SeasonType>('aeration');
   const canSelectSeason = currentCC ? regionHasSeasonSelection(currentCC.region) : false;
 
-  // --- PRODUCT COST STATE (Lawn Rejuv Only) ---
+  // --- PRODUCT COST STATE (Rejuv + Sealing) ---
+  // Default to aeration's value (0%) for safety. Updated by useEffect when season changes.
   const [productCostPercent, setProductCostPercent] = useState<number>(
-    SEASON_CONFIGS['lawn_rejuv'].defaultProductCostPercent
+    SEASON_CONFIGS['aeration'].defaultProductCostPercent
   );
 
   // Update product cost when season type changes
@@ -176,6 +182,12 @@ const SessionCommandCenter: React.FC = () => {
   // Computed: Has digital mapping enabled
   const hasDigitalMapping = currentCC?.digitalMappingEnabled || false;
 
+  // Computed: Does the currently-selected season use product cost + no-tax-on-cash toggle?
+  // Today: lawn_rejuv (Rejuv) + sealing (Sealing) share these features.
+  // TODO: When 'cleaning' season is added, include it here too if Cleaning has product cost.
+  const seasonUsesProductCost = selectedSeasonType === 'lawn_rejuv' || selectedSeasonType === 'sealing';
+  const seasonUsesNoTaxOnCash = selectedSeasonType === 'lawn_rejuv' || selectedSeasonType === 'sealing';
+
   // Load session function (memoized to avoid recreation)
   const loadSession = useCallback(async () => {
     if (!currentCC) return;
@@ -206,12 +218,12 @@ const SessionCommandCenter: React.FC = () => {
           setProductCostPercent(meta.productCostPercent);
         }
 
-        // NEW: Load live card setting from meta
+        // Load live card setting from meta
         if (meta?.liveCardProcessingEnabled !== undefined) {
           setLiveCardEnabled(meta.liveCardProcessingEnabled);
         }
 
-        // NEW: Load no-tax-on-cash setting from meta
+        // Load no-tax-on-cash setting from meta
         if (meta?.noTaxOnCash !== undefined) {
           setNoTaxOnCash(meta.noTaxOnCash);
         }
@@ -273,7 +285,7 @@ const SessionCommandCenter: React.FC = () => {
         seasonType: selectedSeasonType,
         productCostPercent: productCostPercent,
         liveCardProcessingEnabled: liveCardEnabled,
-        noTaxOnCash: selectedSeasonType === 'lawn_rejuv' ? noTaxOnCash : undefined,
+        noTaxOnCash: seasonUsesNoTaxOnCash ? noTaxOnCash : undefined,
       } as ImportMeta;
       data.seasonType = selectedSeasonType;
       setPreviewData(data);
@@ -330,7 +342,7 @@ const SessionCommandCenter: React.FC = () => {
       if ((data as any)._importMeta) {
         (data as any)._importMeta.productCostPercent = productCostPercent;
         (data as any)._importMeta.liveCardProcessingEnabled = liveCardEnabled;
-        (data as any)._importMeta.noTaxOnCash = selectedSeasonType === 'lawn_rejuv' ? noTaxOnCash : undefined;
+        (data as any)._importMeta.noTaxOnCash = seasonUsesNoTaxOnCash ? noTaxOnCash : undefined;
       }
       
       setPreviewData(data);
@@ -413,11 +425,11 @@ const SessionCommandCenter: React.FC = () => {
         // Ensure productCostPercent is set
         meta.productCostPercent = productCostPercent;
 
-        // NEW: Stamp live card setting into meta
+        // Stamp live card setting into meta
         meta.liveCardProcessingEnabled = liveCardEnabled;
 
-        // NEW: Stamp no-tax-on-cash into meta (Rejuv only)
-        meta.noTaxOnCash = selectedSeasonType === 'lawn_rejuv' ? noTaxOnCash : undefined;
+        // Stamp no-tax-on-cash into meta (Rejuv + Sealing only)
+        meta.noTaxOnCash = seasonUsesNoTaxOnCash ? noTaxOnCash : undefined;
         
         // Ensure season type is set
         previewData.seasonType = selectedSeasonType;
@@ -490,6 +502,7 @@ const SessionCommandCenter: React.FC = () => {
         setImportMeta(null);
         setSheetsExportResult(null);
         setDateTab('');
+        // Reset to aeration (the safe default for all regions — West, Central, East all support it)
         setSelectedSeasonType('aeration');
         setProductCostPercent(SEASON_CONFIGS['aeration'].defaultProductCostPercent);
         setLiveCardEnabled(false);
@@ -594,6 +607,20 @@ const SessionCommandCenter: React.FC = () => {
     return <DigitalWorkerbook onBack={() => setShowDigitalWorkerbook(false)} />;
   }
 
+  // Helper for active-session header badge styling
+  // TODO: When 'cleaning' season ships, add a 4th branch here for cleaning badges.
+  const getSeasonBadgeClasses = (seasonType?: SeasonType): string => {
+    if (seasonType === 'lawn_rejuv') return 'bg-green-900/30 text-green-400 border-green-700/50';
+    if (seasonType === 'sealing') return 'bg-slate-800 text-slate-300 border-slate-600';
+    return 'bg-blue-900/30 text-blue-400 border-blue-700/50';
+  };
+
+  const getSeasonBadgeIcon = (seasonType?: SeasonType) => {
+    if (seasonType === 'lawn_rejuv') return <Leaf size={12} />;
+    if (seasonType === 'sealing') return <Shovel size={12} />;
+    return <Wind size={12} />;
+  };
+
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4">
       <div className="max-w-6xl mx-auto">
@@ -636,32 +663,28 @@ const SessionCommandCenter: React.FC = () => {
                 <span className="text-xs text-gray-500">{currentCC.displayName}</span>
               )}
             </div>
-            {/* Season Type Badge for Active Session */}
+            {/* Season Type Badge for Active Session — 3-way branch for aeration / lawn_rejuv / sealing */}
             {currentSessionSeasonConfig && (
-              <span className={`text-xs px-2 py-0.5 rounded border flex items-center gap-1 ${
-                currentSession?.seasonType === 'lawn_rejuv'
-                  ? 'bg-green-900/30 text-green-400 border-green-700/50'
-                  : 'bg-blue-900/30 text-blue-400 border-blue-700/50'
-              }`}>
-                {currentSession?.seasonType === 'lawn_rejuv' ? <Leaf size={12} /> : <Wind size={12} />}
+              <span className={`text-xs px-2 py-0.5 rounded border flex items-center gap-1 ${getSeasonBadgeClasses(currentSession?.seasonType)}`}>
+                {getSeasonBadgeIcon(currentSession?.seasonType)}
                 {currentSessionSeasonConfig.displayName}
               </span>
             )}
-            {/* Product Cost Badge for Active Session (Lawn Rejuv only) */}
-            {currentSession?.seasonType === 'lawn_rejuv' && importMeta?.productCostPercent !== undefined && (
+            {/* Product Cost Badge for Active Session (Rejuv + Sealing only) */}
+            {(currentSession?.seasonType === 'lawn_rejuv' || currentSession?.seasonType === 'sealing') && importMeta?.productCostPercent !== undefined && (
               <span className="text-xs px-2 py-0.5 rounded border bg-orange-900/30 text-orange-400 border-orange-700/50 flex items-center gap-1">
                 <Package size={12} />
                 {importMeta.productCostPercent}% Product Cost
               </span>
             )}
-            {/* NEW: Live Cards badge for active session */}
+            {/* Live Cards badge for active session */}
             {importMeta?.liveCardProcessingEnabled && (
               <span className="text-xs px-2 py-0.5 rounded border bg-purple-900/30 text-purple-400 border-purple-700/50 flex items-center gap-1">
                 <CreditCard size={12} />
                 Live Cards
               </span>
             )}
-            {/* NEW: No Tax on Cash badge for active session */}
+            {/* No Tax on Cash badge for active session */}
             {importMeta?.noTaxOnCash && (
               <span className="text-xs px-2 py-0.5 rounded border bg-green-900/30 text-green-400 border-green-700/50 flex items-center gap-1">
                 <Banknote size={12} />
@@ -784,13 +807,16 @@ const SessionCommandCenter: React.FC = () => {
                         <h2 className="text-xl font-bold text-white mb-2 text-center">Initialize New Session</h2>
                         <p className="text-gray-400 text-sm mb-6 text-center">Import from Google Sheets to generate assignments.</p>
                         
-                        {/* SEASON TYPE SELECTOR (West Region Only) */}
+                        {/* SEASON TYPE SELECTOR (West + East) */}
+                        {/* West shows Aeration + Rejuv. East shows Aeration + Sealing. Central shows nothing. */}
+                        {/* TODO: When Central Cleaning ships, add an Aeration + Cleaning branch here. */}
                         {canSelectSeason && (
                           <div className="mb-6">
                             <label className="block text-sm font-medium text-gray-400 mb-2">
                               Season Type
                             </label>
                             <div className="grid grid-cols-2 gap-3">
+                              {/* Aeration button is shown for ALL regions that support season selection (West + East today) */}
                               <button
                                 onClick={() => setSelectedSeasonType('aeration')}
                                 className={`p-4 rounded-lg border-2 transition-all flex flex-col items-center gap-2 ${
@@ -805,24 +831,48 @@ const SessionCommandCenter: React.FC = () => {
                                   $8/EQ • SP/RJ Flats • 50% Prepaid
                                 </span>
                               </button>
-                              <button
-                                onClick={() => setSelectedSeasonType('lawn_rejuv')}
-                                className={`p-4 rounded-lg border-2 transition-all flex flex-col items-center gap-2 ${
-                                  selectedSeasonType === 'lawn_rejuv'
-                                    ? 'border-green-500 bg-green-900/20 text-green-300'
-                                    : 'border-gray-600 bg-gray-900 text-gray-400 hover:border-gray-500'
-                                }`}
-                              >
-                                <Leaf size={24} className={selectedSeasonType === 'lawn_rejuv' ? 'text-green-400' : 'text-gray-500'} />
-                                <span className="font-bold">Lawn Rejuv</span>
-                                <span className="text-[10px] text-gray-500">
-                                  Teams • $6-8/EQ • FSL Flat • 70% Prepaid
-                                </span>
-                              </button>
+
+                              {/* West region: Rejuv button */}
+                              {currentCC.region === 'West' && (
+                                <button
+                                  onClick={() => setSelectedSeasonType('lawn_rejuv')}
+                                  className={`p-4 rounded-lg border-2 transition-all flex flex-col items-center gap-2 ${
+                                    selectedSeasonType === 'lawn_rejuv'
+                                      ? 'border-green-500 bg-green-900/20 text-green-300'
+                                      : 'border-gray-600 bg-gray-900 text-gray-400 hover:border-gray-500'
+                                  }`}
+                                >
+                                  <Leaf size={24} className={selectedSeasonType === 'lawn_rejuv' ? 'text-green-400' : 'text-gray-500'} />
+                                  <span className="font-bold">Lawn Rejuv</span>
+                                  <span className="text-[10px] text-gray-500">
+                                    Teams • $7-9/EQ • FSL Flat • 60% Prepaid
+                                  </span>
+                                </button>
+                              )}
+
+                              {/* East region: Sealing button */}
+                              {currentCC.region === 'East' && (
+                                <button
+                                  onClick={() => setSelectedSeasonType('sealing')}
+                                  className={`p-4 rounded-lg border-2 transition-all flex flex-col items-center gap-2 ${
+                                    selectedSeasonType === 'sealing'
+                                      ? 'border-slate-400 bg-slate-700/30 text-slate-200'
+                                      : 'border-gray-600 bg-gray-900 text-gray-400 hover:border-gray-500'
+                                  }`}
+                                >
+                                  <Shovel size={24} className={selectedSeasonType === 'sealing' ? 'text-slate-300' : 'text-gray-500'} />
+                                  <span className="font-bold">Sealing</span>
+                                  <span className="text-[10px] text-gray-500">
+                                    Teams • $6-8/EQ • No Flats • 50% Prepaid
+                                  </span>
+                                </button>
+                              )}
+
+                              {/* TODO: Central region Cleaning button goes here once coded */}
                             </div>
                             
-                            {/* PRODUCT COST INPUT (Lawn Rejuv Only) */}
-                            {selectedSeasonType === 'lawn_rejuv' && (
+                            {/* PRODUCT COST INPUT (Rejuv + Sealing) */}
+                            {seasonUsesProductCost && (
                               <div className="mt-4 p-4 rounded-lg border border-orange-700/50 bg-orange-900/10">
                                 <label className="flex items-center gap-2 text-sm font-medium text-orange-300 mb-2">
                                   <Package size={16} />
@@ -848,22 +898,31 @@ const SessionCommandCenter: React.FC = () => {
                               </div>
                             )}
                             
-                            {/* Season Info Banner */}
+                            {/* Season Info Banner — 3-way branch */}
                             <div className={`mt-3 p-3 rounded-lg border text-xs ${
                               selectedSeasonType === 'lawn_rejuv'
                                 ? 'bg-green-900/10 border-green-700/50 text-green-300'
+                                : selectedSeasonType === 'sealing'
+                                ? 'bg-slate-800/40 border-slate-600 text-slate-200'
                                 : 'bg-blue-900/10 border-blue-700/50 text-blue-300'
                             }`}>
                               <div className="font-bold mb-1">{seasonConfig.displayName}</div>
                               <div className="text-gray-400 space-y-0.5">
                                 <div>• EQ Calculation: prodPayable / {EQ_DIVISOR} (always)</div>
-                                <div>• Payout Rate: ${seasonConfig.payoutRateSolo}/EQ solo{selectedSeasonType === 'lawn_rejuv' ? `, $${seasonConfig.payoutRateTeam}/EQ team (2+)` : ''}</div>
+                                <div>• Payout Rate: ${seasonConfig.payoutRateSolo}/EQ solo{seasonConfig.payoutRateTeam !== seasonConfig.payoutRateSolo ? `, $${seasonConfig.payoutRateTeam}/EQ team (2+)` : ''}</div>
                                 <div>• Prepaid Weight: {seasonConfig.prepaidWeight * 100}%</div>
-                                <div>• Office Flats: {seasonConfig.officeFlats.map(f => `${f.code} ($${f.value})`).join(', ')}</div>
+                                <div>• Office Flats: {seasonConfig.officeFlats.length > 0 ? seasonConfig.officeFlats.map(f => `${f.code} ($${f.value})`).join(', ') : 'None'}</div>
                                 {selectedSeasonType === 'lawn_rejuv' && (
                                   <>
                                     <div>• Product Cost: {productCostPercent}% deduction</div>
                                     <div>• Services: A/D/F/S/L (Aeration, Dethatch, Fertilizer, Seed, Lime)</div>
+                                  </>
+                                )}
+                                {selectedSeasonType === 'sealing' && (
+                                  <>
+                                    <div>• Product Cost: {productCostPercent}% deduction</div>
+                                    <div>• Property Types: SS, SSP</div>
+                                    <div>• No upgrades, no add-ons</div>
                                   </>
                                 )}
                               </div>
@@ -1185,7 +1244,7 @@ const SessionCommandCenter: React.FC = () => {
                                   </label>
                                 </div>
 
-                                {/* NEW: Live Card Processing toggle */}
+                                {/* Live Card Processing toggle */}
                                 <div className="bg-gray-900/50 rounded-lg p-4 border border-gray-700">
                                   <label className="flex items-start gap-3 cursor-pointer group">
                                     <input 
@@ -1212,8 +1271,8 @@ const SessionCommandCenter: React.FC = () => {
                                   </label>
                                 </div>
 
-                                {/* NEW: No Tax on Cash toggle (Rejuv only) */}
-                                {selectedSeasonType === 'lawn_rejuv' && (
+                                {/* No Tax on Cash toggle (Rejuv + Sealing only) */}
+                                {seasonUsesNoTaxOnCash && (
                                   <div className="bg-gray-900/50 rounded-lg p-4 border border-green-700/30">
                                     <label className="flex items-start gap-3 cursor-pointer group">
                                       <input 
@@ -1228,7 +1287,7 @@ const SessionCommandCenter: React.FC = () => {
                                           <span>No Tax on Cash</span>
                                           {noTaxOnCash && (
                                             <span className="text-[10px] bg-green-900/50 text-green-300 px-1.5 py-0.5 rounded border border-green-700">
-                                              REJUV
+                                              {selectedSeasonType === 'sealing' ? 'SEALING' : 'REJUV'}
                                             </span>
                                           )}
                                         </div>

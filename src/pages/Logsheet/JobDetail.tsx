@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Phone, Mail, X, CheckCircle2, Ban, Lock,
-  Loader, CheckCircle, FileText, TrendingUp, DollarSign, GraduationCap, Info
+  Loader, CheckCircle, FileText, TrendingUp, DollarSign, GraduationCap, Info, Shovel
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
@@ -51,6 +51,38 @@ function capitalizeWords(value: string): string {
         .join('-')
     )
     .join(' ');
+}
+
+// --- HELPER: Get the property type button list for a given season ---
+// Aeration & Lawn Rejuv use FP/FO/BO. Sealing uses SS/SSP (Ramp is in the enum
+// but reserved for a separate future plan).
+// TODO: When Central 'cleaning' season ships, add its property types here.
+function getPropertyTypesForSeason(seasonType: SeasonType): string[] {
+  if (seasonType === 'sealing') return ['SS', 'SSP'];
+  return ['FP', 'FO', 'BO'];
+}
+
+// --- HELPER: Get the default property type for a given season ---
+function getDefaultPropertyTypeForSeason(seasonType: SeasonType): string {
+  if (seasonType === 'sealing') return 'SS';
+  return 'FP';
+}
+
+// --- HELPER: Get the transaction item/service name for a given season ---
+// TODO: When 'cleaning' season ships, return 'Cleaning' for it.
+function getItemNameForSeason(seasonType: SeasonType): string {
+  if (seasonType === 'lawn_rejuv') return 'Lawn Rejuvenation';
+  if (seasonType === 'sealing') return 'Sealing';
+  return 'Aeration';
+}
+
+// --- HELPER: Build the seasonId stamp for a transaction ---
+// Format: `<region>-<season-slug>` (e.g. 'west-aeration', 'east-sealing', 'west-lawn-rejuv')
+function buildSeasonId(region: Region, seasonType: SeasonType): string {
+  const regionSlug = region.toLowerCase();
+  if (seasonType === 'lawn_rejuv') return `${regionSlug}-lawn-rejuv`;
+  if (seasonType === 'sealing') return `${regionSlug}-sealing`;
+  return `${regionSlug}-aeration`;
 }
 
 // --- SERVICE TOGGLE COLORS (Lawn Rejuv) ---
@@ -133,10 +165,10 @@ const JobDetail: React.FC = () => {
   // Training mode state
   const [isTrainingMode, setIsTrainingMode] = useState(false);
 
-  // Season type state (for Lawn Rejuv support)
+  // Season type state (supports aeration | lawn_rejuv | sealing)
   const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
 
-  // NEW: Live Card Processing flag (production only, stays false in training)
+  // Live Card Processing flag (production only, stays false in training)
   const [liveCardEnabled, setLiveCardEnabled] = useState(false);
 
   // Form Fields
@@ -209,6 +241,9 @@ const JobDetail: React.FC = () => {
 
   // --- COMPUTED: Can show upgrade button (West only, Aeration season only) ---
   const canShowUpgradeButton = region === 'West' && seasonType === 'aeration';
+
+  // --- COMPUTED: Property type list for the current season ---
+  const propertyTypeOptions = getPropertyTypesForSeason(seasonType);
 
   // --- COMPUTED: Get customer address for E-Transfer protocol ---
   const getCustomerAddress = (): string => {
@@ -340,7 +375,7 @@ const JobDetail: React.FC = () => {
           console.warn('Could not get season type, defaulting to aeration');
         }
 
-        // NEW: Get live card processing setting from session
+        // Get live card processing setting from session
         try {
           const liveCard = await sessionService.getSessionLiveCardEnabled();
           setLiveCardEnabled(liveCard);
@@ -360,7 +395,11 @@ const JobDetail: React.FC = () => {
         if (foundJob) {
           setOriginalJob(foundJob);
           setIsReadOnly(foundJob.Status === 'completed' || foundJob.Completed === 'x');
-          loadFormData(foundJob);
+          // Determine season for loadFormData defaults
+          const seasonForLoad = trainingMode
+            ? 'aeration'
+            : (await sessionService.getSessionSeasonType().catch(() => 'aeration')) as SeasonType;
+          loadFormData(foundJob, seasonForLoad);
           
           // Fetch upsellsEnabled status
           const upsellStatus = trainingMode 
@@ -383,7 +422,7 @@ const JobDetail: React.FC = () => {
     init();
   }, [jobId, navigate]);
 
-  const loadFormData = (job: MasterBooking) => {
+  const loadFormData = (job: MasterBooking, currentSeasonType: SeasonType = 'aeration') => {
     const fullAddr = job['Full Address'] || '';
     let hNum = job['House Number'] || '';
     let sName = job['Street Name'] || '';
@@ -415,7 +454,8 @@ const JobDetail: React.FC = () => {
       setPaymentMethod('');
     }
     
-    setPropertyType(job['FO/BO/FP'] || 'FP');
+    // Property type — default depends on season (Sealing → 'SS', else → 'FP')
+    setPropertyType(job['FO/BO/FP'] || getDefaultPropertyTypeForSeason(currentSeasonType));
 
     // Load service flags if present (Lawn Rejuv)
     if (job.services) {
@@ -540,6 +580,7 @@ const JobDetail: React.FC = () => {
 
       const fullAddress = `${houseNumber} ${streetName}`.trim();
       const newTxId = generateUUID();
+      const itemName = getItemNameForSeason(seasonType);
 
       const tx: SessionTransaction = {
         id: newTxId,
@@ -576,10 +617,10 @@ const JobDetail: React.FC = () => {
         ccFullNumber: ccData?.number,
         ccExpiry: ccData?.expiry,
         ccCVC: ccData?.cvc,
-        items: [{ name: seasonType === 'lawn_rejuv' ? 'Lawn Rejuvenation' : 'Aeration', price: priceVal }],
+        items: [{ name: itemName, price: priceVal }],
         itemDescription: officeNotes,
         region: region,
-        seasonId: `${region.toLowerCase()}-${seasonType === 'lawn_rejuv' ? 'lawn-rejuv' : 'aeration'}`,
+        seasonId: buildSeasonId(region, seasonType),
         isWestSplit: false,
         serviceType: propertyType as any,
         
@@ -668,9 +709,16 @@ const JobDetail: React.FC = () => {
                       <GraduationCap size={10}/> Training
                     </span>
                   )}
+                  {/* Season badge — 3-way branch: lawn_rejuv | sealing | (none for aeration) */}
+                  {/* TODO: Add a 'cleaning' branch here once Central Cleaning ships. */}
                   {seasonType === 'lawn_rejuv' && (
                     <span className="bg-green-900/30 text-green-400 text-[10px] px-1.5 py-0.5 rounded border border-green-700">
                       LAWN REJUV
+                    </span>
+                  )}
+                  {seasonType === 'sealing' && (
+                    <span className="bg-slate-800 text-slate-300 text-[10px] px-1.5 py-0.5 rounded border border-slate-600 flex items-center gap-1">
+                      <Shovel size={10}/> SEALING
                     </span>
                   )}
                 </div>
@@ -750,7 +798,7 @@ const JobDetail: React.FC = () => {
            <div className={`bg-gray-900/30 p-4 rounded-lg border border-gray-700/50 ${isReadOnly ? 'opacity-75' : ''}`}>
                <div className="flex justify-between items-center mb-3">
                    <h3 className="text-sm font-bold text-gray-300 uppercase">
-                     {seasonType === 'lawn_rejuv' ? 'Pricing' : 'Services & Pricing'}
+                     {(seasonType === 'lawn_rejuv' || seasonType === 'sealing') ? 'Pricing' : 'Services & Pricing'}
                    </h3>
                    {isReadOnly && <span className="text-xs text-blue-300 flex items-center gap-1"><Lock size={10}/> Locked</span>}
                </div>
@@ -772,7 +820,7 @@ const JobDetail: React.FC = () => {
                   <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Property Type</label>
                       <div className="flex bg-gray-700 rounded-md border border-gray-600 overflow-hidden">
-                          {['FP', 'FO', 'BO'].map(t => (
+                          {propertyTypeOptions.map(t => (
                               <button key={t} onClick={() => setPropertyType(t)} className={`flex-1 py-2 text-xs font-bold transition-colors ${propertyType === t ? 'bg-cps-blue text-white' : 'text-gray-400 hover:bg-gray-600'}`} disabled={isReadOnly}>{t}</button>
                           ))}
                       </div>

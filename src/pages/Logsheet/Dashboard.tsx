@@ -23,12 +23,13 @@ import {
   ArrowLeft,
   Map as MapIcon,
   BookOpen,
+  Shovel,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem, setStorageItem } from '../../lib/localStorage';
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
-import { commandCenterService } from '../../lib/commandCenterService';
+import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
 import { subscribeAsContractor } from '../../lib/realtimeService';
 import { supabase } from '../../lib/supabase';
 import { Worker, SessionStats, MasterBooking, ManagementUser, SeasonType } from '../../types';
@@ -188,8 +189,9 @@ const Dashboard: React.FC = () => {
   // non-RM-view sessions with digital mapping enabled for this command center.
   const showMapTab = hasDigitalMapping && seasonType === 'aeration' && !isTrainingMode && !isRMViewMode;
 
-  // Check if this is a team season with teammates
-  const hasTeammates = seasonType === 'lawn_rejuv' && teammates.length > 1;
+  // Check if this is a team season with teammates.
+  // seasonHasTeams() handles lawn_rejuv + sealing today (and future cleaning when added).
+  const hasTeammates = seasonHasTeams(seasonType) && teammates.length > 1;
 
   // Copy phone to clipboard
   const handleCopyPhone = async (phone: string) => {
@@ -307,7 +309,9 @@ const Dashboard: React.FC = () => {
             setHasAssignedRoutes(myRoutes.length > 0);
             setAssignedRouteCodes(myRoutes.map(r => r.routeCode));
 
-            if (currentSeasonType === 'lawn_rejuv' && dailySession.teamCarts) {
+            // Load teammates for ANY team-based season (lawn_rejuv + sealing today).
+            // TODO: When Central Cleaning ships, seasonHasTeams() will return true for it automatically.
+            if (seasonHasTeams(currentSeasonType) && dailySession.teamCarts) {
               const myCart = dailySession.teamCarts.find(cart =>
                 cart.workerIds.includes(storedWorker.contractorId)
               );
@@ -473,9 +477,16 @@ const Dashboard: React.FC = () => {
                 <div className="flex items-center gap-2 text-white font-bold text-lg">
                   <Calendar size={18} className="text-cps-blue" />
                   {format(new Date(), 'EEE, MMM d')}
+                  {/* Season badge — 3-way branch: lawn_rejuv | sealing | (none for aeration) */}
+                  {/* TODO: Add a 'cleaning' branch here once Central Cleaning ships. */}
                   {seasonType === 'lawn_rejuv' && (
                     <span className="text-[9px] bg-green-900/50 text-green-300 px-1.5 py-0.5 rounded border border-green-700">
                       LAWN REJUV
+                    </span>
+                  )}
+                  {seasonType === 'sealing' && (
+                    <span className="text-[9px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-600 flex items-center gap-1">
+                      <Shovel size={9}/> SEALING
                     </span>
                   )}
                 </div>

@@ -3,8 +3,13 @@
 // --- COMMAND CENTER (Multi-tenant) ---
 export type Region = 'West' | 'Central' | 'East';
 
-// --- SEASON TYPES (West Region Only) ---
-export type SeasonType = 'aeration' | 'lawn_rejuv';
+// --- SEASON TYPES ---
+// West: aeration | lawn_rejuv
+// East: aeration | sealing
+// Central: aeration (today) | cleaning (FUTURE — see TODO markers across codebase)
+// TODO: Add 'cleaning' season type for Central region when ready.
+//       Search the codebase for "TODO.*cleaning" to find every spot that needs updating.
+export type SeasonType = 'aeration' | 'lawn_rejuv' | 'sealing';
 
 // --- SERVICE FLAGS (Lawn Rejuvenation) ---
 export interface ServiceFlags {
@@ -163,11 +168,11 @@ export interface Worker {
   // --- UPSELL CONTROL ---
   upsellsEnabled?: boolean; // Defaults to true if not set
   
-  // --- TEAM SUPPORT (Lawn Rejuv Season) ---
+  // --- TEAM SUPPORT (Lawn Rejuv + Sealing seasons) ---
   teamId?: string; // e.g., "v1", "v2", "1", "2" - workers with same teamId share a cart
 }
 
-// --- TEAM/CART STRUCTURE (Lawn Rejuv) ---
+// --- TEAM/CART STRUCTURE (Lawn Rejuv + Sealing) ---
 export interface TeamCart {
   teamId: string;
   workerIds: string[];
@@ -195,7 +200,7 @@ export interface HistoricalProperty {
 export interface RouteData {
   routeCode: string;
   managerId: string; 
-  assignedWorkerIds: string[]; // For aeration: individual workers. For lawn_rejuv: can include team representatives
+  assignedWorkerIds: string[]; // For aeration: individual workers. For lawn_rejuv/sealing: can include team representatives
   streets?: string[];
   commandCenterId?: string; // Links to CommandCenter.id
 }
@@ -209,9 +214,9 @@ export interface DailySessionData {
   commandCenterId?: string; // Links to CommandCenter.id
   
   // --- SEASON SUPPORT ---
-  seasonType?: SeasonType; // 'aeration' | 'lawn_rejuv' (West only, defaults to 'aeration')
+  seasonType?: SeasonType; // 'aeration' | 'lawn_rejuv' | 'sealing'
   
-  // --- TEAM CARTS (Lawn Rejuv only) ---
+  // --- TEAM CARTS (Lawn Rejuv + Sealing) ---
   teamCarts?: TeamCart[]; // Grouped workers by teamId
   
   // --- HISTORICAL PROPERTIES (digital mapping enabled CCs only) ---
@@ -272,7 +277,7 @@ export interface LogsheetSession {
   
   commandCenterId?: string; // Links to CommandCenter.id
   
-  // --- TEAM SUPPORT (Lawn Rejuv Season) ---
+  // --- TEAM SUPPORT (Lawn Rejuv + Sealing) ---
   teamWorkerIds?: string[]; // All worker IDs in this team/cart (includes primary workerId)
   equivSplit?: TeamSplitConfig; // How to split EQ among team members
   upsellSplit?: TeamSplitConfig; // How to split upsell commission among team members
@@ -381,15 +386,17 @@ export interface MasterBooking {
   
   upsellMenuId?: string; 
   
+  // NOTE: 'Ramp' stays in the enum (reserved for future use — separate plan).
+  // For now, Sealing season UI only shows SS / SSP buttons.
   'FO/BO/FP'?: 'FO' | 'BO' | 'FP' | 'SS' | 'SSP' | 'Ramp';
   'Contractor Number'?: string;
   
   commandCenterId?: string; // Links to CommandCenter.id
   
-  // --- SESSION ASSIGNMENT (Lawn Rejuv) ---
+  // --- SESSION ASSIGNMENT (Lawn Rejuv + Sealing) ---
   sessionId?: string; // Links to LogsheetSession.id for team-based assignment
   
-  // --- SERVICE FLAGS (Lawn Rejuv Season) ---
+  // --- SERVICE FLAGS (Lawn Rejuv Season only) ---
   services?: ServiceFlags; // Which services are included (A/D/F/S/L)
   
   // Allow additional dynamic properties (like 'Gate', 'House Number', etc.)
@@ -437,6 +444,7 @@ export interface SessionTransaction {
   chequeNumber?: string;
   
   // Service-related properties
+  // NOTE: 'Ramp' stays in the enum (reserved for future use — separate plan).
   serviceType?: 'FO' | 'BO' | 'FP' | 'SS' | 'SSP' | 'Ramp';
   serviceName?: string;
   isPrepaid?: boolean;
@@ -449,7 +457,7 @@ export interface SessionTransaction {
   
   commandCenterId?: string; // Links to CommandCenter.id
   
-  // --- SERVICE FLAGS (Lawn Rejuv Season) ---
+  // --- SERVICE FLAGS (Lawn Rejuv Season only) ---
   services?: ServiceFlags; // Which services were performed (A/D/F/S/L)
   
   // --- TEAM SUPPORT ---
@@ -537,18 +545,18 @@ export interface SeasonConfig {
   displayName: string;
   
   // Pricing
-  prepaidWeight: number;      // 0.5 for aeration, 0.6 for lawn_rejuv
-  billedWeight: number;       // 0.5 for both
+  prepaidWeight: number;      // 0.5 for aeration, 0.6 for lawn_rejuv, 0.5 for sealing
+  billedWeight: number;       // 0.5 for all
   
   // PAYOUT RATES ($/EQ for commission calculation)
   // NOTE: These are BASE rates. Final rate = base + alumniRate + silverRate
   // alumniRate and silverRate are also $/EQ amounts (not percentages)
-  payoutRateSolo: number;     // $8 for aeration, $7 for lawn_rejuv solo
-  payoutRateTeam: number;     // $8 for aeration, $9 for lawn_rejuv team (2+)
+  payoutRateSolo: number;     // $8 aeration, $7 lawn_rejuv, $6 sealing
+  payoutRateTeam: number;     // $8 aeration, $9 lawn_rejuv, $8 sealing
   
   // Product Cost Deduction (percentage, 0-100)
   // Applied after tax removal: prodPayable = (weightedProd / taxDivisor) * (1 - productCost/100)
-  defaultProductCostPercent: number; // 0 for aeration, 25 for lawn_rejuv
+  defaultProductCostPercent: number; // 0 aeration, 25 lawn_rejuv, 20 sealing
   
   // Office Flats
   officeFlats: {
@@ -583,12 +591,12 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
   lawn_rejuv: {
     seasonType: 'lawn_rejuv',
     displayName: 'Lawn Rejuvenation Season',
-    prepaidWeight: 0.6,   // CHANGED: was 0.7
+    prepaidWeight: 0.6,
     billedWeight: 0.5,
     // Payout rates for lawn rejuv: $7/EQ solo, $9/EQ for teams of 2+
     // Final rate = base + alumniRate + silverRate
-    payoutRateSolo: 7,    // CHANGED: was 6
-    payoutRateTeam: 9,    // CHANGED: was 8
+    payoutRateSolo: 7,
+    payoutRateTeam: 9,
     // 25% product cost deduction for lawn rejuv
     defaultProductCostPercent: 25,
     officeFlats: [
@@ -597,4 +605,26 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
     hasUpgrades: false,
     availableAddOns: ['star_plan_pro_rejuv', 'chafer_beetle', 'star_plan_protection_plus'],
   },
+  // --- SEALING SEASON (East region only) ---
+  // Same team mechanics as Rejuv. No upgrades, no add-ons, no office flats.
+  // No-tax-on-cash toggle is available at session start (same as Rejuv).
+  // Property types in UI: SS, SSP (Ramp is in the enum but reserved for future).
+  sealing: {
+    seasonType: 'sealing',
+    displayName: 'Sealing Season',
+    prepaidWeight: 0.5,
+    billedWeight: 0.5,
+    // Payout rates for sealing: $6/EQ solo, $8/EQ for teams of 2+
+    // Final rate = base + alumniRate + silverRate
+    payoutRateSolo: 6,
+    payoutRateTeam: 8,
+    // 20% product cost deduction for sealing
+    defaultProductCostPercent: 20,
+    officeFlats: [],
+    hasUpgrades: false,
+    availableAddOns: [],
+  },
+  // TODO: Add 'cleaning' season config for Central region when ready.
+  //       Will likely need teams=true, its own pricing, and own property types.
+  //       Search "TODO.*cleaning" across the codebase to find every spot to update.
 };
