@@ -14,6 +14,7 @@ import {
   Truck,
   Users,
   Leaf,
+  Shovel, // NEW: Sealing season badge icon (matches Admin badge)
   Eye,
   Shuffle,
   Loader,
@@ -23,8 +24,17 @@ import {
   UserMinus,
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
+import { seasonHasTeams } from '../../../lib/commandCenterService'; // NEW: drives isTeamSeason
 import { setStorageItem } from '../../../lib/localStorage';
-import { Worker, MasterBooking, LogsheetSession, ManagementUser, SeasonType, SessionStats } from '../../../types';
+import {
+  Worker,
+  MasterBooking,
+  LogsheetSession,
+  ManagementUser,
+  SeasonType,
+  SessionStats,
+  SEASON_CONFIGS, // NEW: read per-season payout rates instead of hardcoding $7/$9
+} from '../../../types';
 import ContractorJobs from './ContractorJobs';
 
 interface RMTeamTabProps {
@@ -101,7 +111,15 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   const [expandedCarts, setExpandedCarts] = useState<Set<string>>(new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const isLawnRejuv = seasonType === 'lawn_rejuv';
+  // CHANGED: was `isLawnRejuv = seasonType === 'lawn_rejuv'`.
+  // Now uses the seasonHasTeams() helper so cart UI, reassign modal, and team
+  // data loading all activate for BOTH Lawn Rejuv AND Sealing seasons.
+  const isTeamSeason = seasonHasTeams(seasonType);
+
+  // NEW: pull per-season config so payout-rate hints in the Reassign Teams
+  // modal (currently hardcoded $9/$7 for Rejuv) read from SEASON_CONFIGS.
+  // Sealing shows $8/$6; Rejuv still shows $9/$7.
+  const seasonConfig = SEASON_CONFIGS[seasonType];
 
   const [sortBy, setSortBy] = useState<TeamSortOption>('recent');
 
@@ -112,7 +130,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Reassign modal state (Lawn Rejuv only)
+  // Reassign modal state (team seasons only — Rejuv + Sealing)
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [selectedWorkerToMove, setSelectedWorkerToMove] = useState<WorkerDisplay | null>(null);
   const [selectedWorkerCart, setSelectedWorkerCart] = useState<CartDisplay | null>(null);
@@ -134,17 +152,19 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   }, []);
 
   // --- DATA LOADING ---
+  // CHANGED: branch is now isTeamSeason (Rejuv + Sealing) vs Aeration,
+  // instead of Rejuv-only vs everything-else.
   useEffect(() => {
     const loadData = async () => {
       const myTeam = workers.filter((w) => w.assignedManagerId === managerId);
-      if (isLawnRejuv) {
-        await loadLawnRejuvData(myTeam);
+      if (isTeamSeason) {
+        await loadTeamSeasonData(myTeam);
       } else {
         await loadAerationData(myTeam);
       }
     };
     loadData();
-  }, [managerId, workers, allSessions, refreshKey, isLawnRejuv]);
+  }, [managerId, workers, allSessions, refreshKey, isTeamSeason]);
 
   // --- AERATION DATA LOADING (Individual Workers) ---
   const loadAerationData = async (myTeam: Worker[]) => {
@@ -207,14 +227,15 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     setTeamMembers(enriched);
   };
 
-  // --- LAWN REJUV DATA LOADING ---
+  // --- TEAM SEASON DATA LOADING (Rejuv + Sealing) ---
+  // RENAMED from loadLawnRejuvData — logic unchanged.
   // BUG 1 FIX: Uses allSessions as source of truth instead of w.teamId grouping.
   //            After a reassignment, sessions reflect the new cart membership
   //            immediately; worker metadata (teamId) does not.
   // BUG 3 FIX: Reads stats + financialStore directly from allSessions (already
   //            loaded by parent), then fetches all bookings in parallel via
   //            Promise.all — eliminates sequential awaits per worker.
-  const loadLawnRejuvData = async (myTeam: Worker[]) => {
+  const loadTeamSeasonData = async (myTeam: Worker[]) => {
     const myTeamIds = new Set(myTeam.map(w => w.contractorId));
     const workerMap = new Map(myTeam.map(w => [w.contractorId, w]));
 
@@ -446,8 +467,10 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     }
   };
 
+  // CHANGED: was `if (isLawnRejuv) return false;` — now blocks individual modify
+  // actions for ANY team season (Rejuv or Sealing) since both use carts.
   const isModifiable = (member: WorkerDisplay) => {
-    if (isLawnRejuv) return false;
+    if (isTeamSeason) return false;
     return member.financialStore.length === 0;
   };
 
@@ -743,7 +766,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     );
   };
 
-  // --- RENDER: Lawn Rejuv Cart Card ---
+  // --- RENDER: Team Season Cart Card (Rejuv + Sealing) ---
   const renderCartCard = (cart: CartDisplay) => {
     const isExpanded = expandedCarts.has(cart.sessionId);
     const isSoloCart = cart.members.length === 1;
@@ -892,10 +915,14 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
       {/* Header */}
       {teamMembers.length > 0 && (
         <div className="flex justify-between items-center mb-4">
-          {isLawnRejuv && (
+          {/* CHANGED: Was {isLawnRejuv && (...Leaf + green...)}. Now shows for any
+              team season, and switches Leaf+green (Rejuv) ↔ Shovel+slate (Sealing). */}
+          {isTeamSeason && (
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 text-xs text-green-400">
-                <Leaf size={14} />
+              <div className={`flex items-center gap-2 text-xs ${
+                seasonType === 'sealing' ? 'text-slate-300' : 'text-green-400'
+              }`}>
+                {seasonType === 'sealing' ? <Shovel size={14} /> : <Leaf size={14} />}
                 <span>{carts.length} cart{carts.length !== 1 ? 's' : ''} • {teamMembers.length} workers</span>
               </div>
               <button
@@ -907,7 +934,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               </button>
             </div>
           )}
-          <div className={`flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 shadow-sm ${!isLawnRejuv ? 'ml-auto' : ''}`}>
+          <div className={`flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 shadow-sm ${!isTeamSeason ? 'ml-auto' : ''}`}>
             <span className="text-xs text-gray-400 font-medium">Sort by:</span>
             <select
               value={sortBy}
@@ -931,13 +958,18 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         </div>
       )}
 
-      {isLawnRejuv && sortedCarts.map((cart) => renderCartCard(cart))}
-      {!isLawnRejuv && sortedTeamMembers.map((member) => renderWorkerCard(member))}
+      {/* CHANGED: was {isLawnRejuv && ...} / {!isLawnRejuv && ...}. Now uses
+          isTeamSeason so cart cards render for both Rejuv AND Sealing. */}
+      {isTeamSeason && sortedCarts.map((cart) => renderCartCard(cart))}
+      {!isTeamSeason && sortedTeamMembers.map((member) => renderWorkerCard(member))}
 
       {/* ============================================================
-          REASSIGN TEAMS MODAL (Lawn Rejuv only)
+          REASSIGN TEAMS MODAL — Team Seasons only (Rejuv + Sealing)
           ============================================================ */}
-      {showReassignModal && isLawnRejuv && (
+      {/* CHANGED: was {showReassignModal && isLawnRejuv && (...)}. Now opens for
+          any team season. Hardcoded $9/$7 rate hints below now pull from
+          SEASON_CONFIGS[seasonType] (Sealing → $8/$6, Rejuv → $9/$7). */}
+      {showReassignModal && isTeamSeason && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
           <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
 
@@ -1063,7 +1095,12 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                             .map(targetCart => {
                               const label = targetCart.members.map(m => m.firstName).join(' & ');
                               const newSize = targetCart.members.length + 1;
-                              const newRate = newSize >= 2 ? '$9/EQ' : '$7/EQ';
+                              // CHANGED: was hardcoded "$9/EQ" / "$7/EQ" — now reads
+                              // payoutRateTeam / payoutRateSolo from SEASON_CONFIGS
+                              // so Sealing shows $8/$6 and Rejuv shows $9/$7.
+                              const newRate = newSize >= 2
+                                ? `$${seasonConfig.payoutRateTeam}/EQ`
+                                : `$${seasonConfig.payoutRateSolo}/EQ`;
                               return (
                                 <button
                                   key={targetCart.sessionId}
@@ -1112,7 +1149,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                           </div>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
-                          <span className="text-[10px] text-yellow-400 bg-yellow-900/30 border border-yellow-700/50 px-1.5 py-0.5 rounded">$7/EQ</span>
+                          {/* CHANGED: was hardcoded "$7/EQ" — now reads payoutRateSolo
+                              from SEASON_CONFIGS so Sealing shows $6/EQ. */}
+                          <span className="text-[10px] text-yellow-400 bg-yellow-900/30 border border-yellow-700/50 px-1.5 py-0.5 rounded">${seasonConfig.payoutRateSolo}/EQ</span>
                           {reassignLoading ? <Loader size={12} className="animate-spin text-gray-400" /> : <ArrowRight size={14} className="text-gray-500" />}
                         </div>
                       </button>

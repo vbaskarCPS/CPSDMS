@@ -21,6 +21,7 @@ import {
   Trophy,
   Trash2,
   Users,
+  Shovel, // NEW: Sealing header badge icon
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
 import { 
@@ -53,7 +54,7 @@ const BADGE_MAP: Record<string, string> = {
   'Hot Asphalt': 'RAMP'
 };
 
-// Service badge colors (for Lawn Rejuv)
+// Service badge colors (for Lawn Rejuv — A/D/F/S/L)
 const SERVICE_BADGE_COLORS: Record<string, string> = {
   aeration: 'bg-blue-900/30 text-blue-400 border-blue-700',
   dethatch: 'bg-orange-900/30 text-orange-400 border-orange-700',
@@ -153,11 +154,11 @@ const PayoutContractor: React.FC = () => {
   const [isTeamSession, setIsTeamSession] = useState(false);
   const [showTeamModal, setShowTeamModal] = useState(false);
 
-  // Split State (Lawn Rejuv)
+  // Split State (Team seasons — Rejuv + Sealing)
   const [equivSplit, setEquivSplit] = useState<TeamSplitConfig>({});
   const [upsellSplit, setUpsellSplit] = useState<TeamSplitConfig>({});
 
-  // Per-worker deductions (Lawn Rejuv)
+  // Per-worker deductions (Team seasons — Rejuv + Sealing)
   const [workerMachineRentals, setWorkerMachineRentals] = useState<Record<string, boolean>>({});
   const [workerDeductions, setWorkerDeductions] = useState<Record<string, number>>({});
 
@@ -169,7 +170,7 @@ const PayoutContractor: React.FC = () => {
   const [productCostPercent, setProductCostPercent] = useState<number>(0);
   const [taxRate, setTaxRate] = useState<number>(5);
 
-  // NEW: No Tax on Cash flag
+  // No Tax on Cash flag (Rejuv + Sealing)
   const [noTaxOnCash, setNoTaxOnCash] = useState(false);
 
   // Cash/Cheque form state
@@ -196,7 +197,11 @@ const PayoutContractor: React.FC = () => {
   const totalChequeInput = parseFloat(chequeAmount) || 0;
   const totalDeductionsAeration = parseFloat(deductions) || 0;
 
-  // Check if this is lawn rejuv season
+  // CHANGED: was a single `isLawnRejuv` flag controlling everything. Now we have two:
+  //   - isTeamSeason: true for Rejuv AND Sealing — drives team payout grid, team math, split handling
+  //   - isLawnRejuv: true ONLY for Rejuv — used for the one Rejuv-specific UI bit (service badges A/D/F/S/L)
+  // Sealing has no services so isLawnRejuv stays correct as a check for "show service badges".
+  const isTeamSeason = seasonHasTeams(seasonType);
   const isLawnRejuv = seasonType === 'lawn_rejuv';
 
   useEffect(() => {
@@ -216,7 +221,7 @@ const PayoutContractor: React.FC = () => {
         const currentTaxRate = commandCenterService.getCurrentTaxRate();
         setTaxRate(currentTaxRate);
 
-        // NEW: Get no-tax-on-cash flag
+        // Get no-tax-on-cash flag
         const noTaxOnCashFlag = await sessionService.getSessionNoTaxOnCash();
         setNoTaxOnCash(noTaxOnCashFlag);
 
@@ -284,7 +289,7 @@ const PayoutContractor: React.FC = () => {
             setWorkerDeductions(initialDeductions);
             
           } else if (isTeamSeasonType && foundSession.workerId && daily) {
-            // Solo "team" in lawn rejuv - just one worker
+            // Solo "team" in a team season - just one worker
             const soloWorker = daily.workers.find(w => w.contractorId === foundSession.workerId);
             if (soloWorker) {
               setTeamWorkers([soloWorker]);
@@ -397,7 +402,7 @@ const PayoutContractor: React.FC = () => {
   const prodCashDiff = actualProdCash - stats.prodCash;
   const prodChequeDiff = actualProdCheque - stats.prodCheque;
   
-  // FIXED: When noTaxOnCash is on, cash portion of delta skips tax divisor
+  // When noTaxOnCash is on, cash portion of delta skips tax divisor
   const deltaEQ = noTaxOnCash
     ? (prodCashDiff + (prodChequeDiff / taxDivisor)) * productCostMultiplier / EQ_DIVISOR
     : ((prodCashDiff + prodChequeDiff) / taxDivisor) * productCostMultiplier / EQ_DIVISOR;
@@ -405,12 +410,15 @@ const PayoutContractor: React.FC = () => {
   const actualTotalEQ = stats.totalEQ + deltaEQ;
 
   // 3. Season-aware Payout Rate
-  const teamSize = isLawnRejuv ? teamWorkers.length : 1;
+  // CHANGED: teamSize now derives from isTeamSeason (Rejuv + Sealing), not Rejuv only.
+  // So Sealing teams get $8/EQ base, Sealing solos get $6/EQ — pulled from SEASON_CONFIGS.
+  const teamSize = isTeamSeason ? teamWorkers.length : 1;
   const baseRate = getPayoutRate(seasonType, teamSize);
 
-  // 4. Calculate per-worker payouts (Lawn Rejuv)
-  const calculateLawnRejuvPayouts = () => {
-    if (!isLawnRejuv || teamWorkers.length === 0) return [];
+  // 4. Calculate per-worker payouts (Team Seasons — Rejuv + Sealing)
+  // RENAMED from calculateLawnRejuvPayouts. Math unchanged.
+  const calculateTeamPayouts = () => {
+    if (!isTeamSeason || teamWorkers.length === 0) return [];
     
     const payouts = teamWorkers.map(w => {
       const eqPercent = (equivSplit[w.contractorId] || 0) / 100;
@@ -435,15 +443,13 @@ const PayoutContractor: React.FC = () => {
       });
       
       // Per-worker deductions
-      // FIXED: cashChequeDiff is DISPLAY ONLY - it affects EQ, not pay directly
+      // cashChequeDiff is DISPLAY ONLY - it affects EQ via deltaEQ, not pay directly
       const cashChequeDiff = (Math.abs(cashDiff) + Math.abs(chequeDiff)) * eqPercent;
       const workerMachineDeduction = workerMachineRentals[w.contractorId] ? 10.0 : 0;
       const workerOtherDeductions = workerDeductions[w.contractorId] || 0;
       
-      // FIXED: totalWorkerDeductions no longer includes cashChequeDiff
       const totalWorkerDeductions = workerOtherDeductions;
       
-      // FIXED: finalPay no longer subtracts cashChequeDiff (it already affected EQ via deltaEQ)
       const finalPay = productionPay + upsellCommission + iosCommission + bonusAmount - totalWorkerDeductions - workerMachineDeduction;
       
       return {
@@ -468,7 +474,7 @@ const PayoutContractor: React.FC = () => {
     return payouts;
   };
 
-  // 5. Calculate aeration payout (single worker)
+  // 5. Calculate aeration payout (single worker) — UNCHANGED
   const calculateAerationPayout = () => {
     if (!worker) return null;
     
@@ -482,12 +488,10 @@ const PayoutContractor: React.FC = () => {
     const bonusTotal = (session?.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
     const machineDeduction = machineRental ? 10.0 : 0;
     
-    // FIXED: cashChequeDiff is DISPLAY ONLY - it affects EQ via deltaEQ, not pay directly
     const cashChequeDiffVal = Math.abs(cashDiff) + Math.abs(chequeDiff);
     
     const grossPay = productionPay + upsellCommission + iosCommission + bonusTotal;
     
-    // FIXED: finalPay no longer subtracts cashChequeDiffVal (it already affected EQ via deltaEQ)
     const finalPay = grossPay - totalDeductionsAeration - machineDeduction;
     
     return {
@@ -497,18 +501,20 @@ const PayoutContractor: React.FC = () => {
       bonusTotal,
       machineDeduction,
       totalDeductions: totalDeductionsAeration,
-      cashChequeDiff: cashChequeDiffVal, // Still tracked for DISPLAY purposes
+      cashChequeDiff: cashChequeDiffVal,
       finalPay,
       totalRate,
     };
   };
 
-  const lawnRejuvPayouts = calculateLawnRejuvPayouts();
+  // RENAMED variable: was lawnRejuvPayouts. Function call renamed too.
+  const teamPayouts = calculateTeamPayouts();
   const aerationPayout = calculateAerationPayout();
   
   // Final pay for header display
-  const finalPay = isLawnRejuv 
-    ? lawnRejuvPayouts.reduce((sum, p) => sum + p.finalPay, 0)
+  // CHANGED: was isLawnRejuv check, now isTeamSeason — covers Rejuv AND Sealing.
+  const finalPay = isTeamSeason 
+    ? teamPayouts.reduce((sum, p) => sum + p.finalPay, 0)
     : (aerationPayout?.finalPay || 0);
 
   // Bonus total for display
@@ -578,8 +584,8 @@ const PayoutContractor: React.FC = () => {
   const handleFinalize = async () => {
     if (!session) return;
     
-    // Validate splits for lawn rejuv
-    if (isLawnRejuv && !splitsValid) {
+    // CHANGED: was isLawnRejuv — now isTeamSeason (covers Rejuv + Sealing).
+    if (isTeamSeason && !splitsValid) {
       alert('Split percentages must total 100% before finalizing');
       return;
     }
@@ -596,20 +602,22 @@ const PayoutContractor: React.FC = () => {
       actualProdCheque,
       actualTotalEQ,
       finalCommission: finalPay,
-      machineRental: isLawnRejuv ? false : machineRental, // Legacy field for aeration
+      // CHANGED: was isLawnRejuv ? false : machineRental
+      machineRental: isTeamSeason ? false : machineRental, // Legacy field for aeration
       managerName: 'Admin',
       timestamp: new Date().toISOString(),
-      // New per-worker fields for lawn rejuv
-      workerMachineRentals: isLawnRejuv ? workerMachineRentals : undefined,
-      workerDeductions: isLawnRejuv ? workerDeductions : undefined,
+      // CHANGED: was isLawnRejuv — now isTeamSeason (Rejuv + Sealing).
+      workerMachineRentals: isTeamSeason ? workerMachineRentals : undefined,
+      workerDeductions: isTeamSeason ? workerDeductions : undefined,
     };
 
     try {
       await sessionService.updateLogsheetSession(session.id, {
         validation: validationData,
         status: 'PAID',
-        equivSplit: isLawnRejuv ? equivSplit : undefined,
-        upsellSplit: isLawnRejuv ? upsellSplit : undefined,
+        // CHANGED: was isLawnRejuv — now isTeamSeason (Rejuv + Sealing).
+        equivSplit: isTeamSeason ? equivSplit : undefined,
+        upsellSplit: isTeamSeason ? upsellSplit : undefined,
       });
       navigate('/admin/command-center?tab=payout');
     } catch (err) {
@@ -632,7 +640,7 @@ const PayoutContractor: React.FC = () => {
     return `${bonus.type} - ${placingStr} Place`;
   };
 
-  // --- RENDER SERVICE BADGES (for Lawn Rejuv) ---
+  // --- RENDER SERVICE BADGES (Lawn Rejuv only — Sealing has no services) ---
   const renderServiceBadges = (services: any) => {
     if (!services || seasonType !== 'lawn_rejuv') return null;
     
@@ -802,19 +810,32 @@ const PayoutContractor: React.FC = () => {
                 <span className="bg-gray-700 px-2 py-0.5 rounded text-xs">
                   ID: {worker.contractorId}
                 </span>
-                <span className={`px-2 py-0.5 rounded text-xs ${
-                  seasonType === 'lawn_rejuv' 
-                    ? 'bg-green-900/30 text-green-400 border border-green-700' 
-                    : 'bg-blue-900/30 text-blue-400 border border-blue-700'
-                }`}>
-                  {seasonType === 'lawn_rejuv' ? 'Lawn Rejuv' : 'Aeration'}
-                </span>
+                {/* CHANGED: 2-way pill (Rejuv green / Aeration blue) is now 3-way
+                    with a Sealing branch (Shovel + slate-gray + "Sealing"). */}
+                {seasonType === 'lawn_rejuv' && (
+                  <span className="px-2 py-0.5 rounded text-xs bg-green-900/30 text-green-400 border border-green-700 flex items-center gap-1">
+                    Lawn Rejuv
+                  </span>
+                )}
+                {seasonType === 'sealing' && (
+                  <span className="px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-300 border border-slate-600 flex items-center gap-1">
+                    <Shovel size={12} />
+                    Sealing
+                  </span>
+                )}
+                {seasonType === 'aeration' && (
+                  <span className="px-2 py-0.5 rounded text-xs bg-blue-900/30 text-blue-400 border border-blue-700 flex items-center gap-1">
+                    Aeration
+                  </span>
+                )}
                 <span>
                   Steps: <b className="text-white">{stats.stepCount}</b>
                 </span>
                 <span className="text-xs">
                   Payout Rate: <b className="text-white">${baseRate.toFixed(2)}/EQ</b>
-                  {isTeamSession && seasonType === 'lawn_rejuv' && (
+                  {/* CHANGED: "(Team of N)" suffix now shows for any team season
+                      (Rejuv + Sealing), not just Rejuv. */}
+                  {isTeamSession && isTeamSeason && (
                     <span className="text-green-400 ml-1">(Team of {teamWorkers.length})</span>
                   )}
                 </span>
@@ -878,8 +899,8 @@ const PayoutContractor: React.FC = () => {
             </div>
           </div>
 
-          {/* AERATION: VISUAL BREAKDOWN - Only for aeration, after transactions */}
-          {!isLawnRejuv && aerationPayout && (
+          {/* AERATION: VISUAL BREAKDOWN - CHANGED: gated on !isTeamSeason, was !isLawnRejuv */}
+          {!isTeamSeason && aerationPayout && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Production */}
               <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 shadow-sm">
@@ -1073,8 +1094,8 @@ const PayoutContractor: React.FC = () => {
             </div>
           </div>
 
-          {/* AERATION: DEDUCTIONS & FINAL PAYOUT */}
-          {!isLawnRejuv && aerationPayout && (
+          {/* AERATION: DEDUCTIONS & FINAL PAYOUT — CHANGED: gated on !isTeamSeason */}
+          {!isTeamSeason && aerationPayout && (
             <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5 mb-10">
               <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
                 <Calculator size={20} className="text-blue-400" /> Deductions & Final Payout
@@ -1185,7 +1206,6 @@ const PayoutContractor: React.FC = () => {
                           <span className="font-mono">-${aerationPayout.totalDeductions.toFixed(2)}</span>
                         </div>
                       )}
-                      {/* Show cash/cheque diff as info only - it affects EQ, not pay */}
                       {aerationPayout.cashChequeDiff !== 0 && (
                         <div className={`flex justify-between text-xs pt-1 border-t border-gray-700 mt-1 ${
                           aerationPayout.cashChequeDiff > 0 ? 'text-gray-500' : 'text-gray-500'
@@ -1218,8 +1238,10 @@ const PayoutContractor: React.FC = () => {
             </div>
           )}
 
-          {/* LAWN REJUV: COMBINED TEAM PAYOUT CONFIG + BONUSES + FINALIZE */}
-          {isLawnRejuv && teamWorkers.length > 0 && (
+          {/* TEAM SEASON (Rejuv + Sealing): TEAM PAYOUT CONFIG + BONUSES + FINALIZE
+              CHANGED: gated on isTeamSeason (was isLawnRejuv) and uses teamPayouts
+              (renamed from lawnRejuvPayouts). All inner math identical. */}
+          {isTeamSeason && teamWorkers.length > 0 && (
             <div className="bg-gray-800 rounded-lg shadow-lg border border-gray-700 p-5 mb-10">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-white flex items-center gap-2">
@@ -1249,7 +1271,7 @@ const PayoutContractor: React.FC = () => {
 
               {/* Worker Rows */}
               <div className="space-y-2">
-                {lawnRejuvPayouts.map(payout => {
+                {teamPayouts.map(payout => {
                   const isCurrentWorker = payout.worker.contractorId === contractorId;
                   
                   return (

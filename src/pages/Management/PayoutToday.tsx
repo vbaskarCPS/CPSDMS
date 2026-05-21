@@ -23,6 +23,7 @@ import {
   AlertTriangle,
   Camera,
   Truck,
+  Shovel, // NEW: Sealing season banner icon
   GripVertical,
 } from 'lucide-react';
 import {
@@ -112,25 +113,25 @@ interface BonusWinner {
   sessionId: string;
 }
 
-// --- NEW: Per-worker payout breakdown inside a rejuv cart bonus winner ---
-interface RejuvWorkerPayout {
+// --- RENAMED: was RejuvWorkerPayout — now covers all team seasons (Rejuv + Sealing) ---
+interface TeamWorkerPayout {
   worker: Worker;
   commission: number;
   bonusShare: number;
 }
 
-// --- NEW: Rejuv bonus winner — cart-level, with per-worker breakdown ---
-interface RejuvBonusWinner {
+// --- RENAMED: was RejuvBonusWinner — cart-level bonus winner, per-worker breakdown ---
+interface TeamBonusWinner {
   cartWorkers: Worker[];
   teamSize: number;
   bonus: Bonus;
   teamTotalEQ: number;
-  workerPayouts: RejuvWorkerPayout[];
+  workerPayouts: TeamWorkerPayout[];
   // Session id needed for drag/reorder persistence
   sessionId: string;
 }
 
-// Team cart with full worker and session data for Lawn Rejuv
+// Team cart with full worker and session data for any team season (Rejuv + Sealing)
 interface TeamCartDisplay {
   teamId: string;
   sessionId: string;
@@ -145,18 +146,27 @@ interface TeamCartDisplay {
   totalCommission: number;
 }
 
-// --- NEW: Equiv sort multiplier per team size ---
+// --- Equiv sort multiplier per team size ---
 // Solo=1.0, Team of 2=1.5, Team of 3=2.0, Team of 4=2.5, etc.
+// Not season-specific.
 function getEquivMultiplier(teamSize: number): number {
   if (teamSize <= 1) return 1.0;
   return 1.0 + (teamSize - 1) * 0.5;
 }
 
-// --- NEW: Badge thresholds per team size ---
-// Solo(1): green=30, gold=40, silver=60
-// Team(2): green=40, gold=60, silver=100
-// Superteam(3+): green=60, gold=100, silver=teamSize*50
-function getRejuvThresholds(teamSize: number): { green: number; gold: number; silver: number } {
+// --- RENAMED + EXTENDED: was getRejuvThresholds. Now season-aware. ---
+// Rejuv (unchanged):  Solo 30/40/60 · Team 40/60/100 · Super 60/100/(50×size)
+// Sealing (NEW):      Solo 40/60/80 · Team 60/80/120 · Super 60/80/(60×size)
+function getTeamThresholds(
+  teamSize: number,
+  seasonType: SeasonType
+): { green: number; gold: number; silver: number } {
+  if (seasonType === 'sealing') {
+    if (teamSize === 1) return { green: 40, gold: 60, silver: 80 };
+    if (teamSize === 2) return { green: 60, gold: 80, silver: 120 };
+    return { green: 60, gold: 80, silver: teamSize * 60 };
+  }
+  // Rejuv (and any future team season — Rejuv numbers are the default)
   if (teamSize === 1) return { green: 30, gold: 40, silver: 60 };
   if (teamSize === 2) return { green: 40, gold: 60, silver: 100 };
   return { green: 60, gold: 100, silver: teamSize * 50 };
@@ -425,9 +435,12 @@ function getSizeConfig(totalBonuses: number, columnCount: number): SizeConfig {
   }
 }
 
-// --- UPDATED: isRejuv flag switches to old money vs new money ratio ---
-function checkBonusQualification(transactions: SessionTransaction[], isRejuv = false): BonusQualification {
-  if (isRejuv) {
+// --- Bonus qualification rule ---
+// isTeamSeason=true: Rejuv & Sealing — "new money" = Sale + Upgrade + Add-On, "old money" = Production.
+//   (Sealing has no Upgrades/Add-Ons so the math reduces to Sale ≥ Production, per spec.)
+// isTeamSeason=false: Aeration — sales (Sale+Upgrade) ≥ prebooks (Production).
+function checkBonusQualification(transactions: SessionTransaction[], isTeamSeason = false): BonusQualification {
+  if (isTeamSeason) {
     // Old money = Production (office flats/prepaids)
     // New money = Upgrade, Sale, Add-On
     const oldMoneyTxs = transactions.filter(tx => tx.type === 'Production');
@@ -487,7 +500,7 @@ function checkBonusQualification(transactions: SessionTransaction[], isRejuv = f
   };
 }
 
-// --- UPDATED: accepts thresholds prop for rejuv badge unlocks ---
+// --- Badge component — accepts thresholds prop so caller can pass Rejuv or Sealing cutoffs ---
 function AchievementBadge({
   eq,
   thresholds,
@@ -560,8 +573,6 @@ function formatDateForDisplay(dateStr: string): string {
 }
 
 // --- DND: Sortable wrapper for "Other" column cards ---
-// Each card in the Other column gets wrapped in this so it can be dragged.
-// The whole card is grabbable (cursor-grab), lifts slightly when dragging.
 function SortableOtherCard({
   id,
   children,
@@ -607,6 +618,33 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
   const isTeamSeason = seasonHasTeams(seasonType);
 
+  // NEW: derive cart visual styles per season (Rejuv → green, Sealing → slate-gray).
+  // Used in renderTeamCart so the multi-worker cart border/header/count-pill
+  // visually matches the Admin & RMLogbook Sealing badges.
+  const teamCartStyles = useMemo(() => {
+    if (seasonType === 'sealing') {
+      return {
+        cartBorder: 'border-slate-600',
+        cartHeaderBg: 'bg-slate-800/40',
+        cartHeaderBorder: 'border-slate-600/50',
+        cartCountPillBg: 'bg-slate-700/40',
+        cartCountPillBorder: 'border-slate-600',
+        cartCountIcon: 'text-slate-300',
+        cartCountText: 'text-slate-200',
+      };
+    }
+    // Default = Rejuv (and any future team season that doesn't override)
+    return {
+      cartBorder: 'border-green-700/50',
+      cartHeaderBg: 'bg-green-900/20',
+      cartHeaderBorder: 'border-green-700/30',
+      cartCountPillBg: 'bg-green-900/40',
+      cartCountPillBorder: 'border-green-700/50',
+      cartCountIcon: 'text-green-400',
+      cartCountText: 'text-green-400',
+    };
+  }, [seasonType]);
+
   const [showBonusModal, setShowBonusModal] = useState(false);
   const [selectedSession, setSelectedSession] = useState<LogsheetSession | null>(null);
   const [selectedWorkerName, setSelectedWorkerName] = useState<string>('');
@@ -622,7 +660,6 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const [bonusSplitPercentages, setBonusSplitPercentages] = useState<Record<string, number>>({});
 
   // DND sensors — pointer for mouse/touch, keyboard for accessibility.
-  // 5px drag distance required before activating, so simple clicks don't start drags.
   const dndSensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 5 },
@@ -861,8 +898,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       return aP - bP;
     };
 
-    // NEW: Other column sorts by manual sortOrder (drag-to-reorder),
-    // falling back to bonus id for stable ordering. Lower sortOrder = higher on list.
+    // "Other" column sorts by manual sortOrder (drag-to-reorder).
     const sortByManualOrder = (a: BonusWinner, b: BonusWinner) => {
       const aSO = a.bonus.sortOrder ?? Number.MAX_SAFE_INTEGER;
       const bSO = b.bonus.sortOrder ?? Number.MAX_SAFE_INTEGER;
@@ -878,13 +914,13 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     return winners;
   }, [items]);
 
-  // --- NEW: Rejuv bonus winners — cart-level with per-worker breakdown ---
-  const rejuvBonusWinners = useMemo(() => {
+  // --- RENAMED: was rejuvBonusWinners — cart-level winners for any team season (Rejuv + Sealing) ---
+  const teamBonusWinners = useMemo(() => {
     const winners: {
-      performanceEQ: RejuvBonusWinner[];
-      totalUpsell: RejuvBonusWinner[];
-      rookie: RejuvBonusWinner[];
-      other: RejuvBonusWinner[];
+      performanceEQ: TeamBonusWinner[];
+      totalUpsell: TeamBonusWinner[];
+      rookie: TeamBonusWinner[];
+      other: TeamBonusWinner[];
     } = { performanceEQ: [], totalUpsell: [], rookie: [], other: [] };
 
     if (!isTeamSeason) return winners;
@@ -905,16 +941,13 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       const payoutMap = new Map(payoutBreakdowns.map(p => [p.workerId, p]));
 
       session.bonuses.forEach((bonus) => {
-        // Per-worker breakdown using real calculateTeamPayouts results
-        const workerPayouts: RejuvWorkerPayout[] = cart.workers.map((w) => {
+        const workerPayouts: TeamWorkerPayout[] = cart.workers.map((w) => {
           const equivPercent =
             (session.equivSplit?.[w.contractorId] ?? 100 / teamSize) / 100;
 
-          // Real per-worker finalCommission from calculateTeamPayouts
           const payout = payoutMap.get(w.contractorId);
           const commission = payout?.finalCommission || 0;
 
-          // Bonus split: use bonus.splitPercentages if set, else fall back to equivSplit
           const bonusSplitPercent =
             bonus.splitPercentages?.[w.contractorId] ?? equivPercent * 100;
           const bonusShare = bonus.amount * (bonusSplitPercent / 100);
@@ -922,7 +955,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
           return { worker: w, commission, bonusShare };
         });
 
-        const winnerData: RejuvBonusWinner = {
+        const winnerData: TeamBonusWinner = {
           cartWorkers: cart.workers,
           teamSize,
           bonus,
@@ -940,16 +973,14 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       });
     });
 
-    const sortByPlacing = (a: RejuvBonusWinner, b: RejuvBonusWinner) => {
+    const sortByPlacing = (a: TeamBonusWinner, b: TeamBonusWinner) => {
       const aP = typeof a.bonus.placing === 'number' ? a.bonus.placing : 999;
       const bP = typeof b.bonus.placing === 'number' ? b.bonus.placing : 999;
       if (aP === bP) return b.teamTotalEQ - a.teamTotalEQ;
       return aP - bP;
     };
 
-    // NEW: Other column sorts by manual sortOrder (drag-to-reorder),
-    // falling back to bonus id for stable ordering.
-    const sortByManualOrder = (a: RejuvBonusWinner, b: RejuvBonusWinner) => {
+    const sortByManualOrder = (a: TeamBonusWinner, b: TeamBonusWinner) => {
       const aSO = a.bonus.sortOrder ?? Number.MAX_SAFE_INTEGER;
       const bSO = b.bonus.sortOrder ?? Number.MAX_SAFE_INTEGER;
       if (aSO !== bSO) return aSO - bSO;
@@ -965,7 +996,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   }, [teamCartsDisplay, isTeamSeason, seasonType]);
 
   // Use the right winners set depending on season
-  const activeBonusWinners = isTeamSeason ? rejuvBonusWinners : bonusWinners;
+  const activeBonusWinners = isTeamSeason ? teamBonusWinners : bonusWinners;
 
   const totalBonusCount = useMemo(() => {
     return (
@@ -992,14 +1023,12 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
   const hasBonuses = totalBonusCount > 0;
 
-  // --- NEW: Drag-end handler for "Other" column reordering ---
-  // Assigns a new sortOrder to each reordered bonus based on its new index,
-  // groups the updates by session, and saves each session's bonuses array back.
+  // --- Drag-end handler for "Other" column reordering ---
   const handleOtherDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
-    const currentOther = activeBonusWinners.other as (BonusWinner | RejuvBonusWinner)[];
+    const currentOther = activeBonusWinners.other as (BonusWinner | TeamBonusWinner)[];
     const oldIds = currentOther.map((w) => `bonus-${w.bonus.id}`);
     const oldIndex = oldIds.indexOf(String(active.id));
     const newIndex = oldIds.indexOf(String(over.id));
@@ -1007,8 +1036,6 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
 
     const reordered = arrayMove(currentOther, oldIndex, newIndex);
 
-    // Group new sort orders by sessionId so we can update each session's
-    // bonuses array in a single DB write per affected session.
     const updatesBySession: Record<string, Record<number, number>> = {};
     reordered.forEach((winner, idx) => {
       const sid = winner.sessionId;
@@ -1026,8 +1053,6 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         const sess = allSessions.find((s) => s.id === sid);
         if (!sess || !sess.bonuses) continue;
 
-        // Apply new sortOrder only to 'Other' bonuses that got reordered.
-        // Bonuses of other types on this session are left untouched.
         const updatedBonuses: Bonus[] = sess.bonuses.map((b) => {
           if (b.type === 'Other' && newOrders[b.id] !== undefined) {
             return { ...b, sortOrder: newOrders[b.id] };
@@ -1095,7 +1120,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     });
   }, [items, searchTerm, sortOption, managers]);
 
-  // --- UPDATED: equiv case now uses multiplier for rejuv sort ---
+  // equiv case now uses multiplier for team-season sort
   const sortedTeamCarts = useMemo(() => {
     if (!isTeamSeason) return [];
 
@@ -1117,11 +1142,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         case 'steps':
           return b.sharedStats.stepCount - a.sharedStats.stepCount;
         case 'equiv':
-          // Raw team EQ, highest first
           return b.sharedStats.totalEQ - a.sharedStats.totalEQ;
         case 'bonusEquiv': {
-          // Adjusted EQ: divide by team-size multiplier so solo and teams are fairly ranked
-          // Solo ÷1.0, duo ÷1.5, trio ÷2.0, quad ÷2.5 — highest score to top
           const aScore = a.sharedStats.totalEQ / getEquivMultiplier(a.workers.length);
           const bScore = b.sharedStats.totalEQ / getEquivMultiplier(b.workers.length);
           return bScore - aScore;
@@ -1142,14 +1164,12 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const groupedByManager = useMemo(() => {
     if (sortOption !== 'standard' || isTeamSeason) return null;
 
-    const groups: Record<
-      string,
-      {
-        manager: ManagementUser | null;
-        items: typeof sortedItems;
-        stats: ManagerGroupStats;
-      }
-    > = {};
+    type GroupValue = {
+      manager: ManagementUser | null;
+      items: typeof sortedItems;
+      stats: ManagerGroupStats;
+    };
+    const groups: Record<string, GroupValue> = {};
 
     sortedItems.forEach((item) => {
       const managerId = item.worker.assignedManagerId || 'unassigned';
@@ -1304,7 +1324,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     return `${bonus.type} - ${getPlacingSuffix(bonus.placing)} Place`;
   };
 
-  // --- UPDATED: passes isTeamSeason so rejuv uses old/new money ratio ---
+  // checkBonusQualification's second arg = isTeamSeason (true for Rejuv AND Sealing)
   const selectedQualification = selectedSession
     ? checkBonusQualification(selectedSession.financialStore || [], isTeamSeason)
     : null;
@@ -1317,8 +1337,9 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       </div>
     );
 
-  // --- RENDER TEAM CART (Lawn Rejuv) ---
-  // UPDATED: checkBonusQualification now gets isTeamSeason flag
+  // --- RENDER TEAM CART (Rejuv + Sealing) ---
+  // CHANGED: multi-worker cart border/header/count-pill now uses teamCartStyles
+  // so Sealing gets slate-gray and Rejuv keeps green. Solo carts unchanged.
   const renderTeamCart = (cart: TeamCartDisplay) => {
     const { session, workers: cartWorkers, sharedStats, isValidated, totalCommission } = cart;
     const bonusTotal = (session.bonuses || []).reduce((sum, b) => sum + b.amount, 0);
@@ -1328,16 +1349,16 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     return (
       <div
         key={cart.teamId}
-        className={`bg-gray-800 border-2 ${isSoloCart ? 'border-gray-700' : 'border-green-700/50'} rounded-lg overflow-hidden mb-2`}
+        className={`bg-gray-800 border-2 ${isSoloCart ? 'border-gray-700' : teamCartStyles.cartBorder} rounded-lg overflow-hidden mb-2`}
       >
         <div
-          className={`px-3 py-2 ${isSoloCart ? 'bg-gray-750' : 'bg-green-900/20'} border-b ${isSoloCart ? 'border-gray-700' : 'border-green-700/30'} flex items-center justify-between`}
+          className={`px-3 py-2 ${isSoloCart ? 'bg-gray-750' : teamCartStyles.cartHeaderBg} border-b ${isSoloCart ? 'border-gray-700' : teamCartStyles.cartHeaderBorder} flex items-center justify-between`}
         >
           <div className="flex items-center gap-3">
             {!isSoloCart && (
-              <div className="flex items-center gap-1 bg-green-900/40 px-2 py-1 rounded border border-green-700/50">
-                <Truck size={12} className="text-green-400" />
-                <span className="text-green-400 font-bold text-[10px]">{cartWorkers.length}</span>
+              <div className={`flex items-center gap-1 ${teamCartStyles.cartCountPillBg} px-2 py-1 rounded border ${teamCartStyles.cartCountPillBorder}`}>
+                <Truck size={12} className={teamCartStyles.cartCountIcon} />
+                <span className={`${teamCartStyles.cartCountText} font-bold text-[10px]`}>{cartWorkers.length}</span>
               </div>
             )}
 
@@ -1584,10 +1605,9 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     );
   };
 
-  // --- HELPER: render a rejuv winner row in the screenshot modal ---
-  const renderRejuvWinnerRow = (winner: RejuvBonusWinner, idx: number) => {
-    const thresholds = getRejuvThresholds(winner.teamSize);
-    const isSolo = winner.teamSize === 1;
+  // --- RENAMED: was renderRejuvWinnerRow — now uses getTeamThresholds with seasonType ---
+  const renderTeamWinnerRow = (winner: TeamBonusWinner, idx: number) => {
+    const thresholds = getTeamThresholds(winner.teamSize, seasonType);
 
     return (
       <div
@@ -1649,11 +1669,33 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     <div className="flex flex-col h-full">
       {/* --- STATS HEADER --- */}
       <div className="border-b border-gray-700 bg-gray-900/50">
+        {/* CHANGED: season-aware banner. Rejuv keeps green + Truck. Sealing gets
+            slate-gray + Shovel and reads "SEALING SEASON". Layout identical. */}
         {isTeamSeason && (
-          <div className="px-3 py-1.5 bg-green-900/30 border-b border-green-700/50 flex items-center gap-2">
-            <Truck size={14} className="text-green-400" />
-            <span className="text-green-400 text-xs font-bold">LAWN REJUVENATION SEASON</span>
-            <span className="text-green-300 text-xs">
+          <div
+            className={`px-3 py-1.5 border-b flex items-center gap-2 ${
+              seasonType === 'sealing'
+                ? 'bg-slate-800/40 border-slate-600/50'
+                : 'bg-green-900/30 border-green-700/50'
+            }`}
+          >
+            {seasonType === 'sealing' ? (
+              <Shovel size={14} className="text-slate-300" />
+            ) : (
+              <Truck size={14} className="text-green-400" />
+            )}
+            <span
+              className={`text-xs font-bold ${
+                seasonType === 'sealing' ? 'text-slate-300' : 'text-green-400'
+              }`}
+            >
+              {seasonType === 'sealing' ? 'SEALING SEASON' : 'LAWN REJUVENATION SEASON'}
+            </span>
+            <span
+              className={`text-xs ${
+                seasonType === 'sealing' ? 'text-slate-400' : 'text-green-300'
+              }`}
+            >
               ({teamCartsDisplay.length} carts, {aggregatedStats.workerCount} workers)
             </span>
           </div>
@@ -2237,8 +2279,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                   </div>
                   <div className={`${sizeConfig.rowMargin} flex-1 overflow-hidden`}>
                     {isTeamSeason
-                      ? (activeBonusWinners.performanceEQ as RejuvBonusWinner[]).map(
-                          (winner, idx) => renderRejuvWinnerRow(winner, idx)
+                      ? (activeBonusWinners.performanceEQ as TeamBonusWinner[]).map(
+                          (winner, idx) => renderTeamWinnerRow(winner, idx)
                         )
                       : (activeBonusWinners.performanceEQ as BonusWinner[]).map((winner, idx) => (
                           <div
@@ -2298,8 +2340,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                   </div>
                   <div className={`${sizeConfig.rowMargin} flex-1 overflow-hidden`}>
                     {isTeamSeason
-                      ? (activeBonusWinners.totalUpsell as RejuvBonusWinner[]).map(
-                          (winner, idx) => renderRejuvWinnerRow(winner, idx)
+                      ? (activeBonusWinners.totalUpsell as TeamBonusWinner[]).map(
+                          (winner, idx) => renderTeamWinnerRow(winner, idx)
                         )
                       : (activeBonusWinners.totalUpsell as BonusWinner[]).map((winner, idx) => (
                           <div
@@ -2358,8 +2400,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                   </div>
                   <div className={`${sizeConfig.rowMargin} flex-1 overflow-hidden`}>
                     {isTeamSeason
-                      ? (activeBonusWinners.rookie as RejuvBonusWinner[]).map(
-                          (winner, idx) => renderRejuvWinnerRow(winner, idx)
+                      ? (activeBonusWinners.rookie as TeamBonusWinner[]).map(
+                          (winner, idx) => renderTeamWinnerRow(winner, idx)
                         )
                       : (activeBonusWinners.rookie as BonusWinner[]).map((winner, idx) => (
                           <div
@@ -2427,15 +2469,15 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
                       onDragEnd={handleOtherDragEnd}
                     >
                       <SortableContext
-                        items={(activeBonusWinners.other as (BonusWinner | RejuvBonusWinner)[]).map(
+                        items={(activeBonusWinners.other as (BonusWinner | TeamBonusWinner)[]).map(
                           (w) => `bonus-${w.bonus.id}`
                         )}
                         strategy={verticalListSortingStrategy}
                       >
                         {isTeamSeason
-                          ? (activeBonusWinners.other as RejuvBonusWinner[]).map((winner, idx) => (
+                          ? (activeBonusWinners.other as TeamBonusWinner[]).map((winner, idx) => (
                               <SortableOtherCard key={winner.bonus.id} id={`bonus-${winner.bonus.id}`}>
-                                {renderRejuvWinnerRow(winner, idx)}
+                                {renderTeamWinnerRow(winner, idx)}
                               </SortableOtherCard>
                             ))
                           : (activeBonusWinners.other as BonusWinner[]).map((winner, idx) => (
