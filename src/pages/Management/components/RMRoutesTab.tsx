@@ -3,12 +3,14 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Map as MapIcon, 
   AlertCircle, X, Check, ChevronDown, ChevronUp, 
-  MapPin, Phone, User, Users, Shuffle, Truck, Leaf, FileText
+  MapPin, Phone, User, Users, Shuffle, Truck, Leaf, FileText,
+  Shovel, // NEW: Sealing season banner icon
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
 import { 
   getPrepaidWeight, 
   getSeasonConfig,
+  seasonHasTeams, // NEW: drives isTeamSeason — true for Rejuv AND Sealing
   EQ_DIVISOR 
 } from '../../../lib/commandCenterService';
 import { RouteData, MasterBooking, Worker, ManagementUser, SeasonType, TeamCart, LogsheetSession } from '../../../types';
@@ -22,7 +24,7 @@ interface RMRoutesTabProps {
   managers: ManagementUser[];
   seasonType?: SeasonType;
   teamCarts?: TeamCart[];
-  allSessions?: LogsheetSession[]; // CHANGE 1: new prop — source of truth for cart membership
+  allSessions?: LogsheetSession[]; // source of truth for cart membership
   onRefresh: () => void;
 }
 
@@ -55,7 +57,15 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   allSessions = [],
   onRefresh,
 }) => {
+  // CHANGED: was a single `isLawnRejuv` flag driving all cart-vs-individual
+  // branching. Now we have two flags:
+  //   - isTeamSeason: true for Rejuv AND Sealing — drives cart-based assignment,
+  //                   cart-aware sorting, cart-bubble rendering, modal branching.
+  //   - isLawnRejuv:  true ONLY for Rejuv — used solely for showing the A/D/F/S/L
+  //                   service badges on job rows. Sealing has no services so this
+  //                   correctly stays Rejuv-only.
   const isLawnRejuv = seasonType === 'lawn_rejuv';
+  const isTeamSeason = seasonHasTeams(seasonType);
   
   // State
   const [displayRoutes, setDisplayRoutes] = useState<RouteDisplay[]>([]);
@@ -238,7 +248,8 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   const sortedContractors = useMemo(() => {
     const sorted = [...contractors];
     
-    if (isLawnRejuv) {
+    // CHANGED: was `if (isLawnRejuv)`. Now isTeamSeason — Sealing teams also sort by cart.
+    if (isTeamSeason) {
       return sorted.sort((a, b) => {
         const aTeam = a.teamId || a.contractorId;
         const bTeam = b.teamId || b.contractorId;
@@ -263,13 +274,15 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
 
       return a.firstName.localeCompare(b.firstName);
     });
-  }, [contractors, workerRouteMap, isLawnRejuv]);
+  }, [contractors, workerRouteMap, isTeamSeason]);
 
-  // CHANGE 2: Build contractorsByCart from allSessions instead of worker.teamId.
+  // Build contractorsByCart from allSessions instead of worker.teamId.
   // After a reassignment, logsheet_sessions reflects the new cart membership
   // immediately. worker.teamId (metadata) never changes mid-session.
+  // CHANGED: was gated `if (!isLawnRejuv) return null` — now Sealing also gets
+  // the cart-based contractor map.
   const contractorsByCart = useMemo(() => {
-    if (!isLawnRejuv) return null;
+    if (!isTeamSeason) return null;
     
     const myTeamIds = new Set(contractors.map(w => w.contractorId));
     const workerMap = new Map(contractors.map(w => [w.contractorId, w]));
@@ -290,7 +303,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
     });
 
     return cartMap;
-  }, [contractors, allSessions, isLawnRejuv]);
+  }, [contractors, allSessions, isTeamSeason]);
 
   // --- 4. ACTIONS ---
 
@@ -311,7 +324,6 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
   const handleJobClick = (job: MasterBooking) => {
     const isCompleted = job.Status === 'completed' || job.Completed === 'x';
     
-    // Only open modal for non-completed jobs
     if (!isCompleted) {
       setPendingJob(job);
     }
@@ -336,16 +348,18 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
         // Unassign route
         await sessionService.assignRouteToWorkers(routeCode, []);
         
-        // Clear session assignments from bookings (Lawn Rejuv)
-        if (isLawnRejuv) {
+        // CHANGED: was `if (isLawnRejuv)`. Now isTeamSeason — Sealing also
+        // clears session-based booking assignments on route unassign.
+        if (isTeamSeason) {
           const routeItems = displayRoutes.find(r => r.routeCode === routeCode)?.items || [];
           const pendingItems = routeItems.filter(b => b.Status !== 'completed');
           await Promise.all(pendingItems.map(job => 
             sessionService.assignBookingToSession(job['Booking ID'], null)
           ));
         }
-      } else if (isLawnRejuv) {
-        // LAWN REJUV: Find the worker's cart and assign to session
+      } else if (isTeamSeason) {
+        // CHANGED: was `else if (isLawnRejuv)`. Now Sealing also takes this
+        // session-based cart-aware assignment path.
         const worker = contractors.find(w => w.contractorId === workerId);
         const teamId = worker?.teamId || workerId;
         const cart = teamCarts.find(c => c.teamId === teamId);
@@ -395,8 +409,9 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       }
     } else {
       // Single job assignment
-      if (isLawnRejuv && workerId) {
-        // Lawn Rejuv: assign to session
+      // CHANGED: was `if (isLawnRejuv && workerId)`. Now isTeamSeason.
+      if (isTeamSeason && workerId) {
+        // Team season: assign to session
         const session = await sessionService.getWorkerLogsheetSession(workerId);
         if (session?.id) {
           await sessionService.assignBookingToSession(assignModalData.targetId, session.id);
@@ -470,12 +485,16 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
           }}
           className="h-10 w-10 rounded-lg flex items-center justify-center font-bold text-sm border shadow-lg transition-transform active:scale-95 bg-gray-700 text-gray-500 border-gray-600 hover:border-red-500 hover:text-red-400"
         >
-          {isLawnRejuv ? <Truck size={18} /> : <Users size={18} />}
+          {/* CHANGED: was isLawnRejuv — now isTeamSeason so Sealing also shows
+              the Truck (cart-mode) icon for unassigned team-season routes. */}
+          {isTeamSeason ? <Truck size={18} /> : <Users size={18} />}
         </button>
       );
     }
 
-    if (route.assignedWorkerIds.length === 1 && !hasUnassigned && !isLawnRejuv) {
+    // CHANGED: was `!isLawnRejuv` — single-worker avatar bypass now applies to
+    // Aeration ONLY. Sealing and Rejuv both fall through to the cart-aware branch.
+    if (route.assignedWorkerIds.length === 1 && !hasUnassigned && !isTeamSeason) {
       const worker = getWorkerInfo(route.assignedWorkerIds[0]);
       
       return (
@@ -499,12 +518,18 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       );
     }
 
-    if (isLawnRejuv && route.assignedWorkerIds.length >= 1) {
+    // CHANGED: was `isLawnRejuv` — Sealing also takes this team-aware branch.
+    if (isTeamSeason && route.assignedWorkerIds.length >= 1) {
       const firstWorker = getWorkerInfo(route.assignedWorkerIds[0]);
       const cart = firstWorker ? cartByWorkerId.get(firstWorker.contractorId) : null;
       const isFullCart = cart && cart.workerIds.every(wid => route.assignedWorkerIds.includes(wid));
       
       if (isFullCart && cart.workerIds.length > 1) {
+        // Multi-worker team cart bubble.
+        // CHANGED: cart-button color now season-aware — green for Rejuv, slate for Sealing.
+        const cartButtonClass = seasonType === 'sealing'
+          ? 'bg-slate-600 text-slate-100 border-slate-500'
+          : 'bg-green-600 text-white border-green-500';
         return (
           <button
             onClick={(e) => {
@@ -517,7 +542,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                 title: `Assign Route ${route.routeCode}`
               });
             }}
-            className="h-10 w-10 rounded-lg flex flex-col items-center justify-center font-bold text-sm border shadow-lg transition-transform active:scale-95 bg-green-600 text-white border-green-500"
+            className={`h-10 w-10 rounded-lg flex flex-col items-center justify-center font-bold text-sm border shadow-lg transition-transform active:scale-95 ${cartButtonClass}`}
           >
             <Truck size={14} />
             <span className="text-[9px]">{cart.workerIds.length}</span>
@@ -582,13 +607,19 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
           if (bubble.type === 'worker' && bubble.workerId) {
             const worker = getWorkerInfo(bubble.workerId);
             const breakdown = route.workerBreakdown.find(wb => wb.workerId === bubble.workerId);
-            const isTeamMember = isLawnRejuv && worker?.teamId;
+            // CHANGED: was `isLawnRejuv && worker?.teamId` — now isTeamSeason so
+            // Sealing also colors team members differently. Color picks slate
+            // for Sealing, green for Rejuv.
+            const isTeamMember = isTeamSeason && worker?.teamId;
+            const teamMemberClass = seasonType === 'sealing'
+              ? 'bg-slate-600 text-slate-100'
+              : 'bg-green-600 text-white';
             
             return (
               <div
                 key={bubble.workerId}
                 className={`h-8 w-8 rounded-full flex items-center justify-center text-[10px] font-bold border-2 border-gray-800 shadow-md ${
-                  isTeamMember ? 'bg-green-600 text-white' : 'bg-cps-blue text-white'
+                  isTeamMember ? teamMemberClass : 'bg-cps-blue text-white'
                 }`}
                 style={{ zIndex: bubblesToShow.length - idx }}
                 title={worker ? `${worker.firstName} ${worker.lastName}${breakdown ? ` (${breakdown.bookingCount} jobs)` : ''}` : ''}
@@ -638,14 +669,17 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       return <span className="text-red-400 italic">Unassigned Route</span>;
     }
     
-    if (isLawnRejuv) {
+    // CHANGED: was `if (isLawnRejuv)`. Now isTeamSeason — Sealing also gets the
+    // cart label. Text color season-aware (slate vs green).
+    if (isTeamSeason) {
       const firstWorker = getWorkerInfo(route.assignedWorkerIds[0]);
       const cart = firstWorker ? cartByWorkerId.get(firstWorker.contractorId) : null;
       const isFullCart = cart && cart.workerIds.every(wid => route.assignedWorkerIds.includes(wid));
       
       if (isFullCart && cart.workerIds.length > 1) {
+        const cartLabelClass = seasonType === 'sealing' ? 'text-slate-300' : 'text-green-300';
         return (
-          <span className="text-green-300 flex items-center gap-1">
+          <span className={`${cartLabelClass} flex items-center gap-1`}>
             <Truck size={12} />
             Cart {cart.teamId} ({cart.workerIds.length} workers)
           </span>
@@ -674,13 +708,24 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
       {/* Sort Dropdown */}
       {displayRoutes.length > 0 && (
         <div className="flex justify-between items-center mb-4">
-          {isLawnRejuv && (
-            <div className="flex items-center gap-1 text-xs text-green-400">
-              <Leaf size={12} />
-              <span>Lawn Rejuv Mode - Assign by Cart</span>
+          {/* CHANGED: was {isLawnRejuv && (...Leaf + green + "Lawn Rejuv Mode")}.
+              Now shows for any team season, season-aware: Rejuv keeps Leaf+green,
+              Sealing gets Shovel+slate with "Sealing Mode" label. */}
+          {isTeamSeason && (
+            <div className={`flex items-center gap-1 text-xs ${
+              seasonType === 'sealing' ? 'text-slate-300' : 'text-green-400'
+            }`}>
+              {seasonType === 'sealing' ? <Shovel size={12} /> : <Leaf size={12} />}
+              <span>
+                {seasonType === 'sealing'
+                  ? 'Sealing Mode - Assign by Cart'
+                  : 'Lawn Rejuv Mode - Assign by Cart'}
+              </span>
             </div>
           )}
-          <div className={`flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 shadow-sm ${!isLawnRejuv ? 'ml-auto' : ''}`}>
+          {/* CHANGED: !isLawnRejuv → !isTeamSeason so Sealing also keeps the
+              banner on left and dropdown on right (instead of dropdown floating). */}
+          <div className={`flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 shadow-sm ${!isTeamSeason ? 'ml-auto' : ''}`}>
             <span className="text-xs text-gray-400 font-medium">Sort by:</span>
             <select 
               value={sortBy} 
@@ -761,7 +806,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                           statusBadge = <span className="text-[9px] bg-red-900/30 text-red-400 px-1 py-0.5 rounded border border-red-800 font-bold">CANCELLED</span>;
                         }
                         
-                        return (
+                                return (
                             <div 
                                 key={job['Booking ID']} 
                                 onClick={() => handleJobClick(job)}
@@ -784,6 +829,8 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                                             
                                             {statusBadge}
                                             
+                                            {/* Service badges stay gated on isLawnRejuv ONLY. Sealing has
+                                                no services (no A/D/F/S/L) so this correctly skips. */}
                                             {isLawnRejuv && services && (
                                               <div className="flex gap-0.5">
                                                 {services.aeration && <span className="text-[8px] px-1 py-0.5 rounded bg-blue-900/50 text-blue-300 font-bold">A</span>}
@@ -885,8 +932,14 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
               <h3 className="font-bold text-white flex items-center gap-2">
                  <MapIcon size={18} className="text-cps-blue" /> 
                  {assignModalData.title}
-                 {isLawnRejuv && (
-                   <span className="text-[10px] bg-green-900/30 text-green-400 px-1.5 py-0.5 rounded border border-green-700/50 ml-2">
+                 {/* CHANGED: "Cart Mode" pill was gated on isLawnRejuv with green styling.
+                     Now gates on isTeamSeason; color flips slate (Sealing) ↔ green (Rejuv). */}
+                 {isTeamSeason && (
+                   <span className={`text-[10px] px-1.5 py-0.5 rounded border ml-2 ${
+                     seasonType === 'sealing'
+                       ? 'bg-slate-800 text-slate-300 border-slate-600'
+                       : 'bg-green-900/30 text-green-400 border-green-700/50'
+                   }`}>
                      Cart Mode
                    </span>
                  )}
@@ -904,9 +957,10 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                 <AlertCircle size={16} /> Unassign {assignModalData.type === 'ROUTE' ? 'Route' : 'Job'}
               </button>
 
-              {/* CHANGE 3: Assignment modal now iterates contractorsByCart which is
-                  built from allSessions — reflects post-reassignment membership */}
-              {isLawnRejuv && contractorsByCart ? (
+              {/* CHANGED: was `isLawnRejuv && contractorsByCart`. Now `isTeamSeason &&
+                  contractorsByCart` so Sealing also iterates by cart. Inside the
+                  cart iteration, cart icon bg and worker name color flip slate↔green. */}
+              {isTeamSeason && contractorsByCart ? (
                 Array.from(contractorsByCart.entries()).map(([cartId, cartWorkers]) => {
                   const isSoloCart = cartWorkers.length === 1;
                   const primaryWorker = cartWorkers[0];
@@ -914,13 +968,22 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                   const assignedRoutes = workerRouteMap.get(primaryWorker.contractorId);
                   const hasRoute = assignedRoutes && assignedRoutes.length > 0;
                   
+                  // Season-aware styling for the multi-worker cart row.
+                  const cartIconClass = seasonType === 'sealing'
+                    ? (isSelected ? 'bg-slate-600 text-white' : 'bg-slate-800 text-slate-300 border border-slate-600')
+                    : (isSelected ? 'bg-green-600 text-white' : 'bg-green-900/30 text-green-400 border border-green-700/50');
+                  const cartNameClass = seasonType === 'sealing' ? 'text-slate-200' : 'text-green-300';
+                  const selectedRowClass = seasonType === 'sealing'
+                    ? 'bg-slate-800/50 border border-slate-600 text-white'
+                    : 'bg-green-900/20 border border-green-700/50 text-white';
+                  
                   return (
                     <button
                       key={cartId}
                       onClick={() => handleAssignConfirm(primaryWorker.contractorId)}
                       className={`w-full text-left px-3 py-3 rounded text-sm flex items-center justify-between gap-3 transition-colors ${
                         isSelected 
-                          ? 'bg-green-900/20 border border-green-700/50 text-white' 
+                          ? selectedRowClass 
                           : 'text-gray-300 hover:bg-gray-800 border border-transparent'
                       }`}
                     >
@@ -928,7 +991,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                         <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-sm font-bold ${
                           isSoloCart 
                             ? isSelected ? 'bg-cps-blue text-white' : 'bg-gray-700 text-gray-300'
-                            : isSelected ? 'bg-green-600 text-white' : 'bg-green-900/30 text-green-400 border border-green-700/50'
+                            : cartIconClass
                         }`}>
                           {isSoloCart ? (
                             <span>{primaryWorker.firstName[0]}{primaryWorker.lastName[0]}</span>
@@ -947,7 +1010,7 @@ const RMRoutesTab: React.FC<RMRoutesTabProps> = ({
                             </>
                           ) : (
                             <>
-                              <span className="font-medium text-green-300">
+                              <span className={`font-medium ${cartNameClass}`}>
                                 {cartWorkers.map(w => w.firstName).join(' & ')}
                               </span>
                               <span className="text-[10px] text-gray-400">

@@ -1,7 +1,8 @@
 // src/pages/Management/RMLogbook.tsx
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock, Lock, Unlock, Leaf, CreditCard } from 'lucide-react';
+import { Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock, Lock, Unlock, Leaf, CreditCard, Shovel } from 'lucide-react';
+// NEW: Shovel icon imported for the Sealing badge.
 import { getStorageItem } from '../../lib/localStorage';
 import { ManagementUser, DailySessionData, LogsheetSession, SeasonType } from '../../types';
 import { sessionService } from '../../lib/sessionService';
@@ -62,7 +63,11 @@ const RMLogbook: React.FC = () => {
   
   // Season Type
   const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
+  // CHANGED: was a single isLawnRejuv flag. Now two flags side-by-side so the
+  // header badge can render either a Rejuv pill (Leaf + green) or a Sealing pill
+  // (Shovel + slate-gray). Aeration shows no badge, same as before.
   const isLawnRejuv = seasonType === 'lawn_rejuv';
+  const isSealing = seasonType === 'sealing';
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -262,11 +267,19 @@ const RMLogbook: React.FC = () => {
             <span className="text-sm font-bold text-white truncate">
               {currentUser.name}
             </span>
-            {/* Season Badge */}
+            {/* CHANGED: was a 1-way pill (Rejuv only with Leaf + green). Now
+                2-way: Rejuv keeps Leaf + green + "Rejuv", Sealing gets Shovel +
+                slate-gray + "Sealing". Aeration still shows no pill. */}
             {isLawnRejuv && (
               <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-green-900/30 text-green-400 border border-green-700/50">
                 <Leaf size={10} />
                 Rejuv
+              </span>
+            )}
+            {isSealing && (
+              <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-600">
+                <Shovel size={10} />
+                Sealing
               </span>
             )}
           </div>

@@ -1,6 +1,7 @@
 // src/components/AddContractModal.tsx
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader, Phone, CheckCircle, Leaf, CreditCard, Info } from 'lucide-react';
+import { X, ArrowLeft, Check, DollarSign, AlertCircle, User, Lock, Droplets, Mail, Plus, Loader, Phone, CheckCircle, Leaf, CreditCard, Info, Shovel } from 'lucide-react';
+// NEW: Shovel icon imported for the Sealing season pill in the title bar.
 import { getStorageItem } from '../lib/localStorage';
 import { commandCenterService, getTaxRateForRegion, Region, getAvailableAddOns } from '../lib/commandCenterService';
 import { MasterBooking, Worker, SessionTransaction, SeasonType, ServiceFlags, SERVICE_FLAG_KEYS, SERVICE_FLAG_LABELS } from '../types';
@@ -80,8 +81,12 @@ const CONTRACT_RECIPES: ContractRecipe[] = [
   { id: 'window_washing', name: 'Window Washing', type: 'Add-On', region: 'Central', propertyTypes: [], hasIOS: true, badge: 'WW' },
   
   // East Add-Ons
-  { id: 'driveway_sealing', name: 'Driveway Sealing', type: 'Add-On', region: 'East', propertyTypes: ['SS', 'SSP'], hasIOS: true, badge: 'DWS' },
-  { id: 'hot_asphalt', name: 'Hot Asphalt', type: 'Add-On', region: 'East', propertyTypes: [], hasIOS: true, badge: 'RAMP' },
+  // CHANGED: added `seasonOnly: 'aeration'` to both East add-ons. Per spec,
+  // Sealing has zero add-ons. Without these flags, these would still appear in
+  // the picker during Sealing season because the filter loop only checks
+  // `seasonOnly` when it's set. Aeration behavior is unchanged.
+  { id: 'driveway_sealing', name: 'Driveway Sealing', type: 'Add-On', region: 'East', propertyTypes: ['SS', 'SSP'], hasIOS: true, badge: 'DWS', seasonOnly: 'aeration' },
+  { id: 'hot_asphalt', name: 'Hot Asphalt', type: 'Add-On', region: 'East', propertyTypes: [], hasIOS: true, badge: 'RAMP', seasonOnly: 'aeration' },
 ];
 
 // Direct upgrade client data (for NewJob - no existing booking)
@@ -198,6 +203,11 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   // --- COMPUTED VALUES ---
   const isSplitPayment = paymentInfo.method === 'Split Payment';
   const isLawnRejuvSeason = seasonType === 'lawn_rejuv';
+  // NEW: Sealing season flag, used in three places:
+  //   1. Title bar pill (slate + Shovel + "SEALING")
+  //   2. Direct-upgrade guard (no upgrades available in Sealing)
+  //   3. Info banner copy and empty-state message
+  const isSealingSeason = seasonType === 'sealing';
 
   const splitTotal = 
     (parseFloat(splitCash) || 0) + 
@@ -209,6 +219,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
   const splitCCNeedsProcessing = splitCCAmount > 0 && !isCreditPaid;
 
   // Filter recipes based on region AND season type
+  // No change to this logic — the new `seasonOnly: 'aeration'` flags on the
+  // East add-ons are picked up correctly by the existing season check below.
   const availableRecipes = useMemo(() => {
     return CONTRACT_RECIPES.filter(r => {
       // Must match region
@@ -535,17 +547,18 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     init();
   }, [isDirectUpgrade, isTrainingMode]);
 
-  // Filter recipes based on mode - for lawn_rejuv, no upgrades available
+  // Filter recipes based on mode - for lawn_rejuv and sealing, no upgrades available
   const displayedRecipes = useMemo(() => {
     if (isDirectUpgrade) {
-      // In lawn_rejuv, no upgrades available at all
-      if (isLawnRejuvSeason) {
-        return []; // No direct upgrades in lawn_rejuv
+      // CHANGED: was `if (isLawnRejuvSeason) return []`. Now also blocks Sealing.
+      // Neither Lawn Rejuv nor Sealing supports direct upgrades from a job row.
+      if (isLawnRejuvSeason || isSealingSeason) {
+        return []; // No direct upgrades in team seasons
       }
       return availableRecipes.filter(r => r.type === 'Upgrade');
     }
     return availableRecipes;
-  }, [availableRecipes, isDirectUpgrade, isLawnRejuvSeason]);
+  }, [availableRecipes, isDirectUpgrade, isLawnRejuvSeason, isSealingSeason]);
 
   const filteredClients = useMemo(() => {
     if (!selectedRecipe) return [];
@@ -973,9 +986,17 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                 TRAINING
               </span>
             )}
+            {/* CHANGED: was a 1-way pill (Rejuv only). Now 2-way: Rejuv keeps
+                Leaf+green, Sealing gets Shovel+slate. Aeration has no pill,
+                matching the original behavior. */}
             {isLawnRejuvSeason && !isTrainingMode && (
               <span className="ml-2 px-2 py-0.5 bg-green-900/50 border border-green-600 rounded text-green-400 text-[10px] font-bold flex items-center gap-1">
                 <Leaf size={10} /> LAWN REJUV
+              </span>
+            )}
+            {isSealingSeason && !isTrainingMode && (
+              <span className="ml-2 px-2 py-0.5 bg-slate-800 border border-slate-600 rounded text-slate-300 text-[10px] font-bold flex items-center gap-1">
+                <Shovel size={10} /> SEALING
               </span>
             )}
           </div>
@@ -997,11 +1018,27 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                 </div>
               )}
               
-              {/* Show message if direct upgrade but no upgrades available */}
+              {/* NEW: Season info banner for sealing. Sealing has no add-ons and
+                  no upgrades — banner explains the empty picker. */}
+              {isSealingSeason && (
+                <div className="bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm text-slate-300 flex items-center gap-2">
+                  <Shovel size={16} />
+                  <span>
+                    <strong>Sealing Season:</strong> Add-ons and upgrades are not available in this season.
+                  </span>
+                </div>
+              )}
+              
+              {/* Show message if direct upgrade but no upgrades available.
+                  CHANGED: message used to hardcode "Lawn Rejuvenation season".
+                  Now reads the active season so Sealing shows the right text. */}
               {isDirectUpgrade && displayedRecipes.length === 0 && (
                 <div className="text-center text-gray-500 py-8">
                   <AlertCircle size={32} className="mx-auto mb-2 opacity-50" />
-                  <p>Upgrades are not available during Lawn Rejuvenation season.</p>
+                  <p>
+                    Upgrades are not available during{' '}
+                    {isSealingSeason ? 'Sealing' : 'Lawn Rejuvenation'} season.
+                  </p>
                   <button 
                     onClick={onClose}
                     className="mt-4 px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 transition-colors"
