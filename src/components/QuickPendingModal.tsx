@@ -1,8 +1,24 @@
 // src/components/QuickPendingModal.tsx
 import React, { useState, useEffect } from 'react';
-import { X, Save, ArrowRight, Loader, AlertCircle, FileText, Shovel, Leaf, RefreshCw, MapPin } from 'lucide-react';
+import {
+  X,
+  Save,
+  ArrowRight,
+  Loader,
+  AlertCircle,
+  FileText,
+  Shovel,
+  Leaf,
+  RefreshCw,
+  MapPin,
+  Construction,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { sessionService } from '../lib/sessionService';
+import {
+  isRampCrewTeamId,
+  seasonHasAsphalt,
+} from '../lib/commandCenterService';
 import {
   Worker,
   SeasonType,
@@ -136,6 +152,15 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
     lime: false,
   });
 
+  // --- ASPHALT ADD-ON STATE (Sealing only) ---
+  // asphaltEnabled is the on/off for the whole add-on. When false, no asphalt
+  // fields are persisted. When true, asphaltAmount must be > 0 to save.
+  // upsoldAsphaltAmount is only editable for RC carts; non-RC carts will leave
+  // it for the RC to fill in when they execute on-site.
+  const [asphaltEnabled, setAsphaltEnabled] = useState<boolean>(false);
+  const [asphaltAmount, setAsphaltAmount] = useState<string>('');
+  const [upsoldAsphaltAmount, setUpsoldAsphaltAmount] = useState<string>('');
+
   // --- STREETS DROPDOWN STATE ---
   // Same pattern as NewJob.tsx: fetch streets from the route, fall back to
   // free-entry if the route has no street list (or worker chooses "Other").
@@ -151,6 +176,14 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
   const isLawnRejuv = seasonType === 'lawn_rejuv';
   const isSealing = seasonType === 'sealing';
   const propertyTypeOptions = getPropertyTypesForSeason(seasonType);
+
+  // --- ASPHALT / RC GATING ---
+  // showAsphaltSection: any sealing cart can attach asphalt as an add-on.
+  //   Non-RC carts attach it as a child of their driveway sale; an RM later
+  //   assigns it to a Ramp Crew. RC carts get the same UI plus the Upsold field.
+  // isRC: whether the worker's cart is a Ramp Crew (case-sensitive teamId match).
+  const showAsphaltSection = seasonHasAsphalt(seasonType);
+  const isRC = isRampCrewTeamId(worker.teamId);
 
   // --- LOAD STREETS WHEN ROUTE CHANGES ---
   useEffect(() => {
@@ -181,6 +214,13 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
   // --- SHARED SAVE LOGIC ---
   // Both action buttons save first; "Proceed to Complete" then navigates.
   // Returns the created PendingSale's id on success, null on failure.
+  //
+  // Asphalt orchestration: when asphaltEnabled is true and asphaltAmount > 0,
+  // we pass asphaltAmount (and optionally upsoldAsphaltAmount for RC carts)
+  // to createPendingSale. sessionService's 3-way orchestrator decides whether
+  // to write a parent+child pair (driveway-sold) or an asphalt-only standalone
+  // (RC only) based on whether driveway info is present. We don't enforce that
+  // here — sessionService will reject if a non-RC tries to make asphalt-only.
   const handleSave = async (): Promise<string | null> => {
     if (saving) return null;
     setError(null);
@@ -188,6 +228,26 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
     if (!hasAnyAddressInfo) {
       setError('Please enter at least a house number or street name.');
       return null;
+    }
+
+    // Asphalt validation: if the toggle is on, require a real amount.
+    // Empty/zero/NaN → ask user to either enter an amount or turn off the toggle.
+    let asphaltAmountNum: number | undefined = undefined;
+    let upsoldAmountNum: number | undefined = undefined;
+    if (asphaltEnabled) {
+      const amt = parseFloat(asphaltAmount);
+      if (isNaN(amt) || amt <= 0) {
+        setError('Asphalt is added but no valid amount entered. Enter an asphalt amount or remove the asphalt add-on.');
+        return null;
+      }
+      asphaltAmountNum = amt;
+
+      if (isRC) {
+        const upsold = parseFloat(upsoldAsphaltAmount);
+        // Upsold is optional even for RC. Treat NaN/empty/0 as "not set".
+        upsoldAmountNum = !isNaN(upsold) && upsold > 0 ? upsold : undefined;
+      }
+      // Non-RC carts never enter upsold here — the RC will add it on-site.
     }
 
     setSaving(true);
@@ -202,6 +262,8 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
         propertyType: propertyType || undefined,
         services: isLawnRejuv ? services : undefined,
         notes: notes.trim() || undefined,
+        asphaltAmount: asphaltAmountNum,
+        upsoldAsphaltAmount: upsoldAmountNum,
       });
       return created.id;
     } catch (err: any) {
@@ -226,6 +288,9 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
       if (onSaved) onSaved();
       // Navigate to NewJob with the pendingSaleId param so it prefills.
       // We don't call onClose() — navigation unmounts this modal anyway.
+      // For asphalt parent+child pairs, sessionService.createPendingSale returns
+      // the PARENT id; NewJob is responsible for detecting the linked child and
+      // loading both together in the merged completion view.
       navigate(`/logsheet/new?pendingSaleId=${encodeURIComponent(id)}`);
     }
   };
@@ -247,6 +312,12 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
             {isSealing && (
               <span className="bg-slate-800 text-slate-300 text-[10px] px-1.5 py-0.5 rounded border border-slate-600 flex items-center gap-1">
                 <Shovel size={10} /> SEALING
+              </span>
+            )}
+            {/* RC pill — only shown when the worker's cart is a Ramp Crew. */}
+            {isSealing && isRC && (
+              <span className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded border border-zinc-600 flex items-center gap-1">
+                <Construction size={10} /> RAMP CREW
               </span>
             )}
           </div>
@@ -371,7 +442,8 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
               {/* Price */}
               <div>
                 <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">
-                  Price ($) <span className="text-gray-600 font-normal">— optional, leave blank if unknown</span>
+                  {isSealing ? 'Driveway Price ($)' : 'Price ($)'}{' '}
+                  <span className="text-gray-600 font-normal">— optional, leave blank if unknown</span>
                 </label>
                 <input
                   type="number"
@@ -414,6 +486,93 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
               <p className="text-[10px] text-gray-500 italic mt-2">
                 You can adjust this when you come back to complete the sale.
               </p>
+            </div>
+          )}
+
+          {/* ROW 3b: Asphalt Add-On (Sealing only) */}
+          {/*
+            Layout:
+              - Section is always rendered for sealing so the toggle is discoverable.
+              - When toggle is OFF, only the header + toggle button show.
+              - When toggle is ON, reveal:
+                  - Asphalt Amount (required, > 0 to save)
+                  - Upsold Asphalt — RC carts only
+                  - Hint text explaining what happens next.
+          */}
+          {showAsphaltSection && (
+            <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-700/50">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-gray-300 uppercase flex items-center gap-2">
+                  <Construction size={14} className="text-zinc-400" />
+                  Asphalt Add-On
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setAsphaltEnabled(prev => !prev)}
+                  disabled={saving}
+                  className={`px-3 py-1.5 rounded border-2 font-bold text-xs transition-all ${
+                    asphaltEnabled
+                      ? 'bg-zinc-600 border-zinc-500 text-white'
+                      : 'bg-gray-700 border-gray-600 text-gray-400 hover:border-zinc-500'
+                  }`}
+                >
+                  {asphaltEnabled ? '✓ Asphalt Added' : '+ Add Asphalt'}
+                </button>
+              </div>
+
+              {asphaltEnabled && (
+                <div className="space-y-3">
+                  {/* Asphalt Amount — always editable when section is on */}
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">
+                      Asphalt Amount ($) <span className="text-red-400 font-normal">— required</span>
+                    </label>
+                    <input
+                      type="number"
+                      value={asphaltAmount}
+                      onChange={(e) => setAsphaltAmount(e.target.value)}
+                      disabled={saving}
+                      placeholder="0.00"
+                      step="0.01"
+                      className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-xl font-mono font-bold text-zinc-200 focus:outline-none focus:border-zinc-500"
+                    />
+                  </div>
+
+                  {/* Upsold Asphalt — RC carts only */}
+                  {isRC && (
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">
+                        Upsold Asphalt ($){' '}
+                        <span className="text-gray-600 font-normal">— optional, additional asphalt added on-site</span>
+                      </label>
+                      <input
+                        type="number"
+                        value={upsoldAsphaltAmount}
+                        onChange={(e) => setUpsoldAsphaltAmount(e.target.value)}
+                        disabled={saving}
+                        placeholder="0.00"
+                        step="0.01"
+                        className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-lg font-mono font-bold text-zinc-200 focus:outline-none focus:border-zinc-500"
+                      />
+                    </div>
+                  )}
+
+                  {/* Hint about what happens next, based on cart kind */}
+                  <p className="text-[10px] text-gray-500 italic">
+                    {isRC ? (
+                      <>
+                        Your Ramp Crew is auto-assigned to this asphalt.
+                        Driveway price is optional — leave blank for an asphalt-only sale.
+                      </>
+                    ) : (
+                      <>
+                        A Ramp Crew will be assigned by your manager to execute this asphalt.
+                        The RC will fill in any upsold amount on-site.
+                      </>
+                    )}
+                  </p>
+                </div>
+              )}
             </div>
           )}
 

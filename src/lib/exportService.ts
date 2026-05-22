@@ -94,6 +94,7 @@ function serviceFlagsToString(services?: ServiceFlags): string {
 
 /**
  * Format payment breakdown into a readable string.
+ * Used for non-asphalt transactions where the breakdown reflects the whole job.
  */
 function formatPaymentType(tx: any): string {
   const breakdown = tx.payment_breakdown;
@@ -104,14 +105,37 @@ function formatPaymentType(tx: any): string {
     });
     if (entries.length > 1) {
       return entries
-        .map(([method, amount]) => `${method}: $${(Number(amount) || 0).toFixed(2)}`)
-        .join(' / ');
+        .map(([method, amount]) => `${method}: $${(Number(amount) || 0).toFixed(2)}`).join(' / ');
     }
     if (entries.length === 1) {
       return entries[0][0];
     }
   }
   return tx.payment_method || '';
+}
+
+/**
+ * Format a payment breakdown record into a readable string, matching formatPaymentType's
+ * output style. Used by the asphalt two-row export to render proportional slices.
+ *
+ * - Multi-method: "Cash: $200.00 / Cheque: $50.00"
+ * - Single method with non-trivial amount: just "Cash" (matches existing convention)
+ * - Empty/zero: empty string
+ */
+function formatBreakdownString(breakdown: Record<string, number>): string {
+  const entries = Object.entries(breakdown).filter(([, amount]) => {
+    const val = Number(amount) || 0;
+    return val > 0;
+  });
+  if (entries.length > 1) {
+    return entries
+      .map(([method, amount]) => `${method}: $${(Number(amount) || 0).toFixed(2)}`)
+      .join(' / ');
+  }
+  if (entries.length === 1) {
+    return entries[0][0];
+  }
+  return '';
 }
 
 /**
@@ -164,6 +188,10 @@ function getTeamWorkerIds(
 /**
  * Minimal mapping of raw DB transaction to the fields recalculateStats needs.
  * Full mapDbTransaction is private to sessionService, so we use this subset.
+ *
+ * Includes payoutShare and asphaltMeta so the asphalt-aware step counting and
+ * payout-adjustment branches in recalculateStats work correctly when this is
+ * the path used to build a stats snapshot (e.g. inside the export builders).
  */
 function mapTxForRecalc(tx: any): SessionTransaction {
   return {
@@ -184,12 +212,18 @@ function mapTxForRecalc(tx: any): SessionTransaction {
     routeCode: tx.customer_snapshot?.routeCode || '',
     workerName: '',
     services: tx.services,
+    payoutShare: tx.payout_share != null ? Number(tx.payout_share) : undefined,
+    asphaltMeta: tx.asphalt_meta || undefined,
   } as SessionTransaction;
 }
 
 /**
- * Get the transactions for a specific session, using session_id for lawn_rejuv
- * or worker_id grouping for aeration.
+ * Get the transactions for a specific session, using session_id for team seasons
+ * (lawn_rejuv + sealing) or worker_id grouping for solo seasons.
+ *
+ * For sealing in particular, asphalt phantom rows live on the partner cart's
+ * session_id but their worker_id is the partner cart's primary — so session_id
+ * routing is essential to pick them up on the correct cart's stats.
  */
 function getSessionTransactions(
   session: any,
@@ -213,10 +247,192 @@ function getSessionTransactions(
 }
 
 /**
+ * Build the Logsheets-tab rows for asphalt transactions.
+ *
+ * Input: asphalt-bearing transactions (have tx.asphalt_meta), filtered to logsheet-
+ *        eligible types upstream.
+ * Output: an array of row-shaped objects ready to hand to googleSheetsService.appendLogsheets.
+ *
+ * Algorithm:
+ *   1. Group transactions by asphalt_meta.sharedJobKey.
+ *      - Scenarios 1 (Cart+RC split): 2 txs in group — the completer (real payment_breakdown)
+ *        and the phantom partner (empty payment_breakdown {}).
+ *      - Scenarios 2 & 3 (single cart self-both): 1 tx in group.
+ *   2. For each group, identify:
+ *      - The completer (tx with non-empty payment_breakdown) — owns the real cash.
+ *      - The driveway-seller tx (role='driveway-seller' OR 'self-both') — owns the driveway row.
+ *      - The asphalt-executor tx (role='asphalt-executor' OR 'self-both') — owns the asphalt row.
+ *   3. Pull the three component amounts (driveway, asphalt, upsold) from asphalt_meta
+ *      (identical on both txs in a group).
+ *   4. Apply Option B proportional cash split: each row's payment_type string reflects
+ *      the line-item's share of the completer's collected breakdown.
+ *   5. Emit:
+ *      - Driveway row IF driveway_amount > 0 (Scenario 3 has no driveway).
+ *      - Asphalt row IF (asphalt_amount + upsold_asphalt_amount) > 0.
+ *
+ * Row marking (per locked design):
+ *   - Driveway row: PropertyType = original snapshot.serviceType (typically SS or SSP for sealing).
+ *   - Asphalt row: PropertyType = "Ramp" (hard override).
+ *
+ * Defensive behaviour:
+ *   - Groups with no sharedJobKey are skipped.
+ *   - Groups where neither tx has a non-empty breakdown still emit rows; PaymentType strings
+ *     come out empty for those rows (better to surface the work than silently drop it).
+ */
+function buildAsphaltLogsheetRows(
+  asphaltTxs: any[],
+  workersMap: Map<string, any>,
+  sessionsMap: Map<string, any>,
+  isTeamSeason: boolean
+): any[] {
+  // --- Step 1: group by sharedJobKey ---
+  const groups = new Map<string, any[]>();
+  for (const tx of asphaltTxs) {
+    const meta = tx.asphalt_meta;
+    if (!meta) continue;
+    const key = meta.sharedJobKey;
+    if (!key) {
+      console.warn('[Asphalt export] tx has asphalt_meta without sharedJobKey, skipping:', tx.id);
+      continue;
+    }
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(tx);
+  }
+
+  const rows: any[] = [];
+
+  groups.forEach((group) => {
+    // --- Step 2: identify completer (real breakdown) vs phantom (empty {}) ---
+    const completer = group.find((tx) => {
+      const bd = tx.payment_breakdown;
+      return bd && typeof bd === 'object' && Object.keys(bd).length > 0;
+    }) || group[0];  // fallback if both empty — shouldn't happen but cheap to guard
+
+    const meta = completer.asphalt_meta;
+    if (!meta) return;
+
+    // --- Step 3: extract line-item amounts (all txs in group carry the same meta amounts) ---
+    const drivewayAmount = Number(meta.driveway_amount) || 0;
+    const asphaltCore = Number(meta.asphalt_amount) || 0;
+    const upsold = Number(meta.upsold_asphalt_amount) || 0;
+    const asphaltLineAmount = asphaltCore + upsold;
+    const totalAmount = drivewayAmount + asphaltLineAmount;
+
+    if (totalAmount <= 0) return;  // nothing to emit
+
+    // --- Identify which tx owns each row's contractor ---
+    const drivewaySellerTx = group.find((tx) => {
+      const role = tx.asphalt_meta?.role;
+      return role === 'driveway-seller' || role === 'self-both';
+    });
+    const asphaltExecutorTx = group.find((tx) => {
+      const role = tx.asphalt_meta?.role;
+      return role === 'asphalt-executor' || role === 'self-both';
+    });
+
+    // --- Step 4: Option B proportional cash split ---
+    // Each line item gets its share of the actual collected breakdown.
+    const fullBreakdown = (completer.payment_breakdown || {}) as Record<string, number>;
+    const drivewayShare = totalAmount > 0 ? drivewayAmount / totalAmount : 0;
+    const asphaltShare  = totalAmount > 0 ? asphaltLineAmount / totalAmount : 0;
+
+    const splitBreakdown = (
+      bd: Record<string, number>,
+      share: number
+    ): Record<string, number> => {
+      const out: Record<string, number> = {};
+      Object.entries(bd).forEach(([method, amount]) => {
+        const val = Number(amount) || 0;
+        if (val <= 0) return;
+        out[method] = val * share;
+      });
+      return out;
+    };
+
+    const drivewayBreakdown = splitBreakdown(fullBreakdown, drivewayShare);
+    const asphaltBreakdown  = splitBreakdown(fullBreakdown, asphaltShare);
+
+    // --- Customer details (identical across both txs in a group; pull from completer) ---
+    const address = completer.customer_snapshot?.address || completer.address || '';
+    const streetParts = address.split(' ');
+    const streetNum = streetParts[0] || '';
+    const streetName = streetParts.slice(1).join(' ') || '';
+    const firstName = completer.customer_snapshot?.firstName || '';
+    const lastName  = completer.customer_snapshot?.lastName || '';
+    const routeNumber = completer.customer_snapshot?.routeCode || '';
+    const phone = completer.customer_phone || '';
+    const email = completer.customer_email || '';
+
+    // --- Step 5a: Driveway row (skipped for Scenario 3 asphalt-only) ---
+    if (drivewayAmount > 0 && drivewaySellerTx) {
+      const drivewayContractorName = getTeamWorkerNames(
+        drivewaySellerTx,
+        workersMap,
+        isTeamSeason ? sessionsMap : undefined
+      );
+      // PropertyType comes from the original booking's serviceType — for sealing
+      // this is SS or SSP per the locked config. Defaulting to 'SS' if missing
+      // is defensive; in practice the snapshot is always populated by the UI.
+      const drivewayPropertyType = drivewaySellerTx.customer_snapshot?.serviceType || 'SS';
+      rows.push({
+        routeNumber,
+        firstName,
+        lastName,
+        streetNum,
+        streetName,
+        phone,
+        email,
+        clientType: getClientType(drivewaySellerTx),
+        propertyType: drivewayPropertyType,
+        notes: drivewaySellerTx.item_description || '',
+        price: drivewayAmount,
+        paymentType: formatBreakdownString(drivewayBreakdown),
+        contractorName: drivewayContractorName,
+        services: drivewaySellerTx.services as ServiceFlags | undefined,
+      });
+    }
+
+    // --- Step 5b: Asphalt row (always when asphalt portion > 0) ---
+    if (asphaltLineAmount > 0 && asphaltExecutorTx) {
+      const asphaltContractorName = getTeamWorkerNames(
+        asphaltExecutorTx,
+        workersMap,
+        isTeamSeason ? sessionsMap : undefined
+      );
+      rows.push({
+        routeNumber,
+        firstName,
+        lastName,
+        streetNum,
+        streetName,
+        phone,
+        email,
+        clientType: getClientType(asphaltExecutorTx),
+        // Hard override: asphalt rows always mark as "Ramp" regardless of underlying snapshot.
+        propertyType: 'Ramp',
+        notes: 'Asphalt',
+        price: asphaltLineAmount,
+        paymentType: formatBreakdownString(asphaltBreakdown),
+        contractorName: asphaltContractorName,
+        // Asphalt rows carry no service flags — the asphalt work is separate from
+        // any Rejuv-style service ticks on the driveway side.
+        services: undefined,
+      });
+    }
+  });
+
+  return rows;
+}
+
+/**
  * Generates and downloads a comprehensive Excel export of all session data.
  * All data is scoped to the current command center.
  * ONLY exports validated payouts for Payout Summary and Team Payouts sheets.
  * Stats are LIVE-RECALCULATED from transactions (not stored session.stats).
+ *
+ * NOTE: This is the internal/audit Excel export. Asphalt transactions appear here
+ * as raw rows (phantom partner rows visible alongside completer rows). The two-row
+ * customer-facing treatment is in exportToGoogleSheets → Logsheets only.
  */
 export async function generateSessionExport(): Promise<void> {
   const ccId = getCCId();
@@ -363,6 +579,9 @@ export async function generateSessionExport(): Promise<void> {
   }
 
   // === SHEET 2: Transactions (ALL) ===
+  // Raw row-per-tx dump. Asphalt phantom rows show up here as separate rows;
+  // the asphalt_meta column isn't surfaced but is in the underlying data if anyone
+  // pulls the source for forensics.
   const txRows = transactions.map(tx => {
     const servicesStr = serviceFlagsToString(tx.services);
     const completedBy = getTeamWorkerIds(tx, isTeamSeason ? sessionsMap : undefined);
@@ -454,6 +673,13 @@ export async function generateSessionExport(): Promise<void> {
  * Exports session data to Google Sheets.
  * ONLY exports validated payouts for payout stats.
  * Stats are LIVE-RECALCULATED from transactions.
+ *
+ * ASPHALT TWO-ROW LOGSHEETS EMIT (Sealing season only):
+ *   Transactions with asphalt_meta are routed through buildAsphaltLogsheetRows,
+ *   which groups by sharedJobKey and emits a driveway row + asphalt row per group.
+ *   Per Option B: each row's PaymentType is the proportional slice of the actual
+ *   collected payment_breakdown. PropertyType is SS/SSP on driveway, "Ramp" on asphalt.
+ *   Non-asphalt transactions continue to emit a single row via the existing mapping.
  */
 export async function exportToGoogleSheets(dateTab: string): Promise<{
   bookingsUpdated: number;
@@ -514,8 +740,17 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   const bookingsMap = new Map<string, any>();
   bookingsData.forEach(b => bookingsMap.set(b.booking_id, b));
 
+  // For asphalt completions we use the COMPLETER's transaction (the one with a real
+  // payment_breakdown) to drive the booking update — the phantom partner row carries
+  // a synthesised job_id like `...__asphalt_partner_rc` that doesn't exist in bookings.
   const completedFromTransactions = transactions
-    .filter(tx => (tx.type === 'Production' || tx.type === 'Upgrade') && tx.job_id && !tx.job_id.startsWith('NEW-'))
+    .filter(tx => {
+      if (!(tx.type === 'Production' || tx.type === 'Upgrade' || tx.type === 'Sale')) return false;
+      if (!tx.job_id || tx.job_id.startsWith('NEW-')) return false;
+      // Skip phantom partner rows — their job_id is a derived suffix, not a real booking.
+      if (tx.asphalt_meta?.is_partner_phantom) return false;
+      return true;
+    })
     .map(tx => {
       const contractorIds = getTeamWorkerIds(tx, isTeamSeason ? sessionsMap : undefined);
       const booking = bookingsMap.get(tx.job_id);
@@ -539,8 +774,12 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   );
 
   // === 2. Append Accounts ===
+  // Skip phantom partner transactions — their empty payment_breakdown ({}) means
+  // they'd never match the payment-method filters below, but we make the intent
+  // explicit here so anyone reading sees the asphalt-aware logic.
   const validAccountPaymentMethods = ['Billed', 'E-Transfer', 'Credit Card'];
   const accountTransactions = transactions.filter(tx => {
+    if (tx.asphalt_meta?.is_partner_phantom) return false;
     if (tx.payment_breakdown && typeof tx.payment_breakdown === 'object') {
       return Object.keys(tx.payment_breakdown).some(method =>
         validAccountPaymentMethods.some(valid => method.includes(valid))
@@ -570,9 +809,17 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   });
   if (accountsData.length > 0) await googleSheetsService.appendAccounts(accountsData);
 
-  // === 3. Append Logsheets ===
+  // === 3. Append Logsheets (asphalt two-row treatment) ===
+  // Filter to logsheet-eligible types, then split asphalt vs non-asphalt and process
+  // independently. Non-asphalt keeps the existing single-row mapping; asphalt routes
+  // through buildAsphaltLogsheetRows which emits driveway + asphalt rows per shared job.
   const logsheetTypes = isTeamSeason ? ['Production', 'Sale', 'Add-On'] : ['Production', 'Sale', 'Upgrade', 'Add-On'];
-  const logsheetsData = transactions.filter(tx => logsheetTypes.includes(tx.type)).map(tx => {
+  const eligibleLogsheetTx = transactions.filter(tx => logsheetTypes.includes(tx.type));
+
+  const asphaltLogsheetTx = eligibleLogsheetTx.filter(tx => !!tx.asphalt_meta);
+  const nonAsphaltLogsheetTx = eligibleLogsheetTx.filter(tx => !tx.asphalt_meta);
+
+  const nonAsphaltLogsheetsData = nonAsphaltLogsheetTx.map(tx => {
     const address = tx.customer_snapshot?.address || tx.address || '';
     const streetParts = address.split(' ');
     const clientType = getClientType(tx);
@@ -586,6 +833,15 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
       services: tx.services as ServiceFlags | undefined,
     };
   });
+
+  const asphaltLogsheetsData = buildAsphaltLogsheetRows(
+    asphaltLogsheetTx,
+    workersMap,
+    sessionsMap,
+    isTeamSeason
+  );
+
+  const logsheetsData = [...nonAsphaltLogsheetsData, ...asphaltLogsheetsData];
   if (logsheetsData.length > 0) await googleSheetsService.appendLogsheets(logsheetsData);
 
   // === 4. Append Payout Stats (VALIDATED ONLY, LIVE RECALC) ===

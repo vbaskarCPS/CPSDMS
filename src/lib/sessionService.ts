@@ -8,6 +8,9 @@ import {
   getPayoutRate,
   isOfficeFlat,
   seasonHasTeams,
+  seasonHasAsphalt,
+  isRampCrewTeamId,
+  calculateAsphaltSplit,
   createEqualSplit,
   EQ_DIVISOR
 } from './commandCenterService';
@@ -28,12 +31,48 @@ import {
   SEASON_CONFIGS,
   PendingSale,
   PendingSaleInput,
-  PendingSaleUpdate
+  PendingSaleUpdate,
+  AsphaltMeta,
+  AsphaltRole,
 } from '../types';
 
 // Import metadata type - re-export for other modules
 import { ImportMeta } from './googleSheetsService';
 export type { ImportMeta };
+
+// --- ASPHALT COMPLETION CONTEXT ---
+// Passed to completeJob when the job has an asphalt component. The completer's
+// transaction is built normally (form values → SessionTransaction); this context
+// tells completeJob how to split the payout share, which partner row (if any) to
+// write as a phantom, and which pending_sales rows to delete on success.
+//
+// completerRole semantics:
+//   'driveway-seller'  → completer is the cart that sold the driveway; partner is the RC
+//                        executing the asphalt. Two transactions written.
+//   'asphalt-executor' → completer is the RC; partner is the cart that originated the
+//                        driveway. Two transactions written.
+//   'self-both'        → completer sold AND executed everything (one cart, no partner).
+//                        Single transaction written.
+export interface AsphaltCompletionContext {
+  // Pending sale ids being resolved. Both are deleted on success.
+  parentSaleId: string | null;   // null when the job is asphalt-only (RC scenario 3)
+  childSaleId: string;           // always present
+  // Final dollar amounts at completion time (post any RC edits — final-wins rule).
+  drivewayAmount: number;        // 0 when there is no parent (asphalt-only)
+  asphaltAmount: number;
+  upsoldAmount: number;
+  // Partner cart info — required when completerRole !== 'self-both'.
+  // The UI passes this in because it already knows the partner cart from the
+  // merged-card render; saves completeJob a DB roundtrip.
+  partner: {
+    sessionId: string;
+    workerId: string;            // first worker on partner cart (drives tx.worker_id)
+    teamWorkerIds: string[];     // populates completed_by_worker_ids
+    workerName: string;          // for the phantom tx's display
+  } | null;
+  // Which side of the split is the completer on?
+  completerRole: AsphaltRole;
+}
 
 // --- HELPER: Check if array has items ---
 function hasItems(arr: any[] | null | undefined): arr is any[] {
@@ -64,10 +103,22 @@ class SessionService {
   }
 
   // --- HELPER: Normalize an address into a stable cache key ---
-  // Lowercases, trims, collapses internal whitespace.
-  // Same logic must be used when reading and writing, or cache hits will miss.
   private normalizeAddressKey(addr: string): string {
     return (addr || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  // --- HELPER: Generate a shared job key for grouping asphalt transactions ---
+  // Falls back to a timestamped pseudo-random string if crypto.randomUUID is
+  // unavailable (some older Safari WebViews don't have it).
+  private generateSharedJobKey(): string {
+    try {
+      if (typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function') {
+        return (crypto as any).randomUUID();
+      }
+    } catch {
+      // fall through
+    }
+    return `asphalt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   }
 
   // --- HELPER: Get current session's season type ---
@@ -135,12 +186,19 @@ class SessionService {
         completedByWorkerIds: tx.completed_by_worker_ids,
         refId: tx.ref_id,
         sessionId: tx.session_id,
+        // --- ASPHALT FIELDS ---
+        // payout_share NUMERIC NULL → undefined when DB has NULL (preserves legacy
+        // tx behaviour: when undefined, recalculateStats uses bucket math only).
+        payoutShare: tx.payout_share != null ? Number(tx.payout_share) : undefined,
+        // asphalt_meta JSONB NULL → undefined when absent. AsphaltMeta type is the
+        // contract; Supabase returns the JSONB as a plain object.
+        asphaltMeta: tx.asphalt_meta || undefined,
     } as SessionTransaction & { sessionId?: string };
   }
 
   /**
    * Recalculates a worker's stats from their transactions and saves to the DB.
-   * TEAM-AWARE for both aeration and lawn_rejuv.
+   * TEAM-AWARE for both aeration and lawn_rejuv and sealing.
    */
   private async recalculateAndSaveWorkerStats(workerId: string): Promise<void> {
     try {
@@ -183,7 +241,10 @@ class SessionService {
 
       let transactions: any[] | null = null;
 
-      if (seasonType === 'lawn_rejuv' && sessionData.id) {
+      // For team seasons (lawn_rejuv + sealing), prefer session_id matching since
+      // multiple workers share a logsheet. Asphalt phantom transactions are always
+      // session-stamped, so this path is the correct one for them.
+      if (seasonHasTeams(seasonType) && sessionData.id) {
         const { data: sessionTx } = await supabase
           .from('transactions')
           .select('*')
@@ -338,9 +399,9 @@ class SessionService {
     }));
 
     const pendingBookings = (bookingsRes.data || []).map((b) => ({
-      ...b.data,                                // spread stored JSONB FIRST (extras like Gate, etc.)
-      ...b.customer_details,                    // then customer details
-      'Booking ID': b.booking_id,               // then live column values — these WIN
+      ...b.data,
+      ...b.customer_details,
+      'Booking ID': b.booking_id,
       'Route Number': b.route_number,
       'Contractor Number': b.contractor_id,
       Price: String(b.price || ''), 
@@ -665,11 +726,6 @@ class SessionService {
 
   // --- 2g. GEOCODE CACHE (session-scoped) ---
 
-  /**
-   * Fetch every cached geocode for the active session in one query.
-   * Called once when the map loads to pre-populate the in-memory cache.
-   * Returns a Map keyed by normalized address → {lat, lng}.
-   */
   public async getAllGeocodeCache(): Promise<Map<string, { lat: number; lng: number }>> {
     const result = new Map<string, { lat: number; lng: number }>();
     try {
@@ -698,11 +754,6 @@ class SessionService {
     }
   }
 
-  /**
-   * Upsert a single geocoded address into the cache.
-   * Safe to call fire-and-forget — errors are logged but never thrown.
-   * Caller does NOT need to await if they don't care about the result.
-   */
   public async saveGeocode(address: string, lat: number, lng: number): Promise<void> {
     try {
       const ccId = this.getCCId();
@@ -734,11 +785,6 @@ class SessionService {
 
   // --- 2h. HISTORICAL PROPERTIES (purple dots) ---
 
-  /**
-   * Fetch previously-serviced properties for the given route codes.
-   * Used by RMMapTab to render purple dots when sidebar is in 'routes' mode.
-   * Returns [] if digital mapping isn't enabled or no rows exist.
-   */
   public async getHistoricalPropertiesForRoutes(routeCodes: string[]): Promise<HistoricalProperty[]> {
     if (!routeCodes.length) return [];
     try {
@@ -924,7 +970,6 @@ class SessionService {
     }
 
     // --- HISTORICAL PROPERTIES (digital mapping CCs only) ---
-    // Bulk insert in chunks of 500 to stay well under Supabase limits.
     if (hasItems(data.historicalProperties)) {
       const rows = data.historicalProperties!.map((h) => ({
         command_center_id: ccId,
@@ -948,7 +993,6 @@ class SessionService {
         const { error } = await supabase.from('route_historical_properties').insert(slice);
         if (error) {
           console.error('[HistoricalProps] Failed to insert chunk:', error);
-          // Not throwing — historical dots are non-critical to session start
           break;
         }
       }
@@ -976,11 +1020,8 @@ class SessionService {
   public async adminResetDailySession(date: string): Promise<void> {
     const ccId = this.getCCId();
     
-    // NEW: Wipe geocode cache and historical properties for this CC
     await supabase.from('geocode_cache').delete().eq('command_center_id', ccId);
     await supabase.from('route_historical_properties').delete().eq('command_center_id', ccId);
-    
-    // NEW: Wipe pending sales for this CC
     await supabase.from('pending_sales').delete().eq('command_center_id', ccId);
     
     await supabase.from('transactions').delete().eq('command_center_id', ccId); 
@@ -1347,10 +1388,10 @@ class SessionService {
     if (!date) return [];
 
     const seasonType = await this.getSessionSeasonType();
-    const isLawnRejuv = seasonType === 'lawn_rejuv';
+    const isTeamSeason = seasonHasTeams(seasonType);
 
     let sessionId: string | null = null;
-    if (isLawnRejuv) {
+    if (isTeamSeason) {
       const session = await this.getWorkerLogsheetSession(workerId);
       sessionId = session?.id || null;
     }
@@ -1374,7 +1415,7 @@ class SessionService {
 
     let myPending: any[];
     
-    if (isLawnRejuv && sessionId) {
+    if (isTeamSeason && sessionId) {
       myPending = (allBookings || []).filter((b) => {
         if (b.session_id === sessionId) return true;
         const isMyRoute = myRouteCodes.includes(b.route_number);
@@ -1392,7 +1433,7 @@ class SessionService {
 
     let myTransactionsData: any[] | null = null;
 
-    if (isLawnRejuv && sessionId) {
+    if (isTeamSeason && sessionId) {
       const { data: sessionTx } = await supabase
         .from('transactions')
         .select('*')
@@ -1586,6 +1627,7 @@ class SessionService {
     const productCostPercent = await this.getProductCostPercent();
     const noTaxOnCash = await this.getSessionNoTaxOnCash();
     const taxRate = this.getCurrentTaxRate();
+    const isTeamSeason = seasonHasTeams(seasonType);
     
     const [sessionsRes, transactionsRes] = await Promise.all([
       supabase.from('logsheet_sessions').select('*').eq('date', date).eq('command_center_id', ccId),
@@ -1609,7 +1651,11 @@ class SessionService {
     });
     
     return sessions.map((d) => {
-      const sessionTx = seasonType === 'lawn_rejuv'
+      // For team seasons (lawn_rejuv + sealing), prefer session_id grouping so that
+      // asphalt phantom transactions (which carry session_id but a worker_id from the
+      // partner cart) attribute correctly. Falls back to worker_id grouping for legacy
+      // rows without session_id stamped.
+      const sessionTx = isTeamSeason
         ? (transactionsBySessionId[d.id] || [])
         : [];
 
@@ -1674,7 +1720,10 @@ class SessionService {
 
     let financialData: any[] | null = null;
 
-    if (seasonType === 'lawn_rejuv' && sessionData.id) {
+    // Team-season transactions (lawn_rejuv + sealing) are session-stamped — that's
+    // also where the asphalt phantom row lives, so we MUST query by session_id to
+    // pick up rows where worker_id belongs to the partner cart.
+    if (seasonHasTeams(seasonType) && sessionData.id) {
       const { data: sessionTx } = await supabase
         .from('transactions')
         .select('*')
@@ -2097,11 +2146,6 @@ class SessionService {
     }
   }
 
-  /**
-   * Update only the route code of a booking. Does NOT touch contractor_id
-   * or routes.assigned_worker_ids — worker assignment stays put.
-   * Used by PendingJobModal when a prebook was filed on the wrong route.
-   */
   public async updateBookingRoute(bookingId: string, newRouteCode: string): Promise<void> {
     const ccId = this.getCCId();
     const { error } = await supabase
@@ -2232,13 +2276,32 @@ class SessionService {
       }
   }
 
+  /**
+   * Complete a job — writes a transaction row and (if applicable) cleans up the
+   * source pending sale.
+   *
+   * `asphaltContext`:
+   *   When set, the job has an asphalt component. completeJob splits into two
+   *   transactions when the completer and partner are different carts, or one
+   *   when the completer handled everything ('self-both'). See AsphaltCompletionContext
+   *   docs at the top of this file.
+   *
+   *   When omitted (the normal case), behaviour is unchanged from pre-asphalt code.
+   */
   public async completeJob(
     transaction: SessionTransaction, 
     jobId: string, 
     workerId: string,
     teamWorkerIds?: string[],
-    pendingSaleId?: string
-  ): Promise<void> {const ccId = this.getCCId();
+    pendingSaleId?: string,
+    asphaltContext?: AsphaltCompletionContext
+  ): Promise<void> {
+    // Asphalt completion is a different flow — branch immediately.
+    if (asphaltContext) {
+      return this.completeAsphaltJob(transaction, jobId, workerId, teamWorkerIds, asphaltContext);
+    }
+
+    const ccId = this.getCCId();
 
     let currentSessionId: string | undefined;
     try {
@@ -2321,9 +2384,6 @@ class SessionService {
     }
 
     // --- PENDING SALE CLEANUP ---
-    // If this completion resolves a pending sale, delete the pending row so it
-    // stops appearing in worker and RM lists. Fire-and-forget — failure here
-    // shouldn't roll back the transaction.
     if (pendingSaleId) {
       this.deletePendingSale(pendingSaleId).catch(err => {
         console.warn('[PendingSale] cleanup after completeJob failed:', err);
@@ -2349,7 +2409,276 @@ class SessionService {
         refId: transaction.refId,
         isPrepaid: transaction.isPrepaid,
       }).catch(err => {
-        console.error('📧 Email send failed (non-blocking):', err);
+        console.error('Email send failed (non-blocking):', err);
+      });
+    }
+  }
+
+  // --- 6b. ASPHALT COMPLETION (Sealing season only) ---
+  //
+  // Writes 1 or 2 transactions depending on completerRole:
+  //   - 'self-both'        → 1 transaction (completer owns everything, no partner row)
+  //   - 'driveway-seller'  → 2 transactions (completer = cart, partner = RC phantom)
+  //   - 'asphalt-executor' → 2 transactions (completer = RC, partner = cart phantom)
+  //
+  // The completer's transaction carries `transaction.paymentBreakdown` (real cash
+  // collected) and a `payoutShare` set to their slice of the split. The partner's
+  // transaction carries `payment_breakdown = {}` (phantom — no cash) and a
+  // `payoutShare` set to their slice of the split. Both transactions share an
+  // `asphalt_meta.shared_job_key` so the export can group them into the 2-line
+  // Logsheets format.
+  //
+  // Both pending_sales rows (parent driveway + asphalt child) are deleted on success.
+  private async completeAsphaltJob(
+    transaction: SessionTransaction,
+    jobId: string,
+    workerId: string,
+    teamWorkerIds: string[] | undefined,
+    ctx: AsphaltCompletionContext
+  ): Promise<void> {
+    const ccId = this.getCCId();
+
+    if (ctx.completerRole !== 'self-both' && !ctx.partner) {
+      throw new Error('AsphaltCompletionContext: partner required when completerRole is not "self-both"');
+    }
+
+    // Resolve completer's session for transaction stamping.
+    let completerSessionId: string | undefined;
+    try {
+      const completerSession = await this.getWorkerLogsheetSession(workerId);
+      completerSessionId = completerSession?.id;
+    } catch (e) {
+      console.warn('[AsphaltComplete] Could not fetch completer session_id:', e);
+    }
+    if (!completerSessionId) {
+      throw new Error('Asphalt completion requires an active completer session');
+    }
+
+    const split = calculateAsphaltSplit(ctx.drivewayAmount, ctx.asphaltAmount, ctx.upsoldAmount);
+
+    let completerShare: number;
+    let partnerShare: number;
+    let partnerRole: AsphaltRole | null;
+
+    if (ctx.completerRole === 'driveway-seller') {
+      completerShare = split.cartShare;
+      partnerShare = split.rcShare;
+      partnerRole = 'asphalt-executor';
+    } else if (ctx.completerRole === 'asphalt-executor') {
+      completerShare = split.rcShare;
+      partnerShare = split.cartShare;
+      partnerRole = 'driveway-seller';
+    } else {
+      completerShare = split.total;
+      partnerShare = 0;
+      partnerRole = null;
+    }
+
+    const didUpsell = (ctx.upsoldAmount || 0) > 0;
+    const sharedJobKey = this.generateSharedJobKey();
+
+    const completerMeta: AsphaltMeta = {
+      sharedJobKey,
+      role: ctx.completerRole,
+      driveway_amount: ctx.drivewayAmount,
+      asphalt_amount: ctx.asphaltAmount,
+      upsold_asphalt_amount: ctx.upsoldAmount,
+      is_partner_phantom: false,
+      partner_session_id: ctx.partner?.sessionId ?? null,
+      did_upsell: didUpsell,
+    };
+
+    const completerPayload: any = {
+      job_id: jobId,
+      worker_id: workerId,
+      session_id: completerSessionId,
+      timestamp: transaction.timestamp,
+      type: transaction.type,
+      price: transaction.price,
+      payment_method: transaction.paymentMethod,
+      payment_breakdown: transaction.paymentBreakdown,
+      is_west_split: transaction.isWestSplit,
+      display_price: transaction.displayPrice,
+      item_description: transaction.itemDescription,
+      invoice_number: transaction.invoiceNumber,
+      cheque_number: transaction.chequeNumber,
+      etransfer_email: transaction.etransferEmail,
+      customer_phone: transaction.customerPhone,
+      customer_email: transaction.customerEmail,
+      items: transaction.items,
+      services: transaction.services,
+      completed_by_worker_ids: teamWorkerIds || [workerId],
+      ref_id: transaction.refId,
+      cc_full_number: (transaction as any).ccFullNumber,
+      cc_expiry: (transaction as any).ccExpiry,
+      cc_cvc: (transaction as any).ccCVC,
+      customer_snapshot: {
+        firstName: transaction.customerName ? transaction.customerName.split(' ')[0] : 'Unknown',
+        lastName: transaction.customerName ? transaction.customerName.split(' ').slice(1).join(' ') : '',
+        address: transaction.address,
+        routeCode: transaction.routeCode,
+        serviceType: transaction.serviceType,
+        serviceName: transaction.serviceName,
+      },
+      command_center_id: ccId,
+      payout_share: completerShare,
+      asphalt_meta: completerMeta,
+    };
+
+    // Upsert completer's transaction. Match by id (the form-provided one) so
+    // re-completions update rather than duplicate.
+    const { data: existingCompleter } = await supabase
+      .from('transactions')
+      .select('id')
+      .eq('id', transaction.id)
+      .eq('command_center_id', ccId)
+      .maybeSingle();
+
+    if (existingCompleter) {
+      const { error } = await supabase
+        .from('transactions')
+        .update(completerPayload)
+        .eq('id', transaction.id)
+        .eq('command_center_id', ccId);
+      if (error) throw error;
+    } else {
+      const { error } = await supabase
+        .from('transactions')
+        .insert({ ...completerPayload, id: transaction.id });
+      if (error) throw error;
+    }
+
+    // --- Partner's phantom transaction ---
+    if (ctx.partner && partnerRole) {
+      const partnerMeta: AsphaltMeta = {
+        sharedJobKey,
+        role: partnerRole,
+        driveway_amount: ctx.drivewayAmount,
+        asphalt_amount: ctx.asphaltAmount,
+        upsold_asphalt_amount: ctx.upsoldAmount,
+        is_partner_phantom: true,
+        partner_session_id: completerSessionId,
+        did_upsell: didUpsell,
+      };
+
+      // Phantom uses a stable derived id so re-completions update rather than dupe.
+      const phantomTxId = `${transaction.id}_partner`;
+      const phantomJobId = `${jobId}__asphalt_partner_${partnerRole === 'asphalt-executor' ? 'rc' : 'cart'}`;
+
+      const partnerPayload: any = {
+        job_id: phantomJobId,
+        worker_id: ctx.partner.workerId,
+        session_id: ctx.partner.sessionId,
+        timestamp: transaction.timestamp,
+        type: transaction.type,
+        // tx.price set to share so the phantom shows a meaningful number on the
+        // partner's logsheet; cash bucket math reads from payment_breakdown ({})
+        // so this contributes $0 to actual cash counts.
+        price: partnerShare,
+        payment_method: 'Asphalt Share',
+        payment_breakdown: {},
+        is_west_split: false,
+        display_price: `$${partnerShare.toFixed(2)}`,
+        item_description: partnerRole === 'driveway-seller' ? 'Driveway (asphalt share)' : 'Asphalt (share)',
+        invoice_number: null,
+        cheque_number: null,
+        etransfer_email: null,
+        customer_phone: transaction.customerPhone,
+        customer_email: null,
+        items: transaction.items,
+        services: transaction.services,
+        completed_by_worker_ids: ctx.partner.teamWorkerIds,
+        ref_id: transaction.refId,
+        cc_full_number: null,
+        cc_expiry: null,
+        cc_cvc: null,
+        customer_snapshot: {
+          firstName: transaction.customerName ? transaction.customerName.split(' ')[0] : 'Unknown',
+          lastName: transaction.customerName ? transaction.customerName.split(' ').slice(1).join(' ') : '',
+          address: transaction.address,
+          routeCode: transaction.routeCode,
+          serviceType: transaction.serviceType,
+          serviceName: partnerRole === 'driveway-seller' ? 'Driveway' : 'Asphalt',
+        },
+        command_center_id: ccId,
+        payout_share: partnerShare,
+        asphalt_meta: partnerMeta,
+      };
+
+      const { data: existingPhantom } = await supabase
+        .from('transactions')
+        .select('id')
+        .eq('id', phantomTxId)
+        .eq('command_center_id', ccId)
+        .maybeSingle();
+
+      if (existingPhantom) {
+        const { error } = await supabase
+          .from('transactions')
+          .update(partnerPayload)
+          .eq('id', phantomTxId)
+          .eq('command_center_id', ccId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('transactions')
+          .insert({ ...partnerPayload, id: phantomTxId });
+        if (error) throw error;
+      }
+    }
+
+    // Mark booking completed (only if real, not 'NEW-' job)
+    if (jobId && !jobId.startsWith('NEW-')) {
+      await supabase
+        .from('bookings')
+        .update({
+          status: 'completed',
+          contractor_id: workerId,
+        })
+        .eq('booking_id', jobId)
+        .eq('command_center_id', ccId);
+    }
+
+    // Clean up BOTH pending sales (parent driveway + asphalt child)
+    const pendingIdsToDelete: string[] = [];
+    if (ctx.parentSaleId) pendingIdsToDelete.push(ctx.parentSaleId);
+    if (ctx.childSaleId) pendingIdsToDelete.push(ctx.childSaleId);
+    if (pendingIdsToDelete.length > 0) {
+      const { error } = await supabase
+        .from('pending_sales')
+        .delete()
+        .in('id', pendingIdsToDelete)
+        .eq('command_center_id', ccId);
+      if (error) {
+        console.warn('[AsphaltComplete] pending_sales cleanup failed:', error);
+      }
+    }
+
+    // Recalculate stats for BOTH carts (completer and partner if present)
+    await this.recalculateAndSaveWorkerStats(workerId);
+    if (ctx.partner) {
+      await this.recalculateAndSaveWorkerStats(ctx.partner.workerId);
+    }
+
+    // Receipt email — only from collecting cart, since the partner's row is phantom
+    if (transaction.customerEmail && transaction.customerEmail.trim() !== '') {
+      this.sendReceiptEmail({
+        customerEmail: transaction.customerEmail,
+        customerName: transaction.customerName,
+        customerAddress: transaction.address || '',
+        date: new Date(transaction.timestamp).toLocaleDateString(),
+        serviceName: transaction.items?.[0]?.name || transaction.serviceName || 'Service',
+        amount: transaction.displayPrice || `$${transaction.price.toFixed(2)}`,
+        price: transaction.price,
+        paymentMethod: transaction.paymentMethod,
+        workerName: transaction.workerName || '',
+        transactionId: transaction.id,
+        commandCenterId: ccId,
+        type: transaction.type,
+        refId: transaction.refId,
+        isPrepaid: transaction.isPrepaid,
+      }).catch(err => {
+        console.error('Email send failed (non-blocking):', err);
       });
     }
   }
@@ -2386,7 +2715,7 @@ class SessionService {
         .maybeSingle();
 
       if (sessionData && sessionData.email_enabled === false) {
-        console.log('📧 Email sending disabled for this session');
+        console.log('Email sending disabled for this session');
         return false;
       }
 
@@ -2395,14 +2724,14 @@ class SessionService {
       });
 
       if (error) {
-        console.error('📧 Email send error:', error);
+        console.error('Email send error:', error);
         return false;
       }
 
-      console.log('📧 Email sent successfully:', data);
+      console.log('Email sent successfully:', data);
       return true;
     } catch (err) {
-      console.error('📧 Email send failed:', err);
+      console.error('Email send failed:', err);
       return false;
     }
   }
@@ -2456,6 +2785,29 @@ class SessionService {
     };
   }
 
+  /**
+   * Recompute aggregate stats from the transaction list.
+   *
+   * ASPHALT BEHAVIOUR (when any tx has tx.asphaltMeta set):
+   *   1. Cash buckets (prodCash, prodCheque, ...) are filled from tx.paymentBreakdown
+   *      as usual. The collecting cart sees the full collected $ for RM validation;
+   *      the phantom row has an empty breakdown so contributes $0 to buckets.
+   *   2. Step counting branches on tx.asphaltMeta.role + .did_upsell rather than
+   *      using the default tx.type rule.
+   *   3. After the normal prodGross/taxableWeighted formulas, an ASPHALT ADJUSTMENT
+   *      is applied: per asphalt tx, (payoutShare − sum(payment_breakdown)) is added
+   *      to BOTH prodGross and taxableWeighted at 1.0 weight (pre-tax-divisor).
+   *      For the collecting cart this is a negative number (their share < cash held).
+   *      For the phantom this is a positive number (share > $0 collected).
+   *      Net across both carts is 0 — the split moves dollars between cards, not
+   *      out of the day's books.
+   *
+   * LIMITATION: the adjustment is applied PRE-divisor at 1.0 weight regardless of
+   * noTaxOnCash. In practice asphalt is always cash and Sealing defaults noTaxOnCash
+   * to false, so this is correct. If noTaxOnCash is turned ON for a sealing session
+   * AND asphalt jobs are present, the EQ math will be off by ~taxRate% on the asphalt
+   * portion. Documented here so it's not a surprise in production.
+   */
   public recalculateStats(
     financials: SessionTransaction[], 
     taxRate: number = 5,
@@ -2470,7 +2822,23 @@ class SessionService {
     const flatCodes = config.officeFlats.map(f => f.code);
 
     financials.forEach((tx) => {
-      if (['Production', 'Sale', 'Upgrade'].includes(tx.type)) stats.stepCount++;
+      // --- STEP COUNTING (asphalt-aware) ---
+      // Asphalt transactions use the role + did_upsell rules. Non-asphalt fall
+      // through to the existing rule (Production/Sale/Upgrade = +1 step).
+      if (tx.asphaltMeta) {
+        const meta = tx.asphaltMeta;
+        if (meta.role === 'driveway-seller') {
+          stats.stepCount += 1;
+        } else if (meta.role === 'asphalt-executor') {
+          if (meta.did_upsell) stats.stepCount += 1;
+        } else if (meta.role === 'self-both') {
+          if ((meta.driveway_amount || 0) > 0) stats.stepCount += 1;
+          if ((meta.asphalt_amount || 0) > 0) stats.stepCount += 1;
+        }
+      } else if (['Production', 'Sale', 'Upgrade'].includes(tx.type)) {
+        stats.stepCount++;
+      }
+
       if (['Upgrade', 'Add-On'].includes(tx.type)) stats.upsellCount++;
       if (tx.paymentMethod === 'IOS') stats.iosCount++;
 
@@ -2527,7 +2895,7 @@ class SessionService {
     const prepaidWeight = config.prepaidWeight;
     const billedWeight = config.billedWeight;
     
-    const taxableWeighted = 
+    let taxableWeighted = 
         (stats.prodPrepaid * prepaidWeight) + 
         (stats.prodBilled * billedWeight) + 
         (noTaxOnCash ? 0 : stats.prodCash) +
@@ -2536,6 +2904,37 @@ class SessionService {
         stats.prodCreditCard + 
         stats.prodFlats + 
         stats.prodPrepaidSplit;
+
+    // --- ASPHALT ADJUSTMENT ---
+    // For each tx with payoutShare set, compute delta = payoutShare - sum(breakdown).
+    // Apply that delta to BOTH prodGross and taxableWeighted at 1.0 weight, pre-divisor.
+    //
+    // Collecting cart example: $650 cash collected, $360 share → delta = -290
+    //   prodGross goes from $650 to $360 (reflects what they earned, not collected)
+    //   taxableWeighted reduced by 290 → tax/cost math runs on $360 base
+    //
+    // Phantom cart example: $0 collected, $290 share → delta = +290
+    //   prodGross goes from $0 to $290
+    //   taxableWeighted boosted by 290 → tax/cost math credits them with $290 base
+    //
+    // For self-both (single tx, payoutShare = total = sum of breakdown), delta = 0,
+    // so the adjustment is a no-op and the existing math runs unchanged.
+    let asphaltAdjustment = 0;
+    financials.forEach((tx) => {
+      if (tx.payoutShare == null) return;
+      const breakdown = tx.paymentBreakdown || { [tx.paymentMethod]: tx.price };
+      let breakdownTotal = 0;
+      Object.entries(breakdown).forEach(([method, amount]) => {
+        if (method === 'IOS') return;
+        breakdownTotal += Number(amount) || 0;
+      });
+      asphaltAdjustment += (tx.payoutShare - breakdownTotal);
+    });
+
+    if (asphaltAdjustment !== 0) {
+      stats.prodGross += asphaltAdjustment;
+      taxableWeighted += asphaltAdjustment;
+    }
 
     const afterTax = taxableWeighted / taxDivisor;
     const totalAfterTax = noTaxOnCash ? afterTax + stats.prodCash : afterTax;
@@ -2577,9 +2976,6 @@ class SessionService {
     
     const basePayoutRate = getPayoutRate(seasonType, teamSize);
     
-    // FIXED: Use validated actual EQ when available, else fall back to projected stats EQ.
-    // This matches PayoutContractor's logic so the bonus screenshot numbers agree with
-    // the finalized payout page exactly.
     const teamTotalEQ = (validation?.isValidated && typeof validation.actualTotalEQ === 'number')
       ? validation.actualTotalEQ
       : stats.totalEQ;
@@ -2618,15 +3014,10 @@ class SessionService {
         }
       }
       
-      // cashChequeDiff is DISPLAY ONLY — it's already baked into actualTotalEQ via deltaEQ
-      // on the finalized payout page, so we do NOT subtract it here from the commission.
       const cashChequeDiff = validation 
         ? (Math.abs(validation.cashDiff || 0) + Math.abs(validation.chequeDiff || 0)) * equivPercent
         : 0;
       
-      // FIXED: Default machine rental to TRUE when undefined (matches PayoutContractor).
-      // If per-worker flag is set, use it. Otherwise fall back to the legacy team-level flag
-      // if it's explicitly set; otherwise assume true.
       let hasMachineRental: boolean;
       if (validation?.workerMachineRentals?.[workerId] !== undefined) {
         hasMachineRental = validation.workerMachineRentals[workerId];
@@ -2641,8 +3032,6 @@ class SessionService {
       
       const deductions = otherDeductions;
       
-      // FIXED: finalCommission no longer subtracts cashChequeDiff — that variance is
-      // already reflected in actualTotalEQ via deltaEQ on the finalized page.
       const finalCommission = productionCommission + upsellCommission + iosCommission + 
                              bonusAmount - machineRentalDeduction - deductions;
       
@@ -2679,11 +3068,14 @@ class SessionService {
   // pending_sales table. They live and die inside the app — NEVER exported.
   // Visibility is session-scoped: every worker in the same cart sees them,
   // and the RM sees the ones for carts under their management.
+  //
+  // ASPHALT EXTENSIONS (Sealing only):
+  //   - createPendingSale orchestrates parent+child writes when input.asphaltAmount > 0.
+  //   - assignAsphaltToRcSession / unassignAsphalt mutate child rows from the RM modal.
+  //   - getUnassignedAsphaltForManager drives the RMLogbook asphalt button + modal.
+  //   - getAsphaltChildrenForParent / getAsphaltAssignmentsForSession power merged-card
+  //     displays on the worker dashboard and the RC's logsheet.
 
-  /**
-   * Map a DB row from pending_sales into a PendingSale object.
-   * Snake_case columns → camelCase fields, that sort of housekeeping.
-   */
   private mapDbPendingSale(row: any): PendingSale {
     return {
       id: row.id,
@@ -2700,13 +3092,15 @@ class SessionService {
       notes: row.notes || undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      // --- ASPHALT FIELDS ---
+      saleType: row.sale_type || undefined,
+      parentId: row.parent_id || undefined,
+      assignedRcSessionId: row.assigned_rc_session_id || undefined,
+      asphaltAmount: row.asphalt_amount != null ? Number(row.asphalt_amount) : undefined,
+      upsoldAsphaltAmount: row.upsold_asphalt_amount != null ? Number(row.upsold_asphalt_amount) : undefined,
     };
   }
 
-  /**
-   * Fetch all pending sales for a single logsheet session (cart).
-   * Used by the worker dashboard to display the cart's pending sales.
-   */
   public async getPendingSalesForSession(sessionId: string): Promise<PendingSale[]> {
     try {
       const ccId = this.getCCId();
@@ -2728,19 +3122,12 @@ class SessionService {
     }
   }
 
-  /**
-   * Fetch all pending sales for carts under a manager's authority.
-   * Used by RMTeamTab to merge pending sales into the team's contractor view.
-   * Filter chain: find this CC's workers assigned to this manager → find their
-   * logsheet sessions for today → pull pending sales tied to those session IDs.
-   */
   public async getPendingSalesForManager(managerId: string): Promise<PendingSale[]> {
     try {
       const ccId = this.getCCId();
       const date = await this.getDailySessionDate();
       if (!date) return [];
 
-      // Step 1: workers assigned to this manager
       const { data: workers } = await supabase
         .from('users')
         .select('user_id, metadata')
@@ -2753,10 +3140,6 @@ class SessionService {
 
       if (myWorkerIds.length === 0) return [];
 
-      // Step 2: find every session that includes any of those workers today.
-      // We pull all session candidates for the date+CC, then filter in JS so
-      // we cover both legacy solo rows (worker_id match) and team rows
-      // (team_worker_ids array contains).
       const { data: sessions } = await supabase
         .from('logsheet_sessions')
         .select('id, worker_id, team_worker_ids')
@@ -2773,7 +3156,6 @@ class SessionService {
 
       if (mySessionIds.length === 0) return [];
 
-      // Step 3: pending sales tied to those sessions
       const { data: pendingRows, error } = await supabase
         .from('pending_sales')
         .select('*')
@@ -2791,10 +3173,6 @@ class SessionService {
     }
   }
 
-  /**
-   * Fetch a single pending sale by id. Used by NewJob when reopening a parked
-   * sale to prefill the form.
-   */
   public async getPendingSaleById(id: string): Promise<PendingSale | null> {
     try {
       const ccId = this.getCCId();
@@ -2814,17 +3192,179 @@ class SessionService {
   }
 
   /**
-   * Create a new pending sale row. ID generated server-side using worker+ts.
-   * Returns the created PendingSale (with the assigned id, etc) so the UI can
-   * navigate to NewJob with the new id in the URL.
+   * Create a new pending sale.
+   *
+   * ASPHALT ORCHESTRATION:
+   *   - If input.saleType === 'asphalt' AND no input.parentId is provided, this
+   *     creates a single asphalt-only row (Scenario 3: RC sells asphalt standalone).
+   *     The row is auto-assigned to the calling RC's session.
+   *   - If input.asphaltAmount > 0 AND saleType is NOT 'asphalt', this is the
+   *     two-step driveway+asphalt flow. The method writes:
+   *       1. A parent row (driveway, sale_type=null)
+   *       2. A child row (sale_type='asphalt', parent_id=parent.id, asphalt_amount set)
+   *     For RC sellers, the child is auto-assigned to the calling session (skips
+   *     the RM modal). For regular carts, the child is left unassigned and shows
+   *     up in the RM asphalt modal.
+   *   - Otherwise: normal driveway-only behaviour, single row written.
+   *
+   * Return value: the "primary" PendingSale. For parent+child flows, returns the
+   * PARENT row. UI fetches the child via getAsphaltChildrenForParent when needed.
+   * For asphalt-only, returns the child row itself.
    */
   public async createPendingSale(input: PendingSaleInput): Promise<PendingSale> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) throw new Error('No active session');
 
-    const id = `pend_${input.workerId}_${Date.now()}`;
+    const hasAsphaltAmount = (input.asphaltAmount != null && input.asphaltAmount > 0)
+      || (input.upsoldAsphaltAmount != null && input.upsoldAsphaltAmount > 0);
+    const isAsphaltOnly = input.saleType === 'asphalt' && !input.parentId;
+    const isParentWithAsphaltChild = !input.saleType && hasAsphaltAmount;
 
+    // Resolve whether the calling session is an RC (drives auto-assignment).
+    let callerIsRC = false;
+    if (isAsphaltOnly || isParentWithAsphaltChild) {
+      try {
+        const { data: sessionRow } = await supabase
+          .from('logsheet_sessions')
+          .select('worker_id, team_worker_ids')
+          .eq('id', input.sessionId)
+          .eq('command_center_id', ccId)
+          .maybeSingle();
+        if (sessionRow) {
+          const wid = (hasItems(sessionRow.team_worker_ids) ? sessionRow.team_worker_ids[0] : sessionRow.worker_id);
+          if (wid) {
+            const { data: userRow } = await supabase
+              .from('users')
+              .select('metadata')
+              .eq('user_id', wid)
+              .eq('command_center_id', ccId)
+              .maybeSingle();
+            callerIsRC = isRampCrewTeamId(userRow?.metadata?.teamId);
+          }
+        }
+      } catch (e) {
+        console.warn('[PendingSale] RC detection failed, treating as regular cart:', e);
+      }
+    }
+
+    // --- Asphalt-only path (Scenario 3) ---
+    if (isAsphaltOnly) {
+      const id = `pend_${input.workerId}_asphalt_${Date.now()}`;
+      const row = {
+        id,
+        session_id: input.sessionId,
+        worker_id: input.workerId,
+        command_center_id: ccId,
+        session_date: date,
+        route_code: input.routeCode || null,
+        house_number: input.houseNumber || null,
+        street_name: input.streetName || null,
+        price: input.price || (input.asphaltAmount != null ? String(input.asphaltAmount) : null),
+        property_type: input.propertyType || null,
+        services: input.services || null,
+        notes: input.notes || null,
+        sale_type: 'asphalt',
+        parent_id: null,
+        assigned_rc_session_id: input.assignedRcSessionId || (callerIsRC ? input.sessionId : null),
+        asphalt_amount: input.asphaltAmount ?? 0,
+        upsold_asphalt_amount: input.upsoldAsphaltAmount ?? null,
+      };
+
+      const { data, error } = await supabase
+        .from('pending_sales')
+        .insert(row)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[PendingSale] createPendingSale (asphalt-only) failed:', error);
+        throw error;
+      }
+      return this.mapDbPendingSale(data);
+    }
+
+    // --- Parent + asphalt-child path (Scenario 1/2) ---
+    if (isParentWithAsphaltChild) {
+      const parentId = `pend_${input.workerId}_${Date.now()}`;
+      const childId = `pend_${input.workerId}_asphalt_${Date.now() + 1}`;
+
+      const parentRow = {
+        id: parentId,
+        session_id: input.sessionId,
+        worker_id: input.workerId,
+        command_center_id: ccId,
+        session_date: date,
+        route_code: input.routeCode || null,
+        house_number: input.houseNumber || null,
+        street_name: input.streetName || null,
+        price: input.price || null,
+        property_type: input.propertyType || null,
+        services: input.services || null,
+        notes: input.notes || null,
+        sale_type: null,
+        parent_id: null,
+        assigned_rc_session_id: null,
+        asphalt_amount: null,
+        upsold_asphalt_amount: null,
+      };
+
+      const childRow = {
+        id: childId,
+        session_id: input.sessionId,
+        worker_id: input.workerId,
+        command_center_id: ccId,
+        session_date: date,
+        route_code: input.routeCode || null,
+        house_number: input.houseNumber || null,
+        street_name: input.streetName || null,
+        // Mirror asphalt_amount into price for sort/display consistency on the
+        // worker logsheet (the child row shows up as "Asphalt $300" in some lists).
+        price: input.asphaltAmount != null ? String(input.asphaltAmount) : null,
+        property_type: input.propertyType || null,
+        services: null,  // service flags don't apply to the asphalt portion
+        notes: null,
+        sale_type: 'asphalt',
+        parent_id: parentId,
+        // RC sellers auto-assign to themselves; regular carts leave it null for RM assignment.
+        assigned_rc_session_id: input.assignedRcSessionId || (callerIsRC ? input.sessionId : null),
+        asphalt_amount: input.asphaltAmount ?? 0,
+        upsold_asphalt_amount: input.upsoldAsphaltAmount ?? null,
+      };
+
+      const { data: parentData, error: parentError } = await supabase
+        .from('pending_sales')
+        .insert(parentRow)
+        .select()
+        .single();
+
+      if (parentError) {
+        console.error('[PendingSale] createPendingSale (parent) failed:', parentError);
+        throw parentError;
+      }
+
+      const { error: childError } = await supabase
+        .from('pending_sales')
+        .insert(childRow);
+
+      if (childError) {
+        console.error('[PendingSale] createPendingSale (child) failed, rolling back parent:', childError);
+        await supabase
+          .from('pending_sales')
+          .delete()
+          .eq('id', parentId)
+          .eq('command_center_id', ccId)
+          .then(({ error }) => {
+            if (error) console.warn('[PendingSale] parent rollback failed:', error);
+          });
+        throw childError;
+      }
+
+      return this.mapDbPendingSale(parentData);
+    }
+
+    // --- Default path (driveway-only, no asphalt) ---
+    const id = `pend_${input.workerId}_${Date.now()}`;
     const row = {
       id,
       session_id: input.sessionId,
@@ -2856,8 +3396,12 @@ class SessionService {
 
   /**
    * Partial update. Any field omitted from `updates` is left alone in the DB.
-   * `updated_at` is bumped to now() on every call so the most-recently-edited
-   * pending sale floats to the top of "Pending" lists if sorted by it.
+   *
+   * Asphalt extensions:
+   *   - assignedRcSessionId: string to assign, null to unassign. Dedicated wrappers
+   *     (assignAsphaltToRcSession / unassignAsphalt) below are cleaner for that purpose.
+   *   - asphaltAmount / upsoldAsphaltAmount: numeric updates. undefined = leave alone;
+   *     a number = set; 0 = zero out.
    */
   public async updatePendingSale(id: string, updates: PendingSaleUpdate): Promise<void> {
     const ccId = this.getCCId();
@@ -2870,6 +3414,16 @@ class SessionService {
     if (updates.propertyType !== undefined) dbPayload.property_type = updates.propertyType || null;
     if (updates.services !== undefined) dbPayload.services = updates.services || null;
     if (updates.notes !== undefined) dbPayload.notes = updates.notes || null;
+    // Asphalt fields. `null` is meaningful for assignedRcSessionId (= unassign).
+    if (updates.assignedRcSessionId !== undefined) {
+      dbPayload.assigned_rc_session_id = updates.assignedRcSessionId;
+    }
+    if (updates.asphaltAmount !== undefined) {
+      dbPayload.asphalt_amount = updates.asphaltAmount;
+    }
+    if (updates.upsoldAsphaltAmount !== undefined) {
+      dbPayload.upsold_asphalt_amount = updates.upsoldAsphaltAmount;
+    }
 
     const { error } = await supabase
       .from('pending_sales')
@@ -2887,6 +3441,11 @@ class SessionService {
    * Delete a pending sale row. Called when:
    *   - the RM manually deletes one via PendingJobModal, OR
    *   - completeJob() finishes converting one into a real transaction.
+   *
+   * NOTE: does NOT cascade to asphalt children. If you delete a driveway parent
+   * that has an asphalt child, the child is orphaned (parent_id points at a
+   * nonexistent row). completeAsphaltJob deletes both rows atomically; for manual
+   * RM deletions we trust the UI to call this for both rows when needed.
    */
   public async deletePendingSale(id: string): Promise<void> {
     const ccId = this.getCCId();
@@ -2899,6 +3458,174 @@ class SessionService {
     if (error) {
       console.error('[PendingSale] deletePendingSale failed:', error);
       throw error;
+    }
+  }
+
+  // --- 11. ASPHALT-SPECIFIC PENDING-SALE QUERIES & MUTATIONS (Sealing only) ---
+
+  /**
+   * Fetch every UNASSIGNED asphalt child for carts under this manager's authority.
+   * "Unassigned" = sale_type='asphalt' AND assigned_rc_session_id IS NULL.
+   *
+   * Drives:
+   *   - The count badge on the RMLogbook asphalt header button.
+   *   - The list in the RMAsphaltModal.
+   *
+   * Implementation note: filter chain matches getPendingSalesForManager —
+   * workers → sessions → pending_sales. Adds the asphalt filters at the DB level
+   * so the partial index does the heavy lifting on a busy day.
+   */
+  public async getUnassignedAsphaltForManager(managerId: string): Promise<PendingSale[]> {
+    try {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return [];
+
+      const { data: workers } = await supabase
+        .from('users')
+        .select('user_id, metadata')
+        .eq('role', 'Worker')
+        .eq('command_center_id', ccId);
+
+      const myWorkerIds = (workers || [])
+        .filter(w => w.metadata?.assignedManagerId === managerId)
+        .map(w => w.user_id);
+      if (myWorkerIds.length === 0) return [];
+
+      const { data: sessions } = await supabase
+        .from('logsheet_sessions')
+        .select('id, worker_id, team_worker_ids')
+        .eq('date', date)
+        .eq('command_center_id', ccId);
+
+      const myWorkerSet = new Set(myWorkerIds);
+      const mySessionIds = (sessions || [])
+        .filter(s => {
+          const ids = hasItems(s.team_worker_ids) ? s.team_worker_ids : [s.worker_id];
+          return ids.some((id: string) => myWorkerSet.has(id));
+        })
+        .map(s => s.id);
+
+      if (mySessionIds.length === 0) return [];
+
+      const { data: rows, error } = await supabase
+        .from('pending_sales')
+        .select('*')
+        .eq('command_center_id', ccId)
+        .eq('sale_type', 'asphalt')
+        .is('assigned_rc_session_id', null)
+        .in('session_id', mySessionIds)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.warn('[Asphalt] getUnassignedAsphaltForManager failed:', error);
+        return [];
+      }
+      return (rows || []).map(r => this.mapDbPendingSale(r));
+    } catch (err) {
+      console.warn('[Asphalt] getUnassignedAsphaltForManager error:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Assign an asphalt child to an RC session. Used by the RMAsphaltModal.
+   * Updates assigned_rc_session_id only — caller is responsible for any
+   * notifications or UI refreshes.
+   */
+  public async assignAsphaltToRcSession(asphaltPendingSaleId: string, rcSessionId: string): Promise<void> {
+    const ccId = this.getCCId();
+    const { error } = await supabase
+      .from('pending_sales')
+      .update({
+        assigned_rc_session_id: rcSessionId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', asphaltPendingSaleId)
+      .eq('command_center_id', ccId)
+      .eq('sale_type', 'asphalt');
+
+    if (error) {
+      console.error('[Asphalt] assignAsphaltToRcSession failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Unassign an asphalt child (set assigned_rc_session_id back to null).
+   * Per the design, RCs cannot skip/cancel an assigned asphalt themselves —
+   * only the RM can unassign via this method.
+   */
+  public async unassignAsphalt(asphaltPendingSaleId: string): Promise<void> {
+    const ccId = this.getCCId();
+    const { error } = await supabase
+      .from('pending_sales')
+      .update({
+        assigned_rc_session_id: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', asphaltPendingSaleId)
+      .eq('command_center_id', ccId)
+      .eq('sale_type', 'asphalt');
+
+    if (error) {
+      console.error('[Asphalt] unassignAsphalt failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Fetch all asphalt children for a given parent pending_sale id. Almost always
+   * returns 0 or 1 row (one child per parent), but the method returns an array
+   * to keep the contract robust if we ever support multi-child parents.
+   * Used by LogsheetJobCard and Dashboard to render merged "Driveway + Asphalt"
+   * cards without duplicate queries.
+   */
+  public async getAsphaltChildrenForParent(parentId: string): Promise<PendingSale[]> {
+    try {
+      const ccId = this.getCCId();
+      const { data, error } = await supabase
+        .from('pending_sales')
+        .select('*')
+        .eq('command_center_id', ccId)
+        .eq('parent_id', parentId)
+        .eq('sale_type', 'asphalt');
+
+      if (error) {
+        console.warn('[Asphalt] getAsphaltChildrenForParent failed:', error);
+        return [];
+      }
+      return (data || []).map(r => this.mapDbPendingSale(r));
+    } catch (err) {
+      console.warn('[Asphalt] getAsphaltChildrenForParent error:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Fetch all asphalt assignments for an RC session. Returns asphalt children
+   * where assigned_rc_session_id matches. Used by the RC's logsheet to surface
+   * "your asphalt queue".
+   */
+  public async getAsphaltAssignmentsForSession(rcSessionId: string): Promise<PendingSale[]> {
+    try {
+      const ccId = this.getCCId();
+      const { data, error } = await supabase
+        .from('pending_sales')
+        .select('*')
+        .eq('command_center_id', ccId)
+        .eq('sale_type', 'asphalt')
+        .eq('assigned_rc_session_id', rcSessionId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.warn('[Asphalt] getAsphaltAssignmentsForSession failed:', error);
+        return [];
+      }
+      return (data || []).map(r => this.mapDbPendingSale(r));
+    } catch (err) {
+      console.warn('[Asphalt] getAsphaltAssignmentsForSession error:', err);
+      return [];
     }
   }
 }
