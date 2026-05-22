@@ -1,20 +1,20 @@
 // src/pages/Management/components/RMTeamTab.tsx
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  ChevronDown, 
-  ChevronUp, 
-  Phone, 
-  Check, 
-  MoreVertical, 
-  ArrowRight, 
-  Trash2, 
+import {
+  ChevronDown,
+  ChevronUp,
+  Phone,
+  Check,
+  MoreVertical,
+  ArrowRight,
+  Trash2,
   X,
   MapPin,
   Truck,
   Users,
   Leaf,
-  Shovel, // NEW: Sealing season badge icon (matches Admin badge)
+  Shovel,
   Eye,
   Shuffle,
   Loader,
@@ -22,10 +22,10 @@ import {
   UserPlus,
   ArrowRightLeft,
   UserMinus,
-  Bookmark, // NEW: pending-sales count icon in the cart-card Pend cell split
+  Bookmark,
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
-import { seasonHasTeams } from '../../../lib/commandCenterService'; // NEW: drives isTeamSeason
+import { seasonHasTeams } from '../../../lib/commandCenterService';
 import { setStorageItem } from '../../../lib/localStorage';
 import {
   Worker,
@@ -34,8 +34,8 @@ import {
   ManagementUser,
   SeasonType,
   SessionStats,
-  SEASON_CONFIGS, // NEW: read per-season payout rates instead of hardcoding $7/$9
-  PendingSale,    // NEW: for pending sales fetched per cart
+  SEASON_CONFIGS,
+  PendingSale,
 } from '../../../types';
 import ContractorJobs from './ContractorJobs';
 
@@ -79,8 +79,8 @@ interface CartDisplay {
     steps: number;
     gross: number;
     eq: number;
-    pending: number;             // office pending bookings only — unchanged meaning
-    pendingSaleCount: number;    // NEW: count of pending sales parked on this cart (the yellow Bookmark half of the Pend split)
+    pending: number;
+    pendingSaleCount: number;
     upsellCount: number;
     upsellGross: number;
   };
@@ -99,11 +99,6 @@ const formatTimeShort = (timestamp: string): string => {
   return `${hours}:${minutesStr}${ampm}`;
 };
 
-// --- HELPER: Convert a PendingSale into a MasterBooking-shaped object ---
-// Same shape as Dashboard.tsx uses on the worker side, so ContractorJobs sees
-// pending sales in identical form regardless of which screen surfaced them.
-// isPendingSale + pendingSaleId flags let ContractorJobs branch correctly to
-// render the SALE-PEND badge and open the right modal.
 const convertPendingSaleToBooking = (ps: PendingSale): MasterBooking => {
   const fullAddress = `${ps.houseNumber || ''} ${ps.streetName || ''}`.trim();
   return {
@@ -139,26 +134,17 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   const [expandedCarts, setExpandedCarts] = useState<Set<string>>(new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // CHANGED: was `isLawnRejuv = seasonType === 'lawn_rejuv'`.
-  // Now uses the seasonHasTeams() helper so cart UI, reassign modal, and team
-  // data loading all activate for BOTH Lawn Rejuv AND Sealing seasons.
   const isTeamSeason = seasonHasTeams(seasonType);
-
-  // NEW: pull per-season config so payout-rate hints in the Reassign Teams
-  // modal (currently hardcoded $9/$7 for Rejuv) read from SEASON_CONFIGS.
-  // Sealing shows $8/$6; Rejuv still shows $9/$7.
   const seasonConfig = SEASON_CONFIGS[seasonType];
 
   const [sortBy, setSortBy] = useState<TeamSortOption>('recent');
 
-  // Aeration management state
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [transferModeId, setTransferModeId] = useState<string | null>(null);
   const [selectedTransferManager, setSelectedTransferManager] = useState<string>("");
 
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Reassign modal state (team seasons only — Rejuv + Sealing)
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [selectedWorkerToMove, setSelectedWorkerToMove] = useState<WorkerDisplay | null>(null);
   const [selectedWorkerCart, setSelectedWorkerCart] = useState<CartDisplay | null>(null);
@@ -179,9 +165,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // --- DATA LOADING ---
-  // CHANGED: branch is now isTeamSeason (Rejuv + Sealing) vs Aeration,
-  // instead of Rejuv-only vs everything-else.
   useEffect(() => {
     const loadData = async () => {
       const myTeam = workers.filter((w) => w.assignedManagerId === managerId);
@@ -194,7 +177,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     loadData();
   }, [managerId, workers, allSessions, refreshKey, isTeamSeason]);
 
-  // --- AERATION DATA LOADING (Individual Workers) ---
   const loadAerationData = async (myTeam: Worker[]) => {
     const enriched = await Promise.all(
       myTeam.map(async (w) => {
@@ -255,28 +237,15 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     setTeamMembers(enriched);
   };
 
-  // --- TEAM SEASON DATA LOADING (Rejuv + Sealing) ---
-  // RENAMED from loadLawnRejuvData — logic unchanged.
-  // BUG 1 FIX: Uses allSessions as source of truth instead of w.teamId grouping.
-  //            After a reassignment, sessions reflect the new cart membership
-  //            immediately; worker metadata (teamId) does not.
-  // BUG 3 FIX: Reads stats + financialStore directly from allSessions (already
-  //            loaded by parent), then fetches all bookings in parallel via
-  //            Promise.all — eliminates sequential awaits per worker.
-  // NEW: Also fetches pending sales for each cart's session in parallel and
-  //      merges them into sharedBookings so they show up in the RM's
-  //      ContractorJobs view alongside office bookings.
   const loadTeamSeasonData = async (myTeam: Worker[]) => {
     const myTeamIds = new Set(myTeam.map(w => w.contractorId));
     const workerMap = new Map(myTeam.map(w => [w.contractorId, w]));
 
-    // Filter allSessions to those that include at least one of our workers
     const mySessions = allSessions.filter(session => {
       const ids = session.teamWorkerIds || [session.workerId];
       return ids.some(id => myTeamIds.has(id));
     });
 
-    // Build all carts in parallel — one Promise per session
     const cartDisplays = await Promise.all(
       mySessions.map(async (session) => {
         const sessionWorkerIds = (session.teamWorkerIds || [session.workerId]).filter(id => myTeamIds.has(id));
@@ -284,11 +253,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           .map(id => workerMap.get(id))
           .filter(Boolean) as Worker[];
 
-        // Stats and financial store come directly from allSessions — no extra DB call
         const sharedFinancialStore = session.financialStore || [];
         const stats = session.stats || sessionService.getEmptyStats();
 
-        // Bookings + pending sales fetched in parallel (saves a round-trip per cart)
         let officeBookings: MasterBooking[] = [];
         let pendingSales: PendingSale[] = [];
         if (session.id) {
@@ -300,16 +267,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           pendingSales = pendingSalesRes;
         }
 
-        // Convert pending sales into MasterBooking shape so they ride alongside
-        // office bookings through ContractorJobs. The isPendingSale flag lets
-        // ContractorJobs branch (file 8) to render the SALE-PEND badge.
         const pendingSalesAsBookings = pendingSales.map(convertPendingSaleToBooking);
-        // Pending sales listed first so they appear at the top of the RM's view.
         const sharedBookings: MasterBooking[] = [...pendingSalesAsBookings, ...officeBookings];
 
-        // Pending count for the cart card — counts office pending only.
-        // Pending sales have their own visual identity (SALE-PEND badge) and
-        // shouldn't inflate the office-pending counter.
         const pending = officeBookings.filter(b =>
           b.Completed !== 'x' &&
           b.Status !== 'completed' &&
@@ -317,16 +277,12 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           b.Status !== 'next_time'
         );
 
-        // Routes calculation skips pending sales — they don't represent route
-        // assignments, just parked work tied to a route code.
         const uniqueRoutes = Array.from(new Set(
           officeBookings
             .map(b => b['Route Number'])
             .filter(r => r && r !== 'x' && r.trim() !== '')
         )) as string[];
 
-        // Last-active timestamp uses financialStore only. Pending sales are
-        // parked, not completed — they don't count toward "last active."
         let lastAddr: string | null = null;
         let lastTimestamp: string | null = null;
         let lastTimeFormatted: string | null = null;
@@ -366,8 +322,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             gross: stats.upsellGross,
             eq: stats.totalEQ,
             pending: pending.length,
-            // NEW: pending sales count — yellow Bookmark half of the Pend
-            // cell split. pendingSales is already fetched above (Promise.all).
             pendingSaleCount: pendingSales.length,
             upsellCount: stats.upsellCount,
             upsellGross: stats.upsellGross,
@@ -387,7 +341,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
       lastActiveTime: null,
       stats: { steps: 0, gross: 0, eq: 0, pending: 0, upsellCount: 0, upsellGross: 0 },
     })));
-  };// --- SORTING ---
+  };
+
   const sortedTeamMembers = useMemo(() => {
     const members = [...teamMembers];
     switch (sortBy) {
@@ -438,7 +393,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     }
   }, [carts, sortBy]);
 
-  // --- ACTIONS ---
   const toggleItem = (id: string) => {
     setExpandedItem(expandedItem === id ? null : id);
     setMenuOpenId(null);
@@ -519,14 +473,10 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     }
   };
 
-  // CHANGED: was `if (isLawnRejuv) return false;` — now blocks individual modify
-  // actions for ANY team season (Rejuv or Sealing) since both use carts.
   const isModifiable = (member: WorkerDisplay) => {
     if (isTeamSeason) return false;
     return member.financialStore.length === 0;
   };
-
-  // --- REASSIGN MODAL HANDLERS ---
 
   const openReassignModal = () => {
     setSelectedWorkerToMove(null);
@@ -589,9 +539,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     }
   };
 
-  // BUG 2 FIX: Remove a no-show worker completely from the session.
-  // If they're in a team, first split them off (updates team session),
-  // then delete them entirely so they don't affect cart stats.
   const handleRemoveWorkerNoShow = async () => {
     if (!selectedWorkerToMove) return;
     if (!window.confirm(
@@ -603,14 +550,12 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     setReassignSuccess(null);
 
     try {
-      // If in a team cart, remove from team first (creates a temporary solo session)
       if (selectedWorkerCart && selectedWorkerCart.members.length > 1) {
         await sessionService.reassignWorker(
           selectedWorkerToMove.contractorId,
           { type: 'new_solo' }
         );
       }
-      // Delete the worker and their solo session entirely
       await sessionService.deleteWorker(selectedWorkerToMove.contractorId);
 
       setReassignSuccess(`${selectedWorkerToMove.firstName} removed from session`);
@@ -627,9 +572,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
   const otherManagers = allManagers.filter(m => m.userId !== managerId && m.role === 'RouteManager');
 
-  // --- RENDER: Aeration Worker Card ---
-  // UNTOUCHED — Aeration has no pending sales, so its 5-stat grid keeps the
-  // single-yellow "Pend" cell exactly as before.
   const renderWorkerCard = (member: WorkerDisplay) => {
     const canModify = isModifiable(member);
 
@@ -639,7 +581,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         className="relative bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 transition-all shadow-sm"
       >
         <div className="p-2 pr-9">
-          {/* TOP ROW */}
           <div
             className="flex items-center justify-between mb-1 cursor-pointer"
             onClick={() => toggleItem(member.contractorId)}
@@ -692,7 +633,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             </div>
           </div>
 
-          {/* SECOND ROW */}
           <div
             className="flex items-center gap-3 pl-4 mb-2 cursor-pointer"
             onClick={() => toggleItem(member.contractorId)}
@@ -723,7 +663,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             </div>
           </div>
 
-          {/* STATS GRID — Aeration: untouched */}
           <div
             className="grid grid-cols-5 gap-1 text-center bg-gray-900/40 p-1 rounded text-[10px] border border-gray-700/30 cursor-pointer"
             onClick={() => toggleItem(member.contractorId)}
@@ -736,7 +675,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           </div>
         </div>
 
-        {/* Menu Button */}
         <div className="absolute top-2 right-1.5">
           {canModify ? (
             <div className="relative">
@@ -820,834 +758,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     );
   };
 
-  // --- RENDER: Team Season Cart Card (Rejuv + Sealing) ---
-  // CHANGED: Pend cell in the 5-stat grid is now a green+yellow split.
-  // Green = office p// src/pages/Management/components/RMTeamTab.tsx
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { 
-  ChevronDown, 
-  ChevronUp, 
-  Phone, 
-  Check, 
-  MoreVertical, 
-  ArrowRight, 
-  Trash2, 
-  X,
-  MapPin,
-  Truck,
-  Users,
-  Leaf,
-  Shovel, // NEW: Sealing season badge icon (matches Admin badge)
-  Eye,
-  Shuffle,
-  Loader,
-  AlertCircle,
-  UserPlus,
-  ArrowRightLeft,
-  UserMinus,
-  Bookmark, // NEW: pending-sales count icon in the cart-card Pend cell split
-} from 'lucide-react';
-import { sessionService } from '../../../lib/sessionService';
-import { seasonHasTeams } from '../../../lib/commandCenterService'; // NEW: drives isTeamSeason
-import { setStorageItem } from '../../../lib/localStorage';
-import {
-  Worker,
-  MasterBooking,
-  LogsheetSession,
-  ManagementUser,
-  SeasonType,
-  SessionStats,
-  SEASON_CONFIGS, // NEW: read per-season payout rates instead of hardcoding $7/$9
-  PendingSale,    // NEW: for pending sales fetched per cart
-} from '../../../types';
-import ContractorJobs from './ContractorJobs';
-
-interface RMTeamTabProps {
-  managerId: string;
-  workers: Worker[];
-  allSessions: LogsheetSession[];
-  allManagers?: ManagementUser[];
-  seasonType?: SeasonType;
-  currentUser?: ManagementUser;
-}
-
-interface WorkerDisplay extends Worker {
-  displayBookings: MasterBooking[];
-  financialStore: any[];
-  assignedRoutes: string[];
-  lastActiveAddress: string | null;
-  lastActiveTimestamp: string | null;
-  lastActiveTime: string | null;
-  stats: {
-    steps: number;
-    gross: number;
-    eq: number;
-    pending: number;
-    upsellCount: number;
-    upsellGross: number;
-  };
-}
-
-interface CartDisplay {
-  sessionId: string;
-  teamId: string;
-  members: WorkerDisplay[];
-  sharedBookings: MasterBooking[];
-  sharedFinancialStore: any[];
-  assignedRoutes: string[];
-  lastActiveAddress: string | null;
-  lastActiveTimestamp: string | null;
-  lastActiveTime: string | null;
-  aggregatedStats: {
-    steps: number;
-    gross: number;
-    eq: number;
-    pending: number;             // office pending bookings only — unchanged meaning
-    pendingSaleCount: number;    // NEW: count of pending sales parked on this cart (the yellow Bookmark half of the Pend split)
-    upsellCount: number;
-    upsellGross: number;
-  };
-}
-
-type TeamSortOption = 'recent' | 'alpha' | 'steps' | 'equiv' | 'upGross';
-
-const formatTimeShort = (timestamp: string): string => {
-  const date = new Date(timestamp);
-  let hours = date.getHours();
-  const minutes = date.getMinutes();
-  const ampm = hours >= 12 ? 'p' : 'a';
-  hours = hours % 12;
-  hours = hours ? hours : 12;
-  const minutesStr = minutes < 10 ? `0${minutes}` : `${minutes}`;
-  return `${hours}:${minutesStr}${ampm}`;
-};
-
-// --- HELPER: Convert a PendingSale into a MasterBooking-shaped object ---
-// Same shape as Dashboard.tsx uses on the worker side, so ContractorJobs sees
-// pending sales in identical form regardless of which screen surfaced them.
-// isPendingSale + pendingSaleId flags let ContractorJobs branch correctly to
-// render the SALE-PEND badge and open the right modal.
-const convertPendingSaleToBooking = (ps: PendingSale): MasterBooking => {
-  const fullAddress = `${ps.houseNumber || ''} ${ps.streetName || ''}`.trim();
-  return {
-    'Booking ID': ps.id,
-    'First Name': '',
-    'Last Name': '',
-    'Full Address': fullAddress,
-    'House Number': ps.houseNumber,
-    'Street Name': ps.streetName,
-    'Route Number': ps.routeCode,
-    'Price': ps.price || '',
-    'Log Sheet Notes': ps.notes,
-    'FO/BO/FP': ps.propertyType as any,
-    Status: 'pending',
-    services: ps.services,
-    isPendingSale: true,
-    pendingSaleId: ps.id,
-  } as MasterBooking;
-};
-
-const RMTeamTab: React.FC<RMTeamTabProps> = ({
-  managerId,
-  workers,
-  allSessions,
-  allManagers = [],
-  seasonType = 'aeration',
-  currentUser,
-}) => {
-  const navigate = useNavigate();
-  const [teamMembers, setTeamMembers] = useState<WorkerDisplay[]>([]);
-  const [carts, setCarts] = useState<CartDisplay[]>([]);
-  const [expandedItem, setExpandedItem] = useState<string | null>(null);
-  const [expandedCarts, setExpandedCarts] = useState<Set<string>>(new Set());
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-
-  // CHANGED: was `isLawnRejuv = seasonType === 'lawn_rejuv'`.
-  // Now uses the seasonHasTeams() helper so cart UI, reassign modal, and team
-  // data loading all activate for BOTH Lawn Rejuv AND Sealing seasons.
-  const isTeamSeason = seasonHasTeams(seasonType);
-
-  // NEW: pull per-season config so payout-rate hints in the Reassign Teams
-  // modal (currently hardcoded $9/$7 for Rejuv) read from SEASON_CONFIGS.
-  // Sealing shows $8/$6; Rejuv still shows $9/$7.
-  const seasonConfig = SEASON_CONFIGS[seasonType];
-
-  const [sortBy, setSortBy] = useState<TeamSortOption>('recent');
-
-  // Aeration management state
-  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
-  const [transferModeId, setTransferModeId] = useState<string | null>(null);
-  const [selectedTransferManager, setSelectedTransferManager] = useState<string>("");
-
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  // Reassign modal state (team seasons only — Rejuv + Sealing)
-  const [showReassignModal, setShowReassignModal] = useState(false);
-  const [selectedWorkerToMove, setSelectedWorkerToMove] = useState<WorkerDisplay | null>(null);
-  const [selectedWorkerCart, setSelectedWorkerCart] = useState<CartDisplay | null>(null);
-  const [reassignLoading, setReassignLoading] = useState(false);
-  const [reassignError, setReassignError] = useState<string | null>(null);
-  const [reassignManagerId, setReassignManagerId] = useState('');
-  const [reassignSuccess, setReassignSuccess] = useState<string | null>(null);
-
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setMenuOpenId(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // --- DATA LOADING ---
-  // CHANGED: branch is now isTeamSeason (Rejuv + Sealing) vs Aeration,
-  // instead of Rejuv-only vs everything-else.
-  useEffect(() => {
-    const loadData = async () => {
-      const myTeam = workers.filter((w) => w.assignedManagerId === managerId);
-      if (isTeamSeason) {
-        await loadTeamSeasonData(myTeam);
-      } else {
-        await loadAerationData(myTeam);
-      }
-    };
-    loadData();
-  }, [managerId, workers, allSessions, refreshKey, isTeamSeason]);
-
-  // --- AERATION DATA LOADING (Individual Workers) ---
-  const loadAerationData = async (myTeam: Worker[]) => {
-    const enriched = await Promise.all(
-      myTeam.map(async (w) => {
-        const allBookings = await sessionService.getWorkerAssignments(w.contractorId);
-
-        const pending = allBookings.filter((b) =>
-          b.Completed !== 'x' &&
-          b.Status !== 'completed' &&
-          b.Status !== 'cancelled' &&
-          b.Status !== 'next_time'
-        );
-
-        const freshSession = await sessionService.getActiveLogsheetSession(w.contractorId);
-        const stats = freshSession?.stats || sessionService.getEmptyStats();
-        const financialStore = freshSession?.financialStore || [];
-
-        const uniqueRoutes = Array.from(new Set(
-          allBookings
-            .map(b => b['Route Number'])
-            .filter(r => r && r !== 'x' && r.trim() !== '')
-        )) as string[];
-
-        let lastAddr: string | null = null;
-        let lastTimestamp: string | null = null;
-        let lastTimeFormatted: string | null = null;
-
-        if (financialStore.length > 0) {
-          const sortedTx = [...financialStore].sort((a, b) =>
-            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-          );
-          lastAddr = sortedTx[0].address;
-          lastTimestamp = sortedTx[0].timestamp;
-          lastTimeFormatted = formatTimeShort(sortedTx[0].timestamp);
-        }
-
-        const upsellsEnabled = await sessionService.getWorkerUpsellsEnabled(w.contractorId);
-
-        return {
-          ...w,
-          upsellsEnabled,
-          displayBookings: allBookings,
-          financialStore,
-          assignedRoutes: uniqueRoutes,
-          lastActiveAddress: lastAddr,
-          lastActiveTimestamp: lastTimestamp,
-          lastActiveTime: lastTimeFormatted,
-          stats: {
-            steps: stats.stepCount,
-            gross: stats.upsellGross,
-            eq: stats.totalEQ,
-            pending: pending.length,
-            upsellCount: stats.upsellCount,
-            upsellGross: stats.upsellGross,
-          },
-        };
-      })
-    );
-    setTeamMembers(enriched);
-  };
-
-  // --- TEAM SEASON DATA LOADING (Rejuv + Sealing) ---
-  // RENAMED from loadLawnRejuvData — logic unchanged.
-  // BUG 1 FIX: Uses allSessions as source of truth instead of w.teamId grouping.
-  //            After a reassignment, sessions reflect the new cart membership
-  //            immediately; worker metadata (teamId) does not.
-  // BUG 3 FIX: Reads stats + financialStore directly from allSessions (already
-  //            loaded by parent), then fetches all bookings in parallel via
-  //            Promise.all — eliminates sequential awaits per worker.
-  // NEW: Also fetches pending sales for each cart's session in parallel and
-  //      merges them into sharedBookings so they show up in the RM's
-  //      ContractorJobs view alongside office bookings.
-  const loadTeamSeasonData = async (myTeam: Worker[]) => {
-    const myTeamIds = new Set(myTeam.map(w => w.contractorId));
-    const workerMap = new Map(myTeam.map(w => [w.contractorId, w]));
-
-    // Filter allSessions to those that include at least one of our workers
-    const mySessions = allSessions.filter(session => {
-      const ids = session.teamWorkerIds || [session.workerId];
-      return ids.some(id => myTeamIds.has(id));
-    });
-
-    // Build all carts in parallel — one Promise per session
-    const cartDisplays = await Promise.all(
-      mySessions.map(async (session) => {
-        const sessionWorkerIds = (session.teamWorkerIds || [session.workerId]).filter(id => myTeamIds.has(id));
-        const teamWorkers = sessionWorkerIds
-          .map(id => workerMap.get(id))
-          .filter(Boolean) as Worker[];
-
-        // Stats and financial store come directly from allSessions — no extra DB call
-        const sharedFinancialStore = session.financialStore || [];
-        const stats = session.stats || sessionService.getEmptyStats();
-
-        // Bookings + pending sales fetched in parallel (saves a round-trip per cart)
-        let officeBookings: MasterBooking[] = [];
-        let pendingSales: PendingSale[] = [];
-        if (session.id) {
-          const [bookingsRes, pendingSalesRes] = await Promise.all([
-            sessionService.getSessionAssignments(session.id),
-            sessionService.getPendingSalesForSession(session.id),
-          ]);
-          officeBookings = bookingsRes;
-          pendingSales = pendingSalesRes;
-        }
-
-        // Convert pending sales into MasterBooking shape so they ride alongside
-        // office bookings through ContractorJobs. The isPendingSale flag lets
-        // ContractorJobs branch (file 8) to render the SALE-PEND badge.
-        const pendingSalesAsBookings = pendingSales.map(convertPendingSaleToBooking);
-        // Pending sales listed first so they appear at the top of the RM's view.
-        const sharedBookings: MasterBooking[] = [...pendingSalesAsBookings, ...officeBookings];
-
-        // Pending count for the cart card — counts office pending only.
-        // Pending sales have their own visual identity (SALE-PEND badge) and
-        // shouldn't inflate the office-pending counter.
-        const pending = officeBookings.filter(b =>
-          b.Completed !== 'x' &&
-          b.Status !== 'completed' &&
-          b.Status !== 'cancelled' &&
-          b.Status !== 'next_time'
-        );
-
-        // Routes calculation skips pending sales — they don't represent route
-        // assignments, just parked work tied to a route code.
-        const uniqueRoutes = Array.from(new Set(
-          officeBookings
-            .map(b => b['Route Number'])
-            .filter(r => r && r !== 'x' && r.trim() !== '')
-        )) as string[];
-
-        // Last-active timestamp uses financialStore only. Pending sales are
-        // parked, not completed — they don't count toward "last active."
-        let lastAddr: string | null = null;
-        let lastTimestamp: string | null = null;
-        let lastTimeFormatted: string | null = null;
-
-        if (sharedFinancialStore.length > 0) {
-          const sortedTx = [...sharedFinancialStore].sort((a, b) =>
-            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-          );
-          lastAddr = sortedTx[0].address;
-          lastTimestamp = sortedTx[0].timestamp;
-          lastTimeFormatted = formatTimeShort(sortedTx[0].timestamp);
-        }
-
-        const memberDisplays: WorkerDisplay[] = teamWorkers.map(w => ({
-          ...w,
-          displayBookings: [],
-          financialStore: [],
-          assignedRoutes: uniqueRoutes,
-          lastActiveAddress: null,
-          lastActiveTimestamp: null,
-          lastActiveTime: null,
-          stats: { steps: 0, gross: 0, eq: 0, pending: 0, upsellCount: 0, upsellGross: 0 },
-        }));
-
-        return {
-          sessionId: session.id,
-          teamId: sessionWorkerIds[0] || session.workerId,
-          members: memberDisplays,
-          sharedBookings,
-          sharedFinancialStore,
-          assignedRoutes: uniqueRoutes,
-          lastActiveAddress: lastAddr,
-          lastActiveTimestamp: lastTimestamp,
-          lastActiveTime: lastTimeFormatted,
-          aggregatedStats: {
-            steps: stats.stepCount,
-            gross: stats.upsellGross,
-            eq: stats.totalEQ,
-            pending: pending.length,
-            // NEW: pending sales count — yellow Bookmark half of the Pend
-            // cell split. pendingSales is already fetched above (Promise.all).
-            pendingSaleCount: pendingSales.length,
-            upsellCount: stats.upsellCount,
-            upsellGross: stats.upsellGross,
-          },
-        };
-      })
-    );
-
-    setCarts(cartDisplays);
-    setTeamMembers(myTeam.map(w => ({
-      ...w,
-      displayBookings: [],
-      financialStore: [],
-      assignedRoutes: [],
-      lastActiveAddress: null,
-      lastActiveTimestamp: null,
-      lastActiveTime: null,
-      stats: { steps: 0, gross: 0, eq: 0, pending: 0, upsellCount: 0, upsellGross: 0 },
-    })));
-  };// --- SORTING ---
-  const sortedTeamMembers = useMemo(() => {
-    const members = [...teamMembers];
-    switch (sortBy) {
-      case 'recent':
-        return members.sort((a, b) => {
-          if (!a.lastActiveTimestamp && !b.lastActiveTimestamp) return 0;
-          if (!a.lastActiveTimestamp) return 1;
-          if (!b.lastActiveTimestamp) return -1;
-          return new Date(b.lastActiveTimestamp).getTime() - new Date(a.lastActiveTimestamp).getTime();
-        });
-      case 'alpha':
-        return members.sort((a, b) => a.lastName.localeCompare(b.lastName));
-      case 'steps':
-        return members.sort((a, b) => b.stats.steps - a.stats.steps);
-      case 'equiv':
-        return members.sort((a, b) => b.stats.eq - a.stats.eq);
-      case 'upGross':
-        return members.sort((a, b) => b.stats.upsellGross - a.stats.upsellGross);
-      default:
-        return members;
-    }
-  }, [teamMembers, sortBy]);
-
-  const sortedCarts = useMemo(() => {
-    const cartList = [...carts];
-    switch (sortBy) {
-      case 'recent':
-        return cartList.sort((a, b) => {
-          if (!a.lastActiveTimestamp && !b.lastActiveTimestamp) return 0;
-          if (!a.lastActiveTimestamp) return 1;
-          if (!b.lastActiveTimestamp) return -1;
-          return new Date(b.lastActiveTimestamp).getTime() - new Date(a.lastActiveTimestamp).getTime();
-        });
-      case 'alpha':
-        return cartList.sort((a, b) => {
-          const aName = a.members[0]?.lastName || a.teamId;
-          const bName = b.members[0]?.lastName || b.teamId;
-          return aName.localeCompare(bName);
-        });
-      case 'steps':
-        return cartList.sort((a, b) => b.aggregatedStats.steps - a.aggregatedStats.steps);
-      case 'equiv':
-        return cartList.sort((a, b) => b.aggregatedStats.eq - a.aggregatedStats.eq);
-      case 'upGross':
-        return cartList.sort((a, b) => b.aggregatedStats.upsellGross - a.aggregatedStats.upsellGross);
-      default:
-        return cartList;
-    }
-  }, [carts, sortBy]);
-
-  // --- ACTIONS ---
-  const toggleItem = (id: string) => {
-    setExpandedItem(expandedItem === id ? null : id);
-    setMenuOpenId(null);
-    setTransferModeId(null);
-  };
-
-  const toggleCart = (cartId: string) => {
-    setExpandedCarts(prev => {
-      const next = new Set(prev);
-      if (next.has(cartId)) next.delete(cartId);
-      else next.add(cartId);
-      return next;
-    });
-  };
-
-  const copyPhone = (phone: string, id: string) => {
-    navigator.clipboard.writeText(phone);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 1500);
-  };
-
-  const handleRefreshData = () => {
-    setRefreshKey(prev => prev + 1);
-  };
-
-  const handleViewLogsheet = (worker: Worker, cartMembers?: Worker[]) => {
-    if (!currentUser) {
-      console.error('Cannot view logsheet: currentUser not available');
-      return;
-    }
-    setStorageItem('rm_original_user', currentUser);
-    setStorageItem('rm_view_mode', true);
-    if (cartMembers && cartMembers.length > 1) {
-      const cartNames = cartMembers.map(m => m.firstName).join(' & ');
-      setStorageItem('rm_view_cart_names', cartNames);
-    } else {
-      setStorageItem('rm_view_cart_names', null);
-    }
-    setStorageItem('current_user', worker);
-    navigate('/logsheet');
-  };
-
-  const handleTransfer = async (contractorId: string) => {
-    if (!selectedTransferManager) return;
-    try {
-      await sessionService.transferWorker(contractorId, selectedTransferManager);
-      setTeamMembers((prev) => prev.filter((m) => m.contractorId !== contractorId));
-      setTransferModeId(null);
-      setMenuOpenId(null);
-      setSelectedTransferManager("");
-    } catch (error) {
-      console.error("Transfer failed:", error);
-      alert("Failed to transfer contractor. Please try again.");
-    }
-  };
-
-  const handleRemove = async (contractorId: string) => {
-    if (window.confirm("Are you sure you want to remove this contractor?")) {
-      try {
-        await sessionService.deleteWorker(contractorId);
-        setTeamMembers((prev) => prev.filter((m) => m.contractorId !== contractorId));
-        setMenuOpenId(null);
-      } catch (error) {
-        console.error("Error removing contractor:", error);
-        alert("Failed to remove contractor.");
-      }
-    }
-  };
-
-  const handleToggleUpsells = async (contractorId: string, currentValue: boolean) => {
-    try {
-      await sessionService.toggleWorkerUpsells(contractorId, !currentValue);
-      setTeamMembers(prev => prev.map(m =>
-        m.contractorId === contractorId ? { ...m, upsellsEnabled: !currentValue } : m
-      ));
-    } catch (error) {
-      console.error("Failed to toggle upsells:", error);
-    }
-  };
-
-  // CHANGED: was `if (isLawnRejuv) return false;` — now blocks individual modify
-  // actions for ANY team season (Rejuv or Sealing) since both use carts.
-  const isModifiable = (member: WorkerDisplay) => {
-    if (isTeamSeason) return false;
-    return member.financialStore.length === 0;
-  };
-
-  // --- REASSIGN MODAL HANDLERS ---
-
-  const openReassignModal = () => {
-    setSelectedWorkerToMove(null);
-    setSelectedWorkerCart(null);
-    setReassignError(null);
-    setReassignSuccess(null);
-    setReassignManagerId('');
-    setShowReassignModal(true);
-  };
-
-  const closeReassignModal = () => {
-    setShowReassignModal(false);
-    setSelectedWorkerToMove(null);
-    setSelectedWorkerCart(null);
-    setReassignError(null);
-    setReassignSuccess(null);
-  };
-
-  const selectWorkerToMove = (worker: WorkerDisplay, cart: CartDisplay) => {
-    setSelectedWorkerToMove(worker);
-    setSelectedWorkerCart(cart);
-    setReassignError(null);
-    setReassignSuccess(null);
-    setReassignManagerId('');
-  };
-
-  const handleReassignWorker = async (
-    destination:
-      | { type: 'existing_cart'; targetSessionId: string; label: string }
-      | { type: 'new_solo' }
-      | { type: 'different_manager'; targetManagerId: string }
-  ) => {
-    if (!selectedWorkerToMove) return;
-    setReassignLoading(true);
-    setReassignError(null);
-    setReassignSuccess(null);
-
-    try {
-      await sessionService.reassignWorker(selectedWorkerToMove.contractorId, destination);
-
-      let msg = '';
-      if (destination.type === 'existing_cart') {
-        msg = `${selectedWorkerToMove.firstName} moved to ${destination.label}`;
-      } else if (destination.type === 'new_solo') {
-        msg = `${selectedWorkerToMove.firstName} is now a solo cart`;
-      } else {
-        const mgr = allManagers.find(m => m.userId === destination.targetManagerId);
-        msg = `${selectedWorkerToMove.firstName} moved to ${mgr?.name || 'new manager'}`;
-      }
-
-      setReassignSuccess(msg);
-      setSelectedWorkerToMove(null);
-      setSelectedWorkerCart(null);
-      handleRefreshData();
-    } catch (err: any) {
-      console.error('Reassign failed:', err);
-      setReassignError(err.message || 'Failed to reassign worker. Please try again.');
-    } finally {
-      setReassignLoading(false);
-    }
-  };
-
-  // BUG 2 FIX: Remove a no-show worker completely from the session.
-  // If they're in a team, first split them off (updates team session),
-  // then delete them entirely so they don't affect cart stats.
-  const handleRemoveWorkerNoShow = async () => {
-    if (!selectedWorkerToMove) return;
-    if (!window.confirm(
-      `Remove ${selectedWorkerToMove.firstName} ${selectedWorkerToMove.lastName} completely?\n\nThis removes them from the session and all stats. Use this for no-shows only.`
-    )) return;
-
-    setReassignLoading(true);
-    setReassignError(null);
-    setReassignSuccess(null);
-
-    try {
-      // If in a team cart, remove from team first (creates a temporary solo session)
-      if (selectedWorkerCart && selectedWorkerCart.members.length > 1) {
-        await sessionService.reassignWorker(
-          selectedWorkerToMove.contractorId,
-          { type: 'new_solo' }
-        );
-      }
-      // Delete the worker and their solo session entirely
-      await sessionService.deleteWorker(selectedWorkerToMove.contractorId);
-
-      setReassignSuccess(`${selectedWorkerToMove.firstName} removed from session`);
-      setSelectedWorkerToMove(null);
-      setSelectedWorkerCart(null);
-      handleRefreshData();
-    } catch (err: any) {
-      console.error('Remove failed:', err);
-      setReassignError(err.message || 'Failed to remove worker. Please try again.');
-    } finally {
-      setReassignLoading(false);
-    }
-  };
-
-  const otherManagers = allManagers.filter(m => m.userId !== managerId && m.role === 'RouteManager');
-
-  // --- RENDER: Aeration Worker Card ---
-  // UNTOUCHED — Aeration has no pending sales, so its 5-stat grid keeps the
-  // single-yellow "Pend" cell exactly as before.
-  const renderWorkerCard = (member: WorkerDisplay) => {
-    const canModify = isModifiable(member);
-
-    return (
-      <div
-        key={member.contractorId}
-        className="relative bg-gray-800 rounded-lg border border-gray-700 hover:border-gray-600 transition-all shadow-sm"
-      >
-        <div className="p-2 pr-9">
-          {/* TOP ROW */}
-          <div
-            className="flex items-center justify-between mb-1 cursor-pointer"
-            onClick={() => toggleItem(member.contractorId)}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <div
-                className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                  member.stats.pending > 0 ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'
-                }`}
-              />
-              <h3 className="font-bold text-white text-sm whitespace-nowrap">
-                {member.firstName} {member.lastName}
-              </h3>
-              <div className="flex flex-wrap gap-1 ml-2">
-                {member.assignedRoutes.length > 0 ? (
-                  member.assignedRoutes.map((route, idx) => (
-                    <span key={idx} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] bg-indigo-900/60 text-indigo-200 border border-indigo-500/30 font-mono">
-                      {route}
-                    </span>
-                  ))
-                ) : member.displayBookings.length > 0 ? (
-                  <span className="text-[9px] text-gray-500 italic">No Rte</span>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 flex-shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleViewLogsheet(member); }}
-                className="p-1 rounded hover:bg-gray-700 transition-colors text-cyan-400 hover:text-cyan-300"
-                title={`View ${member.firstName}'s logsheet`}
-              >
-                <Eye size={14} />
-              </button>
-              <span className={`text-[8px] font-bold ${member.upsellsEnabled !== false ? 'text-purple-400' : 'text-gray-500'}`}>
-                UP
-              </span>
-              <button
-                onClick={(e) => { e.stopPropagation(); handleToggleUpsells(member.contractorId, member.upsellsEnabled !== false); }}
-                className={`relative inline-flex h-3 w-5 flex-shrink-0 cursor-pointer rounded-full border transition-colors duration-200 ease-in-out focus:outline-none items-center ${
-                  member.upsellsEnabled !== false ? 'bg-purple-600 border-purple-600' : 'bg-gray-600 border-gray-600'
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-2 w-2 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                    member.upsellsEnabled !== false ? 'translate-x-[10px]' : 'translate-x-0.5'
-                  }`}
-                />
-              </button>
-            </div>
-          </div>
-
-          {/* SECOND ROW */}
-          <div
-            className="flex items-center gap-3 pl-4 mb-2 cursor-pointer"
-            onClick={() => toggleItem(member.contractorId)}
-          >
-            <div className="flex items-center gap-1 text-[10px] text-gray-400 truncate max-w-[50%]">
-              <MapPin size={9} className={member.lastActiveAddress ? "text-emerald-500" : "text-gray-600"} />
-              {member.lastActiveAddress ? (
-                <span className="truncate">
-                  {member.lastActiveAddress}
-                  {member.lastActiveTime && <span className="text-gray-500"> • {member.lastActiveTime}</span>}
-                </span>
-              ) : (
-                <span className="opacity-50 italic">No history</span>
-              )}
-            </div>
-            <span className="text-gray-700 text-[10px]">|</span>
-            <div className="flex items-center gap-2 text-[10px] text-gray-500 font-mono">
-              <span>#{member.contractorId}</span>
-              {member.cellPhone && (
-                <span
-                  onClick={(e) => { e.stopPropagation(); copyPhone(member.cellPhone!, member.contractorId); }}
-                  className="flex items-center gap-1 text-blue-400 cursor-pointer hover:underline"
-                >
-                  <Phone size={9} /> {member.cellPhone}
-                  {copiedId === member.contractorId && <Check size={9} className="text-green-400" />}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* STATS GRID — Aeration: untouched */}
-          <div
-            className="grid grid-cols-5 gap-1 text-center bg-gray-900/40 p-1 rounded text-[10px] border border-gray-700/30 cursor-pointer"
-            onClick={() => toggleItem(member.contractorId)}
-          >
-            <div><div className="text-gray-500 text-[8px] uppercase">Steps</div><div className="text-white font-bold">{member.stats.steps}</div></div>
-            <div><div className="text-gray-500 text-[8px] uppercase">Pend</div><div className="text-yellow-400 font-bold">{member.stats.pending}</div></div>
-            <div><div className="text-gray-500 text-[8px] uppercase">Up Gross</div><div className="text-green-400 font-bold">${member.stats.gross.toFixed(2)}</div></div>
-            <div><div className="text-gray-500 text-[8px] uppercase">Upsell</div><div className="text-purple-400 font-bold">{member.stats.upsellCount}</div></div>
-            <div><div className="text-gray-500 text-[8px] uppercase">EQ</div><div className="text-blue-300 font-bold">{member.stats.eq.toFixed(2)}</div></div>
-          </div>
-        </div>
-
-        {/* Menu Button */}
-        <div className="absolute top-2 right-1.5">
-          {canModify ? (
-            <div className="relative">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMenuOpenId(menuOpenId === member.contractorId ? null : member.contractorId);
-                  setTransferModeId(null);
-                }}
-                className={`p-1 rounded hover:bg-gray-700 transition-colors ${menuOpenId === member.contractorId ? 'bg-gray-700 text-white' : 'text-gray-500'}`}
-              >
-                <MoreVertical size={14} />
-              </button>
-
-              {menuOpenId === member.contractorId && (
-                <div ref={menuRef} className="absolute right-0 top-6 w-48 bg-gray-800 border border-gray-600 rounded shadow-xl z-20 overflow-hidden">
-                  {!transferModeId ? (
-                    <div className="flex flex-col">
-                      <button
-                        onClick={() => setTransferModeId(member.contractorId)}
-                        className="flex items-center gap-2 px-3 py-2 text-xs text-blue-300 hover:bg-gray-700 text-left"
-                      >
-                        <ArrowRight size={14} /> Transfer Contractor
-                      </button>
-                      <button
-                        onClick={() => handleRemove(member.contractorId)}
-                        className="flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-gray-700 text-left border-t border-gray-700"
-                      >
-                        <Trash2 size={14} /> Remove Contractor
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="p-2 space-y-2">
-                      <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-                        <span>Select Manager</span>
-                        <button onClick={() => setTransferModeId(null)}><X size={12} /></button>
-                      </div>
-                      <select
-                        className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded p-1 outline-none"
-                        value={selectedTransferManager}
-                        onChange={(e) => setSelectedTransferManager(e.target.value)}
-                      >
-                        <option value="">Select...</option>
-                        {allManagers.filter(m => m.userId !== managerId).map(m => (
-                          <option key={m.userId} value={m.userId}>{m.name}</option>
-                        ))}
-                      </select>
-                      <button
-                        disabled={!selectedTransferManager}
-                        onClick={() => handleTransfer(member.contractorId)}
-                        className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs py-1 rounded"
-                      >
-                        Confirm
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="p-1 cursor-pointer" onClick={() => toggleItem(member.contractorId)}>
-              {expandedItem === member.contractorId
-                ? <ChevronUp size={14} className="text-gray-600" />
-                : <ChevronDown size={14} className="text-gray-600" />
-              }
-            </div>
-          )}
-        </div>
-
-        {expandedItem === member.contractorId && (
-          <div className="mt-1 pt-1 border-t border-gray-700 px-2 pb-2">
-            <ContractorJobs
-              bookings={member.displayBookings}
-              financialStore={member.financialStore}
-              onRefresh={handleRefreshData}
-              seasonType={seasonType}
-            />
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // --- RENDER: Team Season Cart Card (Rejuv + Sealing) ---
-  // CHANGED: Pend cell in the 5-stat grid is now a green+yellow split.
-  // Green = office pending count, yellow = pending sales count w/ Bookmark icon.
-  // Yellow half only renders when pendingSaleCount > 0.
   const renderCartCard = (cart: CartDisplay) => {
     const isExpanded = expandedCarts.has(cart.sessionId);
     const isSoloCart = cart.members.length === 1;
@@ -1661,7 +771,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         }`}
       >
         <div className="p-2 pr-9">
-          {/* TOP ROW */}
           <div
             className="flex items-center justify-between mb-1 cursor-pointer"
             onClick={() => toggleCart(cart.sessionId)}
@@ -1706,7 +815,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             </div>
           </div>
 
-          {/* SECOND ROW */}
           <div
             className="flex items-center gap-3 pl-4 mb-2 cursor-pointer flex-wrap"
             onClick={() => toggleCart(cart.sessionId)}
@@ -1742,15 +850,11 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
             </div>
           </div>
 
-          {/* STATS GRID — Team season: Pend cell is now a green+yellow split */}
           <div
             className="grid grid-cols-5 gap-1 text-center bg-gray-900/40 p-1 rounded text-[10px] border border-gray-700/30 cursor-pointer"
             onClick={() => toggleCart(cart.sessionId)}
           >
             <div><div className="text-gray-500 text-[8px] uppercase">Steps</div><div className="text-white font-bold">{cart.aggregatedStats.steps}</div></div>
-            {/* Pend cell — green office count + yellow pending-sales count (w/ Bookmark)
-                Yellow half only renders when pendingSaleCount > 0 so a clean session
-                doesn't show "0 + 0". */}
             <div>
               <div className="text-gray-500 text-[8px] uppercase">Pend</div>
               <div className="font-bold flex items-center justify-center gap-1">
@@ -1772,7 +876,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           </div>
         </div>
 
-        {/* View + Chevron */}
         <div className="absolute top-2 right-1.5 flex items-center gap-1">
           <button
             onClick={(e) => {
@@ -1807,14 +910,10 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     );
   };
 
-  // --- MAIN RENDER ---
   return (
     <div className="space-y-2 max-w-4xl mx-auto pb-10">
-      {/* Header */}
       {teamMembers.length > 0 && (
         <div className="flex justify-between items-center mb-4">
-          {/* CHANGED: Was {isLawnRejuv && (...Leaf + green...)}. Now shows for any
-              team season, and switches Leaf+green (Rejuv) ↔ Shovel+slate (Sealing). */}
           {isTeamSeason && (
             <div className="flex items-center gap-3">
               <div className={`flex items-center gap-2 text-xs ${
@@ -1856,22 +955,13 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         </div>
       )}
 
-      {/* CHANGED: was {isLawnRejuv && ...} / {!isLawnRejuv && ...}. Now uses
-          isTeamSeason so cart cards render for both Rejuv AND Sealing. */}
       {isTeamSeason && sortedCarts.map((cart) => renderCartCard(cart))}
       {!isTeamSeason && sortedTeamMembers.map((member) => renderWorkerCard(member))}
 
-      {/* ============================================================
-          REASSIGN TEAMS MODAL — Team Seasons only (Rejuv + Sealing)
-          ============================================================ */}
-      {/* CHANGED: was {showReassignModal && isLawnRejuv && (...)}. Now opens for
-          any team season. Hardcoded $9/$7 rate hints below now pull from
-          SEASON_CONFIGS[seasonType] (Sealing → $8/$6, Rejuv → $9/$7). */}
       {showReassignModal && isTeamSeason && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
           <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
 
-            {/* Header */}
             <div className="p-4 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-2">
                 <ArrowRightLeft size={18} className="text-orange-400" />
@@ -1885,7 +975,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               </button>
             </div>
 
-            {/* Banners */}
             {reassignSuccess && (
               <div className="mx-4 mt-3 flex items-center gap-2 bg-green-900/30 border border-green-700/50 rounded-lg px-3 py-2 text-green-300 text-sm">
                 <Check size={16} />{reassignSuccess}
@@ -1899,7 +988,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
             <div className="flex flex-1 overflow-hidden">
 
-              {/* LEFT PANEL: Select worker */}
               <div className="w-1/2 border-r border-gray-700 flex flex-col">
                 <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex-shrink-0">
                   <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">
@@ -1957,7 +1045,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                 </div>
               </div>
 
-              {/* RIGHT PANEL: Choose destination */}
               <div className="w-1/2 flex flex-col">
                 <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex-shrink-0">
                   <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">2. Move to...</p>
@@ -1970,7 +1057,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                 ) : (
                   <div className="flex-1 overflow-y-auto p-3 space-y-3">
 
-                    {/* Selected worker badge */}
                     <div className="flex items-center gap-2 bg-orange-900/20 border border-orange-700/40 rounded-lg px-3 py-2">
                       <div className="w-7 h-7 rounded-full bg-orange-600 flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0">
                         {selectedWorkerToMove.firstName.charAt(0)}{selectedWorkerToMove.lastName.charAt(0)}
@@ -1983,7 +1069,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                       </div>
                     </div>
 
-                    {/* Option A: Join existing cart */}
                     {sortedCarts.filter(c => c.sessionId !== selectedWorkerCart?.sessionId).length > 0 && (
                       <div>
                         <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Join existing cart</p>
@@ -1993,9 +1078,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                             .map(targetCart => {
                               const label = targetCart.members.map(m => m.firstName).join(' & ');
                               const newSize = targetCart.members.length + 1;
-                              // CHANGED: was hardcoded "$9/EQ" / "$7/EQ" — now reads
-                              // payoutRateTeam / payoutRateSolo from SEASON_CONFIGS
-                              // so Sealing shows $8/$6 and Rejuv shows $9/$7.
                               const newRate = newSize >= 2
                                 ? `$${seasonConfig.payoutRateTeam}/EQ`
                                 : `$${seasonConfig.payoutRateSolo}/EQ`;
@@ -2031,7 +1113,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                       </div>
                     )}
 
-                    {/* Option B: Split to solo */}
                     <div>
                       <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Split off</p>
                       <button
@@ -2047,8 +1128,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                           </div>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
-                          {/* CHANGED: was hardcoded "$7/EQ" — now reads payoutRateSolo
-                              from SEASON_CONFIGS so Sealing shows $6/EQ. */}
                           <span className="text-[10px] text-yellow-400 bg-yellow-900/30 border border-yellow-700/50 px-1.5 py-0.5 rounded">${seasonConfig.payoutRateSolo}/EQ</span>
                           {reassignLoading ? <Loader size={12} className="animate-spin text-gray-400" /> : <ArrowRight size={14} className="text-gray-500" />}
                         </div>
@@ -2058,7 +1137,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                       )}
                     </div>
 
-                    {/* Option C: Different manager */}
                     {otherManagers.length > 0 && (
                       <div>
                         <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Move to different manager</p>
@@ -2086,7 +1164,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                       </div>
                     )}
 
-                    {/* Option D: Remove (No-Show) — BUG 2 FIX */}
                     <div>
                       <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">No-show</p>
                       <button
@@ -2113,7 +1190,6 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
               </div>
             </div>
 
-            {/* Footer */}
             <div className="p-3 border-t border-gray-700 flex justify-end flex-shrink-0">
               <button
                 onClick={closeReassignModal}
