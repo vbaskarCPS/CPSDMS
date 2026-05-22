@@ -2130,4 +2130,3 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 };
 
 export default RMTeamTab;
-}
