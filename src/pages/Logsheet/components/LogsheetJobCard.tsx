@@ -1,6 +1,6 @@
 // src/pages/Logsheet/components/LogsheetJobCard.tsx
 import React from 'react';
-import { MapPin, ChevronRight, Check, FileText, Phone, Mail, Clock, X as XIcon } from 'lucide-react';
+import { MapPin, ChevronRight, Check, FileText, Phone, Mail, Clock, X as XIcon, Bookmark } from 'lucide-react';
 import { MasterBooking, ServiceFlags, SERVICE_FLAG_KEYS } from '../../../types';
 
 interface LogsheetJobCardProps {
@@ -141,15 +141,21 @@ const ServiceBadges: React.FC<{ services?: ServiceFlags }> = ({ services }) => {
 };
 
 const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
+  // --- PENDING SALE DETECTION ---
+  // Pending sales are worker-initiated, half-collected sale rows. They're not
+  // office bookings, not yet completed transactions — a third state that gets
+  // its own visual treatment so workers don't confuse them with prebooks.
+  const isPendingSale = (job as any).isPendingSale === true;
+
   const isCompleted = job.Completed === 'x' || job.Status === 'completed';
   const isCancelled = job.Status === 'cancelled';
   const isNextTime = job.Status === 'next_time';
   const isPending = !isCompleted && !isCancelled && !isNextTime;
   const isPrepaid = job.Prepaid === 'x';
   
-  // Warning detection - only for pending jobs
+  // Warning detection - only for pending OFFICE jobs (never pending sales)
   const notes = job['Log Sheet Notes']; 
-  const isWarning = isPending && WARNING_PATTERN.test(notes || '');
+  const isWarning = isPending && !isPendingSale && WARNING_PATTERN.test(notes || '');
   
   // Data Extraction
   const propertyType = job['FO/BO/FP'] || 'FP'; 
@@ -185,6 +191,12 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   } else if (isNextTime) {
       borderColor = 'border-orange-500';
       bgColor = 'bg-orange-900/20';
+  } else if (isPendingSale) {
+      // Pending sales get slate-gray treatment — distinct from prebooks (default
+      // gray), completed (green/yellow/blue/orange), cancelled (red), and warning
+      // (orange-tinted). Reads as "worker's own parked work."
+      borderColor = 'border-slate-500';
+      bgColor = 'bg-slate-800/40';
   } else if (isWarning) {
       borderColor = 'border-orange-500';
       bgColor = 'bg-yellow-900/25';
@@ -219,6 +231,20 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
     return null;
   };
 
+  // --- ADDRESS ASSEMBLY ---
+  // Office bookings always have Full Address. Pending sales might only have a
+  // house number, only a street name, or both — assemble from parts if needed.
+  const assembledAddress = job['Full Address'] 
+    || `${job['House Number'] || ''} ${job['Street Name'] || ''}`.trim()
+    || '— address pending —';
+
+  // --- NAME DISPLAY ---
+  // Pending sales typically don't have a customer name yet. Show a placeholder
+  // so the card doesn't look broken with an empty header.
+  const displayName = (job['First Name'] || job['Last Name']) 
+    ? `${job['First Name'] || ''} ${job['Last Name'] || ''}`.trim()
+    : (isPendingSale ? 'New pending sale' : 'Unknown');
+
   return (
     <div 
       onClick={onClick}
@@ -229,13 +255,13 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
 
       <div className="flex-1 min-w-0 pr-2 relative z-10">
         <div className="flex items-center gap-2 mb-1">
-          <span className="bg-gray-700 text-gray-300 text-[10px] font-mono px-1.5 py-0.5 rounded border border-gray-600">{job['Route Number']}</span>
-          <h3 className="font-bold text-gray-100 text-sm truncate">{job['First Name']} {job['Last Name']}</h3>
+          <span className="bg-gray-700 text-gray-300 text-[10px] font-mono px-1.5 py-0.5 rounded border border-gray-600">{job['Route Number'] || '--'}</span>
+          <h3 className="font-bold text-gray-100 text-sm truncate">{displayName}</h3>
         </div>
 
         <div className="flex items-center gap-1 text-gray-400 text-xs mb-1">
            <MapPin size={10} className="shrink-0" />
-           <span className="truncate">{job['Full Address']}</span>
+           <span className="truncate">{assembledAddress}</span>
         </div>
 
         {/* Service Badges */}
@@ -247,7 +273,7 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
         </div>
 
         {displayNotes && (
-            <div className={`text-[10px] rounded p-1.5 flex items-start gap-2 mt-1 leading-tight ${isCompleted ? 'text-gray-300 italic' : (isCancelled || isNextTime) ? 'text-gray-400 italic' : 'bg-yellow-900/20 border border-yellow-700/30 text-yellow-200'}`}>
+            <div className={`text-[10px] rounded p-1.5 flex items-start gap-2 mt-1 leading-tight ${isCompleted ? 'text-gray-300 italic' : (isCancelled || isNextTime) ? 'text-gray-400 italic' : isPendingSale ? 'bg-slate-900/30 border border-slate-700/40 text-slate-300' : 'bg-yellow-900/20 border border-yellow-700/30 text-yellow-200'}`}>
                 {isCompleted ? <Check size={10}/> : (isCancelled || isNextTime) ? null : <FileText size={10} className="shrink-0 mt-0.5"/>}
                 {displayNotes}
             </div>
@@ -259,8 +285,9 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
         
         <div className="flex flex-col items-end">
             <div className="flex items-center gap-1">
-               {isPrepaid && !isCompleted && !isCancelled && !isNextTime && <span className="text-[9px] bg-green-900/30 text-green-400 px-1.5 py-0.5 rounded border border-green-800 font-bold">PP</span>}
-               <span className={`font-mono font-bold text-lg ${isCompleted ? 'text-gray-300' : isCancelled ? 'text-red-300 line-through' : isNextTime ? 'text-orange-300' : (isPrepaid ? 'text-green-300' : 'text-white')}`}>
+               {/* PP prepaid pill — only for office bookings, never pending sales (no payment state yet) */}
+               {isPrepaid && !isCompleted && !isCancelled && !isNextTime && !isPendingSale && <span className="text-[9px] bg-green-900/30 text-green-400 px-1.5 py-0.5 rounded border border-green-800 font-bold">PP</span>}
+               <span className={`font-mono font-bold text-lg ${isCompleted ? 'text-gray-300' : isCancelled ? 'text-red-300 line-through' : isNextTime ? 'text-orange-300' : isPendingSale ? 'text-slate-200' : (isPrepaid ? 'text-green-300' : 'text-white')}`}>
                  {formattedPrice}
                </span>
             </div>
@@ -273,6 +300,15 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
           </div>
         ) : (isCancelled || isNextTime) ? (
           getStatusBadge()
+        ) : isPendingSale ? (
+          // Yellow SALE-PEND badge for pending sales, with bookmark icon and chevron.
+          // The chevron stays so the affordance still reads "tap to continue."
+          <div className="flex items-center gap-1 mt-1">
+            <span className="flex items-center gap-1 text-[9px] font-bold bg-yellow-900/40 text-yellow-300 px-1.5 py-0.5 rounded border border-yellow-700">
+              <Bookmark size={9} strokeWidth={2.5} /> SALE-PEND
+            </span>
+            <ChevronRight size={14} className="text-gray-500" />
+          </div>
         ) : (
           <ChevronRight size={16} className="text-gray-500 mt-1" />
         )}

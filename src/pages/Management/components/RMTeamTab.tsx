@@ -34,6 +34,7 @@ import {
   SeasonType,
   SessionStats,
   SEASON_CONFIGS, // NEW: read per-season payout rates instead of hardcoding $7/$9
+  PendingSale,    // NEW: for pending sales fetched per cart
 } from '../../../types';
 import ContractorJobs from './ContractorJobs';
 
@@ -94,6 +95,31 @@ const formatTimeShort = (timestamp: string): string => {
   hours = hours ? hours : 12;
   const minutesStr = minutes < 10 ? `0${minutes}` : `${minutes}`;
   return `${hours}:${minutesStr}${ampm}`;
+};
+
+// --- HELPER: Convert a PendingSale into a MasterBooking-shaped object ---
+// Same shape as Dashboard.tsx uses on the worker side, so ContractorJobs sees
+// pending sales in identical form regardless of which screen surfaced them.
+// isPendingSale + pendingSaleId flags let ContractorJobs branch correctly to
+// render the SALE-PEND badge and open the right modal.
+const convertPendingSaleToBooking = (ps: PendingSale): MasterBooking => {
+  const fullAddress = `${ps.houseNumber || ''} ${ps.streetName || ''}`.trim();
+  return {
+    'Booking ID': ps.id,
+    'First Name': '',
+    'Last Name': '',
+    'Full Address': fullAddress,
+    'House Number': ps.houseNumber,
+    'Street Name': ps.streetName,
+    'Route Number': ps.routeCode,
+    'Price': ps.price || '',
+    'Log Sheet Notes': ps.notes,
+    'FO/BO/FP': ps.propertyType as any,
+    Status: 'pending',
+    services: ps.services,
+    isPendingSale: true,
+    pendingSaleId: ps.id,
+  } as MasterBooking;
 };
 
 const RMTeamTab: React.FC<RMTeamTabProps> = ({
@@ -235,6 +261,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   // BUG 3 FIX: Reads stats + financialStore directly from allSessions (already
   //            loaded by parent), then fetches all bookings in parallel via
   //            Promise.all — eliminates sequential awaits per worker.
+  // NEW: Also fetches pending sales for each cart's session in parallel and
+  //      merges them into sharedBookings so they show up in the RM's
+  //      ContractorJobs view alongside office bookings.
   const loadTeamSeasonData = async (myTeam: Worker[]) => {
     const myTeamIds = new Set(myTeam.map(w => w.contractorId));
     const workerMap = new Map(myTeam.map(w => [w.contractorId, w]));
@@ -257,25 +286,45 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         const sharedFinancialStore = session.financialStore || [];
         const stats = session.stats || sessionService.getEmptyStats();
 
-        // Bookings need a fresh fetch (they're not in allSessions)
-        let sharedBookings: MasterBooking[] = [];
+        // Bookings + pending sales fetched in parallel (saves a round-trip per cart)
+        let officeBookings: MasterBooking[] = [];
+        let pendingSales: PendingSale[] = [];
         if (session.id) {
-          sharedBookings = await sessionService.getSessionAssignments(session.id);
+          const [bookingsRes, pendingSalesRes] = await Promise.all([
+            sessionService.getSessionAssignments(session.id),
+            sessionService.getPendingSalesForSession(session.id),
+          ]);
+          officeBookings = bookingsRes;
+          pendingSales = pendingSalesRes;
         }
 
-        const pending = sharedBookings.filter(b =>
+        // Convert pending sales into MasterBooking shape so they ride alongside
+        // office bookings through ContractorJobs. The isPendingSale flag lets
+        // ContractorJobs branch (file 8) to render the SALE-PEND badge.
+        const pendingSalesAsBookings = pendingSales.map(convertPendingSaleToBooking);
+        // Pending sales listed first so they appear at the top of the RM's view.
+        const sharedBookings: MasterBooking[] = [...pendingSalesAsBookings, ...officeBookings];
+
+        // Pending count for the cart card — counts office pending only.
+        // Pending sales have their own visual identity (SALE-PEND badge) and
+        // shouldn't inflate the office-pending counter.
+        const pending = officeBookings.filter(b =>
           b.Completed !== 'x' &&
           b.Status !== 'completed' &&
           b.Status !== 'cancelled' &&
           b.Status !== 'next_time'
         );
 
+        // Routes calculation skips pending sales — they don't represent route
+        // assignments, just parked work tied to a route code.
         const uniqueRoutes = Array.from(new Set(
-          sharedBookings
+          officeBookings
             .map(b => b['Route Number'])
             .filter(r => r && r !== 'x' && r.trim() !== '')
         )) as string[];
 
+        // Last-active timestamp uses financialStore only. Pending sales are
+        // parked, not completed — they don't count toward "last active."
         let lastAddr: string | null = null;
         let lastTimestamp: string | null = null;
         let lastTimeFormatted: string | null = null;
@@ -333,9 +382,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
       lastActiveTime: null,
       stats: { steps: 0, gross: 0, eq: 0, pending: 0, upsellCount: 0, upsellGross: 0 },
     })));
-  };
-
-  // --- SORTING ---
+  };// --- SORTING ---
   const sortedTeamMembers = useMemo(() => {
     const members = [...teamMembers];
     switch (sortBy) {

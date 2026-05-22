@@ -399,6 +399,13 @@ export interface MasterBooking {
   // --- SERVICE FLAGS (Lawn Rejuv Season only) ---
   services?: ServiceFlags; // Which services are included (A/D/F/S/L)
   
+  // --- PENDING SALE FLAG (Team seasons only — set when a pending_sales row is
+  // converted into a MasterBooking-shaped object for display in jobs lists)
+  // Consumers (LogsheetJobCard, ContractorJobs, PendingJobModal) branch on this
+  // to render the SALE-PEND badge and to route clicks to NewJob instead of JobDetail.
+  isPendingSale?: boolean;
+  pendingSaleId?: string;   // Original pending_sales.id (same as 'Booking ID' for these rows)
+  
   // Allow additional dynamic properties (like 'Gate', 'House Number', etc.)
   [key: string]: any;
 }
@@ -462,6 +469,55 @@ export interface SessionTransaction {
   
   // --- TEAM SUPPORT ---
   completedByWorkerIds?: string[]; // All workers who contributed (for team export)
+}
+
+// --- PENDING SALES (Team seasons only — Rejuv + Sealing) ---
+// Worker-initiated, half-collected sales parked in the pending_sales table.
+// Pending sales are NEVER exported with the day's transactions — they live and
+// die inside the app. When a worker completes one, the row is deleted and a
+// real transaction is written via the normal completeJob flow.
+// Visibility: shared across the whole cart (all workers in the same session_id
+// see them) and shown to the RM under their team's pending list.
+export interface PendingSale {
+  id: string;                  // e.g. "pend_<workerId>_<timestamp>"
+  sessionId: string;           // logsheet_sessions.id — the cart this belongs to
+  workerId: string;            // who created the row (display only)
+  commandCenterId: string;
+  sessionDate: string;         // YYYY-MM-DD
+  routeCode?: string;
+  houseNumber?: string;
+  streetName?: string;
+  price?: string;              // string to mirror bookings.price (blank, "0", or "150.00")
+  propertyType?: string;       // 'FP' | 'FO' | 'BO' | 'SS' | 'SSP'
+  services?: ServiceFlags;     // Rejuv-only (A/D/F/S/L). Sealing leaves this undefined.
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Fields accepted by sessionService.createPendingSale().
+// id / commandCenterId / sessionDate / timestamps are filled by the service.
+export interface PendingSaleInput {
+  sessionId: string;
+  workerId: string;
+  routeCode?: string;
+  houseNumber?: string;
+  streetName?: string;
+  price?: string;
+  propertyType?: string;
+  services?: ServiceFlags;
+  notes?: string;
+}
+
+// Fields accepted by sessionService.updatePendingSale(). All optional.
+export interface PendingSaleUpdate {
+  routeCode?: string;
+  houseNumber?: string;
+  streetName?: string;
+  price?: string;
+  propertyType?: string;
+  services?: ServiceFlags;
+  notes?: string;
 }
 
 // Changed 'gross' to 'upGross' for clarity - sorts by upsell gross only

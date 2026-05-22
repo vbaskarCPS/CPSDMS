@@ -25,7 +25,10 @@ import {
   WorkerPayoutBreakdown,
   ServiceFlags,
   HistoricalProperty,
-  SEASON_CONFIGS
+  SEASON_CONFIGS,
+  PendingSale,
+  PendingSaleInput,
+  PendingSaleUpdate
 } from '../types';
 
 // Import metadata type - re-export for other modules
@@ -976,6 +979,9 @@ class SessionService {
     // NEW: Wipe geocode cache and historical properties for this CC
     await supabase.from('geocode_cache').delete().eq('command_center_id', ccId);
     await supabase.from('route_historical_properties').delete().eq('command_center_id', ccId);
+    
+    // NEW: Wipe pending sales for this CC
+    await supabase.from('pending_sales').delete().eq('command_center_id', ccId);
     
     await supabase.from('transactions').delete().eq('command_center_id', ccId); 
     await supabase.from('logsheet_sessions').delete().eq('date', date).eq('command_center_id', ccId);
@@ -2230,9 +2236,9 @@ class SessionService {
     transaction: SessionTransaction, 
     jobId: string, 
     workerId: string,
-    teamWorkerIds?: string[]
-  ): Promise<void> {
-    const ccId = this.getCCId();
+    teamWorkerIds?: string[],
+    pendingSaleId?: string
+  ): Promise<void> {const ccId = this.getCCId();
 
     let currentSessionId: string | undefined;
     try {
@@ -2312,6 +2318,16 @@ class SessionService {
         })
         .eq('booking_id', jobId)
         .eq('command_center_id', ccId);
+    }
+
+    // --- PENDING SALE CLEANUP ---
+    // If this completion resolves a pending sale, delete the pending row so it
+    // stops appearing in worker and RM lists. Fire-and-forget — failure here
+    // shouldn't roll back the transaction.
+    if (pendingSaleId) {
+      this.deletePendingSale(pendingSaleId).catch(err => {
+        console.warn('[PendingSale] cleanup after completeJob failed:', err);
+      });
     }
 
     await this.recalculateAndSaveWorkerStats(workerId);
@@ -2656,6 +2672,234 @@ class SessionService {
     }
     
     return breakdowns;
+  }
+
+  // --- 10. PENDING SALES (Team seasons only — Rejuv + Sealing) ---
+  // Pending sales are worker-initiated, half-collected sales parked in the
+  // pending_sales table. They live and die inside the app — NEVER exported.
+  // Visibility is session-scoped: every worker in the same cart sees them,
+  // and the RM sees the ones for carts under their management.
+
+  /**
+   * Map a DB row from pending_sales into a PendingSale object.
+   * Snake_case columns → camelCase fields, that sort of housekeeping.
+   */
+  private mapDbPendingSale(row: any): PendingSale {
+    return {
+      id: row.id,
+      sessionId: row.session_id,
+      workerId: row.worker_id,
+      commandCenterId: row.command_center_id,
+      sessionDate: row.session_date,
+      routeCode: row.route_code || undefined,
+      houseNumber: row.house_number || undefined,
+      streetName: row.street_name || undefined,
+      price: row.price || undefined,
+      propertyType: row.property_type || undefined,
+      services: row.services || undefined,
+      notes: row.notes || undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /**
+   * Fetch all pending sales for a single logsheet session (cart).
+   * Used by the worker dashboard to display the cart's pending sales.
+   */
+  public async getPendingSalesForSession(sessionId: string): Promise<PendingSale[]> {
+    try {
+      const ccId = this.getCCId();
+      const { data, error } = await supabase
+        .from('pending_sales')
+        .select('*')
+        .eq('session_id', sessionId)
+        .eq('command_center_id', ccId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.warn('[PendingSale] getPendingSalesForSession failed:', error);
+        return [];
+      }
+      return (data || []).map(row => this.mapDbPendingSale(row));
+    } catch (err) {
+      console.warn('[PendingSale] getPendingSalesForSession error:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Fetch all pending sales for carts under a manager's authority.
+   * Used by RMTeamTab to merge pending sales into the team's contractor view.
+   * Filter chain: find this CC's workers assigned to this manager → find their
+   * logsheet sessions for today → pull pending sales tied to those session IDs.
+   */
+  public async getPendingSalesForManager(managerId: string): Promise<PendingSale[]> {
+    try {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return [];
+
+      // Step 1: workers assigned to this manager
+      const { data: workers } = await supabase
+        .from('users')
+        .select('user_id, metadata')
+        .eq('role', 'Worker')
+        .eq('command_center_id', ccId);
+
+      const myWorkerIds = (workers || [])
+        .filter(w => w.metadata?.assignedManagerId === managerId)
+        .map(w => w.user_id);
+
+      if (myWorkerIds.length === 0) return [];
+
+      // Step 2: find every session that includes any of those workers today.
+      // We pull all session candidates for the date+CC, then filter in JS so
+      // we cover both legacy solo rows (worker_id match) and team rows
+      // (team_worker_ids array contains).
+      const { data: sessions } = await supabase
+        .from('logsheet_sessions')
+        .select('id, worker_id, team_worker_ids')
+        .eq('date', date)
+        .eq('command_center_id', ccId);
+
+      const myWorkerSet = new Set(myWorkerIds);
+      const mySessionIds = (sessions || [])
+        .filter(s => {
+          const ids = hasItems(s.team_worker_ids) ? s.team_worker_ids : [s.worker_id];
+          return ids.some((id: string) => myWorkerSet.has(id));
+        })
+        .map(s => s.id);
+
+      if (mySessionIds.length === 0) return [];
+
+      // Step 3: pending sales tied to those sessions
+      const { data: pendingRows, error } = await supabase
+        .from('pending_sales')
+        .select('*')
+        .eq('command_center_id', ccId)
+        .in('session_id', mySessionIds);
+
+      if (error) {
+        console.warn('[PendingSale] getPendingSalesForManager failed:', error);
+        return [];
+      }
+      return (pendingRows || []).map(row => this.mapDbPendingSale(row));
+    } catch (err) {
+      console.warn('[PendingSale] getPendingSalesForManager error:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Fetch a single pending sale by id. Used by NewJob when reopening a parked
+   * sale to prefill the form.
+   */
+  public async getPendingSaleById(id: string): Promise<PendingSale | null> {
+    try {
+      const ccId = this.getCCId();
+      const { data, error } = await supabase
+        .from('pending_sales')
+        .select('*')
+        .eq('id', id)
+        .eq('command_center_id', ccId)
+        .maybeSingle();
+
+      if (error || !data) return null;
+      return this.mapDbPendingSale(data);
+    } catch (err) {
+      console.warn('[PendingSale] getPendingSaleById error:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Create a new pending sale row. ID generated server-side using worker+ts.
+   * Returns the created PendingSale (with the assigned id, etc) so the UI can
+   * navigate to NewJob with the new id in the URL.
+   */
+  public async createPendingSale(input: PendingSaleInput): Promise<PendingSale> {
+    const ccId = this.getCCId();
+    const date = await this.getDailySessionDate();
+    if (!date) throw new Error('No active session');
+
+    const id = `pend_${input.workerId}_${Date.now()}`;
+
+    const row = {
+      id,
+      session_id: input.sessionId,
+      worker_id: input.workerId,
+      command_center_id: ccId,
+      session_date: date,
+      route_code: input.routeCode || null,
+      house_number: input.houseNumber || null,
+      street_name: input.streetName || null,
+      price: input.price || null,
+      property_type: input.propertyType || null,
+      services: input.services || null,
+      notes: input.notes || null,
+    };
+
+    const { data, error } = await supabase
+      .from('pending_sales')
+      .insert(row)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[PendingSale] createPendingSale failed:', error);
+      throw error;
+    }
+
+    return this.mapDbPendingSale(data);
+  }
+
+  /**
+   * Partial update. Any field omitted from `updates` is left alone in the DB.
+   * `updated_at` is bumped to now() on every call so the most-recently-edited
+   * pending sale floats to the top of "Pending" lists if sorted by it.
+   */
+  public async updatePendingSale(id: string, updates: PendingSaleUpdate): Promise<void> {
+    const ccId = this.getCCId();
+
+    const dbPayload: any = { updated_at: new Date().toISOString() };
+    if (updates.routeCode !== undefined) dbPayload.route_code = updates.routeCode || null;
+    if (updates.houseNumber !== undefined) dbPayload.house_number = updates.houseNumber || null;
+    if (updates.streetName !== undefined) dbPayload.street_name = updates.streetName || null;
+    if (updates.price !== undefined) dbPayload.price = updates.price || null;
+    if (updates.propertyType !== undefined) dbPayload.property_type = updates.propertyType || null;
+    if (updates.services !== undefined) dbPayload.services = updates.services || null;
+    if (updates.notes !== undefined) dbPayload.notes = updates.notes || null;
+
+    const { error } = await supabase
+      .from('pending_sales')
+      .update(dbPayload)
+      .eq('id', id)
+      .eq('command_center_id', ccId);
+
+    if (error) {
+      console.error('[PendingSale] updatePendingSale failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete a pending sale row. Called when:
+   *   - the RM manually deletes one via PendingJobModal, OR
+   *   - completeJob() finishes converting one into a real transaction.
+   */
+  public async deletePendingSale(id: string): Promise<void> {
+    const ccId = this.getCCId();
+    const { error } = await supabase
+      .from('pending_sales')
+      .delete()
+      .eq('id', id)
+      .eq('command_center_id', ccId);
+
+    if (error) {
+      console.error('[PendingSale] deletePendingSale failed:', error);
+      throw error;
+    }
   }
 }
 

@@ -1,16 +1,18 @@
 // src/pages/Logsheet/NewJob.tsx
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap, Info, Shovel } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap, Info, Shovel, Bookmark } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
-import { commandCenterService, getTaxRateForRegion, Region } from '../../lib/commandCenterService';
+import { commandCenterService, getTaxRateForRegion, Region, seasonHasTeams } from '../../lib/commandCenterService';
 import { 
   Worker, 
   SessionTransaction, 
   SeasonType,
   ServiceFlags,
   SERVICE_FLAG_KEYS,
-  SERVICE_FLAG_LABELS 
+  SERVICE_FLAG_LABELS,
+  PendingSaleInput,
+  PendingSaleUpdate
 } from '../../types';
 import { sessionService } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
@@ -144,6 +146,7 @@ const ServiceToggles: React.FC<{
 
 const NewJob: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   // --- Training mode state ---
   const [isTrainingMode, setIsTrainingMode] = useState(false);
@@ -157,6 +160,14 @@ const NewJob: React.FC = () => {
 
   // Live Card Processing flag (production only, stays false in training)
   const [liveCardEnabled, setLiveCardEnabled] = useState(false);
+
+  // --- PENDING SALE STATE ---
+  // When NewJob is opened with ?pendingSaleId=xxx, we prefill from the
+  // pending_sales row. On Save & Complete, we pass pendingSaleId to
+  // completeJob() which deletes the row after the transaction writes.
+  // On Save Pending, we update the existing row instead of creating a new one.
+  const [pendingSaleId, setPendingSaleId] = useState<string | null>(null);
+  const [isResumingPending, setIsResumingPending] = useState(false);
 
   // --- Form State ---
   const [routeCode, setRouteCode] = useState('');
@@ -224,7 +235,10 @@ const NewJob: React.FC = () => {
   const [paymentMethodError, setPaymentMethodError] = useState<string | null>(null);
 
   // Saving state to prevent double-click
+  // Two flavours: `saving` covers Save & Complete; `savingPending` covers the
+  // new Save Pending button. Separate so each can spin independently.
   const [saving, setSaving] = useState(false);
+  const [savingPending, setSavingPending] = useState(false);
 
   // --- COMPUTED: Can show upgrade button (West only, Aeration season only) ---
   const canShowUpgradeButton = region === 'West' && seasonType === 'aeration';
@@ -235,6 +249,11 @@ const NewJob: React.FC = () => {
   // --- COMPUTED: Does this season hide the upsell-style "Services" header? ---
   // Lawn Rejuv and Sealing both use the simpler "Pricing" label.
   const seasonUsesPricingOnlyLabel = seasonType === 'lawn_rejuv' || seasonType === 'sealing';
+
+  // --- COMPUTED: Is this a team season? ---
+  // Drives whether the Save Pending button is visible. Training mode is always
+  // Aeration in this codebase, so the inner check excludes training entirely.
+  const isTeamSeason = seasonHasTeams(seasonType) && !isTrainingMode;
 
   // --- COMPUTED: Get customer address for E-Transfer protocol ---
   const getCustomerAddress = (): string => {
@@ -439,14 +458,67 @@ const NewJob: React.FC = () => {
     init();
   }, [navigate]);
 
+  // --- PREFILL FROM PENDING SALE ---
+  // Runs once when worker + season are loaded. If ?pendingSaleId= is in the
+  // URL, fetch the row and copy each saved field into the corresponding form
+  // state. Skipped in training mode (training is always Aeration).
+  // Graceful failure: if the fetch fails or returns null, the worker still
+  // ends up with a normal blank-form experience.
+  useEffect(() => {
+    const prefillFromPending = async () => {
+      const psId = searchParams.get('pendingSaleId');
+      if (!psId || !worker || isTrainingMode) return;
+
+      try {
+        const ps = await sessionService.getPendingSaleById(psId);
+        if (!ps) {
+          console.warn('[NewJob] Pending sale not found, continuing with blank form:', psId);
+          return;
+        }
+
+        setPendingSaleId(ps.id);
+        setIsResumingPending(true);
+
+        // Copy each saved field, leaving anything blank if the pending sale
+        // didn't have it. Worker fills in the rest before saving/completing.
+        if (ps.routeCode) setRouteCode(ps.routeCode);
+        if (ps.houseNumber) setHouseNumber(ps.houseNumber);
+        if (ps.streetName) {
+          setStreetName(ps.streetName);
+          // Force custom street mode so the prefilled value renders in the
+          // input field rather than getting clobbered by the dropdown reset
+          // effect below.
+          setIsCustomStreetMode(true);
+        }
+        if (ps.price) setAmount(ps.price);
+        if (ps.propertyType) setPropertyType(ps.propertyType);
+        if (ps.services) setServices(ps.services);
+        // Notes live in itemDescription/Log Sheet Notes territory; we don't
+        // have a notes field in NewJob's form proper, so we'll forward them
+        // through itemDescription when the transaction writes. For now, stash
+        // on the pendingSale row only — workers see it on the card.
+      } catch (err) {
+        console.warn('[NewJob] Failed to load pending sale, continuing with blank form:', err);
+      }
+    };
+    prefillFromPending();
+    // Intentionally only depends on worker + isTrainingMode. searchParams
+    // doesn't need to be a dep — it's read once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [worker, isTrainingMode]);
+
   useEffect(() => {
     if (routeCode) {
         const service = isTrainingMode ? trainingService : sessionService;
         service.getStreetsForRoute(routeCode).then(streets => {
             if (streets && streets.length > 0) {
                 setSuggestedStreets(streets);
-                setIsCustomStreetMode(false);
-                setStreetName(''); 
+                // If we already prefilled a custom street from a pending sale,
+                // don't yank it back into dropdown mode and blank the field.
+                if (!isResumingPending || !streetName) {
+                  setIsCustomStreetMode(false);
+                  setStreetName('');
+                }
             } else {
                 setSuggestedStreets([]);
                 setIsCustomStreetMode(true);
@@ -456,12 +528,108 @@ const NewJob: React.FC = () => {
         setSuggestedStreets([]);
         setIsCustomStreetMode(true);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeCode, isTrainingMode]);
 
   const handleTaxClick = () => { 
       const current = parseFloat(amount) || 0; 
       const tax = current * (taxRate / 100); 
       setAmount((Math.round((current + tax) * 100) / 100).toFixed(2)); 
+  };
+
+  // --- GATHER CURRENT FORM STATE FOR PENDING SAVE ---
+  // Builds a clean PendingSaleInput from the current form fields. Used by both
+  // create (new pending) and update (resuming pending) paths in handleSavePending.
+  // No payment fields here — pending sales are pre-payment by definition.
+  const gatherPendingPayload = (): {
+    forCreate: PendingSaleInput;
+    forUpdate: PendingSaleUpdate;
+  } | null => {
+    if (!worker) return null;
+
+    // Pending sales are scoped to a logsheet session. Fetching the current
+    // session id is cheap — same call sessionService uses internally for
+    // completeJob's session stamp.
+    // Note: getActiveLogsheetSession is called below in handleSavePending so
+    // we can keep this helper synchronous and not double-fetch.
+
+    const base = {
+      routeCode: routeCode || undefined,
+      houseNumber: houseNumber.trim() || undefined,
+      streetName: streetName.trim() || undefined,
+      price: amount.trim() || undefined,
+      propertyType: propertyType || undefined,
+      services: seasonType === 'lawn_rejuv' ? services : undefined,
+      // Notes flow: we don't have a dedicated notes field in NewJob proper.
+      // If we later add one, plumb it through here. For now, leave undefined.
+      notes: undefined as string | undefined,
+    };
+
+    return {
+      forCreate: {
+        sessionId: '', // filled in by handleSavePending after session lookup
+        workerId: worker.contractorId,
+        ...base,
+      },
+      forUpdate: { ...base },
+    };
+  };
+
+  // --- SAVE PENDING (team seasons only) ---
+  // Two paths:
+  //   - Resuming an existing pending sale (pendingSaleId set): call updatePendingSale
+  //   - New pending sale (pendingSaleId null): look up the worker's active session,
+  //     then call createPendingSale
+  // No payment validation — pending sales are pre-payment by definition.
+  // Address validation is permissive: at least one of (house #, street) must be filled.
+  const handleSavePending = async () => {
+    if (savingPending || saving) return;
+    setError(null);
+
+    if (!worker) {
+      setError('No worker session.');
+      return;
+    }
+
+    const payload = gatherPendingPayload();
+    if (!payload) {
+      setError('Could not gather form state.');
+      return;
+    }
+
+    // Permissive validation — pending sales are by definition incomplete.
+    // But we won't save a totally blank row. Same rule as QuickPendingModal.
+    if (!payload.forUpdate.houseNumber && !payload.forUpdate.streetName) {
+      setError('Please enter at least a house number or street name before parking this sale.');
+      return;
+    }
+
+    setSavingPending(true);
+
+    try {
+      if (pendingSaleId) {
+        // RESUMING — update the existing row in place
+        await sessionService.updatePendingSale(pendingSaleId, payload.forUpdate);
+      } else {
+        // NEW — need the active session id to scope the new row
+        const activeSession = await sessionService.getActiveLogsheetSession(worker.contractorId);
+        if (!activeSession?.id) {
+          setError('Could not find your active session. Please reload and try again.');
+          setSavingPending(false);
+          return;
+        }
+        await sessionService.createPendingSale({
+          ...payload.forCreate,
+          sessionId: activeSession.id,
+        });
+      }
+
+      navigate('/logsheet');
+    } catch (err: any) {
+      console.error('[NewJob] handleSavePending failed:', err);
+      setError(err?.message || 'Failed to save pending sale. Please try again.');
+      setSavingPending(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -617,7 +785,21 @@ const NewJob: React.FC = () => {
           services: seasonType === 'lawn_rejuv' ? services : undefined,
       } as any;
 
-      await service.completeJob(transactionData, placeholderJobId, worker.contractorId);
+      // PENDING SALE CLEANUP — if this completion is resolving a pending sale,
+      // pass the id as the 5th arg so completeJob deletes the row after the
+      // transaction writes. trainingService doesn't support this param, but
+      // training is always Aeration so pendingSaleId is always null there.
+      if (isTrainingMode) {
+        await service.completeJob(transactionData, placeholderJobId, worker.contractorId);
+      } else {
+        await sessionService.completeJob(
+          transactionData,
+          placeholderJobId,
+          worker.contractorId,
+          undefined,           // teamWorkerIds — unchanged behaviour
+          pendingSaleId || undefined  // triggers pending row deletion on success
+        );
+      }
 
       const session = await service.getActiveLogsheetSession(worker.contractorId);
       if (session) {
@@ -647,9 +829,7 @@ const NewJob: React.FC = () => {
 
   if (assignedRoutes.length === 0) {
     return null;
-  }
-
-  return (
+  }return (
     <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4 animate-fade-in">
       <div className="bg-gray-800 rounded-lg w-full max-w-3xl max-h-[95vh] flex flex-col border border-gray-700 shadow-2xl">
         <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-900/50 rounded-t-lg flex-shrink-0">
@@ -672,8 +852,14 @@ const NewJob: React.FC = () => {
                 <Shovel size={10}/> SEALING
               </span>
             )}
+            {/* RESUMING PENDING pill — only when prefilled from a pending sale */}
+            {isResumingPending && (
+              <span className="bg-slate-800 text-slate-200 text-[10px] px-1.5 py-0.5 rounded border border-slate-500 flex items-center gap-1">
+                <Bookmark size={10}/> RESUMING PENDING
+              </span>
+            )}
           </div>
-          <button onClick={() => navigate('/logsheet')} className="text-gray-400 hover:text-white" disabled={saving}><X size={24} /></button>
+          <button onClick={() => navigate('/logsheet')} className="text-gray-400 hover:text-white" disabled={saving || savingPending}><X size={24} /></button>
         </div>
         
         {error && <div className="m-4 p-3 bg-red-900/30 text-red-300 border border-red-700 rounded-md text-sm flex items-center gap-2"><AlertCircle size={16} /> {error}</div>}
@@ -1001,11 +1187,36 @@ const NewJob: React.FC = () => {
 
           </div>
           
+          {/* FOOTER ACTIONS — 3 buttons in team seasons (Cancel | Save Pending | Save & Complete),
+              2 buttons in Aeration (Cancel | Save & Complete) */}
           <div className="p-4 border-t border-gray-700 bg-gray-900/50 rounded-b-lg flex justify-end gap-3 flex-shrink-0">
-              <button type="button" onClick={() => navigate('/logsheet')} className="px-4 py-3 text-gray-400 hover:text-white font-medium" disabled={saving}>Cancel</button>
+              <button type="button" onClick={() => navigate('/logsheet')} className="px-4 py-3 text-gray-400 hover:text-white font-medium" disabled={saving || savingPending}>Cancel</button>
+
+              {/* SAVE PENDING BUTTON — team seasons only.
+                  Parks the current form state as a pending sale (creates if new,
+                  updates if resuming) without writing a transaction. */}
+              {isTeamSeason && (
+                <button
+                  type="button"
+                  onClick={handleSavePending}
+                  disabled={saving || savingPending}
+                  className="px-5 py-3 bg-slate-700 hover:bg-slate-600 border border-slate-500 text-slate-100 rounded-md font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {savingPending ? (
+                    <>
+                      <Loader className="animate-spin" size={16} /> Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Bookmark size={16} /> {isResumingPending ? 'Update Pending' : 'Save Pending'}
+                    </>
+                  )}
+                </button>
+              )}
+
               <button 
                 type="submit"
-                disabled={saving || (paymentMethod === 'Credit Card' && !isCreditPaid && !isSplitPayment) || (isSplitPayment && hasSplitCreditCard() && !splitCcPaid)}
+                disabled={saving || savingPending || (paymentMethod === 'Credit Card' && !isCreditPaid && !isSplitPayment) || (isSplitPayment && hasSplitCreditCard() && !splitCcPaid)}
                 className="px-8 py-3 bg-cps-green hover:bg-green-600 text-white rounded-md font-bold shadow-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? (

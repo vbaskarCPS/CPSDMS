@@ -1,6 +1,6 @@
 // src/pages/Management/components/ContractorJobs.tsx
 import React, { useState, useMemo, useEffect } from 'react';
-import { Phone, Mail, Loader, Clock, X as XIcon, FileText } from 'lucide-react';
+import { Phone, Mail, Loader, Clock, X as XIcon, FileText, Bookmark } from 'lucide-react';
 import { MasterBooking, SessionTransaction, SeasonType } from '../../../types';
 import EditTransactionModal from '../../../components/EditTransactionModal';
 import PendingJobModal from '../../../components/PendingJobModal';
@@ -251,7 +251,9 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
           return;
       }
 
-      // For pending, cancelled, or next_time jobs, open PendingJobModal
+      // For pending, cancelled, next_time, or pending-sale jobs, open PendingJobModal.
+      // PendingJobModal (file 9) detects isPendingSale and renders a Delete
+      // button instead of the Next Time / Cancelled buttons.
       setPendingJob(job);
   };
 
@@ -284,12 +286,19 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
   // Previously: Notes were on a separate second row below the main content
   // Now: [Route] Name [Services] Address 📝Notes... 📞 ✉️ Payment Price [Badge]
   // ============================================================================
+  // NEW: Pending sales (isPendingSale flag set by RMTeamTab via convertPendingSaleToBooking)
+  // get a yellow SALE-PEND badge + slate-gray border accent. Worker-created
+  // parked sales, distinct from office prebooks.
+  // ============================================================================
   const renderJobRow = (job: MasterBooking) => {
       const isPaid = job.Completed === 'x' || job.Status === 'completed';
       const isCancelled = job.Status === 'cancelled';
       const isNextTime = job.Status === 'next_time';
       const isLoading = loadingId === job['Booking ID'];
       const notes = job['Log Sheet Notes'] || '';
+      // PENDING SALE DETECTION — flag set upstream in RMTeamTab.
+      // Drives badge text/color and the slate-gray border treatment below.
+      const isPendingSale = (job as any).isPendingSale === true;
 
       // --- Badges ---
       let badge = { text: 'PENDING', color: 'bg-gray-700 text-gray-400 border-gray-600' };
@@ -324,6 +333,11 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
       else if (isNextTime) {
           badge = { text: 'NEXT TIME', color: 'bg-orange-900/30 text-orange-400 border-orange-800' };
       }
+      else if (isPendingSale) {
+          // SALE-PEND badge — yellow because pending sales sit in the "new sale"
+          // colour family. Distinct from PENDING (generic gray, office prebooks).
+          badge = { text: 'SALE-PEND', color: 'bg-yellow-900/30 text-yellow-400 border-yellow-800' };
+      }
       else if (job.Prepaid === 'x') {
           badge = { text: 'PREPAID', color: 'bg-indigo-900/30 text-indigo-400 border-indigo-800' };
       }
@@ -346,13 +360,27 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
           ? priceStr 
           : `$${parseFloat(priceStr.replace(/[^0-9.]/g, '') || '0').toFixed(2)}`;
 
+      // --- Address & Name Fallbacks (pending sales might be partial) ---
+      const assembledAddress = job['Full Address']
+        || `${job['House Number'] || ''} ${job['Street Name'] || ''}`.trim()
+        || '— address pending —';
+      const hasName = (job['First Name'] || job['Last Name']);
+      const displayName = hasName
+        ? `${job['First Name'] || ''} ${job['Last Name']?.charAt(0) || ''}.`.trim()
+        : (isPendingSale ? 'Pending sale' : 'Unknown');
+
+      // --- Border / hover treatment ---
+      // Pending sales get a slate-gray border accent to visually mark them as
+      // worker-parked work. Everything else uses the default gray border with
+      // hover-colour driven by paid vs pending status.
+      const baseBorder = isPendingSale ? 'border-slate-600' : 'border-gray-700';
+      const hoverBorder = isPaid ? 'hover:border-cps-blue' : isPendingSale ? 'hover:border-slate-400' : 'hover:border-yellow-600';
+
       return (
           <div 
             key={job['Booking ID']} 
             onClick={() => handleJobClick(job)}
-            className={`bg-gray-800 border border-gray-700 rounded px-2 py-1.5 relative mb-1 transition-colors cursor-pointer hover:border-gray-500 group ${
-              isPaid ? 'hover:border-cps-blue' : 'hover:border-yellow-600'
-            }`}
+            className={`bg-gray-800 border rounded px-2 py-1.5 relative mb-1 transition-colors cursor-pointer group ${baseBorder} ${hoverBorder}`}
           >
               {/* Single Row - All content on one line */}
               <div className="flex items-center justify-between gap-2 text-xs">
@@ -361,8 +389,8 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
                       <span className="font-mono font-bold bg-gray-700 text-gray-300 px-1.5 rounded text-[10px] min-w-[32px] text-center flex-shrink-0">
                           {job['Route Number'] || '--'}
                       </span>
-                      <span className={`font-bold truncate ${isCancelled ? 'text-gray-500 line-through' : 'text-gray-200'}`} title={`${job['First Name']} ${job['Last Name']}`}>
-                          {job['First Name']} {job['Last Name']?.charAt(0) || ''}.
+                      <span className={`font-bold truncate ${isCancelled ? 'text-gray-500 line-through' : isPendingSale && !hasName ? 'text-slate-300 italic' : 'text-gray-200'}`} title={`${job['First Name'] || ''} ${job['Last Name'] || ''}`.trim() || (isPendingSale ? 'Pending sale (no name yet)' : 'Unknown')}>
+                          {displayName}
                       </span>
                       
                       {/* Service Badges for Lawn Rejuv - inline after name */}
@@ -372,7 +400,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
                       
                       {/* Address - hidden on mobile */}
                       <span className="text-gray-500 truncate text-[10px] hidden sm:inline flex-shrink">
-                          {job['Full Address']}
+                          {assembledAddress}
                       </span>
 
                       {/* CHANGED: Notes now inline after address (md+ screens only) */}
@@ -410,12 +438,17 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
                               {job['FO/BO/FP']}
                           </span>
                       )}
-                      <span className={`font-mono font-bold w-16 text-right ${isCancelled ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
+                      <span className={`font-mono font-bold w-16 text-right ${isCancelled ? 'text-gray-500 line-through' : isPendingSale ? 'text-slate-300' : 'text-gray-300'}`}>
                           {displayPrice}
                       </span>
                       
                       <button className={`text-[9px] font-bold px-1.5 py-0.5 rounded border min-w-[55px] text-center flex items-center justify-center gap-1 ${badge.color}`}>
-                          {isLoading ? <Loader size={8} className="animate-spin" /> : badge.text}
+                          {isLoading ? <Loader size={8} className="animate-spin" /> : (
+                            <>
+                              {isPendingSale && <Bookmark size={8} strokeWidth={2.5}/>}
+                              {badge.text}
+                            </>
+                          )}
                       </button>
                   </div>
               </div>
@@ -470,7 +503,9 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
             />
         )}
 
-        {/* --- PENDING JOB MODAL (Pending/NextTime/Cancelled Jobs) --- */}
+        {/* --- PENDING JOB MODAL (Pending/NextTime/Cancelled/PendingSale Jobs) ---
+            PendingJobModal detects isPendingSale and swaps Next Time/Cancelled
+            buttons for a Delete button (file 9). */}
         {pendingJob && (
             <PendingJobModal
                 job={pendingJob}

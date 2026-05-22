@@ -32,9 +32,10 @@ import { trainingService } from '../../lib/trainingService';
 import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
 import { subscribeAsContractor } from '../../lib/realtimeService';
 import { supabase } from '../../lib/supabase';
-import { Worker, SessionStats, MasterBooking, ManagementUser, SeasonType } from '../../types';
+import { Worker, SessionStats, MasterBooking, ManagementUser, SeasonType, PendingSale } from '../../types';
 import LogsheetJobCard from './components/LogsheetJobCard';
 import AddContractModal from '../../components/AddContractModal';
+import QuickPendingModal from '../../components/QuickPendingModal';
 import WorkerMapTab from './components/WorkerMapTab';
 import WorkerPCLTab from './components/WorkerPCLTab';
 
@@ -177,8 +178,19 @@ const Dashboard: React.FC = () => {
   const [hasDigitalMapping, setHasDigitalMapping] = useState(false);
   const [activeView, setActiveView] = useState<'logsheet' | 'pcl' | 'map'>('logsheet');
 
-  // Worker's assigned route codes (used by PCL tab)
+  // Worker's assigned route codes (used by PCL tab AND by QuickPendingModal)
   const [assignedRouteCodes, setAssignedRouteCodes] = useState<string[]>([]);
+
+  // --- PENDING SALES STATE (team seasons only) ---
+  // activeSessionId: the worker's current cart/session id (sess_xxx).
+  //   Needed for both the QuickPendingModal (to scope new pending sales) and
+  //   for fetching the existing list to display alongside office bookings.
+  // showQuickPendingModal: controls the new modal that replaces the blue +
+  //   button's NewJob handoff in team seasons.
+  // pendingSales: live list of parked pending sales for this cart.
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [showQuickPendingModal, setShowQuickPendingModal] = useState(false);
+  const [pendingSales, setPendingSales] = useState<PendingSale[]>([]);
 
   // Data State
   const [stats, setStats] = useState<SessionStats>(sessionService.getEmptyStats());
@@ -192,6 +204,10 @@ const Dashboard: React.FC = () => {
   // Check if this is a team season with teammates.
   // seasonHasTeams() handles lawn_rejuv + sealing today (and future cleaning when added).
   const hasTeammates = seasonHasTeams(seasonType) && teammates.length > 1;
+
+  // Team season flag — drives the blue + button behaviour and pending-sales display.
+  // Production mode only; training is always Aeration so pending sales code paths skip naturally.
+  const isTeamSeason = seasonHasTeams(seasonType) && !isTrainingMode;
 
   // Copy phone to clipboard
   const handleCopyPhone = async (phone: string) => {
@@ -230,6 +246,33 @@ const Dashboard: React.FC = () => {
       removeStorageItem('rm_view_cart_names');
       navigate('/rm-logbook');
     }
+  };
+
+  // --- HELPER: Convert a PendingSale into a MasterBooking-shaped object ---
+  // The Pending tab pipeline renders MasterBooking[]. Rather than thread a
+  // separate type through the filter chain, we adapt pending sales into the
+  // same shape and flag them with isPendingSale so LogsheetJobCard branches
+  // correctly. This keeps the rest of the rendering code completely unaware
+  // of the new feature.
+  const convertPendingSaleToBooking = (ps: PendingSale): MasterBooking => {
+    const fullAddress = `${ps.houseNumber || ''} ${ps.streetName || ''}`.trim();
+    return {
+      'Booking ID': ps.id,
+      'First Name': '',
+      'Last Name': '',
+      'Full Address': fullAddress,
+      'House Number': ps.houseNumber,
+      'Street Name': ps.streetName,
+      'Route Number': ps.routeCode,
+      'Price': ps.price || '',
+      'Log Sheet Notes': ps.notes,
+      'FO/BO/FP': ps.propertyType as any,
+      Status: 'pending',
+      services: ps.services,
+      // PENDING SALE FLAGS — read by LogsheetJobCard for badge + style
+      isPendingSale: true,
+      pendingSaleId: ps.id,
+    } as MasterBooking;
   };
 
   // Initial load and data fetching
@@ -282,6 +325,9 @@ const Dashboard: React.FC = () => {
           setManager(managerData);
           setUpsellsEnabled(true);
           setSeasonType('aeration');
+          // Training is always Aeration — pending sales never apply here
+          setActiveSessionId(null);
+          setPendingSales([]);
         } else {
           // --- PRODUCTION MODE ---
           if (!rmViewMode) {
@@ -297,9 +343,25 @@ const Dashboard: React.FC = () => {
 
           const session = await sessionService.startLogsheetSession(storedWorker.contractorId);
           setStats(session.stats);
+          // Stash the session id for QuickPendingModal + pending sales fetch
+          setActiveSessionId(session.id);
 
           const assignments = await sessionService.getWorkerAssignments(storedWorker.contractorId);
           setJobs(assignments);
+
+          // --- PENDING SALES FETCH (team seasons only) ---
+          // seasonHasTeams() is true for Rejuv + Sealing. Aeration skips this entirely.
+          if (seasonHasTeams(currentSeasonType) && session.id) {
+            try {
+              const sales = await sessionService.getPendingSalesForSession(session.id);
+              setPendingSales(sales);
+            } catch (err) {
+              console.warn('[Dashboard] Failed to load pending sales:', err);
+              setPendingSales([]);
+            }
+          } else {
+            setPendingSales([]);
+          }
 
           const dailySession = await sessionService.getDailySession();
           if (dailySession) {
@@ -390,15 +452,61 @@ const Dashboard: React.FC = () => {
     setRefreshKey((prev) => prev + 1);
   };
 
+  // --- BLUE + BUTTON HANDLER ---
+  // Team seasons (Rejuv + Sealing): open QuickPendingModal instead of jumping
+  // straight to NewJob. Aeration: unchanged — straight to NewJob as before.
+  const handleAddClick = () => {
+    if (isTeamSeason && activeSessionId) {
+      setShowQuickPendingModal(true);
+    } else {
+      navigate('/logsheet/new');
+    }
+  };
+
+  // --- JOB CARD CLICK HANDLER ---
+  // Pending sales route to NewJob with the id so it prefills. Office bookings
+  // and completed transactions keep the existing JobDetail route.
+  const handleJobCardClick = (job: MasterBooking) => {
+    if ((job as any).isPendingSale && (job as any).pendingSaleId) {
+      navigate(`/logsheet/new?pendingSaleId=${encodeURIComponent((job as any).pendingSaleId)}`);
+    } else {
+      navigate(`/job-detail/${encodeURIComponent(job['Booking ID'])}`);
+    }
+  };
+
+  // --- REFRESH PENDING SALES AFTER MODAL ACTIONS ---
+  // Called by QuickPendingModal after a successful Save Pending so the new row
+  // shows up immediately without waiting for a realtime tick.
+  const handlePendingSalesRefresh = async () => {
+    if (!activeSessionId || !isTeamSeason) return;
+    try {
+      const sales = await sessionService.getPendingSalesForSession(activeSessionId);
+      setPendingSales(sales);
+    } catch (err) {
+      console.warn('[Dashboard] Failed to refresh pending sales:', err);
+    }
+  };
+
+  // --- FILTERED JOBS (merges pending sales into the Pending tab only) ---
+  // Pending sales only ever appear under the "Pending" tab. They can't be
+  // cancelled or marked Next Time (deletion-only per design decision E),
+  // and they're never completed in this list — completion converts them to
+  // real transactions and deletes the pending row.
   const filteredJobs = useMemo(() => {
     if (viewFilter === 'pending') {
-      return jobs.filter((b) => !b.Completed && (!b.Status || b.Status === 'pending'));
+      const officePending = jobs.filter(
+        (b) => !b.Completed && (!b.Status || b.Status === 'pending')
+      );
+      const convertedPendingSales = pendingSales.map(convertPendingSaleToBooking);
+      // Pending sales rendered first so the worker sees their own parked work
+      // before scrolling through office prebooks. Adjust ordering if desired.
+      return [...convertedPendingSales, ...officePending];
     } else if (viewFilter === 'not_done') {
       return jobs.filter((b) => b.Status === 'cancelled' || b.Status === 'next_time');
     } else {
       return jobs.filter((b) => b.Completed === 'x' || b.Status === 'completed');
     }
-  }, [jobs, viewFilter]);
+  }, [jobs, viewFilter, pendingSales]);
 
   if (loading) {
     return (
@@ -406,9 +514,7 @@ const Dashboard: React.FC = () => {
         <Loader className="animate-spin text-cps-blue" />
       </div>
     );
-  }
-
-  return (
+  }return (
     <div className={`bg-black flex flex-col ${activeView === 'map' ? 'h-screen overflow-hidden' : 'min-h-screen pb-20'}`}>
       {/* RM View Mode Banner */}
       {isRMViewMode && worker && (
@@ -524,9 +630,13 @@ const Dashboard: React.FC = () => {
                     <span className="hidden sm:inline">Back to Lesson</span>
                   </button>
                 )}
+                {/* BLUE + BUTTON — branches by season:
+                    Team seasons (Rejuv + Sealing): opens QuickPendingModal so the
+                    worker can park a half-collected sale or proceed to complete.
+                    Aeration: navigates straight to NewJob as before. */}
                 {hasAssignedRoutes && (
                   <button
-                    onClick={() => navigate('/logsheet/new')}
+                    onClick={handleAddClick}
                     className="p-2 bg-cps-blue text-white rounded-lg shadow-lg hover:bg-blue-600 transition-colors"
                   >
                     <Plus size={20} />
@@ -688,7 +798,7 @@ const Dashboard: React.FC = () => {
               <LogsheetJobCard
                 key={job['Booking ID']}
                 job={job}
-                onClick={() => navigate(`/job-detail/${encodeURIComponent(job['Booking ID'])}`)}
+                onClick={() => handleJobCardClick(job)}
               />
             ))
           )}
@@ -716,6 +826,20 @@ const Dashboard: React.FC = () => {
             setShowContractModal(false);
             setRefreshKey((k) => k + 1);
           }}
+        />
+      )}
+
+      {/* QUICK PENDING MODAL (team seasons only) — replaces the blue + button's
+          direct navigation to NewJob. Opened by handleAddClick when isTeamSeason
+          is true and the worker has an active session id. */}
+      {showQuickPendingModal && worker && activeSessionId && (
+        <QuickPendingModal
+          worker={worker}
+          sessionId={activeSessionId}
+          seasonType={seasonType}
+          assignedRoutes={assignedRouteCodes}
+          onClose={() => setShowQuickPendingModal(false)}
+          onSaved={handlePendingSalesRefresh}
         />
       )}
 
