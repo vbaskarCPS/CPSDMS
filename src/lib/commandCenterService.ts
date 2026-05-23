@@ -143,6 +143,125 @@ export const seasonHasTeams = (seasonType: SeasonType): boolean => {
   return seasonType === 'lawn_rejuv' || seasonType === 'sealing';
 };
 
+// ============================================================================
+// ASPHALT HELPERS (Sealing season only — East region)
+// ============================================================================
+// Locked specs (design lock — DO NOT modify these numbers without explicit approval):
+//   - RC team id pattern: case-sensitive /^RC\d*$/ — matches "RC", "RC1", "RC42", etc.
+//   - Driveway portion: 100% selling cart, 0% RC
+//   - Asphalt portion:  30% selling cart, 70% RC
+//   - Upsold portion:   0% selling cart, 100% RC
+//   - Net across both txs always sums to driveway + asphalt + upsold (total cash collected).
+//
+// Single source of truth — DO NOT hardcode 0.30 / 0.70 anywhere else in the codebase.
+
+/**
+ * Frozen split table. Read from this everywhere percentages are needed —
+ * UI displays, audit tooling, math. The Object.freeze + 'as const' combo means
+ * any attempt to mutate at runtime throws in strict mode.
+ */
+export const ASPHALT_SPLIT = Object.freeze({
+  driveway: Object.freeze({ cart: 1.00, rc: 0.00 }),
+  asphalt:  Object.freeze({ cart: 0.30, rc: 0.70 }),
+  upsold:   Object.freeze({ cart: 0.00, rc: 1.00 }),
+} as const);
+
+/**
+ * Whether the given season supports an asphalt add-on.
+ * Sealing only. East-region exclusive (sealing is East-only by season config).
+ */
+export const seasonHasAsphalt = (seasonType: SeasonType): boolean => {
+  return seasonType === 'sealing';
+};
+
+// Case-sensitive Ramp Crew team id pattern. Matches "RC", "RC1", "RC42", etc.
+// Anything not exactly matching — "rc1", "RC-1", "Ramp", "RCrew" — is NOT an RC.
+// Lowercase or punctuated team ids are explicitly rejected to prevent ambiguity
+// between worker-named teams ("RCarter") and Ramp Crew designators.
+const RAMP_CREW_TEAM_ID_RX = /^RC\d*$/;
+
+/**
+ * Returns true if the given teamId belongs to a Ramp Crew cart.
+ * Case-sensitive. Tolerates null/undefined input (returns false).
+ */
+export const isRampCrewTeamId = (teamId: string | null | undefined): boolean => {
+  if (!teamId) return false;
+  return RAMP_CREW_TEAM_ID_RX.test(teamId);
+};
+
+/**
+ * Cart kind classifier. Thin wrapper over isRampCrewTeamId returning a
+ * discriminated string instead of a boolean — useful at switch sites and
+ * easier to read in conditionals like classifyCartKind(t) === 'rc'.
+ */
+export const classifyCartKind = (teamId: string | null | undefined): 'rc' | 'regular' => {
+  return isRampCrewTeamId(teamId) ? 'rc' : 'regular';
+};
+
+/**
+ * Result of an asphalt split calculation. All three fields are dollar amounts.
+ * Invariant: cartShare + rcShare === total (within floating-point tolerance).
+ */
+export interface AsphaltSplitResult {
+  cartShare: number;
+  rcShare: number;
+  total: number;
+}
+
+/**
+ * Compute the payout split for an asphalt-bearing sale.
+ *
+ * Inputs are dollar amounts; outputs are dollar amounts that sum to total.
+ *   drivewayAmount  — driveway portion (collected by selling cart)
+ *   asphaltAmount   — base asphalt portion (split 30/70)
+ *   upsoldAmount    — additional asphalt RC added on-site (100% to RC)
+ *
+ * Returns:
+ *   cartShare  — earned by the selling cart
+ *   rcShare    — earned by the Ramp Crew
+ *   total      — drivewayAmount + asphaltAmount + upsoldAmount
+ *
+ * For self-both scenarios (RC handles everything solo), the caller reads
+ * `total` directly — that's the single tx's payoutShare.
+ *
+ * All three inputs default to 0 if undefined/NaN/Infinity so callers don't
+ * have to pre-filter.
+ *
+ * Worked example (canonical): D=$200, A=$300, U=$150
+ *   cartShare = 200×1.00 + 300×0.30 + 150×0.00 = $290
+ *   rcShare   = 200×0.00 + 300×0.70 + 150×1.00 = $360
+ *   total     = $650 (sanity: 290 + 360 = 650 ✓)
+ */
+export const calculateAsphaltSplit = (
+  drivewayAmount: number,
+  asphaltAmount: number,
+  upsoldAmount: number
+): AsphaltSplitResult => {
+  const d = Number.isFinite(drivewayAmount) ? drivewayAmount : 0;
+  const a = Number.isFinite(asphaltAmount) ? asphaltAmount : 0;
+  const u = Number.isFinite(upsoldAmount) ? upsoldAmount : 0;
+
+  const cartShare =
+    d * ASPHALT_SPLIT.driveway.cart +
+    a * ASPHALT_SPLIT.asphalt.cart +
+    u * ASPHALT_SPLIT.upsold.cart;
+
+  const rcShare =
+    d * ASPHALT_SPLIT.driveway.rc +
+    a * ASPHALT_SPLIT.asphalt.rc +
+    u * ASPHALT_SPLIT.upsold.rc;
+
+  return {
+    cartShare,
+    rcShare,
+    total: d + a + u,
+  };
+};
+
+// ============================================================================
+// END ASPHALT HELPERS
+// ============================================================================
+
 // --- GET AVAILABLE ADD-ONS FOR SEASON ---
 export const getAvailableAddOns = (seasonType: SeasonType): string[] => {
   return getSeasonConfig(seasonType).availableAddOns;
