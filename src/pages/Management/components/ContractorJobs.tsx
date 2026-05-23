@@ -1,6 +1,6 @@
 // src/pages/Management/components/ContractorJobs.tsx
 import React, { useState, useMemo, useEffect } from 'react';
-import { Phone, Mail, Loader, Clock, X as XIcon, FileText, Bookmark } from 'lucide-react';
+import { Phone, Mail, Loader, Clock, X as XIcon, FileText, Bookmark, Shovel } from 'lucide-react';
 import { MasterBooking, SessionTransaction, SeasonType } from '../../../types';
 import EditTransactionModal from '../../../components/EditTransactionModal';
 import PendingJobModal from '../../../components/PendingJobModal';
@@ -29,11 +29,20 @@ const BADGE_MAP: Record<string, string> = {
   'Hot Asphalt': 'RAMP'
 };
 
+// Compact asphalt $ formatter — matches LogsheetJobCard, RMTeamTab, RMAsphaltModal.
+// Whole numbers drop the cents to keep the single-row layout tight.
+const formatAsphaltDollars = (n: number | undefined | null): string => {
+  if (!n || n <= 0) return '$0';
+  const rounded = Math.round(n * 100) / 100;
+  if (rounded === Math.floor(rounded)) return `$${Math.floor(rounded)}`;
+  return `$${rounded.toFixed(2)}`;
+};
+
 // --- EMAIL STATUS COMPONENT ---
 const EmailStatusIcon: React.FC<{ email: string }> = ({ email }) => {
   const [status, setStatus] = useState<{ sent: boolean; bounced: boolean; reason?: string } | null>(null);
   const [loading, setLoading] = useState(true);
-  
+
   useEffect(() => {
     const fetchStatus = async () => {
       try {
@@ -44,7 +53,7 @@ const EmailStatusIcon: React.FC<{ email: string }> = ({ email }) => {
           .order('sent_at', { ascending: false })
           .limit(1)
           .maybeSingle();
-        
+
         if (data) {
           setStatus({
             sent: data.status === 'sent' || data.status === 'bounced',
@@ -61,37 +70,34 @@ const EmailStatusIcon: React.FC<{ email: string }> = ({ email }) => {
         setLoading(false);
       }
     };
-    
+
     if (email) {
       fetchStatus();
     } else {
       setLoading(false);
     }
   }, [email]);
-  
+
   if (loading) {
     return <Mail size={14} className="text-gray-500 opacity-50 animate-pulse" strokeWidth={2.5} />;
   }
-  
+
   if (!status || !status.sent) {
-    // No email sent (grey)
     return (
       <span title="No email sent">
         <Mail size={14} className="text-gray-600 opacity-30" strokeWidth={2.5} />
       </span>
     );
   }
-  
+
   if (status.bounced) {
-    // Email bounced (red)
     return (
       <span title={`Email bounced: ${status.reason || 'Unknown reason'}`}>
         <Mail size={14} className="text-red-500" strokeWidth={2.5} />
       </span>
     );
   }
-  
-  // Email sent successfully (green)
+
   return (
     <span title={`Email sent to ${email}`}>
       <Mail size={14} className="text-green-500" strokeWidth={2.5} />
@@ -128,9 +134,9 @@ const ServiceBadges: React.FC<{ services?: MasterBooking['services'] }> = ({ ser
   );
 };
 
-const ContractorJobs: React.FC<ContractorJobsProps> = ({ 
-  bookings, 
-  financialStore, 
+const ContractorJobs: React.FC<ContractorJobsProps> = ({
+  bookings,
+  financialStore,
   onRefresh,
   seasonType = 'aeration'
 }) => {
@@ -142,7 +148,6 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
 
   // --- Merge Bookings & Transactions ---
   const allJobs = useMemo(() => {
-      // Create a map of transactions for quick lookup
       const txMap = new Map<string, SessionTransaction>();
       financialStore.forEach(tx => txMap.set(tx.jobId, tx));
 
@@ -212,10 +217,10 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
   });
 
   const pendingJobs = sortedBookings.filter(b => (
-    !b.Completed && 
+    !b.Completed &&
     (!b.Status || b.Status === 'pending')
   ));
-  
+
   const nextTimeJobs = sortedBookings.filter(b => b.Status === 'next_time');
   const cancelledJobs = sortedBookings.filter(b => b.Status === 'cancelled');
   const completedJobs = sortedBookings.filter(b => b.Completed === 'x' || b.Status === 'completed');
@@ -224,19 +229,18 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
   const handleJobClick = async (job: MasterBooking) => {
       const isPaid = job.Completed === 'x' || job.Status === 'completed';
       const jobId = job['Booking ID'];
-      
+
       if (!jobId) {
           console.error("Critical Error: Job missing Booking ID", job);
           return;
       }
 
-      // For completed jobs, open EditTransactionModal
       if (isPaid) {
           setLoadingId(jobId);
 
           try {
               const tx = await sessionService.getTransactionByJobId(jobId);
-              
+
               if (tx) {
                   setEditingTransaction(tx);
               } else {
@@ -252,8 +256,8 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
       }
 
       // For pending, cancelled, next_time, or pending-sale jobs, open PendingJobModal.
-      // PendingJobModal (file 9) detects isPendingSale and renders a Delete
-      // button instead of the Next Time / Cancelled buttons.
+      // PendingJobModal detects isPendingSale (and asphalt sub-types) and adjusts
+      // its action buttons accordingly.
       setPendingJob(job);
   };
 
@@ -282,13 +286,26 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
   // ============================================================================
   // RENDER JOB ROW
   // ============================================================================
-  // CHANGE: Notes are now displayed INLINE on the same row after address (md+ screens only)
-  // Previously: Notes were on a separate second row below the main content
-  // Now: [Route] Name [Services] Address 📝Notes... 📞 ✉️ Payment Price [Badge]
-  // ============================================================================
-  // NEW: Pending sales (isPendingSale flag set by RMTeamTab via convertPendingSaleToBooking)
-  // get a yellow SALE-PEND badge + slate-gray border accent. Worker-created
-  // parked sales, distinct from office prebooks.
+  // Asphalt-aware. Three visual states beyond the existing pending/completed/etc:
+  //
+  //   MERGED PARENT (saleType undefined, asphaltAmount > 0):
+  //     Driveway parent with a paired asphalt child collapsed onto it by the
+  //     upstream merge in RMTeamTab. Keeps the regular driveway price & badge;
+  //     adds an amber `+ASPH $X` pill (and `+UP $Y` when upsold > 0) inline
+  //     next to the price. Slate border preserved (this is still a pending sale).
+  //
+  //   STANDALONE ASPHALT (saleType === 'asphalt', no sharedJobKey):
+  //     Asphalt-only row. The MasterBooking 'Price' field is the asphalt $.
+  //     Badge swaps from SALE-PEND to ASPHALT (unassigned) or ASSIGNED (has
+  //     assignedRcSessionId). Border swaps slate → amber. Shovel icon next to
+  //     the badge for fast visual recognition.
+  //
+  //   PATH 3 DEFERRED (saleType === 'asphalt', sharedJobKey set):
+  //     Driveway already collected via the selling cart's completed transaction;
+  //     only asphalt remains pending. Stronger amber tint, RC PICKUP badge.
+  //
+  // Click behaviour is unchanged. Modal logic (PendingJobModal) handles the
+  // asphalt-specific actions if needed; the row itself is a presentation surface.
   // ============================================================================
   const renderJobRow = (job: MasterBooking) => {
       const isPaid = job.Completed === 'x' || job.Status === 'completed';
@@ -296,16 +313,27 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
       const isNextTime = job.Status === 'next_time';
       const isLoading = loadingId === job['Booking ID'];
       const notes = job['Log Sheet Notes'] || '';
-      // PENDING SALE DETECTION — flag set upstream in RMTeamTab.
-      // Drives badge text/color and the slate-gray border treatment below.
       const isPendingSale = (job as any).isPendingSale === true;
+
+      // --- ASPHALT FIELD DETECTION (5-field LogsheetJobCard contract) ---
+      const asphaltAmount: number = Number((job as any).asphaltAmount) || 0;
+      const upsoldAsphaltAmount: number = Number((job as any).upsoldAsphaltAmount) || 0;
+      const saleType: string | undefined = (job as any).saleType;
+      const sharedJobKey: string | undefined = (job as any).sharedJobKey;
+      const assignedRcSessionId: string | undefined = (job as any).assignedRcSessionId;
+
+      const isStandaloneAsphalt = isPendingSale && saleType === 'asphalt';
+      const isDeferredAsphalt = isStandaloneAsphalt && typeof sharedJobKey === 'string' && sharedJobKey.length > 0;
+      const isAssignedAsphalt = isStandaloneAsphalt && !isDeferredAsphalt && !!assignedRcSessionId;
+      const isMergedAsphalt = isPendingSale && !isStandaloneAsphalt && asphaltAmount > 0;
+      const isAnyAsphalt = isStandaloneAsphalt || isMergedAsphalt;
 
       // --- Badges ---
       let badge = { text: 'PENDING', color: 'bg-gray-700 text-gray-400 border-gray-600' };
-      
+
       if (isPaid) {
           const extra = job as any;
-          
+
           const getLabel = (generic: string) => {
              if (extra.items && extra.items.length > 0) {
                  const name = extra.items[0].name;
@@ -316,26 +344,41 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
 
           if (extra.isUpgrade) {
               badge = { text: getLabel('UPGRADE'), color: 'bg-orange-900/30 text-orange-400 border-orange-800' };
-          } 
+          }
           else if (extra.isAddOn) {
               badge = { text: getLabel('ADD-ON'), color: 'bg-blue-900/30 text-blue-400 border-blue-800' };
-          } 
+          }
           else if (extra.isNewSale) {
               badge = { text: 'SALE', color: 'bg-yellow-900/30 text-yellow-400 border-yellow-800' };
-          } 
+          }
           else {
               badge = { text: 'DONE', color: 'bg-green-900/30 text-green-400 border-green-800' };
           }
-      } 
+      }
       else if (isCancelled) {
           badge = { text: 'CANCELLED', color: 'bg-red-900/30 text-red-400 border-red-800' };
       }
       else if (isNextTime) {
           badge = { text: 'NEXT TIME', color: 'bg-orange-900/30 text-orange-400 border-orange-800' };
       }
+      // ASPHALT BADGE OVERRIDES — must come BEFORE the generic SALE-PEND branch
+      // so standalone asphalt rows get asphalt-specific badges, not SALE-PEND.
+      else if (isDeferredAsphalt) {
+          // Path 3: driveway already collected, only the asphalt portion remains.
+          // Strong amber to signal "executor needs to act on this".
+          badge = { text: 'RC PICKUP', color: 'bg-amber-900/50 text-amber-300 border-amber-600' };
+      }
+      else if (isAssignedAsphalt) {
+          // Assigned to a specific RC session but not yet picked up.
+          badge = { text: 'ASSIGNED', color: 'bg-amber-900/30 text-amber-400 border-amber-700' };
+      }
+      else if (isStandaloneAsphalt) {
+          // Standalone asphalt child with no RC assignment yet — sits in the
+          // unassigned queue (RMAsphaltModal surfaces these for assignment).
+          badge = { text: 'ASPHALT', color: 'bg-amber-900/20 text-amber-400 border-amber-800' };
+      }
       else if (isPendingSale) {
-          // SALE-PEND badge — yellow because pending sales sit in the "new sale"
-          // colour family. Distinct from PENDING (generic gray, office prebooks).
+          // Generic worker-parked sale (drivewey-only or pre-asphalt-flag).
           badge = { text: 'SALE-PEND', color: 'bg-yellow-900/30 text-yellow-400 border-yellow-800' };
       }
       else if (job.Prepaid === 'x') {
@@ -355,10 +398,17 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
       }
 
       // --- Price Display ---
-      const priceStr = String(job.Price || '');
-      const displayPrice = /^[A-Z]+$/.test(priceStr) 
-          ? priceStr 
-          : `$${parseFloat(priceStr.replace(/[^0-9.]/g, '') || '0').toFixed(2)}`;
+      // For standalone asphalt, the row's main $ IS the asphalt amount.
+      // For everything else, parse the stored Price field as before.
+      let displayPrice: string;
+      if (isStandaloneAsphalt) {
+          displayPrice = formatAsphaltDollars(asphaltAmount);
+      } else {
+          const priceStr = String(job.Price || '');
+          displayPrice = /^[A-Z]+$/.test(priceStr)
+              ? priceStr
+              : `$${parseFloat(priceStr.replace(/[^0-9.]/g, '') || '0').toFixed(2)}`;
+      }
 
       // --- Address & Name Fallbacks (pending sales might be partial) ---
       const assembledAddress = job['Full Address']
@@ -367,43 +417,63 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
       const hasName = (job['First Name'] || job['Last Name']);
       const displayName = hasName
         ? `${job['First Name'] || ''} ${job['Last Name']?.charAt(0) || ''}.`.trim()
-        : (isPendingSale ? 'Pending sale' : 'Unknown');
+        : (isStandaloneAsphalt
+            ? 'Asphalt job'
+            : isPendingSale ? 'Pending sale' : 'Unknown');
 
       // --- Border / hover treatment ---
-      // Pending sales get a slate-gray border accent to visually mark them as
-      // worker-parked work. Everything else uses the default gray border with
-      // hover-colour driven by paid vs pending status.
-      const baseBorder = isPendingSale ? 'border-slate-600' : 'border-gray-700';
-      const hoverBorder = isPaid ? 'hover:border-cps-blue' : isPendingSale ? 'hover:border-slate-400' : 'hover:border-yellow-600';
+      // Border colour ladder, weakest to strongest amber:
+      //   plain pending  → gray
+      //   pending sale   → slate (existing worker-parked treatment)
+      //   merged asphalt → slate + amber accent (parent is still a driveway sale)
+      //   standalone     → amber
+      //   deferred (P3)  → amber, stronger via shadow on row
+      let baseBorder = 'border-gray-700';
+      let hoverBorder = 'hover:border-yellow-600';
+      if (isDeferredAsphalt) {
+          baseBorder = 'border-amber-600';
+          hoverBorder = 'hover:border-amber-400';
+      } else if (isStandaloneAsphalt) {
+          baseBorder = 'border-amber-700/70';
+          hoverBorder = 'hover:border-amber-500';
+      } else if (isMergedAsphalt) {
+          // Slate-with-amber-tinted hover signals "this driveway has asphalt attached".
+          baseBorder = 'border-slate-600';
+          hoverBorder = 'hover:border-amber-500';
+      } else if (isPendingSale) {
+          baseBorder = 'border-slate-600';
+          hoverBorder = 'hover:border-slate-400';
+      } else if (isPaid) {
+          hoverBorder = 'hover:border-cps-blue';
+      }
 
       return (
-          <div 
-            key={job['Booking ID']} 
+          <div
+            key={job['Booking ID']}
             onClick={() => handleJobClick(job)}
             className={`bg-gray-800 border rounded px-2 py-1.5 relative mb-1 transition-colors cursor-pointer group ${baseBorder} ${hoverBorder}`}
           >
-              {/* Single Row - All content on one line */}
               <div className="flex items-center justify-between gap-2 text-xs">
                   {/* Left Section: Route, Name, Services, Address, Notes */}
                   <div className="flex items-center gap-2 min-w-0 flex-1">
                       <span className="font-mono font-bold bg-gray-700 text-gray-300 px-1.5 rounded text-[10px] min-w-[32px] text-center flex-shrink-0">
                           {job['Route Number'] || '--'}
                       </span>
-                      <span className={`font-bold truncate ${isCancelled ? 'text-gray-500 line-through' : isPendingSale && !hasName ? 'text-slate-300 italic' : 'text-gray-200'}`} title={`${job['First Name'] || ''} ${job['Last Name'] || ''}`.trim() || (isPendingSale ? 'Pending sale (no name yet)' : 'Unknown')}>
+                      <span className={`font-bold truncate ${isCancelled ? 'text-gray-500 line-through' : isStandaloneAsphalt && !hasName ? 'text-amber-200 italic' : isPendingSale && !hasName ? 'text-slate-300 italic' : 'text-gray-200'}`} title={`${job['First Name'] || ''} ${job['Last Name'] || ''}`.trim() || (isStandaloneAsphalt ? 'Asphalt job (no name yet)' : isPendingSale ? 'Pending sale (no name yet)' : 'Unknown')}>
                           {displayName}
                       </span>
-                      
+
                       {/* Service Badges for Lawn Rejuv - inline after name */}
                       {isLawnRejuv && job.services && (
                         <ServiceBadges services={job.services} />
                       )}
-                      
+
                       {/* Address - hidden on mobile */}
                       <span className="text-gray-500 truncate text-[10px] hidden sm:inline flex-shrink">
                           {assembledAddress}
                       </span>
 
-                      {/* CHANGED: Notes now inline after address (md+ screens only) */}
+                      {/* Notes - inline after address (md+ screens only) */}
                       {notes && (
                         <span className="hidden md:inline-flex items-center gap-1 text-[10px] text-gray-500 italic truncate max-w-[200px] flex-shrink" title={notes}>
                           <FileText size={10} className="flex-shrink-0 text-gray-600" />
@@ -415,7 +485,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
                   {/* Icons with Email Status */}
                   <div className="flex items-center gap-2 flex-shrink-0">
                       <Phone size={14} className={job['Cell Phone'] || job['Home Phone'] ? "text-green-500" : "text-gray-600 opacity-30"} strokeWidth={2.5} />
-                      
+
                       {/* Email Icon with Status */}
                       {isPaid && job['Email Address'] ? (
                         <EmailStatusIcon email={job['Email Address']} />
@@ -431,30 +501,47 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
                       </div>
                   )}
 
-                  {/* Right Section: FO/BO, Price, Badge */}
+                  {/* Right Section: FO/BO, Asphalt pill (merged), Price, Badge */}
                   <div className="flex items-center gap-2 flex-shrink-0 text-right">
                       {job['FO/BO/FP'] && job['FO/BO/FP'] !== 'FP' && (
                           <span className="text-[9px] font-bold text-gray-500 border border-gray-600 px-1 rounded">
                               {job['FO/BO/FP']}
                           </span>
                       )}
-                      <span className={`font-mono font-bold w-16 text-right ${isCancelled ? 'text-gray-500 line-through' : isPendingSale ? 'text-slate-300' : 'text-gray-300'}`}>
+
+                      {/* ASPHALT INLINE PILL — merged case only. Sits between FO/BO
+                          and Price so it reads as "addition to this driveway price".
+                          Compresses Up to a second segment when upsoldAsphaltAmount > 0. */}
+                      {isMergedAsphalt && (
+                          <span
+                            className="inline-flex items-center gap-1 text-[9px] font-bold bg-amber-900/30 text-amber-300 border border-amber-700 px-1.5 py-0.5 rounded whitespace-nowrap"
+                            title={`Asphalt component: ${formatAsphaltDollars(asphaltAmount)}${upsoldAsphaltAmount > 0 ? ` (upsold ${formatAsphaltDollars(upsoldAsphaltAmount)})` : ''}`}
+                          >
+                              <Shovel size={9} strokeWidth={2.5} />
+                              +ASPH {formatAsphaltDollars(asphaltAmount)}
+                              {upsoldAsphaltAmount > 0 && (
+                                  <span className="text-amber-200/90 ml-0.5">
+                                      +UP {formatAsphaltDollars(upsoldAsphaltAmount)}
+                                  </span>
+                              )}
+                          </span>
+                      )}
+
+                      <span className={`font-mono font-bold w-16 text-right ${isCancelled ? 'text-gray-500 line-through' : isStandaloneAsphalt ? 'text-amber-200' : isPendingSale ? 'text-slate-300' : 'text-gray-300'}`}>
                           {displayPrice}
                       </span>
-                      
+
                       <button className={`text-[9px] font-bold px-1.5 py-0.5 rounded border min-w-[55px] text-center flex items-center justify-center gap-1 ${badge.color}`}>
                           {isLoading ? <Loader size={8} className="animate-spin" /> : (
                             <>
-                              {isPendingSale && <Bookmark size={8} strokeWidth={2.5}/>}
+                              {isStandaloneAsphalt && <Shovel size={8} strokeWidth={2.5} />}
+                              {!isStandaloneAsphalt && isPendingSale && <Bookmark size={8} strokeWidth={2.5}/>}
                               {badge.text}
                             </>
                           )}
                       </button>
                   </div>
               </div>
-
-              {/* REMOVED: Previous separate notes row that was here */}
-              {/* Notes are now inline above in the left section */}
           </div>
       );
   };
@@ -496,7 +583,7 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
 
         {/* --- EDIT TRANSACTION MODAL (Completed Jobs) --- */}
         {editingTransaction && (
-            <EditTransactionModal 
+            <EditTransactionModal
                 transaction={editingTransaction}
                 onClose={handleEditModalClose}
                 onUpdate={handleEditModalUpdate}
@@ -505,7 +592,8 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
 
         {/* --- PENDING JOB MODAL (Pending/NextTime/Cancelled/PendingSale Jobs) ---
             PendingJobModal detects isPendingSale and swaps Next Time/Cancelled
-            buttons for a Delete button (file 9). */}
+            buttons for a Delete button. Asphalt sub-types (standalone, deferred,
+            assigned) are handled by PendingJobModal's own asphalt-aware logic. */}
         {pendingJob && (
             <PendingJobModal
                 job={pendingJob}

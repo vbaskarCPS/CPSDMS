@@ -23,6 +23,7 @@ import {
   ArrowRightLeft,
   UserMinus,
   Bookmark,
+  Undo2,
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
 import { seasonHasTeams } from '../../../lib/commandCenterService';
@@ -84,6 +85,14 @@ interface CartDisplay {
     upsellCount: number;
     upsellGross: number;
   };
+  // ASPHALT (sealing only). asphaltOwnedRows = this cart sold them; assignedRcSessionId
+  // may be null (unassigned, eligible for RM assignment) or set (assigned to some RC).
+  // asphaltIncomingRows = rows owned by OTHER carts but assigned to this cart's session
+  // (only non-empty when this is an RC cart). Cross-RM assignments are not visible here
+  // — only assignments from selling carts within this RM's authority.
+  asphaltOwnedRows: PendingSale[];
+  asphaltIncomingRows: PendingSale[];
+  isRcCart: boolean;
 }
 
 type TeamSortOption = 'recent' | 'alpha' | 'steps' | 'equiv' | 'upGross';
@@ -99,6 +108,12 @@ const formatTimeShort = (timestamp: string): string => {
   return `${hours}:${minutesStr}${ampm}`;
 };
 
+// LogsheetJobCard asphalt-display contract: 5 fields propagate via the
+// MasterBooking index signature (asphaltAmount, upsoldAsphaltAmount, saleType,
+// sharedJobKey, assignedRcSessionId). For asphalt CHILDREN whose driveway
+// parent is also in this cart's pending-sales list, the child's fields are
+// stamped onto the parent by mergePendingSalesForDisplay below — this raw
+// converter just carries the row's own values through.
 const convertPendingSaleToBooking = (ps: PendingSale): MasterBooking => {
   const fullAddress = `${ps.houseNumber || ''} ${ps.streetName || ''}`.trim();
   return {
@@ -116,7 +131,78 @@ const convertPendingSaleToBooking = (ps: PendingSale): MasterBooking => {
     services: ps.services,
     isPendingSale: true,
     pendingSaleId: ps.id,
+    // ASPHALT FIELDS (5-field LogsheetJobCard contract):
+    asphaltAmount: ps.asphaltAmount,
+    upsoldAsphaltAmount: ps.upsoldAsphaltAmount,
+    saleType: ps.saleType,
+    sharedJobKey: ps.sharedJobKey,
+    assignedRcSessionId: ps.assignedRcSessionId,
   } as MasterBooking;
+};
+
+// RC cart detection — matches sessionService's RAMP_CREW_TEAM_ID_PATTERN.
+// Case-sensitive /^RC\d*$/ catches "RC", "RC1", "RC42", etc.
+const RC_TEAM_PATTERN = /^RC\d*$/;
+const isRcWorker = (teamId: string | null | undefined): boolean => {
+  return !!teamId && RC_TEAM_PATTERN.test(teamId);
+};
+
+// Compact asphalt $ formatter — matches LogsheetJobCard and RMAsphaltModal.
+const formatAsphaltDollars = (n: number | undefined | null): string => {
+  if (!n || n <= 0) return '$0';
+  const rounded = Math.round(n * 100) / 100;
+  if (rounded === Math.floor(rounded)) return `$${Math.floor(rounded)}`;
+  return `$${rounded.toFixed(2)}`;
+};
+
+// Build a display address from a PendingSale row.
+const assembleAddressFromPending = (ps: PendingSale): string => {
+  const hn = (ps.houseNumber || '').trim();
+  const sn = (ps.streetName || '').trim();
+  if (hn && sn) return `${hn} ${sn}`;
+  return hn || sn || '— address pending —';
+};
+
+// Merge pending sales into display bookings. For each driveway parent that has
+// an asphalt child in the SAME list, stamp the child's asphalt fields onto the
+// parent and drop the child (it renders inside the merged parent card). For
+// asphalt children with no parent visible in this list (Path 3 deferred — the
+// parent is a completed transaction, not a pending sale), pass through as
+// standalone amber-tinted cards.
+const mergePendingSalesForDisplay = (pendingSales: PendingSale[]): MasterBooking[] => {
+  const allIds = new Set(pendingSales.map(ps => ps.id));
+
+  // Index asphalt children by parentId for quick stamp lookup.
+  const asphaltChildByParentId = new Map<string, PendingSale>();
+  for (const ps of pendingSales) {
+    if (ps.saleType === 'asphalt' && ps.parentId) {
+      asphaltChildByParentId.set(ps.parentId, ps);
+    }
+  }
+
+  const result: MasterBooking[] = [];
+  for (const ps of pendingSales) {
+    if (ps.saleType === 'asphalt') {
+      // Child with a parent in this list → skip; it merges into the parent.
+      if (ps.parentId && allIds.has(ps.parentId)) continue;
+      // Standalone asphalt child (Path 3 deferred or orphan) → render standalone.
+      result.push(convertPendingSaleToBooking(ps));
+    } else {
+      // Driveway parent. Stamp asphalt child fields if one is linked.
+      const booking = convertPendingSaleToBooking(ps);
+      const child = asphaltChildByParentId.get(ps.id);
+      if (child) {
+        (booking as any).asphaltAmount = child.asphaltAmount;
+        (booking as any).upsoldAsphaltAmount = child.upsoldAsphaltAmount;
+        (booking as any).sharedJobKey = child.sharedJobKey;
+        (booking as any).assignedRcSessionId = child.assignedRcSessionId;
+        // saleType stays undefined on parent — LogsheetJobCard's "merged"
+        // visual state triggers when asphaltAmount > 0 AND saleType !== 'asphalt'.
+      }
+      result.push(booking);
+    }
+  }
+  return result;
 };
 
 const RMTeamTab: React.FC<RMTeamTabProps> = ({
@@ -136,6 +222,7 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
   const isTeamSeason = seasonHasTeams(seasonType);
   const seasonConfig = SEASON_CONFIGS[seasonType];
+  const isSealing = seasonType === 'sealing';
 
   const [sortBy, setSortBy] = useState<TeamSortOption>('recent');
 
@@ -152,6 +239,10 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   const [reassignError, setReassignError] = useState<string | null>(null);
   const [reassignManagerId, setReassignManagerId] = useState('');
   const [reassignSuccess, setReassignSuccess] = useState<string | null>(null);
+
+  // ASPHALT UNASSIGN STATE — per-row in-flight tracking + error surface.
+  const [unassigningAsphaltId, setUnassigningAsphaltId] = useState<string | null>(null);
+  const [unassignError, setUnassignError] = useState<string | null>(null);
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -237,6 +328,17 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     setTeamMembers(enriched);
   };
 
+  // TEAM-SEASON DATA LOADER — two-pass to enable cross-cart asphalt awareness.
+  //
+  // PASS 1: parallel fetch of (officeBookings, pendingSales) per cart session.
+  //         Collect all pending sales into a flat array.
+  // PASS 2: for each cart, derive:
+  //   - mergedPendingBookings: parents-with-asphalt-stamped + standalone asphalt children
+  //     (only this cart's own session_id rows; merged via mergePendingSalesForDisplay)
+  //   - asphaltOwnedRows: this cart sold them (own asphalt children, all statuses)
+  //   - asphaltIncomingRows: assigned TO this cart's session from any cart in my team
+  //     (limited to within-this-RM scope; cross-RM assignments are an edge case
+  //      not surfaced here — worker still sees them via their own logsheet feed)
   const loadTeamSeasonData = async (myTeam: Worker[]) => {
     const myTeamIds = new Set(myTeam.map(w => w.contractorId));
     const workerMap = new Map(myTeam.map(w => [w.contractorId, w]));
@@ -246,15 +348,13 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
       return ids.some(id => myTeamIds.has(id));
     });
 
-    const cartDisplays = await Promise.all(
+    // PASS 1: parallel per-cart fetches.
+    const cartFetches = await Promise.all(
       mySessions.map(async (session) => {
         const sessionWorkerIds = (session.teamWorkerIds || [session.workerId]).filter(id => myTeamIds.has(id));
         const teamWorkers = sessionWorkerIds
           .map(id => workerMap.get(id))
           .filter(Boolean) as Worker[];
-
-        const sharedFinancialStore = session.financialStore || [];
-        const stats = session.stats || sessionService.getEmptyStats();
 
         let officeBookings: MasterBooking[] = [];
         let pendingSales: PendingSale[] = [];
@@ -267,68 +367,97 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
           pendingSales = pendingSalesRes;
         }
 
-        const pendingSalesAsBookings = pendingSales.map(convertPendingSaleToBooking);
-        const sharedBookings: MasterBooking[] = [...pendingSalesAsBookings, ...officeBookings];
-
-        const pending = officeBookings.filter(b =>
-          b.Completed !== 'x' &&
-          b.Status !== 'completed' &&
-          b.Status !== 'cancelled' &&
-          b.Status !== 'next_time'
-        );
-
-        const uniqueRoutes = Array.from(new Set(
-          officeBookings
-            .map(b => b['Route Number'])
-            .filter(r => r && r !== 'x' && r.trim() !== '')
-        )) as string[];
-
-        let lastAddr: string | null = null;
-        let lastTimestamp: string | null = null;
-        let lastTimeFormatted: string | null = null;
-
-        if (sharedFinancialStore.length > 0) {
-          const sortedTx = [...sharedFinancialStore].sort((a, b) =>
-            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-          );
-          lastAddr = sortedTx[0].address;
-          lastTimestamp = sortedTx[0].timestamp;
-          lastTimeFormatted = formatTimeShort(sortedTx[0].timestamp);
-        }
-
-        const memberDisplays: WorkerDisplay[] = teamWorkers.map(w => ({
-          ...w,
-          displayBookings: [],
-          financialStore: [],
-          assignedRoutes: uniqueRoutes,
-          lastActiveAddress: null,
-          lastActiveTimestamp: null,
-          lastActiveTime: null,
-          stats: { steps: 0, gross: 0, eq: 0, pending: 0, upsellCount: 0, upsellGross: 0 },
-        }));
-
-        return {
-          sessionId: session.id,
-          teamId: sessionWorkerIds[0] || session.workerId,
-          members: memberDisplays,
-          sharedBookings,
-          sharedFinancialStore,
-          assignedRoutes: uniqueRoutes,
-          lastActiveAddress: lastAddr,
-          lastActiveTimestamp: lastTimestamp,
-          lastActiveTime: lastTimeFormatted,
-          aggregatedStats: {
-            steps: stats.stepCount,
-            gross: stats.upsellGross,
-            eq: stats.totalEQ,
-            pending: pending.length,
-            pendingSaleCount: pendingSales.length,
-            upsellCount: stats.upsellCount,
-            upsellGross: stats.upsellGross,
-          },
-        };
+        return { session, sessionWorkerIds, teamWorkers, officeBookings, pendingSales };
       })
     );
+
+    // Flat union of pending sales across all my carts — used for incoming-asphalt
+    // detection (rows with assignedRcSessionId pointing to another of my cart sessions).
+    const allTeamPendingSales = cartFetches.flatMap(c => c.pendingSales);
+
+    // PASS 2: build CartDisplay using merged + classified asphalt data.
+    const cartDisplays: CartDisplay[] = cartFetches.map(({ session, sessionWorkerIds, teamWorkers, officeBookings, pendingSales }) => {
+      const sharedFinancialStore = session.financialStore || [];
+      const stats = session.stats || sessionService.getEmptyStats();
+
+      // Merge pending sales for display: parents with asphalt stamped, plus
+      // standalone asphalt children. Input is this cart's own session rows.
+      const mergedPendingBookings = mergePendingSalesForDisplay(pendingSales);
+      const sharedBookings: MasterBooking[] = [...mergedPendingBookings, ...officeBookings];
+
+      // ASPHALT CLASSIFICATION
+      const asphaltOwnedRows = pendingSales.filter(ps => ps.saleType === 'asphalt');
+      const asphaltIncomingRows = allTeamPendingSales.filter(ps =>
+        ps.assignedRcSessionId === session.id && ps.saleType === 'asphalt'
+      );
+      const isRcCart = teamWorkers.some(w => isRcWorker(w.teamId));
+
+      const pending = officeBookings.filter(b =>
+        b.Completed !== 'x' &&
+        b.Status !== 'completed' &&
+        b.Status !== 'cancelled' &&
+        b.Status !== 'next_time'
+      );
+
+      const uniqueRoutes = Array.from(new Set(
+        officeBookings
+          .map(b => b['Route Number'])
+          .filter(r => r && r !== 'x' && r.trim() !== '')
+      )) as string[];
+
+      let lastAddr: string | null = null;
+      let lastTimestamp: string | null = null;
+      let lastTimeFormatted: string | null = null;
+
+      if (sharedFinancialStore.length > 0) {
+        const sortedTx = [...sharedFinancialStore].sort((a, b) =>
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        );
+        lastAddr = sortedTx[0].address;
+        lastTimestamp = sortedTx[0].timestamp;
+        lastTimeFormatted = formatTimeShort(sortedTx[0].timestamp);
+      }
+
+      const memberDisplays: WorkerDisplay[] = teamWorkers.map(w => ({
+        ...w,
+        displayBookings: [],
+        financialStore: [],
+        assignedRoutes: uniqueRoutes,
+        lastActiveAddress: null,
+        lastActiveTimestamp: null,
+        lastActiveTime: null,
+        stats: { steps: 0, gross: 0, eq: 0, pending: 0, upsellCount: 0, upsellGross: 0 },
+      }));
+
+      return {
+        sessionId: session.id,
+        teamId: sessionWorkerIds[0] || session.workerId,
+        members: memberDisplays,
+        sharedBookings,
+        sharedFinancialStore,
+        assignedRoutes: uniqueRoutes,
+        lastActiveAddress: lastAddr,
+        lastActiveTimestamp: lastTimestamp,
+        lastActiveTime: lastTimeFormatted,
+        asphaltOwnedRows,
+        asphaltIncomingRows,
+        isRcCart,
+        aggregatedStats: {
+          steps: stats.stepCount,
+          gross: stats.upsellGross,
+          eq: stats.totalEQ,
+          pending: pending.length,
+          // SEMANTIC CHANGE: use MERGED count (parent+child collapses to 1 row),
+          // not raw pendingSales.length. This makes the Bookmark badge match
+          // the actual card count rendered in the expanded view. RMLogbook's
+          // teamPendingSalesCount stat still uses the raw count and may
+          // overcount by the number of merged asphalt children — known gap.
+          pendingSaleCount: mergedPendingBookings.length,
+          upsellCount: stats.upsellCount,
+          upsellGross: stats.upsellGross,
+        },
+      };
+    });
 
     setCarts(cartDisplays);
     setTeamMembers(myTeam.map(w => ({
@@ -470,6 +599,29 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
       ));
     } catch (error) {
       console.error("Failed to toggle upsells:", error);
+    }
+  };
+
+  // ASPHALT UNASSIGN — clears assigned_rc_session_id on the asphalt pending row.
+  // The row returns to the "unassigned" queue (visible in RMAsphaltModal). The
+  // selling cart's driveway transaction (Path 3) or driveway parent row stays
+  // untouched. Math doesn't unwind.
+  const handleUnassignAsphalt = async (asphaltRowId: string, addressLabel: string) => {
+    if (!window.confirm(
+      `Unassign asphalt at ${addressLabel}?\n\nThe assigned RC will no longer see it. ` +
+      `The row returns to the asphalt queue for reassignment. The driveway sale is unaffected.`
+    )) return;
+
+    setUnassigningAsphaltId(asphaltRowId);
+    setUnassignError(null);
+    try {
+      await sessionService.unassignAsphalt(asphaltRowId);
+      handleRefreshData();
+    } catch (err: any) {
+      console.error('Unassign asphalt failed:', err);
+      setUnassignError(err?.message || 'Failed to unassign asphalt. Please try again.');
+    } finally {
+      setUnassigningAsphaltId(null);
     }
   };
 
@@ -758,10 +910,65 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     );
   };
 
+  // RENDER: a single asphalt row inside the "Asphalt Assigned to this Cart"
+  // expanded-view section. Shows address, asphalt $, DEFERRED tag (Path 3),
+  // and an Unassign button wired to handleUnassignAsphalt.
+  const renderIncomingAsphaltRow = (asphalt: PendingSale) => {
+    const isUnassigning = unassigningAsphaltId === asphalt.id;
+    const address = assembleAddressFromPending(asphalt);
+    const isDeferred = typeof asphalt.sharedJobKey === 'string' && asphalt.sharedJobKey.length > 0;
+
+    return (
+      <div
+        key={asphalt.id}
+        className="flex items-center justify-between gap-2 p-2 bg-amber-900/15 border border-amber-700/40 rounded"
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="bg-gray-700 text-gray-300 text-[9px] font-mono px-1.5 py-0.5 rounded border border-gray-600">
+              {asphalt.routeCode || '--'}
+            </span>
+            {isDeferred && (
+              <span className="text-[9px] font-bold bg-amber-900/50 text-amber-300 px-1.5 py-0.5 rounded border border-amber-700">
+                DEFERRED
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1 text-gray-200 text-xs truncate">
+            <MapPin size={10} className="text-gray-500 shrink-0" />
+            <span className="truncate">{address}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-amber-200 font-mono font-bold text-sm flex items-center gap-1">
+            <Shovel size={11} className="text-amber-400" />
+            {formatAsphaltDollars(asphalt.asphaltAmount)}
+          </span>
+          <button
+            onClick={() => handleUnassignAsphalt(asphalt.id, address)}
+            disabled={isUnassigning}
+            title="Unassign — returns this row to the unassigned queue"
+            className="flex items-center gap-1 px-2 py-1 bg-gray-700 hover:bg-red-900/40 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300 hover:text-red-300 border border-gray-600 hover:border-red-700 rounded text-[10px] font-bold transition-colors"
+          >
+            {isUnassigning ? (
+              <Loader size={10} className="animate-spin" />
+            ) : (
+              <Undo2 size={10} />
+            )}
+            Unassign
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const renderCartCard = (cart: CartDisplay) => {
     const isExpanded = expandedCarts.has(cart.sessionId);
     const isSoloCart = cart.members.length === 1;
     const primaryWorker = cart.members[0];
+    // Asphalt counts — both arrays are empty outside sealing.
+    const incomingCount = cart.asphaltIncomingRows.length;
+    const showAsphaltBadge = isSealing && incomingCount > 0;
 
     return (
       <div
@@ -809,6 +1016,18 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                 {cart.assignedRoutes.length > 3 && (
                   <span className="px-1.5 py-0.5 rounded text-[9px] bg-gray-700 text-gray-400">
                     +{cart.assignedRoutes.length - 3}
+                  </span>
+                )}
+                {/* ASPHALT BADGE — sealing only, only when this cart has incoming
+                    asphalt assigned. Amber pill with Shovel makes RC carts easy
+                    to spot in the list. */}
+                {showAsphaltBadge && (
+                  <span
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] bg-amber-900/40 text-amber-300 border border-amber-700 font-bold"
+                    title={`${incomingCount} asphalt ${incomingCount === 1 ? 'row' : 'rows'} assigned to this cart`}
+                  >
+                    <Shovel size={9} />
+                    {incomingCount}
                   </span>
                 )}
               </div>
@@ -898,6 +1117,31 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
 
         {isExpanded && (
           <div className="mt-1 pt-1 border-t border-gray-700 px-2 pb-2">
+            {/* INCOMING ASPHALT SECTION — sealing only, only when present.
+                Above ContractorJobs because RM-visit pattern in sealing is:
+                see badge → expand cart → take asphalt action. */}
+            {isSealing && cart.asphaltIncomingRows.length > 0 && (
+              <div className="mb-3 p-2 bg-amber-900/10 border border-amber-700/30 rounded">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-1.5">
+                    <Shovel size={12} className="text-amber-400" />
+                    <h4 className="text-[11px] font-bold text-amber-300 uppercase tracking-wide">
+                      Asphalt Assigned to this Cart ({cart.asphaltIncomingRows.length})
+                    </h4>
+                  </div>
+                </div>
+                {unassignError && (
+                  <div className="mb-2 p-1.5 bg-red-900/30 border border-red-700 rounded text-[10px] text-red-300 flex items-center gap-1.5">
+                    <AlertCircle size={11} className="shrink-0" />
+                    {unassignError}
+                  </div>
+                )}
+                <div className="space-y-1.5">
+                  {cart.asphaltIncomingRows.map(renderIncomingAsphaltRow)}
+                </div>
+              </div>
+            )}
+
             <ContractorJobs
               bookings={cart.sharedBookings}
               financialStore={cart.sharedFinancialStore}

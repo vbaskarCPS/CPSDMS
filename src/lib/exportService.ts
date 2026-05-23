@@ -253,31 +253,55 @@ function getSessionTransactions(
  *        eligible types upstream.
  * Output: an array of row-shaped objects ready to hand to googleSheetsService.appendLogsheets.
  *
+ * Group composition by mode:
+ *   - completer-with-phantom: 2 txs in group — the completer (real payment_breakdown)
+ *     and the phantom partner (empty payment_breakdown {}).
+ *   - self-both: 1 tx in group with role='self-both'.
+ *   - Path 3 same-day (driveway-deferred today + asphalt-executor-only today):
+ *     2 txs in group, BOTH with real payment_breakdowns.
+ *   - Path 3 cross-day: 1 tx per daily export — driveway-seller alone today,
+ *     asphalt-executor-only alone on a later day. The group on any given day
+ *     contains only one of the two roles.
+ *
  * Algorithm:
  *   1. Group transactions by asphalt_meta.sharedJobKey.
- *      - Scenarios 1 (Cart+RC split): 2 txs in group — the completer (real payment_breakdown)
- *        and the phantom partner (empty payment_breakdown {}).
- *      - Scenarios 2 & 3 (single cart self-both): 1 tx in group.
- *   2. For each group, identify:
- *      - The completer (tx with non-empty payment_breakdown) — owns the real cash.
- *      - The driveway-seller tx (role='driveway-seller' OR 'self-both') — owns the driveway row.
- *      - The asphalt-executor tx (role='asphalt-executor' OR 'self-both') — owns the asphalt row.
- *   3. Pull the three component amounts (driveway, asphalt, upsold) from asphalt_meta
- *      (identical on both txs in a group).
- *   4. Apply Option B proportional cash split: each row's payment_type string reflects
- *      the line-item's share of the completer's collected breakdown.
- *   5. Emit:
- *      - Driveway row IF driveway_amount > 0 (Scenario 3 has no driveway).
- *      - Asphalt row IF (asphalt_amount + upsold_asphalt_amount) > 0.
+ *   2. Identify role-owning txs up front, BEFORE any amount math:
+ *        drivewaySellerTx  = tx with role 'driveway-seller' or 'self-both'
+ *        asphaltExecutorTx = tx with role 'asphalt-executor' or 'self-both'
+ *      In self-both both variables point to the same tx. Either may be undefined
+ *      in cross-day Path 3.
+ *   3. Source line-item amounts from each role's OWN meta (final-wins):
+ *        driveway_amount         from drivewaySellerTx.asphalt_meta
+ *        asphalt_amount + upsold from asphaltExecutorTx.asphalt_meta
+ *      This resolves the documented executor-only meta divergence — if cart entered
+ *      asphalt=$300 and RC corrected to $250 at completion, the asphalt row reflects
+ *      RC's $250.
+ *   4. Pick breakdown sourcing per row by counting txs with non-empty breakdowns:
+ *        ≥ 2 non-empty (Path 3 same-day dual): each row uses its own role-tx's
+ *          payment_breakdown directly. No proportional split.
+ *        exactly 1 (completer-with-phantom OR self-both): existing Option B
+ *          proportional cash split — each row's paymentType string reflects its
+ *          share of the sole completer's collected breakdown.
+ *        0 (defensive): rows still emit; paymentType strings come out empty.
+ *   5. Emit rows conditionally:
+ *        Driveway row IF driveway_amount > 0 AND drivewaySellerTx is present.
+ *        Asphalt row  IF (asphalt_amount + upsold) > 0 AND asphaltExecutorTx is present.
  *
  * Row marking (per locked design):
- *   - Driveway row: PropertyType = original snapshot.serviceType (typically SS or SSP for sealing).
- *   - Asphalt row: PropertyType = "Ramp" (hard override).
+ *   - Driveway row: PropertyType = original snapshot.serviceType (SS or SSP for sealing).
+ *   - Asphalt row:  PropertyType = "Ramp" (hard override).
+ *
+ * Path 3 dual-breakdown worked example (driveway $200, asphalt $300, upsold $150):
+ *   - Cart's tx: role 'driveway-seller', payoutShare $290, breakdown {Cash: $500}
+ *   - RC's tx:   role 'asphalt-executor', payoutShare $360, breakdown {Cash: $150}
+ *   - Driveway row emitted: price $200, paymentType from {Cash: $500} → "Cash"
+ *   - Asphalt row  emitted: price $450 ($300 + $150), paymentType from {Cash: $150} → "Cash"
+ *   - Row prices sum $200 + $450 = $650. Row breakdowns sum $500 + $150 = $650. Reconciles.
  *
  * Defensive behaviour:
- *   - Groups with no sharedJobKey are skipped.
- *   - Groups where neither tx has a non-empty breakdown still emit rows; PaymentType strings
- *     come out empty for those rows (better to surface the work than silently drop it).
+ *   - Groups with no sharedJobKey are skipped (warned).
+ *   - Groups where neither tx has a non-empty breakdown still emit rows; paymentType
+ *     strings come out empty (better to surface the work than silently drop it).
  */
 function buildAsphaltLogsheetRows(
   asphaltTxs: any[],
@@ -302,25 +326,7 @@ function buildAsphaltLogsheetRows(
   const rows: any[] = [];
 
   groups.forEach((group) => {
-    // --- Step 2: identify completer (real breakdown) vs phantom (empty {}) ---
-    const completer = group.find((tx) => {
-      const bd = tx.payment_breakdown;
-      return bd && typeof bd === 'object' && Object.keys(bd).length > 0;
-    }) || group[0];  // fallback if both empty — shouldn't happen but cheap to guard
-
-    const meta = completer.asphalt_meta;
-    if (!meta) return;
-
-    // --- Step 3: extract line-item amounts (all txs in group carry the same meta amounts) ---
-    const drivewayAmount = Number(meta.driveway_amount) || 0;
-    const asphaltCore = Number(meta.asphalt_amount) || 0;
-    const upsold = Number(meta.upsold_asphalt_amount) || 0;
-    const asphaltLineAmount = asphaltCore + upsold;
-    const totalAmount = drivewayAmount + asphaltLineAmount;
-
-    if (totalAmount <= 0) return;  // nothing to emit
-
-    // --- Identify which tx owns each row's contractor ---
+    // --- Step 2: identify role-owning txs up front (before any amount math) ---
     const drivewaySellerTx = group.find((tx) => {
       const role = tx.asphalt_meta?.role;
       return role === 'driveway-seller' || role === 'self-both';
@@ -330,11 +336,24 @@ function buildAsphaltLogsheetRows(
       return role === 'asphalt-executor' || role === 'self-both';
     });
 
-    // --- Step 4: Option B proportional cash split ---
-    // Each line item gets its share of the actual collected breakdown.
-    const fullBreakdown = (completer.payment_breakdown || {}) as Record<string, number>;
-    const drivewayShare = totalAmount > 0 ? drivewayAmount / totalAmount : 0;
-    const asphaltShare  = totalAmount > 0 ? asphaltLineAmount / totalAmount : 0;
+    // --- Step 3: per-role amount sourcing (final-wins) ---
+    // Each row's amount comes from its own role's tx meta. When a role's tx is
+    // absent from this day's data (cross-day Path 3), its amount falls to 0
+    // and the corresponding row is skipped at Step 5.
+    const drivewayAmount = Number(drivewaySellerTx?.asphalt_meta?.driveway_amount) || 0;
+    const asphaltCore = Number(asphaltExecutorTx?.asphalt_meta?.asphalt_amount) || 0;
+    const upsold = Number(asphaltExecutorTx?.asphalt_meta?.upsold_asphalt_amount) || 0;
+    const asphaltLineAmount = asphaltCore + upsold;
+    const totalAmount = drivewayAmount + asphaltLineAmount;
+
+    if (totalAmount <= 0) return;  // nothing to emit
+
+    // --- Step 4: pick breakdown strategy by counting non-empty breakdowns ---
+    const txsWithBreakdown = group.filter((tx) => {
+      const bd = tx.payment_breakdown;
+      return bd && typeof bd === 'object' && Object.keys(bd).length > 0;
+    });
+    const isPath3DualBreakdown = txsWithBreakdown.length >= 2;
 
     const splitBreakdown = (
       bd: Record<string, number>,
@@ -349,21 +368,39 @@ function buildAsphaltLogsheetRows(
       return out;
     };
 
-    const drivewayBreakdown = splitBreakdown(fullBreakdown, drivewayShare);
-    const asphaltBreakdown  = splitBreakdown(fullBreakdown, asphaltShare);
+    let drivewayBreakdown: Record<string, number>;
+    let asphaltBreakdown: Record<string, number>;
 
-    // --- Customer details (identical across both txs in a group; pull from completer) ---
-    const address = completer.customer_snapshot?.address || completer.address || '';
+    if (isPath3DualBreakdown) {
+      // Path 3 same-day: each tx owns its own row's breakdown. No proportional split.
+      drivewayBreakdown = (drivewaySellerTx?.payment_breakdown || {}) as Record<string, number>;
+      asphaltBreakdown  = (asphaltExecutorTx?.payment_breakdown || {}) as Record<string, number>;
+    } else {
+      // completer-with-phantom OR self-both single-tx OR defensive (zero breakdowns):
+      // Option B proportional split from the sole completer (or first tx as fallback).
+      const completer = txsWithBreakdown[0] || group[0];
+      const fullBreakdown = (completer.payment_breakdown || {}) as Record<string, number>;
+      const drivewayShare = totalAmount > 0 ? drivewayAmount / totalAmount : 0;
+      const asphaltShare  = totalAmount > 0 ? asphaltLineAmount / totalAmount : 0;
+      drivewayBreakdown = splitBreakdown(fullBreakdown, drivewayShare);
+      asphaltBreakdown  = splitBreakdown(fullBreakdown, asphaltShare);
+    }
+
+    // --- Customer details ---
+    // Identical across the group in practice (same job). Deterministic preference:
+    // asphalt-executor (most recently written) first, then driveway-seller, then group[0].
+    const detailsTx = asphaltExecutorTx || drivewaySellerTx || group[0];
+    const address = detailsTx.customer_snapshot?.address || detailsTx.address || '';
     const streetParts = address.split(' ');
     const streetNum = streetParts[0] || '';
     const streetName = streetParts.slice(1).join(' ') || '';
-    const firstName = completer.customer_snapshot?.firstName || '';
-    const lastName  = completer.customer_snapshot?.lastName || '';
-    const routeNumber = completer.customer_snapshot?.routeCode || '';
-    const phone = completer.customer_phone || '';
-    const email = completer.customer_email || '';
+    const firstName = detailsTx.customer_snapshot?.firstName || '';
+    const lastName  = detailsTx.customer_snapshot?.lastName || '';
+    const routeNumber = detailsTx.customer_snapshot?.routeCode || '';
+    const phone = detailsTx.customer_phone || '';
+    const email = detailsTx.customer_email || '';
 
-    // --- Step 5a: Driveway row (skipped for Scenario 3 asphalt-only) ---
+    // --- Step 5a: Driveway row (skipped when drivewaySellerTx absent or amount 0) ---
     if (drivewayAmount > 0 && drivewaySellerTx) {
       const drivewayContractorName = getTeamWorkerNames(
         drivewaySellerTx,
@@ -371,8 +408,8 @@ function buildAsphaltLogsheetRows(
         isTeamSeason ? sessionsMap : undefined
       );
       // PropertyType comes from the original booking's serviceType — for sealing
-      // this is SS or SSP per the locked config. Defaulting to 'SS' if missing
-      // is defensive; in practice the snapshot is always populated by the UI.
+      // this is SS or SSP per the locked config. Defaulting to 'SS' is defensive;
+      // in practice the snapshot is always populated by the UI.
       const drivewayPropertyType = drivewaySellerTx.customer_snapshot?.serviceType || 'SS';
       rows.push({
         routeNumber,
@@ -392,7 +429,7 @@ function buildAsphaltLogsheetRows(
       });
     }
 
-    // --- Step 5b: Asphalt row (always when asphalt portion > 0) ---
+    // --- Step 5b: Asphalt row (skipped when asphaltExecutorTx absent or amount 0) ---
     if (asphaltLineAmount > 0 && asphaltExecutorTx) {
       const asphaltContractorName = getTeamWorkerNames(
         asphaltExecutorTx,
@@ -414,7 +451,7 @@ function buildAsphaltLogsheetRows(
         price: asphaltLineAmount,
         paymentType: formatBreakdownString(asphaltBreakdown),
         contractorName: asphaltContractorName,
-        // Asphalt rows carry no service flags — the asphalt work is separate from
+        // Asphalt rows carry no service flags — asphalt work is separate from
         // any Rejuv-style service ticks on the driveway side.
         services: undefined,
       });
@@ -677,8 +714,11 @@ export async function generateSessionExport(): Promise<void> {
  * ASPHALT TWO-ROW LOGSHEETS EMIT (Sealing season only):
  *   Transactions with asphalt_meta are routed through buildAsphaltLogsheetRows,
  *   which groups by sharedJobKey and emits a driveway row + asphalt row per group.
- *   Per Option B: each row's PaymentType is the proportional slice of the actual
- *   collected payment_breakdown. PropertyType is SS/SSP on driveway, "Ramp" on asphalt.
+ *   Breakdown sourcing branches on how many txs in the group carry a real breakdown:
+ *     - completer-with-phantom (1 real, 1 empty): Option B proportional cash split.
+ *     - Path 3 same-day dual (2 real): each row uses its own role-tx's breakdown directly.
+ *     - self-both (1 tx total): Option B proportional split on the sole tx.
+ *   PropertyType is SS/SSP on driveway, "Ramp" on asphalt.
  *   Non-asphalt transactions continue to emit a single row via the existing mapping.
  */
 export async function exportToGoogleSheets(dateTab: string): Promise<{

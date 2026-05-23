@@ -5,28 +5,29 @@ import {
   ArrowLeft, Phone, Mail, X, CheckCircle2, Ban, Lock,
   Loader, CheckCircle, FileText, TrendingUp, DollarSign, GraduationCap, Info, Shovel
 } from 'lucide-react';
-import { sessionService } from '../../lib/sessionService';
+import { sessionService, AsphaltCompletionContext } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
 import { commandCenterService, getTaxRateForRegion, Region } from '../../lib/commandCenterService';
 import { getStorageItem } from '../../lib/localStorage';
-import { 
-  Worker, 
-  MasterBooking, 
-  SessionTransaction, 
+import {
+  Worker,
+  MasterBooking,
+  SessionTransaction,
   SeasonType,
   ServiceFlags,
   SERVICE_FLAG_KEYS,
-  SERVICE_FLAG_LABELS 
+  SERVICE_FLAG_LABELS,
+  RAMP_CREW_TEAM_ID_PATTERN,
 } from '../../types';
 import CreditCardModal from '../../components/CreditCardModal';
 import BamboraLiveModal from '../../components/BamboraLiveModal';
 import EtransferProtocolModal from '../../components/EtransferProtocolModal';
 import AddContractModal from '../../components/AddContractModal';
-import { 
-  formatPhoneNumber, 
+import {
+  formatPhoneNumber,
   normalizeEmail,
-  getPhoneValidationError, 
-  getEmailValidationError 
+  getPhoneValidationError,
+  getEmailValidationError
 } from '../../lib/validationUtils';
 
 // --- HELPER: Generate Valid UUIDs ---
@@ -44,7 +45,7 @@ function generateUUID() {
 function capitalizeWords(value: string): string {
   return value
     .split(' ')
-    .map(word => 
+    .map(word =>
       word
         .split('-')
         .map(part => part.charAt(0).toUpperCase() + part.slice(1))
@@ -53,9 +54,17 @@ function capitalizeWords(value: string): string {
     .join(' ');
 }
 
+// --- HELPER: RC detection (local, case-sensitive match on Worker.teamId) ---
+// Matches 'RC', 'RC1', 'RC2', 'RC10', ... case-sensitively. Uses the regex
+// from types/index.ts so we don't rely on a separate service import.
+function isRC(teamId: string | undefined | null): boolean {
+  if (!teamId) return false;
+  return RAMP_CREW_TEAM_ID_PATTERN.test(teamId);
+}
+
 // --- HELPER: Get the property type button list for a given season ---
 // Aeration & Lawn Rejuv use FP/FO/BO. Sealing uses SS/SSP (Ramp is in the enum
-// but reserved for a separate future plan).
+// but reserved for the asphalt add-on workflow's child row display on export).
 // TODO: When Central 'cleaning' season ships, add its property types here.
 function getPropertyTypesForSeason(seasonType: SeasonType): string[] {
   if (seasonType === 'sealing') return ['SS', 'SSP'];
@@ -87,26 +96,11 @@ function buildSeasonId(region: Region, seasonType: SeasonType): string {
 
 // --- SERVICE TOGGLE COLORS (Lawn Rejuv) ---
 const SERVICE_TOGGLE_COLORS: Record<keyof ServiceFlags, { active: string; inactive: string }> = {
-  aeration: { 
-    active: 'bg-blue-600 border-blue-500 text-white', 
-    inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-blue-500' 
-  },
-  dethatch: { 
-    active: 'bg-orange-600 border-orange-500 text-white', 
-    inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-orange-500' 
-  },
-  fertilizer: { 
-    active: 'bg-green-600 border-green-500 text-white', 
-    inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-green-500' 
-  },
-  seed: { 
-    active: 'bg-yellow-600 border-yellow-500 text-white', 
-    inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-yellow-500' 
-  },
-  lime: { 
-    active: 'bg-purple-600 border-purple-500 text-white', 
-    inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-purple-500' 
-  },
+  aeration:   { active: 'bg-blue-600 border-blue-500 text-white',     inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-blue-500' },
+  dethatch:   { active: 'bg-orange-600 border-orange-500 text-white', inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-orange-500' },
+  fertilizer: { active: 'bg-green-600 border-green-500 text-white',   inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-green-500' },
+  seed:       { active: 'bg-yellow-600 border-yellow-500 text-white', inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-yellow-500' },
+  lime:       { active: 'bg-purple-600 border-purple-500 text-white', inactive: 'bg-gray-700 border-gray-600 text-gray-400 hover:border-purple-500' },
 };
 
 // --- SERVICE TOGGLES COMPONENT (Lawn Rejuv only) ---
@@ -117,10 +111,7 @@ const ServiceToggles: React.FC<{
 }> = ({ services, onChange, disabled = false }) => {
   const toggleService = (key: keyof ServiceFlags) => {
     if (disabled) return;
-    onChange({
-      ...services,
-      [key]: !services[key],
-    });
+    onChange({ ...services, [key]: !services[key] });
   };
 
   return (
@@ -136,9 +127,7 @@ const ServiceToggles: React.FC<{
               type="button"
               onClick={() => toggleService(key)}
               disabled={disabled}
-              className={`px-3 py-1.5 rounded border-2 font-bold text-xs transition-all ${
-                isActive ? colors.active : colors.inactive
-              } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+              className={`px-3 py-1.5 rounded border-2 font-bold text-xs transition-all ${isActive ? colors.active : colors.inactive} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               {SERVICE_FLAG_LABELS[key].short} - {SERVICE_FLAG_LABELS[key].full}
             </button>
@@ -186,11 +175,7 @@ const JobDetail: React.FC = () => {
 
   // Service Flags (Lawn Rejuv only)
   const [services, setServices] = useState<ServiceFlags>({
-    aeration: false,
-    dethatch: false,
-    fertilizer: false,
-    seed: false,
-    lime: false,
+    aeration: false, dethatch: false, fertilizer: false, seed: false, lime: false,
   });
 
   // Payment - Default to empty string to force selection
@@ -218,6 +203,25 @@ const JobDetail: React.FC = () => {
   // Upsells enabled state
   const [upsellsEnabled, setUpsellsEnabled] = useState(true);
 
+  // --- ASPHALT STATE (Sealing season only) ---
+  // Worker-toggled. When on, an asphalt component is being sold alongside the
+  // office booking's driveway portion. handleSave routes through
+  // sessionService.completeJob with an AsphaltCompletionContext.
+  //
+  // JobDetail only ever resolves to ONE of two modes:
+  //   - isRampCrew=true  → 'self-both'         (RC sells + executes everything)
+  //   - isRampCrew=false → 'driveway-deferred' (cart writes driveway tx; asphalt
+  //                                              child pending row created for RM queue)
+  // The other two modes ('completer-with-phantom' / 'asphalt-executor-only')
+  // arise from resuming pending sales, which JobDetail doesn't do.
+  const [asphaltEnabled, setAsphaltEnabled] = useState(false);
+  const [asphaltAmount, setAsphaltAmount] = useState('');
+  const [upsoldAsphaltAmount, setUpsoldAsphaltAmount] = useState('');
+
+  // RC detection — Worker.teamId matches /^RC\d*$/ case-sensitively.
+  // Drives Upsold field visibility and mode resolution.
+  const [isRampCrew, setIsRampCrew] = useState(false);
+
   // Validation Errors
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -225,83 +229,78 @@ const JobDetail: React.FC = () => {
   const [splitEtransferEmailError, setSplitEtransferEmailError] = useState<string | null>(null);
   const [paymentMethodError, setPaymentMethodError] = useState<string | null>(null);
 
-  // --- COMPUTED: Is Split Payment Mode ---
+  // --- COMPUTED FLAGS ---
   const isSplitPayment = paymentMethod === 'Split Payment';
 
-  // --- COMPUTED: Split Payment Total ---
-  const splitTotal = 
-    (parseFloat(splitCash) || 0) + 
-    (parseFloat(splitCheque) || 0) + 
-    (parseFloat(splitEtransfer) || 0) + 
+  const splitTotal =
+    (parseFloat(splitCash) || 0) +
+    (parseFloat(splitCheque) || 0) +
+    (parseFloat(splitEtransfer) || 0) +
     (parseFloat(splitCreditCard) || 0);
 
-  // --- COMPUTED: Split CC needs processing ---
   const splitCCAmount = parseFloat(splitCreditCard) || 0;
   const splitCCNeedsProcessing = splitCCAmount > 0 && !isCreditPaid;
 
-  // --- COMPUTED: Can show upgrade button (West only, Aeration season only) ---
   const canShowUpgradeButton = region === 'West' && seasonType === 'aeration';
-
-  // --- COMPUTED: Property type list for the current season ---
   const propertyTypeOptions = getPropertyTypesForSeason(seasonType);
 
+  const isSealingSeason = seasonType === 'sealing' && !isTrainingMode;
+
+  // Prepaid detection — used to block asphalt toggle (prepaid driveway + on-site
+  // cash asphalt would need a mixed payment breakdown that the current single-
+  // method form doesn't cleanly support; block it rather than ship half-working math).
+  const isPrepaid = originalJob?.Prepaid === 'x';
+
+  // Already-upgrade detection — Aeration West only (SP/RJ/GF). Doesn't intersect
+  // with sealing, but included in the asphalt toggle's gating for symmetry.
+  const isAlreadyUpgrade = (() => {
+    const priceStr = String(originalJob?.Price || '').toUpperCase();
+    return priceStr.startsWith('SP') || priceStr.startsWith('RJ') || priceStr.startsWith('GF');
+  })();
+
+  // The asphalt toggle is visible only when ALL the following hold:
+  //   - sealing season
+  //   - not training mode
+  //   - job is not already completed (would be read-only)
+  //   - job is not already an upgrade
+  // (When isPrepaid, the toggle is still SHOWN but DISABLED with an explanation.)
+  const canShowAsphaltToggle = isSealingSeason && !isReadOnly && !isAlreadyUpgrade;
+  const isAsphaltToggleDisabled = isPrepaid;
+  const canShowUpsoldField = asphaltEnabled && isRampCrew;
+
   // --- COMPUTED: Get customer address for E-Transfer protocol ---
-  const getCustomerAddress = (): string => {
-    return `${houseNumber} ${streetName}`.trim();
-  };
+  const getCustomerAddress = (): string => `${houseNumber} ${streetName}`.trim();
 
   // --- HANDLERS FOR NAME FIELDS ---
-  const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFirstName(capitalizeWords(e.target.value));
-  };
-
-  const handleLastNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setLastName(capitalizeWords(e.target.value));
-  };
+  const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => setFirstName(capitalizeWords(e.target.value));
+  const handleLastNameChange  = (e: React.ChangeEvent<HTMLInputElement>) => setLastName(capitalizeWords(e.target.value));
 
   // --- HANDLERS FOR PHONE & EMAIL ---
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const formatted = formatPhoneNumber(e.target.value);
-    setPhone(formatted);
+    setPhone(formatPhoneNumber(e.target.value));
     setPhoneError(null);
   };
-
   const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setEmail(e.target.value);
     setEmailError(null);
   };
-
-  const handleEmailBlur = () => {
-    if (email) setEmail(normalizeEmail(email));
-  };
-
+  const handleEmailBlur = () => { if (email) setEmail(normalizeEmail(email)); };
   const handleEtransferEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setEtransferEmail(e.target.value);
     setEtransferEmailError(null);
   };
+  const handleEtransferEmailBlur = () => { if (etransferEmail) setEtransferEmail(normalizeEmail(etransferEmail)); };
 
-  const handleEtransferEmailBlur = () => {
-    if (etransferEmail) setEtransferEmail(normalizeEmail(etransferEmail));
-  };
-
-  // Split E-Transfer Email handlers
   const handleSplitEtransferEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSplitEtransferEmail(e.target.value);
     setSplitEtransferEmailError(null);
   };
+  const handleSplitEtransferEmailBlur = () => { if (splitEtransferEmail) setSplitEtransferEmail(normalizeEmail(splitEtransferEmail)); };
 
-  const handleSplitEtransferEmailBlur = () => {
-    if (splitEtransferEmail) setSplitEtransferEmail(normalizeEmail(splitEtransferEmail));
-  };
-
-  // Handle split e-transfer amount blur - show protocol if amount > 0
   const handleSplitEtransferAmountBlur = () => {
     const amount = parseFloat(splitEtransfer) || 0;
     if (amount > 0) {
-      // Auto-populate email if empty
-      if (!splitEtransferEmail && email) {
-        setSplitEtransferEmail(email);
-      }
+      if (!splitEtransferEmail && email) setSplitEtransferEmail(email);
       setShowEtransferProtocol(true);
     }
   };
@@ -311,33 +310,51 @@ const JobDetail: React.FC = () => {
     const value = e.target.value;
     setPaymentMethod(value);
     setPaymentMethodError(null);
-    
-    // Reset split fields when changing payment method
+
     if (value !== 'Split Payment') {
-      setSplitCash('');
-      setSplitCheque('');
-      setSplitEtransfer('');
-      setSplitCreditCard('');
-      setSplitEtransferEmail('');
-      setSplitChequeNumber('');
+      setSplitCash(''); setSplitCheque(''); setSplitEtransfer(''); setSplitCreditCard('');
+      setSplitEtransferEmail(''); setSplitChequeNumber('');
     }
-    
-    // Reset CC data when changing away from CC or Split
+
     if (value !== 'Credit Card' && value !== 'Split Payment') {
       setIsCreditPaid(false);
       setCcData(null);
     }
-    
+
     if (value === 'Credit Card') setShowCreditModal(true);
 
-    // Show E-Transfer protocol when E-Transfer is selected
     if (value === 'E-Transfer') {
-      // Auto-populate email if empty
-      if (!etransferEmail && email) {
-        setEtransferEmail(email);
-      }
+      if (!etransferEmail && email) setEtransferEmail(email);
       setShowEtransferProtocol(true);
     }
+  };
+
+  // --- ASPHALT TOGGLE HANDLER ---
+  // Off-state clears amounts so a non-submitted toggle-on→off cycle doesn't
+  // leak stale values. On-state leaves them alone.
+  const handleAsphaltToggleChange = (next: boolean) => {
+    if (isAsphaltToggleDisabled) return;
+    setAsphaltEnabled(next);
+    if (!next) {
+      setAsphaltAmount('');
+      setUpsoldAsphaltAmount('');
+    }
+  };
+
+  // --- ASPHALT TOTAL HELPER ---
+  // Computes the customer-facing collected total when asphalt is on.
+  // Used for the "Total Collected" display in the asphalt section and (in
+  // non-split mode) as transactionPrice on the tx.
+  //
+  // For JobDetail (no asphalt-executor-only mode):
+  //   self-both (RC):              driveway + asphalt + upsold
+  //   driveway-deferred (non-RC):  driveway + asphalt   (no upsold — RC-only)
+  const computeAsphaltTotalCollected = (): number => {
+    if (!asphaltEnabled) return 0;
+    const D = parseFloat(price.toString().replace(/[^0-9.]/g, '')) || 0;
+    const A = parseFloat(asphaltAmount) || 0;
+    const U = isRampCrew ? (parseFloat(upsoldAsphaltAmount) || 0) : 0;
+    return Math.round((D + A + U) * 100) / 100;
   };
 
   // --- INITIALIZATION ---
@@ -366,7 +383,7 @@ const JobDetail: React.FC = () => {
           setRegion(cc.region);
           setTaxRate(getTaxRateForRegion(cc.region));
         }
-        
+
         // Get current season type
         try {
           const currentSeasonType = await sessionService.getSessionSeasonType();
@@ -382,12 +399,14 @@ const JobDetail: React.FC = () => {
         } catch (err) {
           console.warn('Could not get live card status, defaulting to false');
         }
+
+        // RC detection — case-sensitive teamId match. Never RC in training mode.
+        setIsRampCrew(isRC(w.teamId));
       }
 
       const decodedId = decodeURIComponent(jobId);
 
       try {
-        // Use appropriate service
         const service = trainingMode ? trainingService : sessionService;
         const allJobs = await service.getWorkerAssignments(w.contractorId);
         const foundJob = allJobs.find((j) => j['Booking ID'] === decodedId);
@@ -400,9 +419,9 @@ const JobDetail: React.FC = () => {
             ? 'aeration'
             : (await sessionService.getSessionSeasonType().catch(() => 'aeration')) as SeasonType;
           loadFormData(foundJob, seasonForLoad);
-          
+
           // Fetch upsellsEnabled status
-          const upsellStatus = trainingMode 
+          const upsellStatus = trainingMode
             ? await trainingService.getWorkerUpsellsEnabled(w.contractorId)
             : await sessionService.getWorkerUpsellsEnabled(w.contractorId);
           setUpsellsEnabled(upsellStatus);
@@ -446,14 +465,14 @@ const JobDetail: React.FC = () => {
     setRouteNumber(job['Route Number'] || '');
     setOfficeNotes(job['Log Sheet Notes'] || '');
     setPrice(job.Price || '0.00');
-    
+
     // Set payment method: Prepaid if prepaid, otherwise blank to force selection
     if (job.Prepaid === 'x') {
       setPaymentMethod('Prepaid');
     } else {
       setPaymentMethod('');
     }
-    
+
     // Property type — default depends on season (Sealing → 'SS', else → 'FP')
     setPropertyType(job['FO/BO/FP'] || getDefaultPropertyTypeForSeason(currentSeasonType));
 
@@ -468,22 +487,14 @@ const JobDetail: React.FC = () => {
     if ((job as any).etransferEmail) setEtransferEmail(normalizeEmail((job as any).etransferEmail));
   };
 
-  const isPrepaid = originalJob?.Prepaid === 'x';
-  
-  // Check if job is already an upgrade from the office (price starts with SP, RJ, or GF)
-  const isAlreadyUpgrade = (() => {
-    const priceStr = String(originalJob?.Price || '').toUpperCase();
-    return priceStr.startsWith('SP') || priceStr.startsWith('RJ') || priceStr.startsWith('GF');
-  })();
-
   // Determine if upgrade button should be enabled (West only, Aeration season, with other conditions)
-  const canUpgrade = !isReadOnly && 
-                     !isAlreadyUpgrade && 
+  const canUpgrade = !isReadOnly &&
+                     !isAlreadyUpgrade &&
                      upsellsEnabled &&
                      canShowUpgradeButton &&
-                     firstName.trim() !== '' && 
-                     lastName.trim() !== '' && 
-                     houseNumber.trim() !== '' && 
+                     firstName.trim() !== '' &&
+                     lastName.trim() !== '' &&
+                     houseNumber.trim() !== '' &&
                      streetName.trim() !== '';
 
   const handleTaxClick = () => {
@@ -495,30 +506,87 @@ const JobDetail: React.FC = () => {
     setPrice(total.toFixed(2));
   };
 
+  // --- RESOLVE ASPHALT COMPLETION CONTEXT ---
+  // JobDetail's mode resolver — only TWO cases (vs. NewJob's eight, since there
+  // is no resume path here):
+  //
+  //   Case A: RC + asphalt          → self-both
+  //   Case B: Non-RC + asphalt      → driveway-deferred (creates asphalt child
+  //                                                       pending row for the RM queue)
+  //
+  // Returns undefined when asphalt is off (so completeJob runs through its
+  // normal path). Throws on invalid inputs with user-facing messages.
+  const resolveAsphaltContext = (currentSessionId: string, drivewayAmt: number): AsphaltCompletionContext | undefined => {
+    if (!asphaltEnabled) return undefined;
+    if (!worker || !originalJob) throw new Error('No worker/job context.');
+
+    const asphaltAmt = Math.round((parseFloat(asphaltAmount) || 0) * 100) / 100;
+    const upsoldAmt = isRampCrew
+      ? Math.round((parseFloat(upsoldAsphaltAmount) || 0) * 100) / 100
+      : 0;
+
+    if (asphaltAmt <= 0) {
+      throw new Error('Asphalt amount must be greater than zero.');
+    }
+
+    // Case A — RC fires self-both. Single tx covers everything.
+    if (isRampCrew) {
+      return {
+        mode: 'self-both',
+        completerRole: 'self-both',
+        drivewayAmount: drivewayAmt,
+        asphaltAmount: asphaltAmt,
+        upsoldAmount: upsoldAmt,
+      };
+    }
+
+    // Case B — Non-RC fires driveway-deferred. Cart writes the driveway tx; an
+    // asphalt child pending row is created atomically with sharedJobKey set on
+    // the cart's tx + the child. RC picks it up later via NewJob's
+    // asphalt-executor-only mode.
+    //
+    // Office notes flow through to the child's notes so the RC sees context
+    // when they pick up the asphalt later.
+    return {
+      mode: 'driveway-deferred',
+      completerRole: 'driveway-seller',
+      drivewayAmount: drivewayAmt,
+      asphaltAmount: asphaltAmt,
+      upsoldAmount: 0,
+      childPending: {
+        sessionId: currentSessionId,
+        workerId: worker.contractorId,
+        routeCode: routeNumber || undefined,
+        houseNumber: houseNumber.trim() || undefined,
+        streetName: streetName.trim() || undefined,
+        propertyType: propertyType || undefined,
+        notes: officeNotes || undefined,
+      },
+    };
+  };
+
   const handleSave = async () => {
     if (!worker || !originalJob) return;
-    
+
     if (saving) return;
 
     // --- VALIDATION ---
     const pError = getPhoneValidationError(phone);
     const eError = getEmailValidationError(email);
-    
+
     let etError: string | null = null;
     let splitEtError: string | null = null;
-    
+
     if (isSplitPayment) {
-      // Validate split e-transfer email if split e-transfer amount > 0
       if ((parseFloat(splitEtransfer) || 0) > 0) {
         splitEtError = getEmailValidationError(splitEtransferEmail);
       }
     } else {
       etError = paymentMethod === 'E-Transfer' ? getEmailValidationError(etransferEmail) : null;
     }
-    
+
     const pmError = !isPrepaid && !paymentMethod ? 'Please select a payment method' : null;
 
-    // Split payment specific validation
     if (isSplitPayment && splitTotal <= 0) {
       setPhoneError(pError);
       setEmailError(eError);
@@ -526,11 +594,25 @@ const JobDetail: React.FC = () => {
       return;
     }
 
-    // Lawn Rejuv: Validate at least one service is selected
     if (seasonType === 'lawn_rejuv') {
       const hasService = SERVICE_FLAG_KEYS.some(k => services[k]);
       if (!hasService) {
         alert('Please select at least one service');
+        return;
+      }
+    }
+
+    // Asphalt validation — amount must be > 0 when toggle is on.
+    if (asphaltEnabled) {
+      const asphaltVal = parseFloat(asphaltAmount) || 0;
+      if (asphaltVal <= 0) {
+        alert('Please enter an asphalt amount greater than zero.');
+        return;
+      }
+      // Defensive: shouldn't be reachable since the toggle is disabled on
+      // prepaid bookings, but block here too in case the worker forces it.
+      if (isPrepaid) {
+        alert('Asphalt cannot be added to a prepaid booking. Please contact your manager.');
         return;
       }
     }
@@ -547,35 +629,78 @@ const JobDetail: React.FC = () => {
     setSaving(true);
 
     try {
-      // Determine final price and payment info based on mode
+      // Determine driveway price (the office's nominal $ for the driveway portion).
+      // This goes into the asphalt context as drivewayAmount and feeds the
+      // transaction.price calculation.
+      let drivewayPriceVal: number;
+      let rawPrice: string;
+
+      rawPrice = (price || '').toString().trim().toUpperCase();
+      drivewayPriceVal = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
+
+      // Map office flat codes to their dollar values (Aeration/Rejuv codes only;
+      // Sealing has no office flats so this is a no-op for asphalt jobs).
+      if (rawPrice.startsWith('RJ') || rawPrice.startsWith('SP')) {
+        drivewayPriceVal = 52.5;
+      } else if (rawPrice.startsWith('FSL')) {
+        drivewayPriceVal = 157.5;
+      }
+
+      // --- ASPHALT MODE RESOLUTION ---
+      // Resolve the completion context BEFORE assembling the transaction so we
+      // know how to size price and breakdown. Returns undefined when asphalt
+      // is off (so completeJob runs its normal path).
+      let asphaltContext: AsphaltCompletionContext | undefined;
+
+      // Resolve the active session id first (needed by driveway-deferred mode
+      // to attach the new child pending row to the right cart).
+      const service = isTrainingMode ? trainingService : sessionService;
+      let activeSessionForAsphalt = await service.getActiveLogsheetSession(worker.contractorId);
+      if (!activeSessionForAsphalt) {
+        activeSessionForAsphalt = await service.startLogsheetSession(worker.contractorId);
+      }
+
+      try {
+        asphaltContext = resolveAsphaltContext(activeSessionForAsphalt.id, drivewayPriceVal);
+      } catch (resolveErr: any) {
+        alert(resolveErr?.message || 'Could not determine asphalt mode.');
+        setSaving(false);
+        return;
+      }
+
+      // Final price and payment info.
       let priceVal: number;
       let finalPaymentMethod: string;
       let paymentBreakdown: Record<string, number> | undefined;
-      let rawPrice: string;
 
       if (isSplitPayment) {
         priceVal = Math.round(splitTotal * 100) / 100;
         finalPaymentMethod = 'Split';
         rawPrice = priceVal.toFixed(2);
-        
-        // Build breakdown with only non-zero values
+
         paymentBreakdown = {};
         if ((parseFloat(splitCash) || 0) > 0) paymentBreakdown['Cash'] = parseFloat(splitCash);
         if ((parseFloat(splitCheque) || 0) > 0) paymentBreakdown['Cheque'] = parseFloat(splitCheque);
         if ((parseFloat(splitEtransfer) || 0) > 0) paymentBreakdown['E-Transfer'] = parseFloat(splitEtransfer);
         if ((parseFloat(splitCreditCard) || 0) > 0) paymentBreakdown['Credit Card'] = parseFloat(splitCreditCard);
       } else {
-        rawPrice = (price || '').toString().trim().toUpperCase();
-        priceVal = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
-
-        // Map office flat codes to their dollar values
-        if (rawPrice.startsWith('RJ') || rawPrice.startsWith('SP')) {
-          priceVal = 52.5;
-        } else if (rawPrice.startsWith('FSL')) {
-          priceVal = 157.5;
+        // Non-split. With asphalt on, price is the total collected (driveway +
+        // asphalt + upsold). Without asphalt, price is the office's $ value.
+        if (asphaltContext) {
+          priceVal = computeAsphaltTotalCollected();
+          rawPrice = priceVal.toFixed(2);
+        } else {
+          priceVal = drivewayPriceVal;
         }
-        
+
         finalPaymentMethod = isPrepaid ? 'Prepaid' : paymentMethod;
+
+        // For asphalt completions, materialise paymentBreakdown explicitly so
+        // exportService's Path 3 dual-breakdown branch reliably uses it.
+        // Single-method case → one entry: { [paymentMethod]: total }.
+        if (asphaltContext) {
+          paymentBreakdown = { [finalPaymentMethod]: priceVal };
+        }
       }
 
       const fullAddress = `${houseNumber} ${streetName}`.trim();
@@ -601,19 +726,19 @@ const JobDetail: React.FC = () => {
         isPaid: finalPaymentMethod !== 'Billed',
         paymentMethod: finalPaymentMethod,
         paymentBreakdown: paymentBreakdown,
-        
+
         invoiceNumber: paymentMethod === 'Billed' ? invoiceNumber : undefined,
-        
+
         // For regular E-Transfer or Split with E-Transfer
-        etransferEmail: isSplitPayment 
+        etransferEmail: isSplitPayment
           ? ((parseFloat(splitEtransfer) || 0) > 0 ? splitEtransferEmail : undefined)
           : (paymentMethod === 'E-Transfer' ? etransferEmail : undefined),
-        
+
         // For regular Cheque or Split with Cheque
         chequeNumber: isSplitPayment
           ? ((parseFloat(splitCheque) || 0) > 0 ? splitChequeNumber : undefined)
           : (paymentMethod === 'Cheque' ? chequeNumber : undefined),
-        
+
         ccFullNumber: ccData?.number,
         ccExpiry: ccData?.expiry,
         ccCVC: ccData?.cvc,
@@ -623,29 +748,33 @@ const JobDetail: React.FC = () => {
         seasonId: buildSeasonId(region, seasonType),
         isWestSplit: false,
         serviceType: propertyType as any,
-        
+
         // Include services for Lawn Rejuv season
         services: seasonType === 'lawn_rejuv' ? services : undefined,
       } as any;
 
-      // Use appropriate service
-      const service = isTrainingMode ? trainingService : sessionService;
-      
-      await service.completeJob(
-        tx,
-        originalJob['Booking ID'],
-        worker.contractorId
-      );
+      // ASPHALT BRANCH: when asphaltContext is set, completeJob delegates to
+      // completeAsphaltJob, which writes the cart's tx + (for driveway-deferred)
+      // creates the asphalt child pending row atomically. trainingService doesn't
+      // support asphalt — but training is always Aeration, so asphaltContext will
+      // always be undefined in training and we route through the legacy call.
+      if (isTrainingMode) {
+        await service.completeJob(tx, originalJob['Booking ID'], worker.contractorId);
+      } else {
+        await sessionService.completeJob(
+          tx,
+          originalJob['Booking ID'],
+          worker.contractorId,
+          undefined,         // teamWorkerIds — unchanged
+          undefined,         // pendingSaleId — not applicable (JobDetail handles office bookings, not pending sales)
+          asphaltContext,    // 2-case asphalt union (or undefined for non-asphalt completion)
+        );
+      }
 
       const session = await service.getActiveLogsheetSession(worker.contractorId);
       if (session) {
-        const newStats = service.recalculateStats(
-          session.financialStore,
-          taxRate
-        );
-        await service.updateLogsheetSession(session.id, {
-          stats: newStats,
-        });
+        const newStats = service.recalculateStats(session.financialStore, taxRate);
+        await service.updateLogsheetSession(session.id, { stats: newStats });
       }
 
       navigate('/logsheet');
@@ -658,7 +787,7 @@ const JobDetail: React.FC = () => {
 
   const handleCancel = async (status: 'next_time' | 'cancelled') => {
     if (!originalJob) return;
-    
+
     setLoading(true);
     try {
       const service = isTrainingMode ? trainingService : sessionService;
@@ -696,13 +825,13 @@ const JobDetail: React.FC = () => {
   return (
     <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4 animate-fade-in">
       <div className="bg-gray-800 rounded-lg w-full max-w-3xl max-h-[95vh] flex flex-col border border-gray-700 shadow-2xl">
-        
+
         {/* HEADER */}
         <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-900/50 rounded-t-lg flex-shrink-0">
           <div className="flex items-center gap-3">
               <button onClick={() => navigate('/logsheet')} className="p-1 hover:bg-gray-700 rounded text-gray-400" disabled={saving}><ArrowLeft size={20} /></button>
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <h2 className="text-xl font-bold text-white">Job Details</h2>
                   {isTrainingMode && (
                     <span className="bg-yellow-900/30 text-yellow-400 text-[10px] px-1.5 py-0.5 rounded border border-yellow-700 flex items-center gap-1">
@@ -719,6 +848,12 @@ const JobDetail: React.FC = () => {
                   {seasonType === 'sealing' && (
                     <span className="bg-slate-800 text-slate-300 text-[10px] px-1.5 py-0.5 rounded border border-slate-600 flex items-center gap-1">
                       <Shovel size={10}/> SEALING
+                    </span>
+                  )}
+                  {/* RC pill — sealing only, non-training. Drives Upsold field + self-both mode. */}
+                  {isRampCrew && isSealingSeason && (
+                    <span className="bg-amber-900/30 text-amber-300 text-[10px] px-1.5 py-0.5 rounded border border-amber-700">
+                      RAMP CREW
                     </span>
                   )}
                 </div>
@@ -751,10 +886,10 @@ const JobDetail: React.FC = () => {
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Phone</label>
                         <div className="relative">
                           <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
-                          <input 
-                            value={phone} 
+                          <input
+                            value={phone}
                             onChange={handlePhoneChange}
-                            disabled={isReadOnly} 
+                            disabled={isReadOnly}
                             placeholder="000 000 0000"
                             maxLength={12}
                             className={`w-full bg-gray-800 border rounded p-2 pl-9 text-white ${phoneError ? 'border-red-500' : 'border-gray-700'}`}
@@ -766,12 +901,12 @@ const JobDetail: React.FC = () => {
                         <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Email</label>
                         <div className="relative">
                           <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={14}/>
-                          <input 
+                          <input
                             type="email"
-                            value={email} 
+                            value={email}
                             onChange={handleEmailChange}
                             onBlur={handleEmailBlur}
-                            disabled={isReadOnly} 
+                            disabled={isReadOnly}
                             placeholder="client@example.com"
                             className={`w-full bg-gray-800 border rounded p-2 pl-9 text-white ${emailError ? 'border-red-500' : 'border-gray-700'}`}
                           />
@@ -786,9 +921,9 @@ const JobDetail: React.FC = () => {
            {seasonType === 'lawn_rejuv' && (
              <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-700/50">
                <h3 className="text-sm font-bold text-gray-300 uppercase mb-3">Services</h3>
-               <ServiceToggles 
-                 services={services} 
-                 onChange={setServices} 
+               <ServiceToggles
+                 services={services}
+                 onChange={setServices}
                  disabled={isReadOnly}
                />
              </div>
@@ -804,13 +939,15 @@ const JobDetail: React.FC = () => {
                </div>
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Total Amount ($)</label>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">
+                        {asphaltEnabled ? 'Driveway Amount ($)' : 'Total Amount ($)'}
+                      </label>
                       <div className="flex gap-2">
-                          <input 
-                            type="text" 
-                            value={isSplitPayment ? splitTotal.toFixed(2) : price} 
-                            onChange={e => setPrice(e.target.value)} 
-                            className={`flex-grow bg-gray-800 border border-gray-700 rounded p-2 text-xl font-mono font-bold text-green-400 outline-none ${(isPrepaid || isReadOnly || isSplitPayment) ? 'cursor-not-allowed opacity-50' : ''}`} 
+                          <input
+                            type="text"
+                            value={isSplitPayment ? splitTotal.toFixed(2) : price}
+                            onChange={e => setPrice(e.target.value)}
+                            className={`flex-grow bg-gray-800 border border-gray-700 rounded p-2 text-xl font-mono font-bold text-green-400 outline-none ${(isPrepaid || isReadOnly || isSplitPayment) ? 'cursor-not-allowed opacity-50' : ''}`}
                             disabled={isPrepaid || isReadOnly || isSplitPayment}
                           />
                           {!isPrepaid && !isReadOnly && !isSplitPayment && <button type="button" onClick={handleTaxClick} className="px-3 bg-gray-700 text-gray-300 rounded border border-gray-600 hover:bg-gray-600 font-bold text-xs">+ Tax</button>}
@@ -828,6 +965,99 @@ const JobDetail: React.FC = () => {
                </div>
            </div>
 
+           {/* ASPHALT SECTION (Sealing only) — toggle + amount + RC-only upsold.
+               Hidden outside sealing, in training mode, when read-only, or when
+               the booking is already an upgrade. Toggle is DISABLED (visible) on
+               prepaid bookings with an explanatory tooltip. */}
+           {canShowAsphaltToggle && (
+             <div className="bg-gray-900/30 p-4 rounded-lg border border-slate-700/50">
+               <div className="flex items-center justify-between mb-3">
+                 <div className="flex items-center gap-2">
+                   <Shovel size={16} className="text-slate-300" />
+                   <h3 className="text-sm font-bold text-gray-300 uppercase">Asphalt Add-On</h3>
+                   {isAsphaltToggleDisabled && (
+                     <span className="text-[10px] text-amber-400 font-bold" title="Asphalt cannot be added to a prepaid booking">
+                       N/A — PREPAID
+                     </span>
+                   )}
+                 </div>
+                 <label className={`relative inline-flex items-center ${isAsphaltToggleDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+                   <input
+                     type="checkbox"
+                     checked={asphaltEnabled}
+                     onChange={(e) => handleAsphaltToggleChange(e.target.checked)}
+                     disabled={isAsphaltToggleDisabled}
+                     className="sr-only peer"
+                   />
+                   <div className={`w-11 h-6 bg-gray-700 rounded-full peer-checked:bg-slate-500 transition-colors relative ${isAsphaltToggleDisabled ? 'opacity-60' : ''}`}>
+                     <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform ${asphaltEnabled ? 'translate-x-5' : ''}`}></span>
+                   </div>
+                 </label>
+               </div>
+
+               {isAsphaltToggleDisabled && (
+                 <p className="text-[11px] text-amber-400/80 mt-1">
+                   This booking is already prepaid for the driveway portion. Asphalt cannot be added here.
+                   Contact your manager if asphalt is required for this address.
+                 </p>
+               )}
+
+               {asphaltEnabled && (
+                 <div className="space-y-3 mt-3">
+                   <p className="text-[11px] text-gray-400">
+                     Asphalt component added alongside the driveway sale.
+                     {isRampCrew
+                       ? ' You will execute the asphalt yourself (single transaction).'
+                       : ' The Ramp Crew will be assigned to execute the asphalt portion later.'}
+                   </p>
+
+                   <div className={`grid gap-3 ${canShowUpsoldField ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'}`}>
+                     <div>
+                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">
+                         Asphalt Amount ($)
+                       </label>
+                       <input
+                         type="number"
+                         value={asphaltAmount}
+                         onChange={(e) => setAsphaltAmount(e.target.value)}
+                         className="w-full bg-gray-800 border border-slate-700 rounded p-2 text-lg font-mono font-bold text-slate-200"
+                         placeholder="0.00"
+                         step="0.01"
+                       />
+                     </div>
+
+                     {canShowUpsoldField && (
+                       <div>
+                         <label className="text-[10px] font-bold text-amber-400 uppercase mb-1 block">
+                           Upsold by RC ($)
+                         </label>
+                         <input
+                           type="number"
+                           value={upsoldAsphaltAmount}
+                           onChange={(e) => setUpsoldAsphaltAmount(e.target.value)}
+                           className="w-full bg-gray-800 border border-amber-700/50 rounded p-2 text-lg font-mono font-bold text-amber-300"
+                           placeholder="0.00"
+                           step="0.01"
+                         />
+                         <p className="text-gray-500 text-[10px] mt-1">Additional amount added on-site (optional)</p>
+                       </div>
+                     )}
+                   </div>
+
+                   {/* Total Collected display — what will be recorded as collected cash this completion */}
+                   {!isSplitPayment && (
+                     <div className="flex justify-between items-center bg-gray-800/60 border border-slate-700/40 rounded p-2">
+                       <span className="text-[10px] font-bold text-gray-400 uppercase">Total Collected (this completion)</span>
+                       <span className="text-lg font-mono font-bold text-green-400">
+                         ${computeAsphaltTotalCollected().toFixed(2)}
+                       </span>
+                     </div>
+                   )}
+                 </div>
+               )}
+             </div>
+           )}
+
            {/* NOTES */}
            <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-700/50">
                <h3 className="text-sm font-bold text-gray-300 uppercase mb-2 flex items-center gap-2"><FileText size={16}/> Office Notes (Read Only)</h3>
@@ -840,10 +1070,10 @@ const JobDetail: React.FC = () => {
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                   <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Payment Method</label>
-                      <select 
-                        value={paymentMethod} 
-                        onChange={handlePaymentMethodChange} 
-                        className={`w-full bg-gray-800 border rounded p-2 text-white outline-none ${(isPrepaid || isReadOnly) ? 'cursor-not-allowed opacity-50' : ''} ${paymentMethodError ? 'border-red-500' : 'border-gray-700'}`} 
+                      <select
+                        value={paymentMethod}
+                        onChange={handlePaymentMethodChange}
+                        className={`w-full bg-gray-800 border rounded p-2 text-white outline-none ${(isPrepaid || isReadOnly) ? 'cursor-not-allowed opacity-50' : ''} ${paymentMethodError ? 'border-red-500' : 'border-gray-700'}`}
                         disabled={isPrepaid || isReadOnly}
                       >
                           {isPrepaid ? (
@@ -861,7 +1091,7 @@ const JobDetail: React.FC = () => {
                           )}
                       </select>
                       {paymentMethodError && <p className="text-red-400 text-[10px] mt-1">{paymentMethodError}</p>}
-                      
+
                       {/* DIRECT UPGRADE BUTTON - Only show if upsells enabled AND region is West AND season is Aeration */}
                       {!isReadOnly && upsellsEnabled && canShowUpgradeButton && (
                         <button
@@ -874,7 +1104,7 @@ const JobDetail: React.FC = () => {
                         </button>
                       )}
                   </div>
-                  
+
                   {paymentMethod === 'Billed' && !isReadOnly && (
                       <div><label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Invoice #</label><input value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" placeholder="INV-..." /></div>
                   )}
@@ -891,13 +1121,13 @@ const JobDetail: React.FC = () => {
                             <Info size={12} />
                           </button>
                         </label>
-                        <input 
-                          type="email" 
-                          value={etransferEmail} 
+                        <input
+                          type="email"
+                          value={etransferEmail}
                           onChange={handleEtransferEmailChange}
                           onBlur={handleEtransferEmailBlur}
                           className={`w-full bg-gray-800 border rounded p-2 text-white ${etransferEmailError ? 'border-red-500' : 'border-gray-700'}`}
-                          placeholder="client@bank.com" 
+                          placeholder="client@bank.com"
                         />
                         {etransferEmailError && <p className="text-red-400 text-[10px] mt-1">{etransferEmailError}</p>}
                       </div>
@@ -914,7 +1144,7 @@ const JobDetail: React.FC = () => {
                     <h4 className="text-sm font-bold text-gray-300">Split Payment Amounts</h4>
                     <div className="text-sm font-mono font-bold text-green-400">Total: ${splitTotal.toFixed(2)}</div>
                   </div>
-                  
+
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cash</label>
@@ -945,14 +1175,14 @@ const JobDetail: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                  
+
                   {(parseFloat(splitCheque) || 0) > 0 && (
                     <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Cheque Number</label>
                       <input value={splitChequeNumber} onChange={e => setSplitChequeNumber(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white" placeholder="#001"/>
                     </div>
                   )}
-                  
+
                   {(parseFloat(splitEtransfer) || 0) > 0 && (
                     <div>
                       <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block flex items-center gap-1">
@@ -970,7 +1200,7 @@ const JobDetail: React.FC = () => {
                       {splitEtransferEmailError && <p className="text-red-400 text-[10px] mt-1">{splitEtransferEmailError}</p>}
                     </div>
                   )}
-                  
+
                   {splitCCAmount > 0 && (
                     <div className={`p-3 rounded border flex items-center justify-between ${isCreditPaid ? 'bg-green-900/20 border-green-600 text-green-400' : 'bg-blue-900/20 border-blue-600 text-blue-300'}`}>
                       <span className="text-sm font-medium">{isCreditPaid ? `Card Secured for $${splitCCAmount.toFixed(2)}` : `Process $${splitCCAmount.toFixed(2)} on Card`}</span>
@@ -993,8 +1223,8 @@ const JobDetail: React.FC = () => {
              {!isReadOnly ? (
                  <>
                      <button onClick={() => setShowCancelModal(true)} className="flex items-center gap-2 px-4 py-3 bg-red-900/20 hover:bg-red-900/40 text-red-300 border border-red-800 rounded-md font-bold transition-colors" disabled={saving}><Ban size={18} /> Cancel / Skip</button>
-                     <button 
-                       onClick={handleSave} 
+                     <button
+                       onClick={handleSave}
                        disabled={(paymentMethod === 'Credit Card' && !isCreditPaid && !isSplitPayment) || (isSplitPayment && splitCCNeedsProcessing) || saving}
                        className="flex-1 sm:flex-none px-8 py-3 bg-green-600 hover:bg-green-500 text-white rounded-md font-bold shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                      >

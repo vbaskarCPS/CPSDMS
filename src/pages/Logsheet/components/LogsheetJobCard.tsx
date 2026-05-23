@@ -1,6 +1,6 @@
 // src/pages/Logsheet/components/LogsheetJobCard.tsx
 import React from 'react';
-import { MapPin, ChevronRight, Check, FileText, Phone, Mail, Clock, X as XIcon, Bookmark } from 'lucide-react';
+import { MapPin, ChevronRight, Check, FileText, Phone, Mail, Clock, X as XIcon, Bookmark, Shovel } from 'lucide-react';
 import { MasterBooking, ServiceFlags, SERVICE_FLAG_KEYS } from '../../../types';
 
 interface LogsheetJobCardProps {
@@ -57,6 +57,19 @@ const formatPrice = (rawPrice: string | number | undefined): string => {
   
   // Otherwise return with dollar sign
   return `$${formatted}`;
+};
+
+// Helper: Format a numeric asphalt-side amount as a compact dollar string.
+// Asphalt amounts always come in as plain numbers (no flat-code prefixes), so
+// this is simpler than formatPrice. Returns e.g. "$300" or "$0" — no decimals
+// because the pills are tight on horizontal space and amounts are typically
+// whole dollars on the cart side.
+const formatAsphaltAmount = (n: number | undefined | null): string => {
+  if (!n || n <= 0) return '$0';
+  // Round-half-up to nearest dollar for the badge; keep cents only if non-trivial.
+  const rounded = Math.round(n * 100) / 100;
+  if (rounded === Math.floor(rounded)) return `$${Math.floor(rounded)}`;
+  return `$${rounded.toFixed(2)}`;
 };
 
 // Helper: Format payment breakdown for display
@@ -147,6 +160,51 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   // its own visual treatment so workers don't confuse them with prebooks.
   const isPendingSale = (job as any).isPendingSale === true;
 
+  // --- ASPHALT DETECTION (Sealing only — but the logic is season-agnostic so
+  // an accidental non-sealing setter wouldn't break the display) ---
+  //
+  // CONTRACT FOR CALLERS (Dashboard.tsx / RMTeamTab.tsx convertPendingSaleToBooking):
+  // When converting a PendingSale row to a MasterBooking-shaped object for this
+  // component, propagate the following fields onto the booking (they ride on
+  // MasterBooking's `[key: string]: any` index signature — no type changes needed):
+  //
+  //   asphaltAmount        — $ for the asphalt portion (from PendingSale.asphaltAmount)
+  //   upsoldAsphaltAmount  — $ for RC's upsold portion (typically 0 in pending state)
+  //   saleType             — 'asphalt' marks a STANDALONE asphalt child row
+  //   sharedJobKey         — Path 3 deferred state on a standalone asphalt child
+  //   assignedRcSessionId  — set when an RC owns the asphalt portion (subtle UI cue)
+  //
+  // For the MERGED parent+child case (driveway parent has a linked asphalt child):
+  //   - Caller should drop the child from the list it passes to the card grid
+  //     and stamp the parent's row with asphaltAmount (and upsoldAsphaltAmount
+  //     if any). The card then renders the merged display by reading those.
+  //   - The standalone child rows for the same address must NOT also be passed
+  //     — the contract is "one card per parent or per orphan child."
+  //
+  // For the STANDALONE asphalt child case (RC solo asphalt, or Path 3 deferred):
+  //   - Caller passes the child row directly with saleType='asphalt'.
+  //   - sharedJobKey when set → Path 3 deferred pickup mode display.
+  //
+  // For non-sealing seasons or pending sales without asphalt: leave all five
+  // fields off — card renders identically to its pre-asphalt behaviour.
+  const asphaltAmount = Number((job as any).asphaltAmount || 0);
+  const upsoldAsphaltAmount = Number((job as any).upsoldAsphaltAmount || 0);
+  const isAsphaltStandalone = (job as any).saleType === 'asphalt';
+  const hasAsphaltSharedKey = typeof (job as any).sharedJobKey === 'string' && (job as any).sharedJobKey.length > 0;
+  const isAsphaltAssigned = typeof (job as any).assignedRcSessionId === 'string' && (job as any).assignedRcSessionId.length > 0;
+
+  // Merged-card detection: card represents a driveway parent that has a paired
+  // asphalt child. Caller has stamped asphaltAmount onto the parent row.
+  const isMergedWithAsphalt = !isAsphaltStandalone && asphaltAmount > 0;
+
+  // Path 3 deferred pickup detection: standalone asphalt child where the
+  // sharedJobKey is set. Visual cue tells the worker "driveway already done by
+  // selling cart; you're collecting only your share."
+  const isAsphaltDeferredPickup = isAsphaltStandalone && hasAsphaltSharedKey;
+
+  // Overall "card has asphalt" boolean used for several layout decisions.
+  const hasAsphalt = isAsphaltStandalone || isMergedWithAsphalt;
+
   const isCompleted = job.Completed === 'x' || job.Status === 'completed';
   const isCancelled = job.Status === 'cancelled';
   const isNextTime = job.Status === 'next_time';
@@ -158,7 +216,11 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   const isWarning = isPending && !isPendingSale && WARNING_PATTERN.test(notes || '');
   
   // Data Extraction
-  const propertyType = job['FO/BO/FP'] || 'FP'; 
+  // For standalone asphalt cards, override the displayed property type with a
+  // Shovel-themed "RAMP" label (which matches the 'Ramp' enum value reserved in
+  // types/index.ts for the asphalt child row's export propertyType). For merged
+  // cards we keep the driveway's property type (SS/SSP).
+  const rawPropertyType = job['FO/BO/FP'] || 'FP';
   const phone = job['Home Phone'] || job['Cell Phone'];
   const email = job['Email Address'];
   const services = job.services;
@@ -168,6 +230,9 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   const contractTitle = (job as any)['Contract Title'];
   
   // --- COLOR LOGIC ---
+  // Asphalt cards get amber accents layered on top of the base slate-gray
+  // pending-sale colours, so the worker can scan and pick out asphalt rows at a
+  // glance without losing the "this is a pending sale" cue.
   let borderColor = 'border-gray-700';
   let bgColor = 'bg-gray-800';
   
@@ -191,10 +256,27 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
   } else if (isNextTime) {
       borderColor = 'border-orange-500';
       bgColor = 'bg-orange-900/20';
+  } else if (isAsphaltStandalone) {
+      // Standalone asphalt — distinct amber-tinted card so RCs can spot their
+      // asphalt queue at a glance. Slightly stronger amber for Path 3 deferred
+      // pickups (where the cart already collected driveway cash and RC is just
+      // executing the asphalt portion).
+      if (isAsphaltDeferredPickup) {
+        borderColor = 'border-amber-600';
+        bgColor = 'bg-amber-900/25';
+      } else {
+        borderColor = 'border-amber-700';
+        bgColor = 'bg-amber-900/15';
+      }
+  } else if (isMergedWithAsphalt) {
+      // Merged driveway-parent-with-asphalt-child — keep the slate-gray
+      // pending-sale base but lift the border to amber to flag the asphalt
+      // attachment. Reads as "pending sale, but bigger than it looks."
+      borderColor = 'border-amber-700';
+      bgColor = 'bg-slate-800/40';
   } else if (isPendingSale) {
-      // Pending sales get slate-gray treatment — distinct from prebooks (default
-      // gray), completed (green/yellow/blue/orange), cancelled (red), and warning
-      // (orange-tinted). Reads as "worker's own parked work."
+      // Plain pending sale (no asphalt) — slate-gray, distinct from prebooks,
+      // completed, cancelled, and warning. Reads as "worker's own parked work."
       borderColor = 'border-slate-500';
       bgColor = 'bg-slate-800/40';
   } else if (isWarning) {
@@ -204,8 +286,14 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
 
   const displayNotes = isContract && contractTitle ? contractTitle : notes;
   
-  // Format the price
-  const formattedPrice = formatPrice(job.Price);
+  // --- PRICE FORMATTING (asphalt-aware) ---
+  // For STANDALONE asphalt cards the main price is the asphalt amount itself —
+  // no separate driveway portion exists on this row. For MERGED cards the main
+  // price stays the driveway parent's price (from job.Price), and the asphalt
+  // portion is shown as a separate pill below. For everything else, unchanged.
+  const formattedPrice = isAsphaltStandalone
+    ? formatAsphaltAmount(asphaltAmount)
+    : formatPrice(job.Price);
   
   // Format payment info for completed jobs
   const paymentDisplay = isCompleted ? formatPaymentDisplay(job) : '';
@@ -245,6 +333,27 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
     ? `${job['First Name'] || ''} ${job['Last Name'] || ''}`.trim()
     : (isPendingSale ? 'New pending sale' : 'Unknown');
 
+  // --- ASPHALT PILL BUILDER ---
+  // Builds the "+ASPH $X" or "+ASPH $X +UP $Y" pill content for merged cards,
+  // and the bare amount for standalone cards (the surrounding label handles
+  // the "ASPHALT" prefix for standalone). Returns null when nothing to show.
+  const buildAsphaltPillContent = (): string | null => {
+    if (!hasAsphalt) return null;
+    if (isAsphaltStandalone) {
+      // Standalone: only show upsold if it's present and positive.
+      if (upsoldAsphaltAmount > 0) {
+        return `${formatAsphaltAmount(asphaltAmount)} +UP ${formatAsphaltAmount(upsoldAsphaltAmount)}`;
+      }
+      return formatAsphaltAmount(asphaltAmount);
+    }
+    // Merged: "+ASPH $X" plus optional "+UP $Y" when RC has logged upsold.
+    if (upsoldAsphaltAmount > 0) {
+      return `+ASPH ${formatAsphaltAmount(asphaltAmount)} +UP ${formatAsphaltAmount(upsoldAsphaltAmount)}`;
+    }
+    return `+ASPH ${formatAsphaltAmount(asphaltAmount)}`;
+  };
+  const asphaltPillContent = buildAsphaltPillContent();
+
   return (
     <div 
       onClick={onClick}
@@ -281,16 +390,40 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
       </div>
 
       <div className="text-right shrink-0 flex flex-col items-end justify-center gap-1 relative z-10">
-        <span className="text-[9px] font-bold bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded border border-gray-600 uppercase">{propertyType}</span>
+        {/* Property-type pill. For STANDALONE asphalt cards we swap in a
+            Shovel-themed pill to reinforce "this is an asphalt-only job."
+            Merged cards keep the driveway property type — the asphalt pill
+            below provides the secondary signal. */}
+        {isAsphaltStandalone ? (
+          <span className="text-[9px] font-bold bg-amber-900/40 text-amber-300 px-1.5 py-0.5 rounded border border-amber-700 uppercase flex items-center gap-1">
+            <Shovel size={9} strokeWidth={2.5} />
+            ASPHALT
+          </span>
+        ) : (
+          <span className="text-[9px] font-bold bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded border border-gray-600 uppercase">
+            {rawPropertyType}
+          </span>
+        )}
         
         <div className="flex flex-col items-end">
             <div className="flex items-center gap-1">
                {/* PP prepaid pill — only for office bookings, never pending sales (no payment state yet) */}
                {isPrepaid && !isCompleted && !isCancelled && !isNextTime && !isPendingSale && <span className="text-[9px] bg-green-900/30 text-green-400 px-1.5 py-0.5 rounded border border-green-800 font-bold">PP</span>}
-               <span className={`font-mono font-bold text-lg ${isCompleted ? 'text-gray-300' : isCancelled ? 'text-red-300 line-through' : isNextTime ? 'text-orange-300' : isPendingSale ? 'text-slate-200' : (isPrepaid ? 'text-green-300' : 'text-white')}`}>
+               <span className={`font-mono font-bold text-lg ${isCompleted ? 'text-gray-300' : isCancelled ? 'text-red-300 line-through' : isNextTime ? 'text-orange-300' : isAsphaltStandalone ? 'text-amber-200' : isPendingSale ? 'text-slate-200' : (isPrepaid ? 'text-green-300' : 'text-white')}`}>
                  {formattedPrice}
                </span>
             </div>
+            {/* ASPHALT PILL — visible on merged cards (and as a redundant clarity
+                signal on standalone-with-upsold cards). Merged shows "+ASPH $X
+                +UP $Y". Standalone-with-upsold shows "+UP $Y" alongside the
+                main asphalt price. For plain standalone (asphalt only, no
+                upsold) the main price already says it all — no pill needed. */}
+            {asphaltPillContent && (isMergedWithAsphalt || upsoldAsphaltAmount > 0) && (
+              <span className="text-[9px] font-bold bg-amber-900/40 text-amber-300 px-1.5 py-0.5 mt-1 rounded border border-amber-700 flex items-center gap-1 max-w-full">
+                <Shovel size={9} strokeWidth={2.5} className="shrink-0" />
+                <span className="truncate">{isMergedWithAsphalt ? asphaltPillContent : `+UP ${formatAsphaltAmount(upsoldAsphaltAmount)}`}</span>
+              </span>
+            )}
         </div>
         
         {isCompleted ? (
@@ -300,9 +433,22 @@ const LogsheetJobCard: React.FC<LogsheetJobCardProps> = ({ job, onClick }) => {
           </div>
         ) : (isCancelled || isNextTime) ? (
           getStatusBadge()
+        ) : isAsphaltStandalone ? (
+          // STANDALONE ASPHALT: Shovel-themed badge replaces the SALE-PEND
+          // bookmark. Variant for Path 3 deferred pickup gets a distinct label
+          // so RC knows the cart has already collected driveway cash.
+          <div className="flex items-center gap-1 mt-1">
+            <span className="flex items-center gap-1 text-[9px] font-bold bg-amber-900/40 text-amber-300 px-1.5 py-0.5 rounded border border-amber-700">
+              <Shovel size={9} strokeWidth={2.5} />
+              {isAsphaltDeferredPickup ? 'RC PICKUP' : (isAsphaltAssigned ? 'ASSIGNED' : 'ASPHALT')}
+            </span>
+            <ChevronRight size={14} className="text-gray-500" />
+          </div>
         ) : isPendingSale ? (
-          // Yellow SALE-PEND badge for pending sales, with bookmark icon and chevron.
-          // The chevron stays so the affordance still reads "tap to continue."
+          // SALE-PEND badge for ordinary (and merged) pending sales — keep
+          // the Bookmark icon and slate styling so workers recognise it as
+          // "their own parked work." Merged cards already got the amber pill
+          // above to flag the asphalt attachment.
           <div className="flex items-center gap-1 mt-1">
             <span className="flex items-center gap-1 text-[9px] font-bold bg-yellow-900/40 text-yellow-300 px-1.5 py-0.5 rounded border border-yellow-700">
               <Bookmark size={9} strokeWidth={2.5} /> SALE-PEND

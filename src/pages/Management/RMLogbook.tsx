@@ -12,6 +12,7 @@ import RMTeamTab from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
 import RMMapTab from './components/RMMapTab';
 import BamboraTransactionsModal from '../../components/BamboraTransactionsModal';
+import RMAsphaltModal from '../../components/RMAsphaltModal';
 
 export interface TabStats {
   totalSteps: number;
@@ -88,6 +89,12 @@ const RMLogbook: React.FC = () => {
 
   const [pendingSalesByManager, setPendingSalesByManager] = useState<PendingSale[]>([]);
 
+  // --- ASPHALT MODAL STATE (Sealing only — gated by isSealing in the JSX) ---
+  // The header Shovel button opens this. Modal is fully self-contained;
+  // onAssignmentChange fires a debounced refreshData when the modal closes
+  // after at least one successful assign, so the count badge updates.
+  const [showAsphaltModal, setShowAsphaltModal] = useState(false);
+
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // refreshData accepts optional overrideUser so the init useEffect can pass
@@ -120,6 +127,10 @@ const RMLogbook: React.FC = () => {
             try {
               // Find this manager's workers, then this manager's cart sessions,
               // then fetch pending sales per session in parallel and flatten.
+              // NOTE: getPendingSalesForSession returns ALL pending rows for the
+              // session (driveway parents + asphalt children), so the asphalt
+              // queue count derived in unassignedAsphaltCount below is correct
+              // without a separate getUnassignedAsphaltForManager call.
               const myWorkerIds = new Set(
                 session.workers
                   .filter(w => w.assignedManagerId === userId)
@@ -210,6 +221,19 @@ const RMLogbook: React.FC = () => {
       .filter(w => w.assignedManagerId === currentUser.userId)
       .map(w => w.contractorId);
   }, [dailyData, currentUser]);
+
+  // --- DERIVED: count of asphalt children awaiting RC assignment ---
+  // Drives the count badge on the header Shovel button. Visible only when
+  // isSealing — but we compute regardless so the value is stable for memoised
+  // consumers (no conditional hook order). Filter is the same one used by
+  // sessionService.getUnassignedAsphaltForManager at the DB level, so the badge
+  // and the modal's own list will always agree.
+  const unassignedAsphaltCount = useMemo(() => {
+    if (!isSealing) return 0;
+    return pendingSalesByManager.filter(
+      ps => ps.saleType === 'asphalt' && !ps.assignedRcSessionId
+    ).length;
+  }, [pendingSalesByManager, isSealing]);
 
   useEffect(() => {
     if (!dailyData?.date || !currentUser) return;
@@ -366,6 +390,31 @@ const RMLogbook: React.FC = () => {
             >
               <CreditCard size={16} />
             </button>
+
+            {/* ASPHALT QUEUE BUTTON — sealing only. Shovel icon matches the
+                sealing badge above and the asphalt language used throughout
+                the rest of the UI (NewJob, JobDetail, LogsheetJobCard).
+                Count badge mirrors the same partial-index DB filter used by
+                getUnassignedAsphaltForManager — guaranteed to agree with the
+                list the modal renders. */}
+            {isSealing && (
+              <button
+                onClick={() => setShowAsphaltModal(true)}
+                className="relative flex items-center justify-center w-9 h-9 rounded-lg bg-gray-700 hover:bg-gray-600 text-amber-300 hover:text-amber-200 transition-all"
+                title={
+                  unassignedAsphaltCount > 0
+                    ? `${unassignedAsphaltCount} asphalt ${unassignedAsphaltCount === 1 ? 'row' : 'rows'} awaiting RC assignment`
+                    : 'Asphalt queue (none waiting)'
+                }
+              >
+                <Shovel size={16} />
+                {unassignedAsphaltCount > 0 && (
+                  <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] bg-amber-600 text-white rounded-full font-bold border border-gray-800">
+                    {unassignedAsphaltCount}
+                  </span>
+                )}
+              </button>
+            )}
 
             <button
               onClick={handleToggleLock}
@@ -688,6 +737,19 @@ const RMLogbook: React.FC = () => {
         <BamboraTransactionsModal
           sessionDate={dailyData.date}
           onClose={() => setShowTransactionsModal(false)}
+        />
+      )}
+
+      {/* ASPHALT QUEUE MODAL — sealing only. Mounted conditionally so the
+          modal's own initial fetch only fires when the RM actually opens it.
+          onAssignmentChange triggers a debounced refreshData so the count
+          badge on the Shovel button reflects the new state. */}
+      {showAsphaltModal && (
+        <RMAsphaltModal
+          managerId={currentUser.userId}
+          managerName={currentUser.name}
+          onClose={() => setShowAsphaltModal(false)}
+          onAssignmentChange={() => refreshData()}
         />
       )}
     </div>

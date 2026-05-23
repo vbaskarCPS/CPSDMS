@@ -39,10 +39,86 @@ import QuickPendingModal from '../../components/QuickPendingModal';
 import WorkerMapTab from './components/WorkerMapTab';
 import WorkerPCLTab from './components/WorkerPCLTab';
 
+// --- ASPHALT MERGE HELPER ---
+//
+// Mirrors RMTeamTab's mergePendingSalesForDisplay. Collapses driveway parents
+// with linked asphalt children into single MasterBookings with the 5 contract
+// fields stamped on the parent. Standalone asphalt children (Path 3 deferred,
+// orphans, or assigned-incoming) pass through with saleType='asphalt' so the
+// LogsheetJobCard renders them as amber asphalt cards.
+//
+// NOTE on duplication: this same logic lives in RMTeamTab.tsx. Extracting both
+// helpers (this + convertPendingSaleToBooking) to src/lib/pendingSaleDisplay.ts
+// is the right move once these deliveries settle — accumulated debt is
+// tracked in the parked-items list.
+const convertPendingSaleToBookingShape = (ps: PendingSale): MasterBooking => {
+  const fullAddress = `${ps.houseNumber || ''} ${ps.streetName || ''}`.trim();
+  return {
+    'Booking ID': ps.id,
+    'First Name': '',
+    'Last Name': '',
+    'Full Address': fullAddress,
+    'House Number': ps.houseNumber,
+    'Street Name': ps.streetName,
+    'Route Number': ps.routeCode,
+    'Price': ps.price || '',
+    'Log Sheet Notes': ps.notes,
+    'FO/BO/FP': ps.propertyType as any,
+    Status: 'pending',
+    services: ps.services,
+    isPendingSale: true,
+    pendingSaleId: ps.id,
+    // 5-field LogsheetJobCard contract — propagate the row's own values; the
+    // merger below stamps a child's fields onto a parent when one is paired.
+    asphaltAmount: ps.asphaltAmount,
+    upsoldAsphaltAmount: ps.upsoldAsphaltAmount,
+    saleType: ps.saleType,
+    sharedJobKey: ps.sharedJobKey,
+    assignedRcSessionId: ps.assignedRcSessionId,
+  } as MasterBooking;
+};
+
+const mergePendingSalesForDisplay = (pendingSales: PendingSale[]): MasterBooking[] => {
+  const allIds = new Set(pendingSales.map(ps => ps.id));
+
+  // Index asphalt children by parentId for quick stamp lookup.
+  const asphaltChildByParentId = new Map<string, PendingSale>();
+  for (const ps of pendingSales) {
+    if (ps.saleType === 'asphalt' && ps.parentId) {
+      asphaltChildByParentId.set(ps.parentId, ps);
+    }
+  }
+
+  const result: MasterBooking[] = [];
+  for (const ps of pendingSales) {
+    if (ps.saleType === 'asphalt') {
+      // Child whose parent IS in this list → skip; merges into the parent below.
+      if (ps.parentId && allIds.has(ps.parentId)) continue;
+      // Standalone asphalt (Path 3 deferred, incoming-assigned, or orphan) →
+      // render as own amber card via LogsheetJobCard's saleType branch.
+      result.push(convertPendingSaleToBookingShape(ps));
+    } else {
+      const booking = convertPendingSaleToBookingShape(ps);
+      const child = asphaltChildByParentId.get(ps.id);
+      if (child) {
+        // Stamp child's asphalt fields onto the parent. saleType stays
+        // undefined on the parent — LogsheetJobCard's "merged" visual state
+        // triggers when asphaltAmount > 0 AND saleType !== 'asphalt'.
+        (booking as any).asphaltAmount = child.asphaltAmount;
+        (booking as any).upsoldAsphaltAmount = child.upsoldAsphaltAmount;
+        (booking as any).sharedJobKey = child.sharedJobKey;
+        (booking as any).assignedRcSessionId = child.assignedRcSessionId;
+      }
+      result.push(booking);
+    }
+  }
+  return result;
+};
+
 // Simple Toast Component
 const Toast: React.FC<{ message: string; show: boolean }> = ({ message, show }) => {
   if (!show) return null;
-  
+
   return (
     <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 animate-fade-in">
       <div className="bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2">
@@ -70,7 +146,7 @@ interface RMViewBannerProps {
 }
 
 const RMViewBanner: React.FC<RMViewBannerProps> = ({ workerName, cartNames, onReturn }) => (
-  <div 
+  <div
     className="bg-gradient-to-r from-cyan-600 to-blue-600 text-white px-4 py-2 flex items-center justify-center gap-2 text-sm font-bold cursor-pointer hover:from-cyan-500 hover:to-blue-500 transition-all"
     onClick={onReturn}
   >
@@ -155,22 +231,22 @@ const Dashboard: React.FC = () => {
   const [hasAssignedRoutes, setHasAssignedRoutes] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('Copied!');
-  
+
   // Training mode state
   const [isTrainingMode, setIsTrainingMode] = useState(false);
-  
+
   // RM View Mode state
   const [isRMViewMode, setIsRMViewMode] = useState(false);
   const [rmOriginalUser, setRmOriginalUser] = useState<ManagementUser | null>(null);
   const [rmViewCartNames, setRmViewCartNames] = useState<string | null>(null);
-  
+
   // Season type state
   const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
-  
+
   // Team state
   const [teammates, setTeammates] = useState<Worker[]>([]);
   const [showTeamModal, setShowTeamModal] = useState(false);
-  
+
   // Upsells enabled state
   const [upsellsEnabled, setUpsellsEnabled] = useState(true);
 
@@ -248,42 +324,15 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  // --- HELPER: Convert a PendingSale into a MasterBooking-shaped object ---
-  // The Pending tab pipeline renders MasterBooking[]. Rather than thread a
-  // separate type through the filter chain, we adapt pending sales into the
-  // same shape and flag them with isPendingSale so LogsheetJobCard branches
-  // correctly. This keeps the rest of the rendering code completely unaware
-  // of the new feature.
-  const convertPendingSaleToBooking = (ps: PendingSale): MasterBooking => {
-    const fullAddress = `${ps.houseNumber || ''} ${ps.streetName || ''}`.trim();
-    return {
-      'Booking ID': ps.id,
-      'First Name': '',
-      'Last Name': '',
-      'Full Address': fullAddress,
-      'House Number': ps.houseNumber,
-      'Street Name': ps.streetName,
-      'Route Number': ps.routeCode,
-      'Price': ps.price || '',
-      'Log Sheet Notes': ps.notes,
-      'FO/BO/FP': ps.propertyType as any,
-      Status: 'pending',
-      services: ps.services,
-      // PENDING SALE FLAGS — read by LogsheetJobCard for badge + style
-      isPendingSale: true,
-      pendingSaleId: ps.id,
-    } as MasterBooking;
-  };
-
   // Initial load and data fetching
   useEffect(() => {
     const init = async () => {
       setLoading(true);
-      
+
       // Check training mode
       const trainingMode = trainingService.isTrainingMode();
       setIsTrainingMode(trainingMode);
-      
+
       // Check RM view mode
       const rmViewMode = getStorageItem<boolean>('rm_view_mode', false);
       const originalUser = getStorageItem<ManagementUser | null>('rm_original_user', null);
@@ -295,7 +344,7 @@ const Dashboard: React.FC = () => {
       // Check digital mapping enabled for this command center
       const cc = commandCenterService.getCurrentCommandCenter();
       setHasDigitalMapping(cc?.digitalMappingEnabled || false);
-      
+
       const storedWorker = getStorageItem<Worker | null>('current_user', null);
       if (!storedWorker) {
         navigate('/');
@@ -351,6 +400,9 @@ const Dashboard: React.FC = () => {
 
           // --- PENDING SALES FETCH (team seasons only) ---
           // seasonHasTeams() is true for Rejuv + Sealing. Aeration skips this entirely.
+          // The returned list is fed through mergePendingSalesForDisplay in
+          // filteredJobs below to collapse parent+asphalt-child pairs into single
+          // display cards (LogsheetJobCard renders the three asphalt visual states).
           if (seasonHasTeams(currentSeasonType) && session.id) {
             try {
               const sales = await sessionService.getPendingSalesForSession(session.id);
@@ -464,8 +516,10 @@ const Dashboard: React.FC = () => {
   };
 
   // --- JOB CARD CLICK HANDLER ---
-  // Pending sales route to NewJob with the id so it prefills. Office bookings
-  // and completed transactions keep the existing JobDetail route.
+  // Pending sales route to NewJob with the id so it prefills. NewJob's 8-case
+  // resolver handles all asphalt sub-states (merged parent, standalone, deferred
+  // pickup, assigned-incoming). Office bookings and completed transactions keep
+  // the existing JobDetail route.
   const handleJobCardClick = (job: MasterBooking) => {
     if ((job as any).isPendingSale && (job as any).pendingSaleId) {
       navigate(`/logsheet/new?pendingSaleId=${encodeURIComponent((job as any).pendingSaleId)}`);
@@ -487,20 +541,25 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  // --- FILTERED JOBS (merges pending sales into the Pending tab only) ---
-  // Pending sales only ever appear under the "Pending" tab. They can't be
-  // cancelled or marked Next Time (deletion-only per design decision E),
-  // and they're never completed in this list — completion converts them to
-  // real transactions and deletes the pending row.
+  // --- FILTERED JOBS ---
+  // Pending tab merges pending sales (with asphalt parent+child collapse) into
+  // office bookings. The merger collapses driveway+asphalt pairs into single
+  // cards with the 5 asphalt fields stamped; standalone asphalt rows (Path 3
+  // deferred, orphan, or incoming-assigned) pass through as their own cards.
+  // LogsheetJobCard's three visual states render the distinction.
+  //
+  // Pending sales never appear on Not Done (no cancelled/next_time concept for
+  // them — deletion-only per design decision E) or Completed (completion
+  // converts them to real transactions and deletes the pending row).
   const filteredJobs = useMemo(() => {
     if (viewFilter === 'pending') {
       const officePending = jobs.filter(
         (b) => !b.Completed && (!b.Status || b.Status === 'pending')
       );
-      const convertedPendingSales = pendingSales.map(convertPendingSaleToBooking);
-      // Pending sales rendered first so the worker sees their own parked work
-      // before scrolling through office prebooks. Adjust ordering if desired.
-      return [...convertedPendingSales, ...officePending];
+      const mergedPendingBookings = mergePendingSalesForDisplay(pendingSales);
+      // Pending sales first so the worker sees their own parked work before
+      // scrolling through office prebooks. Adjust ordering if desired.
+      return [...mergedPendingBookings, ...officePending];
     } else if (viewFilter === 'not_done') {
       return jobs.filter((b) => b.Status === 'cancelled' || b.Status === 'next_time');
     } else {
@@ -514,7 +573,9 @@ const Dashboard: React.FC = () => {
         <Loader className="animate-spin text-cps-blue" />
       </div>
     );
-  }return (
+  }
+
+  return (
     <div className={`bg-black flex flex-col ${activeView === 'map' ? 'h-screen overflow-hidden' : 'min-h-screen pb-20'}`}>
       {/* RM View Mode Banner */}
       {isRMViewMode && worker && (

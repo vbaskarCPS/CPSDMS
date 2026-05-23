@@ -386,8 +386,8 @@ export interface MasterBooking {
   
   upsellMenuId?: string; 
   
-  // NOTE: 'Ramp' stays in the enum (reserved for future use — separate plan).
-  // For now, Sealing season UI only shows SS / SSP buttons.
+  // NOTE: 'Ramp' stays in the enum (used by the asphalt add-on workflow for the
+  // child row's display propertyType on the Logsheets export).
   'FO/BO/FP'?: 'FO' | 'BO' | 'FP' | 'SS' | 'SSP' | 'Ramp';
   'Contractor Number'?: string;
   
@@ -451,7 +451,8 @@ export interface SessionTransaction {
   chequeNumber?: string;
   
   // Service-related properties
-  // NOTE: 'Ramp' stays in the enum (reserved for future use — separate plan).
+  // NOTE: 'Ramp' stays in the enum — used as the propertyType on asphalt child rows
+  // emitted by the Logsheets export.
   serviceType?: 'FO' | 'BO' | 'FP' | 'SS' | 'SSP' | 'Ramp';
   serviceName?: string;
   isPrepaid?: boolean;
@@ -469,6 +470,29 @@ export interface SessionTransaction {
   
   // --- TEAM SUPPORT ---
   completedByWorkerIds?: string[]; // All workers who contributed (for team export)
+
+  // --- ASPHALT FIELDS (Sealing season only) ---
+  // payoutShare:
+  //   The portion of the day's payout this transaction earns for the worker.
+  //   Set when the tx participates in an asphalt workflow (any of the four modes:
+  //   completer-with-phantom, self-both, driveway-deferred, asphalt-executor-only);
+  //   undefined for regular non-asphalt sales.
+  //
+  //   For a driveway-seller tx:  payoutShare = driveway $ + 0.30 × asphalt $
+  //   For an asphalt-executor tx: payoutShare = 0.70 × asphalt $ + 1.00 × upsold $
+  //   For a self-both tx:         payoutShare = driveway $ + asphalt $ + upsold $
+  //
+  //   recalculateStats uses (payoutShare − sum(payment_breakdown)) as the asphalt
+  //   adjustment delta — applied at 1.0 weight (pre-tax-divisor) to both
+  //   prodGross and taxableWeighted so the cash-vs-earned-dollars difference is
+  //   reflected in stats without touching the cash buckets.
+  payoutShare?: number;
+
+  // asphaltMeta:
+  //   JSONB payload stored alongside the tx. Read by the Logsheets export's
+  //   two-row builder (groups by sharedJobKey, identifies driveway/asphalt rows by
+  //   role, reads amounts). Absent for non-asphalt txs.
+  asphaltMeta?: AsphaltMeta;
 }
 
 // --- PENDING SALES (Team seasons only — Rejuv + Sealing) ---
@@ -478,6 +502,18 @@ export interface SessionTransaction {
 // real transaction is written via the normal completeJob flow.
 // Visibility: shared across the whole cart (all workers in the same session_id
 // see them) and shown to the RM under their team's pending list.
+//
+// ASPHALT EXTENSIONS (Sealing season only):
+//   - saleType='asphalt' marks an asphalt child row.
+//   - parentId points to the driveway parent (null for standalone-RC and
+//     deferred-asphalt children).
+//   - assignedRcSessionId tracks which Ramp Crew (if any) has been assigned
+//     to execute the asphalt. Null = unassigned (RM modal queue).
+//   - asphaltAmount / upsoldAsphaltAmount carry the dollar amounts.
+//   - sharedJobKey (PATH 3): links a deferred-asphalt child to its already-
+//     completed driveway-seller transaction via asphalt_meta.sharedJobKey.
+//     Set only when the child was created as the "deferred" side of a
+//     driveway-deferred completion at JobDetail/NewJob.
 export interface PendingSale {
   id: string;                  // e.g. "pend_<workerId>_<timestamp>"
   sessionId: string;           // logsheet_sessions.id — the cart this belongs to
@@ -493,10 +529,36 @@ export interface PendingSale {
   notes?: string;
   createdAt?: string;
   updatedAt?: string;
+
+  // --- ASPHALT FIELDS (Sealing season only) ---
+  saleType?: 'asphalt';                // 'asphalt' = child row. Undefined = driveway parent or pre-asphalt row.
+  parentId?: string;                   // If saleType='asphalt', points to the driveway parent. Null for standalone RC or deferred children.
+  assignedRcSessionId?: string;        // RC's session id when assigned. Undefined/null = unassigned.
+  asphaltAmount?: number;              // $ for the asphalt portion.
+  upsoldAsphaltAmount?: number;        // $ upsold by RC on-site. Undefined or 0 if none.
+
+  // --- PATH 3 ADDITION ---
+  // sharedJobKey: set when this child was created by a driveway-deferred
+  // completion. Matches the cart's already-written tx's asphalt_meta.sharedJobKey.
+  // When RC completes the asphalt via asphalt-executor-only, this key is stamped
+  // on the RC's tx so the export's two-row builder can pair the two real txs.
+  sharedJobKey?: string;
 }
 
 // Fields accepted by sessionService.createPendingSale().
 // id / commandCenterId / sessionDate / timestamps are filled by the service.
+//
+// ASPHALT ORCHESTRATION (handled inside createPendingSale):
+//   - saleType='asphalt' + no parentId  → asphalt-only standalone (RC sells solo asphalt).
+//   - asphaltAmount/upsoldAsphaltAmount with no saleType → parent driveway row PLUS
+//     an auto-generated asphalt child row are written atomically. The child gets
+//     auto-assigned to the calling session if the caller is an RC; otherwise it's
+//     left unassigned for the RM to assign via the asphalt modal.
+//   - Neither asphalt field set → normal driveway-only row.
+//
+// sharedJobKey is reserved for callers that need to link a child to an already-
+// completed driveway tx (the driveway-deferred completion path in sessionService).
+// UI callers (QuickPendingModal, NewJob walk-up) don't pass it.
 export interface PendingSaleInput {
   sessionId: string;
   workerId: string;
@@ -507,9 +569,26 @@ export interface PendingSaleInput {
   propertyType?: string;
   services?: ServiceFlags;
   notes?: string;
+
+  // --- ASPHALT FIELDS ---
+  saleType?: 'asphalt';
+  parentId?: string;
+  assignedRcSessionId?: string;
+  asphaltAmount?: number;
+  upsoldAsphaltAmount?: number;
+
+  // --- PATH 3 ADDITION ---
+  // sharedJobKey: only set by sessionService internally when creating a deferred
+  // asphalt child as part of a driveway-deferred completion. UI callers leave
+  // this undefined.
+  sharedJobKey?: string;
 }
 
 // Fields accepted by sessionService.updatePendingSale(). All optional.
+//
+// assignedRcSessionId: pass `null` to clear an existing assignment (RM unassign).
+// Other asphalt fields can be zeroed by passing 0 explicitly.
+// sharedJobKey: `null` clears the link (rare — typically only used in rollback).
 export interface PendingSaleUpdate {
   routeCode?: string;
   houseNumber?: string;
@@ -518,6 +597,82 @@ export interface PendingSaleUpdate {
   propertyType?: string;
   services?: ServiceFlags;
   notes?: string;
+
+  // --- ASPHALT FIELDS ---
+  assignedRcSessionId?: string | null;
+  asphaltAmount?: number;
+  upsoldAsphaltAmount?: number;
+
+  // --- PATH 3 ADDITION ---
+  sharedJobKey?: string | null;
+}
+
+// --- RAMP CREW + ASPHALT (Sealing season only) ---
+// Asphalt = the Sealing-only Ramp Crew add-on workflow. A regular cart can sell
+// an asphalt component alongside the driveway sale; a Ramp Crew (RC) executes
+// the asphalt portion. Cash and payout-share split per ASPHALT_SPLIT below.
+//
+// Four completion modes exist in sessionService.completeAsphaltJob — see the
+// AsphaltCompletionContext discriminated union in sessionService.ts for details:
+//   1. completer-with-phantom — both pending rows exist, completer fires both
+//      txs at once (real + cashless phantom partner).
+//   2. self-both — solo RC sold and executed everything (single tx).
+//   3. driveway-deferred — cart writes driveway tx with asphalt_meta; asphalt
+//      child pending row is created atomically for an RC to pick up later.
+//   4. asphalt-executor-only — RC completes a deferred asphalt child; writes
+//      RC's tx with the same sharedJobKey as the cart's already-existing tx.
+
+// Case-sensitive match pattern for Ramp Crew team IDs.
+// Matches: 'RC', 'RC1', 'RC2', 'RC10', ...
+// Does NOT match: 'rc1', 'RCA', 'RCB', etc.
+// Used to detect special RC carts via Worker.teamId.
+export const RAMP_CREW_TEAM_ID_PATTERN = /^RC\d*$/;
+
+// Payout-share split constants for the asphalt workflow.
+//   Driveway $   → 100% to selling cart  (DRIVEWAY_CART)
+//   Asphalt $    → 30% selling cart      (ASPHALT_CART)
+//                + 70% RC                 (ASPHALT_RC)
+//   Upsold $     → 100% to RC            (UPSOLD_RC)
+// Frozen so downstream code can rely on the values.
+export const ASPHALT_SPLIT = Object.freeze({
+  DRIVEWAY_CART: 1.0,
+  ASPHALT_CART: 0.30,
+  ASPHALT_RC: 0.70,
+  UPSOLD_RC: 1.0,
+});
+
+// Cart classification — derived from teamId pattern.
+export type CartKind = 'ramp-crew' | 'regular';
+
+// Role of a transaction in the asphalt workflow.
+//   driveway-seller  — wrote the driveway portion. payoutShare = driveway $ + 30% asphalt $.
+//   asphalt-executor — wrote the asphalt portion. payoutShare = 70% asphalt $ + 100% upsold $.
+//   self-both        — single tx covering everything (solo RC). payoutShare = driveway + asphalt + upsold.
+export type AsphaltRole = 'driveway-seller' | 'asphalt-executor' | 'self-both';
+
+// AsphaltMeta — JSONB payload stored on each transaction that participates in
+// an asphalt sale. The Logsheets export's two-row builder groups txs by
+// sharedJobKey, identifies driveway/asphalt rows by role, and reads amounts.
+//
+// Field naming: a deliberate mix of camelCase (sharedJobKey, role) and snake_case
+// (driveway_amount, etc.) — preserved to match what's already written to JSONB.
+// Don't rename without a backfill migration.
+export interface AsphaltMeta {
+  sharedJobKey: string;                  // Links paired txs (driveway-seller + asphalt-executor) across cart/RC sessions.
+  role: AsphaltRole;
+  driveway_amount: number;               // $ for the driveway portion (0 if asphalt-only).
+  asphalt_amount: number;                // $ for the asphalt portion.
+  upsold_asphalt_amount?: number;        // $ added by RC on-site (undefined or 0 if none).
+  is_partner_phantom: boolean;           // True for the cashless mirror tx in completer-with-phantom mode.
+  partner_session_id: string | null;     // The other cart's session_id when known. Null for self-both / driveway-deferred (RC not yet assigned).
+  did_upsell: boolean;                   // True if asphalt-executor / self-both added any upsold amount.
+}
+
+// Result shape from commandCenterService.calculateAsphaltSplit.
+export interface AsphaltSplit {
+  cartShare: number;   // Selling cart's payout-share contribution (driveway $ + 30% asphalt $).
+  rcShare: number;     // RC's payout-share contribution (70% asphalt $ + 100% upsold $).
+  total: number;       // cartShare + rcShare. Equals driveway + asphalt + upsold.
 }
 
 // Changed 'gross' to 'upGross' for clarity - sorts by upsell gross only
@@ -664,7 +819,8 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
   // --- SEALING SEASON (East region only) ---
   // Same team mechanics as Rejuv. No upgrades, no add-ons, no office flats.
   // No-tax-on-cash toggle is available at session start (same as Rejuv).
-  // Property types in UI: SS, SSP (Ramp is in the enum but reserved for future).
+  // Property types in UI: SS, SSP. The 'Ramp' value is reserved for the
+  // asphalt add-on workflow's child row on the Logsheets export.
   sealing: {
     seasonType: 'sealing',
     displayName: 'Sealing Season',

@@ -40,39 +40,125 @@ import {
 import { ImportMeta } from './googleSheetsService';
 export type { ImportMeta };
 
-// --- ASPHALT COMPLETION CONTEXT ---
-// Passed to completeJob when the job has an asphalt component. The completer's
-// transaction is built normally (form values → SessionTransaction); this context
-// tells completeJob how to split the payout share, which partner row (if any) to
-// write as a phantom, and which pending_sales rows to delete on success.
+// --- ASPHALT COMPLETION CONTEXT (4-mode discriminated union) ---
 //
-// completerRole semantics:
-//   'driveway-seller'  → completer is the cart that sold the driveway; partner is the RC
-//                        executing the asphalt. Two transactions written.
-//   'asphalt-executor' → completer is the RC; partner is the cart that originated the
-//                        driveway. Two transactions written.
-//   'self-both'        → completer sold AND executed everything (one cart, no partner).
-//                        Single transaction written.
-export interface AsphaltCompletionContext {
-  // Pending sale ids being resolved. Both are deleted on success.
-  parentSaleId: string | null;   // null when the job is asphalt-only (RC scenario 3)
-  childSaleId: string;           // always present
-  // Final dollar amounts at completion time (post any RC edits — final-wins rule).
+// Passed to completeJob when the job has an asphalt component. completeJob
+// branches on ctx.mode and routes to completeAsphaltJob, which writes the
+// appropriate transactions (1 or 2 real, optionally a phantom partner) and
+// reconciles pending_sales rows.
+//
+// Mode selection guide for UI callers:
+//   QuickPendingModal → completion flow with both pending rows existing:
+//     - Cart != RC, partner is RC                       → completer-with-phantom
+//     - Solo RC handling everything                     → self-both
+//     - Cart-completing-driveway, RC-completing-asphalt → completer-with-phantom
+//                                                          (whichever fires runs both)
+//
+//   JobDetail (office booking completion) / NewJob walk-up, asphalt toggled on:
+//     - Non-RC cart                                     → driveway-deferred
+//     - RC cart (self-handles everything)               → self-both
+//
+//   NewJob with ?pendingSaleId= (resuming an asphalt child):
+//     - RC picking up a deferred asphalt child          → asphalt-executor-only
+//     - Solo RC resuming an asphalt-only standalone     → self-both
+//     - Cart-with-RC parent+child completion            → completer-with-phantom
+
+// Mode 1 (existing): writes completer's tx + phantom partner tx.
+// Used when both pending rows existed (QuickPending → completion flow) and the
+// completer's cart ≠ partner's cart. Whichever cart fires completion writes both
+// transactions atomically; the other side's tx is a cashless phantom for accounting.
+export interface AsphaltCompleterWithPhantomContext {
+  mode: 'completer-with-phantom';
+  completerRole: 'driveway-seller' | 'asphalt-executor';
+  parentSaleId: string | null;   // null when the job is asphalt-only
+  childSaleId: string;           // always present in this mode
   drivewayAmount: number;        // 0 when there is no parent (asphalt-only)
   asphaltAmount: number;
   upsoldAmount: number;
-  // Partner cart info — required when completerRole !== 'self-both'.
-  // The UI passes this in because it already knows the partner cart from the
-  // merged-card render; saves completeJob a DB roundtrip.
+  // Partner cart info — the OTHER cart that participates via phantom row.
   partner: {
     sessionId: string;
     workerId: string;            // first worker on partner cart (drives tx.worker_id)
-    teamWorkerIds: string[];     // populates completed_by_worker_ids
-    workerName: string;          // for the phantom tx's display
-  } | null;
-  // Which side of the split is the completer on?
-  completerRole: AsphaltRole;
+    teamWorkerIds: string[];     // populates completed_by_worker_ids on the phantom
+    workerName: string;          // for display
+  };
 }
+
+// Mode 2 (existing): single transaction, no partner.
+// Used by a solo RC who sold AND executed everything (Scenario 2 or 3, or
+// RC-at-JobDetail/NewJob handling both portions themselves).
+export interface AsphaltSelfBothContext {
+  mode: 'self-both';
+  completerRole: 'self-both';
+  // Optional — present when resuming from a pending row (QuickPending flow).
+  // Omitted/null when called from a walk-up NewJob with no prior pending row.
+  parentSaleId?: string | null;
+  childSaleId?: string | null;
+  drivewayAmount: number;
+  asphaltAmount: number;
+  upsoldAmount: number;
+}
+
+// Mode 3 (NEW — Path 3): cart writes the driveway-seller tx + creates a
+// deferred asphalt child pending_sale. No phantom. RC will pick up the child
+// later via mode='asphalt-executor-only'.
+//
+// Used by JobDetail (office booking) and NewJob (walk-up) when a non-RC cart
+// adds asphalt and clicks the green completion button. The cart collects all
+// the cash (driveway + asphalt) and its tx records the full breakdown; the
+// payoutShare on the cart's tx is (driveway $ + 30% × asphalt $) which leaves a
+// negative asphalt-adjustment delta in their session (cash held > earned). RC's
+// eventual asphalt-executor-only tx will balance it with a matching positive delta.
+export interface AsphaltDrivewayDeferredContext {
+  mode: 'driveway-deferred';
+  completerRole: 'driveway-seller';
+  drivewayAmount: number;
+  asphaltAmount: number;        // must be > 0 (validated)
+  upsoldAmount: number;         // typically 0 for non-RC (cart doesn't know upsold yet)
+  // Info for the asphalt child pending_sale row to be created atomically.
+  // sessionId/workerId here are the CART's (selling side) — not the RC's.
+  childPending: {
+    sessionId: string;
+    workerId: string;
+    routeCode?: string;
+    houseNumber?: string;
+    streetName?: string;
+    propertyType?: string;
+    notes?: string;
+    // For an RC voluntarily deferring to themselves (rare): auto-assign the
+    // child to a specific RC session id. For typical non-RC use: leave
+    // undefined → child stays unassigned for the RM modal queue.
+    autoAssignToRcSessionId?: string;
+  };
+}
+
+// Mode 4 (NEW — Path 3): RC writes the asphalt-executor tx referencing an
+// already-existing driveway-seller tx via sharedJobKey. No phantom — the cart's
+// tx already exists (written by mode='driveway-deferred' earlier).
+//
+// Used when RC picks up a deferred asphalt child from their pending list. The
+// child's row carries the sharedJobKey set at cart's completion time; the UI
+// reads it and passes it through here so RC's tx links to the cart's.
+//
+// On completion: RC's tx is written with payoutShare = 70% × asphalt + 100% × upsold,
+// the child pending_sale row is deleted, and only RC's stats are recalculated
+// (cart's stats are correctly locked from their earlier completion).
+export interface AsphaltExecutorOnlyContext {
+  mode: 'asphalt-executor-only';
+  completerRole: 'asphalt-executor';
+  childSaleId: string;                  // the asphalt child pending_sale id to delete
+  existingParentSharedJobKey: string;   // copied from child.sharedJobKey
+  drivewayAmount: number;               // copied through for asphalt_meta consistency
+  asphaltAmount: number;
+  upsoldAmount: number;
+}
+
+// The union exported for consumers (UI files, etc).
+export type AsphaltCompletionContext =
+  | AsphaltCompleterWithPhantomContext
+  | AsphaltSelfBothContext
+  | AsphaltDrivewayDeferredContext
+  | AsphaltExecutorOnlyContext;
 
 // --- HELPER: Check if array has items ---
 function hasItems(arr: any[] | null | undefined): arr is any[] {
@@ -187,11 +273,7 @@ class SessionService {
         refId: tx.ref_id,
         sessionId: tx.session_id,
         // --- ASPHALT FIELDS ---
-        // payout_share NUMERIC NULL → undefined when DB has NULL (preserves legacy
-        // tx behaviour: when undefined, recalculateStats uses bucket math only).
         payoutShare: tx.payout_share != null ? Number(tx.payout_share) : undefined,
-        // asphalt_meta JSONB NULL → undefined when absent. AsphaltMeta type is the
-        // contract; Supabase returns the JSONB as a plain object.
         asphaltMeta: tx.asphalt_meta || undefined,
     } as SessionTransaction & { sessionId?: string };
   }
@@ -241,9 +323,6 @@ class SessionService {
 
       let transactions: any[] | null = null;
 
-      // For team seasons (lawn_rejuv + sealing), prefer session_id matching since
-      // multiple workers share a logsheet. Asphalt phantom transactions are always
-      // session-stamped, so this path is the correct one for them.
       if (seasonHasTeams(seasonType) && sessionData.id) {
         const { data: sessionTx } = await supabase
           .from('transactions')
@@ -928,7 +1007,6 @@ class SessionService {
       .insert(bookingRows);
     if (bookingError) throw bookingError;
 
-    // Create logsheet sessions
     if (isTeamSeason && data.teamCarts) {
       const logsheetRows = data.teamCarts.map((cart) => {
         const primaryWorker = cart.workers[0];
@@ -969,7 +1047,6 @@ class SessionService {
       if (lsError) throw lsError;
     }
 
-    // --- HISTORICAL PROPERTIES (digital mapping CCs only) ---
     if (hasItems(data.historicalProperties)) {
       const rows = data.historicalProperties!.map((h) => ({
         command_center_id: ccId,
@@ -999,7 +1076,6 @@ class SessionService {
       console.log(`[HistoricalProps] Inserted ${rows.length} historical properties`);
     }
 
-    // --- PCL CACHE (non-blocking) ---
     const cc = commandCenterService.getCurrentCommandCenter();
     if (cc?.digitalMappingEnabled && cc.callbookSheetId) {
       const sheetId = cc.callbookSheetId;
@@ -1192,7 +1268,7 @@ class SessionService {
     }
   }
 
-  // --- 3b. REASSIGN WORKER (Lawn Rejuv cart moves) ---
+  // --- 3b. REASSIGN WORKER ---
 
   public async reassignWorker(
     workerId: string,
@@ -1651,10 +1727,6 @@ class SessionService {
     });
     
     return sessions.map((d) => {
-      // For team seasons (lawn_rejuv + sealing), prefer session_id grouping so that
-      // asphalt phantom transactions (which carry session_id but a worker_id from the
-      // partner cart) attribute correctly. Falls back to worker_id grouping for legacy
-      // rows without session_id stamped.
       const sessionTx = isTeamSeason
         ? (transactionsBySessionId[d.id] || [])
         : [];
@@ -1720,9 +1792,6 @@ class SessionService {
 
     let financialData: any[] | null = null;
 
-    // Team-season transactions (lawn_rejuv + sealing) are session-stamped — that's
-    // also where the asphalt phantom row lives, so we MUST query by session_id to
-    // pick up rows where worker_id belongs to the partner cart.
     if (seasonHasTeams(seasonType) && sessionData.id) {
       const { data: sessionTx } = await supabase
         .from('transactions')
@@ -2281,10 +2350,12 @@ class SessionService {
    * source pending sale.
    *
    * `asphaltContext`:
-   *   When set, the job has an asphalt component. completeJob splits into two
-   *   transactions when the completer and partner are different carts, or one
-   *   when the completer handled everything ('self-both'). See AsphaltCompletionContext
-   *   docs at the top of this file.
+   *   When set, the job has an asphalt component. completeJob branches into
+   *   completeAsphaltJob, which switches on ctx.mode and handles 1 or 2
+   *   transactions plus any pending_sales bookkeeping. See the
+   *   AsphaltCompletionContext discriminated union at the top of this file for
+   *   the four modes (completer-with-phantom, self-both, driveway-deferred,
+   *   asphalt-executor-only).
    *
    *   When omitted (the normal case), behaviour is unchanged from pre-asphalt code.
    */
@@ -2383,7 +2454,6 @@ class SessionService {
         .eq('command_center_id', ccId);
     }
 
-    // --- PENDING SALE CLEANUP ---
     if (pendingSaleId) {
       this.deletePendingSale(pendingSaleId).catch(err => {
         console.warn('[PendingSale] cleanup after completeJob failed:', err);
@@ -2416,19 +2486,26 @@ class SessionService {
 
   // --- 6b. ASPHALT COMPLETION (Sealing season only) ---
   //
-  // Writes 1 or 2 transactions depending on completerRole:
-  //   - 'self-both'        → 1 transaction (completer owns everything, no partner row)
-  //   - 'driveway-seller'  → 2 transactions (completer = cart, partner = RC phantom)
-  //   - 'asphalt-executor' → 2 transactions (completer = RC, partner = cart phantom)
+  // Dispatcher for the four AsphaltCompletionContext modes. Each branch writes
+  // the right transactions, reconciles pending_sales rows, and recalcs stats.
   //
-  // The completer's transaction carries `transaction.paymentBreakdown` (real cash
-  // collected) and a `payoutShare` set to their slice of the split. The partner's
-  // transaction carries `payment_breakdown = {}` (phantom — no cash) and a
-  // `payoutShare` set to their slice of the split. Both transactions share an
-  // `asphalt_meta.shared_job_key` so the export can group them into the 2-line
-  // Logsheets format.
+  // Shared steps (all modes):
+  //   - Resolve completer's session for transaction stamping.
+  //   - Calculate split via calculateAsphaltSplit(driveway, asphalt, upsold).
+  //   - Build completer's customer_snapshot from transaction fields.
+  //   - Upsert completer's transaction (insert new or update existing by id).
+  //   - Mark booking completed (if jobId is a real booking, not 'NEW-').
+  //   - Send receipt email (from completer's tx — has the cash and the customer email).
   //
-  // Both pending_sales rows (parent driveway + asphalt child) are deleted on success.
+  // Mode-specific:
+  //   completer-with-phantom → also writes the partner's phantom tx; deletes BOTH
+  //     pending rows; recalcs BOTH carts.
+  //   self-both              → no phantom; deletes any provided pending rows;
+  //     recalcs only completer.
+  //   driveway-deferred      → no phantom; CREATES an asphalt child pending_sale
+  //     atomically; no pending rows to delete; recalcs only completer.
+  //   asphalt-executor-only  → no phantom; deletes the asphalt child pending_sale;
+  //     recalcs only completer (cart's stats are correctly locked from earlier).
   private async completeAsphaltJob(
     transaction: SessionTransaction,
     jobId: string,
@@ -2438,11 +2515,7 @@ class SessionService {
   ): Promise<void> {
     const ccId = this.getCCId();
 
-    if (ctx.completerRole !== 'self-both' && !ctx.partner) {
-      throw new Error('AsphaltCompletionContext: partner required when completerRole is not "self-both"');
-    }
-
-    // Resolve completer's session for transaction stamping.
+    // Resolve completer's session for transaction stamping. All four modes need this.
     let completerSessionId: string | undefined;
     try {
       const completerSession = await this.getWorkerLogsheetSession(workerId);
@@ -2454,29 +2527,73 @@ class SessionService {
       throw new Error('Asphalt completion requires an active completer session');
     }
 
+    // --- COMMON: split calculation ---
     const split = calculateAsphaltSplit(ctx.drivewayAmount, ctx.asphaltAmount, ctx.upsoldAmount);
+    const didUpsell = (ctx.upsoldAmount || 0) > 0;
 
+    // --- MODE-DRIVEN: completer's payout share, partner role/share, sharedJobKey, partner_session_id ---
+    // partnerRole !== null implies a phantom tx will be written (completer-with-phantom only).
     let completerShare: number;
     let partnerShare: number;
     let partnerRole: AsphaltRole | null;
+    let sharedJobKey: string;
+    let partnerSessionIdForMeta: string | null;
 
-    if (ctx.completerRole === 'driveway-seller') {
-      completerShare = split.cartShare;
-      partnerShare = split.rcShare;
-      partnerRole = 'asphalt-executor';
-    } else if (ctx.completerRole === 'asphalt-executor') {
-      completerShare = split.rcShare;
-      partnerShare = split.cartShare;
-      partnerRole = 'driveway-seller';
-    } else {
+    if (ctx.mode === 'completer-with-phantom') {
+      if (ctx.completerRole === 'driveway-seller') {
+        completerShare = split.cartShare;
+        partnerShare = split.rcShare;
+        partnerRole = 'asphalt-executor';
+      } else {
+        // completerRole === 'asphalt-executor'
+        completerShare = split.rcShare;
+        partnerShare = split.cartShare;
+        partnerRole = 'driveway-seller';
+      }
+      sharedJobKey = this.generateSharedJobKey();
+      partnerSessionIdForMeta = ctx.partner.sessionId;
+    } else if (ctx.mode === 'self-both') {
       completerShare = split.total;
       partnerShare = 0;
       partnerRole = null;
+      sharedJobKey = this.generateSharedJobKey();
+      partnerSessionIdForMeta = null;
+    } else if (ctx.mode === 'driveway-deferred') {
+      // Defensive: must have a positive asphalt amount, or this mode is meaningless.
+      if (!(ctx.asphaltAmount > 0)) {
+        throw new Error('driveway-deferred mode requires asphaltAmount > 0');
+      }
+      completerShare = split.cartShare;
+      partnerShare = 0;
+      partnerRole = null;
+      sharedJobKey = this.generateSharedJobKey();
+      // RC isn't assigned yet (or only auto-assigned to self for an RC voluntarily
+      // deferring). partner_session_id on meta stays null — export pairs via sharedJobKey,
+      // not session id, so this is fine.
+      partnerSessionIdForMeta = null;
+    } else if (ctx.mode === 'asphalt-executor-only') {
+      completerShare = split.rcShare;
+      partnerShare = 0;
+      partnerRole = null;
+      // Inherit the key from the cart's already-written tx (was stamped on the
+      // asphalt child pending_sale at cart's completion time).
+      sharedJobKey = ctx.existingParentSharedJobKey;
+      // Look up the asphalt child's session_id (the cart's session) for the meta.
+      // Best-effort — if the row is gone (e.g., already completed), proceed with null.
+      try {
+        const childRow = await this.getPendingSaleById(ctx.childSaleId);
+        partnerSessionIdForMeta = childRow?.sessionId || null;
+      } catch (e) {
+        console.warn('[AsphaltComplete] Could not look up asphalt child for partner_session_id:', e);
+        partnerSessionIdForMeta = null;
+      }
+    } else {
+      // Exhaustiveness check — TypeScript should catch unhandled modes at compile time.
+      const _exhaustive: never = ctx;
+      throw new Error('Unhandled asphalt completion mode');
     }
 
-    const didUpsell = (ctx.upsoldAmount || 0) > 0;
-    const sharedJobKey = this.generateSharedJobKey();
-
+    // --- COMMON: build completer's asphalt_meta ---
     const completerMeta: AsphaltMeta = {
       sharedJobKey,
       role: ctx.completerRole,
@@ -2484,7 +2601,7 @@ class SessionService {
       asphalt_amount: ctx.asphaltAmount,
       upsold_asphalt_amount: ctx.upsoldAmount,
       is_partner_phantom: false,
-      partner_session_id: ctx.partner?.sessionId ?? null,
+      partner_session_id: partnerSessionIdForMeta,
       did_upsell: didUpsell,
     };
 
@@ -2548,8 +2665,8 @@ class SessionService {
       if (error) throw error;
     }
 
-    // --- Partner's phantom transaction ---
-    if (ctx.partner && partnerRole) {
+    // --- MODE: completer-with-phantom — write partner's phantom transaction ---
+    if (ctx.mode === 'completer-with-phantom' && partnerRole) {
       const partnerMeta: AsphaltMeta = {
         sharedJobKey,
         role: partnerRole,
@@ -2627,7 +2744,38 @@ class SessionService {
       }
     }
 
-    // Mark booking completed (only if real, not 'NEW-' job)
+    // --- MODE: driveway-deferred — create the asphalt child pending_sale row ---
+    // sharedJobKey on the child is what RC's later asphalt-executor-only completion
+    // will pass back as ctx.existingParentSharedJobKey to link the two real txs.
+    if (ctx.mode === 'driveway-deferred') {
+      try {
+        await this.createDeferredAsphaltChild({
+          sharedJobKey,
+          sessionId: ctx.childPending.sessionId,
+          workerId: ctx.childPending.workerId,
+          routeCode: ctx.childPending.routeCode,
+          houseNumber: ctx.childPending.houseNumber,
+          streetName: ctx.childPending.streetName,
+          propertyType: ctx.childPending.propertyType,
+          notes: ctx.childPending.notes,
+          asphaltAmount: ctx.asphaltAmount,
+          upsoldAsphaltAmount: ctx.upsoldAmount > 0 ? ctx.upsoldAmount : undefined,
+          assignedRcSessionId: ctx.childPending.autoAssignToRcSessionId,
+        });
+      } catch (err) {
+        // The cart's tx is already written at this point. Rolling it back is
+        // complex (would need to delete the just-inserted tx and re-throw). Instead,
+        // log loudly so the RM can see the orphan and create the asphalt child
+        // manually via QuickPending if needed.
+        console.error(
+          '[AsphaltComplete] CRITICAL: driveway-deferred tx written but child pending creation FAILED.',
+          'Cart tx id:', transaction.id, 'sharedJobKey:', sharedJobKey, 'Error:', err
+        );
+        throw err;
+      }
+    }
+
+    // --- COMMON: Mark booking completed (real bookings only) ---
     if (jobId && !jobId.startsWith('NEW-')) {
       await supabase
         .from('bookings')
@@ -2639,10 +2787,22 @@ class SessionService {
         .eq('command_center_id', ccId);
     }
 
-    // Clean up BOTH pending sales (parent driveway + asphalt child)
+    // --- MODE-DRIVEN: pending_sales cleanup ---
+    // completer-with-phantom + self-both: delete parent and child rows when present.
+    // asphalt-executor-only: delete the child row (cart's tx already consumed any parent).
+    // driveway-deferred: nothing to delete (we just CREATED a child instead).
     const pendingIdsToDelete: string[] = [];
-    if (ctx.parentSaleId) pendingIdsToDelete.push(ctx.parentSaleId);
-    if (ctx.childSaleId) pendingIdsToDelete.push(ctx.childSaleId);
+    if (ctx.mode === 'completer-with-phantom') {
+      if (ctx.parentSaleId) pendingIdsToDelete.push(ctx.parentSaleId);
+      if (ctx.childSaleId) pendingIdsToDelete.push(ctx.childSaleId);
+    } else if (ctx.mode === 'self-both') {
+      if (ctx.parentSaleId) pendingIdsToDelete.push(ctx.parentSaleId);
+      if (ctx.childSaleId) pendingIdsToDelete.push(ctx.childSaleId);
+    } else if (ctx.mode === 'asphalt-executor-only') {
+      pendingIdsToDelete.push(ctx.childSaleId);
+    }
+    // driveway-deferred: no cleanup needed.
+
     if (pendingIdsToDelete.length > 0) {
       const { error } = await supabase
         .from('pending_sales')
@@ -2654,13 +2814,19 @@ class SessionService {
       }
     }
 
-    // Recalculate stats for BOTH carts (completer and partner if present)
+    // --- MODE-DRIVEN: recalculate stats ---
+    // Always recalc the completer. Only recalc partner in completer-with-phantom.
+    //   self-both              → no partner to recalc.
+    //   driveway-deferred      → RC's tx doesn't exist yet; nothing to recalc on partner side.
+    //   asphalt-executor-only  → cart's tx already exists and its payoutShare-vs-cash
+    //                            delta was locked at the cart's earlier completion.
+    //                            Cart's stats are still correct without re-running.
     await this.recalculateAndSaveWorkerStats(workerId);
-    if (ctx.partner) {
+    if (ctx.mode === 'completer-with-phantom') {
       await this.recalculateAndSaveWorkerStats(ctx.partner.workerId);
     }
 
-    // Receipt email — only from collecting cart, since the partner's row is phantom
+    // --- COMMON: Receipt email (only from collecting cart, since the partner's row is phantom) ---
     if (transaction.customerEmail && transaction.customerEmail.trim() !== '') {
       this.sendReceiptEmail({
         customerEmail: transaction.customerEmail,
@@ -2681,6 +2847,74 @@ class SessionService {
         console.error('Email send failed (non-blocking):', err);
       });
     }
+  }
+
+  /**
+   * Create an asphalt child pending_sale row as part of a driveway-deferred
+   * completion. Distinct from createPendingSale's 3-way orchestrator because:
+   *   - parent_id is null (parent is a completed tx, not a pending row)
+   *   - shared_job_key is set (links to the cart's just-written driveway tx)
+   *   - no auto-RC-detection (the caller specifies assignedRcSessionId explicitly,
+   *     or leaves it null/undefined for RM assignment)
+   *
+   * Called only from inside completeAsphaltJob's driveway-deferred branch.
+   * The row is visible to:
+   *   - The selling cart (via session_id match in their pending list)
+   *   - The RM (via getUnassignedAsphaltForManager filter)
+   *   - The assigned RC (via getAsphaltAssignmentsForSession) once assigned.
+   */
+  private async createDeferredAsphaltChild(input: {
+    sharedJobKey: string;
+    sessionId: string;            // the SELLING cart's session id (origin of the sale)
+    workerId: string;             // the cart worker who completed the driveway
+    routeCode?: string;
+    houseNumber?: string;
+    streetName?: string;
+    propertyType?: string;
+    notes?: string;
+    asphaltAmount: number;
+    upsoldAsphaltAmount?: number;
+    assignedRcSessionId?: string;
+  }): Promise<PendingSale> {
+    const ccId = this.getCCId();
+    const date = await this.getDailySessionDate();
+    if (!date) throw new Error('No active session');
+
+    const id = `pend_${input.workerId}_asphalt_deferred_${Date.now()}`;
+    const row = {
+      id,
+      session_id: input.sessionId,
+      worker_id: input.workerId,
+      command_center_id: ccId,
+      session_date: date,
+      route_code: input.routeCode || null,
+      house_number: input.houseNumber || null,
+      street_name: input.streetName || null,
+      // Mirror the asphalt amount into price for display consistency on lists
+      // that sort/filter by price.
+      price: String(input.asphaltAmount),
+      property_type: input.propertyType || null,
+      services: null,             // service flags don't apply to the asphalt portion
+      notes: input.notes || null,
+      sale_type: 'asphalt',
+      parent_id: null,            // No pending parent — parent is a completed transaction
+      assigned_rc_session_id: input.assignedRcSessionId || null,
+      asphalt_amount: input.asphaltAmount,
+      upsold_asphalt_amount: input.upsoldAsphaltAmount ?? null,
+      shared_job_key: input.sharedJobKey,
+    };
+
+    const { data, error } = await supabase
+      .from('pending_sales')
+      .insert(row)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[Asphalt] createDeferredAsphaltChild failed:', error);
+      throw error;
+    }
+    return this.mapDbPendingSale(data);
   }
 
   // --- 7. EMAIL RECEIPTS ---
@@ -2802,6 +3036,13 @@ class SessionService {
    *      Net across both carts is 0 — the split moves dollars between cards, not
    *      out of the day's books.
    *
+   *      For Path 3 (driveway-deferred + asphalt-executor-only): the same adjustment
+   *      logic applies — cart's tx has negative delta (cash collected > earned share),
+   *      RC's tx (later) has positive delta. Net across both sessions stays 0 once
+   *      both txs exist. In the window between cart's completion and RC's, cart's
+   *      stats correctly reflect cart's earned $; the +0.70Y "due to RC" is captured
+   *      on RC's books at their completion time.
+   *
    * LIMITATION: the adjustment is applied PRE-divisor at 1.0 weight regardless of
    * noTaxOnCash. In practice asphalt is always cash and Sealing defaults noTaxOnCash
    * to false, so this is correct. If noTaxOnCash is turned ON for a sealing session
@@ -2823,8 +3064,6 @@ class SessionService {
 
     financials.forEach((tx) => {
       // --- STEP COUNTING (asphalt-aware) ---
-      // Asphalt transactions use the role + did_upsell rules. Non-asphalt fall
-      // through to the existing rule (Production/Sale/Upgrade = +1 step).
       if (tx.asphaltMeta) {
         const meta = tx.asphaltMeta;
         if (meta.role === 'driveway-seller') {
@@ -2906,19 +3145,6 @@ class SessionService {
         stats.prodPrepaidSplit;
 
     // --- ASPHALT ADJUSTMENT ---
-    // For each tx with payoutShare set, compute delta = payoutShare - sum(breakdown).
-    // Apply that delta to BOTH prodGross and taxableWeighted at 1.0 weight, pre-divisor.
-    //
-    // Collecting cart example: $650 cash collected, $360 share → delta = -290
-    //   prodGross goes from $650 to $360 (reflects what they earned, not collected)
-    //   taxableWeighted reduced by 290 → tax/cost math runs on $360 base
-    //
-    // Phantom cart example: $0 collected, $290 share → delta = +290
-    //   prodGross goes from $0 to $290
-    //   taxableWeighted boosted by 290 → tax/cost math credits them with $290 base
-    //
-    // For self-both (single tx, payoutShare = total = sum of breakdown), delta = 0,
-    // so the adjustment is a no-op and the existing math runs unchanged.
     let asphaltAdjustment = 0;
     financials.forEach((tx) => {
       if (tx.payoutShare == null) return;
@@ -3075,6 +3301,9 @@ class SessionService {
   //   - getUnassignedAsphaltForManager drives the RMLogbook asphalt button + modal.
   //   - getAsphaltChildrenForParent / getAsphaltAssignmentsForSession power merged-card
   //     displays on the worker dashboard and the RC's logsheet.
+  //   - shared_job_key (Path 3): set on deferred children created by completeAsphaltJob's
+  //     driveway-deferred branch. Linked to the cart's already-completed driveway tx
+  //     via asphalt_meta.sharedJobKey on that tx.
 
   private mapDbPendingSale(row: any): PendingSale {
     return {
@@ -3098,6 +3327,8 @@ class SessionService {
       assignedRcSessionId: row.assigned_rc_session_id || undefined,
       asphaltAmount: row.asphalt_amount != null ? Number(row.asphalt_amount) : undefined,
       upsoldAsphaltAmount: row.upsold_asphalt_amount != null ? Number(row.upsold_asphalt_amount) : undefined,
+      // --- PATH 3 ADDITION ---
+      sharedJobKey: row.shared_job_key || undefined,
     };
   }
 
@@ -3207,6 +3438,9 @@ class SessionService {
    *     up in the RM asphalt modal.
    *   - Otherwise: normal driveway-only behaviour, single row written.
    *
+   * input.sharedJobKey is honoured if passed (defensive — only the internal
+   * createDeferredAsphaltChild path actually sets it in current code).
+   *
    * Return value: the "primary" PendingSale. For parent+child flows, returns the
    * PARENT row. UI fetches the child via getAsphaltChildrenForParent when needed.
    * For asphalt-only, returns the child row itself.
@@ -3269,6 +3503,7 @@ class SessionService {
         assigned_rc_session_id: input.assignedRcSessionId || (callerIsRC ? input.sessionId : null),
         asphalt_amount: input.asphaltAmount ?? 0,
         upsold_asphalt_amount: input.upsoldAsphaltAmount ?? null,
+        shared_job_key: input.sharedJobKey || null,
       };
 
       const { data, error } = await supabase
@@ -3307,6 +3542,7 @@ class SessionService {
         assigned_rc_session_id: null,
         asphalt_amount: null,
         upsold_asphalt_amount: null,
+        shared_job_key: null,
       };
 
       const childRow = {
@@ -3330,6 +3566,7 @@ class SessionService {
         assigned_rc_session_id: input.assignedRcSessionId || (callerIsRC ? input.sessionId : null),
         asphalt_amount: input.asphaltAmount ?? 0,
         upsold_asphalt_amount: input.upsoldAsphaltAmount ?? null,
+        shared_job_key: null,
       };
 
       const { data: parentData, error: parentError } = await supabase
@@ -3402,6 +3639,7 @@ class SessionService {
    *     (assignAsphaltToRcSession / unassignAsphalt) below are cleaner for that purpose.
    *   - asphaltAmount / upsoldAsphaltAmount: numeric updates. undefined = leave alone;
    *     a number = set; 0 = zero out.
+   *   - sharedJobKey: string to set, null to clear (rare — typically only used in rollback).
    */
   public async updatePendingSale(id: string, updates: PendingSaleUpdate): Promise<void> {
     const ccId = this.getCCId();
@@ -3423,6 +3661,10 @@ class SessionService {
     }
     if (updates.upsoldAsphaltAmount !== undefined) {
       dbPayload.upsold_asphalt_amount = updates.upsoldAsphaltAmount;
+    }
+    // Path 3: sharedJobKey can be set or cleared.
+    if (updates.sharedJobKey !== undefined) {
+      dbPayload.shared_job_key = updates.sharedJobKey;
     }
 
     const { error } = await supabase
@@ -3626,6 +3868,34 @@ class SessionService {
     } catch (err) {
       console.warn('[Asphalt] getAsphaltAssignmentsForSession error:', err);
       return [];
+    }
+  }
+
+  /**
+   * Path 3 lookup: fetch an asphalt pending_sale by its shared_job_key. Used for
+   * diagnostics and rare cross-referencing (e.g., reconciliation tools that walk
+   * from a cart's tx to find its deferred asphalt child). Returns null if no
+   * matching child exists.
+   *
+   * Note: regular Path 3 usage doesn't need this — the UI reads sharedJobKey
+   * directly from the PendingSale object when displaying/completing it.
+   */
+  public async getAsphaltChildBySharedJobKey(sharedJobKey: string): Promise<PendingSale | null> {
+    try {
+      const ccId = this.getCCId();
+      const { data, error } = await supabase
+        .from('pending_sales')
+        .select('*')
+        .eq('command_center_id', ccId)
+        .eq('sale_type', 'asphalt')
+        .eq('shared_job_key', sharedJobKey)
+        .maybeSingle();
+
+      if (error || !data) return null;
+      return this.mapDbPendingSale(data);
+    } catch (err) {
+      console.warn('[Asphalt] getAsphaltChildBySharedJobKey error:', err);
+      return null;
     }
   }
 }
