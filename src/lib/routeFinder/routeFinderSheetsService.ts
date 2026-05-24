@@ -20,12 +20,22 @@ const EXCLUDED_TABS = new Set([
   'listings', 'ccd', 'managers', 'rf_session', 'rf_log',
 ]);
 
-// Background colors for suggestion cells
+// Background colors for suggestion cells (Sheets API expects 0–1 RGB)
+//
+//   green        — geocoded, suggested route = current route
+//   light_green  — geocoded, suggested route differs from current
+//   blue         — rescued via prior-year phone match
+//   orange       — rescued via Listings lookup
+//   purple       — rescued via contractor+date cluster
+//   red          — no match — current values written unchanged
+//
 const SUGGESTION_COLORS: Record<string, { red: number; green: number; blue: number }> = {
-  green:  { red: 0.714, green: 0.843, blue: 0.659 },
-  yellow: { red: 1.0,   green: 0.949, blue: 0.600 },
-  orange: { red: 0.976, green: 0.796, blue: 0.518 },
-  red:    { red: 0.918, green: 0.600, blue: 0.600 },
+  green:       { red: 0.714, green: 0.843, blue: 0.659 },
+  light_green: { red: 0.851, green: 0.949, blue: 0.800 },
+  blue:        { red: 0.776, green: 0.882, blue: 0.969 },
+  orange:      { red: 0.976, green: 0.796, blue: 0.518 },
+  purple:      { red: 0.851, green: 0.776, blue: 0.918 },
+  red:         { red: 0.918, green: 0.600, blue: 0.600 },
 };
 
 function columnIndexToLetter(colIndex: number): string {

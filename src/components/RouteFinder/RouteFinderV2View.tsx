@@ -5,20 +5,27 @@
 // Phases:
 //   auth      — connect to Google
 //   setup     — enter aeration spreadsheet ID
-//   scanning  — geocoding + fuzzy matching with live progress
+//   scanning  — geocoding + rescue layers with live progress
 //   complete  — done, counts shown
 //
 // What it does:
 //   - Reads the aeration call book across all tabs
+//   - Reads the Listings tab once (curated route → street list)
+//   - Builds two global rescue indexes from the call book rows:
+//       • cleanPhoneIndex — phone → most-recent year where (route, street) is a Listings match
+//       • clusters       — contractor+date → dominant route for that crew that day
 //   - Groups customers by call book prefix + city
-//   - Runs 3-pass geocoding to find the best route for each customer
-//   - Inserts "Suggested RC" and "Suggested Street" columns next to the
-//     originals (or clears them if they already exist from a prior run)
+//   - Runs the scan engine per group:
+//       geocode → if no hit, try phone-group / listings / cluster rescues
+//   - Inserts "Suggested RC" and "Suggested Street" columns next to the originals
+//     (or clears them if they already exist from a prior run)
 //   - Writes suggestions with colour coding:
-//       green  = same route, spelling standardization only
-//       yellow = different route found via geocode
-//       orange = geocode failed, fuzzy street-name match used
-//       red    = no match found at all
+//       green        — geocoded, same route as current
+//       light green  — geocoded, different route
+//       blue         — rescued via prior-year phone match
+//       orange       — rescued via Listings lookup
+//       purple       — rescued via contractor+date cluster
+//       red          — no match — current values written unchanged
 //
 
 import React, { useState, useEffect } from 'react';
@@ -28,10 +35,13 @@ import {
 
 import { routeFinderSheetsService } from '../../lib/routeFinder/routeFinderSheetsService';
 import { rfPrefixService, RFPrefixMapping } from '../../lib/routeFinder/rfPrefixService';
-import { scanGroup, SuggestionEntry } from '../../lib/routeFinder/rfScanEngine';
+import {
+  scanGroup,
+  SuggestionEntry,
+  CustomerRescueInfo,
+} from '../../lib/routeFinder/rfScanEngine';
 import {
   loadApprovedRoutes,
-  getRouteCentroid,
   geocodeAddress,
   findClosestRoute,
   normalizePhone,
@@ -39,6 +49,11 @@ import {
   GeoCustomer,
   CustomerRow,
 } from '../../lib/routeFinder/routeFinderGeoService';
+import {
+  ListingsData,
+  normalizeStreetForMatch,
+  CallBookSheet,
+} from '../../lib/routeFinder/routeFinderEngine';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -49,6 +64,30 @@ interface CustomerGroup {
   city: string;
   mapPrefix: string | null;
   customers: GeoCustomer[];
+}
+
+/** Most-recent contractor + date per customer (parallel to GeoCustomer.id) */
+interface CustomerContext {
+  contractor: string;
+  date: string;
+  year: number;
+}
+
+/** Result of cleanPhoneIndex — the cleanest prior-year row for a phone */
+interface CleanPhoneEntry {
+  routeCode: string;
+  streetName: string;
+  year: number;
+}
+
+/** Mutable cluster being aggregated during the rescue-index build */
+interface MutableCluster {
+  contractor: string;
+  date: string;
+  totalRows: number;
+  routeVotes: Map<string, number>;
+  dominantRoute: string;
+  dominantCount: number;
 }
 
 interface Props {
@@ -62,18 +101,18 @@ const DISCOVERY_SAMPLE_SIZE = 20;
 // ─── COMPONENT ────────────────────────────────────────────────────────────────
 
 const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
-  const [phase, setPhase]                 = useState<Phase>('auth');
+  const [phase, setPhase]                       = useState<Phase>('auth');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const [aerationInput, setAerationInput] = useState(() => localStorage.getItem('rfv2_aeration_id') || '');
-  const [error, setError]                 = useState<string | null>(null);
+  const [aerationInput, setAerationInput]       = useState(() => localStorage.getItem('rfv2_aeration_id') || '');
+  const [error, setError]                       = useState<string | null>(null);
 
   const [scanProgress, setScanProgress] = useState({
     current: 0, total: 0, message: '', group: '',
-    green: 0, yellow: 0, orange: 0, red: 0,
+    green: 0, lightGreen: 0, blue: 0, orange: 0, purple: 0, red: 0,
   });
 
   const [completeCounts, setCompleteCounts] = useState({
-    green: 0, yellow: 0, orange: 0, red: 0,
+    green: 0, lightGreen: 0, blue: 0, orange: 0, purple: 0, red: 0,
   });
 
   // ─── Auth check ───────────────────────────────────────────────────────────
@@ -113,10 +152,13 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
     localStorage.setItem('rfv2_aeration_id', aerationId);
     setError(null);
     setPhase('scanning');
+    setScanProgress({
+      current: 0, total: 0, message: 'Loading route maps...', group: '',
+      green: 0, lightGreen: 0, blue: 0, orange: 0, purple: 0, red: 0,
+    });
 
     try {
       // 1. Load routes + prefix mappings
-      setScanProgress({ current: 0, total: 0, message: 'Loading route maps...', group: '', green: 0, yellow: 0, orange: 0, red: 0 });
       const routes = await loadApprovedRoutes();
 
       setScanProgress(p => ({ ...p, message: 'Loading prefix mappings...' }));
@@ -138,22 +180,46 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
       const sheetIdByName = new Map<string, number>();
       for (const t of tabsWithIds) sheetIdByName.set(t.title, t.sheetId);
 
-      // 4. Read call book sheets + capture column positions per tab
+      // 4. Read Listings tab (curated route → street list)
+      setScanProgress(p => ({ ...p, message: 'Reading Listings tab...' }));
+      const listingsData = await routeFinderSheetsService.readListingsTab(aerationId);
+
+      // 5. Read call book sheets (all tabs except excluded)
       setScanProgress(p => ({ ...p, message: 'Reading call book...' }));
+      const tabNames = await routeFinderSheetsService.getCallBookTabs(aerationId);
+      const loadedSheets = await routeFinderSheetsService.readCallBookSheets(
+        aerationId, tabNames,
+        (_current, _total, sheetName) =>
+          setScanProgress(p => ({ ...p, message: `Reading ${sheetName}...` }))
+      );
+
+      // 6. Build rescue indexes from the raw sheet rows (one walk, once)
+      setScanProgress(p => ({ ...p, message: 'Building rescue indexes...' }));
+      const { cleanPhoneIndex, clusters } = buildRescueIndexes(loadedSheets, listingsData);
+
+      // 7. Build customer groups + capture per-customer contractor+date context
+      setScanProgress(p => ({ ...p, message: 'Building customer groups...' }));
       const sheetColumnMap = new Map<string, {
         routeCodeCol: number;
         streetNameCol: number;
         headerRowIndex: number;
       }>();
+      const customerContextMap = new Map<string, CustomerContext>();
 
-      const groups = await buildCustomerGroups(
-        [{ id: aerationId, label: 'Aeration' }],
-        routes,
+      const groups = buildCustomerGroups(
+        aerationId,
+        loadedSheets,
         mappings,
-        sheetColumnMap
+        sheetColumnMap,
+        customerContextMap,
       );
 
-      // 5. Set up "Suggested RC" / "Suggested Street" columns per tab
+      // 8. Build per-customer rescue info from the global indexes
+      const customerRescueInfo = buildCustomerRescueInfo(
+        groups, customerContextMap, cleanPhoneIndex, clusters,
+      );
+
+      // 9. Set up "Suggested RC" / "Suggested Street" columns per tab
       setScanProgress(p => ({ ...p, message: 'Setting up suggestion columns...' }));
       const suggestedColBySheet = new Map<string, {
         suggestedRCCol: number;
@@ -173,9 +239,9 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
         suggestedColBySheet.set(sheetName, result);
       }
 
-      // 6. Scan all customer groups
-      const allSuggestions: SuggestionEntry[] = [];
-      let totalGreen = 0, totalYellow = 0, totalOrange = 0, totalRed = 0;
+      // 10. Scan all customer groups
+      let totalGreen = 0, totalLightGreen = 0, totalBlue = 0,
+          totalOrange = 0, totalPurple = 0, totalRed = 0;
 
       for (let g = 0; g < groups.length; g++) {
         const group      = groups[g];
@@ -212,30 +278,33 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
 
         const result = await scanGroup({
           mapPrefix,
-          customers:     group.customers,
-          approvedRoutes: routes,
-          mapboxToken:   import.meta.env.VITE_MAPBOX_TOKEN as string,
-          onProgress:    ({ current, total, message, green, yellow, orange, red }) => {
+          customers:          group.customers,
+          approvedRoutes:     routes,
+          mapboxToken:        import.meta.env.VITE_MAPBOX_TOKEN as string,
+          listingsData,
+          customerRescueInfo,
+          onProgress: ({ current, total, message, green, lightGreen, blue, orange, purple, red }) => {
             setScanProgress({
-              current,
-              total,
-              message,
-              group: groupLabel,
-              green:  totalGreen  + green,
-              yellow: totalYellow + yellow,
-              orange: totalOrange + orange,
-              red:    totalRed    + red,
+              current, total, message,
+              group:      groupLabel,
+              green:      totalGreen      + green,
+              lightGreen: totalLightGreen + lightGreen,
+              blue:       totalBlue       + blue,
+              orange:     totalOrange     + orange,
+              purple:     totalPurple     + purple,
+              red:        totalRed        + red,
             });
           },
         });
 
-        allSuggestions.push(...result.suggestions);
-        totalGreen  += result.green;
-        totalYellow += result.yellow;
-        totalOrange += result.orange;
-        totalRed    += result.red;
+        totalGreen      += result.green;
+        totalLightGreen += result.lightGreen;
+        totalBlue       += result.blue;
+        totalOrange     += result.orange;
+        totalPurple     += result.purple;
+        totalRed        += result.red;
 
-        // 7. Write this group's suggestions immediately so progress is visible in the sheet
+        // 11. Write this group's suggestions immediately so progress is visible in the sheet
         const groupSuggestionsBySheet = new Map<string, SuggestionEntry[]>();
         for (const s of result.suggestions) {
           if (!groupSuggestionsBySheet.has(s.sheetName)) groupSuggestionsBySheet.set(s.sheetName, []);
@@ -259,7 +328,14 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
         }
       }
 
-      setCompleteCounts({ green: totalGreen, yellow: totalYellow, orange: totalOrange, red: totalRed });
+      setCompleteCounts({
+        green:      totalGreen,
+        lightGreen: totalLightGreen,
+        blue:       totalBlue,
+        orange:     totalOrange,
+        purple:     totalPurple,
+        red:        totalRed,
+      });
       setPhase('complete');
 
     } catch (e: any) {
@@ -269,98 +345,257 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
     }
   };
 
+  // ─── BUILD RESCUE INDEXES ─────────────────────────────────────────────────
+  //
+  // One walk of all rows across all sheets to produce two global indexes:
+  //
+  //   cleanPhoneIndex — phone → most-recent year where (route, normalize(street))
+  //                      is in the Listings tab. The "clean prior year" signal.
+  //
+  //   clusters        — `${contractor}|${date}` → vote tally of routes that
+  //                      contractor was on that day. Used by Rescue 3 once
+  //                      the engine checks the ≥3 rows / ≥60% threshold.
+  //
+  function buildRescueIndexes(
+    sheets: CallBookSheet[],
+    listingsData: ListingsData,
+  ): {
+    cleanPhoneIndex: Map<string, CleanPhoneEntry>;
+    clusters: Map<string, MutableCluster>;
+  } {
+    const cleanPhoneIndex = new Map<string, CleanPhoneEntry>();
+    const clusters        = new Map<string, MutableCluster>();
+
+    for (const sheet of sheets) {
+      const { CI, rows } = sheet;
+
+      for (const row of rows) {
+        if (!row || !row[0]) continue;
+
+        const routeCode = CI.routeCode >= 0 ? String(row[CI.routeCode] ?? '').trim().toUpperCase() : '';
+        if (!routeCode) continue;
+
+        // ── Cluster contribution ────────────────────────────────────────
+        const contractor = CI.contractorName >= 0 ? String(row[CI.contractorName] ?? '').trim() : '';
+        const date       = CI.date >= 0           ? String(row[CI.date]           ?? '').trim() : '';
+        if (contractor && date) {
+          const key = `${contractor.toLowerCase()}|${date}`;
+          let entry = clusters.get(key);
+          if (!entry) {
+            entry = {
+              contractor, date,
+              totalRows: 0,
+              routeVotes: new Map(),
+              dominantRoute: '',
+              dominantCount: 0,
+            };
+            clusters.set(key, entry);
+          }
+          entry.totalRows++;
+          entry.routeVotes.set(routeCode, (entry.routeVotes.get(routeCode) || 0) + 1);
+        }
+
+        // ── Clean-phone contribution ────────────────────────────────────
+        const rawPhone   = CI.phone >= 0    ? String(row[CI.phone]    ?? '').trim() : '';
+        const rawArea    = CI.areaCode >= 0 ? String(row[CI.areaCode] ?? '').trim() : '';
+        const combined   = (rawArea.replace(/\D/g, '') + rawPhone.replace(/\D/g, '')).slice(-10);
+        const phone      = combined.length === 10 ? combined : normalizePhone(rawPhone);
+        if (!phone) continue;
+
+        const streetName = CI.streetName >= 0 ? String(row[CI.streetName] ?? '').trim() : '';
+        const year       = CI.year >= 0       ? (parseInt(String(row[CI.year] ?? ''), 10) || 0) : 0;
+        if (!streetName || year <= 0) continue;
+
+        const listingsStreets   = listingsData.routeMap.get(routeCode);
+        const listingsOriginals = listingsData.routeMapOriginal.get(routeCode);
+        if (!listingsStreets || !listingsOriginals) continue;
+
+        const normalizedStreet = normalizeStreetForMatch(streetName);
+        const idx = listingsStreets.indexOf(normalizedStreet);
+        if (idx < 0) continue; // not a clean Listings match
+
+        // Use the Listings tab's canonical spelling, not the call book's
+        const canonicalStreet = listingsOriginals[idx] || streetName;
+
+        const existing = cleanPhoneIndex.get(phone);
+        if (!existing || year > existing.year) {
+          cleanPhoneIndex.set(phone, {
+            routeCode,
+            streetName: canonicalStreet,
+            year,
+          });
+        }
+      }
+    }
+
+    // Finalize cluster dominant routes
+    for (const entry of clusters.values()) {
+      let max = 0, dominant = '';
+      for (const [route, count] of entry.routeVotes) {
+        if (count > max) { max = count; dominant = route; }
+      }
+      entry.dominantRoute = dominant;
+      entry.dominantCount = max;
+    }
+
+    return { cleanPhoneIndex, clusters };
+  }
+
+  // ─── BUILD CUSTOMER RESCUE INFO ───────────────────────────────────────────
+  //
+  // Per-customer rescue context. Only populated for customers who have
+  // either a clean prior-year phone match OR a cluster on their most-recent
+  // contractor+date. The engine handles the cluster threshold itself.
+  //
+  function buildCustomerRescueInfo(
+    groups: CustomerGroup[],
+    customerContextMap: Map<string, CustomerContext>,
+    cleanPhoneIndex: Map<string, CleanPhoneEntry>,
+    clusters: Map<string, MutableCluster>,
+  ): Map<string, CustomerRescueInfo> {
+    const out = new Map<string, CustomerRescueInfo>();
+
+    for (const group of groups) {
+      for (const customer of group.customers) {
+        const info: CustomerRescueInfo = {};
+
+        // Phone match — only include if it differs from current values
+        if (customer.phone) {
+          const match = cleanPhoneIndex.get(customer.phone);
+          if (match) {
+            const currentRC = customer.currentRouteCode.toUpperCase();
+            const currentStreetNorm = normalizeStreetForMatch(customer.streetName);
+            const matchStreetNorm   = normalizeStreetForMatch(match.streetName);
+            if (match.routeCode !== currentRC || matchStreetNorm !== currentStreetNorm) {
+              info.phoneMatch = { ...match };
+            }
+          }
+        }
+
+        // Cluster — pull from this customer's most-recent contractor+date
+        const ctx = customerContextMap.get(customer.id);
+        if (ctx && ctx.contractor && ctx.date) {
+          const key = `${ctx.contractor.toLowerCase()}|${ctx.date}`;
+          const cluster = clusters.get(key);
+          if (cluster) {
+            info.cluster = {
+              contractor:    cluster.contractor,
+              date:          cluster.date,
+              dominantRoute: cluster.dominantRoute,
+              dominantCount: cluster.dominantCount,
+              totalRows:     cluster.totalRows,
+            };
+          }
+        }
+
+        if (info.phoneMatch || info.cluster) {
+          out.set(customer.id, info);
+        }
+      }
+    }
+
+    return out;
+  }
+
   // ─── BUILD CUSTOMER GROUPS ────────────────────────────────────────────────
-  async function buildCustomerGroups(
-    books: { id: string; label: string }[],
-    routes: ApprovedRoute[],
+  //
+  // Walks pre-read sheet rows and produces:
+  //   - Customer groups (one per call-book prefix + city)
+  //   - sheetColumnMap (per-sheet column indices for later column setup)
+  //   - customerContextMap (per-customer most-recent contractor+date)
+  //
+  function buildCustomerGroups(
+    spreadsheetId: string,
+    sheets: CallBookSheet[],
     mappings: RFPrefixMapping[],
-    sheetColumnMap: Map<string, { routeCodeCol: number; streetNameCol: number; headerRowIndex: number }>
-  ): Promise<CustomerGroup[]> {
+    sheetColumnMap: Map<string, { routeCodeCol: number; streetNameCol: number; headerRowIndex: number }>,
+    customerContextMap: Map<string, CustomerContext>,
+  ): CustomerGroup[] {
     const customerMap = new Map<string, GeoCustomer>();
 
-    for (const book of books) {
-      const tabNames = await routeFinderSheetsService.getCallBookTabs(book.id);
-      const sheets   = await routeFinderSheetsService.readCallBookSheets(
-        book.id, tabNames,
-        (_current, _total, sheetName) =>
-          setScanProgress(p => ({ ...p, message: `Reading ${book.label}: ${sheetName}...` }))
-      );
+    for (const sheet of sheets) {
+      const { CI, rows, sheetName } = sheet;
 
-      for (const sheet of sheets) {
-        const { CI, rows, sheetName } = sheet;
+      // Capture column positions for this tab (used later in setupSuggestedColumns)
+      sheetColumnMap.set(sheetName, {
+        routeCodeCol:   CI.routeCode,
+        streetNameCol:  CI.streetName,
+        headerRowIndex: CI.headerRowIndex,
+      });
 
-        // Capture column positions for this tab (used later in setupSuggestedColumns)
-        sheetColumnMap.set(sheetName, {
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row || !row[0]) continue;
+
+        const routeCode = CI.routeCode >= 0 ? String(row[CI.routeCode] ?? '').trim().toUpperCase() : '';
+        if (!routeCode) continue;
+
+        const rawPhone  = CI.phone >= 0    ? String(row[CI.phone]    ?? '').trim() : '';
+        const rawArea   = CI.areaCode >= 0 ? String(row[CI.areaCode] ?? '').trim() : '';
+        const combined  = (rawArea.replace(/\D/g, '') + rawPhone.replace(/\D/g, '')).slice(-10);
+        const phone     = combined.length === 10 ? combined : normalizePhone(rawPhone);
+
+        const houseNum   = CI.houseNum   >= 0 ? String(row[CI.houseNum]   ?? '').trim() : '';
+        const streetName = CI.streetName >= 0 ? String(row[CI.streetName] ?? '').trim() : '';
+        const city       = CI.city       >= 0 ? String(row[CI.city]       ?? '').trim() : '';
+        const firstName  = CI.firstName  >= 0 ? String(row[CI.firstName]  ?? '').trim() : '';
+        const lastName   = CI.lastName   >= 0 ? String(row[CI.lastName]   ?? '').trim() : '';
+        const bookingId  = CI.bookingId  >= 0 ? String(row[CI.bookingId]  ?? '').trim() : '';
+        const year       = CI.year       >= 0 ? (parseInt(String(row[CI.year] ?? ''), 10) || 0) : 0;
+        const contractor = CI.contractorName >= 0 ? String(row[CI.contractorName] ?? '').trim() : '';
+        const date       = CI.date           >= 0 ? String(row[CI.date]           ?? '').trim() : '';
+
+        if (!phone && !houseNum && !streetName) continue;
+
+        const groupKey = phone
+          ? phone
+          : `${houseNum}|${streetName.toLowerCase()}|${city.toLowerCase()}`;
+
+        const customerRow: CustomerRow = {
+          spreadsheetId:  spreadsheetId,
+          sheetName,
+          sheetRowNumber: i + CI.headerRowIndex + 2,
           routeCodeCol:   CI.routeCode,
           streetNameCol:  CI.streetName,
-          headerRowIndex: CI.headerRowIndex,
-        });
+          bookingId,
+          year,
+        };
 
-        for (let i = 0; i < rows.length; i++) {
-          const row = rows[i];
-          if (!row || !row[0]) continue;
+        if (customerMap.has(groupKey)) {
+          const existing = customerMap.get(groupKey)!;
+          existing.rows.push(customerRow);
+          if (year > 0) {
+            const maxYear = Math.max(...existing.rows.map(r => r.year));
+            if (year >= maxYear) {
+              if (firstName)  existing.firstName  = firstName;
+              if (lastName)   existing.lastName   = lastName;
+              if (houseNum)   existing.houseNum   = houseNum;
+              if (streetName) existing.streetName = streetName;
+              if (city)       existing.city       = city;
+              existing.currentRouteCode = routeCode;
 
-          const routeCode = CI.routeCode >= 0 ? String(row[CI.routeCode] ?? '').trim().toUpperCase() : '';
-          if (!routeCode) continue;
-
-          const rawPhone  = CI.phone >= 0    ? String(row[CI.phone]    ?? '').trim() : '';
-          const rawArea   = CI.areaCode >= 0 ? String(row[CI.areaCode] ?? '').trim() : '';
-          const combined  = (rawArea.replace(/\D/g, '') + rawPhone.replace(/\D/g, '')).slice(-10);
-          const phone     = combined.length === 10 ? combined : normalizePhone(rawPhone);
-
-          const houseNum   = CI.houseNum   >= 0 ? String(row[CI.houseNum]   ?? '').trim() : '';
-          const streetName = CI.streetName >= 0 ? String(row[CI.streetName] ?? '').trim() : '';
-          const city       = CI.city       >= 0 ? String(row[CI.city]       ?? '').trim() : '';
-          const firstName  = CI.firstName  >= 0 ? String(row[CI.firstName]  ?? '').trim() : '';
-          const lastName   = CI.lastName   >= 0 ? String(row[CI.lastName]   ?? '').trim() : '';
-          const bookingId  = CI.bookingId  >= 0 ? String(row[CI.bookingId]  ?? '').trim() : '';
-          const year       = CI.year       >= 0 ? (parseInt(String(row[CI.year] ?? ''), 10) || 0) : 0;
-
-          if (!phone && !houseNum && !streetName) continue;
-
-          const groupKey = phone
-            ? phone
-            : `${houseNum}|${streetName.toLowerCase()}|${city.toLowerCase()}`;
-
-          const customerRow: CustomerRow = {
-            spreadsheetId:  book.id,
-            sheetName,
-            sheetRowNumber: i + CI.headerRowIndex + 2,
-            routeCodeCol:   CI.routeCode,
-            streetNameCol:  CI.streetName,
-            bookingId,
-            year,
-          };
-
-          if (customerMap.has(groupKey)) {
-            const existing = customerMap.get(groupKey)!;
-            existing.rows.push(customerRow);
-            if (year > 0) {
-              const maxYear = Math.max(...existing.rows.map(r => r.year));
-              if (year >= maxYear) {
-                if (firstName)  existing.firstName  = firstName;
-                if (lastName)   existing.lastName   = lastName;
-                if (houseNum)   existing.houseNum   = houseNum;
-                if (streetName) existing.streetName = streetName;
-                if (city)       existing.city       = city;
-                existing.currentRouteCode = routeCode;
+              // Update context only when we see a year as recent or more recent
+              const ctx = customerContextMap.get(groupKey);
+              if (!ctx || year >= ctx.year) {
+                customerContextMap.set(groupKey, { contractor, date, year });
               }
             }
-          } else {
-            customerMap.set(groupKey, {
-              id: groupKey,
-              rows: [customerRow],
-              phone, firstName, lastName, houseNum, streetName, city,
-              currentRouteCode: routeCode,
-              lat: null, lng: null,
-              geocodeFailed: false,
-              pinColor: 'grey',
-              suggestedRouteCode:   routeCode,
-              suggestedSegmentName: '',
-              distanceDeg: 0,
-              noRouteFound: false,
-            });
           }
+        } else {
+          customerMap.set(groupKey, {
+            id: groupKey,
+            rows: [customerRow],
+            phone, firstName, lastName, houseNum, streetName, city,
+            currentRouteCode: routeCode,
+            lat: null, lng: null,
+            geocodeFailed: false,
+            pinColor: 'grey',
+            suggestedRouteCode:   routeCode,
+            suggestedSegmentName: '',
+            distanceDeg: 0,
+            noRouteFound: false,
+          });
+          customerContextMap.set(groupKey, { contractor, date, year });
         }
       }
     }
@@ -488,10 +723,12 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
           <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-2">
             <p className="text-xs text-gray-500 uppercase tracking-wider mb-3">Suggestion colours</p>
             {[
-              { color: '#22C55E', label: 'Green',  desc: 'Same route — spelling standardization only' },
-              { color: '#EAB308', label: 'Yellow', desc: 'Different route found via geocode' },
-              { color: '#F97316', label: 'Orange', desc: 'Geocode failed — fuzzy street match used' },
-              { color: '#EF4444', label: 'Red',    desc: 'No match found' },
+              { color: '#22C55E', label: 'Green',       desc: 'Geocoded — same route as current' },
+              { color: '#86EFAC', label: 'Light green', desc: 'Geocoded — different route suggested' },
+              { color: '#60A5FA', label: 'Blue',        desc: 'Rescued via prior-year phone match' },
+              { color: '#F97316', label: 'Orange',      desc: 'Rescued via Listings street lookup' },
+              { color: '#A78BFA', label: 'Purple',      desc: 'Rescued via contractor+date cluster' },
+              { color: '#EF4444', label: 'Red',         desc: 'No match — current values written unchanged' },
             ].map(item => (
               <div key={item.label} className="flex items-center gap-3">
                 <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: item.color }} />
@@ -554,22 +791,30 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div className="bg-gray-800 rounded-lg p-3 text-center border border-gray-700">
               <p className="text-xl font-bold text-green-400">{scanProgress.green.toLocaleString()}</p>
               <p className="text-xs text-gray-500 mt-1">Same route</p>
             </div>
             <div className="bg-gray-800 rounded-lg p-3 text-center border border-gray-700">
-              <p className="text-xl font-bold text-yellow-400">{scanProgress.yellow.toLocaleString()}</p>
+              <p className="text-xl font-bold text-green-300">{scanProgress.lightGreen.toLocaleString()}</p>
               <p className="text-xs text-gray-500 mt-1">Re-routed</p>
             </div>
             <div className="bg-gray-800 rounded-lg p-3 text-center border border-gray-700">
+              <p className="text-xl font-bold text-blue-400">{scanProgress.blue.toLocaleString()}</p>
+              <p className="text-xs text-gray-500 mt-1">Phone match</p>
+            </div>
+            <div className="bg-gray-800 rounded-lg p-3 text-center border border-gray-700">
               <p className="text-xl font-bold text-orange-400">{scanProgress.orange.toLocaleString()}</p>
-              <p className="text-xs text-gray-500 mt-1">Fuzzy match</p>
+              <p className="text-xs text-gray-500 mt-1">Listings</p>
+            </div>
+            <div className="bg-gray-800 rounded-lg p-3 text-center border border-gray-700">
+              <p className="text-xl font-bold text-purple-400">{scanProgress.purple.toLocaleString()}</p>
+              <p className="text-xs text-gray-500 mt-1">Cluster</p>
             </div>
             <div className="bg-gray-800 rounded-lg p-3 text-center border border-gray-700">
               <p className="text-xl font-bold text-red-400">{scanProgress.red.toLocaleString()}</p>
-              <p className="text-xs text-gray-500 mt-1">Not found</p>
+              <p className="text-xs text-gray-500 mt-1">No match</p>
             </div>
           </div>
         </div>
@@ -593,29 +838,37 @@ const RouteFinderV2View: React.FC<Props> = ({ onBack }) => {
             <p className="text-gray-400 mb-6">
               Suggestions written to your spreadsheet. Review and approve them there.
             </p>
-            <div className="grid grid-cols-2 gap-3 text-sm max-w-xs mx-auto">
+            <div className="grid grid-cols-3 gap-3 text-sm max-w-md mx-auto">
               <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
                 <p className="text-2xl font-bold text-green-400">{completeCounts.green.toLocaleString()}</p>
                 <p className="text-xs text-gray-500 mt-1">Same route</p>
               </div>
               <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-                <p className="text-2xl font-bold text-yellow-400">{completeCounts.yellow.toLocaleString()}</p>
+                <p className="text-2xl font-bold text-green-300">{completeCounts.lightGreen.toLocaleString()}</p>
                 <p className="text-xs text-gray-500 mt-1">Re-routed</p>
               </div>
               <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <p className="text-2xl font-bold text-blue-400">{completeCounts.blue.toLocaleString()}</p>
+                <p className="text-xs text-gray-500 mt-1">Phone match</p>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
                 <p className="text-2xl font-bold text-orange-400">{completeCounts.orange.toLocaleString()}</p>
-                <p className="text-xs text-gray-500 mt-1">Fuzzy match</p>
+                <p className="text-xs text-gray-500 mt-1">Listings</p>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                <p className="text-2xl font-bold text-purple-400">{completeCounts.purple.toLocaleString()}</p>
+                <p className="text-xs text-gray-500 mt-1">Cluster</p>
               </div>
               <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
                 <p className="text-2xl font-bold text-red-400">{completeCounts.red.toLocaleString()}</p>
-                <p className="text-xs text-gray-500 mt-1">Not found</p>
+                <p className="text-xs text-gray-500 mt-1">No match</p>
               </div>
             </div>
           </div>
           <button
             onClick={() => {
               setPhase('setup');
-              setCompleteCounts({ green: 0, yellow: 0, orange: 0, red: 0 });
+              setCompleteCounts({ green: 0, lightGreen: 0, blue: 0, orange: 0, purple: 0, red: 0 });
             }}
             className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-white px-5 py-2 rounded-lg text-sm"
           >
