@@ -7,7 +7,7 @@ import {
   Loader, ChevronLeft, ChevronRight, X, Users, Eye, Phone, MapPin,
   AlertCircle, LayoutList, AlertTriangle, Truck, Bookmark, Shovel, Leaf,
   FileText, Check, ArrowRight, ArrowRightLeft, Shuffle, Trash2, UserPlus,
-  UserMinus, Undo2, Navigation2,
+  UserMinus, Undo2, Navigation2, Compass,
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { sessionService } from '../../../lib/sessionService';
@@ -327,6 +327,19 @@ function distToSegmentMeters(
   return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
 }
 
+// Compute great-circle bearing (degrees clockwise from north) from point 1 to point 2.
+// Used to derive a heading from two successive GPS fixes when the device compass
+// isn't available (Android tablets, desktop, or iOS with denied permission).
+function bearingDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const phi1 = lat1 * Math.PI / 180;
+  const phi2 = lat2 * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const y = Math.sin(dLng) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLng);
+  const theta = Math.atan2(y, x);
+  return ((theta * 180 / Math.PI) + 360) % 360;
+}
+
 function findNearestAssignedRoute(
   lat: number, lng: number,
   routeMapData: SavedRoute[],
@@ -533,6 +546,19 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const watchIdRef = useRef<number | null>(null);
   const navMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const navArrowElRef = useRef<HTMLDivElement | null>(null);
+  // --- COMPASS / HEADING ROTATION REFS ---
+  // Last compass reading from DeviceOrientationEvent (preferred, more accurate).
+  const compassHeadingRef = useRef<number | null>(null);
+  // Last GPS-derived heading, computed from successive GPS fixes (fallback).
+  const gpsHeadingRef = useRef<number | null>(null);
+  // Last GPS position seen, used to compute bearingDeg() between fixes.
+  const lastGpsPosRef = useRef<{ lat: number; lng: number; ts: number } | null>(null);
+  // The compass event handler — kept so we can remove it on unmount.
+  const compassHandlerRef = useRef<((e: DeviceOrientationEvent) => void) | null>(null);
+  // iOS Safari 13+ requires a user gesture to grant compass permission. When
+  // true, we render a small "Enable compass" button in HALF 2 that calls
+  // handleEnableCompass on tap.
+  const [compassNeedsPermission, setCompassNeedsPermission] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('staff');
   const [sortBy, setSortBy] = useState<SortOption>('recent');
@@ -1846,10 +1872,26 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [mostRecentCompletionPins, mapLoaded, filterVisibility.pendingSalesAndCompleted]);
 
   // GPS (RM's own location) + drag-to-disable-follow-me + cart-aware on-route
+  //
+  // The nav arrow rotation strategy: compass heading (DeviceOrientationEvent) is
+  // preferred and updates the arrow continuously; this watchPosition callback
+  // computes a GPS-derived heading from successive fixes as a fallback, used
+  // only when compass isn't available (Android tablets without compass, denied
+  // iOS permission, desktop browsers). When BOTH are available, compass wins
+  // because it works while stationary and updates more smoothly.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!navigator.geolocation) return;
     if(!navArrowElRef.current) navArrowElRef.current=createNavArrow();
     navMarkerRef.current=new mapboxgl.Marker({element:navArrowElRef.current}).setLngLat([0,0]).addTo(map);
+
+    // Apply current best heading to the arrow. Called on every GPS fix AND
+    // (separately, via the compass effect below) on every compass event.
+    const applyArrowRotation = () => {
+      if (!navArrowElRef.current) return;
+      const heading = compassHeadingRef.current ?? gpsHeadingRef.current;
+      if (heading == null || isNaN(heading)) return;
+      navArrowElRef.current.style.transform = `rotate(${heading}deg)`;
+    };
 
     const handleDragStart = (e: any) => {
       if (!e.originalEvent) return;
@@ -1861,9 +1903,34 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
     watchIdRef.current=navigator.geolocation.watchPosition(pos=>{
       if(!navMarkerRef.current||!mapRef.current) return;
-      const{latitude:lat,longitude:lng,heading}=pos.coords;
+      const{latitude:lat,longitude:lng,heading,speed}=pos.coords;
       navMarkerRef.current.setLngLat([lng,lat]);
-      if(heading!=null&&!isNaN(heading)&&navArrowElRef.current) navArrowElRef.current.style.transform=`rotate(${heading}deg)`;
+
+      // --- Heading computation ---
+      // Priority 1: native pos.coords.heading (browser-reported course over
+      // ground). Often null at rest or low speeds.
+      // Priority 2: bearing from previous fix to current fix, but only if
+      // we moved enough that GPS noise won't dominate (>5m).
+      // We always update gpsHeadingRef; whether the arrow uses it depends on
+      // whether compass is available (compass wins in applyArrowRotation).
+      let derivedHeading: number | null = null;
+      if (heading != null && !isNaN(heading)) {
+        derivedHeading = heading;
+      } else if (lastGpsPosRef.current) {
+        const prev = lastGpsPosRef.current;
+        const dist = distanceMeters(prev.lat, prev.lng, lat, lng);
+        // Only trust GPS-derived bearing if we've moved meaningfully and
+        // speed is above walking pace (helps filter out drift while idle).
+        if (dist >= 5 && (speed == null || speed > 0.5)) {
+          derivedHeading = bearingDeg(prev.lat, prev.lng, lat, lng);
+        }
+      }
+      if (derivedHeading != null) {
+        gpsHeadingRef.current = derivedHeading;
+      }
+      lastGpsPosRef.current = { lat, lng, ts: Date.now() };
+      applyArrowRotation();
+
       if(centerOnLocationRef.current) mapRef.current.easeTo({center:[lng,lat],duration:1000});
 
       if (centerOnLocationRef.current) {
@@ -1908,6 +1975,72 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       navMarkerRef.current?.remove();navMarkerRef.current=null;
     };
   }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable]);
+
+  // --- COMPASS LISTENER WIRING ---
+  // On mount (and after a permission grant on iOS), attach a deviceorientation
+  // listener that pushes compass headings into compassHeadingRef and applies
+  // rotation. Android tablets and desktop just have this work without any
+  // permission flow; iOS 13+ Safari requires a user gesture, which we handle
+  // by showing a small button overlay in HALF 2 that calls handleEnableCompass.
+  const attachCompassListener = useCallback(() => {
+    if (compassHandlerRef.current) return; // already attached
+    const handler = (e: DeviceOrientationEvent) => {
+      // iOS provides webkitCompassHeading directly — degrees clockwise from north.
+      const webkit = (e as any).webkitCompassHeading;
+      if (typeof webkit === 'number' && !isNaN(webkit)) {
+        compassHeadingRef.current = webkit;
+      } else if (e.alpha != null && !isNaN(e.alpha)) {
+        // Android/desktop: alpha is 0 when device is pointing north and increases
+        // counterclockwise. Invert to get clockwise-from-north.
+        compassHeadingRef.current = (360 - e.alpha) % 360;
+      }
+      if (navArrowElRef.current && compassHeadingRef.current != null) {
+        navArrowElRef.current.style.transform = `rotate(${compassHeadingRef.current}deg)`;
+      }
+    };
+    window.addEventListener('deviceorientation', handler, true);
+    compassHandlerRef.current = handler;
+  }, []);
+
+  const handleEnableCompass = useCallback(async () => {
+    const DOE: any = (window as any).DeviceOrientationEvent;
+    if (!DOE || typeof DOE.requestPermission !== 'function') {
+      // Shouldn't happen — the button only renders when this exists — but
+      // defensive: attach anyway and dismiss the button.
+      attachCompassListener();
+      setCompassNeedsPermission(false);
+      return;
+    }
+    try {
+      const result = await DOE.requestPermission();
+      if (result === 'granted') {
+        attachCompassListener();
+      }
+    } catch (err) {
+      console.warn('Compass permission request failed:', err);
+    }
+    // Either way, dismiss the button — if denied, we silently fall back to
+    // GPS-derived heading. No point pestering the user.
+    setCompassNeedsPermission(false);
+  }, [attachCompassListener]);
+
+  useEffect(() => {
+    const DOE: any = (window as any).DeviceOrientationEvent;
+    if (!DOE) return; // device has no orientation API at all
+    if (typeof DOE.requestPermission === 'function') {
+      // iOS 13+ — needs user gesture, show the enable button.
+      setCompassNeedsPermission(true);
+    } else {
+      // Android/desktop — no permission flow, attach now.
+      attachCompassListener();
+    }
+    return () => {
+      if (compassHandlerRef.current) {
+        window.removeEventListener('deviceorientation', compassHandlerRef.current, true);
+        compassHandlerRef.current = null;
+      }
+    };
+  }, [attachCompassListener]);
 
   useEffect(() => {
     if (centerOnLocation && navMarkerRef.current && mapRef.current) {
@@ -2152,171 +2285,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
         if (sessionId && pendingBookingIds.length > 0) {
           await sessionService.assignBookingsToSession(pendingBookingIds, sessionId);
-        }
-      } else {
-        await sessionService.assignRouteToWorkers(routeCode, [workerId]);
-        await Promise.all(pendingItems.map(job =>
-          sessionService.assignBookingToWorker(job['Booking ID'], workerId)
-        ));
-      }
-      setAssignModalData(null);
-      onRefresh();
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setAssignLoading(false);
-    }
-  };
-
-  const handleTransferConfirm = async (newManagerId: string) => {
-    if (!transferModalData) return;
-    try {
-      if (transferModalData.type === 'ROUTE') {
-        await sessionService.transferRouteToManager(transferModalData.routeCode, newManagerId);
-      } else {
-        await sessionService.transferBookingToManager(
-          transferModalData.targetId,
-          transferModalData.routeCode,
-          newManagerId
-        );
-      }
-      setTransferModalData(null);
-      onRefresh();
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const openTransferModal = () => {
-    if (!assignModalData) return;
-    setTransferModalData({
-      type: 'ROUTE',
-      targetId: assignModalData.routeCode,
-      routeCode: assignModalData.routeCode,
-      title: `Transfer Route ${assignModalData.routeCode}`,
-    });
-    setAssignModalData(null);
-  };
-
-  const handleReassignWorker = async (
-    destination:
-      | { type: 'existing_cart'; targetSessionId: string; label: string }
-      | { type: 'new_solo' }
-      | { type: 'different_manager'; targetManagerId: string }
-  ) => {
-    if (!selectedWorkerToMove) return;
-    setReassignLoading(true);
-    setReassignError(null);
-    setReassignSuccess(null);
-
-    try {
-      await sessionService.reassignWorker(selectedWorkerToMove.contractorId, destination);
-
-      let msg = '';
-      if (destination.type === 'existing_cart') {
-        msg = `${selectedWorkerToMove.firstName} moved to ${destination.label}`;
-      } else if (destination.type === 'new_solo') {
-        msg = `${selectedWorkerToMove.firstName} is now a solo cart`;
-      } else {
-        const mgr = allManagers.find(m => m.userId === destination.targetManagerId);
-        msg = `${selectedWorkerToMove.firstName} moved to ${mgr?.name || 'new manager'}`;
-      }
-
-      setReassignSuccess(msg);
-      setSelectedWorkerToMove(null);
-      setSelectedWorkerSourceCart(null);
-      onRefresh();
-    } catch (err: any) {
-      console.error('Reassign failed:', err);
-      setReassignError(err.message || 'Failed to reassign worker. Please try again.');
-    } finally {
-      setReassignLoading(false);
-    }
-  };
-
-  const handleAerationTransfer = async (targetManagerId: string) => {
-    if (!selectedWorkerToMove) return;
-    setReassignLoading(true);
-    setReassignError(null);
-    setReassignSuccess(null);
-    try {
-      await sessionService.transferWorker(selectedWorkerToMove.contractorId, targetManagerId);
-      const mgr = allManagers.find(m => m.userId === targetManagerId);
-      setReassignSuccess(`${selectedWorkerToMove.firstName} moved to ${mgr?.name || 'new manager'}`);
-      setSelectedWorkerToMove(null);
-      onRefresh();
-    } catch (err: any) {
-      console.error('Transfer failed:', err);
-      setReassignError(err.message || 'Failed to transfer worker.');
-    } finally {
-      setReassignLoading(false);
-    }
-  };
-
-  const handleRemoveWorkerNoShow = async () => {
-    if (!selectedWorkerToMove) return;
-    if (!window.confirm(
-      `Remove ${selectedWorkerToMove.firstName} ${selectedWorkerToMove.lastName} completely?\n\nThis removes them from the session and all stats. Use this for no-shows only.`
-    )) return;
-
-    setReassignLoading(true);
-    setReassignError(null);
-    setReassignSuccess(null);
-
-    try {
-      if (isTeamSeason && selectedWorkerSourceCart && selectedWorkerSourceCart.members.length > 1) {
-        await sessionService.reassignWorker(
-          selectedWorkerToMove.contractorId,
-          { type: 'new_solo' }
-        );
-      }
-      await sessionService.deleteWorker(selectedWorkerToMove.contractorId);
-
-      setReassignSuccess(`${selectedWorkerToMove.firstName} removed from session`);
-      setSelectedWorkerToMove(null);
-      setSelectedWorkerSourceCart(null);
-      onRefresh();
-    } catch (err: any) {
-      console.error('Remove failed:', err);
-      setReassignError(err.message || 'Failed to remove worker. Please try again.');
-    } finally {
-      setReassignLoading(false);
-    }
-  };
-
-  const handleUnassignAsphalt = async (asphaltRowId: string, addressLabel: string) => {
-    if (!window.confirm(
-      `Unassign asphalt at ${addressLabel}?\n\nThe assigned RC will no longer see it. ` +
-      `The row returns to the asphalt queue for reassignment. The driveway sale is unaffected.`
-    )) return;
-
-    setUnassigningAsphaltId(asphaltRowId);
-    setUnassignError(null);
-    try {
-      await sessionService.unassignAsphalt(asphaltRowId);
-      onRefresh();
-    } catch (err: any) {
-      console.error('Unassign asphalt failed:', err);
-      setUnassignError(err?.message || 'Failed to unassign asphalt. Please try again.');
-    } finally {
-      setUnassigningAsphaltId(null);
-    }
-  };
-
-  const isAerationWorkerModifiable = (worker: Worker): boolean => {
-    if (isTeamSeason) return false;
-    const card = workerCardData.find(c => c.worker.contractorId === worker.contractorId);
-    return !card || card.financialStore.length === 0;
-  };
-
-  const selectedRouteBookings=useMemo(()=>selectedRouteForBookings?bookings.filter(b=>b['Route Number']===selectedRouteForBookings):[], [selectedRouteForBookings,bookings]);
-  const selectedRouteFinancialStore=useMemo(()=>selectedRouteForBookings?allSessions.flatMap(s=>(s.financialStore||[]).filter((tx:any)=>tx.routeCode===selectedRouteForBookings)):[], [selectedRouteForBookings,allSessions]);
-
-  const handleCopyPhone = (phone: string, id: string) => {
-    navigator.clipboard.writeText(phone);
-  };
-
-  // --- SIDEBAR RESIZE: when sidebar opens/closes, the map's container
+    // --- SIDEBAR RESIZE: when sidebar opens/closes, the map's container
   // changes width. Tell Mapbox to redraw at the new size. Mapbox keeps the
   // same center automatically on resize, so the view stays put.
   useEffect(() => {
