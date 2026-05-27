@@ -306,13 +306,16 @@ async function geocodeAddress(addr: string, pLat?: number, pLng?: number): Promi
 // translate, inner gets rotate, neither fights the other.
 function createNavArrow(): { outer: HTMLDivElement; inner: HTMLDivElement } {
   const outer = document.createElement('div');
-  outer.style.cssText = 'pointer-events:none;width:28px;height:28px;';
+  outer.style.cssText = 'pointer-events:none;width:42px;height:42px;';
 
   const inner = document.createElement('div');
   // 0.15s transition smooths low-rate GPS-derived heading updates without
   // adding noticeable lag to high-rate compass events.
   inner.style.cssText = 'width:100%;height:100%;transition:transform 0.15s linear;transform-origin:50% 50%;';
-  inner.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#4285F4" stroke="white" stroke-width="2" opacity="0.25"/><path d="M12 4 L18 18 L12 14 L6 18 Z" fill="#4285F4" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+  // Red arrow with black outline on a translucent black halo. Higher visual
+  // weight than the original blue-on-white version — easier to spot on busy
+  // map backgrounds.
+  inner.innerHTML = `<svg width="42" height="42" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#000000" stroke="#ffffff" stroke-width="1.5" opacity="0.35"/><path d="M12 3 L18.5 19 L12 14.5 L5.5 19 Z" fill="#ef4444" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 
   outer.appendChild(inner);
   return { outer, inner };
@@ -711,12 +714,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [routeNavPrompt, setRouteNavPrompt] = useState<RouteNavPrompt | null>(null);
 
   // --- ARROW ROTATION ---
-  // Shared by the GPS watch callback AND the compass listener so both sources
-  // route through the same priority logic. GPS-derived heading wins when
-  // fresh (last computed within 5s), reflecting your actual direction of
-  // travel. Compass is the fallback for stationary use. Deps are empty
-  // because we only read from refs; useCallback identity is therefore stable
-  // and we never need to re-register listeners.
+  // Shared by the GPS watch callback, the compass listener, AND the map's
+  // rotate event so all three sources route through the same priority logic.
+  // GPS-derived heading wins when fresh (last computed within 5s), reflecting
+  // your actual direction of travel. Compass is the fallback for stationary
+  // use. The map's current bearing is SUBTRACTED so the arrow stays aligned
+  // to world-true heading even when the user rotates the map — otherwise a
+  // 30° map rotation would visually skew the arrow by 30°.
   const HEADING_FRESHNESS_MS = 5000;
   const applyArrowRotation = useCallback(() => {
     if (!navArrowInnerRef.current) return;
@@ -732,7 +736,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       heading = compassHeadingRef.current;
     }
     if (heading == null) return;
-    navArrowInnerRef.current.style.transform = `rotate(${heading}deg)`;
+    // Map bearing: degrees clockwise from north that the map is rotated.
+    // Subtract from heading so the arrow points to the world direction,
+    // not the screen direction.
+    const mapBearing = mapRef.current?.getBearing() ?? 0;
+    navArrowInnerRef.current.style.transform = `rotate(${heading - mapBearing}deg)`;
   }, []);
 
   // Reset Manage Team sub-state when modal closes
@@ -2350,6 +2358,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     };
     map.on('dragstart', handleDragStart);
 
+    // Re-apply arrow rotation whenever the map's bearing changes — keeps the
+    // arrow pointing at the world heading rather than the screen heading
+    // when the user rotates the map (two-finger gesture on touch, or
+    // shift-drag on desktop). Without this, the arrow visibly skews by the
+    // rotation angle.
+    map.on('rotate', applyArrowRotation);
+
     watchIdRef.current=navigator.geolocation.watchPosition(pos=>{
       if(!navMarkerRef.current||!mapRef.current) return;
       const{latitude:lat,longitude:lng,heading,speed}=pos.coords;
@@ -2430,6 +2445,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     },()=>{},{enableHighAccuracy:true,maximumAge:15000,timeout:30000});
     return()=>{
       map.off('dragstart', handleDragStart);
+      map.off('rotate', applyArrowRotation);
       if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}
       navMarkerRef.current?.remove();navMarkerRef.current=null;
     };
