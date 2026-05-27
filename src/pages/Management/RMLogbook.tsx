@@ -1,9 +1,16 @@
 // src/pages/Management/RMLogbook.tsx
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock, Lock, Unlock, Leaf, CreditCard, Shovel, Bookmark } from 'lucide-react';
+import {
+  Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock,
+  Lock, Unlock, Leaf, CreditCard, Shovel, Bookmark, Navigation, History,
+  CheckCircle2, MapPin as MapPinIcon,
+} from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
-import { ManagementUser, DailySessionData, LogsheetSession, SeasonType, PendingSale, SEASON_CONFIGS } from '../../types';
+import {
+  ManagementUser, DailySessionData, LogsheetSession, SeasonType,
+  PendingSale, SEASON_CONFIGS,
+} from '../../types';
 import { sessionService } from '../../lib/sessionService';
 import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
 import { subscribeAsRouteManager } from '../../lib/realtimeService';
@@ -33,6 +40,50 @@ export interface TabStats {
   teamCartAvgGross: number;
 }
 
+// Geocode phase machine — drives the per-layer "Loading X/Y" indicators on the
+// filter buttons. State flows: idle → phase1 → phase2 → phase3 → phase4 → complete.
+// A given layer's filter button is enabled only after its phase reports complete.
+// If a phase has zero addresses to geocode (everything's cached), it skips
+// straight to complete almost instantly.
+export type GeocodePhase =
+  | 'idle'
+  | 'phase1_pending_bookings'
+  | 'phase2_completed_and_sales'
+  | 'phase3_historical'
+  | 'phase4_pcl'
+  | 'complete';
+
+export interface GeocodeProgress {
+  pendingBookings: { current: number; total: number; done: boolean };
+  pendingSalesAndCompleted: { current: number; total: number; done: boolean };
+  historical: { current: number; total: number; done: boolean };
+  pcl: { current: number; total: number; done: boolean };
+}
+
+const initialGeocodeProgress: GeocodeProgress = {
+  pendingBookings: { current: 0, total: 0, done: false },
+  pendingSalesAndCompleted: { current: 0, total: 0, done: false },
+  historical: { current: 0, total: 0, done: false },
+  pcl: { current: 0, total: 0, done: false },
+};
+
+// Filter visibility flags — these drive what layers render on the map.
+// Defaults per spec: Pending Bookings ON, Pending Sales/Completed ON,
+// Historical OFF, PCL OFF. Worker locations have no toggle, always render.
+export interface FilterVisibility {
+  pendingBookings: boolean;
+  pendingSalesAndCompleted: boolean;
+  historical: boolean;
+  pcl: boolean;
+}
+
+const defaultFilterVisibility: FilterVisibility = {
+  pendingBookings: true,
+  pendingSalesAndCompleted: true,
+  historical: false,
+  pcl: false,
+};
+
 function getPendingDollarValue(priceStr: string | undefined | null, seasonType: SeasonType): number {
   if (!priceStr) return 0;
   const trimmed = priceStr.trim();
@@ -60,6 +111,13 @@ const RMLogbook: React.FC = () => {
   const [digitalMappingEnabled, setDigitalMappingEnabled] = useState(false);
 
   const [showTransactionsModal, setShowTransactionsModal] = useState(false);
+
+  // NEW: state lifted from RMMapTab — header controls live here now.
+  const [showManageTeamModal, setShowManageTeamModal] = useState(false);
+  const [centerOnLocation, setCenterOnLocation] = useState(false);
+  const [filterVisibility, setFilterVisibility] = useState<FilterVisibility>(defaultFilterVisibility);
+  const [geocodePhase, setGeocodePhase] = useState<GeocodePhase>('idle');
+  const [geocodeProgress, setGeocodeProgress] = useState<GeocodeProgress>(initialGeocodeProgress);
 
   const [stats, setStats] = useState<TabStats>({
     totalSteps: 0,
@@ -169,6 +227,39 @@ const RMLogbook: React.FC = () => {
     }
   };
 
+  // Follow-me handlers. Toggle from header button always succeeds. RMMapTab
+  // calls onFollowMeAutoDisable when the user pans the map — that's the
+  // Google-Maps-style auto-off behavior.
+  const handleToggleCenter = useCallback(() => {
+    setCenterOnLocation(prev => !prev);
+  }, []);
+
+  const handleFollowMeAutoDisable = useCallback(() => {
+    setCenterOnLocation(false);
+  }, []);
+
+  // Filter toggle handler — only fires when the layer's geocoding phase is done.
+  const handleToggleFilter = useCallback((key: keyof FilterVisibility) => {
+    setFilterVisibility(prev => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
+  // Progress reporter — RMMapTab calls this as it works through each phase.
+  const handleGeocodeProgress = useCallback((
+    phase: GeocodePhase,
+    layerKey: keyof GeocodeProgress | null,
+    current: number,
+    total: number,
+    done: boolean,
+  ) => {
+    setGeocodePhase(phase);
+    if (layerKey) {
+      setGeocodeProgress(prev => ({
+        ...prev,
+        [layerKey]: { current, total, done },
+      }));
+    }
+  }, []);
+
   useEffect(() => {
     const init = async () => {
       const user = getStorageItem<ManagementUser | null>('current_user', null);
@@ -196,8 +287,7 @@ const RMLogbook: React.FC = () => {
     };
   }, [navigate]);
 
-  // Defensive: if mapping is on and the active tab is anything other than 'maps',
-  // force it back to 'maps'. Belt-and-braces in case state gets out of sync.
+  // Defensive: if mapping is on, force activeTab to maps regardless.
   useEffect(() => {
     if (digitalMappingEnabled && activeTab !== 'maps') {
       setActiveTab('maps');
@@ -341,6 +431,49 @@ const RMLogbook: React.FC = () => {
       </div>
     );
 
+  // FILTER BUTTON COMPONENT — small helper to keep the JSX below readable.
+  // Renders the icon, ON/OFF visual state, and the loading badge when a phase
+  // hasn't completed yet for the given layer.
+  const FilterBtn: React.FC<{
+    icon: React.ReactNode;
+    active: boolean;
+    progress: { current: number; total: number; done: boolean };
+    onToggle: () => void;
+    label: string;
+  }> = ({ icon, active, progress, onToggle, label }) => {
+    const isLoading = !progress.done && progress.total > 0;
+    const isPending = !progress.done && progress.total === 0;
+    const disabled = !progress.done;
+
+    const badge = isLoading
+      ? `${progress.current}/${progress.total}`
+      : isPending
+        ? '…'
+        : null;
+
+    return (
+      <button
+        onClick={() => !disabled && onToggle()}
+        disabled={disabled}
+        title={disabled ? `${label} — loading…` : `${label} — ${active ? 'visible' : 'hidden'}`}
+        className={`relative flex items-center justify-center w-7 h-7 sm:w-9 sm:h-9 rounded-lg transition-all ${
+          disabled
+            ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
+            : active
+              ? 'bg-blue-600 text-white hover:bg-blue-500'
+              : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+        }`}
+      >
+        {icon}
+        {badge && (
+          <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[16px] h-[14px] px-1 text-[8px] bg-amber-600 text-white rounded-full font-bold border border-gray-800 whitespace-nowrap">
+            {badge}
+          </span>
+        )}
+      </button>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
       <div className="bg-gray-800 border-b border-gray-700 shadow-md sticky top-0 z-10">
@@ -365,10 +498,22 @@ const RMLogbook: React.FC = () => {
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
+            {/* Manage Team — leftmost in the actions block per spec. Only renders
+                on digital-mapping CCs since RMTeamTab still owns this on non-mapping CCs. */}
+            {digitalMappingEnabled && (
+              <button
+                onClick={() => setShowManageTeamModal(true)}
+                className="flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white transition-all"
+                title="Manage Team"
+              >
+                <Users size={16} />
+              </button>
+            )}
+
             <button
               onClick={() => setShowTransactionsModal(true)}
-              className="flex items-center justify-center w-9 h-9 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white transition-all"
+              className="flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white transition-all"
               title="View Today's Card Transactions"
             >
               <CreditCard size={16} />
@@ -377,7 +522,7 @@ const RMLogbook: React.FC = () => {
             {isSealing && (
               <button
                 onClick={() => setShowAsphaltModal(true)}
-                className="relative flex items-center justify-center w-9 h-9 rounded-lg bg-gray-700 hover:bg-gray-600 text-amber-300 hover:text-amber-200 transition-all"
+                className="relative flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-gray-700 hover:bg-gray-600 text-amber-300 hover:text-amber-200 transition-all"
                 title={
                   unassignedAsphaltCount > 0
                     ? `${unassignedAsphaltCount} asphalt ${unassignedAsphaltCount === 1 ? 'row' : 'rows'} awaiting RC assignment`
@@ -396,7 +541,7 @@ const RMLogbook: React.FC = () => {
             <button
               onClick={handleToggleLock}
               disabled={lockLoading}
-              className={`flex items-center justify-center w-9 h-9 rounded-lg transition-all ${
+              className={`flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-lg transition-all ${
                 lockLoading
                   ? 'bg-gray-700 cursor-wait'
                   : isTeamLocked
@@ -414,11 +559,59 @@ const RMLogbook: React.FC = () => {
               )}
             </button>
 
-            <div className="flex gap-1 bg-gray-900/50 p-1 rounded-lg border border-gray-700/50">
-              {/* Team tab — hidden when digital mapping is on. Manage Team modal in the map
-                  replaces the per-worker management actions; the team list itself is in the
-                  map sidebar. */}
-              {!digitalMappingEnabled && (
+            {/* FILTER BUTTONS — only render on digital-mapping CCs. Each one is
+                disabled until its phase reports done. Layers default per spec. */}
+            {digitalMappingEnabled && (
+              <>
+                <FilterBtn
+                  icon={<Clock size={14} />}
+                  active={filterVisibility.pendingBookings}
+                  progress={geocodeProgress.pendingBookings}
+                  onToggle={() => handleToggleFilter('pendingBookings')}
+                  label="Pending Bookings"
+                />
+                <FilterBtn
+                  icon={<CheckCircle2 size={14} />}
+                  active={filterVisibility.pendingSalesAndCompleted}
+                  progress={geocodeProgress.pendingSalesAndCompleted}
+                  onToggle={() => handleToggleFilter('pendingSalesAndCompleted')}
+                  label="Pending Sales & Completed"
+                />
+                <FilterBtn
+                  icon={<History size={14} />}
+                  active={filterVisibility.historical}
+                  progress={geocodeProgress.historical}
+                  onToggle={() => handleToggleFilter('historical')}
+                  label="Previously Done"
+                />
+                <FilterBtn
+                  icon={<Users size={14} />}
+                  active={filterVisibility.pcl}
+                  progress={geocodeProgress.pcl}
+                  onToggle={() => handleToggleFilter('pcl')}
+                  label="Callbook Clients (PCL)"
+                />
+
+                {/* FOLLOW ME — rightmost in the header per spec. Decent size (w-10 h-10
+                    on desktop, w-9 h-9 on mobile) per "decent size button" call. */}
+                <button
+                  onClick={handleToggleCenter}
+                  className={`flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-lg transition-all ${
+                    centerOnLocation
+                      ? 'bg-blue-600 text-white ring-2 ring-blue-400'
+                      : 'bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white'
+                  }`}
+                  title={centerOnLocation ? 'Stop following my location' : 'Follow my location'}
+                >
+                  <Navigation size={16} className={centerOnLocation ? 'fill-current' : ''} />
+                </button>
+              </>
+            )}
+
+            {/* TAB STRIP — only renders for non-digital-mapping CCs. When digital
+                mapping is on, the map is the only view and the strip is gone entirely. */}
+            {!digitalMappingEnabled && (
+              <div className="flex gap-1 bg-gray-900/50 p-1 rounded-lg border border-gray-700/50">
                 <button
                   onClick={() => setActiveTab('team')}
                   className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
@@ -430,11 +623,7 @@ const RMLogbook: React.FC = () => {
                   <Users size={14} />
                   Team
                 </button>
-              )}
 
-              {/* Routes tab — hidden when digital mapping is on. The map's Routes sidebar mode
-                  plus the route prebookings popup cover everything Routes tab used to do. */}
-              {!digitalMappingEnabled && (
                 <button
                   onClick={() => setActiveTab('routes')}
                   className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
@@ -450,25 +639,14 @@ const RMLogbook: React.FC = () => {
                     </span>
                   )}
                 </button>
-              )}
-
-              {digitalMappingEnabled && (
-                <button
-                  onClick={() => setActiveTab('maps')}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
-                    activeTab === 'maps'
-                      ? 'bg-gray-700 text-white shadow-sm'
-                      : 'text-gray-400 hover:text-white'
-                  }`}
-                >
-                  <MapIcon size={14} /> Map
-                </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* AERATION: existing 6-column grid (untouched) */}
+        {/* Stats grids stay exactly as they were — these continue to show on
+            digital-mapping CCs too. Visual continuity. */}
+
         {!isTeamSeason && (
           <div className="grid grid-cols-6 gap-px bg-gray-700 border-t border-gray-700">
 
@@ -520,11 +698,8 @@ const RMLogbook: React.FC = () => {
           </div>
         )}
 
-        {/* TEAM SEASONS: 8-column grid (6 small cells of 1-width each + centerpiece spanning 2)
-            Mobile: centerpiece stacks on top in its own row, other 6 stats in 3-col grid below */}
         {isTeamSeason && (
           <div className="border-t border-gray-700">
-            {/* Mobile: centerpiece on its own full-width row */}
             <div className="sm:hidden bg-gray-800 p-3 flex flex-col items-center justify-center border-b border-gray-700">
               <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-1">Total Gross</span>
               <div className="flex items-center gap-1 text-white font-bold text-2xl">
@@ -538,7 +713,6 @@ const RMLogbook: React.FC = () => {
               </div>
             </div>
 
-            {/* Mobile: 3-col grid for the other 6 stats */}
             <div className="grid grid-cols-3 gap-px bg-gray-700 sm:hidden">
               <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
                 <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Workers</span>
@@ -596,7 +770,6 @@ const RMLogbook: React.FC = () => {
               </div>
             </div>
 
-            {/* Desktop: 8 columns total. 6 small cells (1 width each) + centerpiece (2 widths). */}
             <div className="hidden sm:grid grid-cols-8 gap-px bg-gray-700">
               <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
                 <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Workers</span>
@@ -716,6 +889,15 @@ const RMLogbook: React.FC = () => {
             teamCarts={dailyData.teamCarts}
             pendingSalesByManager={pendingSalesByManager}
             onRefresh={refreshData}
+            // NEW lifted state + handlers
+            filterVisibility={filterVisibility}
+            geocodePhase={geocodePhase}
+            geocodeProgress={geocodeProgress}
+            onGeocodeProgress={handleGeocodeProgress}
+            centerOnLocation={centerOnLocation}
+            onFollowMeAutoDisable={handleFollowMeAutoDisable}
+            showManageTeamModal={showManageTeamModal}
+            onCloseManageTeamModal={() => setShowManageTeamModal(false)}
           />
         )}
       </div>

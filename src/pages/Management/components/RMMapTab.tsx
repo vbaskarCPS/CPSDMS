@@ -4,11 +4,10 @@ import { useNavigate } from 'react-router-dom';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import {
-  Loader, Navigation, ChevronLeft, ChevronRight, ChevronDown, ChevronUp,
-  X, Users, UsersRound, Eye, Phone, MapPin, AlertCircle, LayoutList,
-  AlertTriangle, Truck, Bookmark, Shovel, Leaf, FileText, Check,
-  ArrowRight, ArrowRightLeft, Shuffle, Trash2, UserPlus, UserMinus,
-  Undo2, MoreVertical,
+  Loader, ChevronLeft, ChevronRight, X, Users, Eye, Phone, MapPin,
+  AlertCircle, LayoutList, AlertTriangle, Truck, Bookmark, Shovel, Leaf,
+  FileText, Check, ArrowRight, ArrowRightLeft, Shuffle, Trash2, UserPlus,
+  UserMinus, Undo2,
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { sessionService } from '../../../lib/sessionService';
@@ -27,6 +26,7 @@ import {
 import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
 import ContractorJobs from './ContractorJobs';
 import PendingJobModal from '../../../components/PendingJobModal';
+import type { GeocodePhase, GeocodeProgress, FilterVisibility } from '../RMLogbook';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -77,6 +77,21 @@ interface RMMapTabProps {
   teamCarts?: TeamCart[];
   pendingSalesByManager?: PendingSale[];
   onRefresh: () => void;
+  // NEW: lifted state from RMLogbook
+  filterVisibility: FilterVisibility;
+  geocodePhase: GeocodePhase;
+  geocodeProgress: GeocodeProgress;
+  onGeocodeProgress: (
+    phase: GeocodePhase,
+    layerKey: keyof GeocodeProgress | null,
+    current: number,
+    total: number,
+    done: boolean,
+  ) => void;
+  centerOnLocation: boolean;
+  onFollowMeAutoDisable: () => void;
+  showManageTeamModal: boolean;
+  onCloseManageTeamModal: () => void;
 }
 
 interface WorkerCardData {
@@ -134,7 +149,6 @@ const jobIdCache = new Map<string, { address: string; lat: number; lng: number }
 const makeCacheKey = (a: string) => a.trim().toLowerCase().replace(/\s+/g, ' ');
 const esc = (s: string) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-// RC team id pattern — matches sessionService's RAMP_CREW_TEAM_ID_PATTERN.
 const RC_TEAM_PATTERN = /^RC\d*$/;
 const isRcWorker = (teamId: string | null | undefined): boolean => {
   return !!teamId && RC_TEAM_PATTERN.test(teamId);
@@ -165,8 +179,6 @@ const formatTimeShort = (timestamp: string): string => {
   return `${hours}:${minutesStr}${ampm}`;
 };
 
-// Convert a pending sale to a MasterBooking shape for PendingJobModal compatibility.
-// Carries asphalt fields through so LogsheetJobCard's 5-field display contract works.
 const convertPendingSaleToBooking = (ps: PendingSale): MasterBooking => {
   const fullAddress = `${ps.houseNumber || ''} ${ps.streetName || ''}`.trim();
   return {
@@ -192,9 +204,6 @@ const convertPendingSaleToBooking = (ps: PendingSale): MasterBooking => {
   } as MasterBooking;
 };
 
-// Merge pending sales into display bookings — driveway parents absorb their
-// asphalt children's fields; standalone asphalt children pass through.
-// Used for the cart detail modal's shared bookings list.
 const mergePendingSalesForDisplay = (pendingSales: PendingSale[]): MasterBooking[] => {
   const allIds = new Set(pendingSales.map(ps => ps.id));
   const asphaltChildByParentId = new Map<string, PendingSale>();
@@ -296,7 +305,6 @@ function distToSegmentMeters(
   return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
 }
 
-// Aeration: returns workerId. Team seasons: returns sessionId so caller can resolve to cart.
 function findNearestAssignedRoute(
   lat: number, lng: number,
   routeMapData: SavedRoute[],
@@ -376,7 +384,6 @@ function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: stri
   return { hasFlag: flags.length > 0, flags };
 }
 
-// Pulsing outward ring — used for most-recent-completion markers (existing).
 function createPulsingRing(color: string): HTMLDivElement {
   let pulseStyle = document.getElementById('rm-pulse-keyframes') as HTMLStyleElement | null;
   if (!pulseStyle) {
@@ -391,8 +398,6 @@ function createPulsingRing(color: string): HTMLDivElement {
   return el;
 }
 
-// Dashed rotating ring — used for pending-sales markers in team seasons.
-// Grey dot center, dashed grey ring rotating ~3s/cycle. Total ~12px.
 function createDashedRotatingRing(): HTMLDivElement {
   let spinStyle = document.getElementById('rm-spin-keyframes') as HTMLStyleElement | null;
   if (!spinStyle) {
@@ -403,7 +408,6 @@ function createDashedRotatingRing(): HTMLDivElement {
   spinStyle.textContent = `@keyframes rmDashedSpin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}`;
   const el = document.createElement('div');
   el.style.cssText = 'width:0;height:0;overflow:visible;pointer-events:auto;cursor:pointer;';
-  // Inner: solid grey dot, 4px. Outer: dashed ring, 12px, rotating.
   el.innerHTML = `
     <div style="position:relative;width:12px;height:12px;margin-left:-6px;margin-top:-6px;">
       <svg width="12" height="12" viewBox="0 0 12 12" style="position:absolute;top:0;left:0;animation:rmDashedSpin 3s linear infinite;">
@@ -431,6 +435,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   teamCarts = [],
   pendingSalesByManager = [],
   onRefresh,
+  filterVisibility,
+  geocodePhase,
+  geocodeProgress,
+  onGeocodeProgress,
+  centerOnLocation,
+  onFollowMeAutoDisable,
+  showManageTeamModal,
+  onCloseManageTeamModal,
 }) => {
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -446,10 +458,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const initialFitDoneRef = useRef(false);
   const knownPinsRef = useRef<Map<string, GeocodedPin>>(new Map());
   const [geocodedPins, setGeocodedPins] = useState<GeocodedPin[]>([]);
-  const [geocodingProgress, setGeocodingProgress] = useState<{ current: number; total: number } | null>(null);
-  const geocodeBatchRef = useRef(0);
   const mountedRef = useRef(true);
-  const [centerOnLocation, setCenterOnLocation] = useState(false);
   const centerOnLocationRef = useRef(false);
   const watchIdRef = useRef<number | null>(null);
   const navMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -482,27 +491,24 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [historicalProps, setHistoricalProps] = useState<HistoricalProperty[]>([]);
   const [geocodedHistorical, setGeocodedHistorical] = useState<GeocodedHistorical[]>([]);
   const knownHistoricalRef = useRef<Map<string, GeocodedHistorical>>(new Map());
-  const historicalBatchRef = useRef(0);
   const [geocodeCacheHydrated, setGeocodeCacheHydrated] = useState(false);
 
   // Pending sales (geocoded for team seasons)
   const [geocodedPendingSales, setGeocodedPendingSales] = useState<GeocodedPendingSale[]>([]);
   const pendingSaleMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
-  const pendingSalesBatchRef = useRef(0);
 
   // PCL reference circles
   const [pclByRoute, setPclByRoute] = useState<Map<string, PCLClientGroup[]>>(new Map());
   const [geocodedPCL, setGeocodedPCL] = useState<GeocodedPCLEntry[]>([]);
-  const pclBatchRef = useRef(0);
 
-  // Team-season cart data (parallel to workerCardData but for carts)
+  // Team-season cart data
   const [cartCardData, setCartCardData] = useState<CartCardData[]>([]);
 
-  // EQ math fix — tax rate is sync, product cost is async with safe defaults.
+  // EQ math fix
   const [taxRate, setTaxRate] = useState<number>(5);
   const [productCostPercent, setProductCostPercent] = useState<number>(0);
 
-  // Routes-side overhaul: pending job modal + transfer modal state
+  // Routes-side overhaul
   const [pendingJobForModal, setPendingJobForModal] = useState<MasterBooking | null>(null);
   const [transferModalData, setTransferModalData] = useState<{
     type: 'ROUTE' | 'JOB';
@@ -511,8 +517,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     title: string;
   } | null>(null);
 
-  // Manage Team modal state (replaces the old per-worker more-menu in RMTeamTab)
-  const [showManageTeamModal, setShowManageTeamModal] = useState(false);
+  // Manage Team modal sub-state (modal itself controlled by parent prop)
   const [selectedWorkerToMove, setSelectedWorkerToMove] = useState<Worker | null>(null);
   const [selectedWorkerSourceCart, setSelectedWorkerSourceCart] = useState<CartCardData | null>(null);
   const [reassignLoading, setReassignLoading] = useState(false);
@@ -520,15 +525,26 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [reassignSuccess, setReassignSuccess] = useState<string | null>(null);
   const [reassignManagerId, setReassignManagerId] = useState('');
 
-  // Per-asphalt-row in-flight tracking for the Unassign button
   const [unassigningAsphaltId, setUnassigningAsphaltId] = useState<string | null>(null);
   const [unassignError, setUnassignError] = useState<string | null>(null);
+
+  // Reset Manage Team sub-state when modal closes
+  useEffect(() => {
+    if (!showManageTeamModal) {
+      setSelectedWorkerToMove(null);
+      setSelectedWorkerSourceCart(null);
+      setReassignError(null);
+      setReassignSuccess(null);
+      setReassignManagerId('');
+    }
+  }, [showManageTeamModal]);
 
   useEffect(() => { sidebarModeRef.current = sidebarMode; }, [sidebarMode]);
   useEffect(() => { routesRef.current = routes; }, [routes]);
   useEffect(() => { bookingsRef.current = bookings; }, [bookings]);
   useEffect(() => { routeMapDataRef.current = routeMapData; }, [routeMapData]);
   useEffect(() => { cartCardDataRef.current = cartCardData; }, [cartCardData]);
+  useEffect(() => { centerOnLocationRef.current = centerOnLocation; }, [centerOnLocation]);
 
   const isTeamSeason = useMemo(() => seasonHasTeams(seasonType), [seasonType]);
   const isLawnRejuv = seasonType === 'lawn_rejuv';
@@ -550,9 +566,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return m;
   }, [allSessions]);
 
-  // EQ math fix — load region tax rate (sync) and session product cost (async).
-  // Defaults match the old hardcoded behavior (5% tax, 0% product cost) so first
-  // render before the async fetch resolves shows the same numbers as before.
+  // EQ math fix
   useEffect(() => {
     const loadRates = async () => {
       try {
@@ -567,7 +581,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     loadRates();
   }, [seasonType]);
 
-  // Worker card data — aeration only. Used by sidebar Staff mode in aeration.
+  // Worker card data (aeration only)
   const workerCardData = useMemo<WorkerCardData[]>(() => {
     if (isTeamSeason) return [];
     return workers.filter(w => w.assignedManagerId === managerId).map(worker => {
@@ -618,10 +632,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (updated) setOnRouteWorkerCard(updated);
   }, [workerCardData]);
 
-  // Team-season cart data loader — parallel fetch per cart, then derive
-  // asphalt classification and merged pending-sales for display.
-  // PASS 1: parallel (officeBookings, pendingSales) per cart session.
-  // PASS 2: classify asphalt owned vs incoming using flat union of all team pending sales.
+  // Cart card data
   useEffect(() => {
     if (!isTeamSeason) { setCartCardData([]); return; }
     let cancelled = false;
@@ -732,14 +743,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [isTeamSeason, allSessions, myTeamWorkers, myTeamIds]);
 
-  // Refresh the cart modal when underlying data changes.
   useEffect(() => {
     if (!selectedCartForModal) return;
     const updated = cartCardData.find(c => c.sessionId === selectedCartForModal.sessionId);
     if (updated) setSelectedCartForModal(updated);
   }, [cartCardData]);
 
-  // Refresh the on-route cart when underlying data changes.
   useEffect(() => {
     if (!onRouteCartIdRef.current) return;
     const updated = cartCardData.find(c => c.sessionId === onRouteCartIdRef.current);
@@ -779,7 +788,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   }, [cartCardData, sortBy]);
 
-  // Cart lookup for routes-side cart-mode assign picker.
   const cartByWorkerId = useMemo(() => {
     const map = new Map<string, TeamCart>();
     teamCarts.forEach(cart => {
@@ -790,8 +798,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return map;
   }, [teamCarts]);
 
-  // Cart grouping for the routes-side assign modal in team seasons.
-  // Mirrors RMRoutesTab's contractorsByCart but built from allSessions + myTeamWorkers.
   const contractorsByCart = useMemo(() => {
     if (!isTeamSeason) return null;
     const workerMap = new Map(myTeamWorkers.map(w => [w.contractorId, w]));
@@ -809,9 +815,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return cartMap;
   }, [isTeamSeason, allSessions, myTeamWorkers, myTeamIds]);
 
-  // EQ calculation for a single booking — uses live tax + product cost.
-  // Matches RMRoutesTab and PayoutContractor math exactly:
-  //   EQ = (price × prepaidWeight × productCostMultiplier) / taxDivisor / EQ_DIVISOR
   const calculateBookingEQ = useCallback((booking: MasterBooking): number => {
     const priceStr = String(booking.Price || '');
     const config = getSeasonConfig(seasonType);
@@ -849,31 +852,65 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }).sort((a,b)=>{ if(a.isAssigned!==b.isAssigned) return a.isAssigned?1:-1; return a.routeCode.localeCompare(b.routeCode); });
   }, [routes, managerId, routeMapData, workers, bookings, calculateBookingEQ]);
 
-  const pins = useMemo<PinData[]>(() => {
-    const result:PinData[]=[], done=new Set<string>(), myRS=new Set(myRouteCodes);
+  // Split pins into pending-only and completed/new-sale-only — driven by the
+  // new filter system. Each set is also visibility-gated separately downstream.
+  const pendingBookingPinSource = useMemo<PinData[]>(() => {
+    const result: PinData[] = [];
+    const myRS = new Set(myRouteCodes);
+    const done = new Set<string>();
     allSessions.forEach(s => {
-      const sids=(s.teamWorkerIds||[s.workerId]);
-      const isMe=sids.some(wid=>myTeamIds.has(wid));
-      (s.financialStore||[]).forEach((tx:any)=>{
-        if(tx.type==='Upgrade'||tx.type==='Add-On') return;
-        if(!isMe && !(tx.routeCode&&myRS.has(tx.routeCode))) return;
-        const addr=tx.address||tx.itemDescription||''; if(!addr) return;
-        done.add(tx.jobId);
-        result.push({ id:tx.jobId||tx.id, address:addr, routeCode:tx.routeCode||'', name:tx.customerName||'Unknown',
-          status:tx.jobId?.startsWith('NEW-')?'new_sale':'completed',
-          phone:tx.customerPhone||'', email:tx.customerEmail||'',
-          price:tx.displayPrice||(tx.price?`$${Number(tx.price).toFixed(2)}`:''), paymentMethod:tx.paymentMethod||'' });
+      (s.financialStore || []).forEach((tx: any) => {
+        if (tx.type === 'Upgrade' || tx.type === 'Add-On') return;
+        if (tx.jobId) done.add(tx.jobId);
       });
     });
-    bookings.forEach(b=>{
-      const rn=b['Route Number']; if(!rn||!myRS.has(rn)) return;
-      if(done.has(b['Booking ID'])) return;
-      const addr=b['Full Address']; if(!addr) return;
-      result.push({ id:b['Booking ID'], address:addr, routeCode:rn, name:`${b['First Name']||''} ${b['Last Name']||''}`.trim()||'Unknown',
-        status:'pending', phone:(b['Cell Phone']||b['Home Phone']||'') as string, email:(b['Email Address']||'') as string, price:b.Price?String(b.Price):'', paymentMethod:'' });
+    bookings.forEach(b => {
+      const rn = b['Route Number'];
+      if (!rn || !myRS.has(rn)) return;
+      if (done.has(b['Booking ID'])) return;
+      const addr = b['Full Address'];
+      if (!addr) return;
+      result.push({
+        id: b['Booking ID'],
+        address: addr,
+        routeCode: rn,
+        name: `${b['First Name'] || ''} ${b['Last Name'] || ''}`.trim() || 'Unknown',
+        status: 'pending',
+        phone: (b['Cell Phone'] || b['Home Phone'] || '') as string,
+        email: (b['Email Address'] || '') as string,
+        price: b.Price ? String(b.Price) : '',
+        paymentMethod: '',
+      });
     });
     return result;
-  }, [bookings, allSessions, myRouteCodes, myTeamIds]);
+  }, [bookings, allSessions, myRouteCodes]);
+
+  const completedAndNewSalePinSource = useMemo<PinData[]>(() => {
+    const result: PinData[] = [];
+    const myRS = new Set(myRouteCodes);
+    allSessions.forEach(s => {
+      const sids = s.teamWorkerIds || [s.workerId];
+      const isMe = sids.some(wid => myTeamIds.has(wid));
+      (s.financialStore || []).forEach((tx: any) => {
+        if (tx.type === 'Upgrade' || tx.type === 'Add-On') return;
+        if (!isMe && !(tx.routeCode && myRS.has(tx.routeCode))) return;
+        const addr = tx.address || tx.itemDescription || '';
+        if (!addr) return;
+        result.push({
+          id: tx.jobId || tx.id,
+          address: addr,
+          routeCode: tx.routeCode || '',
+          name: tx.customerName || 'Unknown',
+          status: tx.jobId?.startsWith('NEW-') ? 'new_sale' : 'completed',
+          phone: tx.customerPhone || '',
+          email: tx.customerEmail || '',
+          price: tx.displayPrice || (tx.price ? `$${Number(tx.price).toFixed(2)}` : ''),
+          paymentMethod: tx.paymentMethod || '',
+        });
+      });
+    });
+    return result;
+  }, [allSessions, myRouteCodes, myTeamIds]);
 
   const routeCentroid = useMemo(() => {
     if(!routeMapData.length) return null;
@@ -882,12 +919,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return n?{lat:sLat/n,lng:sLng/n}:null;
   }, [routeMapData]);
 
-  // Most-recent-completion pins — aeration uses per-worker, team seasons use per-cart-session.
   const mostRecentCompletionPins = useMemo<GeocodedPin[]>(() => {
     const latestByOwner = new Map<string, { jobId: string; timestamp: string }>();
-
     allSessions.forEach(s => {
-      // For team seasons, group by session id (which carries the cart). For aeration, group by worker.
       const ownerKey = isTeamSeason ? s.id : s.workerId;
       (s.financialStore || []).forEach((tx: any) => {
         if (tx.type === 'Upgrade' || tx.type === 'Add-On') return;
@@ -926,8 +960,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, []);
 
-  // --- WORKER LOCATION FETCH ---
-
+  // Worker location fetch
   const fetchWorkerLocations = useCallback(async () => {
     const teamIds = workers
       .filter(w => w.assignedManagerId === managerId)
@@ -989,7 +1022,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, [workerLocations, mapLoaded, workers]);
 
-  // --- GEOCODE CACHE HYDRATION ---
+  // Geocode cache hydration
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1011,7 +1044,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, []);
 
-  // --- HISTORICAL PROPERTIES FETCH ---
+  // Historical fetch
   useEffect(() => {
     if (!myRouteCodes.length) { setHistoricalProps([]); return; }
     let cancelled = false;
@@ -1028,7 +1061,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [myRouteCodes.join(',')]);
 
-  // --- PCL FETCH ---
+  // PCL fetch
   useEffect(() => {
     if (!myRouteCodes.length) { setPclByRoute(new Map()); return; }
     const ccId = commandCenterService.getCurrentCommandCenterId();
@@ -1048,7 +1081,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     })();
     return () => { cancelled = true; };
   }, [myRouteCodes.join(',')]);
-  // === PART 2 START ===
 
   // Load route geometry
   useEffect(() => {
@@ -1068,6 +1100,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     })();
     return()=>{cancelled=true;};
   }, [myRouteCodes]);
+
+  // === PART 2 START ===
 
   // Draw routes
   useEffect(() => {
@@ -1164,38 +1198,105 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return()=>cleanups.forEach(fn=>fn());
   }, [routeMapData, mapLoaded, myRouteCodes, calculateBookingEQ]);
 
-  // Update map pins
-  const updateMapPins = useCallback((map:mapboxgl.Map, geocoded:GeocodedPin[]) => {
-    if(pinClickHandlerRef.current){map.off('click','rm-pins-circles',pinClickHandlerRef.current);pinClickHandlerRef.current=null;}
-    if(popupRef.current){popupRef.current.remove();popupRef.current=null;}
-    const gj:GeoJSON.FeatureCollection={type:'FeatureCollection',features:geocoded.map(pin=>({type:'Feature' as const,properties:{name:pin.name,address:pin.address,routeCode:pin.routeCode,routeColor:pin.routeColor,status:pin.status,phone:pin.phone||'',email:pin.email||'',price:pin.price||'',paymentMethod:pin.paymentMethod||''},geometry:{type:'Point' as const,coordinates:[pin.lng,pin.lat]}}))};
-    const src=map.getSource('rm-pins-src') as mapboxgl.GeoJSONSource;
-    if(src){src.setData(gj);}
-    else{
-      map.addSource('rm-pins-src',{type:'geojson',data:gj});
-      map.addLayer({id:'rm-pins-circles',type:'circle',source:'rm-pins-src',paint:{'circle-color':['get','routeColor'],'circle-radius':3.33,'circle-stroke-color':['match',['get','status'],'completed','#22c55e','new_sale','#eab308','#000000'],'circle-stroke-width':1.67,'circle-opacity':0.95}});
-      map.on('mouseenter','rm-pins-circles',()=>{map.getCanvas().style.cursor='pointer';});
-      map.on('mouseleave','rm-pins-circles',()=>{map.getCanvas().style.cursor='';});
-    }
-    const clickHandler=(e:any)=>{
-      const f=e.features?.[0]; if(!f) return;
-      const{name,address,routeCode,routeColor,status,phone,email,price,paymentMethod}=f.properties;
-      const coords=(f.geometry as GeoJSON.Point).coordinates as [number,number];
-      if(popupRef.current) popupRef.current.remove();
-      const sl=status==='completed'?'✅ Done':status==='new_sale'?'🆕 Sale':'⏳ Pending';
-      const sc=status==='completed'?'#22c55e':status==='new_sale'?'#eab308':'#9ca3af';
+  // --- LAYER RENDERERS ---
+
+  // Pending bookings circles — separate layer from completed so they can be
+  // filter-toggled independently.
+  const updatePendingBookingPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedPin[]) => {
+    const gj: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: geocoded.map(pin => ({
+        type: 'Feature' as const,
+        properties: {
+          name: pin.name, address: pin.address, routeCode: pin.routeCode,
+          routeColor: pin.routeColor, phone: pin.phone || '', email: pin.email || '',
+          price: pin.price || '',
+        },
+        geometry: { type: 'Point' as const, coordinates: [pin.lng, pin.lat] },
+      })),
+    };
+    const src = map.getSource('rm-pending-pins-src') as mapboxgl.GeoJSONSource;
+    if (src) { src.setData(gj); return; }
+    map.addSource('rm-pending-pins-src', { type: 'geojson', data: gj });
+    map.addLayer({
+      id: 'rm-pending-pins-circles',
+      type: 'circle',
+      source: 'rm-pending-pins-src',
+      paint: {
+        'circle-color': ['get', 'routeColor'],
+        'circle-radius': 3.33,
+        'circle-stroke-color': '#000000',
+        'circle-stroke-width': 1.67,
+        'circle-opacity': 0.95,
+      },
+    });
+    map.on('mouseenter', 'rm-pending-pins-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'rm-pending-pins-circles', () => { map.getCanvas().style.cursor = ''; });
+    map.on('click', 'rm-pending-pins-circles', (e: any) => {
+      const f = e.features?.[0]; if (!f) return;
+      const { name, address, routeCode, routeColor, phone, email, price } = f.properties;
+      const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+      if (popupRef.current) popupRef.current.remove();
+      const sn=esc(name),sa=esc(address),sp=esc(phone),se=esc(email),spr=esc(price),src2=esc(routeCode);
+      const pRow=sp?`<div style="margin-top:5px;"><a href="tel:${sp}" style="color:#60a5fa;font-size:12px;text-decoration:none;">📞 ${sp}</a></div>`:'';
+      const eRow=se?`<div style="color:#9ca3af;font-size:11px;margin-top:2px;">✉️ ${se}</div>`:'';
+      const prTag=spr?`<span style="background:#16a34a22;color:#4ade80;border:1px solid #16a34a66;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${spr}</span>`:'';
+      popupRef.current = new mapboxgl.Popup({ offset: 12, closeButton: true }).setLngLat(coords).setHTML(
+        `<div style="font-family:system-ui,sans-serif;font-size:13px;min-width:190px;line-height:1.4;"><div style="font-weight:700;margin-bottom:3px;">${sn}</div><div style="color:#555;font-size:11px;">${sa}</div>${pRow}${eRow}<div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;"><span style="background:${routeColor}22;color:${routeColor};border:1px solid ${routeColor}88;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${src2}</span><span style="color:#9ca3af;font-size:11px;font-weight:600;">⏳ Pending</span>${prTag}</div></div>`
+      ).addTo(map);
+    });
+  }, []);
+
+  // Completed + new-sale circles
+  const updateCompletedPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedPin[]) => {
+    const gj: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: geocoded.map(pin => ({
+        type: 'Feature' as const,
+        properties: {
+          name: pin.name, address: pin.address, routeCode: pin.routeCode,
+          routeColor: pin.routeColor, status: pin.status, phone: pin.phone || '',
+          email: pin.email || '', price: pin.price || '', paymentMethod: pin.paymentMethod || '',
+        },
+        geometry: { type: 'Point' as const, coordinates: [pin.lng, pin.lat] },
+      })),
+    };
+    const src = map.getSource('rm-completed-pins-src') as mapboxgl.GeoJSONSource;
+    if (src) { src.setData(gj); return; }
+    map.addSource('rm-completed-pins-src', { type: 'geojson', data: gj });
+    map.addLayer({
+      id: 'rm-completed-pins-circles',
+      type: 'circle',
+      source: 'rm-completed-pins-src',
+      paint: {
+        'circle-color': ['get', 'routeColor'],
+        'circle-radius': 3.33,
+        'circle-stroke-color': ['match', ['get', 'status'], 'completed', '#22c55e', 'new_sale', '#eab308', '#000000'],
+        'circle-stroke-width': 1.67,
+        'circle-opacity': 0.95,
+      },
+    });
+    map.on('mouseenter', 'rm-completed-pins-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'rm-completed-pins-circles', () => { map.getCanvas().style.cursor = ''; });
+    map.on('click', 'rm-completed-pins-circles', (e: any) => {
+      const f = e.features?.[0]; if (!f) return;
+      const { name, address, routeCode, routeColor, status, phone, email, price, paymentMethod } = f.properties;
+      const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+      if (popupRef.current) popupRef.current.remove();
+      const sl = status === 'completed' ? '✅ Done' : '🆕 Sale';
+      const sc = status === 'completed' ? '#22c55e' : '#eab308';
       const sn=esc(name),sa=esc(address),sp=esc(phone),se=esc(email),spr=esc(price),sm=esc(paymentMethod),src2=esc(routeCode);
       const pRow=sp?`<div style="margin-top:5px;"><a href="tel:${sp}" style="color:#60a5fa;font-size:12px;text-decoration:none;">📞 ${sp}</a></div>`:'';
       const eRow=se?`<div style="color:#9ca3af;font-size:11px;margin-top:2px;">✉️ ${se}</div>`:'';
       const prTag=spr?`<span style="background:#16a34a22;color:#4ade80;border:1px solid #16a34a66;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${spr}</span>`:'';
       const mTag=sm?`<span style="background:#37415122;color:#9ca3af;border:1px solid #37415166;border-radius:4px;padding:2px 7px;font-size:11px;">${sm}</span>`:'';
-      popupRef.current=new mapboxgl.Popup({offset:12,closeButton:true}).setLngLat(coords).setHTML(`<div style="font-family:system-ui,sans-serif;font-size:13px;min-width:190px;line-height:1.4;"><div style="font-weight:700;margin-bottom:3px;">${sn}</div><div style="color:#555;font-size:11px;">${sa}</div>${pRow}${eRow}<div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;"><span style="background:${routeColor}22;color:${routeColor};border:1px solid ${routeColor}88;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${src2}</span><span style="color:${sc};font-size:11px;font-weight:600;">${sl}</span>${prTag}${mTag}</div></div>`).addTo(map);
-    };
-    pinClickHandlerRef.current=clickHandler;
-    map.on('click','rm-pins-circles',clickHandler);
+      popupRef.current = new mapboxgl.Popup({ offset: 12, closeButton: true }).setLngLat(coords).setHTML(
+        `<div style="font-family:system-ui,sans-serif;font-size:13px;min-width:190px;line-height:1.4;"><div style="font-weight:700;margin-bottom:3px;">${sn}</div><div style="color:#555;font-size:11px;">${sa}</div>${pRow}${eRow}<div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;"><span style="background:${routeColor}22;color:${routeColor};border:1px solid ${routeColor}88;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${src2}</span><span style="color:${sc};font-size:11px;font-weight:600;">${sl}</span>${prTag}${mTag}</div></div>`
+      ).addTo(map);
+    });
   }, []);
 
-  // Update historical X markers
+  // Historical X markers
   const updateHistoricalPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedHistorical[]) => {
     const gj: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
@@ -1206,27 +1307,23 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }))
     };
     const src = map.getSource('rm-historical-src') as mapboxgl.GeoJSONSource;
-    if (src) {
-      src.setData(gj);
-    } else {
-      map.addSource('rm-historical-src', { type: 'geojson', data: gj });
-      map.addLayer({
-        id: 'rm-historical-symbols',
-        type: 'symbol',
-        source: 'rm-historical-src',
-        layout: {
-          'icon-image': 'rm-historical-x',
-          'icon-size': 1.0,
-          'icon-allow-overlap': true,
-          'icon-ignore-placement': true,
-        },
-        paint: { 'icon-opacity': 0 },
-      });
-    }
+    if (src) { src.setData(gj); return; }
+    map.addSource('rm-historical-src', { type: 'geojson', data: gj });
+    map.addLayer({
+      id: 'rm-historical-symbols',
+      type: 'symbol',
+      source: 'rm-historical-src',
+      layout: {
+        'icon-image': 'rm-historical-x',
+        'icon-size': 1.0,
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      },
+      paint: { 'icon-opacity': 0 },
+    });
   }, []);
 
-  // Update PCL grey reference circles — reference-only, no click handler.
-  // Renders as small grey circles (radius 3.5) above route lines but below pins.
+  // PCL grey circles — HALVED per spec. radius 1.75, stroke 0.5.
   const updatePclCircles = useCallback((map: mapboxgl.Map, entries: GeocodedPCLEntry[]) => {
     const gj: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
@@ -1237,277 +1334,429 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }))
     };
     const src = map.getSource('rm-pcl-src') as mapboxgl.GeoJSONSource;
-    if (src) {
-      src.setData(gj);
-    } else {
-      map.addSource('rm-pcl-src', { type: 'geojson', data: gj });
-      map.addLayer({
-        id: 'rm-pcl-circles',
-        type: 'circle',
-        source: 'rm-pcl-src',
-        paint: {
-          'circle-color': '#6b7280',
-          'circle-radius': 3.5,
-          'circle-stroke-color': '#374151',
-          'circle-stroke-width': 0.75,
-          'circle-opacity': 0,
-        },
-      });
-    }
+    if (src) { src.setData(gj); return; }
+    map.addSource('rm-pcl-src', { type: 'geojson', data: gj });
+    map.addLayer({
+      id: 'rm-pcl-circles',
+      type: 'circle',
+      source: 'rm-pcl-src',
+      paint: {
+        'circle-color': '#6b7280',
+        'circle-radius': 1.75,
+        'circle-stroke-color': '#374151',
+        'circle-stroke-width': 0.5,
+        'circle-opacity': 0,
+      },
+    });
   }, []);
 
-  // Toggle historical X + PCL visibility based on sidebarMode (Routes view only)
+  // FILTER-DRIVEN VISIBILITY — each layer reads its boolean from filterVisibility.
+  // The dashed-ring pending-sales markers, the pulsing completion markers, and
+  // the worker location markers are HTML element-based (not Mapbox layers) so
+  // they're handled separately in their own effects below.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-    const opacity = sidebarMode === 'routes' ? 0.85 : 0;
+
+    if (map.getLayer('rm-pending-pins-circles')) {
+      map.setPaintProperty('rm-pending-pins-circles', 'circle-opacity', filterVisibility.pendingBookings ? 0.95 : 0);
+    }
+    if (map.getLayer('rm-completed-pins-circles')) {
+      map.setPaintProperty('rm-completed-pins-circles', 'circle-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
+    }
     if (map.getLayer('rm-historical-symbols')) {
-      map.setPaintProperty('rm-historical-symbols', 'icon-opacity', opacity);
+      map.setPaintProperty('rm-historical-symbols', 'icon-opacity', filterVisibility.historical ? 0.85 : 0);
     }
     if (map.getLayer('rm-pcl-circles')) {
-      map.setPaintProperty('rm-pcl-circles', 'circle-opacity', sidebarMode === 'routes' ? 0.7 : 0);
+      map.setPaintProperty('rm-pcl-circles', 'circle-opacity', filterVisibility.pcl ? 0.7 : 0);
     }
-  }, [sidebarMode, mapLoaded, geocodedHistorical, geocodedPCL]);
+  }, [filterVisibility, mapLoaded]);
 
-  // Geocode and render prebook/completed pins
-  useEffect(() => {
-    const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length||!geocodeCacheHydrated) return;
-    const batch=++geocodeBatchRef.current, curIds=new Set(pins.map(p=>p.id)), toGeo:PinData[]=[];
-    pins.forEach(pin=>{
-      const addrKey = makeCacheKey(pin.address);
-      const ac = geocodeCache.get(addrKey);
-      const ic = jobIdCache.get(pin.id);
-      const icValid = ic && makeCacheKey(ic.address) === addrKey;
-      const cached = ac || (icValid ? { lat: ic!.lat, lng: ic!.lng } : undefined);
+  // --- SERIAL GEOCODING STATE MACHINE ---
+  //
+  // Drives the four-phase geocoding pipeline in strict order. Each phase:
+  //  1. Splits inputs into cached vs needs-geocoding
+  //  2. Reports its total to RMLogbook so the filter badge knows the denominator
+  //  3. Renders cached entries immediately
+  //  4. Geocodes the remainder one address at a time with 80ms throttle
+  //  5. Reports done:true when finished, advancing to the next phase
+  //
+  // Mid-day additions (new pending sales, new completed jobs) bypass the phase
+  // machine and geocode immediately — see the "incremental" effect lower down.
 
-      if(cached){
-        if(!ac) geocodeCache.set(addrKey, cached);
-        jobIdCache.set(pin.id, { address: pin.address, lat: cached.lat, lng: cached.lng });
-        knownPinsRef.current.set(pin.id,{...pin,lat:cached.lat,lng:cached.lng,routeColor:routeColorMap.get(pin.routeCode)||'#888888'});
-      }
-      else toGeo.push(pin);
-    });
-    knownPinsRef.current.forEach((ep,id)=>{if(!curIds.has(id)&&ep.status==='pending') knownPinsRef.current.set(id,{...ep,status:'completed'});});
-    const snap=Array.from(knownPinsRef.current.values());updateMapPins(map,snap);setGeocodedPins(snap);
-    if(!toGeo.length){setGeocodingProgress(null);return;}
-    setGeocodingProgress({current:0,total:toGeo.length});
-    (async()=>{
-      for(let i=0;i<toGeo.length;i++){
-        if(geocodeBatchRef.current!==batch||!mountedRef.current) return;
-        const pin=toGeo[i], coord=await geocodeAddress(pin.address,routeCentroid?.lat,routeCentroid?.lng);
-        if(coord){
-          const addrKey = makeCacheKey(pin.address);
-          geocodeCache.set(addrKey, coord);
-          jobIdCache.set(pin.id, { address: pin.address, lat: coord.lat, lng: coord.lng });
-          knownPinsRef.current.set(pin.id,{...pin,lat:coord.lat,lng:coord.lng,routeColor:routeColorMap.get(pin.routeCode)||'#888888'});
-          sessionService.saveGeocode(pin.address, coord.lat, coord.lng).catch(()=>{});
-        }
-        if(geocodeBatchRef.current!==batch||!mountedRef.current) return;
-        setGeocodingProgress({current:i+1,total:toGeo.length});
-        if(i<toGeo.length-1) await new Promise(r=>setTimeout(r,80));
-      }
-      if(geocodeBatchRef.current!==batch||!mountedRef.current) return;
-      const fp=Array.from(knownPinsRef.current.values());setGeocodedPins(fp);updateMapPins(map,fp);setGeocodingProgress(null);
-    })();
-  }, [pins, routeMapData, mapLoaded, routeColorMap, routeCentroid, updateMapPins, geocodeCacheHydrated]);
-
-  // Geocode historical
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !mapLoaded || !geocodeCacheHydrated) return;
-    if (!historicalProps.length) {
-      knownHistoricalRef.current.clear();
-      setGeocodedHistorical([]);
-      if (map.getSource('rm-historical-src')) {
-        updateHistoricalPins(map, []);
-      }
-      return;
+  // Helper that geocodes a single address with cache write-through.
+  const geocodeOne = useCallback(async (address: string): Promise<{ lat: number; lng: number } | null> => {
+    const addrKey = makeCacheKey(address);
+    const cached = geocodeCache.get(addrKey);
+    if (cached) return cached;
+    const coord = await geocodeAddress(address, routeCentroid?.lat, routeCentroid?.lng);
+    if (coord) {
+      geocodeCache.set(addrKey, coord);
+      sessionService.saveGeocode(address, coord.lat, coord.lng).catch(() => {});
     }
+    return coord;
+  }, [routeCentroid]);
 
-    const batch = ++historicalBatchRef.current;
-    const toGeo: HistoricalProperty[] = [];
+  // Phase machine — fires when its prerequisites are met. Each phase signals
+  // completion via onGeocodeProgress and advances geocodePhase implicitly by
+  // each subsequent phase having `geocodePhase === <previous_done>` checks.
+  // Since RMLogbook owns the phase state, we just call onGeocodeProgress with
+  // the next phase name when transitioning.
 
-    historicalProps.forEach(h => {
-      const addrKey = makeCacheKey(h.address);
-      const cached = geocodeCache.get(addrKey);
-      const uniqueKey = `${h.routeCode}::${addrKey}`;
-      if (cached) {
-        knownHistoricalRef.current.set(uniqueKey, { ...h, lat: cached.lat, lng: cached.lng });
-      } else {
-        toGeo.push(h);
-      }
-    });
+  // PHASE 1: Pending Prebooks
+  useEffect(() => {
+    if (!mapLoaded || !geocodeCacheHydrated) return;
+    if (geocodePhase !== 'idle') return;
 
-    const snap = Array.from(knownHistoricalRef.current.values());
-    setGeocodedHistorical(snap);
-    updateHistoricalPins(map, snap);
-
-    if (!toGeo.length) return;
+    const map = mapRef.current; if (!map) return;
+    let cancelled = false;
 
     (async () => {
-      for (let i = 0; i < toGeo.length; i++) {
-        if (historicalBatchRef.current !== batch || !mountedRef.current) return;
-        const h = toGeo[i];
-        const coord = await geocodeAddress(h.address, routeCentroid?.lat, routeCentroid?.lng);
-        if (coord) {
-          const addrKey = makeCacheKey(h.address);
-          geocodeCache.set(addrKey, coord);
-          const uniqueKey = `${h.routeCode}::${addrKey}`;
-          knownHistoricalRef.current.set(uniqueKey, { ...h, lat: coord.lat, lng: coord.lng });
-          sessionService.saveGeocode(h.address, coord.lat, coord.lng).catch(()=>{});
-        }
-        if (historicalBatchRef.current !== batch || !mountedRef.current) return;
-        if (i < toGeo.length - 1) await new Promise(r => setTimeout(r, 80));
-      }
-      if (historicalBatchRef.current !== batch || !mountedRef.current) return;
-      const fp = Array.from(knownHistoricalRef.current.values());
-      setGeocodedHistorical(fp);
-      updateHistoricalPins(map, fp);
-    })();
-  }, [historicalProps, mapLoaded, geocodeCacheHydrated, routeCentroid, updateHistoricalPins]);
+      const sources = pendingBookingPinSource;
+      const enriched: GeocodedPin[] = [];
+      const needsGeocoding: PinData[] = [];
 
-  // Geocode PCL — flatten all routes' clients into a single list keyed by route::address.
-  // Reference-only, no click handler, only visible in Routes sidebar mode.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !mapLoaded || !geocodeCacheHydrated) return;
-
-    if (pclByRoute.size === 0) {
-      setGeocodedPCL([]);
-      if (map.getSource('rm-pcl-src')) {
-        updatePclCircles(map, []);
-      }
-      return;
-    }
-
-    const batch = ++pclBatchRef.current;
-    const known = new Map<string, GeocodedPCLEntry>();
-    const toGeo: Array<{ key: string; address: string }> = [];
-
-    pclByRoute.forEach((clients, routeCode) => {
-      clients.forEach(c => {
-        const address = `${c.houseNum} ${c.streetName}`.trim();
-        if (!address) return;
-        const addrKey = makeCacheKey(address);
-        const uniqueKey = `${routeCode}::${addrKey}`;
+      sources.forEach(pin => {
+        const addrKey = makeCacheKey(pin.address);
         const cached = geocodeCache.get(addrKey);
         if (cached) {
-          known.set(uniqueKey, { key: uniqueKey, lat: cached.lat, lng: cached.lng });
+          enriched.push({ ...pin, lat: cached.lat, lng: cached.lng, routeColor: routeColorMap.get(pin.routeCode) || '#888888' });
         } else {
-          toGeo.push({ key: uniqueKey, address });
+          needsGeocoding.push(pin);
         }
       });
-    });
 
-    const snap = Array.from(known.values());
-    setGeocodedPCL(snap);
-    updatePclCircles(map, snap);
+      const total = needsGeocoding.length;
+      onGeocodeProgress('phase1_pending_bookings', 'pendingBookings', 0, total, false);
 
-    if (!toGeo.length) return;
+      // Render cached immediately
+      const merged = [...enriched];
+      enriched.forEach(p => knownPinsRef.current.set(p.id, p));
+      const allKnown = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'pending');
+      updatePendingBookingPins(map, allKnown);
+
+      // Geocode the rest
+      for (let i = 0; i < needsGeocoding.length; i++) {
+        if (cancelled || !mountedRef.current) return;
+        const pin = needsGeocoding[i];
+        const coord = await geocodeOne(pin.address);
+        if (coord) {
+          const enrichedPin: GeocodedPin = { ...pin, lat: coord.lat, lng: coord.lng, routeColor: routeColorMap.get(pin.routeCode) || '#888888' };
+          knownPinsRef.current.set(pin.id, enrichedPin);
+        }
+        if (cancelled || !mountedRef.current) return;
+        onGeocodeProgress('phase1_pending_bookings', 'pendingBookings', i + 1, total, false);
+        // Re-render every few to give visual feedback
+        if ((i + 1) % 5 === 0 || i === needsGeocoding.length - 1) {
+          const live = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'pending');
+          updatePendingBookingPins(map, live);
+        }
+        if (i < needsGeocoding.length - 1) await new Promise(r => setTimeout(r, 80));
+      }
+
+      if (cancelled || !mountedRef.current) return;
+      const final = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'pending');
+      updatePendingBookingPins(map, final);
+      setGeocodedPins(Array.from(knownPinsRef.current.values()));
+
+      // Phase 1 done — advance to phase 2
+      onGeocodeProgress('phase2_completed_and_sales', 'pendingBookings', total, total, true);
+    })();
+
+    return () => { cancelled = true; };
+  }, [mapLoaded, geocodeCacheHydrated, geocodePhase, pendingBookingPinSource, routeColorMap, geocodeOne, updatePendingBookingPins, onGeocodeProgress]);
+
+  // PHASE 2: Completed + new sales + pending sales (combined visual filter)
+  useEffect(() => {
+    if (!mapLoaded || !geocodeCacheHydrated) return;
+    if (geocodePhase !== 'phase2_completed_and_sales') return;
+
+    const map = mapRef.current; if (!map) return;
+    let cancelled = false;
 
     (async () => {
-      for (let i = 0; i < toGeo.length; i++) {
-        if (pclBatchRef.current !== batch || !mountedRef.current) return;
-        const { key, address } = toGeo[i];
-        const coord = await geocodeAddress(address, routeCentroid?.lat, routeCentroid?.lng);
-        if (coord) {
-          const addrKey = makeCacheKey(address);
-          geocodeCache.set(addrKey, coord);
-          known.set(key, { key, lat: coord.lat, lng: coord.lng });
-          sessionService.saveGeocode(address, coord.lat, coord.lng).catch(()=>{});
+      // Completed + new-sale pins
+      const sources = completedAndNewSalePinSource;
+      const enriched: GeocodedPin[] = [];
+      const needsGeocoding: PinData[] = [];
+
+      sources.forEach(pin => {
+        const addrKey = makeCacheKey(pin.address);
+        const cached = geocodeCache.get(addrKey);
+        const ic = jobIdCache.get(pin.id);
+        const icValid = ic && makeCacheKey(ic.address) === addrKey;
+        const resolved = cached || (icValid ? { lat: ic!.lat, lng: ic!.lng } : undefined);
+        if (resolved) {
+          if (!cached) geocodeCache.set(addrKey, resolved);
+          jobIdCache.set(pin.id, { address: pin.address, lat: resolved.lat, lng: resolved.lng });
+          enriched.push({ ...pin, lat: resolved.lat, lng: resolved.lng, routeColor: routeColorMap.get(pin.routeCode) || '#888888' });
+        } else {
+          needsGeocoding.push(pin);
         }
-        if (pclBatchRef.current !== batch || !mountedRef.current) return;
-        if (i < toGeo.length - 1) await new Promise(r => setTimeout(r, 80));
+      });
+
+      // Pending sales (team seasons only) — fold into the same phase
+      const pendingSalesNeedsGeocoding: Array<{ booking: MasterBooking; address: string; id: string }> = [];
+      const pendingSalesCached: GeocodedPendingSale[] = [];
+
+      if (isTeamSeason) {
+        const merged = mergePendingSalesForDisplay(pendingSalesByManager);
+        merged.forEach(booking => {
+          const address = booking['Full Address'] || '';
+          if (!address) return;
+          const addrKey = makeCacheKey(address);
+          const cached = geocodeCache.get(addrKey);
+          if (cached) {
+            pendingSalesCached.push({ id: booking['Booking ID'], lat: cached.lat, lng: cached.lng, booking });
+          } else {
+            pendingSalesNeedsGeocoding.push({ booking, address, id: booking['Booking ID'] });
+          }
+        });
       }
-      if (pclBatchRef.current !== batch || !mountedRef.current) return;
-      const fp = Array.from(known.values());
-      setGeocodedPCL(fp);
-      updatePclCircles(map, fp);
+
+      const totalToGeocode = needsGeocoding.length + pendingSalesNeedsGeocoding.length;
+      onGeocodeProgress('phase2_completed_and_sales', 'pendingSalesAndCompleted', 0, totalToGeocode, false);
+
+      // Render cached immediately
+      enriched.forEach(p => knownPinsRef.current.set(p.id, p));
+      const allCompleted = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'completed' || p.status === 'new_sale');
+      updateCompletedPins(map, allCompleted);
+      if (isTeamSeason) {
+        setGeocodedPendingSales(pendingSalesCached);
+      }
+
+      let progressDone = 0;
+
+      // Geocode completed/new-sale first
+      for (let i = 0; i < needsGeocoding.length; i++) {
+        if (cancelled || !mountedRef.current) return;
+        const pin = needsGeocoding[i];
+        const coord = await geocodeOne(pin.address);
+        if (coord) {
+          jobIdCache.set(pin.id, { address: pin.address, lat: coord.lat, lng: coord.lng });
+          knownPinsRef.current.set(pin.id, { ...pin, lat: coord.lat, lng: coord.lng, routeColor: routeColorMap.get(pin.routeCode) || '#888888' });
+        }
+        if (cancelled || !mountedRef.current) return;
+        progressDone++;
+        onGeocodeProgress('phase2_completed_and_sales', 'pendingSalesAndCompleted', progressDone, totalToGeocode, false);
+        if (progressDone % 5 === 0 || i === needsGeocoding.length - 1) {
+          const live = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'completed' || p.status === 'new_sale');
+          updateCompletedPins(map, live);
+        }
+        if (i < needsGeocoding.length - 1) await new Promise(r => setTimeout(r, 80));
+      }
+
+      // Then pending sales
+      const newPSResults: GeocodedPendingSale[] = [...pendingSalesCached];
+      for (let i = 0; i < pendingSalesNeedsGeocoding.length; i++) {
+        if (cancelled || !mountedRef.current) return;
+        const { booking, address, id } = pendingSalesNeedsGeocoding[i];
+        const coord = await geocodeOne(address);
+        if (coord) {
+          newPSResults.push({ id, lat: coord.lat, lng: coord.lng, booking });
+        }
+        if (cancelled || !mountedRef.current) return;
+        progressDone++;
+        onGeocodeProgress('phase2_completed_and_sales', 'pendingSalesAndCompleted', progressDone, totalToGeocode, false);
+        if (i < pendingSalesNeedsGeocoding.length - 1) await new Promise(r => setTimeout(r, 80));
+      }
+
+      if (cancelled || !mountedRef.current) return;
+      if (isTeamSeason) {
+        setGeocodedPendingSales(newPSResults);
+      }
+      setGeocodedPins(Array.from(knownPinsRef.current.values()));
+
+      // Phase 2 done — advance to phase 3
+      onGeocodeProgress('phase3_historical', 'pendingSalesAndCompleted', totalToGeocode, totalToGeocode, true);
     })();
-  }, [pclByRoute, mapLoaded, geocodeCacheHydrated, routeCentroid, updatePclCircles]);
 
-  // Geocode pending sales (team seasons only). Renders one dashed rotating ring
-  // per address — driveway parents absorb their asphalt children's data,
-  // standalone asphalt children render their own dot.
+    return () => { cancelled = true; };
+  }, [mapLoaded, geocodeCacheHydrated, geocodePhase, completedAndNewSalePinSource, pendingSalesByManager, isTeamSeason, routeColorMap, geocodeOne, updateCompletedPins, onGeocodeProgress]);
+
+  // PHASE 3: Historical
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !mapLoaded || !geocodeCacheHydrated) {
-      // Clear markers if mapping reqs unmet
-      pendingSaleMarkersRef.current.forEach(m => m.remove());
-      pendingSaleMarkersRef.current.clear();
-      setGeocodedPendingSales([]);
-      return;
-    }
-    if (!isTeamSeason) {
-      pendingSaleMarkersRef.current.forEach(m => m.remove());
-      pendingSaleMarkersRef.current.clear();
-      setGeocodedPendingSales([]);
-      return;
-    }
-    if (!pendingSalesByManager.length) {
-      pendingSaleMarkersRef.current.forEach(m => m.remove());
-      pendingSaleMarkersRef.current.clear();
-      setGeocodedPendingSales([]);
-      return;
-    }
+    if (!mapLoaded || !geocodeCacheHydrated) return;
+    if (geocodePhase !== 'phase3_historical') return;
 
-    const batch = ++pendingSalesBatchRef.current;
-    const merged = mergePendingSalesForDisplay(pendingSalesByManager);
-    const known = new Map<string, GeocodedPendingSale>();
-    const toGeo: Array<{ booking: MasterBooking; address: string }> = [];
+    const map = mapRef.current; if (!map) return;
+    let cancelled = false;
 
-    merged.forEach(booking => {
-      const address = booking['Full Address'] || '';
-      if (!address) return;
-      const addrKey = makeCacheKey(address);
-      const cached = geocodeCache.get(addrKey);
-      if (cached) {
-        known.set(booking['Booking ID'], {
-          id: booking['Booking ID'],
-          lat: cached.lat,
-          lng: cached.lng,
-          booking,
+    (async () => {
+      const enriched: GeocodedHistorical[] = [];
+      const needsGeocoding: HistoricalProperty[] = [];
+
+      historicalProps.forEach(h => {
+        const addrKey = makeCacheKey(h.address);
+        const uniqueKey = `${h.routeCode}::${addrKey}`;
+        const cached = geocodeCache.get(addrKey);
+        if (cached) {
+          knownHistoricalRef.current.set(uniqueKey, { ...h, lat: cached.lat, lng: cached.lng });
+        } else {
+          needsGeocoding.push(h);
+        }
+      });
+
+      const total = needsGeocoding.length;
+      onGeocodeProgress('phase3_historical', 'historical', 0, total, false);
+
+      // Render cached
+      const snap = Array.from(knownHistoricalRef.current.values());
+      setGeocodedHistorical(snap);
+      updateHistoricalPins(map, snap);
+
+      for (let i = 0; i < needsGeocoding.length; i++) {
+        if (cancelled || !mountedRef.current) return;
+        const h = needsGeocoding[i];
+        const coord = await geocodeOne(h.address);
+        if (coord) {
+          const addrKey = makeCacheKey(h.address);
+          const uniqueKey = `${h.routeCode}::${addrKey}`;
+          knownHistoricalRef.current.set(uniqueKey, { ...h, lat: coord.lat, lng: coord.lng });
+        }
+        if (cancelled || !mountedRef.current) return;
+        onGeocodeProgress('phase3_historical', 'historical', i + 1, total, false);
+        if ((i + 1) % 10 === 0 || i === needsGeocoding.length - 1) {
+          const live = Array.from(knownHistoricalRef.current.values());
+          setGeocodedHistorical(live);
+          updateHistoricalPins(map, live);
+        }
+        if (i < needsGeocoding.length - 1) await new Promise(r => setTimeout(r, 80));
+      }
+
+      if (cancelled || !mountedRef.current) return;
+      const final = Array.from(knownHistoricalRef.current.values());
+      setGeocodedHistorical(final);
+      updateHistoricalPins(map, final);
+
+      // Phase 3 done — advance to phase 4
+      onGeocodeProgress('phase4_pcl', 'historical', total, total, true);
+    })();
+
+    return () => { cancelled = true; };
+  }, [mapLoaded, geocodeCacheHydrated, geocodePhase, historicalProps, geocodeOne, updateHistoricalPins, onGeocodeProgress]);
+
+  // PHASE 4: PCL
+  useEffect(() => {
+    if (!mapLoaded || !geocodeCacheHydrated) return;
+    if (geocodePhase !== 'phase4_pcl') return;
+
+    const map = mapRef.current; if (!map) return;
+    let cancelled = false;
+
+    (async () => {
+      const known = new Map<string, GeocodedPCLEntry>();
+      const needsGeocoding: Array<{ key: string; address: string }> = [];
+
+      pclByRoute.forEach((clients, routeCode) => {
+        clients.forEach(c => {
+          const address = `${c.houseNum} ${c.streetName}`.trim();
+          if (!address) return;
+          const addrKey = makeCacheKey(address);
+          const uniqueKey = `${routeCode}::${addrKey}`;
+          const cached = geocodeCache.get(addrKey);
+          if (cached) {
+            known.set(uniqueKey, { key: uniqueKey, lat: cached.lat, lng: cached.lng });
+          } else {
+            needsGeocoding.push({ key: uniqueKey, address });
+          }
+        });
+      });
+
+      const total = needsGeocoding.length;
+      onGeocodeProgress('phase4_pcl', 'pcl', 0, total, false);
+
+      const snap = Array.from(known.values());
+      setGeocodedPCL(snap);
+      updatePclCircles(map, snap);
+
+      for (let i = 0; i < needsGeocoding.length; i++) {
+        if (cancelled || !mountedRef.current) return;
+        const { key, address } = needsGeocoding[i];
+        const coord = await geocodeOne(address);
+        if (coord) {
+          known.set(key, { key, lat: coord.lat, lng: coord.lng });
+        }
+        if (cancelled || !mountedRef.current) return;
+        onGeocodeProgress('phase4_pcl', 'pcl', i + 1, total, false);
+        if ((i + 1) % 20 === 0 || i === needsGeocoding.length - 1) {
+          const live = Array.from(known.values());
+          setGeocodedPCL(live);
+          updatePclCircles(map, live);
+        }
+        if (i < needsGeocoding.length - 1) await new Promise(r => setTimeout(r, 80));
+      }
+
+      if (cancelled || !mountedRef.current) return;
+      const final = Array.from(known.values());
+      setGeocodedPCL(final);
+      updatePclCircles(map, final);
+
+      // Phase 4 done — mark complete
+      onGeocodeProgress('complete', 'pcl', total, total, true);
+    })();
+
+    return () => { cancelled = true; };
+  }, [mapLoaded, geocodeCacheHydrated, geocodePhase, pclByRoute, geocodeOne, updatePclCircles, onGeocodeProgress]);
+
+  // INCREMENTAL: mid-day pending-sales additions. Once phase machine is complete,
+  // new pending sales appearing in pendingSalesByManager prop get geocoded
+  // immediately without waiting for any phase.
+  useEffect(() => {
+    if (!mapLoaded || !geocodeCacheHydrated) return;
+    if (geocodePhase !== 'complete') return;
+    if (!isTeamSeason) return;
+
+    let cancelled = false;
+    (async () => {
+      const merged = mergePendingSalesForDisplay(pendingSalesByManager);
+      const knownIds = new Set(geocodedPendingSales.map(g => g.id));
+      const additions: GeocodedPendingSale[] = [];
+
+      for (const booking of merged) {
+        if (cancelled) return;
+        if (knownIds.has(booking['Booking ID'])) continue;
+        const address = booking['Full Address'] || '';
+        if (!address) continue;
+        const coord = await geocodeOne(address);
+        if (coord) {
+          additions.push({ id: booking['Booking ID'], lat: coord.lat, lng: coord.lng, booking });
+        }
+        await new Promise(r => setTimeout(r, 80));
+      }
+
+      if (cancelled || !mountedRef.current) return;
+      if (additions.length > 0) {
+        // Filter out any that have disappeared from current pending sales
+        const stillRelevant = new Set(merged.map(b => b['Booking ID']));
+        setGeocodedPendingSales(prev => {
+          const next = [...prev.filter(g => stillRelevant.has(g.id)), ...additions];
+          return next;
         });
       } else {
-        toGeo.push({ booking, address });
+        // Even with no additions, prune ones that have been resolved/removed
+        const stillRelevant = new Set(merged.map(b => b['Booking ID']));
+        setGeocodedPendingSales(prev => prev.filter(g => stillRelevant.has(g.id)));
       }
-    });
-
-    const snap = Array.from(known.values());
-    setGeocodedPendingSales(snap);
-
-    if (!toGeo.length) return;
-
-    (async () => {
-      for (let i = 0; i < toGeo.length; i++) {
-        if (pendingSalesBatchRef.current !== batch || !mountedRef.current) return;
-        const { booking, address } = toGeo[i];
-        const coord = await geocodeAddress(address, routeCentroid?.lat, routeCentroid?.lng);
-        if (coord) {
-          const addrKey = makeCacheKey(address);
-          geocodeCache.set(addrKey, coord);
-          known.set(booking['Booking ID'], {
-            id: booking['Booking ID'],
-            lat: coord.lat,
-            lng: coord.lng,
-            booking,
-          });
-          sessionService.saveGeocode(address, coord.lat, coord.lng).catch(()=>{});
-        }
-        if (pendingSalesBatchRef.current !== batch || !mountedRef.current) return;
-        if (i < toGeo.length - 1) await new Promise(r => setTimeout(r, 80));
-      }
-      if (pendingSalesBatchRef.current !== batch || !mountedRef.current) return;
-      setGeocodedPendingSales(Array.from(known.values()));
     })();
-  }, [pendingSalesByManager, mapLoaded, geocodeCacheHydrated, routeCentroid, isTeamSeason]);
+    return () => { cancelled = true; };
+  }, [pendingSalesByManager, geocodePhase, isTeamSeason, mapLoaded, geocodeCacheHydrated, geocodeOne]);
 
-  // Render pending-sales markers (dashed rotating rings). Recreates on change.
+  // Render pending-sales markers (dashed rotating rings)
+  // Honors filterVisibility.pendingSalesAndCompleted.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
     const existingIds = new Set(pendingSaleMarkersRef.current.keys());
+    const showThem = filterVisibility.pendingSalesAndCompleted;
+
+    if (!showThem) {
+      // Hide all
+      pendingSaleMarkersRef.current.forEach(m => m.remove());
+      pendingSaleMarkersRef.current.clear();
+      return;
+    }
 
     geocodedPendingSales.forEach(ps => {
       const existing = pendingSaleMarkersRef.current.get(ps.id);
@@ -1531,15 +1780,18 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       pendingSaleMarkersRef.current.get(id)?.remove();
       pendingSaleMarkersRef.current.delete(id);
     });
-  }, [geocodedPendingSales, mapLoaded]);
+  }, [geocodedPendingSales, mapLoaded, filterVisibility.pendingSalesAndCompleted]);
 
-  // Pulsing dot on each contractor/cart's most recent completion
+  // Pulsing completion dots — honor filterVisibility.pendingSalesAndCompleted
+  // since they're conceptually completion markers.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
     pulsingMarkersRef.current.forEach(m => m.remove());
     pulsingMarkersRef.current = [];
+
+    if (!filterVisibility.pendingSalesAndCompleted) return;
 
     mostRecentCompletionPins.forEach(pin => {
       const color = pin.routeColor || '#22c55e';
@@ -1554,13 +1806,24 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       pulsingMarkersRef.current.forEach(m => m.remove());
       pulsingMarkersRef.current = [];
     };
-  }, [mostRecentCompletionPins, mapLoaded]);
+  }, [mostRecentCompletionPins, mapLoaded, filterVisibility.pendingSalesAndCompleted]);
 
-  // GPS (RM's own location) — cart-aware on-route detection in team seasons
+  // GPS (RM's own location) + drag-to-disable-follow-me + cart-aware on-route
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!navigator.geolocation) return;
     if(!navArrowElRef.current) navArrowElRef.current=createNavArrow();
     navMarkerRef.current=new mapboxgl.Marker({element:navArrowElRef.current}).setLngLat([0,0]).addTo(map);
+
+    // Google-Maps-style: user drag disables follow-me. Programmatic moves
+    // (easeTo from GPS updates) don't have an originalEvent.
+    const handleDragStart = (e: any) => {
+      if (!e.originalEvent) return; // programmatic, ignore
+      if (centerOnLocationRef.current) {
+        onFollowMeAutoDisable();
+      }
+    };
+    map.on('dragstart', handleDragStart);
+
     watchIdRef.current=navigator.geolocation.watchPosition(pos=>{
       if(!navMarkerRef.current||!mapRef.current) return;
       const{latitude:lat,longitude:lng,heading}=pos.coords;
@@ -1572,7 +1835,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, managerId, 100);
         if (nearest) {
           if (isTeamSeason) {
-            // Resolve to the cart that owns this worker's session.
             const cart = cartCardDataRef.current.find(c => c.members.some(m => m.contractorId === nearest.workerId));
             if (cart) {
               onRouteCartIdRef.current = cart.sessionId;
@@ -1605,17 +1867,28 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         setOnRouteCartCard(null);
       }
     },()=>{},{enableHighAccuracy:true,maximumAge:15000,timeout:30000});
-    return()=>{if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}navMarkerRef.current?.remove();navMarkerRef.current=null;};
-  }, [mapLoaded, isTeamSeason, managerId]);
+    return()=>{
+      map.off('dragstart', handleDragStart);
+      if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}
+      navMarkerRef.current?.remove();navMarkerRef.current=null;
+    };
+  }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable]);
 
-  useEffect(()=>{centerOnLocationRef.current=centerOnLocation;},[centerOnLocation]);
-
-  const handleToggleCenter=useCallback(()=>{
-    setCenterOnLocation(prev=>{const nv=!prev;centerOnLocationRef.current=nv;
-      if(nv&&navMarkerRef.current&&mapRef.current){const ll=navMarkerRef.current.getLngLat();if(ll.lng!==0||ll.lat!==0) mapRef.current.easeTo({center:[ll.lng,ll.lat],duration:800});}
-      if(!nv){ onRouteWorkerIdRef.current=null; onRouteCartIdRef.current=null; setOnRouteWorkerCard(null); setOnRouteCartCard(null); }
-      return nv;});
-  },[]);
+  // When follow-me activates externally (header button), recenter immediately.
+  useEffect(() => {
+    if (centerOnLocation && navMarkerRef.current && mapRef.current) {
+      const ll = navMarkerRef.current.getLngLat();
+      if (ll.lng !== 0 || ll.lat !== 0) {
+        mapRef.current.easeTo({ center: [ll.lng, ll.lat], duration: 800 });
+      }
+    }
+    if (!centerOnLocation) {
+      onRouteWorkerIdRef.current = null;
+      onRouteCartIdRef.current = null;
+      setOnRouteWorkerCard(null);
+      setOnRouteCartCard(null);
+    }
+  }, [centerOnLocation]);
 
   // Map init
   useEffect(() => {
@@ -1708,7 +1981,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   };
 
-  // Routes-side assign with team-season cart-mode logic. Mirrors RMRoutesTab.
   const handleAssignRoute=async(workerId:string|null)=>{
     if(!assignModalData) return; setAssignLoading(true);
     try{
@@ -1718,7 +1990,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const pendingBookingIds = pendingItems.map(j => j['Booking ID']);
 
       if (workerId === null) {
-        // UNASSIGN ROUTE
         await sessionService.assignRouteToWorkers(routeCode, []);
         if (isTeamSeason) {
           await Promise.all(pendingItems.map(job =>
@@ -1730,7 +2001,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           ));
         }
       } else if (isTeamSeason) {
-        // TEAM SEASON: cart mode
         const worker = myTeamWorkers.find(w => w.contractorId === workerId);
         const teamId = worker?.teamId || workerId;
         const cart = teamCarts.find(c => c.teamId === teamId);
@@ -1747,7 +2017,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           await sessionService.assignBookingsToSession(pendingBookingIds, sessionId);
         }
       } else {
-        // AERATION
         await sessionService.assignRouteToWorkers(routeCode, [workerId]);
         await Promise.all(pendingItems.map(job =>
           sessionService.assignBookingToWorker(job['Booking ID'], workerId)
@@ -1760,18 +2029,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     } finally {
       setAssignLoading(false);
     }
-  };
-
-  const handleAssignJob = async (jobId: string, workerId: string | null, routeCode: string) => {
-    if (isTeamSeason && workerId) {
-      const session = await sessionService.getWorkerLogsheetSession(workerId);
-      if (session?.id) {
-        await sessionService.assignBookingToSession(jobId, session.id);
-      }
-    } else {
-      await sessionService.assignBookingToWorker(jobId, workerId);
-    }
-    onRefresh();
   };
 
   const handleTransferConfirm = async (newManagerId: string) => {
@@ -1802,24 +2059,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       title: `Transfer Route ${assignModalData.routeCode}`,
     });
     setAssignModalData(null);
-  };
-
-  // Manage Team handlers
-  const openManageTeamModal = () => {
-    setSelectedWorkerToMove(null);
-    setSelectedWorkerSourceCart(null);
-    setReassignError(null);
-    setReassignSuccess(null);
-    setReassignManagerId('');
-    setShowManageTeamModal(true);
-  };
-
-  const closeManageTeamModal = () => {
-    setShowManageTeamModal(false);
-    setSelectedWorkerToMove(null);
-    setSelectedWorkerSourceCart(null);
-    setReassignError(null);
-    setReassignSuccess(null);
   };
 
   const handleReassignWorker = async (
@@ -1858,9 +2097,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   };
 
-  // Aeration-only: transfer worker to a different manager.
-  // Strict zero-transactions constraint enforced at the UI level (workers with
-  // any transactions are greyed out and can't be selected).
   const handleAerationTransfer = async (targetManagerId: string) => {
     if (!selectedWorkerToMove) return;
     setReassignLoading(true);
@@ -1911,7 +2147,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   };
 
-  // Asphalt unassign — clears assigned_rc_session_id, returns row to queue.
   const handleUnassignAsphalt = async (asphaltRowId: string, addressLabel: string) => {
     if (!window.confirm(
       `Unassign asphalt at ${addressLabel}?\n\nThe assigned RC will no longer see it. ` +
@@ -1931,7 +2166,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   };
 
-  // Aeration worker modifiability — matches RMTeamTab's isModifiable rule.
   const isAerationWorkerModifiable = (worker: Worker): boolean => {
     if (isTeamSeason) return false;
     const card = workerCardData.find(c => c.worker.contractorId === worker.contractorId);
@@ -1940,42 +2174,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   const selectedRouteBookings=useMemo(()=>selectedRouteForBookings?bookings.filter(b=>b['Route Number']===selectedRouteForBookings):[], [selectedRouteForBookings,bookings]);
   const selectedRouteFinancialStore=useMemo(()=>selectedRouteForBookings?allSessions.flatMap(s=>(s.financialStore||[]).filter((tx:any)=>tx.routeCode===selectedRouteForBookings)):[], [selectedRouteForBookings,allSessions]);
-  const pendingCount=geocodedPins.filter(p=>p.status==='pending').length;
-  const completedCount=geocodedPins.filter(p=>p.status==='completed').length;
-  const newSaleCount=geocodedPins.filter(p=>p.status==='new_sale').length;
-  const historicalCount = geocodedHistorical.length;
-  const pclCount = geocodedPCL.length;
-  const pendingSalesCount = geocodedPendingSales.length;
 
   const handleCopyPhone = (phone: string, id: string) => {
     navigator.clipboard.writeText(phone);
-    // Lightweight feedback via temporary highlight handled in component-level state below if needed.
   };
 
   return (
     <div className="absolute inset-0 flex flex-col">
       <div ref={mapContainerRef} className="flex-1" />
 
-      {/* Header floating actions (top-right area, below the navigation control) */}
-      <div className="absolute top-3 right-14 z-30 flex gap-2">
-        <button
-          onClick={openManageTeamModal}
-          className="flex items-center justify-center w-9 h-9 rounded-lg bg-gray-800/95 hover:bg-gray-700 text-gray-200 hover:text-white border border-gray-600 shadow-md transition-all"
-          title="Manage Team"
-        >
-          <Users size={16} />
-        </button>
-      </div>
-
-      {/* Follow-me button */}
-      <button onClick={handleToggleCenter}
-        style={{left:sidebarOpen?'calc(20% + 8px)':'28px'}}
-        className={`absolute top-3 z-20 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-all duration-300 ${centerOnLocation?'bg-blue-600 text-white ring-2 ring-blue-400 ring-offset-1 ring-offset-gray-900':'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'}`}
-        title={centerOnLocation?'Stop following':'Follow my location'}>
-        <Navigation size={18} className={centerOnLocation?'fill-current':''} />
-      </button>
-
-      {/* Sidebar — now renders in all seasons */}
+      {/* Sidebar — always renders */}
       <div className="absolute left-0 top-0 bottom-0 z-20 transition-all duration-300" style={{width:sidebarOpen?'20%':'20px'}}>
         <div className="absolute left-0 top-0 bottom-0 bg-gray-900/95 backdrop-blur-sm transition-all duration-300 overflow-hidden" style={{width:sidebarOpen?'calc(100% - 20px)':'0px'}}>
           {sidebarOpen && (
@@ -2141,42 +2349,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         </button>
       </div>
 
-      {/* Status overlays */}
-      {geocodingProgress && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm"><Loader size={12} className="animate-spin text-blue-400"/>Geocoding {geocodingProgress.current}/{geocodingProgress.total}…</div>}
-      {routesLoading&&!geocodingProgress && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm"><Loader size={12} className="animate-spin text-blue-400"/>Loading routes…</div>}
-      {!routesLoading&&!routeMapData.length&&myRouteCodes.length>0&&mapLoaded&&!geocodingProgress && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-yellow-900/90 text-yellow-300 px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm">No map data for your routes</div>}
-
-      {/* Pin legend */}
-      {!geocodingProgress && !sidebarOpen && (geocodedPins.length > 0 || workerLocations.length > 0 || historicalCount > 0 || pclCount > 0 || pendingSalesCount > 0) && (
-        <div className="absolute bottom-6 left-3 z-20 bg-gray-900/90 text-white px-3 py-2 rounded-lg shadow-lg text-[10px] space-y-1 backdrop-blur-sm">
-          {pendingCount>0&&<div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-400 border-2 border-black inline-block flex-shrink-0"/>Pending ({pendingCount})</div>}
-          {completedCount>0&&<div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-400 border-2 border-green-500 inline-block flex-shrink-0"/>Completed ({completedCount})</div>}
-          {newSaleCount>0&&<div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-400 border-2 border-yellow-500 inline-block flex-shrink-0"/>New Sale ({newSaleCount})</div>}
-          {pendingSalesCount>0&&<div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full border border-dashed border-gray-400 inline-block flex-shrink-0"/>Pending Sale ({pendingSalesCount})</div>}
-          {sidebarMode === 'routes' && historicalCount > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 inline-flex items-center justify-center flex-shrink-0 text-black font-black text-[11px] leading-none">✕</span>
-              <span>Previously done ({historicalCount})</span>
-            </div>
-          )}
-          {sidebarMode === 'routes' && pclCount > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full bg-gray-500 inline-block flex-shrink-0"/>
-              <span>Callbook clients ({pclCount})</span>
-            </div>
-          )}
-          {workerLocations.length > 0 && (
-            <>
-              {(pendingCount > 0 || completedCount > 0 || newSaleCount > 0) && <div className="border-t border-gray-700 my-1" />}
-              <div className="text-gray-500 text-[9px] uppercase tracking-wider mb-0.5">Workers</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-300 border-2 border-green-500 inline-block flex-shrink-0"/>≤ 10 min</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-300 border-2 border-yellow-500 inline-block flex-shrink-0"/>≤ 1 hr</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-300 border-2 border-orange-500 inline-block flex-shrink-0"/>≤ 2 hr</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-300 border-2 border-red-500 inline-block flex-shrink-0"/>2+ hr</div>
-            </>
-          )}
-        </div>
-      )}
+      {/* Status overlays — keep loading routes message but drop the legacy
+          "geocoding X/Y" overlay (filter-button badges show that now). */}
+      {routesLoading && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm"><Loader size={12} className="animate-spin text-blue-400"/>Loading routes…</div>}
+      {!routesLoading&&!routeMapData.length&&myRouteCodes.length>0&&mapLoaded && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-yellow-900/90 text-yellow-300 px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm">No map data for your routes</div>}
 
       {!mapLoaded && <div className="absolute inset-0 bg-gray-100 flex items-center justify-center z-10"><Loader size={24} className="animate-spin text-blue-500"/></div>}
 
@@ -2208,7 +2384,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         </button>
       )}
 
-      {/* Worker detail modal (aeration) */}
+      {/* Worker detail modal */}
       {selectedWorkerForModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.75)'}} onClick={e=>{if(e.target===e.currentTarget) setSelectedWorkerForModal(null);}}>
           <div className="bg-gray-800 rounded-lg border border-gray-700 shadow-2xl w-full max-w-2xl flex flex-col" style={{maxHeight:'85vh'}}>
@@ -2262,7 +2438,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         </div>
       )}
 
-      {/* Cart detail modal (team seasons) */}
+      {/* Cart detail modal */}
       {selectedCartForModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.75)'}} onClick={e=>{if(e.target===e.currentTarget) setSelectedCartForModal(null);}}>
           <div className="bg-gray-800 rounded-lg border border-gray-700 shadow-2xl w-full max-w-2xl flex flex-col" style={{maxHeight:'85vh'}}>
@@ -2346,7 +2522,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               </div>
             </div>
             <div className="flex-1 overflow-y-auto" style={{scrollbarWidth:'thin'}}>
-              {/* Asphalt-incoming section — sealing RC carts only */}
               {isSealing && selectedCartForModal.asphaltIncomingRows.length > 0 && (
                 <div className="m-3 p-2 bg-amber-900/10 border border-amber-700/30 rounded">
                   <div className="flex items-center gap-1.5 mb-2">
@@ -2393,7 +2568,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         </div>
       )}
 
-      {/* Route prebookings popup with full job-row treatment */}
+      {/* Route prebookings popup */}
       {selectedRouteForBookings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.75)'}} onClick={e=>{if(e.target===e.currentTarget) setSelectedRouteForBookings(null);}}>
           <div className="bg-gray-800 rounded-lg border border-gray-700 shadow-2xl w-full max-w-2xl flex flex-col" style={{maxHeight:'85vh'}}>
@@ -2468,7 +2643,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         </div>
       )}
 
-      {/* PendingJobModal — used by pending-sales dots and pending route jobs */}
+      {/* PendingJobModal */}
       {pendingJobForModal && (
         <PendingJobModal
           job={pendingJobForModal}
@@ -2478,7 +2653,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         />
       )}
 
-      {/* Route assignment modal — with cart-mode picker + transfer-to-manager */}
+      {/* Route assignment modal */}
       {assignModalData && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.85)'}} onClick={e=>{if(e.target===e.currentTarget) setAssignModalData(null);}}>
           <div className="bg-gray-900 rounded-lg border border-gray-700 shadow-2xl w-full max-w-md flex flex-col" style={{maxHeight:'85vh'}}>
@@ -2503,8 +2678,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               <button onClick={()=>handleAssignRoute(null)} disabled={assignLoading} className="w-full text-left px-3 py-2.5 text-red-400 hover:bg-red-900/10 rounded flex items-center gap-2 text-sm border border-transparent hover:border-red-900/30 transition-all">
                 <AlertCircle size={14}/> Unassign Route
               </button>
-
-              {/* Cart-mode picker for team seasons */}
               {isTeamSeason && contractorsByCart ? (
                 Array.from(contractorsByCart.entries()).map(([cartId, cartWorkers]) => {
                   const isSoloCart = cartWorkers.length === 1;
@@ -2556,7 +2729,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         </div>
       )}
 
-      {/* Transfer route to manager modal */}
+      {/* Transfer route modal */}
       {transferModalData && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.85)'}} onClick={e=>{if(e.target===e.currentTarget) setTransferModalData(null);}}>
           <div className="bg-gray-900 rounded-lg border border-gray-700 shadow-2xl w-full max-w-sm flex flex-col">
@@ -2576,9 +2749,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         </div>
       )}
 
-      {/* Manage Team modal */}
+      {/* Manage Team modal — controlled by parent prop */}
       {showManageTeamModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.85)'}} onClick={e=>{if(e.target===e.currentTarget) closeManageTeamModal();}}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.85)'}} onClick={e=>{if(e.target===e.currentTarget) onCloseManageTeamModal();}}>
           <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
             <div className="p-4 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-2">
@@ -2588,7 +2761,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                   <span className="text-xs bg-orange-900/30 text-orange-400 border border-orange-700/50 px-2 py-0.5 rounded">Transactions stay with original cart</span>
                 )}
               </div>
-              <button onClick={closeManageTeamModal} className="p-1.5 hover:bg-gray-700 rounded-full text-gray-400 hover:text-white"><X size={18}/></button>
+              <button onClick={onCloseManageTeamModal} className="p-1.5 hover:bg-gray-700 rounded-full text-gray-400 hover:text-white"><X size={18}/></button>
             </div>
             {reassignSuccess && (
               <div className="mx-4 mt-3 flex items-center gap-2 bg-green-900/30 border border-green-700/50 rounded-lg px-3 py-2 text-green-300 text-sm">
@@ -2601,7 +2774,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               </div>
             )}
             <div className="flex flex-1 overflow-hidden">
-              {/* LEFT PANE: worker picker */}
               <div className="w-1/2 border-r border-gray-700 flex flex-col">
                 <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex-shrink-0">
                   <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">{selectedWorkerToMove ? '✓ Worker selected' : '1. Select worker'}</p>
@@ -2635,7 +2807,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                       </div>
                     ))
                   ) : (
-                    // Aeration: flat worker list. Workers with transactions are greyed out (strict).
                     myTeamWorkers.map(worker => {
                       const isModifiable = isAerationWorkerModifiable(worker);
                       const isSelected = selectedWorkerToMove?.contractorId === worker.contractorId;
@@ -2659,7 +2830,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 </div>
               </div>
 
-              {/* RIGHT PANE: destination */}
               <div className="w-1/2 flex flex-col">
                 <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex-shrink-0">
                   <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">2. Move to…</p>
@@ -2682,7 +2852,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                       </div>
                     </div>
 
-                    {/* TEAM SEASONS: full destination list */}
                     {isTeamSeason && (
                       <>
                         {sortedCartCards.filter(c => c.sessionId !== selectedWorkerSourceCart?.sessionId).length > 0 && (
@@ -2736,7 +2905,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                       </>
                     )}
 
-                    {/* AERATION + TEAM: transfer to different manager */}
                     {availableManagers.length > 0 && (
                       <div>
                         <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Move to different manager</p>
@@ -2759,7 +2927,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                       </div>
                     )}
 
-                    {/* AERATION + TEAM: no-show removal */}
                     <div>
                       <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">No-show</p>
                       <button disabled={reassignLoading} onClick={handleRemoveWorkerNoShow}
@@ -2779,7 +2946,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               </div>
             </div>
             <div className="p-3 border-t border-gray-700 flex justify-end flex-shrink-0">
-              <button onClick={closeManageTeamModal} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors">Done</button>
+              <button onClick={onCloseManageTeamModal} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors">Done</button>
             </div>
           </div>
         </div>
