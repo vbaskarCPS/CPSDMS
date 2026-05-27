@@ -161,6 +161,34 @@ interface SwitchNavConfirmation {
   newLabel: string;
 }
 
+// NEW: route-line-click navigation prompt (Staff mode only).
+// When the RM taps a route line on the map while the Staff sidebar is open,
+// we offer to navigate to whoever's working that route. If exactly one
+// contractor/cart is assigned, the modal is a confirmation ("Navigate to
+// John?"). If multiple distinct carts are assigned (rare), it's a picker
+// with one Navigate button per cart. Unassigned routes are silently ignored
+// (no popup at all) — to (re)assign a route, switch to Routes mode.
+interface RouteNavPromptEntry {
+  // 'worker' for aeration solo workers, 'cart' for team-season carts
+  // (including multi-member carts and single-member team carts).
+  type: 'worker' | 'cart';
+  // Display label: "John D." or "John & Mike"
+  label: string;
+  // The card object — shape depends on `type`. Cast at the call site of the
+  // existing handleNavigate{ToWorker,ToCart} handlers.
+  card: WorkerCardData | CartCardData;
+  // Whether resolveNavDestination() returns a coordinate for this contractor.
+  // False means there's no geocoded transaction to navigate to — we still
+  // render the entry but the Navigate button is disabled.
+  hasGeocodableAddress: boolean;
+}
+
+interface RouteNavPrompt {
+  routeCode: string;
+  routeColor: string;
+  entries: RouteNavPromptEntry[];
+}
+
 type SidebarMode = 'staff' | 'routes';
 type SortOption = 'recent' | 'alpha' | 'steps' | 'equiv' | 'upGross';
 
@@ -268,11 +296,26 @@ async function geocodeAddress(addr: string, pLat?: number, pLng?: number): Promi
   } catch { return null; }
 }
 
-function createNavArrow(): HTMLDivElement {
-  const el = document.createElement('div');
-  el.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#4285F4" stroke="white" stroke-width="2" opacity="0.25"/><path d="M12 4 L18 18 L12 14 L6 18 Z" fill="#4285F4" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
-  el.style.cssText = 'transition: transform 0.3s ease;';
-  return el;
+// Builds the GPS "you are here" marker. Returns an OUTER wrapper that's safe
+// to hand to Mapbox (Mapbox sets `transform: translate(...)` on it for
+// positioning) and an INNER rotating div that we control for heading rotation.
+//
+// This split matters: if we tried to rotate the same div Mapbox uses for
+// positioning, Mapbox would clobber our rotate() on every map move with its
+// own translate(). Two nested divs sidestep the conflict — outer gets
+// translate, inner gets rotate, neither fights the other.
+function createNavArrow(): { outer: HTMLDivElement; inner: HTMLDivElement } {
+  const outer = document.createElement('div');
+  outer.style.cssText = 'pointer-events:none;width:28px;height:28px;';
+
+  const inner = document.createElement('div');
+  // 0.15s transition smooths low-rate GPS-derived heading updates without
+  // adding noticeable lag to high-rate compass events.
+  inner.style.cssText = 'width:100%;height:100%;transition:transform 0.15s linear;transform-origin:50% 50%;';
+  inner.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#4285F4" stroke="white" stroke-width="2" opacity="0.25"/><path d="M12 4 L18 18 L12 14 L6 18 Z" fill="#4285F4" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+
+  outer.appendChild(inner);
+  return { outer, inner };
 }
 
 function getStalenessColor(updatedAt: string): string {
@@ -543,9 +586,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [geocodedPins, setGeocodedPins] = useState<GeocodedPin[]>([]);
   const mountedRef = useRef(true);
   const centerOnLocationRef = useRef(false);
+  // Last GPS position we ACTUALLY re-centered the map at. Used with a small
+  // movement threshold to avoid restarting easeTo animations every GPS fix
+  // when the device is stationary and GPS is jittering by a metre or two —
+  // the cause of the follow-me "flicker".
+  const lastCenteredAtRef = useRef<{ lat: number; lng: number } | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const navMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  // The OUTER wrapper of the GPS arrow — Mapbox sets translate(...) here for
+  // positioning. We never touch this transform.
   const navArrowElRef = useRef<HTMLDivElement | null>(null);
+  // The INNER div nested inside navArrowElRef — we rotate this for heading.
+  // Decoupled from the outer so Mapbox's positioning translate doesn't clobber
+  // our rotation.
+  const navArrowInnerRef = useRef<HTMLDivElement | null>(null);
   // --- COMPASS / HEADING ROTATION REFS ---
   // Last compass reading from DeviceOrientationEvent (preferred, more accurate).
   const compassHeadingRef = useRef<number | null>(null);
@@ -629,6 +683,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [navState, setNavState] = useState<NavState | null>(null);
   // Confirmation popup when user taps Navigate while one is already active.
   const [switchNavConfirm, setSwitchNavConfirm] = useState<SwitchNavConfirmation | null>(null);
+  // Staff-mode route-line tap → "Navigate to who?" prompt. Null when closed.
+  // Single-entry shows as confirmation, multi-entry shows as picker.
+  const [routeNavPrompt, setRouteNavPrompt] = useState<RouteNavPrompt | null>(null);
 
   // Reset Manage Team sub-state when modal closes
   useEffect(() => {
@@ -1272,23 +1329,96 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, [sidebarMode, routeMapData, routes, mapLoaded, myRouteCodes]);
 
-  // Route click handlers
+  // Route click handlers — mode-aware.
+  //   - In Routes mode (sidebar shows route cards), tapping a route line on
+  //     the map opens the route assignment modal as before.
+  //   - In Staff mode (sidebar shows staff cards), tapping a route line opens
+  //     a "Navigate to who?" prompt with one entry per assigned worker (or
+  //     cart, for team seasons). Unassigned routes silently do nothing.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     const cleanups:Array<()=>void>=[];
     routeMapData.forEach(route=>{
       if(!myRouteCodes.includes(route.route_code)) return;
-      const enter=()=>{if(sidebarModeRef.current==='routes') map.getCanvas().style.cursor='pointer';};
-      const leave=()=>{map.getCanvas().style.cursor='';};
+
+      // Show pointer cursor in BOTH modes now — the click does something in
+      // either case (assignment modal in Routes mode, nav prompt in Staff mode).
+      const enter=()=>{ map.getCanvas().style.cursor='pointer'; };
+      const leave=()=>{ map.getCanvas().style.cursor=''; };
+
       const click=(e:any)=>{
-        if(sidebarModeRef.current!=='routes') return; e.preventDefault();
-        const rc=route.route_code, cr=routesRef.current, cb=bookingsRef.current;
-        const rp=cr.find(r=>r.routeCode===rc);
-        const rb=cb.filter(b=>b['Route Number']===rc);
-        const totalEQ=rb.reduce((sum,b) => sum + calculateBookingEQ(b), 0);
-        if(popupRef.current){popupRef.current.remove();popupRef.current=null;}
-        setAssignModalData({routeCode:rc,routeColor:route.route_color,prebookCount:rb.length,prepayCount:rb.filter(b=>b.Prepaid==='x').length,totalEQ,currentWorkerIds:rp?.assignedWorkerIds||[]});
+        e.preventDefault();
+        const mode = sidebarModeRef.current;
+        const rc = route.route_code;
+        const cr = routesRef.current, cb = bookingsRef.current;
+        const rp = cr.find(r => r.routeCode === rc);
+        const assignedIds = rp?.assignedWorkerIds || [];
+
+        if (mode === 'routes') {
+          // Existing behaviour — open the assignment modal.
+          const rb = cb.filter(b => b['Route Number'] === rc);
+          const totalEQ = rb.reduce((sum, b) => sum + calculateBookingEQ(b), 0);
+          if (popupRef.current) { popupRef.current.remove(); popupRef.current = null; }
+          setAssignModalData({
+            routeCode: rc,
+            routeColor: route.route_color,
+            prebookCount: rb.length,
+            prepayCount: rb.filter(b => b.Prepaid === 'x').length,
+            totalEQ,
+            currentWorkerIds: assignedIds,
+          });
+          return;
+        }
+
+        // STAFF MODE — build the nav prompt entries.
+        if (assignedIds.length === 0) return; // silently ignore unassigned
+
+        const entries: RouteNavPromptEntry[] = [];
+        if (isTeamSeason) {
+          // Group assigned workers by their cart (session). For team seasons,
+          // both members of a multi-member cart share the same financialStore,
+          // so they go in as a single entry. If a route happens to span two
+          // distinct carts (rare), each cart gets its own entry.
+          const seenSessions = new Set<string>();
+          for (const wid of assignedIds) {
+            const cart = cartCardDataRef.current.find(c =>
+              c.members.some(m => m.contractorId === wid)
+            );
+            if (!cart || seenSessions.has(cart.sessionId)) continue;
+            seenSessions.add(cart.sessionId);
+            const label = cart.members.length > 1
+              ? cart.members.map(m => m.firstName).join(' & ')
+              : `${cart.members[0]?.firstName || ''} ${cart.members[0]?.lastName?.charAt(0) || ''}.`.trim();
+            entries.push({
+              type: 'cart',
+              label: label || cart.teamId,
+              card: cart,
+              hasGeocodableAddress: resolveNavDestination(cart.sharedFinancialStore) !== null,
+            });
+          }
+        } else {
+          // Aeration — one entry per worker (each worker has their own session).
+          for (const wid of assignedIds) {
+            const card = workerCardDataRef.current.find(c => c.worker.contractorId === wid);
+            if (!card) continue;
+            entries.push({
+              type: 'worker',
+              label: `${card.worker.firstName} ${card.worker.lastName.charAt(0)}.`,
+              card,
+              hasGeocodableAddress: resolveNavDestination(card.financialStore) !== null,
+            });
+          }
+        }
+
+        if (entries.length === 0) return; // defensive — shouldn't happen
+        if (popupRef.current) { popupRef.current.remove(); popupRef.current = null; }
+        setRouteNavPrompt({
+          routeCode: rc,
+          routeColor: route.route_color,
+          entries,
+        });
       };
+
       [`rm-line-${route.id}`,`rm-num-${route.id}`].forEach(lid=>{
         if(!map.getLayer(lid)) return;
         map.on('mouseenter',lid,enter);map.on('mouseleave',lid,leave);map.on('click',lid,click);
@@ -1296,7 +1426,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     });
     return()=>cleanups.forEach(fn=>fn());
-  }, [routeMapData, mapLoaded, myRouteCodes, calculateBookingEQ]);
+  }, [routeMapData, mapLoaded, myRouteCodes, calculateBookingEQ, isTeamSeason]);
 
   // --- LAYER RENDERERS ---
 
@@ -1881,16 +2011,21 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // because it works while stationary and updates more smoothly.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!navigator.geolocation) return;
-    if(!navArrowElRef.current) navArrowElRef.current=createNavArrow();
+    if(!navArrowElRef.current) {
+      const arrow = createNavArrow();
+      navArrowElRef.current = arrow.outer;
+      navArrowInnerRef.current = arrow.inner;
+    }
     navMarkerRef.current=new mapboxgl.Marker({element:navArrowElRef.current}).setLngLat([0,0]).addTo(map);
 
-    // Apply current best heading to the arrow. Called on every GPS fix AND
-    // (separately, via the compass effect below) on every compass event.
+    // Apply current best heading to the arrow's INNER div. The outer div is
+    // owned by Mapbox for positioning (translate), so we never touch it —
+    // we'd just lose our rotation on the next map move.
     const applyArrowRotation = () => {
-      if (!navArrowElRef.current) return;
+      if (!navArrowInnerRef.current) return;
       const heading = compassHeadingRef.current ?? gpsHeadingRef.current;
       if (heading == null || isNaN(heading)) return;
-      navArrowElRef.current.style.transform = `rotate(${heading}deg)`;
+      navArrowInnerRef.current.style.transform = `rotate(${heading}deg)`;
     };
 
     const handleDragStart = (e: any) => {
@@ -1931,7 +2066,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       lastGpsPosRef.current = { lat, lng, ts: Date.now() };
       applyArrowRotation();
 
-      if(centerOnLocationRef.current) mapRef.current.easeTo({center:[lng,lat],duration:1000});
+      // Follow-me map centering — only ease to the new GPS position if we've
+      // moved meaningfully since the last re-center (>3m). This kills the
+      // jittery flicker that happens when GPS noise keeps stacking new 1-sec
+      // easing animations on top of each other while the device is stationary.
+      // Duration shortened from 1000→300ms so animations don't overlap when
+      // you ARE moving.
+      if (centerOnLocationRef.current) {
+        const last = lastCenteredAtRef.current;
+        const shouldCenter = !last || distanceMeters(last.lat, last.lng, lat, lng) > 3;
+        if (shouldCenter) {
+          mapRef.current.easeTo({ center: [lng, lat], duration: 300 });
+          lastCenteredAtRef.current = { lat, lng };
+        }
+      }
 
       if (centerOnLocationRef.current) {
         const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, managerId, 100);
@@ -1994,8 +2142,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         // counterclockwise. Invert to get clockwise-from-north.
         compassHeadingRef.current = (360 - e.alpha) % 360;
       }
-      if (navArrowElRef.current && compassHeadingRef.current != null) {
-        navArrowElRef.current.style.transform = `rotate(${compassHeadingRef.current}deg)`;
+      if (navArrowInnerRef.current && compassHeadingRef.current != null) {
+        navArrowInnerRef.current.style.transform = `rotate(${compassHeadingRef.current}deg)`;
       }
     };
     window.addEventListener('deviceorientation', handler, true);
@@ -2047,9 +2195,15 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const ll = navMarkerRef.current.getLngLat();
       if (ll.lng !== 0 || ll.lat !== 0) {
         mapRef.current.easeTo({ center: [ll.lng, ll.lat], duration: 800 });
+        // Seed the throttle so we don't immediately re-center again on the
+        // next GPS update.
+        lastCenteredAtRef.current = { lat: ll.lat, lng: ll.lng };
       }
     }
     if (!centerOnLocation) {
+      // Clear the throttle so the next time follow-me turns on, the first
+      // GPS update will re-center (any distance > 3m from a null reference).
+      lastCenteredAtRef.current = null;
       onRouteWorkerIdRef.current = null;
       onRouteCartIdRef.current = null;
       setOnRouteWorkerCard(null);
@@ -2248,6 +2402,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     startNavToDestination(switchNavConfirm.newDestination, switchNavConfirm.newTargetKey);
     setSwitchNavConfirm(null);
   }, [switchNavConfirm, startNavToDestination]);
+
+  // Route-prompt picker → trigger the existing nav handler for the chosen
+  // contractor/cart, then dismiss the prompt. Disabled entries (no
+  // geocodable address) shouldn't reach this handler — the button is
+  // disabled in the modal — but we defensively no-op if they do.
+  const handleRouteNavPromptSelect = useCallback((entry: RouteNavPromptEntry) => {
+    if (!entry.hasGeocodableAddress) return;
+    setRouteNavPrompt(null);
+    if (entry.type === 'cart') {
+      handleNavigateToCart(entry.card as CartCardData);
+    } else {
+      handleNavigateToWorker(entry.card as WorkerCardData);
+    }
+  }, [handleNavigateToWorker, handleNavigateToCart]);
 
   // --- EXISTING ACTIONS ---
 
@@ -3490,6 +3658,99 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                   Switch navigation
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ROUTE-NAV PROMPT (Staff mode — tapped a route line on the map).
+            Single-entry shows as a confirmation; multi-entry shows as a picker.
+            Entries without a geocodable address render with a disabled button
+            and a "no recent location" note. */}
+        {routeNavPrompt && (
+          <div
+            className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4"
+            onClick={() => setRouteNavPrompt(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2 mb-3">
+                <div
+                  className="w-8 h-8 rounded-md flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
+                  style={{ background: routeNavPrompt.routeColor }}
+                >
+                  {routeNavPrompt.routeCode}
+                </div>
+                <div className="text-white font-bold text-sm">
+                  {routeNavPrompt.entries.length === 1
+                    ? 'Navigate to…'
+                    : 'Pick who to navigate to'}
+                </div>
+                <button
+                  onClick={() => setRouteNavPrompt(null)}
+                  className="ml-auto w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                  title="Cancel"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+
+              {routeNavPrompt.entries.length === 1 ? (
+                // Single-entry → confirmation
+                <>
+                  <div className="text-sm text-gray-200 mb-3">
+                    Navigate to{' '}
+                    <span className="text-blue-300 font-bold">{routeNavPrompt.entries[0].label}</span>?
+                    {!routeNavPrompt.entries[0].hasGeocodableAddress && (
+                      <span className="block text-[11px] text-amber-400 mt-1">
+                        No recent transactions to navigate to.
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setRouteNavPrompt(null)}
+                      className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => handleRouteNavPromptSelect(routeNavPrompt.entries[0])}
+                      disabled={!routeNavPrompt.entries[0].hasGeocodableAddress}
+                      className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed text-white text-xs font-bold rounded-md flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <Navigation2 size={12} />
+                      Navigate
+                    </button>
+                  </div>
+                </>
+              ) : (
+                // Multi-entry → picker
+                <div className="space-y-1.5">
+                  {routeNavPrompt.entries.map((entry, i) => (
+                    <button
+                      key={i}
+                      onClick={() => handleRouteNavPromptSelect(entry)}
+                      disabled={!entry.hasGeocodableAddress}
+                      className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:bg-gray-800/40 disabled:cursor-not-allowed rounded-md border border-gray-700 text-xs flex items-center gap-2 transition-colors"
+                    >
+                      <Navigation2
+                        size={12}
+                        className={entry.hasGeocodableAddress ? 'text-blue-400' : 'text-gray-600'}
+                      />
+                      <span className={`flex-1 font-bold truncate ${entry.hasGeocodableAddress ? 'text-white' : 'text-gray-500'}`}>
+                        {entry.label}
+                      </span>
+                      {!entry.hasGeocodableAddress && (
+                        <span className="text-[10px] text-amber-400 flex-shrink-0">
+                          no recent location
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
