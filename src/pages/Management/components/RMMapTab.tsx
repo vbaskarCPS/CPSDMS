@@ -40,7 +40,7 @@ interface SavedRoute {
 }
 interface PinData {
   id: string; address: string; routeCode: string; name: string;
-  status: 'pending' | 'completed' | 'new_sale';
+  status: 'pending' | 'completed' | 'new_sale' | 'upsell';
   phone?: string; email?: string; price?: string; paymentMethod?: string;
 }
 interface GeocodedPin extends PinData { lat: number; lng: number; routeColor: string; }
@@ -584,6 +584,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const initialFitDoneRef = useRef(false);
   const knownPinsRef = useRef<Map<string, GeocodedPin>>(new Map());
   const [geocodedPins, setGeocodedPins] = useState<GeocodedPin[]>([]);
+  // Upsells (Upgrade / Add-On tx) — geocoded separately so we can render
+  // them with their own blue-ring style and detect overlap with completed/sale
+  // pins at the same address.
+  const knownUpsellPinsRef = useRef<Map<string, GeocodedPin>>(new Map());
+  const [geocodedUpsellPins, setGeocodedUpsellPins] = useState<GeocodedPin[]>([]);
   const mountedRef = useRef(true);
   const centerOnLocationRef = useRef(false);
   // Last GPS position we ACTUALLY re-centered the map at. Used with a small
@@ -1071,6 +1076,39 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return result;
   }, [allSessions, myRouteCodes, myTeamIds]);
 
+  // Upsells live in financialStore as type='Upgrade' or 'Add-On'. They sit at
+  // the same address as their parent aeration job, so their addresses are
+  // typically already in geocodeCache once phase 2 has run — no new geocoding
+  // phase needed. We still build a separate source list so the rendering
+  // pipeline can treat them distinctly (blue ring, half-overlay at overlap
+  // points, dedicated popup).
+  const upsellPinSource = useMemo<PinData[]>(() => {
+    const result: PinData[] = [];
+    const myRS = new Set(myRouteCodes);
+    allSessions.forEach(s => {
+      const sids = s.teamWorkerIds || [s.workerId];
+      const isMe = sids.some(wid => myTeamIds.has(wid));
+      (s.financialStore || []).forEach((tx: any) => {
+        if (tx.type !== 'Upgrade' && tx.type !== 'Add-On') return;
+        if (!isMe && !(tx.routeCode && myRS.has(tx.routeCode))) return;
+        const addr = tx.address || tx.itemDescription || '';
+        if (!addr) return;
+        result.push({
+          id: tx.jobId || tx.id,
+          address: addr,
+          routeCode: tx.routeCode || '',
+          name: tx.customerName || 'Unknown',
+          status: 'upsell',
+          phone: tx.customerPhone || '',
+          email: tx.customerEmail || '',
+          price: tx.displayPrice || (tx.price ? `$${Number(tx.price).toFixed(2)}` : ''),
+          paymentMethod: tx.paymentMethod || '',
+        });
+      });
+    });
+    return result;
+  }, [allSessions, myRouteCodes, myTeamIds]);
+
   const routeCentroid = useMemo(() => {
     if(!routeMapData.length) return null;
     let sLat=0,sLng=0,n=0;
@@ -1078,12 +1116,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return n?{lat:sLat/n,lng:sLng/n}:null;
   }, [routeMapData]);
 
+  // Most-recent transaction per session — drives the pulsing ring marker.
+  // INCLUDES upsells now (Upgrade / Add-On) since the user asked that the
+  // upsell pin be eligible as the most-recent location indicator. We look
+  // across BOTH the completed/sale pin set and the upsell pin set when
+  // resolving each session's latest jobId to a geocoded position.
   const mostRecentCompletionPins = useMemo<GeocodedPin[]>(() => {
     const latestByOwner = new Map<string, { jobId: string; timestamp: string }>();
     allSessions.forEach(s => {
       const ownerKey = isTeamSeason ? s.id : s.workerId;
       (s.financialStore || []).forEach((tx: any) => {
-        if (tx.type === 'Upgrade' || tx.type === 'Add-On') return;
         if (!tx.timestamp || !tx.jobId) return;
         const existing = latestByOwner.get(ownerKey);
         if (!existing || tx.timestamp > existing.timestamp) {
@@ -1094,11 +1136,48 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
     const result: GeocodedPin[] = [];
     latestByOwner.forEach(({ jobId }) => {
-      const pin = geocodedPins.find(p => p.id === jobId && (p.status === 'completed' || p.status === 'new_sale'));
+      // Try completed/sale first, then upsells. Whichever has the matching
+      // jobId wins. The pulsing ring uses the pin's routeColor for its
+      // color, so the visual is consistent regardless of which type.
+      const pin =
+        geocodedPins.find(p => p.id === jobId && (p.status === 'completed' || p.status === 'new_sale'))
+        ?? geocodedUpsellPins.find(p => p.id === jobId);
       if (pin) result.push(pin);
     });
     return result;
-  }, [allSessions, geocodedPins, isTeamSeason]);
+  }, [allSessions, geocodedPins, geocodedUpsellPins, isTeamSeason]);
+
+  // Overlap detection: addresses (cache-key normalized) that have BOTH a
+  // completed/sale pin AND an upsell pin. At these positions the rendering
+  // logic does two things:
+  //   1) excludes the upsell from the "upsell-only" circle layer (we don't
+  //      want to draw two stacked full rings at the same point),
+  //   2) adds the address to the half-blue overlay symbol layer (drawing
+  //      a blue right-half arc on top of the existing green/yellow ring).
+  // Click handler for the underlying completed/sale pin also reads from this
+  // set to decide whether to show the combined popup (Q2 = B).
+  const overlapInfo = useMemo(() => {
+    // Map<cacheKey, { upsellPin, basePin }>
+    // upsellPin: the upsell pin at this address (for popup details, overlay)
+    // basePin:   the completed/sale pin at this address (for left-side color)
+    const map = new Map<string, { upsellPin: GeocodedPin; basePin: GeocodedPin }>();
+    if (geocodedUpsellPins.length === 0) return map;
+    // Index completed/sale pins by address for fast lookup.
+    const baseByKey = new Map<string, GeocodedPin>();
+    for (const p of geocodedPins) {
+      if (p.status === 'completed' || p.status === 'new_sale') {
+        baseByKey.set(makeCacheKey(p.address), p);
+      }
+    }
+    for (const u of geocodedUpsellPins) {
+      const key = makeCacheKey(u.address);
+      const base = baseByKey.get(key);
+      if (base) {
+        map.set(key, { upsellPin: u, basePin: base });
+      }
+    }
+    return map;
+  }, [geocodedPins, geocodedUpsellPins]);
 
   const onRouteRedFlags = useMemo(() => {
     if (onRouteCartCard) return computeRedFlags(onRouteCartCard.sharedFinancialStore);
@@ -1430,6 +1509,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   // --- LAYER RENDERERS ---
 
+  // Ref-mirrored overlap info, read by the completed-pins click handler when
+  // deciding whether to append upsell details to its popup. We use a ref
+  // (not direct state) so the click handler closure registered once on layer
+  // creation always sees the current overlap data without needing to be
+  // re-registered every time the data changes.
+  const overlapInfoRef = useRef<Map<string, { upsellPin: GeocodedPin; basePin: GeocodedPin }>>(new Map());
+  useEffect(() => { overlapInfoRef.current = overlapInfo; }, [overlapInfo]);
+
   // Pending bookings circles — separate layer from completed so they can be
   // filter-toggled independently.
   const updatePendingBookingPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedPin[]) => {
@@ -1520,9 +1607,119 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const eRow=se?`<div style="color:#9ca3af;font-size:11px;margin-top:2px;">✉️ ${se}</div>`:'';
       const prTag=spr?`<span style="background:#16a34a22;color:#4ade80;border:1px solid #16a34a66;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${spr}</span>`:'';
       const mTag=sm?`<span style="background:#37415122;color:#9ca3af;border:1px solid #37415166;border-radius:4px;padding:2px 7px;font-size:11px;">${sm}</span>`:'';
+
+      // Combined-popup branch: if this address has an upsell at the same
+      // location (i.e. is in overlapInfoRef), append upsell details to the
+      // bottom of the popup with a divider above. Per Q2=B requirement.
+      const overlapEntry = overlapInfoRef.current.get(makeCacheKey(address));
+      let upsellBlock = '';
+      if (overlapEntry) {
+        const u = overlapEntry.upsellPin;
+        const uName = esc(u.name);
+        const uPrice = esc(u.price || '');
+        const uPriceTag = uPrice
+          ? `<span style="background:#3b82f622;color:#93c5fd;border:1px solid #3b82f666;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${uPrice}</span>`
+          : '';
+        upsellBlock = `
+          <div style="margin-top:8px;padding-top:8px;border-top:1px solid #444;">
+            <div style="display:flex;align-items:center;gap:5px;margin-bottom:3px;">
+              <span style="background:#3b82f622;color:#60a5fa;border:1px solid #3b82f666;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">⬆ Upsell</span>
+              ${uPriceTag}
+            </div>
+            <div style="color:#9ca3af;font-size:11px;">${uName}</div>
+          </div>
+        `;
+      }
+
       popupRef.current = new mapboxgl.Popup({ offset: 12, closeButton: true }).setLngLat(coords).setHTML(
-        `<div style="font-family:system-ui,sans-serif;font-size:13px;min-width:190px;line-height:1.4;"><div style="font-weight:700;margin-bottom:3px;">${sn}</div><div style="color:#555;font-size:11px;">${sa}</div>${pRow}${eRow}<div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;"><span style="background:${routeColor}22;color:${routeColor};border:1px solid ${routeColor}88;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${src2}</span><span style="color:${sc};font-size:11px;font-weight:600;">${sl}</span>${prTag}${mTag}</div></div>`
+        `<div style="font-family:system-ui,sans-serif;font-size:13px;min-width:190px;line-height:1.4;"><div style="font-weight:700;margin-bottom:3px;">${sn}</div><div style="color:#555;font-size:11px;">${sa}</div>${pRow}${eRow}<div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;"><span style="background:${routeColor}22;color:${routeColor};border:1px solid ${routeColor}88;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${src2}</span><span style="color:${sc};font-size:11px;font-weight:600;">${sl}</span>${prTag}${mTag}</div>${upsellBlock}</div>`
       ).addTo(map);
+    });
+  }, []);
+
+  // Upsell-ONLY circles (blue ring) — feeds addresses that have an upsell tx
+  // and NO completed/sale at the same point. Overlap points are drawn with a
+  // half-blue overlay symbol instead (see updateOverlapHalfPins below).
+  // Fill follows the route color like other pins; the stroke is the
+  // distinguishing blue (#3b82f6, Tailwind blue-500).
+  const updateUpsellOnlyPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedPin[]) => {
+    const gj: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: geocoded.map(pin => ({
+        type: 'Feature' as const,
+        properties: {
+          name: pin.name, address: pin.address, routeCode: pin.routeCode,
+          routeColor: pin.routeColor, phone: pin.phone || '',
+          email: pin.email || '', price: pin.price || '',
+        },
+        geometry: { type: 'Point' as const, coordinates: [pin.lng, pin.lat] },
+      })),
+    };
+    const src = map.getSource('rm-upsell-only-src') as mapboxgl.GeoJSONSource;
+    if (src) { src.setData(gj); return; }
+    map.addSource('rm-upsell-only-src', { type: 'geojson', data: gj });
+    map.addLayer({
+      id: 'rm-upsell-only-circles',
+      type: 'circle',
+      source: 'rm-upsell-only-src',
+      paint: {
+        'circle-color': ['get', 'routeColor'],
+        'circle-radius': 3.33,
+        'circle-stroke-color': '#3b82f6',
+        'circle-stroke-width': 1.67,
+        'circle-opacity': 0.95,
+      },
+    });
+    map.on('mouseenter', 'rm-upsell-only-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'rm-upsell-only-circles', () => { map.getCanvas().style.cursor = ''; });
+    map.on('click', 'rm-upsell-only-circles', (e: any) => {
+      const f = e.features?.[0]; if (!f) return;
+      const { name, address, routeCode, routeColor, phone, email, price } = f.properties;
+      const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+      if (popupRef.current) popupRef.current.remove();
+      const sn=esc(name),sa=esc(address),sp=esc(phone),se=esc(email),spr=esc(price),src2=esc(routeCode);
+      const pRow=sp?`<div style="margin-top:5px;"><a href="tel:${sp}" style="color:#60a5fa;font-size:12px;text-decoration:none;">📞 ${sp}</a></div>`:'';
+      const eRow=se?`<div style="color:#9ca3af;font-size:11px;margin-top:2px;">✉️ ${se}</div>`:'';
+      const prTag=spr?`<span style="background:#3b82f622;color:#93c5fd;border:1px solid #3b82f666;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${spr}</span>`:'';
+      popupRef.current = new mapboxgl.Popup({ offset: 12, closeButton: true }).setLngLat(coords).setHTML(
+        `<div style="font-family:system-ui,sans-serif;font-size:13px;min-width:190px;line-height:1.4;"><div style="font-weight:700;margin-bottom:3px;">${sn}</div><div style="color:#555;font-size:11px;">${sa}</div>${pRow}${eRow}<div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;"><span style="background:${routeColor}22;color:${routeColor};border:1px solid ${routeColor}88;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${src2}</span><span style="background:#3b82f622;color:#60a5fa;border:1px solid #3b82f666;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">⬆ Upsell</span>${prTag}</div></div>`
+      ).addTo(map);
+    });
+  }, []);
+
+  // Half-blue overlay symbols at overlap addresses (where a completed/sale
+  // pin AND an upsell exist at the same lat/lng). Renders a symbol whose
+  // icon is the right-half-blue arc — overlayed on top of the underlying
+  // green/yellow completed-pin circle. Together they read as a single ring
+  // with the left half its original color and the right half blue.
+  //
+  // The icon itself is created in map onload (see the icon-creation block).
+  // No click handler on this layer — clicks fall through to the underlying
+  // rm-completed-pins-circles layer, which knows (via overlapInfoRef) to
+  // render the combined popup.
+  const updateOverlapHalfPins = useCallback((map: mapboxgl.Map, points: Array<{ lat: number; lng: number }>) => {
+    const gj: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: points.map(p => ({
+        type: 'Feature' as const,
+        properties: {},
+        geometry: { type: 'Point' as const, coordinates: [p.lng, p.lat] },
+      })),
+    };
+    const src = map.getSource('rm-overlap-half-src') as mapboxgl.GeoJSONSource;
+    if (src) { src.setData(gj); return; }
+    map.addSource('rm-overlap-half-src', { type: 'geojson', data: gj });
+    map.addLayer({
+      id: 'rm-overlap-half-symbols',
+      type: 'symbol',
+      source: 'rm-overlap-half-src',
+      layout: {
+        'icon-image': 'rm-upsell-half-blue',
+        'icon-size': 1.0,
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      },
+      paint: { 'icon-opacity': 0.95 },
     });
   }, []);
 
@@ -1593,6 +1790,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
     if (map.getLayer('rm-completed-pins-circles')) {
       map.setPaintProperty('rm-completed-pins-circles', 'circle-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
+    }
+    // Upsell layers piggyback on the same toggle (Q3 = grouped under
+    // pendingSalesAndCompleted, no separate filter).
+    if (map.getLayer('rm-upsell-only-circles')) {
+      map.setPaintProperty('rm-upsell-only-circles', 'circle-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
+    }
+    if (map.getLayer('rm-overlap-half-symbols')) {
+      map.setPaintProperty('rm-overlap-half-symbols', 'icon-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
     }
     if (map.getLayer('rm-historical-symbols')) {
       map.setPaintProperty('rm-historical-symbols', 'icon-opacity', filterVisibility.historical ? 0.85 : 0);
@@ -1938,6 +2143,81 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [pendingSalesByManager, geocodePhase, isTeamSeason, mapLoaded, geocodeCacheHydrated, geocodeOne]);
 
+  // --- UPSELL GEOCODING ---
+  // Upsells (Upgrade / Add-On tx) sit at the same address as their parent
+  // aeration job. Once Phase 2 has populated geocodeCache with those parent
+  // addresses, the vast majority of upsell pins resolve from cache instantly
+  // — no Mapbox calls needed. For the rare upsell at an address that didn't
+  // get geocoded by phase 2 (shouldn't happen, but defensive), we fall
+  // through to geocodeOne which itself checks the cache and only hits the
+  // network if nothing is found.
+  //
+  // We trigger this after Phase 2 finishes (geocodePhase past 'phase2_*'),
+  // and re-run incrementally whenever upsellPinSource changes (a worker
+  // adds a new upsell mid-day).
+  useEffect(() => {
+    if (!mapLoaded || !geocodeCacheHydrated) return;
+    // Only run once Phase 2 has populated cache with completed/sale addresses.
+    if (geocodePhase === 'idle' || geocodePhase === 'phase1_pending_bookings') return;
+
+    let cancelled = false;
+    (async () => {
+      const sources = upsellPinSource;
+      const additions: GeocodedPin[] = [];
+
+      for (const pin of sources) {
+        if (cancelled) return;
+        if (knownUpsellPinsRef.current.has(pin.id)) continue;
+        const coord = await geocodeOne(pin.address);
+        if (coord) {
+          additions.push({
+            ...pin,
+            lat: coord.lat,
+            lng: coord.lng,
+            routeColor: routeColorMap.get(pin.routeCode) || '#888888',
+          });
+        }
+        // Small yield between iterations even when serving from cache — keeps
+        // the main thread responsive on large upsell lists.
+        await new Promise(r => setTimeout(r, 0));
+      }
+
+      if (cancelled || !mountedRef.current) return;
+      const stillRelevantIds = new Set(sources.map(p => p.id));
+      additions.forEach(p => knownUpsellPinsRef.current.set(p.id, p));
+      // Prune any cached upsells whose source no longer lists them (rare —
+      // e.g. an upsell tx was retracted).
+      for (const id of Array.from(knownUpsellPinsRef.current.keys())) {
+        if (!stillRelevantIds.has(id)) {
+          knownUpsellPinsRef.current.delete(id);
+        }
+      }
+      setGeocodedUpsellPins(Array.from(knownUpsellPinsRef.current.values()));
+    })();
+    return () => { cancelled = true; };
+  }, [upsellPinSource, geocodePhase, mapLoaded, geocodeCacheHydrated, geocodeOne, routeColorMap]);
+
+  // Drive the upsell-only and overlap-half layers. Recomputes from the
+  // current overlapInfo + geocodedUpsellPins state on every change.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+
+    // Upsell-only: upsells whose address ISN'T in overlapInfo.
+    const upsellOnly = geocodedUpsellPins.filter(
+      p => !overlapInfo.has(makeCacheKey(p.address))
+    );
+    updateUpsellOnlyPins(map, upsellOnly);
+
+    // Overlap points: one entry per overlap address, using the base pin's
+    // coordinates (which match the upsell's, since they share an address).
+    const overlapPoints: Array<{ lat: number; lng: number }> = [];
+    overlapInfo.forEach(({ basePin }) => {
+      overlapPoints.push({ lat: basePin.lat, lng: basePin.lng });
+    });
+    updateOverlapHalfPins(map, overlapPoints);
+  }, [geocodedUpsellPins, overlapInfo, mapLoaded, updateUpsellOnlyPins, updateOverlapHalfPins]);
+
   // Render pending-sales markers
   useEffect(() => {
     const map = mapRef.current;
@@ -2259,6 +2539,40 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         const imgData = ctx.getImageData(0, 0, xCanvasSize, xCanvasSize);
         if (!map.hasImage('rm-historical-x')) {
           map.addImage('rm-historical-x', imgData, { pixelRatio: 2 });
+        }
+      }
+
+      // ---- Half-blue overlay icon (rm-upsell-half-blue) ----
+      // Draws ONLY the right half of a ring (semicircle, π to 0 going through
+      // 0 from the top, then back) at the same radius/stroke-width as the
+      // underlying completed-pin circles. Drawn at pixelRatio 2 for crispness
+      // on retina displays. The left half is transparent so the underlying
+      // pin's green/yellow stroke shows through unmodified.
+      const upsellCanvasSize = 16;
+      const upsellCanvas = document.createElement('canvas');
+      upsellCanvas.width = upsellCanvasSize;
+      upsellCanvas.height = upsellCanvasSize;
+      const uctx = upsellCanvas.getContext('2d');
+      if (uctx) {
+        const cx = upsellCanvasSize / 2;
+        const cy = upsellCanvasSize / 2;
+        // Underlying circle is radius 3.33 with stroke 1.67. At pixelRatio 2,
+        // the icon's nominal pixel space is 2x. So our drawing radius needs
+        // to match the painted ring: drawing radius ~= (3.33 + 1.67/2) * 2 ≈
+        // 8.3 in canvas pixels. We use slightly larger to ensure full overlap
+        // of the stroke.
+        const ringRadius = 4.17;     // (3.33 + half stroke) * 2-ish, eyeballed
+        const strokeWidth = 1.67 * 2; // double for hi-DPI canvas
+        uctx.strokeStyle = '#3b82f6'; // Tailwind blue-500
+        uctx.lineWidth = strokeWidth;
+        uctx.lineCap = 'butt';
+        uctx.beginPath();
+        // Right half arc: from top (-π/2) clockwise to bottom (π/2)
+        uctx.arc(cx, cy, ringRadius, -Math.PI / 2, Math.PI / 2, false);
+        uctx.stroke();
+        const upsellImgData = uctx.getImageData(0, 0, upsellCanvasSize, upsellCanvasSize);
+        if (!map.hasImage('rm-upsell-half-blue')) {
+          map.addImage('rm-upsell-half-blue', upsellImgData, { pixelRatio: 2 });
         }
       }
 
