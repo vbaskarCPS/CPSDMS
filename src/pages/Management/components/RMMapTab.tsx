@@ -2361,7 +2361,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         @keyframes rmSlideOut { from { transform: translateX(0); } to { transform: translateX(-100%); } }
       `}</style>
 
-      <div className="relative w-full h-full">
+<div className="relative w-full h-full min-h-0" style={{ minHeight: '300px' }}>
 
         {/* Map container */}
         <div ref={mapContainerRef} className="absolute inset-0 bg-gray-900" />
