@@ -238,6 +238,15 @@ const RMLogbook: React.FC = () => {
     setCenterOnLocation(false);
   }, []);
 
+  // NEW: force follow-me ON. Called by RMMapTab when starting in-app
+  // navigation — nav needs the camera tracking the RM, so if follow-me is
+  // off it gets turned on at nav launch. After nav ends, follow-me stays on
+  // (per spec: "stays on after arrival or cancel"). User drag still auto-
+  // disables it during nav, same as today, via handleFollowMeAutoDisable.
+  const handleForceFollowMeOn = useCallback(() => {
+    setCenterOnLocation(true);
+  }, []);
+
   // Filter toggle handler — only fires when the layer's geocoding phase is done.
   const handleToggleFilter = useCallback((key: keyof FilterVisibility) => {
     setFilterVisibility(prev => ({ ...prev, [key]: !prev[key] }));
@@ -896,6 +905,7 @@ const RMLogbook: React.FC = () => {
             onGeocodeProgress={handleGeocodeProgress}
             centerOnLocation={centerOnLocation}
             onFollowMeAutoDisable={handleFollowMeAutoDisable}
+            onForceFollowMeOn={handleForceFollowMeOn}
             showManageTeamModal={showManageTeamModal}
             onCloseManageTeamModal={() => setShowManageTeamModal(false)}
           />

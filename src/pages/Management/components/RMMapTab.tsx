@@ -7,7 +7,7 @@ import {
   Loader, ChevronLeft, ChevronRight, X, Users, Eye, Phone, MapPin,
   AlertCircle, LayoutList, AlertTriangle, Truck, Bookmark, Shovel, Leaf,
   FileText, Check, ArrowRight, ArrowRightLeft, Shuffle, Trash2, UserPlus,
-  UserMinus, Undo2,
+  UserMinus, Undo2, Navigation2,
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { sessionService } from '../../../lib/sessionService';
@@ -22,10 +22,12 @@ import { setStorageItem } from '../../../lib/localStorage';
 import {
   RouteData, MasterBooking, LogsheetSession, Worker, ManagementUser,
   HistoricalProperty, SeasonType, TeamCart, PendingSale, SEASON_CONFIGS,
+  SessionTransaction,
 } from '../../../types';
 import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
 import ContractorJobs from './ContractorJobs';
 import PendingJobModal from '../../../components/PendingJobModal';
+import RMNavigation, { NavDestination } from './RMNavigation';
 import type { GeocodePhase, GeocodeProgress, FilterVisibility } from '../RMLogbook';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -90,6 +92,9 @@ interface RMMapTabProps {
   ) => void;
   centerOnLocation: boolean;
   onFollowMeAutoDisable: () => void;
+  // NEW: nav-related — RMMapTab owns nav state, but follow-me lives in RMLogbook.
+  // When nav starts, we ask RMLogbook to turn on follow-me if it's off.
+  onForceFollowMeOn?: () => void;
   showManageTeamModal: boolean;
   onCloseManageTeamModal: () => void;
 }
@@ -137,6 +142,23 @@ interface RouteCardData {
 
 interface AssignModalData {
   routeCode: string; routeColor: string; prebookCount: number; prepayCount: number; totalEQ: number; currentWorkerIds: string[];
+}
+
+// NEW: nav-related state types.
+// Active nav state — destination + label for the maneuver card.
+interface NavState {
+  destination: NavDestination;
+  // Lightweight identifier so we can detect "is this the same target?" if user re-taps.
+  targetKey: string;       // e.g. 'worker:abc123' or 'cart:sess_xyz'
+}
+
+// Switch-target confirmation popup data — shown when user taps Navigate on a
+// different worker/cart while another nav is active.
+interface SwitchNavConfirmation {
+  newDestination: NavDestination;
+  newTargetKey: string;
+  currentLabel: string;
+  newLabel: string;
 }
 
 type SidebarMode = 'staff' | 'routes';
@@ -421,6 +443,53 @@ function createDashedRotatingRing(): HTMLDivElement {
 
 const WORKER_LOCATION_POLL_MS = 5 * 60 * 1000;
 
+// --- NAV DESTINATION RESOLVER ---
+//
+// Walk the financialStore newest-first and find the first transaction whose
+// address has a geocode. Skip Upgrade/Add-On types since they share an address
+// with a parent Production/Sale (no new physical location to navigate to).
+//
+// Returns null if nothing geocodable exists — the Navigate button is hidden
+// in that case.
+//
+// Cache priority per spec:
+//   1. jobIdCache (per-tx accurate — populated by Phase 2 geocoding)
+//   2. geocodeCache (address-level — populated by all phases)
+function resolveNavDestination(financialStore: any[]): { lat: number; lng: number; address: string } | null {
+  if (!financialStore || financialStore.length === 0) return null;
+
+  // Sort newest-first. Defensive copy — we don't mutate caller's array.
+  const sorted = [...financialStore].sort((a, b) => {
+    const ta = a?.timestamp || '';
+    const tb = b?.timestamp || '';
+    return tb.localeCompare(ta);
+  });
+
+  for (const tx of sorted) {
+    if (!tx) continue;
+    if (tx.type === 'Upgrade' || tx.type === 'Add-On') continue;
+    const address: string = tx.address || '';
+    if (!address) continue;
+
+    // Try jobIdCache first.
+    if (tx.jobId) {
+      const ic = jobIdCache.get(tx.jobId);
+      if (ic && ic.lat != null && ic.lng != null) {
+        return { lat: ic.lat, lng: ic.lng, address: ic.address || address };
+      }
+    }
+    // Fall back to geocodeCache by normalized address.
+    const key = makeCacheKey(address);
+    const gc = geocodeCache.get(key);
+    if (gc && gc.lat != null && gc.lng != null) {
+      return { lat: gc.lat, lng: gc.lng, address };
+    }
+    // No hit for this tx — move on to the next-most-recent.
+  }
+
+  return null;
+}
+
 // --- COMPONENT ---
 
 const RMMapTab: React.FC<RMMapTabProps> = ({
@@ -441,6 +510,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   onGeocodeProgress,
   centerOnLocation,
   onFollowMeAutoDisable,
+  onForceFollowMeOn,
   showManageTeamModal,
   onCloseManageTeamModal,
 }) => {
@@ -527,6 +597,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   const [unassigningAsphaltId, setUnassigningAsphaltId] = useState<string | null>(null);
   const [unassignError, setUnassignError] = useState<string | null>(null);
+
+  // --- NEW: NAV STATE ---
+  // Active nav (null = not navigating). When set, RMNavigation overlay renders.
+  const [navState, setNavState] = useState<NavState | null>(null);
+  // Confirmation popup when user taps Navigate while one is already active.
+  const [switchNavConfirm, setSwitchNavConfirm] = useState<SwitchNavConfirmation | null>(null);
 
   // Reset Manage Team sub-state when modal closes
   useEffect(() => {
@@ -1101,8 +1177,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return()=>{cancelled=true;};
   }, [myRouteCodes]);
 
-  // === PART 2 START ===
-
   // Draw routes
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
@@ -1373,16 +1447,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [filterVisibility, mapLoaded]);
 
   // --- SERIAL GEOCODING STATE MACHINE ---
-  //
-  // Drives the four-phase geocoding pipeline in strict order. Each phase:
-  //  1. Splits inputs into cached vs needs-geocoding
-  //  2. Reports its total to RMLogbook so the filter badge knows the denominator
-  //  3. Renders cached entries immediately
-  //  4. Geocodes the remainder one address at a time with 80ms throttle
-  //  5. Reports done:true when finished, advancing to the next phase
-  //
-  // Mid-day additions (new pending sales, new completed jobs) bypass the phase
-  // machine and geocode immediately — see the "incremental" effect lower down.
 
   // Helper that geocodes a single address with cache write-through.
   const geocodeOne = useCallback(async (address: string): Promise<{ lat: number; lng: number } | null> => {
@@ -1396,12 +1460,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
     return coord;
   }, [routeCentroid]);
-
-  // Phase machine — fires when its prerequisites are met. Each phase signals
-  // completion via onGeocodeProgress and advances geocodePhase implicitly by
-  // each subsequent phase having `geocodePhase === <previous_done>` checks.
-  // Since RMLogbook owns the phase state, we just call onGeocodeProgress with
-  // the next phase name when transitioning.
 
   // PHASE 1: Pending Prebooks
   useEffect(() => {
@@ -1429,13 +1487,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const total = needsGeocoding.length;
       onGeocodeProgress('phase1_pending_bookings', 'pendingBookings', 0, total, false);
 
-      // Render cached immediately
-      const merged = [...enriched];
       enriched.forEach(p => knownPinsRef.current.set(p.id, p));
       const allKnown = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'pending');
       updatePendingBookingPins(map, allKnown);
 
-      // Geocode the rest
       for (let i = 0; i < needsGeocoding.length; i++) {
         if (cancelled || !mountedRef.current) return;
         const pin = needsGeocoding[i];
@@ -1446,7 +1501,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
         if (cancelled || !mountedRef.current) return;
         onGeocodeProgress('phase1_pending_bookings', 'pendingBookings', i + 1, total, false);
-        // Re-render every few to give visual feedback
         if ((i + 1) % 5 === 0 || i === needsGeocoding.length - 1) {
           const live = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'pending');
           updatePendingBookingPins(map, live);
@@ -1459,14 +1513,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       updatePendingBookingPins(map, final);
       setGeocodedPins(Array.from(knownPinsRef.current.values()));
 
-      // Phase 1 done — advance to phase 2
       onGeocodeProgress('phase2_completed_and_sales', 'pendingBookings', total, total, true);
     })();
 
     return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, pendingBookingPinSource, routeColorMap, geocodeOne, updatePendingBookingPins, onGeocodeProgress]);
 
-  // PHASE 2: Completed + new sales + pending sales (combined visual filter)
+  // PHASE 2: Completed + new sales + pending sales
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'phase2_completed_and_sales') return;
@@ -1475,7 +1528,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     let cancelled = false;
 
     (async () => {
-      // Completed + new-sale pins
       const sources = completedAndNewSalePinSource;
       const enriched: GeocodedPin[] = [];
       const needsGeocoding: PinData[] = [];
@@ -1495,7 +1547,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
       });
 
-      // Pending sales (team seasons only) — fold into the same phase
       const pendingSalesNeedsGeocoding: Array<{ booking: MasterBooking; address: string; id: string }> = [];
       const pendingSalesCached: GeocodedPendingSale[] = [];
 
@@ -1517,7 +1568,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const totalToGeocode = needsGeocoding.length + pendingSalesNeedsGeocoding.length;
       onGeocodeProgress('phase2_completed_and_sales', 'pendingSalesAndCompleted', 0, totalToGeocode, false);
 
-      // Render cached immediately
       enriched.forEach(p => knownPinsRef.current.set(p.id, p));
       const allCompleted = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'completed' || p.status === 'new_sale');
       updateCompletedPins(map, allCompleted);
@@ -1527,7 +1577,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
       let progressDone = 0;
 
-      // Geocode completed/new-sale first
       for (let i = 0; i < needsGeocoding.length; i++) {
         if (cancelled || !mountedRef.current) return;
         const pin = needsGeocoding[i];
@@ -1546,7 +1595,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         if (i < needsGeocoding.length - 1) await new Promise(r => setTimeout(r, 80));
       }
 
-      // Then pending sales
       const newPSResults: GeocodedPendingSale[] = [...pendingSalesCached];
       for (let i = 0; i < pendingSalesNeedsGeocoding.length; i++) {
         if (cancelled || !mountedRef.current) return;
@@ -1567,7 +1615,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
       setGeocodedPins(Array.from(knownPinsRef.current.values()));
 
-      // Phase 2 done — advance to phase 3
       onGeocodeProgress('phase3_historical', 'pendingSalesAndCompleted', totalToGeocode, totalToGeocode, true);
     })();
 
@@ -1600,7 +1647,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const total = needsGeocoding.length;
       onGeocodeProgress('phase3_historical', 'historical', 0, total, false);
 
-      // Render cached
       const snap = Array.from(knownHistoricalRef.current.values());
       setGeocodedHistorical(snap);
       updateHistoricalPins(map, snap);
@@ -1629,7 +1675,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       setGeocodedHistorical(final);
       updateHistoricalPins(map, final);
 
-      // Phase 3 done — advance to phase 4
       onGeocodeProgress('phase4_pcl', 'historical', total, total, true);
     })();
 
@@ -1692,16 +1737,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       setGeocodedPCL(final);
       updatePclCircles(map, final);
 
-      // Phase 4 done — mark complete
       onGeocodeProgress('complete', 'pcl', total, total, true);
     })();
 
     return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, pclByRoute, geocodeOne, updatePclCircles, onGeocodeProgress]);
 
-  // INCREMENTAL: mid-day pending-sales additions. Once phase machine is complete,
-  // new pending sales appearing in pendingSalesByManager prop get geocoded
-  // immediately without waiting for any phase.
+  // INCREMENTAL: mid-day pending-sales additions
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'complete') return;
@@ -1727,14 +1769,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
       if (cancelled || !mountedRef.current) return;
       if (additions.length > 0) {
-        // Filter out any that have disappeared from current pending sales
         const stillRelevant = new Set(merged.map(b => b['Booking ID']));
         setGeocodedPendingSales(prev => {
           const next = [...prev.filter(g => stillRelevant.has(g.id)), ...additions];
           return next;
         });
       } else {
-        // Even with no additions, prune ones that have been resolved/removed
         const stillRelevant = new Set(merged.map(b => b['Booking ID']));
         setGeocodedPendingSales(prev => prev.filter(g => stillRelevant.has(g.id)));
       }
@@ -1742,8 +1782,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [pendingSalesByManager, geocodePhase, isTeamSeason, mapLoaded, geocodeCacheHydrated, geocodeOne]);
 
-  // Render pending-sales markers (dashed rotating rings)
-  // Honors filterVisibility.pendingSalesAndCompleted.
+  // Render pending-sales markers
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
@@ -1752,7 +1791,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const showThem = filterVisibility.pendingSalesAndCompleted;
 
     if (!showThem) {
-      // Hide all
       pendingSaleMarkersRef.current.forEach(m => m.remove());
       pendingSaleMarkersRef.current.clear();
       return;
@@ -1782,8 +1820,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, [geocodedPendingSales, mapLoaded, filterVisibility.pendingSalesAndCompleted]);
 
-  // Pulsing completion dots — honor filterVisibility.pendingSalesAndCompleted
-  // since they're conceptually completion markers.
+  // Pulsing completion dots
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
@@ -1814,10 +1851,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if(!navArrowElRef.current) navArrowElRef.current=createNavArrow();
     navMarkerRef.current=new mapboxgl.Marker({element:navArrowElRef.current}).setLngLat([0,0]).addTo(map);
 
-    // Google-Maps-style: user drag disables follow-me. Programmatic moves
-    // (easeTo from GPS updates) don't have an originalEvent.
     const handleDragStart = (e: any) => {
-      if (!e.originalEvent) return; // programmatic, ignore
+      if (!e.originalEvent) return;
       if (centerOnLocationRef.current) {
         onFollowMeAutoDisable();
       }
@@ -1874,7 +1909,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     };
   }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable]);
 
-  // When follow-me activates externally (header button), recenter immediately.
   useEffect(() => {
     if (centerOnLocation && navMarkerRef.current && mapRef.current) {
       const ll = navMarkerRef.current.getLngLat();
@@ -1980,6 +2014,109 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       console.error("Failed to toggle upsells:", error);
     }
   };
+
+  // --- NEW: NAV ACTION HANDLERS ---
+  //
+  // Common flow for both worker and cart nav requests:
+  //   1. Resolve destination via the fallback chain (newest geocodable transaction).
+  //   2. If none found → toast/log and abort (the button shouldn't have been
+  //      visible in the first place; this is just defence in depth).
+  //   3. If no nav is currently active → start nav directly.
+  //   4. If nav is active and same target → no-op.
+  //   5. If nav is active and different target → show switch-confirmation popup.
+  //
+  // When nav starts, force follow-me on if it's off so the camera tracks the RM.
+  // The auto-disable-on-drag still works (handleDragStart in the GPS effect),
+  // so the RM can tap-pan to inspect mid-trip and follow-me silently turns off.
+
+  const startNavToDestination = useCallback((
+    dest: NavDestination,
+    targetKey: string
+  ) => {
+    // Force follow-me on if it's off.
+    if (!centerOnLocation && onForceFollowMeOn) {
+      onForceFollowMeOn();
+    }
+    setNavState({ destination: dest, targetKey });
+    // Defensive: close any overlays that would visually fight the maneuver card.
+    if (popupRef.current) { popupRef.current.remove(); popupRef.current = null; }
+  }, [centerOnLocation, onForceFollowMeOn]);
+
+  const handleNavigateToWorker = useCallback((card: WorkerCardData) => {
+    const resolved = resolveNavDestination(card.financialStore);
+    if (!resolved) {
+      console.warn('[RMNav] No geocoded address available for', card.worker.contractorId);
+      return;
+    }
+    const label = `${card.worker.firstName} ${card.worker.lastName.charAt(0)}.`;
+    const newDest: NavDestination = { lat: resolved.lat, lng: resolved.lng, label };
+    const newKey = `worker:${card.worker.contractorId}`;
+
+    if (!navState) {
+      startNavToDestination(newDest, newKey);
+      return;
+    }
+    if (navState.targetKey === newKey) return; // tapping the same target — no-op
+    setSwitchNavConfirm({
+      newDestination: newDest,
+      newTargetKey: newKey,
+      currentLabel: navState.destination.label,
+      newLabel: label,
+    });
+  }, [navState, startNavToDestination]);
+
+  const handleNavigateToCart = useCallback((cart: CartCardData) => {
+    const resolved = resolveNavDestination(cart.sharedFinancialStore);
+    if (!resolved) {
+      console.warn('[RMNav] No geocoded address available for cart', cart.sessionId);
+      return;
+    }
+    const label = cart.members.length > 1
+      ? cart.members.map(m => m.firstName).join(' & ')
+      : `${cart.members[0]?.firstName || ''} ${cart.members[0]?.lastName.charAt(0) || ''}.`;
+    const newDest: NavDestination = { lat: resolved.lat, lng: resolved.lng, label };
+    const newKey = `cart:${cart.sessionId}`;
+
+    if (!navState) {
+      startNavToDestination(newDest, newKey);
+      return;
+    }
+    if (navState.targetKey === newKey) return;
+    setSwitchNavConfirm({
+      newDestination: newDest,
+      newTargetKey: newKey,
+      currentLabel: navState.destination.label,
+      newLabel: label,
+    });
+  }, [navState, startNavToDestination]);
+
+  // Worker/cart cards expose "can navigate?" — used to hide the Navigate icon
+  // when there's no geocodable address. Cheap enough to recompute per-render
+  // since it's just cache lookups.
+  const workerCanNavigate = useCallback((card: WorkerCardData): boolean => {
+    return resolveNavDestination(card.financialStore) !== null;
+  }, []);
+
+  const cartCanNavigate = useCallback((cart: CartCardData): boolean => {
+    return resolveNavDestination(cart.sharedFinancialStore) !== null;
+  }, []);
+
+  const handleNavCancel = useCallback(() => {
+    setNavState(null);
+  }, []);
+
+  const handleNavArrived = useCallback(() => {
+    // Silent end — drops back to regular map. No modal auto-open per spec.
+    setNavState(null);
+  }, []);
+
+  const handleSwitchNavConfirm = useCallback(() => {
+    if (!switchNavConfirm) return;
+    startNavToDestination(switchNavConfirm.newDestination, switchNavConfirm.newTargetKey);
+    setSwitchNavConfirm(null);
+  }, [switchNavConfirm, startNavToDestination]);
+
+  // --- EXISTING ACTIONS ---
 
   const handleAssignRoute=async(workerId:string|null)=>{
     if(!assignModalData) return; setAssignLoading(true);
@@ -2179,779 +2316,973 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     navigator.clipboard.writeText(phone);
   };
 
+  // --- RENDER ---
   return (
-    <div className="absolute inset-0 flex flex-col">
-      <div ref={mapContainerRef} className="flex-1" />
+    <>
+      {/* Inline keyframes for sidebar slide animation */}
+      <style>{`
+        @keyframes rmSlideIn { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+        @keyframes rmSlideOut { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+      `}</style>
 
-      {/* Sidebar — always renders */}
-      <div className="absolute left-0 top-0 bottom-0 z-20 transition-all duration-300" style={{width:sidebarOpen?'20%':'20px'}}>
-        <div className="absolute left-0 top-0 bottom-0 bg-gray-900/95 backdrop-blur-sm transition-all duration-300 overflow-hidden" style={{width:sidebarOpen?'calc(100% - 20px)':'0px'}}>
-          {sidebarOpen && (
-            <div className="h-full flex flex-col">
-              <div className="p-2 border-b border-gray-700 flex-shrink-0 bg-gray-800/80">
-                <div className="flex gap-1 bg-gray-900/60 rounded-lg p-0.5">
-                  <button onClick={()=>setSidebarMode('staff')} className={`flex-1 flex items-center justify-center gap-1 py-1 rounded-md text-[10px] font-bold transition-all ${sidebarMode==='staff'?'bg-gray-700 text-white':'text-gray-500 hover:text-gray-300'}`}>
-                    {isTeamSeason ? <Truck size={10}/> : <Users size={10}/>}
-                    {isTeamSeason ? 'Carts' : 'Staff'}
-                  </button>
-                  <button onClick={()=>setSidebarMode('routes')} className={`flex-1 flex items-center justify-center gap-1 py-1 rounded-md text-[10px] font-bold transition-all ${sidebarMode==='routes'?'bg-gray-700 text-white':'text-gray-500 hover:text-gray-300'}`}>
-                    <LayoutList size={10}/> Routes
-                  </button>
-                </div>
-              </div>
-              {sidebarMode==='staff' && (
-                <div className="px-2 pt-1.5 pb-1 border-b border-gray-800 flex-shrink-0">
-                  <select value={sortBy} onChange={e=>setSortBy(e.target.value as SortOption)} className="w-full bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-[10px] text-white focus:outline-none">
-                    <option value="recent">Most Recent</option>
-                    <option value="alpha">A–Z</option>
-                    <option value="steps">Highest Steps</option>
-                    <option value="equiv">Highest EQ</option>
-                    <option value="upGross">Highest Upsell</option>
-                  </select>
-                </div>
-              )}
-              {sidebarMode==='routes' && (
-                <div className="px-2 pt-1.5 pb-1 border-b border-gray-800 flex-shrink-0">
-                  <p className="text-[8px] text-gray-600 text-center italic">Card → jobs · Route on map → assign</p>
-                </div>
-              )}
-              <div className="flex-1 overflow-y-auto p-2" style={{scrollbarWidth:'thin'}}>
-                {sidebarMode==='staff' && !isTeamSeason && (
-                  sortedWorkerCards.length===0
-                    ? <div className="text-center text-gray-500 text-xs py-6 italic">No workers found.</div>
-                    : sortedWorkerCards.map(card => (
-                        <div key={card.worker.contractorId} className="bg-gray-800 border border-gray-700 rounded-lg p-2 mb-1.5 hover:border-blue-500 transition-all cursor-pointer" onClick={()=>setSelectedWorkerForModal(card)}>
-                          <div className="flex items-center justify-between mb-1.5">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${card.stats.pending>0?'bg-yellow-500 animate-pulse':'bg-green-500'}`}/>
-                              <div className="flex flex-col min-w-0">
-                                <span className="font-bold text-white text-xs truncate hover:text-blue-300">
-                                  {card.worker.firstName} {card.worker.lastName}
-                                </span>
-                                <span className="text-[9px] text-gray-500 font-mono">#{card.worker.contractorId}</span>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1 flex-shrink-0" onClick={e=>e.stopPropagation()}>
-                              <button onClick={()=>handleViewLogsheet(card.worker)} className="p-1 rounded hover:bg-gray-700 text-cyan-400 hover:text-cyan-300" title="View logsheet"><Eye size={11}/></button>
-                              {card.worker.cellPhone && <a href={`tel:${card.worker.cellPhone}`} onClick={e=>e.stopPropagation()} className="p-1 rounded hover:bg-gray-700 text-green-400 hover:text-green-300" title={card.worker.cellPhone}><Phone size={11}/></a>}
-                            </div>
-                          </div>
-                          {card.assignedRoutes.length>0 && (
-                            <div className="flex flex-wrap gap-0.5 mb-1.5 pl-3">
-                              {card.assignedRoutes.slice(0,4).map((route,idx)=>{const color=routeColorMap.get(route)||'#6b7280';return(<span key={idx} style={{backgroundColor:`${color}22`,color,borderColor:`${color}88`}} className="px-1 py-0.5 rounded text-[8px] font-bold border font-mono">{route}</span>);})}
-                              {card.assignedRoutes.length>4 && <span className="px-1 py-0.5 rounded text-[8px] bg-gray-700 text-gray-400">+{card.assignedRoutes.length-4}</span>}
-                            </div>
-                          )}
-                          {card.lastActiveAddress && (
-                            <div className="flex items-center gap-1 text-[9px] text-gray-400 mb-1 pl-3 truncate">
-                              <MapPin size={8} className="text-emerald-500 shrink-0" />
-                              <span className="truncate">{card.lastActiveAddress}{card.lastActiveTime && <span className="text-gray-500"> • {card.lastActiveTime}</span>}</span>
-                            </div>
-                          )}
-                          <div className="grid grid-cols-5 gap-0.5 text-center bg-gray-900/50 rounded p-1">
-                            {[['Steps',card.stats.steps,'text-white'],['Pend',card.stats.pending,'text-yellow-400'],['Up$',`$${card.stats.upsellGross.toFixed(0)}`,'text-green-400'],['Up',card.stats.upsellCount,'text-purple-400'],['EQ',card.stats.eq.toFixed(1),'text-blue-300']].map(([l,v,c])=>(
-                              <div key={l as string}><div className="text-[7px] text-gray-500 uppercase leading-none mb-0.5">{l}</div><div className={`text-[10px] font-bold ${c}`}>{v}</div></div>
-                            ))}
-                          </div>
-                        </div>
-                      ))
-                )}
-                {sidebarMode==='staff' && isTeamSeason && (
-                  sortedCartCards.length===0
-                    ? <div className="text-center text-gray-500 text-xs py-6 italic">No carts found.</div>
-                    : sortedCartCards.map(cart => {
-                        const isSoloCart = cart.members.length === 1;
-                        const primaryWorker = cart.members[0];
-                        const incomingCount = cart.asphaltIncomingRows.length;
-                        const showAsphaltBadge = isSealing && incomingCount > 0;
-                        const combinedName = isSoloCart
-                          ? `${primaryWorker?.firstName || ''} ${primaryWorker?.lastName || ''}`
-                          : cart.members.map(m => m.firstName).join(' & ');
-                        return (
-                          <div key={cart.sessionId} className="bg-gray-800 border border-gray-700 rounded-lg p-2 mb-1.5 hover:border-blue-500 transition-all cursor-pointer" onClick={()=>setSelectedCartForModal(cart)}>
-                            <div className="flex items-center justify-between mb-1.5">
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cart.stats.pending>0?'bg-yellow-500 animate-pulse':'bg-green-500'}`}/>
-                                {!isSoloCart && (
-                                  <div className="flex items-center gap-0.5 px-1 py-0.5 rounded bg-green-900/30 border border-green-700/50 flex-shrink-0">
-                                    <Truck size={9} className="text-green-400" />
-                                    <span className="text-green-300 text-[9px] font-bold">{cart.members.length}</span>
-                                  </div>
-                                )}
-                                <span className="font-bold text-white text-xs truncate">{combinedName}</span>
-                              </div>
-                              <div className="flex items-center gap-1 flex-shrink-0" onClick={e=>e.stopPropagation()}>
-                                <button onClick={()=>handleViewLogsheet(primaryWorker, cart.members)} className="p-1 rounded hover:bg-gray-700 text-cyan-400 hover:text-cyan-300" title="View cart logsheet"><Eye size={11}/></button>
-                              </div>
-                            </div>
-                            <div className="flex flex-wrap gap-0.5 mb-1.5 pl-3">
-                              {cart.assignedRoutes.slice(0,3).map((route,idx)=>{const color=routeColorMap.get(route)||'#6b7280';return(<span key={idx} style={{backgroundColor:`${color}22`,color,borderColor:`${color}88`}} className="px-1 py-0.5 rounded text-[8px] font-bold border font-mono">{route}</span>);})}
-                              {cart.assignedRoutes.length>3 && <span className="px-1 py-0.5 rounded text-[8px] bg-gray-700 text-gray-400">+{cart.assignedRoutes.length-3}</span>}
-                              {showAsphaltBadge && (
-                                <span className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[8px] bg-amber-900/40 text-amber-300 border border-amber-700 font-bold" title={`${incomingCount} asphalt row(s) assigned`}>
-                                  <Shovel size={8}/> {incomingCount}
-                                </span>
-                              )}
-                            </div>
-                            {cart.lastActiveAddress && (
-                              <div className="flex items-center gap-1 text-[9px] text-gray-400 mb-1 pl-3 truncate">
-                                <MapPin size={8} className="text-emerald-500 shrink-0" />
-                                <span className="truncate">{cart.lastActiveAddress}{cart.lastActiveTime && <span className="text-gray-500"> • {cart.lastActiveTime}</span>}</span>
-                              </div>
-                            )}
-                            <div className="grid grid-cols-5 gap-0.5 text-center bg-gray-900/50 rounded p-1">
-                              <div><div className="text-[7px] text-gray-500 uppercase leading-none mb-0.5">Steps</div><div className="text-[10px] font-bold text-white">{cart.stats.steps}</div></div>
-                              <div>
-                                <div className="text-[7px] text-gray-500 uppercase leading-none mb-0.5">Pend</div>
-                                <div className="text-[10px] font-bold flex items-center justify-center gap-0.5">
-                                  <span className="text-green-400">{cart.stats.pending}</span>
-                                  {cart.stats.pendingSaleCount > 0 && (
-                                    <>
-                                      <span className="text-gray-600 text-[8px]">+</span>
-                                      <span className="text-yellow-400 flex items-center gap-0.5"><Bookmark size={7}/>{cart.stats.pendingSaleCount}</span>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                              <div><div className="text-[7px] text-gray-500 uppercase leading-none mb-0.5">Up$</div><div className="text-[10px] font-bold text-green-400">${cart.stats.upsellGross.toFixed(0)}</div></div>
-                              <div><div className="text-[7px] text-gray-500 uppercase leading-none mb-0.5">Up</div><div className="text-[10px] font-bold text-purple-400">{cart.stats.upsellCount}</div></div>
-                              <div><div className="text-[7px] text-gray-500 uppercase leading-none mb-0.5">EQ</div><div className="text-[10px] font-bold text-blue-300">{cart.stats.eq.toFixed(1)}</div></div>
-                            </div>
-                          </div>
-                        );
-                      })
-                )}
-                {sidebarMode==='routes' && (
-                  routeCardData.length===0
-                    ? <div className="text-center text-gray-500 text-xs py-6 italic">No routes found.</div>
-                    : routeCardData.map(card => (
-                        <div key={card.routeCode} onClick={()=>setSelectedRouteForBookings(card.routeCode)} style={{borderColor:`${card.routeColor}66`,backgroundColor:`${card.routeColor}12`}} className={`rounded-lg p-2 mb-1.5 border cursor-pointer hover:brightness-110 active:scale-[0.98] transition-all ${!card.isAssigned?'opacity-50':''}`}>
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span style={{color:card.routeColor}} className="font-mono font-black text-base leading-none flex-shrink-0">{card.routeCode}</span>
-                              {card.assignedWorkerLabel?<span className="text-[10px] text-white font-medium truncate">{card.assignedWorkerLabel}</span>:<span className="text-[9px] text-gray-500 italic">Unassigned</span>}
-                            </div>
-                            <span style={{color:card.routeColor}} className="text-xs font-bold font-mono flex-shrink-0">{card.totalEQ.toFixed(1)} EQ</span>
-                          </div>
-                          <div className="flex items-center gap-3 mt-1">
-                            <span className="text-[9px] text-gray-400">{card.prebookCount} jobs</span>
-                            {card.prepayCount>0 && <span className="text-[9px] text-green-400 font-bold">{card.prepayCount} prepaid</span>}
-                          </div>
-                        </div>
-                      ))
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-        <button onClick={()=>setSidebarOpen(p=>!p)} className="absolute right-0 top-1/2 -translate-y-1/2 w-5 h-12 bg-gray-800/90 border border-gray-600 rounded-r-md flex items-center justify-center hover:bg-gray-700 transition-colors cursor-pointer shadow-md">
-          {sidebarOpen?<ChevronLeft size={12} className="text-gray-300"/>:<ChevronRight size={12} className="text-gray-300"/>}
-        </button>
-      </div>
+      <div className="relative w-full h-full">
 
-      {/* Status overlays — keep loading routes message but drop the legacy
-          "geocoding X/Y" overlay (filter-button badges show that now). */}
-      {routesLoading && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm"><Loader size={12} className="animate-spin text-blue-400"/>Loading routes…</div>}
-      {!routesLoading&&!routeMapData.length&&myRouteCodes.length>0&&mapLoaded && <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-yellow-900/90 text-yellow-300 px-3 py-1.5 rounded-full shadow-lg text-xs font-medium backdrop-blur-sm">No map data for your routes</div>}
+        {/* Map container */}
+        <div ref={mapContainerRef} className="absolute inset-0 bg-gray-900" />
 
-      {!mapLoaded && <div className="absolute inset-0 bg-gray-100 flex items-center justify-center z-10"><Loader size={24} className="animate-spin text-blue-500"/></div>}
+        {/* Routes loading overlay */}
+        {routesLoading && (
+          <div className="absolute top-3 left-3 z-30 bg-gray-900/90 text-white text-xs px-3 py-2 rounded-lg flex items-center gap-2 shadow-lg">
+            <Loader size={14} className="animate-spin" />
+            Loading routes…
+          </div>
+        )}
 
-      {/* On-route contractor/cart button */}
-      {(onRouteCartCard || onRouteWorkerCard) && (
+        {/* No-routes-on-map message */}
+        {!routesLoading && mapLoaded && routeMapData.length === 0 && myRouteCodes.length > 0 && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-amber-900/90 text-amber-100 text-xs px-3 py-2 rounded-lg shadow-lg max-w-md text-center">
+            <AlertCircle size={14} className="inline mr-1" />
+            No approved route geometry found. Have a Senior RM approve routes.
+          </div>
+        )}
+
+        {/* Sidebar toggle (top-left, always visible) */}
         <button
-          onClick={() => {
-            if (onRouteCartCard) setSelectedCartForModal(onRouteCartCard);
-            else if (onRouteWorkerCard) setSelectedWorkerForModal(onRouteWorkerCard);
-          }}
-          className="absolute bottom-20 right-3 z-40 bg-gray-900/95 backdrop-blur-sm text-white rounded-xl shadow-2xl border border-gray-600 px-6 py-5 flex items-center gap-4 hover:border-blue-500 active:scale-[0.97] transition-all max-w-[420px]"
+          onClick={() => setSidebarOpen(o => !o)}
+          className="absolute top-3 left-3 z-40 w-11 h-11 bg-gray-900/95 hover:bg-gray-800 text-white rounded-lg shadow-xl flex items-center justify-center transition-all border border-gray-700"
+          title={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+          style={{ display: navState ? 'none' : 'flex' }}
         >
-          {onRouteRedFlags.hasFlag && (
-            <AlertTriangle size={32} className="text-red-500 flex-shrink-0 animate-pulse" />
-          )}
-          <div className="flex flex-col items-start min-w-0">
-            <span className="font-bold text-xl leading-tight truncate w-full">
-              {onRouteCartCard
-                ? onRouteCartCard.members.map(m => m.firstName).join(' & ')
-                : `${onRouteWorkerCard?.worker.firstName} ${onRouteWorkerCard?.worker.lastName}`}
-            </span>
-            <div className="flex items-center gap-3 text-sm mt-1">
-              <span className="text-gray-400">Steps: <span className="text-white font-bold">{onRouteCartCard ? onRouteCartCard.stats.steps : onRouteWorkerCard?.stats.steps}</span></span>
-              <span className="text-gray-400">Pend: <span className="text-yellow-400 font-bold">{onRouteCartCard ? onRouteCartCard.stats.pending : onRouteWorkerCard?.stats.pending}</span></span>
-              <span className="text-gray-400">EQ: <span className="text-blue-300 font-bold">{(onRouteCartCard ? onRouteCartCard.stats.eq : onRouteWorkerCard?.stats.eq || 0).toFixed(1)}</span></span>
-              <span className="text-gray-400">Up: <span className="text-purple-400 font-bold">{onRouteCartCard ? onRouteCartCard.stats.upsellCount : onRouteWorkerCard?.stats.upsellCount}</span></span>
-            </div>
-          </div>
+          {sidebarOpen ? <ChevronLeft size={20} /> : <LayoutList size={20} />}
         </button>
-      )}
 
-      {/* Worker detail modal */}
-      {selectedWorkerForModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.75)'}} onClick={e=>{if(e.target===e.currentTarget) setSelectedWorkerForModal(null);}}>
-          <div className="bg-gray-800 rounded-lg border border-gray-700 shadow-2xl w-full max-w-2xl flex flex-col" style={{maxHeight:'85vh'}}>
-            <div className="p-4 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
-              <div className="min-w-0 flex-1">
-                <h3 className="text-base font-bold text-white truncate">{selectedWorkerForModal.worker.firstName} {selectedWorkerForModal.worker.lastName}</h3>
-                <div className="flex items-center gap-3 text-xs text-gray-400 mt-0.5">
-                  <span className="font-mono">#{selectedWorkerForModal.worker.contractorId}</span>
-                  {selectedWorkerForModal.worker.cellPhone && (
-                    <button onClick={()=>handleCopyPhone(selectedWorkerForModal.worker.cellPhone!, selectedWorkerForModal.worker.contractorId)} className="flex items-center gap-1 text-blue-400 hover:underline">
-                      <Phone size={10}/> {selectedWorkerForModal.worker.cellPhone}
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className="flex items-center gap-2 ml-3 flex-shrink-0">
-                <button onClick={()=>handleViewLogsheet(selectedWorkerForModal.worker)} className="flex items-center gap-1 px-2 py-1 rounded bg-cyan-900/30 hover:bg-cyan-900/50 text-cyan-300 border border-cyan-700/50 text-xs">
-                  <Eye size={12}/> Logsheet
+        {/* SIDEBAR */}
+        {sidebarOpen && (
+          <div
+            className="absolute top-0 left-0 h-full w-[min(380px,90vw)] bg-gray-900 border-r border-gray-700 z-30 shadow-2xl flex flex-col"
+            style={{ animation: 'rmSlideIn 0.2s ease-out forwards' }}
+          >
+            {/* Header */}
+            <div className="flex-shrink-0 p-3 border-b border-gray-700 bg-gray-900/95 pt-16">
+              {/* Mode toggle */}
+              <div className="flex bg-gray-800 rounded-lg p-0.5 mb-3">
+                <button
+                  onClick={() => setSidebarMode('staff')}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors ${
+                    sidebarMode === 'staff'
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <Users size={12} className="inline mr-1" />
+                  Staff
                 </button>
-                <button onClick={()=>handleToggleUpsells(selectedWorkerForModal.worker.contractorId, selectedWorkerForModal.upsellsEnabled)} className={`flex items-center gap-1 px-2 py-1 rounded text-xs border ${selectedWorkerForModal.upsellsEnabled ? 'bg-purple-900/30 text-purple-300 border-purple-700/50' : 'bg-gray-700 text-gray-400 border-gray-600'}`} title="Toggle upsells">
-                  Upsells {selectedWorkerForModal.upsellsEnabled ? 'ON' : 'OFF'}
+                <button
+                  onClick={() => setSidebarMode('routes')}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors ${
+                    sidebarMode === 'routes'
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <MapPin size={12} className="inline mr-1" />
+                  Routes
                 </button>
-                <button onClick={()=>setSelectedWorkerForModal(null)} className="p-1.5 hover:bg-gray-700 rounded-full text-gray-400 hover:text-white"><X size={18}/></button>
               </div>
-            </div>
-            <div className="px-4 py-3 border-b border-gray-700 flex-shrink-0">
-              <div className="grid grid-cols-5 gap-1 text-center bg-gray-900/50 rounded p-2 mb-2">
-                {[['Steps',selectedWorkerForModal.stats.steps,'text-white'],['Pend',selectedWorkerForModal.stats.pending,'text-yellow-400'],['Up Gross',`$${selectedWorkerForModal.stats.upsellGross.toFixed(0)}`,'text-green-400'],['Upsells',selectedWorkerForModal.stats.upsellCount,'text-purple-400'],['EQ',selectedWorkerForModal.stats.eq.toFixed(2),'text-blue-300']].map(([l,v,c])=>(
-                  <div key={l as string}><div className="text-[8px] text-gray-500 uppercase mb-0.5">{l}</div><div className={`text-sm font-bold ${c}`}>{v}</div></div>
-                ))}
-              </div>
-              {selectedWorkerForModal.assignedRoutes.length > 0 && (
-                <div className="flex flex-wrap gap-1 mb-2">
-                  {selectedWorkerForModal.assignedRoutes.map((route, idx) => {
-                    const color = routeColorMap.get(route) || '#6b7280';
-                    return <span key={idx} style={{backgroundColor:`${color}22`,color,borderColor:`${color}88`}} className="px-1.5 py-0.5 rounded text-[10px] font-bold border font-mono">{route}</span>;
-                  })}
-                </div>
-              )}
-              {selectedWorkerForModal.lastActiveAddress && (
-                <div className="flex items-center gap-1 text-[11px] text-gray-400">
-                  <MapPin size={10} className="text-emerald-500" />
-                  <span>{selectedWorkerForModal.lastActiveAddress}{selectedWorkerForModal.lastActiveTime && <span className="text-gray-500"> • {selectedWorkerForModal.lastActiveTime}</span>}</span>
-                </div>
-              )}
-            </div>
-            <div className="flex-1 overflow-y-auto" style={{scrollbarWidth:'thin'}}>
-              <ContractorJobs bookings={selectedWorkerForModal.displayBookings} financialStore={selectedWorkerForModal.financialStore} onRefresh={onRefresh} seasonType={seasonType}/>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* Cart detail modal */}
-      {selectedCartForModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.75)'}} onClick={e=>{if(e.target===e.currentTarget) setSelectedCartForModal(null);}}>
-          <div className="bg-gray-800 rounded-lg border border-gray-700 shadow-2xl w-full max-w-2xl flex flex-col" style={{maxHeight:'85vh'}}>
-            <div className="p-4 border-b border-gray-700 flex items-start justify-between flex-shrink-0 gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 mb-1">
-                  {selectedCartForModal.members.length > 1 ? (
-                    <div className="flex items-center gap-1 px-2 py-0.5 rounded bg-green-900/30 border border-green-700/50">
-                      <Truck size={12} className="text-green-400"/>
-                      <span className="text-green-300 text-xs font-bold">{selectedCartForModal.members.length}</span>
-                    </div>
-                  ) : null}
-                  <h3 className="text-base font-bold text-white truncate">
-                    {selectedCartForModal.members.map(m => m.firstName).join(' & ')}
-                  </h3>
-                  {selectedCartForModal.isRcCart && (
-                    <span className="px-1.5 py-0.5 rounded text-[9px] bg-slate-700 text-slate-200 border border-slate-500 font-bold">RC</span>
-                  )}
-                </div>
-                {selectedCartForModal.assignedRoutes.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mb-1">
-                    {selectedCartForModal.assignedRoutes.map((route, idx) => {
-                      const color = routeColorMap.get(route) || '#6b7280';
-                      return <span key={idx} style={{backgroundColor:`${color}22`,color,borderColor:`${color}88`}} className="px-1.5 py-0.5 rounded text-[10px] font-bold border font-mono">{route}</span>;
-                    })}
-                  </div>
-                )}
-                {selectedCartForModal.lastActiveAddress && (
-                  <div className="flex items-center gap-1 text-[11px] text-gray-400">
-                    <MapPin size={10} className="text-emerald-500"/>
-                    <span>{selectedCartForModal.lastActiveAddress}{selectedCartForModal.lastActiveTime && <span className="text-gray-500"> • {selectedCartForModal.lastActiveTime}</span>}</span>
-                  </div>
-                )}
-              </div>
-              <button onClick={()=>setSelectedCartForModal(null)} className="p-1.5 hover:bg-gray-700 rounded-full text-gray-400 hover:text-white flex-shrink-0"><X size={18}/></button>
-            </div>
-            <div className="px-4 py-3 border-b border-gray-700 flex-shrink-0">
-              <div className="grid grid-cols-5 gap-1 text-center bg-gray-900/50 rounded p-2 mb-3">
-                <div><div className="text-[8px] text-gray-500 uppercase mb-0.5">Steps</div><div className="text-sm font-bold text-white">{selectedCartForModal.stats.steps}</div></div>
-                <div>
-                  <div className="text-[8px] text-gray-500 uppercase mb-0.5">Pend</div>
-                  <div className="text-sm font-bold flex items-center justify-center gap-1">
-                    <span className="text-green-400">{selectedCartForModal.stats.pending}</span>
-                    {selectedCartForModal.stats.pendingSaleCount > 0 && (
-                      <>
-                        <span className="text-gray-600 text-[9px]">+</span>
-                        <span className="text-yellow-400 flex items-center gap-0.5"><Bookmark size={8}/>{selectedCartForModal.stats.pendingSaleCount}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div><div className="text-[8px] text-gray-500 uppercase mb-0.5">Up Gross</div><div className="text-sm font-bold text-green-400">${selectedCartForModal.stats.upsellGross.toFixed(0)}</div></div>
-                <div><div className="text-[8px] text-gray-500 uppercase mb-0.5">Upsells</div><div className="text-sm font-bold text-purple-400">{selectedCartForModal.stats.upsellCount}</div></div>
-                <div><div className="text-[8px] text-gray-500 uppercase mb-0.5">EQ</div><div className="text-sm font-bold text-blue-300">{selectedCartForModal.stats.eq.toFixed(2)}</div></div>
-              </div>
-              <div className="space-y-1">
-                {selectedCartForModal.members.map(member => (
-                  <div key={member.contractorId} className="flex items-center justify-between gap-2 p-1.5 bg-gray-900/50 rounded border border-gray-700/50">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className="w-6 h-6 rounded-full bg-cps-blue flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0">
-                        {member.firstName.charAt(0)}{member.lastName.charAt(0)}
-                      </div>
-                      <div className="flex flex-col min-w-0">
-                        <span className="text-xs text-white truncate">{member.firstName} {member.lastName}</span>
-                        <span className="text-[9px] text-gray-500 font-mono">#{member.contractorId}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      {member.cellPhone && (
-                        <button onClick={()=>handleCopyPhone(member.cellPhone!, member.contractorId)} className="flex items-center gap-1 text-[10px] text-blue-400 hover:underline">
-                          <Phone size={10}/> {member.cellPhone}
-                        </button>
-                      )}
-                      <button onClick={()=>handleViewLogsheet(member, selectedCartForModal.members)} className="p-1 rounded hover:bg-gray-700 text-cyan-400 hover:text-cyan-300" title="View this member's logsheet"><Eye size={11}/></button>
-                      <button onClick={()=>handleToggleUpsells(member.contractorId, (member as any).upsellsEnabled !== false)} className={`px-1.5 py-0.5 rounded text-[9px] border ${(member as any).upsellsEnabled !== false ? 'bg-purple-900/30 text-purple-300 border-purple-700/50' : 'bg-gray-700 text-gray-400 border-gray-600'}`}>
-                        UP {(member as any).upsellsEnabled !== false ? 'ON' : 'OFF'}
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto" style={{scrollbarWidth:'thin'}}>
-              {isSealing && selectedCartForModal.asphaltIncomingRows.length > 0 && (
-                <div className="m-3 p-2 bg-amber-900/10 border border-amber-700/30 rounded">
-                  <div className="flex items-center gap-1.5 mb-2">
-                    <Shovel size={12} className="text-amber-400" />
-                    <h4 className="text-[11px] font-bold text-amber-300 uppercase tracking-wide">
-                      Asphalt Assigned to this Cart ({selectedCartForModal.asphaltIncomingRows.length})
-                    </h4>
-                  </div>
-                  {unassignError && (
-                    <div className="mb-2 p-1.5 bg-red-900/30 border border-red-700 rounded text-[10px] text-red-300 flex items-center gap-1.5">
-                      <AlertCircle size={11} className="shrink-0"/> {unassignError}
-                    </div>
-                  )}
-                  <div className="space-y-1.5">
-                    {selectedCartForModal.asphaltIncomingRows.map(asphalt => {
-                      const isUnassigning = unassigningAsphaltId === asphalt.id;
-                      const address = assembleAddressFromPending(asphalt);
-                      const isDeferred = typeof asphalt.sharedJobKey === 'string' && asphalt.sharedJobKey.length > 0;
-                      return (
-                        <div key={asphalt.id} className="flex items-center justify-between gap-2 p-2 bg-amber-900/15 border border-amber-700/40 rounded">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-0.5">
-                              <span className="bg-gray-700 text-gray-300 text-[9px] font-mono px-1.5 py-0.5 rounded border border-gray-600">{asphalt.routeCode || '--'}</span>
-                              {isDeferred && <span className="text-[9px] font-bold bg-amber-900/50 text-amber-300 px-1.5 py-0.5 rounded border border-amber-700">DEFERRED</span>}
-                            </div>
-                            <div className="flex items-center gap-1 text-gray-200 text-xs truncate"><MapPin size={10} className="text-gray-500 shrink-0"/><span className="truncate">{address}</span></div>
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-amber-200 font-mono font-bold text-sm flex items-center gap-1"><Shovel size={11} className="text-amber-400"/>{formatAsphaltDollars(asphalt.asphaltAmount)}</span>
-                            <button onClick={()=>handleUnassignAsphalt(asphalt.id, address)} disabled={isUnassigning} title="Unassign — returns this row to the unassigned queue" className="flex items-center gap-1 px-2 py-1 bg-gray-700 hover:bg-red-900/40 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300 hover:text-red-300 border border-gray-600 hover:border-red-700 rounded text-[10px] font-bold transition-colors">
-                              {isUnassigning ? <Loader size={10} className="animate-spin"/> : <Undo2 size={10}/>}
-                              Unassign
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+              {/* Sort */}
+              {sidebarMode === 'staff' && (
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as SortOption)}
+                  className="w-full bg-gray-800 text-white text-xs rounded-md px-2 py-1.5 border border-gray-700"
+                >
+                  <option value="recent">Most recent</option>
+                  <option value="alpha">Alphabetical</option>
+                  <option value="steps">Steps</option>
+                  <option value="equiv">EQ</option>
+                  <option value="upGross">Upsell $</option>
+                </select>
               )}
-              <ContractorJobs bookings={selectedCartForModal.sharedBookings} financialStore={selectedCartForModal.sharedFinancialStore} onRefresh={onRefresh} seasonType={seasonType}/>
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* Route prebookings popup */}
-      {selectedRouteForBookings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.75)'}} onClick={e=>{if(e.target===e.currentTarget) setSelectedRouteForBookings(null);}}>
-          <div className="bg-gray-800 rounded-lg border border-gray-700 shadow-2xl w-full max-w-2xl flex flex-col" style={{maxHeight:'85vh'}}>
-            <div className="p-4 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <span style={{color:routeColorMap.get(selectedRouteForBookings)||'#6b7280'}} className="font-mono font-black text-xl">Route {selectedRouteForBookings}</span>
-                <span className="text-white font-bold text-xs">{selectedRouteBookings.length} jobs</span>
-                <span className="text-green-400 font-bold text-xs">{selectedRouteBookings.filter(b=>b.Prepaid==='x').length} prepaid</span>
-              </div>
-              <button onClick={()=>setSelectedRouteForBookings(null)} className="p-1.5 hover:bg-gray-700 rounded-full text-gray-400 hover:text-white"><X size={18}/></button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-2" style={{scrollbarWidth:'thin'}}>
-              {selectedRouteBookings.map(job => {
-                const isCompleted = job.Status === 'completed' || job.Completed === 'x';
-                const isNextTime = job.Status === 'next_time';
-                const isCancelled = job.Status === 'cancelled';
-                const notes = job['Log Sheet Notes'] || '';
-                const services = job.services;
-                const jobWorker = job['Contractor Number'] ? myTeamWorkers.find(w => w.contractorId === job['Contractor Number']) : null;
-                let statusBadge = null;
-                if (isNextTime) statusBadge = <span className="text-[9px] bg-orange-900/30 text-orange-400 px-1 py-0.5 rounded border border-orange-800 font-bold">NEXT TIME</span>;
-                else if (isCancelled) statusBadge = <span className="text-[9px] bg-red-900/30 text-red-400 px-1 py-0.5 rounded border border-red-800 font-bold">CANCELLED</span>;
+            {/* Body — scrollable */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-2">
+
+              {/* STAFF MODE: worker cards (aeration) or cart cards (team seasons) */}
+              {sidebarMode === 'staff' && !isTeamSeason && sortedWorkerCards.map(card => {
+                const canNav = workerCanNavigate(card);
+                const { hasFlag, flags } = computeRedFlags(card.financialStore);
                 return (
-                  <div key={job['Booking ID']} onClick={()=>{ if(!isCompleted) setPendingJobForModal(job); }}
-                    className={`p-2 rounded border flex flex-col gap-2 transition-colors ${isCompleted ? 'bg-green-900/10 border-green-900/30 opacity-75' : isCancelled ? 'bg-red-900/10 border-red-900/30 cursor-pointer hover:border-red-700' : isNextTime ? 'bg-orange-900/10 border-orange-900/30 cursor-pointer hover:border-orange-700' : 'bg-gray-800 border-gray-700 cursor-pointer hover:border-cps-blue'}`}>
-                    <div className="flex justify-between items-start gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-bold text-gray-200 text-sm truncate flex items-center gap-2 flex-wrap">
-                          <span className={isCancelled ? 'line-through text-gray-500' : ''}>{job['First Name']} {job['Last Name']}</span>
-                          {statusBadge}
-                          {isLawnRejuv && services && (
-                            <div className="flex gap-0.5">
-                              {services.aeration && <span className="text-[8px] px-1 py-0.5 rounded bg-blue-900/50 text-blue-300 font-bold">A</span>}
-                              {services.dethatch && <span className="text-[8px] px-1 py-0.5 rounded bg-orange-900/50 text-orange-300 font-bold">D</span>}
-                              {services.fertilizer && <span className="text-[8px] px-1 py-0.5 rounded bg-green-900/50 text-green-300 font-bold">F</span>}
-                              {services.seed && <span className="text-[8px] px-1 py-0.5 rounded bg-yellow-900/50 text-yellow-300 font-bold">S</span>}
-                              {services.lime && <span className="text-[8px] px-1 py-0.5 rounded bg-purple-900/50 text-purple-300 font-bold">L</span>}
-                            </div>
+                  <div
+                    key={card.worker.contractorId}
+                    onClick={() => setSelectedWorkerForModal(card)}
+                    className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-white font-bold text-sm truncate">
+                            {card.worker.firstName} {card.worker.lastName}
+                          </span>
+                          {hasFlag && (
+                            <span title={`Red flags: ${flags.join(', ')}`} className="text-red-400">
+                              <AlertTriangle size={12} />
+                            </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-1 text-xs text-gray-500 truncate"><MapPin size={10}/> {job['Full Address']}</div>
-                        {job['Home Phone'] && (
-                          <button onClick={e=>{e.stopPropagation(); handleCopyPhone(job['Home Phone']!, `ph-${job['Booking ID']}`);}} className="text-blue-400 text-xs flex items-center gap-1 hover:underline mt-1 w-fit">
-                            <Phone size={10}/> {job['Home Phone']}
+                        {card.lastActiveAddress && (
+                          <div className="text-[10px] text-gray-400 truncate mt-0.5">
+                            {card.lastActiveTime} • {card.lastActiveAddress}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2 mt-1.5 text-[10px] text-gray-300">
+                          <span>{card.stats.steps} steps</span>
+                          <span className="text-gray-600">•</span>
+                          <span>{card.stats.eq.toFixed(1)} EQ</span>
+                          <span className="text-gray-600">•</span>
+                          <span>${card.stats.upsellGross.toFixed(0)} up</span>
+                        </div>
+                      </div>
+
+                      {/* Icon row */}
+                      <div className="flex-shrink-0 flex items-center gap-1">
+                        {canNav && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleNavigateToWorker(card); }}
+                            className="w-7 h-7 rounded-md bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white flex items-center justify-center transition-colors"
+                            title={`Navigate to ${card.worker.firstName}`}
+                          >
+                            <Navigation2 size={13} />
                           </button>
                         )}
-                      </div>
-                      <div className="flex flex-col items-end gap-2">
-                        <div className="flex items-center gap-2">
-                          {job.Prepaid === 'x' && <span className="text-[9px] bg-green-900/30 text-green-400 px-1 py-0.5 rounded border border-green-800 font-bold">PP</span>}
-                          <span className={`font-mono text-sm font-bold ${isCancelled ? 'text-gray-500 line-through' : 'text-gray-300'}`}>{job.Price}</span>
-                        </div>
-                        {!isCompleted && (
-                          <span className={`flex items-center gap-1 px-2 py-1 rounded text-xs border ${jobWorker ? 'bg-gray-700 border-green-900/50 text-green-400' : 'bg-gray-700 border-gray-600 text-gray-400'}`}>
-                            <Users size={10}/> <span className="truncate max-w-[60px]">{jobWorker ? jobWorker.firstName : 'Unassigned'}</span>
-                          </span>
-                        )}
-                        {isCompleted && <span className="flex items-center gap-1 text-[10px] text-green-500 font-bold bg-green-900/20 px-1.5 py-0.5 rounded border border-green-900/30"><Check size={10}/> Done</span>}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleViewLogsheet(card.worker); }}
+                          className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                          title="Open logsheet"
+                        >
+                          <Eye size={13} />
+                        </button>
                       </div>
                     </div>
-                    {notes && (
-                      <div className="flex items-center gap-1.5 bg-gray-900/50 border border-gray-700/50 rounded px-2 py-1.5 text-[10px] text-gray-400 font-mono italic">
-                        <FileText size={10} className="flex-shrink-0 text-gray-600"/>
-                        <span className="truncate">{notes}</span>
-                      </div>
-                    )}
                   </div>
                 );
               })}
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* PendingJobModal */}
-      {pendingJobForModal && (
-        <PendingJobModal
-          job={pendingJobForModal}
-          onClose={()=>setPendingJobForModal(null)}
-          onUpdate={()=>{ setPendingJobForModal(null); onRefresh(); }}
-          seasonType={seasonType}
-        />
-      )}
-
-      {/* Route assignment modal */}
-      {assignModalData && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.85)'}} onClick={e=>{if(e.target===e.currentTarget) setAssignModalData(null);}}>
-          <div className="bg-gray-900 rounded-lg border border-gray-700 shadow-2xl w-full max-w-md flex flex-col" style={{maxHeight:'85vh'}}>
-            <div className="p-4 border-b border-gray-700 flex-shrink-0">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <MapPin size={15} style={{color:assignModalData.routeColor}}/>
-                  Assign Route <span style={{color:assignModalData.routeColor}} className="font-mono font-black">{assignModalData.routeCode}</span>
-                  {isTeamSeason && (
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ml-2 ${isSealing ? 'bg-slate-800 text-slate-300 border-slate-600' : 'bg-green-900/30 text-green-400 border-green-700/50'}`}>Cart Mode</span>
-                  )}
-                </h3>
-                <button onClick={()=>setAssignModalData(null)} className="p-1.5 hover:bg-gray-700 rounded-full text-gray-400 hover:text-white"><X size={16}/></button>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-center bg-gray-800/60 rounded-lg p-2 border border-gray-700">
-                {[['Prebooks',assignModalData.prebookCount,'text-white'],['Prepaid',assignModalData.prepayCount,'text-green-400'],['Total EQ',assignModalData.totalEQ.toFixed(2),'text-blue-300']].map(([l,v,c])=>(
-                  <div key={l as string}><div className="text-[9px] text-gray-500 uppercase mb-0.5">{l}</div><div className={`text-sm font-bold ${c}`}>{v}</div></div>
-                ))}
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-1" style={{scrollbarWidth:'thin'}}>
-              <button onClick={()=>handleAssignRoute(null)} disabled={assignLoading} className="w-full text-left px-3 py-2.5 text-red-400 hover:bg-red-900/10 rounded flex items-center gap-2 text-sm border border-transparent hover:border-red-900/30 transition-all">
-                <AlertCircle size={14}/> Unassign Route
-              </button>
-              {isTeamSeason && contractorsByCart ? (
-                Array.from(contractorsByCart.entries()).map(([cartId, cartWorkers]) => {
-                  const isSoloCart = cartWorkers.length === 1;
-                  const primaryWorker = cartWorkers[0];
-                  const isSelected = cartWorkers.some(w => assignModalData.currentWorkerIds.includes(w.contractorId));
-                  const cartLabel = isSoloCart
-                    ? `${primaryWorker.firstName} ${primaryWorker.lastName}`
-                    : cartWorkers.map(w => w.firstName).join(' & ');
-                  return (
-                    <button key={cartId} onClick={()=>handleAssignRoute(primaryWorker.contractorId)} disabled={assignLoading}
-                      className={`w-full text-left px-3 py-2.5 rounded text-sm flex items-center justify-between gap-3 transition-colors ${isSelected ? 'bg-blue-900/20 border border-blue-700/50 text-white' : 'text-gray-300 hover:bg-gray-800 border border-transparent'}`}>
-                      <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${isSoloCart ? (isSelected ? 'bg-cps-blue text-white' : 'bg-gray-700 text-gray-300') : (isSealing ? 'bg-slate-700 text-slate-100' : 'bg-green-900/40 text-green-300 border border-green-700/50')}`}>
-                          {isSoloCart ? `${primaryWorker.firstName.charAt(0)}${primaryWorker.lastName.charAt(0)}` : (
-                            <div className="flex flex-col items-center"><Truck size={12}/><span className="text-[8px]">{cartWorkers.length}</span></div>
+              {sidebarMode === 'staff' && isTeamSeason && sortedCartCards.map(cart => {
+                const canNav = cartCanNavigate(cart);
+                const { hasFlag, flags } = computeRedFlags(cart.sharedFinancialStore);
+                const label = cart.members.length > 1
+                  ? cart.members.map(m => m.firstName).join(' & ')
+                  : `${cart.members[0]?.firstName || ''} ${cart.members[0]?.lastName || ''}`.trim() || cart.teamId;
+                return (
+                  <div
+                    key={cart.sessionId}
+                    onClick={() => setSelectedCartForModal(cart)}
+                    className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          {cart.isRcCart && <Truck size={11} className="text-orange-400 flex-shrink-0" title="Ramp Crew" />}
+                          <span className="text-white font-bold text-sm truncate">{label}</span>
+                          {hasFlag && (
+                            <span title={`Red flags: ${flags.join(', ')}`} className="text-red-400">
+                              <AlertTriangle size={12} />
+                            </span>
                           )}
                         </div>
-                        <span className="font-medium truncate">{cartLabel}</span>
+                        {cart.lastActiveAddress && (
+                          <div className="text-[10px] text-gray-400 truncate mt-0.5">
+                            {cart.lastActiveTime} • {cart.lastActiveAddress}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2 mt-1.5 text-[10px] text-gray-300">
+                          <span>{cart.stats.steps} steps</span>
+                          <span className="text-gray-600">•</span>
+                          <span>{cart.stats.eq.toFixed(1)} EQ</span>
+                          <span className="text-gray-600">•</span>
+                          <span>${cart.stats.upsellGross.toFixed(0)} up</span>
+                          {cart.stats.pendingSaleCount > 0 && (
+                            <>
+                              <span className="text-gray-600">•</span>
+                              <span className="text-amber-400">{cart.stats.pendingSaleCount} pend</span>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      {isSelected && <span className="text-[9px] text-blue-400 font-bold">ASSIGNED</span>}
-                    </button>
-                  );
-                })
-              ) : (
-                myTeamWorkers.sort((a,b)=>a.firstName.localeCompare(b.firstName)).map(worker=>{
-                  const isSel=assignModalData.currentWorkerIds.includes(worker.contractorId);
-                  return (
-                    <button key={worker.contractorId} onClick={()=>handleAssignRoute(worker.contractorId)} disabled={assignLoading}
-                      className={`w-full text-left px-3 py-2.5 rounded text-sm flex items-center justify-between gap-3 transition-colors ${isSel?'bg-blue-900/20 border border-blue-700/50 text-white':'text-gray-300 hover:bg-gray-800 border border-transparent'}`}>
-                      <div className="flex items-center gap-3">
-                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${isSel?'bg-blue-600':'bg-gray-600'}`}>{worker.firstName.charAt(0)}{worker.lastName.charAt(0)}</div>
-                        <span className="font-medium">{worker.firstName} {worker.lastName}</span>
-                      </div>
-                      {isSel&&<span className="text-[9px] text-blue-400 font-bold">ASSIGNED</span>}
-                    </button>
-                  );
-                })
-              )}
-            </div>
-            {availableManagers.length > 0 && assignModalData.currentWorkerIds.length === 0 && (
-              <div className="p-3 border-t border-gray-700 flex-shrink-0">
-                <button onClick={openTransferModal} className="w-full px-3 py-2.5 text-blue-400 hover:bg-blue-900/10 rounded flex items-center gap-2 text-sm border border-transparent hover:border-blue-900/30 transition-all">
-                  <Shuffle size={14}/> Transfer Route to Another Manager
-                </button>
-              </div>
-            )}
-            {assignLoading&&<div className="p-3 border-t border-gray-700 flex items-center justify-center gap-2 text-gray-400 text-sm flex-shrink-0"><Loader size={14} className="animate-spin"/>Saving…</div>}
-          </div>
-        </div>
-      )}
 
-      {/* Transfer route modal */}
-      {transferModalData && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.85)'}} onClick={e=>{if(e.target===e.currentTarget) setTransferModalData(null);}}>
-          <div className="bg-gray-900 rounded-lg border border-gray-700 shadow-2xl w-full max-w-sm flex flex-col">
-            <div className="p-4 border-b border-gray-700 flex items-center justify-between">
-              <h3 className="font-bold text-white flex items-center gap-2"><Shuffle size={16} className="text-blue-400"/>{transferModalData.title}</h3>
-              <button onClick={()=>setTransferModalData(null)} className="p-1.5 hover:bg-gray-700 rounded-full text-gray-400 hover:text-white"><X size={16}/></button>
-            </div>
-            <div className="p-3 space-y-1 max-h-64 overflow-y-auto" style={{scrollbarWidth:'thin'}}>
-              {availableManagers.map(manager => (
-                <button key={manager.userId} onClick={()=>handleTransferConfirm(manager.userId)} className="w-full text-left px-3 py-2.5 rounded text-sm flex items-center gap-3 transition-colors text-gray-300 hover:bg-gray-800 border border-transparent hover:border-blue-900/30">
-                  <div className="w-7 h-7 rounded-full bg-blue-900/30 border border-blue-700 flex items-center justify-center text-blue-300 font-bold text-[10px]">{manager.name.split(' ').map(n=>n[0]).join('')}</div>
-                  <span className="font-medium">{manager.name}</span>
-                </button>
+                      <div className="flex-shrink-0 flex items-center gap-1">
+                        {canNav && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleNavigateToCart(cart); }}
+                            className="w-7 h-7 rounded-md bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white flex items-center justify-center transition-colors"
+                            title={`Navigate to ${label}`}
+                          >
+                            <Navigation2 size={13} />
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleViewLogsheet(cart.members[0], cart.members); }}
+                          className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                          title="Open logsheet"
+                        >
+                          <Eye size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* ROUTES MODE */}
+              {sidebarMode === 'routes' && routeCardData.map(rc => (
+                <div
+                  key={rc.routeCode}
+                  onClick={() => setSelectedRouteForBookings(rc.routeCode)}
+                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="w-8 h-8 rounded-md flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
+                      style={{ background: rc.routeColor }}
+                    >
+                      {rc.routeCode}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-white text-xs font-bold truncate">
+                        {rc.assignedWorkerLabel || (
+                          <span className="text-amber-400">⚠ Unassigned</span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-gray-400">
+                        {rc.prebookCount} jobs • {rc.prepayCount} prepaid • {rc.totalEQ.toFixed(1)} EQ
+                      </div>
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Manage Team modal — controlled by parent prop */}
-      {showManageTeamModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{backgroundColor:'rgba(0,0,0,0.85)'}} onClick={e=>{if(e.target===e.currentTarget) onCloseManageTeamModal();}}>
-          <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
-            <div className="p-4 border-b border-gray-700 flex items-center justify-between flex-shrink-0">
-              <div className="flex items-center gap-2">
-                <ArrowRightLeft size={18} className="text-orange-400"/>
-                <h3 className="text-lg font-bold text-white">Manage Team</h3>
-                {isTeamSeason && (
-                  <span className="text-xs bg-orange-900/30 text-orange-400 border border-orange-700/50 px-2 py-0.5 rounded">Transactions stay with original cart</span>
+        {/* ON-ROUTE FLOATING CARD (bottom-center) — UNCHANGED.
+            Still opens the worker/cart detail modal on tap. */}
+        {(onRouteWorkerCard || onRouteCartCard) && !navState && (
+          <div
+            onClick={() => {
+              if (onRouteCartCard) setSelectedCartForModal(onRouteCartCard);
+              else if (onRouteWorkerCard) setSelectedWorkerForModal(onRouteWorkerCard);
+            }}
+            className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 bg-gray-900/95 backdrop-blur-sm border border-blue-500/60 rounded-xl shadow-2xl px-4 py-2.5 cursor-pointer hover:bg-gray-800 transition-colors flex items-center gap-3 max-w-[90vw]"
+          >
+            <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+            <div className="min-w-0">
+              <div className="text-[10px] text-blue-300 font-bold uppercase tracking-wide">On route</div>
+              <div className="text-white text-sm font-bold truncate">
+                {onRouteCartCard
+                  ? (onRouteCartCard.members.length > 1
+                      ? onRouteCartCard.members.map(m => m.firstName).join(' & ')
+                      : `${onRouteCartCard.members[0]?.firstName} ${onRouteCartCard.members[0]?.lastName.charAt(0)}.`)
+                  : `${onRouteWorkerCard!.worker.firstName} ${onRouteWorkerCard!.worker.lastName.charAt(0)}.`}
+                {onRouteRedFlags.hasFlag && (
+                  <AlertTriangle size={12} className="inline ml-1.5 text-red-400" />
                 )}
               </div>
-              <button onClick={onCloseManageTeamModal} className="p-1.5 hover:bg-gray-700 rounded-full text-gray-400 hover:text-white"><X size={18}/></button>
             </div>
-            {reassignSuccess && (
-              <div className="mx-4 mt-3 flex items-center gap-2 bg-green-900/30 border border-green-700/50 rounded-lg px-3 py-2 text-green-300 text-sm">
-                <Check size={16}/>{reassignSuccess}
-              </div>
-            )}
-            {reassignError && (
-              <div className="mx-4 mt-3 flex items-center gap-2 bg-red-900/30 border border-red-700/50 rounded-lg px-3 py-2 text-red-300 text-sm">
-                <AlertCircle size={16}/>{reassignError}
-              </div>
-            )}
-            <div className="flex flex-1 overflow-hidden">
-              <div className="w-1/2 border-r border-gray-700 flex flex-col">
-                <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex-shrink-0">
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">{selectedWorkerToMove ? '✓ Worker selected' : '1. Select worker'}</p>
+          </div>
+        )}
+
+        {/* WORKER DETAIL MODAL (aeration) */}
+        {selectedWorkerForModal && (
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+            onClick={() => setSelectedWorkerForModal(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-md max-h-[90vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header with inline action buttons */}
+              <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="text-white font-bold text-base truncate">
+                    {selectedWorkerForModal.worker.firstName} {selectedWorkerForModal.worker.lastName}
+                  </div>
+                  <div className="text-[11px] text-gray-400">
+                    {selectedWorkerForModal.stats.steps} steps • {selectedWorkerForModal.stats.eq.toFixed(1)} EQ • ${selectedWorkerForModal.stats.upsellGross.toFixed(0)} upsell
+                  </div>
                 </div>
-                <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                  {isTeamSeason ? (
-                    sortedCartCards.map(cart => (
-                      <div key={cart.sessionId} className={`rounded-lg border overflow-hidden ${selectedWorkerSourceCart?.sessionId === cart.sessionId ? 'border-orange-600/50 bg-orange-900/10' : 'border-gray-700 bg-gray-800/50'}`}>
-                        <div className="px-3 py-1.5 bg-gray-800/80 border-b border-gray-700/50 flex items-center gap-2">
-                          {cart.members.length > 1 ? (
-                            <><Truck size={11} className="text-green-400"/><span className="text-[10px] text-green-400 font-bold">Cart ({cart.members.length})</span></>
-                          ) : (<span className="text-[10px] text-gray-500 font-bold">Solo</span>)}
-                          <span className="text-[10px] text-gray-600 font-mono ml-auto">{cart.stats.eq.toFixed(1)} EQ</span>
-                        </div>
-                        {cart.members.map(member => {
-                          const isSelected = selectedWorkerToMove?.contractorId === member.contractorId;
-                          return (
-                            <button key={member.contractorId} onClick={()=>{setSelectedWorkerToMove(member); setSelectedWorkerSourceCart(cart); setReassignError(null); setReassignSuccess(null); setReassignManagerId('');}}
-                              className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors text-sm ${isSelected ? 'bg-orange-900/30 text-orange-200' : 'hover:bg-gray-700/50 text-gray-300'}`}>
-                              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${isSelected ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300'}`}>
-                                {member.firstName.charAt(0)}{member.lastName.charAt(0)}
-                              </div>
-                              <div className="min-w-0">
-                                <div className="font-medium truncate">{member.firstName} {member.lastName}</div>
-                                <div className="text-[10px] text-gray-500 font-mono">#{member.contractorId}</div>
-                              </div>
-                              {isSelected && <Check size={14} className="text-orange-400 ml-auto flex-shrink-0"/>}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ))
-                  ) : (
-                    myTeamWorkers.map(worker => {
-                      const isModifiable = isAerationWorkerModifiable(worker);
-                      const isSelected = selectedWorkerToMove?.contractorId === worker.contractorId;
-                      return (
-                        <button key={worker.contractorId} disabled={!isModifiable} onClick={()=>{if(!isModifiable) return; setSelectedWorkerToMove(worker); setSelectedWorkerSourceCart(null); setReassignError(null); setReassignSuccess(null); setReassignManagerId('');}}
-                          className={`w-full text-left px-3 py-2 flex items-center gap-2 rounded transition-colors text-sm ${!isModifiable ? 'opacity-40 cursor-not-allowed bg-gray-800/30' : isSelected ? 'bg-orange-900/30 text-orange-200 border border-orange-700/50' : 'hover:bg-gray-700/50 text-gray-300 border border-transparent'}`}
-                          title={!isModifiable ? 'Worker has transactions — cannot be reassigned' : ''}>
-                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${isSelected ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-300'}`}>
-                            {worker.firstName.charAt(0)}{worker.lastName.charAt(0)}
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="font-medium truncate">{worker.firstName} {worker.lastName}</div>
-                            <div className="text-[10px] text-gray-500 font-mono">#{worker.contractorId}</div>
-                          </div>
-                          {!isModifiable && <span className="text-[9px] text-gray-500 italic">has txns</span>}
-                          {isSelected && <Check size={14} className="text-orange-400 flex-shrink-0"/>}
-                        </button>
-                      );
-                    })
+                <div className="flex-shrink-0 flex items-center gap-1.5">
+                  {workerCanNavigate(selectedWorkerForModal) && (
+                    <button
+                      onClick={() => {
+                        const card = selectedWorkerForModal;
+                        setSelectedWorkerForModal(null);
+                        handleNavigateToWorker(card);
+                      }}
+                      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors"
+                      title="Navigate to most recent transaction"
+                    >
+                      <Navigation2 size={12} />
+                      Navigate
+                    </button>
                   )}
+                  <button
+                    onClick={() => handleViewLogsheet(selectedWorkerForModal.worker)}
+                    className="px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md flex items-center gap-1.5"
+                    title="View logsheet"
+                  >
+                    <FileText size={12} />
+                    Logsheet
+                  </button>
+                  <button
+                    onClick={() => handleToggleUpsells(
+                      selectedWorkerForModal.worker.contractorId,
+                      selectedWorkerForModal.upsellsEnabled,
+                    )}
+                    className={`px-2.5 py-1.5 text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors ${
+                      selectedWorkerForModal.upsellsEnabled
+                        ? 'bg-green-600/20 text-green-300 hover:bg-green-600 hover:text-white'
+                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                    }`}
+                    title="Toggle upsells"
+                  >
+                    {selectedWorkerForModal.upsellsEnabled ? 'Upsells ✓' : 'Upsells ✗'}
+                  </button>
+                  <button
+                    onClick={() => setSelectedWorkerForModal(null)}
+                    className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                  >
+                    <X size={14} />
+                  </button>
                 </div>
               </div>
 
-              <div className="w-1/2 flex flex-col">
-                <div className="px-4 py-2.5 border-b border-gray-700/50 bg-gray-800/50 flex-shrink-0">
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">2. Move to…</p>
+              {/* Body */}
+              <div className="flex-1 overflow-y-auto p-3 min-h-0">
+                <ContractorJobs
+                  bookings={selectedWorkerForModal.displayBookings}
+                  financialStore={selectedWorkerForModal.financialStore}
+                  workerName={`${selectedWorkerForModal.worker.firstName} ${selectedWorkerForModal.worker.lastName}`}
+                  isReadOnly
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* CART DETAIL MODAL (team seasons) */}
+        {selectedCartForModal && (
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+            onClick={() => setSelectedCartForModal(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-md max-h-[90vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    {selectedCartForModal.isRcCart && (
+                      <Truck size={13} className="text-orange-400 flex-shrink-0" />
+                    )}
+                    <div className="text-white font-bold text-base truncate">
+                      {selectedCartForModal.members.length > 1
+                        ? selectedCartForModal.members.map(m => m.firstName).join(' & ')
+                        : `${selectedCartForModal.members[0]?.firstName} ${selectedCartForModal.members[0]?.lastName}`}
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-gray-400">
+                    {selectedCartForModal.stats.steps} steps • {selectedCartForModal.stats.eq.toFixed(1)} EQ • ${selectedCartForModal.stats.upsellGross.toFixed(0)} upsell
+                  </div>
                 </div>
+                <div className="flex-shrink-0 flex items-center gap-1.5">
+                  {cartCanNavigate(selectedCartForModal) && (
+                    <button
+                      onClick={() => {
+                        const cart = selectedCartForModal;
+                        setSelectedCartForModal(null);
+                        handleNavigateToCart(cart);
+                      }}
+                      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors"
+                      title="Navigate to most recent transaction"
+                    >
+                      <Navigation2 size={12} />
+                      Navigate
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleViewLogsheet(
+                      selectedCartForModal.members[0],
+                      selectedCartForModal.members,
+                    )}
+                    className="px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md flex items-center gap-1.5"
+                    title="Open cart logsheet"
+                  >
+                    <FileText size={12} />
+                    Logsheet
+                  </button>
+                  <button
+                    onClick={() => setSelectedCartForModal(null)}
+                    className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div className="flex-1 overflow-y-auto p-3 min-h-0 space-y-3">
+                {/* Cart members list */}
+                <div>
+                  <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">
+                    Cart members
+                  </div>
+                  <div className="space-y-1.5">
+                    {selectedCartForModal.members.map(m => (
+                      <div key={m.contractorId} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
+                        <Users size={11} className="text-gray-400 flex-shrink-0" />
+                        <span className="text-white text-xs font-medium flex-1 min-w-0 truncate">
+                          {m.firstName} {m.lastName}
+                        </span>
+                        {isRcWorker(m.teamId) && (
+                          <span className="text-[9px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded font-bold">RC</span>
+                        )}
+                        {m.cellPhone && (
+                          <a
+                            href={`tel:${m.cellPhone}`}
+                            className="text-blue-400 hover:text-blue-300"
+                            title="Call"
+                          >
+                            <Phone size={11} />
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Asphalt sections (sealing only) */}
+                {isSealing && selectedCartForModal.asphaltOwnedRows.length > 0 && (
+                  <div>
+                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">
+                      Asphalt sold by this cart
+                    </div>
+                    <div className="space-y-1">
+                      {selectedCartForModal.asphaltOwnedRows.map(ps => (
+                        <div key={ps.id} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
+                          <Shovel size={11} className="text-amber-400 flex-shrink-0" />
+                          <span className="text-white text-xs flex-1 min-w-0 truncate">
+                            {assembleAddressFromPending(ps)}
+                          </span>
+                          <span className="text-amber-300 text-[10px] font-bold">
+                            {formatAsphaltDollars(ps.asphaltAmount)}
+                          </span>
+                          {ps.assignedRcSessionId && (
+                            <button
+                              onClick={() => handleUnassignAsphalt(ps.id, assembleAddressFromPending(ps))}
+                              disabled={unassigningAsphaltId === ps.id}
+                              className="text-[9px] bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white px-1.5 py-0.5 rounded font-bold transition-colors disabled:opacity-50"
+                              title="Unassign asphalt"
+                            >
+                              {unassigningAsphaltId === ps.id ? '...' : 'Unassign'}
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {unassignError && (
+                      <div className="text-[10px] text-red-400 mt-1">{unassignError}</div>
+                    )}
+                  </div>
+                )}
+
+                {isSealing && selectedCartForModal.asphaltIncomingRows.length > 0 && (
+                  <div>
+                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">
+                      Asphalt assigned to this RC
+                    </div>
+                    <div className="space-y-1">
+                      {selectedCartForModal.asphaltIncomingRows.map(ps => (
+                        <div key={ps.id} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
+                          <Shovel size={11} className="text-amber-400 flex-shrink-0" />
+                          <span className="text-white text-xs flex-1 min-w-0 truncate">
+                            {assembleAddressFromPending(ps)}
+                          </span>
+                          <span className="text-amber-300 text-[10px] font-bold">
+                            {formatAsphaltDollars(ps.asphaltAmount)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Shared jobs */}
+                <div>
+                  <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">
+                    Cart jobs ({selectedCartForModal.sharedBookings.length})
+                  </div>
+                  <ContractorJobs
+                    bookings={selectedCartForModal.sharedBookings}
+                    financialStore={selectedCartForModal.sharedFinancialStore}
+                    workerName={
+                      selectedCartForModal.members.length > 1
+                        ? selectedCartForModal.members.map(m => m.firstName).join(' & ')
+                        : `${selectedCartForModal.members[0]?.firstName || ''} ${selectedCartForModal.members[0]?.lastName || ''}`
+                    }
+                    isReadOnly
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ROUTE PREBOOKINGS POPUP */}
+        {selectedRouteForBookings && (
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+            onClick={() => setSelectedRouteForBookings(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-md max-h-[90vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between">
+                <div className="text-white font-bold text-sm">
+                  Route {selectedRouteForBookings} • {selectedRouteBookings.length} jobs
+                </div>
+                <button
+                  onClick={() => setSelectedRouteForBookings(null)}
+                  className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-3 min-h-0">
+                <ContractorJobs
+                  bookings={selectedRouteBookings}
+                  financialStore={selectedRouteFinancialStore}
+                  workerName={`Route ${selectedRouteForBookings}`}
+                  isReadOnly
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* PENDING JOB MODAL (clicking a pending-sale ring on the map) */}
+        {pendingJobForModal && (
+          <PendingJobModal
+            booking={pendingJobForModal}
+            onClose={() => setPendingJobForModal(null)}
+            onRefresh={() => { setPendingJobForModal(null); onRefresh(); }}
+          />
+        )}
+
+        {/* ROUTE ASSIGNMENT MODAL */}
+        {assignModalData && (
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+            onClick={() => setAssignModalData(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md p-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <div
+                    className="w-9 h-9 rounded-md flex items-center justify-center font-bold text-white text-sm"
+                    style={{ background: assignModalData.routeColor }}
+                  >
+                    {assignModalData.routeCode}
+                  </div>
+                  <div>
+                    <div className="text-white font-bold text-sm">Assign Route</div>
+                    <div className="text-[10px] text-gray-400">
+                      {assignModalData.prebookCount} jobs • {assignModalData.prepayCount} prepaid • {assignModalData.totalEQ.toFixed(1)} EQ
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setAssignModalData(null)}
+                  className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+
+              <div className="space-y-1.5 max-h-[50vh] overflow-y-auto">
+                {/* Unassign */}
+                {assignModalData.currentWorkerIds.length > 0 && (
+                  <button
+                    onClick={() => handleAssignRoute(null)}
+                    disabled={assignLoading}
+                    className="w-full text-left px-3 py-2 bg-red-900/30 hover:bg-red-900/50 border border-red-700/50 rounded-md text-red-300 text-xs font-bold disabled:opacity-50"
+                  >
+                    {assignLoading ? <Loader size={12} className="inline animate-spin" /> : <X size={12} className="inline mr-1.5" />}
+                    Unassign route
+                  </button>
+                )}
+
+                {/* Workers / carts */}
+                {isTeamSeason ? (
+                  Array.from(contractorsByCart?.entries() || []).map(([sessionWorkerId, cartMembers]) => {
+                    const cart = teamCarts.find(c => c.workerIds.includes(cartMembers[0].contractorId));
+                    const sessionWorker = cartMembers[0];
+                    const label = cartMembers.length > 1
+                      ? cartMembers.map(m => m.firstName).join(' & ')
+                      : `${sessionWorker.firstName} ${sessionWorker.lastName}`;
+                    const isAssigned = cart?.workerIds.some(wid => assignModalData.currentWorkerIds.includes(wid));
+                    return (
+                      <button
+                        key={sessionWorkerId}
+                        onClick={() => handleAssignRoute(sessionWorker.contractorId)}
+                        disabled={assignLoading}
+                        className={`w-full text-left px-3 py-2 rounded-md text-xs font-medium flex items-center justify-between ${
+                          isAssigned
+                            ? 'bg-blue-900/40 border border-blue-700 text-blue-200'
+                            : 'bg-gray-800 hover:bg-gray-700 text-white border border-gray-700'
+                        } disabled:opacity-50`}
+                      >
+                        <span className="truncate">{label}</span>
+                        {isAssigned && <Check size={12} className="text-blue-400" />}
+                      </button>
+                    );
+                  })
+                ) : (
+                  myTeamWorkers.map(w => {
+                    const isAssigned = assignModalData.currentWorkerIds.includes(w.contractorId);
+                    return (
+                      <button
+                        key={w.contractorId}
+                        onClick={() => handleAssignRoute(w.contractorId)}
+                        disabled={assignLoading}
+                        className={`w-full text-left px-3 py-2 rounded-md text-xs font-medium flex items-center justify-between ${
+                          isAssigned
+                            ? 'bg-blue-900/40 border border-blue-700 text-blue-200'
+                            : 'bg-gray-800 hover:bg-gray-700 text-white border border-gray-700'
+                        } disabled:opacity-50`}
+                      >
+                        <span className="truncate">{w.firstName} {w.lastName}</span>
+                        {isAssigned && <Check size={12} className="text-blue-400" />}
+                      </button>
+                    );
+                  })
+                )}
+
+                {/* Transfer to other manager */}
+                <button
+                  onClick={openTransferModal}
+                  disabled={assignLoading}
+                  className="w-full text-left px-3 py-2 bg-purple-900/30 hover:bg-purple-900/50 border border-purple-700/50 rounded-md text-purple-300 text-xs font-bold mt-2 disabled:opacity-50"
+                >
+                  <ArrowRightLeft size={12} className="inline mr-1.5" />
+                  Transfer to another manager…
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TRANSFER ROUTE MODAL */}
+        {transferModalData && (
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+            onClick={() => setTransferModalData(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md p-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-white font-bold text-sm">{transferModalData.title}</div>
+                <button
+                  onClick={() => setTransferModalData(null)}
+                  className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="space-y-1.5">
+                {availableManagers.map(mgr => (
+                  <button
+                    key={mgr.userId}
+                    onClick={() => handleTransferConfirm(mgr.userId)}
+                    className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700"
+                  >
+                    <ArrowRight size={12} className="inline mr-1.5 text-purple-400" />
+                    {mgr.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MANAGE TEAM MODAL */}
+        {showManageTeamModal && (
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+            onClick={onCloseManageTeamModal}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between">
+                <div className="text-white font-bold text-sm">
+                  <Shuffle size={14} className="inline mr-1.5 text-blue-400" />
+                  Manage Team
+                </div>
+                <button
+                  onClick={onCloseManageTeamModal}
+                  className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-3 min-h-0">
+                {reassignSuccess && (
+                  <div className="mb-3 px-3 py-2 bg-green-900/30 border border-green-700 rounded-md text-green-300 text-xs">
+                    <Check size={11} className="inline mr-1" />
+                    {reassignSuccess}
+                  </div>
+                )}
+                {reassignError && (
+                  <div className="mb-3 px-3 py-2 bg-red-900/30 border border-red-700 rounded-md text-red-300 text-xs">
+                    <AlertCircle size={11} className="inline mr-1" />
+                    {reassignError}
+                  </div>
+                )}
+
                 {!selectedWorkerToMove ? (
-                  <div className="flex-1 flex items-center justify-center text-gray-600 text-sm italic p-4 text-center">
-                    Select a worker on the left to see move options
+                  // STEP 1: pick a worker
+                  <div className="space-y-1.5">
+                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1">
+                      Pick a worker to move
+                    </div>
+                    {isTeamSeason ? (
+                      cartCardData.map(cart =>
+                        cart.members.map(m => (
+                          <button
+                            key={m.contractorId}
+                            onClick={() => {
+                              setSelectedWorkerToMove(m);
+                              setSelectedWorkerSourceCart(cart);
+                            }}
+                            className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700 flex items-center gap-2"
+                          >
+                            <Users size={11} className="text-gray-400" />
+                            <span className="flex-1 truncate">{m.firstName} {m.lastName}</span>
+                            <span className="text-[9px] text-gray-500">
+                              {cart.members.length > 1
+                                ? cart.members.map(x => x.firstName).join(' & ')
+                                : 'solo'}
+                            </span>
+                          </button>
+                        ))
+                      )
+                    ) : (
+                      myTeamWorkers.map(w => (
+                        <button
+                          key={w.contractorId}
+                          onClick={() => {
+                            setSelectedWorkerToMove(w);
+                            setSelectedWorkerSourceCart(null);
+                          }}
+                          className={`w-full text-left px-3 py-2 rounded-md text-xs font-medium border flex items-center gap-2 ${
+                            isAerationWorkerModifiable(w)
+                              ? 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700'
+                              : 'bg-gray-800/40 text-gray-500 border-gray-800 cursor-not-allowed'
+                          }`}
+                          disabled={!isAerationWorkerModifiable(w)}
+                        >
+                          <Users size={11} className="text-gray-400" />
+                          <span className="flex-1 truncate">{w.firstName} {w.lastName}</span>
+                          {!isAerationWorkerModifiable(w) && (
+                            <span className="text-[9px] text-amber-400">has txs — locked</span>
+                          )}
+                        </button>
+                      ))
+                    )}
                   </div>
                 ) : (
-                  <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                    <div className="flex items-center gap-2 bg-orange-900/20 border border-orange-700/40 rounded-lg px-3 py-2">
-                      <div className="w-7 h-7 rounded-full bg-orange-600 flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0">
-                        {selectedWorkerToMove.firstName.charAt(0)}{selectedWorkerToMove.lastName.charAt(0)}
-                      </div>
-                      <div>
-                        <div className="text-sm font-bold text-white">{selectedWorkerToMove.firstName} {selectedWorkerToMove.lastName}</div>
-                        {selectedWorkerSourceCart && (
-                          <div className="text-[10px] text-orange-400">From: {selectedWorkerSourceCart.members.map(m => m.firstName).join(' & ')}</div>
-                        )}
+                  // STEP 2: pick destination
+                  <div className="space-y-2.5">
+                    <div className="px-3 py-2 bg-blue-900/20 border border-blue-700/40 rounded-md flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setSelectedWorkerToMove(null);
+                          setSelectedWorkerSourceCart(null);
+                        }}
+                        className="text-blue-300 hover:text-white"
+                      >
+                        <Undo2 size={12} />
+                      </button>
+                      <div className="text-white text-xs font-bold flex-1 truncate">
+                        Move {selectedWorkerToMove.firstName} {selectedWorkerToMove.lastName}
                       </div>
                     </div>
 
-                    {isTeamSeason && (
+                    {isTeamSeason ? (
                       <>
-                        {sortedCartCards.filter(c => c.sessionId !== selectedWorkerSourceCart?.sessionId).length > 0 && (
-                          <div>
-                            <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Join existing cart</p>
-                            <div className="space-y-1">
-                              {sortedCartCards.filter(c => c.sessionId !== selectedWorkerSourceCart?.sessionId).map(targetCart => {
-                                const label = targetCart.members.map(m => m.firstName).join(' & ');
-                                const newSize = targetCart.members.length + 1;
-                                const newRate = newSize >= 2 ? `$${SEASON_CONFIGS[seasonType].payoutRateTeam}/EQ` : `$${SEASON_CONFIGS[seasonType].payoutRateSolo}/EQ`;
-                                return (
-                                  <button key={targetCart.sessionId} disabled={reassignLoading} onClick={()=>handleReassignWorker({type:'existing_cart', targetSessionId: targetCart.sessionId, label})}
-                                    className="w-full text-left px-3 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 hover:border-blue-500 rounded-lg transition-colors flex items-center justify-between gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
-                                    <div className="flex items-center gap-2 min-w-0">
-                                      {targetCart.members.length > 1 ? <Truck size={14} className="text-green-400 flex-shrink-0"/> : <div className="w-5 h-5 rounded-full bg-gray-600 flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0">{targetCart.members[0]?.firstName.charAt(0)}</div>}
-                                      <div className="min-w-0">
-                                        <div className="font-medium text-gray-200 truncate">{label}</div>
-                                        <div className="text-[10px] text-gray-500">{targetCart.stats.eq.toFixed(1)} EQ</div>
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-2 flex-shrink-0">
-                                      <span className="text-[10px] text-blue-400 bg-blue-900/30 border border-blue-700/50 px-1.5 py-0.5 rounded">→ {newRate}</span>
-                                      {reassignLoading ? <Loader size={12} className="animate-spin text-gray-400"/> : <ArrowRight size={14} className="text-gray-500"/>}
-                                    </div>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-                        <div>
-                          <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Split off</p>
-                          <button disabled={reassignLoading || selectedWorkerSourceCart?.members.length === 1} onClick={()=>handleReassignWorker({type:'new_solo'})}
-                            className="w-full text-left px-3 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 hover:border-yellow-500 rounded-lg transition-colors flex items-center justify-between gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
-                            <div className="flex items-center gap-2">
-                              <UserPlus size={14} className="text-yellow-400 flex-shrink-0"/>
-                              <div>
-                                <div className="font-medium text-gray-200">Create solo cart</div>
-                                <div className="text-[10px] text-gray-500">New cart, fresh start</div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 flex-shrink-0">
-                              <span className="text-[10px] text-yellow-400 bg-yellow-900/30 border border-yellow-700/50 px-1.5 py-0.5 rounded">${SEASON_CONFIGS[seasonType].payoutRateSolo}/EQ</span>
-                              {reassignLoading ? <Loader size={12} className="animate-spin text-gray-400"/> : <ArrowRight size={14} className="text-gray-500"/>}
-                            </div>
+                        {/* Move to existing cart */}
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">
+                          Move to another cart
+                        </div>
+                        {cartCardData
+                          .filter(c => c.sessionId !== selectedWorkerSourceCart?.sessionId)
+                          .map(c => {
+                            const label = c.members.length > 1
+                              ? c.members.map(m => m.firstName).join(' & ')
+                              : c.members[0]?.firstName;
+                            return (
+                              <button
+                                key={c.sessionId}
+                                onClick={() => handleReassignWorker({ type: 'existing_cart', targetSessionId: c.sessionId, label: label || '' })}
+                                disabled={reassignLoading}
+                                className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700 disabled:opacity-50"
+                              >
+                                <UserPlus size={11} className="inline mr-1.5 text-green-400" />
+                                {label}
+                              </button>
+                            );
+                          })}
+
+                        {/* New solo */}
+                        {selectedWorkerSourceCart && selectedWorkerSourceCart.members.length > 1 && (
+                          <button
+                            onClick={() => handleReassignWorker({ type: 'new_solo' })}
+                            disabled={reassignLoading}
+                            className="w-full text-left px-3 py-2 bg-amber-900/30 hover:bg-amber-900/50 border border-amber-700/50 rounded-md text-amber-300 text-xs font-bold disabled:opacity-50"
+                          >
+                            <UserMinus size={11} className="inline mr-1.5" />
+                            Make solo cart
                           </button>
-                          {selectedWorkerSourceCart?.members.length === 1 && (
-                            <p className="text-[10px] text-gray-600 italic mt-1 pl-1">Already solo — join a cart instead</p>
-                          )}
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">
+                          Transfer to another manager
+                        </div>
+                        {availableManagers.map(mgr => (
+                          <button
+                            key={mgr.userId}
+                            onClick={() => handleAerationTransfer(mgr.userId)}
+                            disabled={reassignLoading}
+                            className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700 disabled:opacity-50"
+                          >
+                            <ArrowRight size={11} className="inline mr-1.5 text-purple-400" />
+                            {mgr.name}
+                          </button>
+                        ))}
+                      </>
+                    )}
+
+                    {/* Move to another manager (team seasons) */}
+                    {isTeamSeason && availableManagers.length > 0 && (
+                      <>
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mt-2">
+                          Transfer to another manager
+                        </div>
+                        <div className="flex gap-1.5">
+                          <select
+                            value={reassignManagerId}
+                            onChange={e => setReassignManagerId(e.target.value)}
+                            className="flex-1 bg-gray-800 text-white text-xs rounded-md px-2 py-1.5 border border-gray-700"
+                          >
+                            <option value="">Pick a manager…</option>
+                            {availableManagers.map(m => (
+                              <option key={m.userId} value={m.userId}>{m.name}</option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() => reassignManagerId && handleReassignWorker({ type: 'different_manager', targetManagerId: reassignManagerId })}
+                            disabled={!reassignManagerId || reassignLoading}
+                            className="px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white text-xs font-bold rounded-md disabled:opacity-50"
+                          >
+                            Move
+                          </button>
                         </div>
                       </>
                     )}
 
-                    {availableManagers.length > 0 && (
-                      <div>
-                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">Move to different manager</p>
-                        <div className="bg-gray-800 border border-gray-600 rounded-lg p-3 space-y-2">
-                          <select value={reassignManagerId} onChange={e=>setReassignManagerId(e.target.value)} className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                            <option value="">Select manager...</option>
-                            {availableManagers.map(m => <option key={m.userId} value={m.userId}>{m.name}</option>)}
-                          </select>
-                          <button disabled={reassignLoading || !reassignManagerId} onClick={()=>{
-                            if (isTeamSeason) handleReassignWorker({type:'different_manager', targetManagerId: reassignManagerId});
-                            else handleAerationTransfer(reassignManagerId);
-                          }} className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg text-sm font-bold transition-colors disabled:cursor-not-allowed">
-                            {reassignLoading ? <Loader size={14} className="animate-spin"/> : <Shuffle size={14}/>}
-                            Transfer to Manager
-                          </button>
-                          {isTeamSeason && (
-                            <p className="text-[10px] text-gray-600 italic">Worker gets a new solo cart under the new manager</p>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    <div>
-                      <p className="text-[10px] text-gray-500 uppercase font-bold mb-1.5">No-show</p>
-                      <button disabled={reassignLoading} onClick={handleRemoveWorkerNoShow}
-                        className="w-full text-left px-3 py-2.5 bg-gray-800 hover:bg-red-900/20 border border-gray-600 hover:border-red-700 rounded-lg transition-colors flex items-center justify-between gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
-                        <div className="flex items-center gap-2">
-                          <UserMinus size={14} className="text-red-400 flex-shrink-0"/>
-                          <div>
-                            <div className="font-medium text-red-300">Remove from session</div>
-                            <div className="text-[10px] text-gray-500">Removes worker & stats entirely</div>
-                          </div>
-                        </div>
-                        {reassignLoading ? <Loader size={12} className="animate-spin text-gray-400"/> : <Trash2 size={14} className="text-red-500 flex-shrink-0"/>}
-                      </button>
-                    </div>
+                    {/* Remove (no-show) */}
+                    <button
+                      onClick={handleRemoveWorkerNoShow}
+                      disabled={reassignLoading}
+                      className="w-full text-left px-3 py-2 bg-red-900/30 hover:bg-red-900/50 border border-red-700/50 rounded-md text-red-300 text-xs font-bold mt-3 disabled:opacity-50"
+                    >
+                      <Trash2 size={11} className="inline mr-1.5" />
+                      Remove worker (no-show)
+                    </button>
                   </div>
                 )}
               </div>
             </div>
-            <div className="p-3 border-t border-gray-700 flex justify-end flex-shrink-0">
-              <button onClick={onCloseManageTeamModal} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm transition-colors">Done</button>
+          </div>
+        )}
+
+        {/* NAV OVERLAY — renders the maneuver card + route line on top of the map */}
+        {navState && mapRef.current && (
+          <RMNavigation
+            map={mapRef.current}
+            destination={navState.destination}
+            onArrived={handleNavArrived}
+            onCancel={handleNavCancel}
+          />
+        )}
+
+        {/* SWITCH-NAV CONFIRMATION POPUP */}
+        {switchNavConfirm && (
+          <div
+            className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4"
+            onClick={() => setSwitchNavConfirm(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <Navigation2 size={16} className="text-blue-400" />
+                <div className="text-white font-bold text-sm">Switch navigation?</div>
+              </div>
+              <div className="text-xs text-gray-300 mb-1">
+                You're currently navigating to{' '}
+                <span className="text-white font-bold">{switchNavConfirm.currentLabel}</span>.
+              </div>
+              <div className="text-xs text-gray-300 mb-3">
+                Cancel current navigation and go to{' '}
+                <span className="text-blue-300 font-bold">{switchNavConfirm.newLabel}</span>?
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setSwitchNavConfirm(null)}
+                  className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSwitchNavConfirm}
+                  className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md"
+                >
+                  Switch navigation
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+
+      </div>
+    </>
   );
 };
 
