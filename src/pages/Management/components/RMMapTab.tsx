@@ -306,7 +306,7 @@ async function geocodeAddress(addr: string, pLat?: number, pLng?: number): Promi
 // translate, inner gets rotate, neither fights the other.
 function createNavArrow(): { outer: HTMLDivElement; inner: HTMLDivElement } {
   const outer = document.createElement('div');
-  outer.style.cssText = 'pointer-events:none;width:42px;height:42px;';
+  outer.style.cssText = 'pointer-events:none;width:34px;height:34px;';
 
   const inner = document.createElement('div');
   // 0.15s transition smooths low-rate GPS-derived heading updates without
@@ -315,7 +315,7 @@ function createNavArrow(): { outer: HTMLDivElement; inner: HTMLDivElement } {
   // Red arrow with black outline on a translucent black halo. Higher visual
   // weight than the original blue-on-white version — easier to spot on busy
   // map backgrounds.
-  inner.innerHTML = `<svg width="42" height="42" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#000000" stroke="#ffffff" stroke-width="1.5" opacity="0.35"/><path d="M12 3 L18.5 19 L12 14.5 L5.5 19 Z" fill="#ef4444" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+  inner.innerHTML = `<svg width="34" height="34" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#000000" stroke="#ffffff" stroke-width="1.5" opacity="0.35"/><path d="M12 3 L18.5 19 L12 14.5 L5.5 19 Z" fill="#ef4444" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 
   outer.appendChild(inner);
   return { outer, inner };
@@ -3360,6 +3360,18 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               destination={navState.destination}
               onArrived={handleNavArrived}
               onCancel={handleNavCancel}
+              // Seed RMNavigation with whatever heading we've already
+              // tracked here, so the very first route fetch can apply a
+              // bearings constraint and avoid routes that start with a
+              // U-turn. Only pass the value if it's fresh (last updated
+              // within 5 minutes) — older than that and the user has
+              // likely been parked and could be facing any direction.
+              initialHeading={
+                gpsHeadingRef.current != null
+                  && (Date.now() - gpsHeadingUpdatedAtRef.current) < 300000
+                  ? gpsHeadingRef.current
+                  : null
+              }
             />
           )}
 
