@@ -306,7 +306,7 @@ async function geocodeAddress(addr: string, pLat?: number, pLng?: number): Promi
 // translate, inner gets rotate, neither fights the other.
 function createNavArrow(): { outer: HTMLDivElement; inner: HTMLDivElement } {
   const outer = document.createElement('div');
-  outer.style.cssText = 'pointer-events:none;width:34px;height:34px;';
+  outer.style.cssText = 'pointer-events:none;width:29px;height:29px;';
 
   const inner = document.createElement('div');
   // 0.15s transition smooths low-rate GPS-derived heading updates without
@@ -315,7 +315,7 @@ function createNavArrow(): { outer: HTMLDivElement; inner: HTMLDivElement } {
   // Red arrow with black outline on a translucent black halo. Higher visual
   // weight than the original blue-on-white version — easier to spot on busy
   // map backgrounds.
-  inner.innerHTML = `<svg width="34" height="34" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#000000" stroke="#ffffff" stroke-width="1.5" opacity="0.35"/><path d="M12 3 L18.5 19 L12 14.5 L5.5 19 Z" fill="#ef4444" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+  inner.innerHTML = `<svg width="29" height="29" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#000000" stroke="#ffffff" stroke-width="1.5" opacity="0.35"/><path d="M12 3 L18.5 19 L12 14.5 L5.5 19 Z" fill="#ef4444" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 
   outer.appendChild(inner);
   return { outer, inner };
@@ -2377,17 +2377,24 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       // we moved enough that GPS noise won't dominate (>5m).
       // When set, stamp gpsHeadingUpdatedAtRef so the rotation priority logic
       // knows this heading is fresh.
+      // Heading derivation. We PREFER the bearing computed from successive
+      // GPS fixes (true course over ground) over `pos.coords.heading` (which
+      // on Android Chrome can come from the compass sensor and points
+      // wherever the device is oriented, not where the user is moving).
+      // Fall back to pos.coords.heading only when movement is below the
+      // 5m threshold and we can't compute a reliable bearing ourselves.
       let derivedHeading: number | null = null;
-      if (heading != null && !isNaN(heading)) {
-        derivedHeading = heading;
-      } else if (lastGpsPosRef.current) {
+      if (lastGpsPosRef.current) {
         const prev = lastGpsPosRef.current;
         const dist = distanceMeters(prev.lat, prev.lng, lat, lng);
-        // Only trust GPS-derived bearing if we've moved meaningfully and
-        // speed is above walking pace (helps filter out drift while idle).
-        if (dist >= 5 && (speed == null || speed > 0.5)) {
+        if (dist >= 5) {
           derivedHeading = bearingDeg(prev.lat, prev.lng, lat, lng);
+        } else if (heading != null && !isNaN(heading)) {
+          derivedHeading = heading;
         }
+      } else if (heading != null && !isNaN(heading)) {
+        // First fix — no prev to compare against. Use OS heading if any.
+        derivedHeading = heading;
       }
       if (derivedHeading != null) {
         gpsHeadingRef.current = derivedHeading;
