@@ -502,11 +502,15 @@ const WORKER_LOCATION_POLL_MS = 5 * 60 * 1000;
 // --- NAV DESTINATION RESOLVER ---
 //
 // Walk the financialStore newest-first and find the first transaction whose
-// address has a geocode. Skip Upgrade/Add-On types since they share an address
-// with a parent Production/Sale (no new physical location to navigate to).
+// address has a geocode. Returns null if nothing geocodable exists — the
+// Navigate button is hidden in that case.
 //
-// Returns null if nothing geocodable exists — the Navigate button is hidden
-// in that case.
+// Upsells (Upgrade / Add-On tx) are NOT skipped — they're valid nav targets
+// when they're the most recent transaction. Their address typically matches
+// the parent aeration tx at the same location, so navigating "to the upsell"
+// and navigating "to the parent job" land you at the same coordinates anyway.
+// What matters is that the most-recent record wins regardless of type, so
+// the Navigate button always points at where the worker last logged work.
 //
 // Cache priority per spec:
 //   1. jobIdCache (per-tx accurate — populated by Phase 2 geocoding)
@@ -523,7 +527,6 @@ function resolveNavDestination(financialStore: any[]): { lat: number; lng: numbe
 
   for (const tx of sorted) {
     if (!tx) continue;
-    if (tx.type === 'Upgrade' || tx.type === 'Add-On') continue;
     const address: string = tx.address || '';
     if (!address) continue;
 
