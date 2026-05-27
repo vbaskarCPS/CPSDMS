@@ -514,42 +514,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   showManageTeamModal,
   onCloseManageTeamModal,
 }) => {
-  // TEMPORARY DIAGNOSTIC — remove after fixing
-  useEffect(() => {
-    const onErr = (e: ErrorEvent) => {
-      alert('[JS ERROR]\n' + e.message + '\n@ ' + (e.filename || '?') + ':' + e.lineno);
-    };
-    const onRej = (e: PromiseRejectionEvent) => {
-      alert('[PROMISE REJECTION]\n' + (e.reason?.message || String(e.reason)));
-    };
-    window.addEventListener('error', onErr);
-    window.addEventListener('unhandledrejection', onRej);
-
-    // Probe the environment after 2 seconds so the map has had time to init
-    const probeTimer = setTimeout(() => {
-      const token = (import.meta as any).env?.VITE_MAPBOX_TOKEN;
-      const container = mapContainerRef.current;
-      const rect = container?.getBoundingClientRect();
-      const mapInstance = mapRef.current;
-      const canvas = container?.querySelector('canvas');
-      alert(
-        '[PROBE]\n' +
-        'token present: ' + (token ? 'YES (len=' + token.length + ')' : 'NO') + '\n' +
-        'container exists: ' + !!container + '\n' +
-        'container size: ' + (rect ? Math.round(rect.width) + 'x' + Math.round(rect.height) : 'N/A') + '\n' +
-        'map instance exists: ' + !!mapInstance + '\n' +
-        'mapLoaded state: ' + mapLoaded + '\n' +
-        'canvas in container: ' + !!canvas + '\n' +
-        'canvas size: ' + (canvas ? (canvas as HTMLCanvasElement).width + 'x' + (canvas as HTMLCanvasElement).height : 'N/A')
-      );
-    }, 2000);
-
-    return () => {
-      window.removeEventListener('error', onErr);
-      window.removeEventListener('unhandledrejection', onRej);
-      clearTimeout(probeTimer);
-    };
-  }, []);
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -2352,6 +2316,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     navigator.clipboard.writeText(phone);
   };
 
+  // --- SIDEBAR RESIZE: when sidebar opens/closes, the map's container
+  // changes width. Tell Mapbox to redraw at the new size. Mapbox keeps the
+  // same center automatically on resize, so the view stays put.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    // Wait for the CSS transition to settle, then resize. A single resize
+    // after ~250ms covers the 200ms slide animation plus paint.
+    const t = setTimeout(() => {
+      try { map.resize(); } catch {}
+    }, 250);
+    return () => clearTimeout(t);
+  }, [sidebarOpen]);
+
   // --- RENDER ---
   return (
     <>
@@ -2361,45 +2339,46 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         @keyframes rmSlideOut { from { transform: translateX(0); } to { transform: translateX(-100%); } }
       `}</style>
 
-<div className="relative w-full h-full min-h-0" style={{ minHeight: '300px' }}>
+      {/*
+        OUTER WRAPPER — fills the viewport minus the RMLogbook header.
+        Uses calc(100vh - 160px) as a guaranteed height so flex-1 from the
+        parent doesn't race against Mapbox's initial measurement on mobile.
+        If your header height differs, adjust 160px up or down by 10-20px.
 
-        {/* Map container */}
-        <div ref={mapContainerRef} className="absolute inset-0 bg-gray-900" />
+        Inner layout is a flex row: sidebar on the left (when open), map on
+        the right (flex-1, fills remaining space). When the sidebar opens,
+        the map shrinks to fit; when it closes, the map expands back to
+        full width. A useEffect above calls map.resize() on every toggle so
+        Mapbox redraws cleanly at the new size.
+      */}
+      <div
+        className="relative w-full flex flex-row"
+        style={{ height: 'calc(100vh - 160px)' }}
+      >
 
-        {/* Routes loading overlay */}
-        {routesLoading && (
-          <div className="absolute top-3 left-3 z-30 bg-gray-900/90 text-white text-xs px-3 py-2 rounded-lg flex items-center gap-2 shadow-lg">
-            <Loader size={14} className="animate-spin" />
-            Loading routes…
-          </div>
-        )}
-
-        {/* No-routes-on-map message */}
-        {!routesLoading && mapLoaded && routeMapData.length === 0 && myRouteCodes.length > 0 && (
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-amber-900/90 text-amber-100 text-xs px-3 py-2 rounded-lg shadow-lg max-w-md text-center">
-            <AlertCircle size={14} className="inline mr-1" />
-            No approved route geometry found. Have a Senior RM approve routes.
-          </div>
-        )}
-
-        {/* Sidebar toggle (top-left, always visible) */}
-        <button
-          onClick={() => setSidebarOpen(o => !o)}
-          className="absolute top-3 left-3 z-40 w-11 h-11 bg-gray-900/95 hover:bg-gray-800 text-white rounded-lg shadow-xl flex items-center justify-center transition-all border border-gray-700"
-          title={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
-          style={{ display: navState ? 'none' : 'flex' }}
-        >
-          {sidebarOpen ? <ChevronLeft size={20} /> : <LayoutList size={20} />}
-        </button>
-
-        {/* SIDEBAR */}
+        {/* SIDEBAR — flex sibling, not an overlay. Takes up real width when
+            open, so the map shrinks to fit beside it. */}
         {sidebarOpen && (
           <div
-            className="absolute top-0 left-0 h-full w-[min(380px,90vw)] bg-gray-900 border-r border-gray-700 z-30 shadow-2xl flex flex-col"
+            className="flex-shrink-0 w-[min(380px,90vw)] bg-gray-900 border-r border-gray-700 z-30 shadow-2xl flex flex-col h-full"
             style={{ animation: 'rmSlideIn 0.2s ease-out forwards' }}
           >
             {/* Header */}
-            <div className="flex-shrink-0 p-3 border-b border-gray-700 bg-gray-900/95 pt-16">
+            <div className="flex-shrink-0 p-3 border-b border-gray-700 bg-gray-900/95">
+              {/* Close button row */}
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">
+                  {sidebarMode === 'staff' ? 'Staff' : 'Routes'}
+                </span>
+                <button
+                  onClick={() => setSidebarOpen(false)}
+                  className="w-7 h-7 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 flex items-center justify-center"
+                  title="Close sidebar"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+              </div>
+
               {/* Mode toggle */}
               <div className="flex bg-gray-800 rounded-lg p-0.5 mb-3">
                 <button
@@ -2602,32 +2581,88 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           </div>
         )}
 
-        {/* ON-ROUTE FLOATING CARD (bottom-center) — UNCHANGED.
-            Still opens the worker/cart detail modal on tap. */}
-        {(onRouteWorkerCard || onRouteCartCard) && !navState && (
-          <div
-            onClick={() => {
-              if (onRouteCartCard) setSelectedCartForModal(onRouteCartCard);
-              else if (onRouteWorkerCard) setSelectedWorkerForModal(onRouteWorkerCard);
-            }}
-            className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 bg-gray-900/95 backdrop-blur-sm border border-blue-500/60 rounded-xl shadow-2xl px-4 py-2.5 cursor-pointer hover:bg-gray-800 transition-colors flex items-center gap-3 max-w-[90vw]"
-          >
-            <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
-            <div className="min-w-0">
-              <div className="text-[10px] text-blue-300 font-bold uppercase tracking-wide">On route</div>
-              <div className="text-white text-sm font-bold truncate">
-                {onRouteCartCard
-                  ? (onRouteCartCard.members.length > 1
-                      ? onRouteCartCard.members.map(m => m.firstName).join(' & ')
-                      : `${onRouteCartCard.members[0]?.firstName} ${onRouteCartCard.members[0]?.lastName.charAt(0)}.`)
-                  : `${onRouteWorkerCard!.worker.firstName} ${onRouteWorkerCard!.worker.lastName.charAt(0)}.`}
-                {onRouteRedFlags.hasFlag && (
-                  <AlertTriangle size={12} className="inline ml-1.5 text-red-400" />
-                )}
+        {/*
+          MAP AREA — flex-1 means it fills whatever width is left after the
+          sidebar (full width when sidebar closed, full minus 380px when open).
+          It's `relative` so everything inside (map container, sidebar toggle
+          when sidebar closed, on-route card, nav maneuver card overlay) is
+          positioned within the map area, not the whole viewport.
+        */}
+        <div className="flex-1 relative h-full min-w-0">
+
+          {/* Map container */}
+          <div ref={mapContainerRef} className="absolute inset-0 bg-gray-900" />
+
+          {/* Routes loading overlay */}
+          {routesLoading && (
+            <div className="absolute top-3 left-3 z-30 bg-gray-900/90 text-white text-xs px-3 py-2 rounded-lg flex items-center gap-2 shadow-lg">
+              <Loader size={14} className="animate-spin" />
+              Loading routes…
+            </div>
+          )}
+
+          {/* No-routes-on-map message */}
+          {!routesLoading && mapLoaded && routeMapData.length === 0 && myRouteCodes.length > 0 && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-amber-900/90 text-amber-100 text-xs px-3 py-2 rounded-lg shadow-lg max-w-md text-center">
+              <AlertCircle size={14} className="inline mr-1" />
+              No approved route geometry found. Have a Senior RM approve routes.
+            </div>
+          )}
+
+          {/* Sidebar toggle (top-left of MAP AREA) — only shown when sidebar
+              is closed. When sidebar is open it has its own close button in
+              its header, so this hides. */}
+          {!sidebarOpen && !navState && (
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="absolute top-3 left-3 z-40 w-11 h-11 bg-gray-900/95 hover:bg-gray-800 text-white rounded-lg shadow-xl flex items-center justify-center transition-all border border-gray-700"
+              title="Open sidebar"
+            >
+              <LayoutList size={20} />
+            </button>
+          )}
+
+          {/* ON-ROUTE FLOATING CARD (bottom-center of MAP AREA) — UNCHANGED.
+              Still opens the worker/cart detail modal on tap. */}
+          {(onRouteWorkerCard || onRouteCartCard) && !navState && (
+            <div
+              onClick={() => {
+                if (onRouteCartCard) setSelectedCartForModal(onRouteCartCard);
+                else if (onRouteWorkerCard) setSelectedWorkerForModal(onRouteWorkerCard);
+              }}
+              className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 bg-gray-900/95 backdrop-blur-sm border border-blue-500/60 rounded-xl shadow-2xl px-4 py-2.5 cursor-pointer hover:bg-gray-800 transition-colors flex items-center gap-3 max-w-[90%]"
+            >
+              <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+              <div className="min-w-0">
+                <div className="text-[10px] text-blue-300 font-bold uppercase tracking-wide">On route</div>
+                <div className="text-white text-sm font-bold truncate">
+                  {onRouteCartCard
+                    ? (onRouteCartCard.members.length > 1
+                        ? onRouteCartCard.members.map(m => m.firstName).join(' & ')
+                        : `${onRouteCartCard.members[0]?.firstName} ${onRouteCartCard.members[0]?.lastName.charAt(0)}.`)
+                    : `${onRouteWorkerCard!.worker.firstName} ${onRouteWorkerCard!.worker.lastName.charAt(0)}.`}
+                  {onRouteRedFlags.hasFlag && (
+                    <AlertTriangle size={12} className="inline ml-1.5 text-red-400" />
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+
+          {/* NAV OVERLAY — renders the maneuver card + route line on top of the
+              map. Because we're inside the map area's `relative` container, the
+              maneuver card's `absolute top-0 left-0 right-0` naturally hugs
+              just the map area — it won't overlap the sidebar. */}
+          {navState && mapRef.current && (
+            <RMNavigation
+              map={mapRef.current}
+              destination={navState.destination}
+              onArrived={handleNavArrived}
+              onCancel={handleNavCancel}
+            />
+          )}
+
+        </div>
 
         {/* WORKER DETAIL MODAL (aeration) */}
         {selectedWorkerForModal && (
@@ -3265,16 +3300,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               </div>
             </div>
           </div>
-        )}
-
-        {/* NAV OVERLAY — renders the maneuver card + route line on top of the map */}
-        {navState && mapRef.current && (
-          <RMNavigation
-            map={mapRef.current}
-            destination={navState.destination}
-            onArrived={handleNavArrived}
-            onCancel={handleNavCancel}
-          />
         )}
 
         {/* SWITCH-NAV CONFIRMATION POPUP */}
