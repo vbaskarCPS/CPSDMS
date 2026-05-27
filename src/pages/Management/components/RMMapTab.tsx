@@ -514,19 +514,40 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   showManageTeamModal,
   onCloseManageTeamModal,
 }) => {
-  // TEMPORARY DIAGNOSTIC — remove after fixing the map issue
+  // TEMPORARY DIAGNOSTIC — remove after fixing
   useEffect(() => {
     const onErr = (e: ErrorEvent) => {
-      alert('[RMMapTab JS ERROR]\n' + e.message + '\n@ ' + (e.filename || '?') + ':' + e.lineno);
+      alert('[JS ERROR]\n' + e.message + '\n@ ' + (e.filename || '?') + ':' + e.lineno);
     };
     const onRej = (e: PromiseRejectionEvent) => {
-      alert('[RMMapTab PROMISE REJECTION]\n' + (e.reason?.message || String(e.reason)));
+      alert('[PROMISE REJECTION]\n' + (e.reason?.message || String(e.reason)));
     };
     window.addEventListener('error', onErr);
     window.addEventListener('unhandledrejection', onRej);
+
+    // Probe the environment after 2 seconds so the map has had time to init
+    const probeTimer = setTimeout(() => {
+      const token = (import.meta as any).env?.VITE_MAPBOX_TOKEN;
+      const container = mapContainerRef.current;
+      const rect = container?.getBoundingClientRect();
+      const mapInstance = mapRef.current;
+      const canvas = container?.querySelector('canvas');
+      alert(
+        '[PROBE]\n' +
+        'token present: ' + (token ? 'YES (len=' + token.length + ')' : 'NO') + '\n' +
+        'container exists: ' + !!container + '\n' +
+        'container size: ' + (rect ? Math.round(rect.width) + 'x' + Math.round(rect.height) : 'N/A') + '\n' +
+        'map instance exists: ' + !!mapInstance + '\n' +
+        'mapLoaded state: ' + mapLoaded + '\n' +
+        'canvas in container: ' + !!canvas + '\n' +
+        'canvas size: ' + (canvas ? (canvas as HTMLCanvasElement).width + 'x' + (canvas as HTMLCanvasElement).height : 'N/A')
+      );
+    }, 2000);
+
     return () => {
       window.removeEventListener('error', onErr);
       window.removeEventListener('unhandledrejection', onRej);
+      clearTimeout(probeTimer);
     };
   }, []);
   const navigate = useNavigate();
