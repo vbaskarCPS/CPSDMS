@@ -2752,12 +2752,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                             {card.lastActiveTime} • {card.lastActiveAddress}
                           </div>
                         )}
-                        <div className="flex items-center gap-2 mt-1.5 text-[10px] text-gray-300">
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1.5 text-[10px] text-gray-300">
                           <span>{card.stats.steps} steps</span>
+                          <span className="text-gray-600">•</span>
+                          <span className={card.stats.pending > 0 ? 'text-amber-400' : ''}>{card.stats.pending} pend</span>
                           <span className="text-gray-600">•</span>
                           <span>{card.stats.eq.toFixed(1)} EQ</span>
                           <span className="text-gray-600">•</span>
-                          <span>${card.stats.upsellGross.toFixed(0)} up</span>
+                          <span>{card.stats.upsellCount} up</span>
+                          <span className="text-gray-600">•</span>
+                          <span>${card.stats.upsellGross.toFixed(0)}</span>
                         </div>
                       </div>
 
@@ -2813,16 +2817,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                             {cart.lastActiveTime} • {cart.lastActiveAddress}
                           </div>
                         )}
-                        <div className="flex items-center gap-2 mt-1.5 text-[10px] text-gray-300">
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1.5 text-[10px] text-gray-300">
                           <span>{cart.stats.steps} steps</span>
+                          <span className="text-gray-600">•</span>
+                          <span className={cart.stats.pending > 0 ? 'text-amber-400' : ''}>{cart.stats.pending} pend</span>
                           <span className="text-gray-600">•</span>
                           <span>{cart.stats.eq.toFixed(1)} EQ</span>
                           <span className="text-gray-600">•</span>
-                          <span>${cart.stats.upsellGross.toFixed(0)} up</span>
+                          <span>{cart.stats.upsellCount} up</span>
+                          <span className="text-gray-600">•</span>
+                          <span>${cart.stats.upsellGross.toFixed(0)}</span>
                           {cart.stats.pendingSaleCount > 0 && (
                             <>
                               <span className="text-gray-600">•</span>
-                              <span className="text-amber-400">{cart.stats.pendingSaleCount} pend</span>
+                              <span className="text-amber-400">{cart.stats.pendingSaleCount} sale</span>
                             </>
                           )}
                         </div>
@@ -2860,7 +2868,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 >
                   <div className="flex items-center gap-2">
                     <div
-                      className="w-8 h-8 rounded-md flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
+                      className="h-8 px-2 min-w-[44px] rounded-md flex items-center justify-center font-bold text-white text-[11px] flex-shrink-0 leading-none whitespace-nowrap"
                       style={{ background: rc.routeColor }}
                     >
                       {rc.routeCode}
@@ -3288,7 +3296,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <div
-                    className="w-9 h-9 rounded-md flex items-center justify-center font-bold text-white text-sm"
+                    className="h-9 px-2.5 min-w-[48px] rounded-md flex items-center justify-center font-bold text-white text-xs flex-shrink-0 leading-none whitespace-nowrap"
                     style={{ background: assignModalData.routeColor }}
                   >
                     {assignModalData.routeCode}
@@ -3677,7 +3685,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             >
               <div className="flex items-center gap-2 mb-3">
                 <div
-                  className="w-8 h-8 rounded-md flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
+                  className="h-8 px-2 min-w-[44px] rounded-md flex items-center justify-center font-bold text-white text-[11px] flex-shrink-0 leading-none whitespace-nowrap"
                   style={{ background: routeNavPrompt.routeColor }}
                 >
                   {routeNavPrompt.routeCode}
