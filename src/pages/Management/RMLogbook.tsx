@@ -89,21 +89,10 @@ const RMLogbook: React.FC = () => {
 
   const [pendingSalesByManager, setPendingSalesByManager] = useState<PendingSale[]>([]);
 
-  // --- ASPHALT MODAL STATE (Sealing only — gated by isSealing in the JSX) ---
-  // The header Shovel button opens this. Modal is fully self-contained;
-  // onAssignmentChange fires a debounced refreshData when the modal closes
-  // after at least one successful assign, so the count badge updates.
   const [showAsphaltModal, setShowAsphaltModal] = useState(false);
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // refreshData accepts optional overrideUser so the init useEffect can pass
-  // the freshly-loaded user before setCurrentUser has settled. Without this,
-  // the first pending-sales fetch silently skipped because currentUser was
-  // still null in the closure.
-  // Pending sales are now iterated per-session (matching RMTeamTab's approach)
-  // instead of using getPendingSalesForManager, so the header count and the
-  // cart-card counts always agree.
   const refreshData = async (overrideUser?: ManagementUser) => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
@@ -125,12 +114,6 @@ const RMLogbook: React.FC = () => {
           const userId = overrideUser?.userId || currentUser?.userId;
           if (seasonHasTeams(sessionSeasonType) && session && userId) {
             try {
-              // Find this manager's workers, then this manager's cart sessions,
-              // then fetch pending sales per session in parallel and flatten.
-              // NOTE: getPendingSalesForSession returns ALL pending rows for the
-              // session (driveway parents + asphalt children), so the asphalt
-              // queue count derived in unassignedAsphaltCount below is correct
-              // without a separate getUnassignedAsphaltForManager call.
               const myWorkerIds = new Set(
                 session.workers
                   .filter(w => w.assignedManagerId === userId)
@@ -202,8 +185,6 @@ const RMLogbook: React.FC = () => {
         setActiveTab('maps');
       }
 
-      // Pass user explicitly — setCurrentUser hasn't settled on this tick,
-      // so the refreshData closure would otherwise see null currentUser.
       await refreshData(user);
       await checkLockStatus(user.userId);
       setLoading(false);
@@ -215,6 +196,14 @@ const RMLogbook: React.FC = () => {
     };
   }, [navigate]);
 
+  // Defensive: if mapping is on and the active tab is anything other than 'maps',
+  // force it back to 'maps'. Belt-and-braces in case state gets out of sync.
+  useEffect(() => {
+    if (digitalMappingEnabled && activeTab !== 'maps') {
+      setActiveTab('maps');
+    }
+  }, [digitalMappingEnabled, activeTab]);
+
   const myTeamIds = useMemo(() => {
     if (!dailyData || !currentUser) return [];
     return dailyData.workers
@@ -222,12 +211,6 @@ const RMLogbook: React.FC = () => {
       .map(w => w.contractorId);
   }, [dailyData, currentUser]);
 
-  // --- DERIVED: count of asphalt children awaiting RC assignment ---
-  // Drives the count badge on the header Shovel button. Visible only when
-  // isSealing — but we compute regardless so the value is stable for memoised
-  // consumers (no conditional hook order). Filter is the same one used by
-  // sessionService.getUnassignedAsphaltForManager at the DB level, so the badge
-  // and the modal's own list will always agree.
   const unassignedAsphaltCount = useMemo(() => {
     if (!isSealing) return 0;
     return pendingSalesByManager.filter(
@@ -391,12 +374,6 @@ const RMLogbook: React.FC = () => {
               <CreditCard size={16} />
             </button>
 
-            {/* ASPHALT QUEUE BUTTON — sealing only. Shovel icon matches the
-                sealing badge above and the asphalt language used throughout
-                the rest of the UI (NewJob, JobDetail, LogsheetJobCard).
-                Count badge mirrors the same partial-index DB filter used by
-                getUnassignedAsphaltForManager — guaranteed to agree with the
-                list the modal renders. */}
             {isSealing && (
               <button
                 onClick={() => setShowAsphaltModal(true)}
@@ -438,33 +415,42 @@ const RMLogbook: React.FC = () => {
             </button>
 
             <div className="flex gap-1 bg-gray-900/50 p-1 rounded-lg border border-gray-700/50">
-              <button
-                onClick={() => setActiveTab('team')}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
-                  activeTab === 'team'
-                    ? 'bg-gray-700 text-white shadow-sm'
-                    : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                <Users size={14} />
-                Team
-              </button>
+              {/* Team tab — hidden when digital mapping is on. Manage Team modal in the map
+                  replaces the per-worker management actions; the team list itself is in the
+                  map sidebar. */}
+              {!digitalMappingEnabled && (
+                <button
+                  onClick={() => setActiveTab('team')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    activeTab === 'team'
+                      ? 'bg-gray-700 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <Users size={14} />
+                  Team
+                </button>
+              )}
 
-              <button
-                onClick={() => setActiveTab('routes')}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
-                  activeTab === 'routes'
-                    ? 'bg-gray-700 text-white shadow-sm'
-                    : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                <MapIcon size={14} /> Routes
-                {stats.unassignedRoutes > 0 && (
-                  <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] bg-red-500 text-white rounded-full font-bold">
-                    {stats.unassignedRoutes}
-                  </span>
-                )}
-              </button>
+              {/* Routes tab — hidden when digital mapping is on. The map's Routes sidebar mode
+                  plus the route prebookings popup cover everything Routes tab used to do. */}
+              {!digitalMappingEnabled && (
+                <button
+                  onClick={() => setActiveTab('routes')}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
+                    activeTab === 'routes'
+                      ? 'bg-gray-700 text-white shadow-sm'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <MapIcon size={14} /> Routes
+                  {stats.unassignedRoutes > 0 && (
+                    <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] bg-red-500 text-white rounded-full font-bold">
+                      {stats.unassignedRoutes}
+                    </span>
+                  )}
+                </button>
+              )}
 
               {digitalMappingEnabled && (
                 <button
@@ -626,7 +612,6 @@ const RMLogbook: React.FC = () => {
                 </div>
               </div>
 
-              {/* Pending — green office count + yellow Bookmark + sales count split */}
               <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
                 <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Pending</span>
                 <div className="flex items-center gap-1 font-bold text-base">
@@ -644,7 +629,6 @@ const RMLogbook: React.FC = () => {
                 </div>
               </div>
 
-              {/* CENTERPIECE — Total Gross (white, large) + Pending $ (yellow, smaller). Spans 2 columns. */}
               <div className="col-span-2 bg-gray-800 p-2 flex flex-col items-center justify-center">
                 <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold">Total Gross</span>
                 <div className="flex items-center gap-1 text-white font-bold text-2xl leading-tight">
@@ -658,7 +642,6 @@ const RMLogbook: React.FC = () => {
                 </div>
               </div>
 
-              {/* Avg EQ + Cart Avg — two-row stat cell */}
               <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
                 <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Avg EQ</span>
                 <div className={`font-bold text-base ${
@@ -728,6 +711,10 @@ const RMLogbook: React.FC = () => {
             allSessions={allSessions}
             workers={dailyData.workers}
             currentUser={currentUser}
+            allManagers={dailyData.managers}
+            seasonType={seasonType}
+            teamCarts={dailyData.teamCarts}
+            pendingSalesByManager={pendingSalesByManager}
             onRefresh={refreshData}
           />
         )}
@@ -740,10 +727,6 @@ const RMLogbook: React.FC = () => {
         />
       )}
 
-      {/* ASPHALT QUEUE MODAL — sealing only. Mounted conditionally so the
-          modal's own initial fetch only fires when the RM actually opens it.
-          onAssignmentChange triggers a debounced refreshData so the count
-          badge on the Shovel button reflects the new state. */}
       {showAsphaltModal && (
         <RMAsphaltModal
           managerId={currentUser.userId}
