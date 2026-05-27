@@ -514,6 +514,21 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   showManageTeamModal,
   onCloseManageTeamModal,
 }) => {
+  // TEMPORARY DIAGNOSTIC — remove after fixing the map issue
+  useEffect(() => {
+    const onErr = (e: ErrorEvent) => {
+      alert('[RMMapTab JS ERROR]\n' + e.message + '\n@ ' + (e.filename || '?') + ':' + e.lineno);
+    };
+    const onRej = (e: PromiseRejectionEvent) => {
+      alert('[RMMapTab PROMISE REJECTION]\n' + (e.reason?.message || String(e.reason)));
+    };
+    window.addEventListener('error', onErr);
+    window.addEventListener('unhandledrejection', onRej);
+    return () => {
+      window.removeEventListener('error', onErr);
+      window.removeEventListener('unhandledrejection', onRej);
+    };
+  }, []);
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
