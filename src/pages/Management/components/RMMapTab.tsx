@@ -2285,7 +2285,171 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
         if (sessionId && pendingBookingIds.length > 0) {
           await sessionService.assignBookingsToSession(pendingBookingIds, sessionId);
-    // --- SIDEBAR RESIZE: when sidebar opens/closes, the map's container
+        }
+      } else {
+        await sessionService.assignRouteToWorkers(routeCode, [workerId]);
+        await Promise.all(pendingItems.map(job =>
+          sessionService.assignBookingToWorker(job['Booking ID'], workerId)
+        ));
+      }
+      setAssignModalData(null);
+      onRefresh();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setAssignLoading(false);
+    }
+  };
+
+  const handleTransferConfirm = async (newManagerId: string) => {
+    if (!transferModalData) return;
+    try {
+      if (transferModalData.type === 'ROUTE') {
+        await sessionService.transferRouteToManager(transferModalData.routeCode, newManagerId);
+      } else {
+        await sessionService.transferBookingToManager(
+          transferModalData.targetId,
+          transferModalData.routeCode,
+          newManagerId
+        );
+      }
+      setTransferModalData(null);
+      onRefresh();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const openTransferModal = () => {
+    if (!assignModalData) return;
+    setTransferModalData({
+      type: 'ROUTE',
+      targetId: assignModalData.routeCode,
+      routeCode: assignModalData.routeCode,
+      title: `Transfer Route ${assignModalData.routeCode}`,
+    });
+    setAssignModalData(null);
+  };
+
+  const handleReassignWorker = async (
+    destination:
+      | { type: 'existing_cart'; targetSessionId: string; label: string }
+      | { type: 'new_solo' }
+      | { type: 'different_manager'; targetManagerId: string }
+  ) => {
+    if (!selectedWorkerToMove) return;
+    setReassignLoading(true);
+    setReassignError(null);
+    setReassignSuccess(null);
+
+    try {
+      await sessionService.reassignWorker(selectedWorkerToMove.contractorId, destination);
+
+      let msg = '';
+      if (destination.type === 'existing_cart') {
+        msg = `${selectedWorkerToMove.firstName} moved to ${destination.label}`;
+      } else if (destination.type === 'new_solo') {
+        msg = `${selectedWorkerToMove.firstName} is now a solo cart`;
+      } else {
+        const mgr = allManagers.find(m => m.userId === destination.targetManagerId);
+        msg = `${selectedWorkerToMove.firstName} moved to ${mgr?.name || 'new manager'}`;
+      }
+
+      setReassignSuccess(msg);
+      setSelectedWorkerToMove(null);
+      setSelectedWorkerSourceCart(null);
+      onRefresh();
+    } catch (err: any) {
+      console.error('Reassign failed:', err);
+      setReassignError(err.message || 'Failed to reassign worker. Please try again.');
+    } finally {
+      setReassignLoading(false);
+    }
+  };
+
+  const handleAerationTransfer = async (targetManagerId: string) => {
+    if (!selectedWorkerToMove) return;
+    setReassignLoading(true);
+    setReassignError(null);
+    setReassignSuccess(null);
+    try {
+      await sessionService.transferWorker(selectedWorkerToMove.contractorId, targetManagerId);
+      const mgr = allManagers.find(m => m.userId === targetManagerId);
+      setReassignSuccess(`${selectedWorkerToMove.firstName} moved to ${mgr?.name || 'new manager'}`);
+      setSelectedWorkerToMove(null);
+      onRefresh();
+    } catch (err: any) {
+      console.error('Transfer failed:', err);
+      setReassignError(err.message || 'Failed to transfer worker.');
+    } finally {
+      setReassignLoading(false);
+    }
+  };
+
+  const handleRemoveWorkerNoShow = async () => {
+    if (!selectedWorkerToMove) return;
+    if (!window.confirm(
+      `Remove ${selectedWorkerToMove.firstName} ${selectedWorkerToMove.lastName} completely?\n\nThis removes them from the session and all stats. Use this for no-shows only.`
+    )) return;
+
+    setReassignLoading(true);
+    setReassignError(null);
+    setReassignSuccess(null);
+
+    try {
+      if (isTeamSeason && selectedWorkerSourceCart && selectedWorkerSourceCart.members.length > 1) {
+        await sessionService.reassignWorker(
+          selectedWorkerToMove.contractorId,
+          { type: 'new_solo' }
+        );
+      }
+      await sessionService.deleteWorker(selectedWorkerToMove.contractorId);
+
+      setReassignSuccess(`${selectedWorkerToMove.firstName} removed from session`);
+      setSelectedWorkerToMove(null);
+      setSelectedWorkerSourceCart(null);
+      onRefresh();
+    } catch (err: any) {
+      console.error('Remove failed:', err);
+      setReassignError(err.message || 'Failed to remove worker. Please try again.');
+    } finally {
+      setReassignLoading(false);
+    }
+  };
+
+  const handleUnassignAsphalt = async (asphaltRowId: string, addressLabel: string) => {
+    if (!window.confirm(
+      `Unassign asphalt at ${addressLabel}?\n\nThe assigned RC will no longer see it. ` +
+      `The row returns to the asphalt queue for reassignment. The driveway sale is unaffected.`
+    )) return;
+
+    setUnassigningAsphaltId(asphaltRowId);
+    setUnassignError(null);
+    try {
+      await sessionService.unassignAsphalt(asphaltRowId);
+      onRefresh();
+    } catch (err: any) {
+      console.error('Unassign asphalt failed:', err);
+      setUnassignError(err?.message || 'Failed to unassign asphalt. Please try again.');
+    } finally {
+      setUnassigningAsphaltId(null);
+    }
+  };
+
+  const isAerationWorkerModifiable = (worker: Worker): boolean => {
+    if (isTeamSeason) return false;
+    const card = workerCardData.find(c => c.worker.contractorId === worker.contractorId);
+    return !card || card.financialStore.length === 0;
+  };
+
+  const selectedRouteBookings=useMemo(()=>selectedRouteForBookings?bookings.filter(b=>b['Route Number']===selectedRouteForBookings):[], [selectedRouteForBookings,bookings]);
+  const selectedRouteFinancialStore=useMemo(()=>selectedRouteForBookings?allSessions.flatMap(s=>(s.financialStore||[]).filter((tx:any)=>tx.routeCode===selectedRouteForBookings)):[], [selectedRouteForBookings,allSessions]);
+
+  const handleCopyPhone = (phone: string, id: string) => {
+    navigator.clipboard.writeText(phone);
+  };
+
+  // --- SIDEBAR RESIZE: when sidebar opens/closes, the map's container
   // changes width. Tell Mapbox to redraw at the new size. Mapbox keeps the
   // same center automatically on resize, so the view stays put.
   useEffect(() => {
@@ -2576,6 +2740,25 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               <AlertCircle size={14} className="inline mr-1" />
               No approved route geometry found. Have a Senior RM approve routes.
             </div>
+          )}
+
+          {/*
+            Compass enable button — iOS Safari 13+ only. iOS requires a user
+            gesture to grant access to DeviceOrientationEvent, so we show this
+            small pill until the user taps it. After tap (whether granted or
+            denied), the button disappears for the rest of the session. If
+            denied, the arrow falls back to GPS-derived heading (works while
+            moving, doesn't rotate while stationary).
+          */}
+          {compassNeedsPermission && !navState && (
+            <button
+              onClick={handleEnableCompass}
+              className="absolute top-3 left-1/2 -translate-x-1/2 z-[55] bg-blue-600/95 hover:bg-blue-500 text-white text-xs font-bold px-3 py-2 rounded-lg shadow-xl flex items-center gap-2 border border-blue-400 transition-colors"
+              title="Enable compass for nav arrow rotation"
+            >
+              <Compass size={14} />
+              Enable compass
+            </button>
           )}
 
           {/* Sidebar toggle (top-left of MAP AREA) — only shown when sidebar
