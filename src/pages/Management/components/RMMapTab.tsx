@@ -2499,8 +2499,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     map.addControl(new mapboxgl.NavigationControl(),'top-right');
     map.on('load',()=>{
       map.resize();
-      const xh=['poi-label','housenum-label','road-number-shield'];
+      const xh=['poi-label','housenum-label','road-number-shield','transit-label'];
       xh.forEach(id=>{if(map.getLayer(id)) map.setLayoutProperty(id,'visibility','none');});
+      // Defensive: also hide any other layer whose id mentions transit or bus
+      // — covers bus-stop icons, transit lines, transit shields, station
+      // labels, etc. across any Mapbox style variant.
+      map.getStyle().layers?.forEach((layer:any)=>{
+        const id=layer.id.toLowerCase();
+        if(id.includes('transit')||id.includes('bus-stop')||id.includes('busstop')) {
+          try { map.setLayoutProperty(layer.id,'visibility','none'); } catch {}
+        }
+      });
       map.getStyle().layers?.forEach((layer:any)=>{
         const id=layer.id.toLowerCase();
         if(layer.type==='fill'||layer.type==='fill-extrusion'){if(id.includes('building')||id.includes('structure')) map.setLayoutProperty(layer.id,'visibility','none');}
