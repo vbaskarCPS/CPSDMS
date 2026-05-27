@@ -2381,20 +2381,15 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       lastGpsPosRef.current = { lat, lng, ts: Date.now() };
       applyArrowRotation();
 
-      // Follow-me map centering. Threshold lowered to 1m (was 3m) so walking
-      // pace updates the map smoothly; the previous 3m was too high to catch
-      // typical per-fix walking displacement, making follow-me feel "static"
-      // after the initial center. Duration kept short (500ms) so animations
-      // don't pile up if GPS jitters at high accuracy when stationary —
-      // overlapping 500ms easings blend smoothly rather than stacking like
-      // the original 1000ms version did.
+      // Follow-me map centering — re-center on EVERY GPS fix (no movement
+      // threshold). The previous threshold of 1m / 3m made follow-me feel
+      // static when walking; the real cause of the original flicker was the
+      // 1000ms easeTo duration creating overlapping animations. At 300ms,
+      // each animation completes before the next GPS fix arrives so there's
+      // no stacking and no flicker even at high GPS rates.
       if (centerOnLocationRef.current) {
-        const last = lastCenteredAtRef.current;
-        const shouldCenter = !last || distanceMeters(last.lat, last.lng, lat, lng) > 1;
-        if (shouldCenter) {
-          mapRef.current.easeTo({ center: [lng, lat], duration: 500 });
-          lastCenteredAtRef.current = { lat, lng };
-        }
+        mapRef.current.easeTo({ center: [lng, lat], duration: 300 });
+        lastCenteredAtRef.current = { lat, lng };
       }
 
       if (centerOnLocationRef.current) {
