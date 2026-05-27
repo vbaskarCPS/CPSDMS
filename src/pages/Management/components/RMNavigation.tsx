@@ -548,4 +548,5 @@ const RMNavigation: React.FC<RMNavigationProps> = ({ map, destination, onArrived
   );
 };
 
+
 export default RMNavigation;
