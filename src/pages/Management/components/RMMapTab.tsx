@@ -609,10 +609,25 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // our rotation.
   const navArrowInnerRef = useRef<HTMLDivElement | null>(null);
   // --- COMPASS / HEADING ROTATION REFS ---
-  // Last compass reading from DeviceOrientationEvent (preferred, more accurate).
+  //
+  // The arrow rotation priority is:
+  //   1. GPS-derived heading IF it was computed recently (i.e. you're moving).
+  //      This reflects your actual direction of travel, which is what users
+  //      expect to see in a navigation map. Compass measures which way the
+  //      DEVICE is facing, not which way you're going — useless if you're
+  //      holding a tablet vertically while walking forward.
+  //   2. Compass heading as a fallback (when GPS-derived heading is stale,
+  //      i.e. you've been stationary for >5s). Compass works while parked
+  //      and helps orient the arrow before you start moving.
+  //
+  // Both update through applyArrowRotation() (defined below as a useCallback)
+  // so the priority logic lives in one place and both event sources stay
+  // consistent.
   const compassHeadingRef = useRef<number | null>(null);
-  // Last GPS-derived heading, computed from successive GPS fixes (fallback).
   const gpsHeadingRef = useRef<number | null>(null);
+  // Timestamp (ms epoch) when gpsHeadingRef was last set. Determines whether
+  // the GPS-derived heading is "fresh" enough to win over compass.
+  const gpsHeadingUpdatedAtRef = useRef<number>(0);
   // Last GPS position seen, used to compute bearingDeg() between fixes.
   const lastGpsPosRef = useRef<{ lat: number; lng: number; ts: number } | null>(null);
   // The compass event handler — kept so we can remove it on unmount.
@@ -694,6 +709,31 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // Staff-mode route-line tap → "Navigate to who?" prompt. Null when closed.
   // Single-entry shows as confirmation, multi-entry shows as picker.
   const [routeNavPrompt, setRouteNavPrompt] = useState<RouteNavPrompt | null>(null);
+
+  // --- ARROW ROTATION ---
+  // Shared by the GPS watch callback AND the compass listener so both sources
+  // route through the same priority logic. GPS-derived heading wins when
+  // fresh (last computed within 5s), reflecting your actual direction of
+  // travel. Compass is the fallback for stationary use. Deps are empty
+  // because we only read from refs; useCallback identity is therefore stable
+  // and we never need to re-register listeners.
+  const HEADING_FRESHNESS_MS = 5000;
+  const applyArrowRotation = useCallback(() => {
+    if (!navArrowInnerRef.current) return;
+    let heading: number | null = null;
+    const now = Date.now();
+    if (
+      gpsHeadingRef.current != null &&
+      !isNaN(gpsHeadingRef.current) &&
+      now - gpsHeadingUpdatedAtRef.current < HEADING_FRESHNESS_MS
+    ) {
+      heading = gpsHeadingRef.current;
+    } else if (compassHeadingRef.current != null && !isNaN(compassHeadingRef.current)) {
+      heading = compassHeadingRef.current;
+    }
+    if (heading == null) return;
+    navArrowInnerRef.current.style.transform = `rotate(${heading}deg)`;
+  }, []);
 
   // Reset Manage Team sub-state when modal closes
   useEffect(() => {
@@ -2286,12 +2326,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   // GPS (RM's own location) + drag-to-disable-follow-me + cart-aware on-route
   //
-  // The nav arrow rotation strategy: compass heading (DeviceOrientationEvent) is
-  // preferred and updates the arrow continuously; this watchPosition callback
-  // computes a GPS-derived heading from successive fixes as a fallback, used
-  // only when compass isn't available (Android tablets without compass, denied
-  // iOS permission, desktop browsers). When BOTH are available, compass wins
-  // because it works while stationary and updates more smoothly.
+  // Arrow rotation: GPS-derived heading is PREFERRED when fresh (the user is
+  // moving). This watchPosition callback computes that heading from successive
+  // fixes (>5m apart, above walking pace) and stamps gpsHeadingUpdatedAtRef so
+  // applyArrowRotation knows it's current. Compass is the fallback for when
+  // GPS-derived heading is stale (stationary >5s). Both sources route through
+  // applyArrowRotation (defined in PART 1) so the priority logic lives in one
+  // place.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!navigator.geolocation) return;
     if(!navArrowElRef.current) {
@@ -2300,16 +2341,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       navArrowInnerRef.current = arrow.inner;
     }
     navMarkerRef.current=new mapboxgl.Marker({element:navArrowElRef.current}).setLngLat([0,0]).addTo(map);
-
-    // Apply current best heading to the arrow's INNER div. The outer div is
-    // owned by Mapbox for positioning (translate), so we never touch it —
-    // we'd just lose our rotation on the next map move.
-    const applyArrowRotation = () => {
-      if (!navArrowInnerRef.current) return;
-      const heading = compassHeadingRef.current ?? gpsHeadingRef.current;
-      if (heading == null || isNaN(heading)) return;
-      navArrowInnerRef.current.style.transform = `rotate(${heading}deg)`;
-    };
 
     const handleDragStart = (e: any) => {
       if (!e.originalEvent) return;
@@ -2329,8 +2360,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       // ground). Often null at rest or low speeds.
       // Priority 2: bearing from previous fix to current fix, but only if
       // we moved enough that GPS noise won't dominate (>5m).
-      // We always update gpsHeadingRef; whether the arrow uses it depends on
-      // whether compass is available (compass wins in applyArrowRotation).
+      // When set, stamp gpsHeadingUpdatedAtRef so the rotation priority logic
+      // knows this heading is fresh.
       let derivedHeading: number | null = null;
       if (heading != null && !isNaN(heading)) {
         derivedHeading = heading;
@@ -2345,21 +2376,23 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
       if (derivedHeading != null) {
         gpsHeadingRef.current = derivedHeading;
+        gpsHeadingUpdatedAtRef.current = Date.now();
       }
       lastGpsPosRef.current = { lat, lng, ts: Date.now() };
       applyArrowRotation();
 
-      // Follow-me map centering — only ease to the new GPS position if we've
-      // moved meaningfully since the last re-center (>3m). This kills the
-      // jittery flicker that happens when GPS noise keeps stacking new 1-sec
-      // easing animations on top of each other while the device is stationary.
-      // Duration shortened from 1000→300ms so animations don't overlap when
-      // you ARE moving.
+      // Follow-me map centering. Threshold lowered to 1m (was 3m) so walking
+      // pace updates the map smoothly; the previous 3m was too high to catch
+      // typical per-fix walking displacement, making follow-me feel "static"
+      // after the initial center. Duration kept short (500ms) so animations
+      // don't pile up if GPS jitters at high accuracy when stationary —
+      // overlapping 500ms easings blend smoothly rather than stacking like
+      // the original 1000ms version did.
       if (centerOnLocationRef.current) {
         const last = lastCenteredAtRef.current;
-        const shouldCenter = !last || distanceMeters(last.lat, last.lng, lat, lng) > 3;
+        const shouldCenter = !last || distanceMeters(last.lat, last.lng, lat, lng) > 1;
         if (shouldCenter) {
-          mapRef.current.easeTo({ center: [lng, lat], duration: 300 });
+          mapRef.current.easeTo({ center: [lng, lat], duration: 500 });
           lastCenteredAtRef.current = { lat, lng };
         }
       }
@@ -2405,7 +2438,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}
       navMarkerRef.current?.remove();navMarkerRef.current=null;
     };
-  }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable]);
+  }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable, applyArrowRotation]);
 
   // --- COMPASS LISTENER WIRING ---
   // On mount (and after a permission grant on iOS), attach a deviceorientation
@@ -2425,13 +2458,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         // counterclockwise. Invert to get clockwise-from-north.
         compassHeadingRef.current = (360 - e.alpha) % 360;
       }
-      if (navArrowInnerRef.current && compassHeadingRef.current != null) {
-        navArrowInnerRef.current.style.transform = `rotate(${compassHeadingRef.current}deg)`;
-      }
+      // Route through the shared rotation logic so the GPS-fresh-wins
+      // priority is honoured. If the user is actively moving, GPS-derived
+      // heading is fresh and the compass value won't be applied — even
+      // though we just updated compassHeadingRef. That's intentional: when
+      // moving, direction of travel matters more than device orientation.
+      applyArrowRotation();
     };
     window.addEventListener('deviceorientation', handler, true);
     compassHandlerRef.current = handler;
-  }, []);
+  }, [applyArrowRotation]);
 
   const handleEnableCompass = useCallback(async () => {
     const DOE: any = (window as any).DeviceOrientationEvent;
