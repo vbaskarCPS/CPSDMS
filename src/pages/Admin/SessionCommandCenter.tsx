@@ -1,4 +1,16 @@
 // src/pages/Admin/SessionCommandCenter.tsx
+//
+// CHANGELOG (this revision):
+//   - handleAddAdditional now ALSO triggers a PCL cache refresh, using the
+//     currently active session's route codes (not just new ones). This lets
+//     the admin force a PCL re-cache without closing and re-uploading the
+//     entire session — useful for testing the diagnostic logging without a
+//     full session teardown.
+//   - Small UI note added to the Add Additional panel explaining the
+//     additional behaviour.
+//   - Tagged with `// PCL REFRESH:` comments for easy removal later.
+//   - All other behaviour unchanged.
+//
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
@@ -542,6 +554,36 @@ const SessionCommandCenter: React.FC = () => {
 
       // Reload the live session report to reflect new workers/bookings
       await loadSession();
+
+      // PCL REFRESH: also rebuild the PCL cache for ALL current routes using
+      // the now-fresh session data. Non-blocking by design — same shape as the
+      // call inside sessionService.uploadDailySession. Lets the admin force a
+      // PCL re-cache without closing the session. Diagnostic trail still goes
+      // to pcl_error_log under '__admin_pcl_load__'.
+      if (currentCC?.digitalMappingEnabled && currentCC.callbookSheetId && currentCC.id) {
+        const sheetId = currentCC.callbookSheetId;
+        const ccId = currentCC.id;
+        // Pull route codes from the freshly re-imported data (covers any new
+        // routes the "Add Additional" pass just inserted) and merge with the
+        // existing active session's route codes so nothing is missed.
+        const existingCodes = (currentSession?.routes || []).map(r => r.routeCode);
+        const freshCodes = (freshData.routes || []).map(r => r.routeCode);
+        const allRouteCodes = Array.from(new Set([...existingCodes, ...freshCodes]));
+
+        Promise.all([
+          import('../../lib/pclCacheService'),
+        ]).then(([{ loadAndCachePCL }]) => {
+          const accessToken = googleSheetsService.getAccessToken();
+          if (!accessToken) {
+            console.warn('[PCL Refresh] No Google access token available — PCL refresh skipped.');
+            return;
+          }
+          loadAndCachePCL(sheetId, allRouteCodes, accessToken, ccId).catch(err =>
+            console.warn('[PCL Refresh] Non-blocking load failed:', err)
+          );
+        }).catch(err => console.warn('[PCL Refresh] Module import failed:', err));
+      }
+      // END PCL REFRESH
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : 'Failed to add additional data.');
@@ -1123,6 +1165,12 @@ const SessionCommandCenter: React.FC = () => {
                                 <p className="text-gray-400 text-xs mt-0.5">
                                   Re-reads <span className="text-blue-300 font-mono">{importMeta?.dateTab}</span> from Google Sheets and appends anything not already in the live session. Existing workers, routes, and bookings are untouched.
                                 </p>
+                                {/* PCL REFRESH: extra note so admin knows clicking this also rebuilds PCL */}
+                                {hasDigitalMapping && (
+                                  <p className="text-blue-300/80 text-[11px] mt-1.5">
+                                    Also rebuilds the PCL cache for all current routes (non-blocking).
+                                  </p>
+                                )}
                               </div>
                             </div>
 
