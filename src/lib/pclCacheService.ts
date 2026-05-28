@@ -1,19 +1,5 @@
 // src/lib/pclCacheService.ts
 //
-// CHANGELOG (this revision — DIAGNOSTIC BUILD):
-//   - loadAndCachePCL is now heavily instrumented. Every decision point writes
-//     a row to pcl_error_log with worker_user_id='__admin_pcl_load__' so the
-//     full trail is visible without browser dev tools (admin is on a tablet).
-//   - Diagnostic rows leave error_stack null; real errors still populate stack.
-//   - Filter the trail with:
-//       select created_at, error_message
-//       from pcl_error_log
-//       where worker_user_id = '__admin_pcl_load__'
-//       order by created_at asc;
-//   - To be stripped out once the bug is identified. Everything tagged with
-//     `// DIAG:` below is removable in the cleanup pass.
-//   - getWorkerPCL and logPCLError UNCHANGED from previous revision.
-//
 // PCL Cache Service
 //
 // Reads callbook spreadsheet data using a pre-authenticated Google OAuth token
@@ -103,29 +89,6 @@ function parseHouseNum(val: string): number {
 
 function normalizeStreet(s: string): string {
   return s.toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
-// ─── DIAG: admin trail helper ────────────────────────────────────────────────
-// DIAG: fire-and-forget diagnostic row writer. Same shape as logPCLError but
-// stack is always null and worker_user_id is the sentinel '__admin_pcl_load__'.
-// REMOVE THIS BLOCK in the cleanup pass.
-async function diag(
-  ccId: string | null,
-  routeCodes: string[],
-  message: string,
-): Promise<void> {
-  try {
-    await supabase.from('pcl_error_log').insert({
-      command_center_id: ccId,
-      worker_user_id: '__admin_pcl_load__',
-      route_codes: routeCodes,
-      error_message: message,
-      error_stack: null,
-      user_agent: null,
-    });
-  } catch {
-    // Swallow — diagnostics must never break the flow.
-  }
 }
 
 // ─── HEADER RESOLUTION ───────────────────────────────────────────────────────
@@ -286,10 +249,6 @@ async function getCallbookTabNames(
  *
  * Called non-blocking at the end of uploadDailySession — any failure is
  * caught and logged without interrupting the session upload.
- *
- * DIAG: This function is heavily instrumented in this revision. Every
- * decision point writes to pcl_error_log under '__admin_pcl_load__'.
- * Remove all `// DIAG:` lines and the diag() helper in the cleanup pass.
  */
 export async function loadAndCachePCL(
   callbookSheetId: string,
@@ -297,21 +256,7 @@ export async function loadAndCachePCL(
   accessToken: string,
   ccId: string,
 ): Promise<void> {
-  // DIAG: confirm function fired at all + argument shape
-  await diag(ccId, routeCodes,
-    `[STEP 1] loadAndCachePCL called. routes=${routeCodes.length}, ` +
-    `hasSheetId=${!!callbookSheetId}, hasToken=${!!accessToken}, ` +
-    `tokenLen=${accessToken?.length ?? 0}`
-  );
-
-  if (!callbookSheetId || !accessToken || routeCodes.length === 0) {
-    // DIAG: early return — note exactly which arg was missing
-    await diag(ccId, routeCodes,
-      `[STEP 1a] EARLY RETURN — missing arg. ` +
-      `callbookSheetId=${!!callbookSheetId}, accessToken=${!!accessToken}, routes=${routeCodes.length}`
-    );
-    return;
-  }
+  if (!callbookSheetId || !accessToken || routeCodes.length === 0) return;
 
   const routeCodeSet = new Set(routeCodes);
   const routeRowsMap = new Map<string, RawCallbookRow[]>();
@@ -320,75 +265,26 @@ export async function loadAndCachePCL(
   let tabs: string[];
   try {
     tabs = await getCallbookTabNames(accessToken, callbookSheetId);
-    // DIAG: confirm Google API access actually works + how many tabs we found
-    await diag(ccId, routeCodes,
-      `[STEP 2] Fetched ${tabs.length} tab(s) from callbook: ` +
-      `${tabs.slice(0, 10).join(', ')}${tabs.length > 10 ? '...' : ''}`
-    );
   } catch (err) {
-    // DIAG: tab-listing failed entirely (token expired? wrong sheet id?)
-    await diag(ccId, routeCodes,
-      `[STEP 2 FAIL] getCallbookTabNames threw: ${err instanceof Error ? err.message : String(err)}`
-    );
     console.warn('[PCL Cache] Could not fetch callbook tabs:', err);
     return;
   }
 
-  if (tabs.length === 0) {
-    // DIAG: getCallbookTabNames silently returns [] on !response.ok — catch that case
-    await diag(ccId, routeCodes,
-      `[STEP 2a] Tabs array empty — getCallbookTabNames returned no tabs ` +
-      `(response was likely non-OK; check sheet id and token validity)`
-    );
-  }
-
   // Read each tab and collect rows matching our route codes
-  let tabsRead = 0;
-  let tabsFailed = 0;
-  let tabsHeaderMissing = 0;
-  let tabsColumnMissing = 0;
-
   for (const tabName of tabs) {
     let rawData: any[][];
     try {
       rawData = await sheetsGetRaw(accessToken, callbookSheetId, `'${tabName}'`);
-      tabsRead++;
-    } catch (err) {
-      // DIAG: was a silent continue — now we see WHICH tab failed AND why
-      tabsFailed++;
-      await diag(ccId, routeCodes,
-        `[STEP 3 TAB FAIL] '${tabName}' read failed: ${err instanceof Error ? err.message : String(err)}`
-      );
+    } catch {
       continue;
     }
-    if (!rawData || rawData.length < 2) {
-      // DIAG: tab is empty or has only a single row
-      await diag(ccId, routeCodes,
-        `[STEP 3 SKIP] '${tabName}' has ${rawData?.length ?? 0} row(s) — skipped as empty`
-      );
-      continue;
-    }
+    if (!rawData || rawData.length < 2) continue;
 
     const headerIdx = findHeaderRow(rawData);
-    if (headerIdx === null) {
-      tabsHeaderMissing++;
-      // DIAG: header row couldn't be located — common header-mismatch failure
-      await diag(ccId, routeCodes,
-        `[STEP 3 NO HEADER] '${tabName}' — no PHONE column found in first 10 rows`
-      );
-      continue;
-    }
+    if (headerIdx === null) continue;
 
     const CI = resolveColumns(rawData[headerIdx]);
-    if (CI.PHONE < 0 || CI.ROUTE_CODE < 0) {
-      tabsColumnMissing++;
-      // DIAG: header row found but required columns missing
-      await diag(ccId, routeCodes,
-        `[STEP 3 BAD COLS] '${tabName}' — PHONE=${CI.PHONE}, ROUTE_CODE=${CI.ROUTE_CODE} ` +
-        `(both must be >= 0)`
-      );
-      continue;
-    }
+    if (CI.PHONE < 0 || CI.ROUTE_CODE < 0) continue;
 
     for (const row of rawData.slice(headerIdx + 1)) {
       if (!row || !row[0]) continue;
@@ -416,22 +312,6 @@ export async function loadAndCachePCL(
     }
   }
 
-  // DIAG: summary of tab processing pass
-  await diag(ccId, routeCodes,
-    `[STEP 4] Tab pass complete. read=${tabsRead}, failed=${tabsFailed}, ` +
-    `noHeader=${tabsHeaderMissing}, badCols=${tabsColumnMissing}, ` +
-    `routesWithData=${routeRowsMap.size}/${routeCodes.length}`
-  );
-
-  // DIAG: per-route row counts so we see exactly which routes got data
-  const routeCounts: string[] = [];
-  for (const rc of routeCodes) {
-    routeCounts.push(`${rc}=${routeRowsMap.get(rc)?.length ?? 0}`);
-  }
-  await diag(ccId, routeCodes,
-    `[STEP 5] Row counts per route: ${routeCounts.join(', ')}`
-  );
-
   // Build upsert rows — one per route code (even if no history found)
   const upsertRows = routeCodes.map(rc => {
     const rows = routeRowsMap.get(rc) || [];
@@ -443,24 +323,13 @@ export async function loadAndCachePCL(
     };
   });
 
-  await diag(ccId, routeCodes,
-    `[STEP 6] About to upsert ${upsertRows.length} rows to pcl_cache`
-  );
-
   const { error } = await supabase
     .from('pcl_cache')
     .upsert(upsertRows, { onConflict: 'command_center_id,route_code' });
 
   if (error) {
-    // DIAG: final upsert failure — write a real error row too so error_stack is set
-    await diag(ccId, routeCodes,
-      `[STEP 7 UPSERT FAIL] ${error.message}`
-    );
     console.warn('[PCL Cache] Failed to write to Supabase:', error.message);
   } else {
-    await diag(ccId, routeCodes,
-      `[STEP 7 OK] Upsert succeeded for ${upsertRows.length} routes`
-    );
     console.log(`[PCL Cache] Cached PCL for ${upsertRows.length} routes`);
   }
 }
