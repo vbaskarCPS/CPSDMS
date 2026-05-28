@@ -1,15 +1,17 @@
 // src/pages/Admin/SessionCommandCenter.tsx
 //
-// CHANGELOG (this revision):
-//   - handleAddAdditional now ALSO triggers a PCL cache refresh, using the
-//     currently active session's route codes (not just new ones). This lets
-//     the admin force a PCL re-cache without closing and re-uploading the
-//     entire session — useful for testing the diagnostic logging without a
-//     full session teardown.
-//   - Small UI note added to the Add Additional panel explaining the
-//     additional behaviour.
-//   - Tagged with `// PCL REFRESH:` comments for easy removal later.
-//   - All other behaviour unchanged.
+// CHANGELOG (this revision — DIAGNOSTIC BUILD #2):
+//   - handleAddAdditional is now heavily instrumented to find why the PCL
+//     refresh block isn't reaching pcl_cache. Writes diagnostic rows at:
+//       1. Function entry (proves the handler ran at all)
+//       2. Before the guard check (shows actual values of digitalMappingEnabled,
+//          callbookSheetId, currentCC.id)
+//       3. If the dynamic import fails
+//       4. If getAccessToken() returns null
+//   - All logs go to pcl_error_log under worker_user_id='__admin_pcl_load__'
+//     so they show up in the existing diagnostic query.
+//   - To be stripped once the bug is identified.
+//   - Tagged `// PCL DIAG:` for easy removal.
 //
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
@@ -54,6 +56,8 @@ import { getDateTabError } from '../../lib/googleSheetsConfig';
 import { commandCenterService, regionHasSeasonSelection } from '../../lib/commandCenterService';
 import { removeStorageItem } from '../../lib/localStorage';
 import { DailySessionData, SortOption, LogsheetSession, SeasonType, SEASON_CONFIGS, EQ_DIVISOR } from '../../types';
+// PCL DIAG: supabase client imported directly for diagnostic writes
+import { supabase } from '../../lib/supabase';
 import PayoutToday from '../Management/PayoutToday';
 import JobFairManager from './JobFairManager';
 import TrainingsTab from './TrainingsTab';
@@ -61,6 +65,25 @@ import PayslipGenerator from './PayslipGenerator';
 import RouteFinderView from '../../components/RouteFinder/RouteFinderView';
 import DigitalMasterBookings from './DigitalMasterBookings';
 import DigitalWorkerbook from './DigitalWorkerbook';
+
+// PCL DIAG: fire-and-forget diagnostic writer. Never throws, never blocks.
+// Writes a row to pcl_error_log under the '__admin_pcl_load__' sentinel so
+// admin diagnostic rows are easy to query/filter. Remove this helper along
+// with all its call sites in the cleanup pass.
+async function pclDiag(ccId: string | null, message: string): Promise<void> {
+  try {
+    await supabase.from('pcl_error_log').insert({
+      command_center_id: ccId,
+      worker_user_id: '__admin_pcl_load__',
+      route_codes: [],
+      error_message: message,
+      error_stack: null,
+      user_agent: null,
+    });
+  } catch {
+    // Swallow.
+  }
+}
 
 const SessionCommandCenter: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -529,6 +552,16 @@ const SessionCommandCenter: React.FC = () => {
 
   // --- ADD ADDITIONAL HANDLER ---
   const handleAddAdditional = async () => {
+    // PCL DIAG: log #1 — handler entry. Proves the button click reached the function.
+    // Fires before ANY guards (importMeta, Google connect, etc.) so we know.
+    await pclDiag(
+      currentCC?.id ?? null,
+      `[ADDADDL ENTRY] handler invoked. ` +
+      `importMeta.dateTab=${importMeta?.dateTab ?? 'null'}, ` +
+      `isGoogleConnected=${isGoogleConnected}, ` +
+      `currentCC.id=${currentCC?.id ?? 'null'}`
+    );
+
     if (!importMeta?.dateTab) return;
 
     // Ensure Google is connected
@@ -560,6 +593,20 @@ const SessionCommandCenter: React.FC = () => {
       // call inside sessionService.uploadDailySession. Lets the admin force a
       // PCL re-cache without closing the session. Diagnostic trail still goes
       // to pcl_error_log under '__admin_pcl_load__'.
+
+      // PCL DIAG: log #2 — fires UNCONDITIONALLY (before the guard). Shows
+      // exactly what the guard is about to see. Without this we can't tell
+      // whether the guard is falsy or whether the dynamic import is failing.
+      await pclDiag(
+        currentCC?.id ?? null,
+        `[ADDADDL PRE-GUARD] ` +
+        `digitalMappingEnabled=${currentCC?.digitalMappingEnabled}, ` +
+        `callbookSheetId=${currentCC?.callbookSheetId ? 'set(' + currentCC.callbookSheetId.length + 'ch)' : 'EMPTY/NULL'}, ` +
+        `currentCC.id=${currentCC?.id ? 'set' : 'EMPTY/NULL'}, ` +
+        `freshRouteCount=${(freshData.routes || []).length}, ` +
+        `liveRouteCount=${(currentSession?.routes || []).length}`
+      );
+
       if (currentCC?.digitalMappingEnabled && currentCC.callbookSheetId && currentCC.id) {
         const sheetId = currentCC.callbookSheetId;
         const ccId = currentCC.id;
@@ -570,22 +617,65 @@ const SessionCommandCenter: React.FC = () => {
         const freshCodes = (freshData.routes || []).map(r => r.routeCode);
         const allRouteCodes = Array.from(new Set([...existingCodes, ...freshCodes]));
 
+        // PCL DIAG: log #3 — passed the guard, about to dynamic-import + fire.
+        await pclDiag(
+          ccId,
+          `[ADDADDL POST-GUARD] passed guard, importing pclCacheService. ` +
+          `routeCodes=${allRouteCodes.length}`
+        );
+
         Promise.all([
           import('../../lib/pclCacheService'),
         ]).then(([{ loadAndCachePCL }]) => {
           const accessToken = googleSheetsService.getAccessToken();
           if (!accessToken) {
+            // PCL DIAG: log #4a — token missing. THIS is the most likely
+            // culprit and would explain the original session upload too.
+            pclDiag(
+              ccId,
+              `[ADDADDL NO TOKEN] googleSheetsService.getAccessToken() returned ` +
+              `null/empty. PCL refresh skipped. (isGoogleConnected=${isGoogleConnected})`
+            );
             console.warn('[PCL Refresh] No Google access token available — PCL refresh skipped.');
             return;
           }
-          loadAndCachePCL(sheetId, allRouteCodes, accessToken, ccId).catch(err =>
-            console.warn('[PCL Refresh] Non-blocking load failed:', err)
+          // PCL DIAG: log #4b — token present, calling loadAndCachePCL.
+          pclDiag(
+            ccId,
+            `[ADDADDL CALLING] token present (${accessToken.length}ch), ` +
+            `calling loadAndCachePCL with ${allRouteCodes.length} routes`
           );
-        }).catch(err => console.warn('[PCL Refresh] Module import failed:', err));
+          loadAndCachePCL(sheetId, allRouteCodes, accessToken, ccId).catch(err => {
+            // PCL DIAG: log #4c — loadAndCachePCL itself rejected.
+            pclDiag(
+              ccId,
+              `[ADDADDL LOAD REJECTED] ${err instanceof Error ? err.message : String(err)}`
+            );
+            console.warn('[PCL Refresh] Non-blocking load failed:', err);
+          });
+        }).catch(err => {
+          // PCL DIAG: log #4d — dynamic import itself failed.
+          pclDiag(
+            ccId,
+            `[ADDADDL IMPORT FAIL] ${err instanceof Error ? err.message : String(err)}`
+          );
+          console.warn('[PCL Refresh] Module import failed:', err);
+        });
+      } else {
+        // PCL DIAG: log #3-alt — guard failed. Pre-guard log already shows why.
+        await pclDiag(
+          currentCC?.id ?? null,
+          `[ADDADDL GUARD FAILED] PCL refresh skipped — see PRE-GUARD row above for values.`
+        );
       }
       // END PCL REFRESH
     } catch (err) {
       console.error(err);
+      // PCL DIAG: catch-all so even unexpected errors in the handler are logged.
+      pclDiag(
+        currentCC?.id ?? null,
+        `[ADDADDL OUTER CATCH] ${err instanceof Error ? err.message : String(err)}`
+      );
       setError(err instanceof Error ? err.message : 'Failed to add additional data.');
     } finally {
       setAddAdditionalLoading(false);
