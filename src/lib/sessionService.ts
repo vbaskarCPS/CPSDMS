@@ -35,6 +35,8 @@ import {
   AsphaltMeta,
   AsphaltRole,
   RouteSplit,
+  RouteSplitBucket,
+  RouteSplitRectangle,
 } from '../types';
 
 // Import metadata type - re-export for other modules
@@ -283,15 +285,23 @@ class SessionService {
   // alongside the other mapDbXxx helpers so this file's "shape of DB rows"
   // logic stays in one neighborhood.
   private mapDbRouteSplit(row: any): RouteSplit {
+    // The new v2 schema stores a buckets jsonb array. Each element should
+    // already match the RouteSplitBucket interface. Defensive normalisation
+    // here in case the row was hand-written or has missing fields.
+    const rawBuckets = Array.isArray(row.buckets) ? row.buckets : [];
+    const buckets: RouteSplitBucket[] = rawBuckets.map((b: any) => ({
+      letter: typeof b.letter === 'string' ? b.letter : 'a',
+      sourceLetter: typeof b.sourceLetter === 'string' ? b.sourceLetter : null,
+      rectangles: Array.isArray(b.rectangles) ? b.rectangles : [],
+      bookingIds: Array.isArray(b.bookingIds) ? b.bookingIds : [],
+      assignedWorkers: Array.isArray(b.assignedWorkers) ? b.assignedWorkers : [],
+    }));
     return {
       id: row.id,
       commandCenterId: row.command_center_id,
       sessionDate: row.session_date,
       routeCode: row.route_code,
-      segmentBOsmIds: Array.isArray(row.segment_b_osm_ids) ? row.segment_b_osm_ids : [],
-      bookingBIds: Array.isArray(row.booking_b_ids) ? row.booking_b_ids : [],
-      assignedWorkersA: Array.isArray(row.assigned_workers_a) ? row.assigned_workers_a : [],
-      assignedWorkersB: Array.isArray(row.assigned_workers_b) ? row.assigned_workers_b : [],
+      buckets,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -919,16 +929,15 @@ class SessionService {
 
   // --- 2i. ROUTE SPLITS (Digital mapping CCs only) ---
   //
-  // RouteSplits are an RM-side visual division of a route into two halves.
-  // The underlying route_code on bookings/routes never changes — splits are
-  // a tooling overlay that affects what the RM sees on the master map and
-  // which workers receive which subset of bookings via per-half assignment.
+  // V2 schema: recursive splits with stored rectangles. See the RouteSplit
+  // interface in types.ts for full semantics.
   //
   // Eligibility (enforced in calling UI, not here):
-  //   - createRouteSplit only called on UNASSIGNED routes
-  //   - createRouteSplit refuses if a split already exists (DB unique constraint)
+  //   - splitBucket can only be called on buckets with zero assignedWorkers.
+  //   - The first call on a route auto-creates the row with a single 'a'
+  //     bucket containing all bookings, then carves the new letter.
   //
-  // Lifecycle: split is wiped automatically when adminResetDailySession runs.
+  // Lifecycle: split row is wiped automatically when adminResetDailySession runs.
 
   /**
    * Fetch all route splits for the current session. Returns an empty array if
@@ -983,52 +992,140 @@ class SessionService {
   }
 
   /**
-   * Create a new route split. Caller has already done the bucketing math —
-   * this method just writes the row. Throws if a split already exists for
-   * this (CC, date, route_code) — see the unique constraint on the table.
+   * Compute the next available letter for a route, given its current buckets.
+   * Pure function — exported on the service for use by the UI (the split
+   * modal needs to know which letter it's previewing as the new bucket).
    *
-   * The route's existing routes.assigned_worker_ids is NOT touched here. The
-   * RM will assign workers to half-a and half-b via the post-Confirm picker,
-   * which calls updateRouteSplitAssignment for each half. That method writes
-   * to both route_splits AND routes.assigned_worker_ids (the latter holds the
-   * union so the existing per-booking assignment code keeps working).
+   * Sequence is a, b, c, ..., z. We assume routes never need >26 buckets;
+   * if a 27th split is requested, throws.
    */
-  public async createRouteSplit(input: {
+  public nextAvailableLetter(buckets: RouteSplitBucket[]): string {
+    const used = new Set(buckets.map(b => b.letter));
+    const ALPHA = 'abcdefghijklmnopqrstuvwxyz';
+    for (const ch of ALPHA) {
+      if (!used.has(ch)) return ch;
+    }
+    throw new Error('Route already has 26 buckets — refusing to split further');
+  }
+
+  /**
+   * Split an existing bucket. Atomically:
+   *   1. If no split row exists yet, create one with bucket 'a' containing
+   *      input.allBookingIds (the full list of pending bookings on this route).
+   *   2. Compute the next available letter (b, c, d, ...).
+   *   3. Append a new bucket entry: { letter, sourceLetter, rectangles,
+   *      bookingIds: input.bookingsMovingToNew, assignedWorkers: [] }.
+   *   4. Update the source bucket: remove input.bookingsMovingToNew from its
+   *      bookingIds.
+   *   5. Save the row.
+   *
+   * Returns the updated RouteSplit so the caller can read which letter was
+   * assigned. Note: routes.assigned_worker_ids is NOT touched here — assigning
+   * workers to the new bucket happens via updateRouteSplitAssignment, which
+   * does the union math.
+   *
+   * The caller (RouteSplitModal at confirm time) is responsible for computing
+   * input.bookingsMovingToNew correctly based on which prebookings in the source
+   * bucket fall inside the new rectangles.
+   */
+  public async splitBucket(input: {
     routeCode: string;
-    segmentBOsmIds: number[];
-    bookingBIds: string[];
+    sourceLetter: string;
+    rectangles: RouteSplitRectangle[];
+    bookingsMovingToNew: string[];
+    // Used only when no split row exists yet. The first split has to
+    // initialize 'a' with all bookings; from that point on we ignore this.
+    allBookingIdsOnRoute: string[];
   }): Promise<RouteSplit> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) throw new Error('No active session');
 
-    const row = {
-      command_center_id: ccId,
-      session_date: date,
-      route_code: input.routeCode,
-      segment_b_osm_ids: input.segmentBOsmIds || [],
-      booking_b_ids: input.bookingBIds || [],
-      assigned_workers_a: [],
-      assigned_workers_b: [],
-    };
+    // Read existing row (if any).
+    let existing = await this.getRouteSplitForRoute(input.routeCode);
 
-    const { data, error } = await supabase
-      .from('route_splits')
-      .insert(row)
-      .select()
-      .single();
-
-    if (error) {
-      console.error('[RouteSplit] createRouteSplit failed:', error);
-      throw error;
+    // If no row exists, initialize with bucket 'a' containing all bookings.
+    let buckets: RouteSplitBucket[];
+    if (!existing) {
+      if (input.sourceLetter !== 'a') {
+        throw new Error(`Cannot split bucket '${input.sourceLetter}' — no split exists yet for ${input.routeCode}; the first split must source from 'a'`);
+      }
+      buckets = [{
+        letter: 'a',
+        sourceLetter: null,
+        rectangles: [],
+        bookingIds: [...input.allBookingIdsOnRoute],
+        assignedWorkers: [],
+      }];
+    } else {
+      buckets = existing.buckets.map(b => ({ ...b, rectangles: [...b.rectangles], bookingIds: [...b.bookingIds], assignedWorkers: [...b.assignedWorkers] }));
     }
-    return this.mapDbRouteSplit(data);
+
+    // Find the source bucket. If missing, the caller has a stale view.
+    const source = buckets.find(b => b.letter === input.sourceLetter);
+    if (!source) {
+      throw new Error(`Cannot split bucket '${input.sourceLetter}' — bucket not found on route ${input.routeCode}`);
+    }
+    if (source.assignedWorkers.length > 0) {
+      throw new Error(`Cannot split bucket '${input.sourceLetter}' — it has assigned workers`);
+    }
+
+    // Compute the new letter.
+    const newLetter = this.nextAvailableLetter(buckets);
+
+    // Move bookings from source → new bucket.
+    const movingSet = new Set(input.bookingsMovingToNew);
+    const newBucketBookingIds = source.bookingIds.filter(id => movingSet.has(id));
+    source.bookingIds = source.bookingIds.filter(id => !movingSet.has(id));
+
+    buckets.push({
+      letter: newLetter,
+      sourceLetter: input.sourceLetter,
+      rectangles: input.rectangles,
+      bookingIds: newBucketBookingIds,
+      assignedWorkers: [],
+    });
+
+    // Upsert: if existing, update; else insert.
+    if (existing) {
+      const { data, error } = await supabase
+        .from('route_splits')
+        .update({ buckets, updated_at: new Date().toISOString() })
+        .eq('command_center_id', ccId)
+        .eq('session_date', date)
+        .eq('route_code', input.routeCode)
+        .select()
+        .single();
+      if (error) {
+        console.error('[RouteSplit] splitBucket update failed:', error);
+        throw error;
+      }
+      return this.mapDbRouteSplit(data);
+    } else {
+      const { data, error } = await supabase
+        .from('route_splits')
+        .insert({
+          command_center_id: ccId,
+          session_date: date,
+          route_code: input.routeCode,
+          buckets,
+        })
+        .select()
+        .single();
+      if (error) {
+        console.error('[RouteSplit] splitBucket insert failed:', error);
+        throw error;
+      }
+      return this.mapDbRouteSplit(data);
+    }
   }
 
   /**
-   * Delete a route split (undo / re-split). Removes the route_splits row.
-   * Does NOT touch routes.assigned_worker_ids — the caller is responsible for
-   * unassigning workers if needed before deleting.
+   * Delete the entire split row for a route. Removes all bucket info.
+   * Does NOT touch routes.assigned_worker_ids or bookings — caller is
+   * responsible for any cleanup. Primarily called from adminResetDailySession
+   * (which wipes the whole table) but exposed in case admin tooling wants
+   * per-route control.
    */
   public async deleteRouteSplit(routeCode: string): Promise<void> {
     const ccId = this.getCCId();
@@ -1049,46 +1146,51 @@ class SessionService {
   }
 
   /**
-   * Assign workers to a specific half of a split route.
+   * Assign workers to a specific bucket of a split route.
    *
    * Effects:
-   *   1. Updates route_splits.assigned_workers_a or assigned_workers_b for the
-   *      target half.
-   *   2. Updates routes.assigned_worker_ids to be the UNION of (a + b) so that
-   *      the existing booking-assignment code (assignBookingToWorker, etc.)
+   *   1. Updates the target bucket's assignedWorkers field within the row's
+   *      buckets array.
+   *   2. Updates routes.assigned_worker_ids to the UNION across ALL buckets so
+   *      that the existing booking-assignment code (assignBookingToWorker)
    *      continues to know "these workers are on this route".
-   *   3. For each booking in this half (driven by booking_b_ids for 'b', or
-   *      everything-not-in-booking_b_ids for 'a'), runs assignBookingToWorker
-   *      so the worker's logsheet only sees their half's prebooks.
+   *   3. For each booking in this bucket (from bucket.bookingIds), writes
+   *      contractor_id so the worker's logsheet only sees their bucket's
+   *      prebooks. (Team seasons use session_id instead — the calling UI
+   *      should use assignBookingsToSession for that flow.)
    *
-   * Pass workerIds=[] to unassign that half.
+   * Pass workerIds=[] to unassign that bucket.
    */
   public async updateRouteSplitAssignment(
     routeCode: string,
-    half: 'a' | 'b',
+    letter: string,
     workerIds: string[]
   ): Promise<void> {
     const ccId = this.getCCId();
     const date = await this.getDailySessionDate();
     if (!date) throw new Error('No active session');
 
-    // Fetch existing split to know booking buckets and the OTHER half's workers.
     const existing = await this.getRouteSplitForRoute(routeCode);
     if (!existing) {
       throw new Error(`Cannot update split assignment: no split exists for route ${routeCode}`);
     }
 
-    const newA = half === 'a' ? workerIds : (existing.assignedWorkersA || []);
-    const newB = half === 'b' ? workerIds : (existing.assignedWorkersB || []);
+    // Build new buckets array with this bucket's assignedWorkers updated.
+    const newBuckets = existing.buckets.map(b =>
+      b.letter === letter
+        ? { ...b, assignedWorkers: [...workerIds] }
+        : b
+    );
 
-    // 1) Update the route_splits row.
-    const updateColumn = half === 'a' ? 'assigned_workers_a' : 'assigned_workers_b';
+    // Verify the target bucket actually exists.
+    if (!newBuckets.some(b => b.letter === letter)) {
+      throw new Error(`Cannot update split assignment: bucket '${letter}' not found on route ${routeCode}`);
+    }
+
+    // 1) Save the row.
     const { error: splitErr } = await supabase
       .from('route_splits')
-      .update({
-        [updateColumn]: workerIds,
-        updated_at: new Date().toISOString(),
-      })
+      .update({ buckets: newBuckets, updated_at: new Date().toISOString() })
       .eq('command_center_id', ccId)
       .eq('session_date', date)
       .eq('route_code', routeCode);
@@ -1098,8 +1200,11 @@ class SessionService {
       throw splitErr;
     }
 
-    // 2) Update routes.assigned_worker_ids to UNION(a, b). Deduplicate.
-    const unionWorkers = Array.from(new Set([...newA, ...newB]));
+    // 2) Compute UNION of all buckets' assignedWorkers, dedup, push to routes.
+    const unionSet = new Set<string>();
+    for (const b of newBuckets) for (const w of b.assignedWorkers) unionSet.add(w);
+    const unionWorkers = Array.from(unionSet);
+
     const { error: routeErr } = await supabase
       .from('routes')
       .update({ assigned_worker_ids: unionWorkers })
@@ -1112,50 +1217,20 @@ class SessionService {
       throw routeErr;
     }
 
-    // 3) Per-booking reassignment for the half we just changed.
-    //    'b' half = bookings whose IDs appear in existing.bookingBIds.
-    //    'a' half = bookings on this route NOT in existing.bookingBIds.
-    //
-    //    We fetch all pending bookings on this route, partition by half, and
-    //    write contractor_id for the affected half. Workers in the assigned
-    //    list each "claim" the bookings — we use the first worker as the
-    //    single-assigned contractor (matching the behaviour of the existing
-    //    assignBookingToWorker flow). When workerIds is empty, we clear
-    //    contractor_id on the half's bookings.
-    const { data: routeBookings } = await supabase
-      .from('bookings')
-      .select('booking_id')
-      .eq('route_number', routeCode)
-      .eq('session_date', date)
-      .eq('command_center_id', ccId)
-      .neq('status', 'completed');
+    // 3) Per-booking reassignment for this bucket's bookings (aeration pattern).
+    // The bucket.bookingIds is our cached membership list.
+    const target = newBuckets.find(b => b.letter === letter)!;
+    if (target.bookingIds.length > 0) {
+      const newContractorId = workerIds.length > 0 ? workerIds[0] : null;
+      const { error: bkErr } = await supabase
+        .from('bookings')
+        .update({ contractor_id: newContractorId })
+        .in('booking_id', target.bookingIds)
+        .eq('command_center_id', ccId);
 
-    if (routeBookings && routeBookings.length > 0) {
-      const bookingBSet = new Set(existing.bookingBIds);
-      const halfBookingIds = routeBookings
-        .filter(b =>
-          half === 'b'
-            ? bookingBSet.has(b.booking_id)
-            : !bookingBSet.has(b.booking_id)
-        )
-        .map(b => b.booking_id);
-
-      if (halfBookingIds.length > 0) {
-        // Match the existing single-contractor model: first worker (or null).
-        // For team seasons that use session_id instead of contractor_id, the
-        // calling UI should use assignBookingsToSession separately; this code
-        // path is the aeration / per-booking-contractor pattern.
-        const newContractorId = workerIds.length > 0 ? workerIds[0] : null;
-        const { error: bkErr } = await supabase
-          .from('bookings')
-          .update({ contractor_id: newContractorId })
-          .in('booking_id', halfBookingIds)
-          .eq('command_center_id', ccId);
-
-        if (bkErr) {
-          console.error('[RouteSplit] updateRouteSplitAssignment (bookings) failed:', bkErr);
-          throw bkErr;
-        }
+      if (bkErr) {
+        console.error('[RouteSplit] updateRouteSplitAssignment (bookings) failed:', bkErr);
+        throw bkErr;
       }
     }
   }

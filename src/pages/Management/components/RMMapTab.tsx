@@ -136,20 +136,23 @@ interface CartCardData {
   };
 }
 
-// RouteCardData extended for split awareness.
+// RouteCardData extended for recursive split awareness.
 //
-// For a route that ISN'T split, one card is generated with:
-//   isSplit = false, half = undefined, displayRouteCode = baseRouteCode = "BIN09"
+// For a route with NO splits, one card is generated with:
+//   isSplit = false, letter = undefined, displayRouteCode = baseRouteCode = "BIN09"
 //
-// For a route that IS split, TWO cards are generated:
-//   - { isSplit: true, half: 'a', baseRouteCode: 'BIN09', displayRouteCode: 'BIN09a', routeColor: <original> }
-//   - { isSplit: true, half: 'b', baseRouteCode: 'BIN09', displayRouteCode: 'BIN09b', routeColor: <complementary> }
+// For a route that HAS splits, N cards are generated (one per bucket):
+//   - { isSplit: true, letter: 'a', baseRouteCode: 'BIN09', displayRouteCode: 'BIN09a', routeColor: <original> }
+//   - { isSplit: true, letter: 'b', baseRouteCode: 'BIN09', displayRouteCode: 'BIN09b', routeColor: <60° rotated> }
+//   - { isSplit: true, letter: 'c', baseRouteCode: 'BIN09', displayRouteCode: 'BIN09c', routeColor: <120° rotated> }
+//   - ...
 //
-// assignedWorkerIds, prebookCount, prepayCount, totalEQ are scoped to that half.
-// The Split button is hidden when isSplit is true (already split) OR isAssigned is true.
+// Each card's prebookCount, prepayCount, totalEQ, assignedWorkerIds are scoped
+// to that bucket. The Split button is no longer on these cards — it lives
+// inside the assignment modal that opens when a card is tapped.
 interface RouteCardData {
   routeCode: string;          // baseRouteCode for split cards; full code for non-split
-  displayRouteCode: string;   // what to show in UI ("BIN09" or "BIN09a"/"BIN09b")
+  displayRouteCode: string;   // what to show in UI ("BIN09" or "BIN09a"/"BIN09b"/...)
   routeColor: string;
   assignedWorkerIds: string[];
   assignedWorkerLabel: string;
@@ -158,47 +161,27 @@ interface RouteCardData {
   totalEQ: number;
   isAssigned: boolean;
   isSplit: boolean;
-  half?: 'a' | 'b';
+  letter?: string;            // the bucket letter for split cards; undefined for whole-route
   baseRouteCode: string;      // always the underlying DB route_code
 }
 
-// AssignModalData extended to know about split halves.
-// half=undefined → regular full-route assignment (unchanged behaviour).
-// half='a' or 'b' → assigning that half of a split; handleAssignRoute calls
-// updateRouteSplitAssignment instead of the regular flow.
+// AssignModalData extended for recursive splits.
+// letter=undefined → regular full-route assignment (unchanged behaviour).
+// letter is set → assigning that bucket of a split route; handleAssignRoute
+// calls updateRouteSplitAssignment(routeCode, letter, workerIds).
+//
+// canSplit is true iff the current bucket has zero assigned workers. When
+// true, the Split button at the TOP of the modal is enabled.
 interface AssignModalData {
   routeCode: string;          // base route code
-  displayRouteCode: string;   // header display ("BIN09" or "BIN09a"/"BIN09b")
-  routeColor: string;
+  displayRouteCode: string;   // header display ("BIN09" or "BIN09a"/"BIN09b"/...)
+  routeColor: string;         // colour for this specific bucket
   prebookCount: number;
   prepayCount: number;
   totalEQ: number;
   currentWorkerIds: string[];
-  half?: 'a' | 'b';
-  // Post-split flow context: when set, the modal shows an "Assign later" button
-  // that dismisses and advances the flow. Without this, only the standard
-  // Cancel-via-X behaviour is available.
-  postSplitFlow?: boolean;
-}
-
-// Post-split sequential assignment state. After Confirm in the split modal,
-// we open the assign modal for half 'a', then 'b'. This object tracks where
-// we are in that sequence. Null when not in a post-split flow.
-interface PostSplitFlowState {
-  routeCode: string;
-  routeColor: string;          // base colour (used for 'a'; 'b' uses complementary)
-  segmentBOsmIds: number[];
-  bookingBIds: string[];
-  // Computed once at Confirm time: how many segments/bookings ended up in each half.
-  aSegCount: number;
-  bSegCount: number;
-  aBookingCount: number;
-  bBookingCount: number;
-  aPrepayCount: number;
-  bPrepayCount: number;
-  aTotalEQ: number;
-  bTotalEQ: number;
-  currentlyAssigning: 'a' | 'b';
+  letter?: string;            // bucket letter, undefined for whole-route
+  canSplit: boolean;          // controls Split button enabled state
 }
 
 // NEW: nav-related state types.
@@ -261,15 +244,23 @@ const isRcWorker = (teamId: string | null | undefined): boolean => {
   return !!teamId && RC_TEAM_PATTERN.test(teamId);
 };
 
-// --- HSL hue rotation by 180° for the 'b' half of a split route. ---
+// --- colorForBucket: HSL hue rotation by 60° per bucket letter index. ---
 //
-// Duplicated from RouteSplitModal.tsx so the master map's "b half" colour
-// matches the split modal preview exactly. If you ever want to factor this
-// out into a shared util, both files need to import the same function so
-// they stay in sync — silent colour drift between the modal preview and
-// the master map render would be a nasty bug to chase.
-function complementaryColor(hex: string): string {
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
+// Same algorithm as RouteSplitModal.tsx — keep the two in sync. 'a' returns
+// baseColor unchanged; each subsequent letter rotates hue +60° from 'a'.
+// Supports up to 'f' (6 buckets total = full 360° wheel); 'g'..'z' would
+// land on a duplicate hue but we cap splits at 26 buckets in the service
+// and visually they'd be indistinguishable anyway.
+//
+// If you ever want to factor this into a shared util, both files need to
+// import the same function so they stay in sync — silent colour drift
+// between the modal preview and the master map render would be a nasty
+// bug to chase.
+function colorForBucket(baseHex: string, letter: string | undefined): string {
+  if (!letter || letter === 'a') return baseHex;
+  const idx = letter.charCodeAt(0) - 'a'.charCodeAt(0);
+  if (idx <= 0) return baseHex;
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(baseHex || '');
   if (!m) return '#facc15';
   const r = parseInt(m[1], 16) / 255;
   const g = parseInt(m[2], 16) / 255;
@@ -286,7 +277,7 @@ function complementaryColor(hex: string): string {
     else h = ((r - g) / d + 4);
     h *= 60;
   }
-  const newH = (h + 180) % 360;
+  const newH = ((h + idx * 60) % 360 + 360) % 360;
   const c = (1 - Math.abs(2 * l - 1)) * s;
   const x = c * (1 - Math.abs(((newH / 60) % 2) - 1));
   const mm = l - c / 2;
@@ -299,6 +290,32 @@ function complementaryColor(hex: string): string {
   else { rr = c; gg = 0; bb = x; }
   const to = (v: number) => Math.round((v + mm) * 255).toString(16).padStart(2, '0');
   return `#${to(rr)}${to(gg)}${to(bb)}`;
+}
+
+// --- bucketForPoint: cascade algorithm shared with RouteSplitModal.
+//
+// Determines which bucket a (lng, lat) point belongs to given the buckets
+// array. Identical algorithm to RouteSplitModal so master map render and
+// modal preview agree pixel-for-pixel.
+//
+// Process buckets in chronological order (skipping index 0, which is 'a'
+// and has no rectangles). For each non-'a' bucket B:
+//   if currentBucket == B.sourceLetter AND point inside any B.rectangle →
+//   currentBucket = B.letter
+function bucketForPoint(lng: number, lat: number, buckets: Array<{letter: string; sourceLetter: string | null; rectangles: Array<{west: number; east: number; south: number; north: number}>}>): string {
+  let current = 'a';
+  for (let i = 1; i < buckets.length; i++) {
+    const b = buckets[i];
+    if (b.sourceLetter !== current) continue;
+    if (!b.rectangles || b.rectangles.length === 0) continue;
+    for (const r of b.rectangles) {
+      if (lng >= r.west && lng <= r.east && lat >= r.south && lat <= r.north) {
+        current = b.letter;
+        break;
+      }
+    }
+  }
+  return current;
 }
 
 const formatAsphaltDollars = (n: number | undefined | null): string => {
@@ -664,20 +681,47 @@ function resolveNavDestination(financialStore: any[]): { lat: number; lng: numbe
 
 // --- SPLIT BUCKETING HELPERS ---
 //
-// Used at multiple points: building routeCardData (split a route into two
-// cards), painting the master map (per-segment colour), filtering bookings to
-// a half (for the assignment modal's count/EQ display).
+// In v2 recursive splits, the master map bucket-paints each line PIECE (not
+// each segment as a whole). A piece is a pair of consecutive coords in a
+// segment. The bucket for each piece is computed by bucketForPoint() using
+// the buckets array's stored rectangles. This gives sharp half-segment edges.
 //
-// Mirrors the math in RouteSplitModal:
-//   - segmentMidpoint = middle index of coords array
-//   - segment in 'b' iff its midpoint is in segmentBOsmIds (precomputed at Confirm)
-//   - booking in 'b' iff its closest segment is in segmentBOsmIds
-//
-// Closest-segment math is duplicated rather than imported so this file stays
-// self-contained for the per-segment colour painting on the master map.
-function segmentMidCoord(coords: [number, number][]): [number, number] {
-  if (!coords || coords.length === 0) return [0, 0];
-  return coords[Math.floor(coords.length / 2)];
+// For bookings, we use the cached bookingIds on each bucket — those were
+// precomputed at split time so we don't recompute closest-line-piece every
+// render. To look up a pin's bucket: iterate the route's buckets, find the
+// one whose bookingIds contains the booking ID. Default to 'a' (the original
+// bucket) when the route isn't split or the booking isn't in any bucket.
+
+// Line-piece midpoint = average of the two endpoints.
+function lineMidCoord(a: [number, number], b: [number, number]): [number, number] {
+  return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+}
+
+// Compute the centroid of all pieces in a given bucket on a given route.
+// Returns null if the bucket has no pieces (e.g. all of 'a' got carved away).
+// Used for placing the route's letter label on the master map.
+function bucketCentroid(
+  segments: Array<{ coordinates: [number, number][] }>,
+  buckets: Array<{ letter: string; sourceLetter: string | null; rectangles: Array<{west: number; east: number; south: number; north: number}> }>,
+  targetLetter: string
+): { lng: number; lat: number } | null {
+  let sumLng = 0, sumLat = 0, count = 0;
+  for (const seg of segments) {
+    const cs = seg.coordinates;
+    if (!cs || cs.length < 2) continue;
+    for (let i = 0; i < cs.length - 1; i++) {
+      const a = cs[i];
+      const b = cs[i + 1];
+      const mid = lineMidCoord(a, b);
+      if (bucketForPoint(mid[0], mid[1], buckets) === targetLetter) {
+        sumLng += mid[0];
+        sumLat += mid[1];
+        count++;
+      }
+    }
+  }
+  if (count === 0) return null;
+  return { lng: sumLng / count, lat: sumLat / count };
 }
 
 // --- COMPONENT ---
@@ -761,16 +805,28 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // --- ROUTE SPLITS state ---
   //
   // routeSplits is the canonical list from the DB. routeSplitsByCode is the
-  // memoized map for fast lookup. splitModalData and postSplitFlow drive the
-  // new split UI: open modal → confirm → sequential assignment for each half.
+  // memoized map for fast lookup. splitModalData drives the split modal —
+  // includes the source bucket being carved and the new letter to assign.
+  //
+  // Flow: assignment modal open → user taps Split → assignment modal closes
+  // → splitModalData populated → RouteSplitModal renders → user confirms →
+  // handleSplitConfirm persists and immediately reopens the assignment modal
+  // for the NEW LETTER. There is no longer a postSplitFlow state because the
+  // flow is naturally recursive: from inside the picker for the new letter,
+  // the user can Split again, etc.
   const [routeSplits, setRouteSplits] = useState<RouteSplit[]>([]);
   const [splitModalData, setSplitModalData] = useState<{
     routeCode: string;
-    routeColor: string;
+    baseRouteColor: string;        // original 'a' colour for HSL derivation
     segments: SavedRoute['segments'];
     prebookings: { bookingId: string; lat: number; lng: number }[];
+    existingBuckets: RouteSplit['buckets'] | null;
+    splittingFromLetter: string;
+    newLetter: string;
+    // We stash the full booking-id list so handleSplitConfirm can pass it
+    // to splitBucket for the FIRST-split case (bootstraps bucket 'a').
+    allBookingIdsOnRoute: string[];
   } | null>(null);
-  const [postSplitFlow, setPostSplitFlow] = useState<PostSplitFlowState | null>(null);
 
   const [workerLocations, setWorkerLocations] = useState<WorkerLocation[]>([]);
   const workerLocationMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
@@ -1183,19 +1239,33 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return eq;
   }, [seasonType, taxRate, productCostPercent]);
 
-  // routeCardData — SPLIT-AWARE.
+  // routeCardData — V2 RECURSIVE SPLIT-AWARE.
   //
   // For each route managed by this RM:
-  //   - If NO split exists: emit a single RouteCardData as before, but with
-  //     isSplit=false, half=undefined, baseRouteCode=routeCode.
-  //   - If a split exists: emit TWO RouteCardData entries, one per half. The
-  //     'b' half's colour is HSL-rotated. Job counts, prepay counts, EQ, and
-  //     assigned workers are scoped to that half via the cached bucketing.
+  //   - If NO split row exists: emit a single RouteCardData with isSplit=false,
+  //     letter=undefined, baseRouteCode=routeCode. (Same as before.)
+  //   - If a split row exists: emit N RouteCardData entries, one per bucket
+  //     in the buckets array. Each card's colour is colorForBucket(baseColor,
+  //     bucket.letter). Job counts, prepay counts, EQ, and assigned workers
+  //     are scoped to that bucket via the cached bookingIds and assignedWorkers.
   //
-  // The Split button on each card is hidden when isSplit is true OR
-  // isAssigned is true (see the Routes-mode sidebar render).
+  // The Split button has been moved into the assignment modal (header), so
+  // it no longer appears on these cards. Whether a bucket is splittable
+  // (zero assigned workers) is computed at modal-open time.
   const routeCardData = useMemo<RouteCardData[]>(() => {
     const result: RouteCardData[] = [];
+
+    const buildLabel = (ids: string[]): string => {
+      if (ids.length === 0) return '';
+      if (ids.length === 1) {
+        const w = workers.find(wk => wk.contractorId === ids[0]);
+        return w ? `${w.firstName} ${w.lastName.charAt(0)}.` : '';
+      }
+      return ids.map(id => {
+        const w = workers.find(wk => wk.contractorId === id);
+        return w ? `${w.firstName.charAt(0)}${w.lastName.charAt(0)}` : '';
+      }).filter(Boolean).join(' ');
+    };
 
     for (const r of routes) {
       if (r.managerId !== managerId) continue;
@@ -1204,26 +1274,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const split = routeSplitsByCode.get(r.routeCode);
       const rb = bookings.filter(b => b['Route Number'] === r.routeCode);
 
-      if (!split) {
-        // No split — single card, same as before.
+      if (!split || split.buckets.length === 0) {
+        // No split — single card.
         const assignedIds = r.assignedWorkerIds || [];
-        let label = '';
-        if (assignedIds.length === 1) {
-          const w = workers.find(wk => wk.contractorId === assignedIds[0]);
-          if (w) label = `${w.firstName} ${w.lastName.charAt(0)}.`;
-        } else if (assignedIds.length > 1) {
-          label = assignedIds.map(id => {
-            const w = workers.find(wk => wk.contractorId === id);
-            return w ? `${w.firstName.charAt(0)}${w.lastName.charAt(0)}` : '';
-          }).filter(Boolean).join(' ');
-        }
         const totalEQ = rb.reduce((sum, b) => sum + calculateBookingEQ(b), 0);
         result.push({
           routeCode: r.routeCode,
           displayRouteCode: r.routeCode,
           routeColor: baseColor,
           assignedWorkerIds: assignedIds,
-          assignedWorkerLabel: label,
+          assignedWorkerLabel: buildLabel(assignedIds),
           prebookCount: rb.length,
           prepayCount: rb.filter(b => b.Prepaid === 'x').length,
           totalEQ,
@@ -1234,56 +1294,27 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         continue;
       }
 
-      // Split exists — emit two cards. Partition the bookings by the cached
-      // booking_b_ids list. The 'a' half is everything not in 'b'.
-      const bBookingSet = new Set(split.bookingBIds);
-      const aBookings = rb.filter(b => !bBookingSet.has(b['Booking ID']));
-      const bBookings = rb.filter(b => bBookingSet.has(b['Booking ID']));
-
-      const buildLabel = (ids: string[]): string => {
-        if (ids.length === 0) return '';
-        if (ids.length === 1) {
-          const w = workers.find(wk => wk.contractorId === ids[0]);
-          return w ? `${w.firstName} ${w.lastName.charAt(0)}.` : '';
-        }
-        return ids.map(id => {
-          const w = workers.find(wk => wk.contractorId === id);
-          return w ? `${w.firstName.charAt(0)}${w.lastName.charAt(0)}` : '';
-        }).filter(Boolean).join(' ');
-      };
-
-      const aAssigned = split.assignedWorkersA || [];
-      const bAssigned = split.assignedWorkersB || [];
-      const bColor = complementaryColor(baseColor);
-
-      result.push({
-        routeCode: r.routeCode,
-        displayRouteCode: `${r.routeCode}a`,
-        routeColor: baseColor,
-        assignedWorkerIds: aAssigned,
-        assignedWorkerLabel: buildLabel(aAssigned),
-        prebookCount: aBookings.length,
-        prepayCount: aBookings.filter(b => b.Prepaid === 'x').length,
-        totalEQ: aBookings.reduce((sum, b) => sum + calculateBookingEQ(b), 0),
-        isAssigned: aAssigned.length > 0,
-        isSplit: true,
-        half: 'a',
-        baseRouteCode: r.routeCode,
-      });
-      result.push({
-        routeCode: r.routeCode,
-        displayRouteCode: `${r.routeCode}b`,
-        routeColor: bColor,
-        assignedWorkerIds: bAssigned,
-        assignedWorkerLabel: buildLabel(bAssigned),
-        prebookCount: bBookings.length,
-        prepayCount: bBookings.filter(b => b.Prepaid === 'x').length,
-        totalEQ: bBookings.reduce((sum, b) => sum + calculateBookingEQ(b), 0),
-        isAssigned: bAssigned.length > 0,
-        isSplit: true,
-        half: 'b',
-        baseRouteCode: r.routeCode,
-      });
+      // Split exists — emit N cards (one per bucket).
+      for (const bucket of split.buckets) {
+        const bookingIdSet = new Set(bucket.bookingIds);
+        const bucketBookings = rb.filter(b => bookingIdSet.has(b['Booking ID']));
+        const bucketColor = colorForBucket(baseColor, bucket.letter);
+        const assignedIds = bucket.assignedWorkers || [];
+        result.push({
+          routeCode: r.routeCode,
+          displayRouteCode: `${r.routeCode}${bucket.letter}`,
+          routeColor: bucketColor,
+          assignedWorkerIds: assignedIds,
+          assignedWorkerLabel: buildLabel(assignedIds),
+          prebookCount: bucketBookings.length,
+          prepayCount: bucketBookings.filter(b => b.Prepaid === 'x').length,
+          totalEQ: bucketBookings.reduce((sum, b) => sum + calculateBookingEQ(b), 0),
+          isAssigned: assignedIds.length > 0,
+          isSplit: true,
+          letter: bucket.letter,
+          baseRouteCode: r.routeCode,
+        });
+      }
     }
 
     // Sort: unassigned cards first, then by displayRouteCode alphabetically.
@@ -1589,22 +1620,22 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return()=>{cancelled=true;};
   }, [myRouteCodes]);
 
-  // Draw routes — SPLIT-AWARE.
+  // Draw routes — V2 RECURSIVE-SPLIT-AWARE with per-line-piece bucketing.
   //
-  // For each route, every segment becomes a Feature with a `bucket` property
-  // ('a' or 'b'). The line layer uses a data-driven colour expression:
-  //   bucket='a' → original route colour
-  //   bucket='b' → complementary colour (HSL hue rotated 180°)
+  // For each route, we no longer render one feature per SEGMENT. Instead, each
+  // pair of consecutive coords within a segment becomes its own LineString
+  // feature. The bucket for each piece is determined at render time by
+  // bucketForPoint() against the buckets array — sharp half-segment edges.
   //
-  // For unsplit routes, every segment gets bucket='a' so the result is
-  // identical to the pre-split behaviour. The colour expression handles both
-  // cases via a 'match' so no separate code paths are needed.
+  // The line layer uses a 'match' colour expression keyed off the piece's
+  // bucket property: each letter maps to colorForBucket(baseColor, letter).
+  // Default colour = baseColor (so anything unaccounted for shows as 'a').
   //
-  // Centroid number labels: unsplit routes get ONE label at the route centroid;
-  // split routes get TWO labels, one at each half's centroid, with the
-  // appropriate colour and the suffixed code (e.g. "11" → "11a" / "11b").
-  // The labels still use route_number-derived text (e.g. "11") for unsplit and
-  // the suffixed code ("11a", "11b") for split routes.
+  // Centroid labels: N labels per split route (one per bucket with non-zero
+  // piece count), positioned at the centroid of the bucket's pieces and
+  // coloured with that bucket's colour. Non-split routes get one label as
+  // before. Labels use route_number-derived text suffixed with the letter
+  // (e.g. "11" → "11a"/"11b"/"11c"/...).
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     loadedIdsRef.current.forEach(id=>{
@@ -1615,29 +1646,50 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const before=(map.getLayer('road-label')?'road-label':map.getStyle().layers?.find((l:any)=>l.type==='symbol')?.id)??undefined;
     const allCoords:[number,number][]=[];
 
+    // Letters we'll honour in the match expression. Up to 'f' is the
+    // documented palette (60° rotations covering the full 360° wheel).
+    const PALETTE_LETTERS = ['a', 'b', 'c', 'd', 'e', 'f'];
+
     routeMapData.forEach(route=>{
       if(!route.segments?.length) return;
       const srcId=`rm-src-${route.id}`, lineId=`rm-line-${route.id}`;
       loadedIdsRef.current.push(route.id);
 
       const split = routeSplitsByCode.get(route.route_code);
-      const bSet = split ? new Set(split.segmentBOsmIds) : null;
-      const bColor = complementaryColor(route.route_color);
+      const buckets = split ? split.buckets : [];
 
-      const features:GeoJSON.Feature[]=route.segments.map(seg=>{
-        const bucket = bSet && bSet.has(seg.osmId) ? 'b' : 'a';
-        return {
-          type:'Feature',
-          properties:{
-            route_code:route.route_code,
-            color:route.route_color,
-            bucket,
-            osmId: seg.osmId,
-          },
-          geometry:{type:'LineString',coordinates:seg.coordinates},
-        };
+      // Build per-line-piece features.
+      const features: GeoJSON.Feature[] = [];
+      route.segments.forEach(seg => {
+        const cs = seg.coordinates;
+        if (!cs || cs.length < 2) return;
+        for (let i = 0; i < cs.length - 1; i++) {
+          const a = cs[i];
+          const b = cs[i + 1];
+          const mid = lineMidCoord(a, b);
+          const bucket = buckets.length > 0 ? bucketForPoint(mid[0], mid[1], buckets) : 'a';
+          features.push({
+            type: 'Feature',
+            properties: {
+              route_code: route.route_code,
+              color: route.route_color,
+              bucket,
+              osmId: seg.osmId,
+            },
+            geometry: { type: 'LineString', coordinates: [a, b] },
+          });
+          allCoords.push(a, b);
+        }
       });
-      features.forEach(f=>allCoords.push(...((f.geometry as GeoJSON.LineString).coordinates as [number,number][])));
+
+      // Build colour match expression from the palette letters.
+      const lineColorExpr: any = ['match', ['get', 'bucket']];
+      for (const L of PALETTE_LETTERS) {
+        lineColorExpr.push(L);
+        lineColorExpr.push(colorForBucket(route.route_color, L));
+      }
+      lineColorExpr.push(route.route_color); // default
+
       map.addSource(srcId,{type:'geojson',data:{type:'FeatureCollection',features}});
       map.addLayer({
         id:lineId,
@@ -1645,48 +1697,36 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         source:srcId,
         minzoom:0,maxzoom:24,
         paint:{
-          'line-color': [
-            'match',
-            ['get', 'bucket'],
-            'b', bColor,
-            route.route_color,
-          ],
+          'line-color': lineColorExpr,
           'line-width':7,
           'line-opacity':0.75,
         },
         layout:{'line-cap':'round','line-join':'round'},
       },before);
 
-      // Centroid labels. Single centroid for unsplit; two for split.
+      // Centroid labels.
       const nSrc=`rm-num-src-${route.id}`, nLbl=`rm-num-${route.id}`;
       loadedIdsRef.current.push(`num-${route.id}`);
 
-      if (!split) {
-        const rc:[number,number][]=[];route.segments.forEach(s=>s.coordinates.forEach(c=>rc.push(c)));if(!rc.length) return;
-        const cLng=rc.reduce((s,c)=>s+c[0],0)/rc.length, cLat=rc.reduce((s,c)=>s+c[1],0)/rc.length;
-        map.addSource(nSrc,{type:'geojson',data:{type:'FeatureCollection',features:[{type:'Feature',properties:{num:String(route.route_number),color:route.route_color,route_code:route.route_code,half:''},geometry:{type:'Point',coordinates:[cLng,cLat]}}]}});
+      const labelFeatures: GeoJSON.Feature[] = [];
+      if (!split || buckets.length === 0) {
+        const rc:[number,number][]=[];route.segments.forEach(s=>s.coordinates.forEach(c=>rc.push(c)));
+        if (rc.length) {
+          const cLng=rc.reduce((s,c)=>s+c[0],0)/rc.length, cLat=rc.reduce((s,c)=>s+c[1],0)/rc.length;
+          labelFeatures.push({type:'Feature',properties:{num:String(route.route_number),color:route.route_color,route_code:route.route_code,letter:''},geometry:{type:'Point',coordinates:[cLng,cLat]}});
+        }
       } else {
-        // Compute centroid per half from this route's segments.
-        const aCoords:[number,number][]=[];
-        const bCoords:[number,number][]=[];
-        route.segments.forEach(seg => {
-          (bSet!.has(seg.osmId) ? bCoords : aCoords).push(...seg.coordinates);
-        });
-        const features: GeoJSON.Feature[] = [];
-        if (aCoords.length > 0) {
-          const cLng=aCoords.reduce((s,c)=>s+c[0],0)/aCoords.length;
-          const cLat=aCoords.reduce((s,c)=>s+c[1],0)/aCoords.length;
-          features.push({type:'Feature',properties:{num:`${route.route_number}a`,color:route.route_color,route_code:route.route_code,half:'a'},geometry:{type:'Point',coordinates:[cLng,cLat]}});
+        for (const bucket of buckets) {
+          const c = bucketCentroid(route.segments, buckets, bucket.letter);
+          if (!c) continue;
+          const bucketColor = colorForBucket(route.route_color, bucket.letter);
+          labelFeatures.push({type:'Feature',properties:{num:`${route.route_number}${bucket.letter}`,color:bucketColor,route_code:route.route_code,letter:bucket.letter},geometry:{type:'Point',coordinates:[c.lng,c.lat]}});
         }
-        if (bCoords.length > 0) {
-          const cLng=bCoords.reduce((s,c)=>s+c[0],0)/bCoords.length;
-          const cLat=bCoords.reduce((s,c)=>s+c[1],0)/bCoords.length;
-          features.push({type:'Feature',properties:{num:`${route.route_number}b`,color:bColor,route_code:route.route_code,half:'b'},geometry:{type:'Point',coordinates:[cLng,cLat]}});
-        }
-        map.addSource(nSrc,{type:'geojson',data:{type:'FeatureCollection',features}});
       }
-
-      map.addLayer({id:nLbl,type:'symbol',source:nSrc,layout:{'text-field':['get','num'],'text-font':['DIN Pro Bold','Arial Unicode MS Bold'],'text-size':28,'text-allow-overlap':true,'text-ignore-placement':true},paint:{'text-color':['get','color'],'text-halo-color':'rgba(255,255,255,0.85)','text-halo-width':2}});
+      if (labelFeatures.length > 0) {
+        map.addSource(nSrc,{type:'geojson',data:{type:'FeatureCollection',features:labelFeatures}});
+        map.addLayer({id:nLbl,type:'symbol',source:nSrc,layout:{'text-field':['get','num'],'text-font':['DIN Pro Bold','Arial Unicode MS Bold'],'text-size':28,'text-allow-overlap':true,'text-ignore-placement':true},paint:{'text-color':['get','color'],'text-halo-color':'rgba(255,255,255,0.85)','text-halo-width':2}});
+      }
     });
 
     if(allCoords.length&&!initialFitDoneRef.current){
@@ -1695,11 +1735,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   }, [routeMapData, mapLoaded, routeSplitsByCode]);
 
-  // Worker name overlay — SPLIT-AWARE.
+  // Worker name overlay — V2 RECURSIVE-SPLIT-AWARE.
   // Unsplit routes get one label at the route centroid showing assigned workers.
-  // Split routes get TWO labels, each showing only that half's assigned workers
-  // (read from route_splits.assignedWorkersA / assignedWorkersB), positioned at
-  // each half's centroid, coloured with that half's colour.
+  // Split routes get N labels, each at the bucket's centroid (per the cascade
+  // algorithm), coloured with that bucket's colour, showing only that bucket's
+  // assignedWorkers.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     const myRS=new Set(myRouteCodes);
@@ -1721,7 +1761,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
     routeMapData.filter(r => myRS.has(r.route_code)).forEach(route => {
       const split = routeSplitsByCode.get(route.route_code);
-      if (!split) {
+      if (!split || split.buckets.length === 0) {
         const rc:[number,number][]=[];route.segments.forEach(s=>s.coordinates.forEach(c=>rc.push(c)));if(!rc.length) return;
         const cLng=rc.reduce((s,c)=>s+c[0],0)/rc.length, cLat=rc.reduce((s,c)=>s+c[1],0)/rc.length;
         const rp=routes.find(r=>r.routeCode===route.route_code), aids=rp?.assignedWorkerIds||[];
@@ -1729,25 +1769,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         features.push({type:'Feature',properties:{label,color:route.route_color},geometry:{type:'Point',coordinates:[cLng,cLat]}});
         return;
       }
-      // Split — emit two labels.
-      const bSet = new Set(split.segmentBOsmIds);
-      const bColor = complementaryColor(route.route_color);
-      const aCoords:[number,number][]=[];
-      const bCoords:[number,number][]=[];
-      route.segments.forEach(seg => {
-        (bSet.has(seg.osmId) ? bCoords : aCoords).push(...seg.coordinates);
-      });
-      if (aCoords.length > 0) {
-        const cLng=aCoords.reduce((s,c)=>s+c[0],0)/aCoords.length;
-        const cLat=aCoords.reduce((s,c)=>s+c[1],0)/aCoords.length;
-        const label = labelForWorkerIds(split.assignedWorkersA || []);
-        features.push({type:'Feature',properties:{label,color:route.route_color},geometry:{type:'Point',coordinates:[cLng,cLat]}});
-      }
-      if (bCoords.length > 0) {
-        const cLng=bCoords.reduce((s,c)=>s+c[0],0)/bCoords.length;
-        const cLat=bCoords.reduce((s,c)=>s+c[1],0)/bCoords.length;
-        const label = labelForWorkerIds(split.assignedWorkersB || []);
-        features.push({type:'Feature',properties:{label,color:bColor},geometry:{type:'Point',coordinates:[cLng,cLat]}});
+      // Split — emit one label per bucket (with non-empty pieces).
+      for (const bucket of split.buckets) {
+        const c = bucketCentroid(route.segments, split.buckets, bucket.letter);
+        if (!c) continue;
+        const bucketColor = colorForBucket(route.route_color, bucket.letter);
+        const label = labelForWorkerIds(bucket.assignedWorkers || []);
+        features.push({type:'Feature',properties:{label,color:bucketColor},geometry:{type:'Point',coordinates:[c.lng,c.lat]}});
       }
     });
 
@@ -1760,14 +1788,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   }, [routeMapData, routes, workers, mapLoaded, myRouteCodes, routeSplitsByCode]);
 
-  // Route opacity — SPLIT-AWARE.
-  // For unsplit routes, behaviour is unchanged: one opacity for the whole route
-  // based on whether it has any assigned workers.
-  // For split routes, we can't set a per-feature opacity through line-opacity
-  // alone since it's the same layer for both halves. Compromise: if EITHER half
-  // is assigned, the route reads as "assigned" for opacity purposes. The visual
-  // colour distinction between halves still makes the split obvious, and the
-  // RM uses the sidebar's two cards to see which half is which.
+  // Route opacity — V2 SPLIT-AWARE.
+  // For unsplit routes, behaviour is unchanged. For split routes, "any bucket
+  // assigned" is the OR across all buckets' assignedWorkers. Since all buckets
+  // share one line layer, we can't paint different opacities per bucket — the
+  // RM uses the sidebar's N cards (one per bucket) to see exactly which
+  // bucket is assigned.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     routeMapData.forEach(route=>{
@@ -1775,7 +1801,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const split = routeSplitsByCode.get(route.route_code);
       const rp=routes.find(r=>r.routeCode===route.route_code);
       const baseAssigned = !!rp?.assignedWorkerIds?.length;
-      const splitAssigned = !!split && ((split.assignedWorkersA?.length || 0) + (split.assignedWorkersB?.length || 0) > 0);
+      const splitAssigned = !!split && split.buckets.some(b => (b.assignedWorkers?.length || 0) > 0);
       const isAssigned = baseAssigned || splitAssigned;
 
       if (sidebarMode === 'routes' && myRouteCodes.includes(route.route_code)) {
@@ -1786,18 +1812,21 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, [sidebarMode, routeMapData, routes, mapLoaded, myRouteCodes, routeSplitsByCode]);
 
-  // Route click handlers — SPLIT-AWARE.
+  // Route click handlers — V2 RECURSIVE-SPLIT-AWARE.
+  //
+  // The line layer's features carry a `bucket` property (set at draw time by
+  // bucketForPoint). When the user taps a line piece, e.features[0].properties
+  // .bucket gives us the bucket letter directly — no recomputation needed.
   //
   // In Routes mode (sidebar shows route cards):
-  //   - Non-split route → opens the assignment modal for the whole route
-  //     (unchanged from before).
-  //   - Split route → identifies which half was clicked (via the segment's
-  //     osmId being in segmentBOsmIds) and opens the modal scoped to that half.
+  //   - Non-split route → opens the assignment modal for the whole route.
+  //   - Split route → identifies which bucket was clicked and opens the modal
+  //     scoped to that bucket (e.g. "BIN09c"). canSplit is true iff that
+  //     bucket has zero assigned workers.
   //
   // In Staff mode (sidebar shows staff cards):
   //   - Non-split route → "Navigate to who?" prompt as before.
-  //   - Split route → look at THAT half's assigned workers and build the prompt
-  //     from those instead of the union.
+  //   - Split route → only that bucket's assignedWorkers populate the prompt.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     const cleanups:Array<()=>void>=[];
@@ -1815,39 +1844,35 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         const rp = cr.find(r => r.routeCode === rc);
         const split = routeSplitsByCode.get(rc);
 
-        // Determine which half was clicked (for split routes).
-        // The first feature in e.features has properties.osmId set; check
-        // against segmentBOsmIds.
-        let clickedHalf: 'a' | 'b' | undefined = undefined;
-        if (split && e.features && e.features.length > 0) {
-          const osmId = e.features[0].properties?.osmId;
-          if (osmId != null) {
-            const bSet = new Set(split.segmentBOsmIds);
-            clickedHalf = bSet.has(osmId) ? 'b' : 'a';
-          }
+        // Determine clicked bucket from the feature's `bucket` property.
+        let clickedLetter: string | undefined = undefined;
+        if (split && split.buckets.length > 0 && e.features && e.features.length > 0) {
+          const fb = e.features[0].properties?.bucket;
+          if (typeof fb === 'string') clickedLetter = fb;
         }
 
         if (mode === 'routes') {
-          if (split && clickedHalf) {
-            // Half-scoped assignment modal.
-            const bBookingSet = new Set(split.bookingBIds);
+          if (split && clickedLetter) {
+            // Bucket-scoped assignment modal.
+            const bucket = split.buckets.find(b => b.letter === clickedLetter);
+            if (!bucket) return;
+            const bucketBookingSet = new Set(bucket.bookingIds);
             const rb = cb.filter(b => b['Route Number'] === rc);
-            const halfBookings = clickedHalf === 'b'
-              ? rb.filter(b => bBookingSet.has(b['Booking ID']))
-              : rb.filter(b => !bBookingSet.has(b['Booking ID']));
-            const totalEQ = halfBookings.reduce((sum, b) => sum + calculateBookingEQ(b), 0);
-            const halfColor = clickedHalf === 'b' ? complementaryColor(route.route_color) : route.route_color;
-            const halfAssigned = clickedHalf === 'b' ? (split.assignedWorkersB || []) : (split.assignedWorkersA || []);
+            const bucketBookings = rb.filter(b => bucketBookingSet.has(b['Booking ID']));
+            const totalEQ = bucketBookings.reduce((sum, b) => sum + calculateBookingEQ(b), 0);
+            const bucketColor = colorForBucket(route.route_color, clickedLetter);
+            const bucketAssigned = bucket.assignedWorkers || [];
             if (popupRef.current) { popupRef.current.remove(); popupRef.current = null; }
             setAssignModalData({
               routeCode: rc,
-              displayRouteCode: `${rc}${clickedHalf}`,
-              routeColor: halfColor,
-              prebookCount: halfBookings.length,
-              prepayCount: halfBookings.filter(b => b.Prepaid === 'x').length,
+              displayRouteCode: `${rc}${clickedLetter}`,
+              routeColor: bucketColor,
+              prebookCount: bucketBookings.length,
+              prepayCount: bucketBookings.filter(b => b.Prepaid === 'x').length,
               totalEQ,
-              currentWorkerIds: halfAssigned,
-              half: clickedHalf,
+              currentWorkerIds: bucketAssigned,
+              letter: clickedLetter,
+              canSplit: bucketAssigned.length === 0,
             });
             return;
           }
@@ -1865,15 +1890,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             prepayCount: rb.filter(b => b.Prepaid === 'x').length,
             totalEQ,
             currentWorkerIds: assignedIds,
+            canSplit: assignedIds.length === 0,
           });
           return;
         }
 
-        // STAFF MODE — nav prompt.
-        // For split routes, only this half's assigned workers are in the prompt.
+        // STAFF MODE — nav prompt. Only clicked bucket's workers in the prompt.
         let assignedIds: string[];
-        if (split && clickedHalf) {
-          assignedIds = clickedHalf === 'b' ? (split.assignedWorkersB || []) : (split.assignedWorkersA || []);
+        if (split && clickedLetter) {
+          const bucket = split.buckets.find(b => b.letter === clickedLetter);
+          assignedIds = bucket?.assignedWorkers || [];
         } else {
           assignedIds = rp?.assignedWorkerIds || [];
         }
@@ -1913,13 +1939,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
         if (entries.length === 0) return;
         if (popupRef.current) { popupRef.current.remove(); popupRef.current = null; }
-        const displayRC = split && clickedHalf ? `${rc}${clickedHalf}` : rc;
-        const halfColor = split && clickedHalf === 'b'
-          ? complementaryColor(route.route_color)
+        const displayRC = split && clickedLetter ? `${rc}${clickedLetter}` : rc;
+        const bucketColor = split && clickedLetter
+          ? colorForBucket(route.route_color, clickedLetter)
           : route.route_color;
         setRouteNavPrompt({
           routeCode: displayRC,
-          routeColor: halfColor,
+          routeColor: bucketColor,
           entries,
         });
       };
@@ -1953,9 +1979,19 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const gj: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
       features: geocoded.map(pin => {
+        // Find which bucket this booking belongs to (if route is split).
+        // The bucket's bookingIds is the cached membership list. Default to
+        // the route's base colour for unsplit routes or unfound bookings.
         const split = routeSplitsByCode.get(pin.routeCode);
-        const isB = !!split && (split.bookingBIds || []).includes(pin.id);
-        const pinColor = isB ? complementaryColor(pin.routeColor) : pin.routeColor;
+        let pinColor = pin.routeColor;
+        if (split) {
+          for (const bucket of split.buckets) {
+            if (bucket.bookingIds.includes(pin.id)) {
+              pinColor = colorForBucket(pin.routeColor, bucket.letter);
+              break;
+            }
+          }
+        }
         return {
           type: 'Feature' as const,
           properties: {
@@ -2883,197 +2919,172 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     else handleNavigateToWorker(entry.card as WorkerCardData);
   }, [handleNavigateToWorker, handleNavigateToCart]);
 
-  // --- ROUTE SPLIT HANDLERS ---
+  // --- ROUTE SPLIT HANDLERS (V2 RECURSIVE) ---
   //
-  // handleOpenSplitModal: tapped on a route card's Split button. Builds the
-  // segments + prebookings payload from the current routeMapData and
-  // geocodedPins, then opens RouteSplitModal.
+  // handleOpenSplitModal: invoked from the Split button at the TOP of the
+  // assignment modal. Takes the assignModalData snapshot, builds the split
+  // modal payload (segments, prebookings, current buckets, source letter,
+  // next available letter), and opens RouteSplitModal.
   //
-  // handleSplitConfirm: RouteSplitModal called back with the chosen bucket.
-  // Saves to DB via sessionService.createRouteSplit, reloads splits, then
-  // computes the per-half preview stats and opens the post-split assignment
-  // picker for half 'a'.
+  // handleSplitConfirm: RouteSplitModal called back with the new rectangles
+  // and the list of bookings moving from source → new bucket. Persists via
+  // sessionService.splitBucket, then reopens the assignment modal scoped to
+  // the NEW LETTER so the RM can assign it immediately. From inside that
+  // re-opened modal they can choose to assign or to split further (recursive).
   //
-  // handlePostSplitAssign: the user clicks a worker in the post-split picker.
-  // Calls updateRouteSplitAssignment, then advances the flow: if just finished
-  // 'a', open the picker for 'b'; if just finished 'b', close everything and
-  // refresh.
-  //
-  // handlePostSplitAssignLater: same advance logic, but skips the assignment.
+  // handleSplitCancel: closes the split modal. The assignment modal is NOT
+  // automatically re-opened — the user dismissed the split intentionally,
+  // so we leave them in a clean state where they can tap the route again
+  // if they want.
 
-  const handleOpenSplitModal = useCallback((card: RouteCardData) => {
-    const rmd = routeMapData.find(r => r.route_code === card.baseRouteCode);
+  const handleOpenSplitModal = useCallback(() => {
+    if (!assignModalData) return;
+    const { routeCode, routeColor, letter } = assignModalData;
+    const rmd = routeMapData.find(r => r.route_code === routeCode);
     if (!rmd || !rmd.segments?.length) {
-      console.warn('[Split] No segment geometry for route', card.baseRouteCode);
+      console.warn('[Split] No segment geometry for route', routeCode);
       return;
     }
-    // Prebookings: read from geocodedPins (pending status), filter to this route,
-    // map to the modal's expected shape.
+
+    // Read the current split row (if any) so the modal can render existing
+    // buckets and so we know the next available letter.
+    const existingSplit = routeSplitsByCode.get(routeCode);
+    const existingBuckets = existingSplit?.buckets || null;
+    const splittingFromLetter = letter || 'a';
+
+    // Compute the next available letter. If no split exists yet, the next
+    // letter is 'b' (since 'a' is implicit).
+    const newLetter = existingBuckets
+      ? sessionService.nextAvailableLetter(existingBuckets)
+      : 'b';
+
+    // baseRouteColor: always the 'a' bucket's colour, derived from the route
+    // map record (not assignModalData.routeColor — that could be the bucket-
+    // specific colour).
+    const baseRouteColor = rmd.route_color;
+
+    // All prebookings on this route (regardless of bucket) — modal renders all.
     const prebookings = geocodedPins
-      .filter(p => p.status === 'pending' && p.routeCode === card.baseRouteCode)
+      .filter(p => p.status === 'pending' && p.routeCode === routeCode)
       .map(p => ({ bookingId: p.id, lat: p.lat, lng: p.lng }));
+
+    // For the first-split case, splitBucket needs the full list of booking
+    // IDs to initialize bucket 'a'. We compute it from the current bookings.
+    const allBookingIdsOnRoute = bookings
+      .filter(b => b['Route Number'] === routeCode)
+      .map(b => b['Booking ID']);
+
+    // Close the assignment modal before opening split.
+    setAssignModalData(null);
+
     setSplitModalData({
-      routeCode: card.baseRouteCode,
-      routeColor: card.routeColor,
+      routeCode,
+      baseRouteColor,
       segments: rmd.segments,
       prebookings,
+      existingBuckets,
+      splittingFromLetter,
+      newLetter,
+      allBookingIdsOnRoute,
     });
-  }, [routeMapData, geocodedPins]);
+  }, [assignModalData, routeMapData, routeSplitsByCode, geocodedPins, bookings]);
 
-  const handleSplitConfirm = useCallback(async (segmentBOsmIds: number[], bookingBIds: string[]) => {
+  const handleSplitConfirm = useCallback(async (
+    rectangles: Array<{ west: number; east: number; south: number; north: number }>,
+    bookingsMovingToNew: string[]
+  ) => {
     if (!splitModalData) return;
-    const { routeCode, routeColor } = splitModalData;
+    const { routeCode, baseRouteColor, splittingFromLetter, newLetter, allBookingIdsOnRoute } = splitModalData;
     try {
-      await sessionService.createRouteSplit({ routeCode, segmentBOsmIds, bookingBIds });
+      await sessionService.splitBucket({
+        routeCode,
+        sourceLetter: splittingFromLetter,
+        rectangles,
+        bookingsMovingToNew,
+        allBookingIdsOnRoute,
+      });
     } catch (err) {
-      console.error('[Split] createRouteSplit failed:', err);
-      // Close the modal anyway so the user isn't stuck. Surface the error
-      // through a console log; the RM can retry if the DB insert failed.
+      console.error('[Split] splitBucket failed:', err);
       setSplitModalData(null);
       return;
     }
-    // Refresh splits so routeCardData re-renders with two cards.
+    // Refresh splits so routeCardData re-renders with N cards.
     await reloadRouteSplits();
 
-    // Compute per-half stats for the post-split picker preview. Read from
-    // current bookings to count.
-    const allRouteBookings = bookings.filter(b => b['Route Number'] === routeCode);
-    const bBookingSet = new Set(bookingBIds);
-    const aBookings = allRouteBookings.filter(b => !bBookingSet.has(b['Booking ID']));
-    const bBookingsList = allRouteBookings.filter(b => bBookingSet.has(b['Booking ID']));
-    const rmd = routeMapData.find(r => r.route_code === routeCode);
-    const totalSegs = rmd?.segments?.length || 0;
-    const bSegs = segmentBOsmIds.length;
-    const aSegs = Math.max(0, totalSegs - bSegs);
+    // Compute new-bucket stats for the assignment modal we're about to open.
+    const movingSet = new Set(bookingsMovingToNew);
+    const newBucketBookings = bookings.filter(b =>
+      b['Route Number'] === routeCode && movingSet.has(b['Booking ID'])
+    );
+    const totalEQ = newBucketBookings.reduce((sum, b) => sum + calculateBookingEQ(b), 0);
 
-    const flow: PostSplitFlowState = {
-      routeCode,
-      routeColor,
-      segmentBOsmIds,
-      bookingBIds,
-      aSegCount: aSegs,
-      bSegCount: bSegs,
-      aBookingCount: aBookings.length,
-      bBookingCount: bBookingsList.length,
-      aPrepayCount: aBookings.filter(b => b.Prepaid === 'x').length,
-      bPrepayCount: bBookingsList.filter(b => b.Prepaid === 'x').length,
-      aTotalEQ: aBookings.reduce((sum, b) => sum + calculateBookingEQ(b), 0),
-      bTotalEQ: bBookingsList.reduce((sum, b) => sum + calculateBookingEQ(b), 0),
-      currentlyAssigning: 'a',
-    };
-    setPostSplitFlow(flow);
     setSplitModalData(null);
 
-    // Open the assignment picker for half 'a'.
+    // Open the assignment picker for the NEW LETTER. canSplit is true since
+    // it has zero assigned workers.
     setAssignModalData({
       routeCode,
-      displayRouteCode: `${routeCode}a`,
-      routeColor,
-      prebookCount: flow.aBookingCount,
-      prepayCount: flow.aPrepayCount,
-      totalEQ: flow.aTotalEQ,
+      displayRouteCode: `${routeCode}${newLetter}`,
+      routeColor: colorForBucket(baseRouteColor, newLetter),
+      prebookCount: newBucketBookings.length,
+      prepayCount: newBucketBookings.filter(b => b.Prepaid === 'x').length,
+      totalEQ,
       currentWorkerIds: [],
-      half: 'a',
-      postSplitFlow: true,
+      letter: newLetter,
+      canSplit: true,
     });
-  }, [splitModalData, reloadRouteSplits, bookings, routeMapData, calculateBookingEQ]);
+  }, [splitModalData, reloadRouteSplits, bookings, calculateBookingEQ]);
 
   const handleSplitCancel = useCallback(() => {
     setSplitModalData(null);
   }, []);
 
-  // Advance the post-split flow after an 'a' assignment (or "later"). Opens
-  // the 'b' picker if we just finished 'a'; closes everything and refreshes
-  // if we just finished 'b'.
-  const advancePostSplitFlow = useCallback(() => {
-    if (!postSplitFlow) {
-      // Not in a flow — just close the modal.
-      setAssignModalData(null);
-      return;
-    }
-    if (postSplitFlow.currentlyAssigning === 'a') {
-      // Move on to 'b'.
-      const bColor = complementaryColor(postSplitFlow.routeColor);
-      setPostSplitFlow({ ...postSplitFlow, currentlyAssigning: 'b' });
-      setAssignModalData({
-        routeCode: postSplitFlow.routeCode,
-        displayRouteCode: `${postSplitFlow.routeCode}b`,
-        routeColor: bColor,
-        prebookCount: postSplitFlow.bBookingCount,
-        prepayCount: postSplitFlow.bPrepayCount,
-        totalEQ: postSplitFlow.bTotalEQ,
-        currentWorkerIds: [],
-        half: 'b',
-        postSplitFlow: true,
-      });
-    } else {
-      // Done with 'b' — close everything.
-      setAssignModalData(null);
-      setPostSplitFlow(null);
-      onRefresh();
-    }
-  }, [postSplitFlow, onRefresh]);
-
   // --- ASSIGN ROUTE ---
-  // Branches by half:
-  //   - assignModalData.half undefined: original whole-route assignment flow.
-  //   - assignModalData.half = 'a' | 'b': writes to route_splits via
-  //     updateRouteSplitAssignment, which handles both the splits row and the
+  // Branches by letter:
+  //   - assignModalData.letter undefined: whole-route assignment flow.
+  //   - assignModalData.letter set: writes to route_splits via
+  //     updateRouteSplitAssignment, which handles the buckets array and the
   //     routes.assigned_worker_ids union AND the per-booking assignment for
-  //     the affected half's bookings.
-  //
-  // When in postSplitFlow, advances after a successful assignment.
+  //     the affected bucket's bookings.
   const handleAssignRoute = async (workerId: string | null) => {
     if (!assignModalData) return;
     setAssignLoading(true);
     try {
-      const { routeCode, half } = assignModalData;
+      const { routeCode, letter } = assignModalData;
 
-      if (half) {
-        // Split-half assignment.
+      if (letter) {
+        // Bucket-scoped assignment.
         const workerIds = workerId === null ? [] : [workerId];
         // For team seasons, cart members need to be included on the route's
         // assigned_worker_ids union so the existing per-booking session logic
         // still works. updateRouteSplitAssignment handles the union math.
-        let halfWorkerIds = workerIds;
+        let bucketWorkerIds = workerIds;
         if (isTeamSeason && workerId !== null) {
           const worker = myTeamWorkers.find(w => w.contractorId === workerId);
           const teamId = worker?.teamId || workerId;
           const cart = teamCarts.find(c => c.teamId === teamId);
-          if (cart && cart.workerIds.length > 1) halfWorkerIds = cart.workerIds;
+          if (cart && cart.workerIds.length > 1) bucketWorkerIds = cart.workerIds;
         }
-        await sessionService.updateRouteSplitAssignment(routeCode, half, halfWorkerIds);
+        await sessionService.updateRouteSplitAssignment(routeCode, letter, bucketWorkerIds);
 
-        // For team seasons, also push session_id onto the affected half's
-        // bookings so the worker logsheet routes them correctly.
+        // For team seasons, also push session_id onto this bucket's bookings
+        // so the worker logsheet routes them correctly.
         if (isTeamSeason && workerId !== null) {
           const session = await sessionService.getWorkerLogsheetSession(workerId);
           const sessionId = session?.id;
           if (sessionId) {
-            // Read which bookings belong to this half.
             const split = await sessionService.getRouteSplitForRoute(routeCode);
             if (split) {
-              const allRouteBookings = bookings.filter(b => b['Route Number'] === routeCode);
-              const bBookingSet = new Set(split.bookingBIds);
-              const halfBookings = half === 'b'
-                ? allRouteBookings.filter(b => bBookingSet.has(b['Booking ID']))
-                : allRouteBookings.filter(b => !bBookingSet.has(b['Booking ID']));
-              const halfBookingIds = halfBookings.map(b => b['Booking ID']);
-              if (halfBookingIds.length > 0) {
-                await sessionService.assignBookingsToSession(halfBookingIds, sessionId);
+              const bucket = split.buckets.find(b => b.letter === letter);
+              if (bucket && bucket.bookingIds.length > 0) {
+                await sessionService.assignBookingsToSession(bucket.bookingIds, sessionId);
               }
             }
           }
         }
 
-        if (postSplitFlow) {
-          // In the flow — advance.
-          advancePostSplitFlow();
-        } else {
-          // Direct half assignment (RM tapped the line on the map).
-          setAssignModalData(null);
-          onRefresh();
-        }
+        setAssignModalData(null);
+        onRefresh();
         return;
       }
 
@@ -3116,13 +3127,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       setAssignLoading(false);
     }
   };
-
-  // "Assign later" — only present when postSplitFlow is active. Skips the
-  // current half's assignment and advances to the next half (or closes).
-  const handleAssignLater = useCallback(() => {
-    if (!postSplitFlow) return;
-    advancePostSplitFlow();
-  }, [postSplitFlow, advancePostSplitFlow]);
 
   const handleTransferConfirm = async (newManagerId: string) => {
     if (!transferModalData) return;
@@ -3251,30 +3255,27 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // alphabetical tiebreaker.
 
   // Map workerId -> list of {routeCode, color} they're currently assigned to.
-  // For split routes, "assigned" means the worker is on either half.
+  // For split routes, one entry per bucket the worker is in (e.g. a worker
+  // assigned to BIN09c shows up as "BIN09c" with the c-bucket colour).
   const workerRouteBadges = useMemo(() => {
     const m = new Map<string, Array<{ code: string; color: string }>>();
     for (const r of routes) {
       if (r.managerId !== managerId) continue;
       const split = routeSplitsByCode.get(r.routeCode);
       const baseColor = routeColorMap.get(r.routeCode) || '#6b7280';
-      if (!split) {
+      if (!split || split.buckets.length === 0) {
         const ids = r.assignedWorkerIds || [];
         for (const id of ids) {
           if (!m.has(id)) m.set(id, []);
           m.get(id)!.push({ code: r.routeCode, color: baseColor });
         }
       } else {
-        const aIds = split.assignedWorkersA || [];
-        const bIds = split.assignedWorkersB || [];
-        const bColor = complementaryColor(baseColor);
-        for (const id of aIds) {
-          if (!m.has(id)) m.set(id, []);
-          m.get(id)!.push({ code: `${r.routeCode}a`, color: baseColor });
-        }
-        for (const id of bIds) {
-          if (!m.has(id)) m.set(id, []);
-          m.get(id)!.push({ code: `${r.routeCode}b`, color: bColor });
+        for (const bucket of split.buckets) {
+          const bucketColor = colorForBucket(baseColor, bucket.letter);
+          for (const id of bucket.assignedWorkers || []) {
+            if (!m.has(id)) m.set(id, []);
+            m.get(id)!.push({ code: `${r.routeCode}${bucket.letter}`, color: bucketColor });
+          }
         }
       }
     }
@@ -3488,8 +3489,24 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                   Split button appears only on cards that are: not split AND not assigned. */}
               {sidebarMode === 'routes' && routeCardData.map(rc => (
                 <div
-                  key={`${rc.baseRouteCode}-${rc.half || 'whole'}`}
-                  onClick={() => setSelectedRouteForBookings(rc.baseRouteCode)}
+                  key={`${rc.baseRouteCode}-${rc.letter || 'whole'}`}
+                  onClick={() => {
+                    // V2 design: sidebar card tap opens the assignment modal
+                    // (matching the route-line tap on the map). The Split
+                    // button is inside the modal, so this is the entry point
+                    // for both assignment and split flows.
+                    setAssignModalData({
+                      routeCode: rc.baseRouteCode,
+                      displayRouteCode: rc.displayRouteCode,
+                      routeColor: rc.routeColor,
+                      prebookCount: rc.prebookCount,
+                      prepayCount: rc.prepayCount,
+                      totalEQ: rc.totalEQ,
+                      currentWorkerIds: rc.assignedWorkerIds,
+                      letter: rc.letter,
+                      canSplit: rc.assignedWorkerIds.length === 0,
+                    });
+                  }}
                   className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
                 >
                   <div className="flex items-center gap-2">
@@ -3507,16 +3524,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                         {rc.prebookCount} jobs • {rc.prepayCount} prepaid • {rc.totalEQ.toFixed(1)} EQ
                       </div>
                     </div>
-                    {/* SPLIT BUTTON — only on unsplit, unassigned routes. */}
-                    {!rc.isSplit && !rc.isAssigned && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleOpenSplitModal(rc); }}
-                        className="flex-shrink-0 w-7 h-7 rounded-md bg-amber-600/20 hover:bg-amber-600 text-amber-300 hover:text-white flex items-center justify-center transition-colors"
-                        title="Split this route into two halves"
-                      >
-                        <Scissors size={13} />
-                      </button>
-                    )}
+                    {/* SPLIT BUTTON removed in v2 — Split now lives inside the
+                        assignment modal (opens when the card or line is tapped),
+                        which is also how the user splits buckets recursively. */}
                   </div>
                 </div>
               ))}
@@ -3814,12 +3824,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           />
         )}
 
-        {/* ROUTE ASSIGNMENT MODAL — WIDENED to max-w-3xl, route badges, fewest-routes sort,
-            and (when postSplitFlow is active) an "Assign later" button. */}
+        {/* ROUTE ASSIGNMENT MODAL — V2: max-w-3xl, route badges, fewest-routes sort,
+            Split button at the TOP (enabled when bucket has zero assigned workers). */}
         {assignModalData && (
           <div
             className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
-            onClick={() => { if (!postSplitFlow) setAssignModalData(null); }}
+            onClick={() => setAssignModalData(null)}
           >
             <div
               className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
@@ -3834,21 +3844,36 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                     {assignModalData.displayRouteCode}
                   </div>
                   <div>
-                    <div className="text-white font-bold text-sm">
-                      {postSplitFlow ? `Assign ${assignModalData.displayRouteCode}` : 'Assign Route'}
-                    </div>
+                    <div className="text-white font-bold text-sm">Assign Route</div>
                     <div className="text-[10px] text-gray-400">
                       {assignModalData.prebookCount} jobs • {assignModalData.prepayCount} prepaid • {assignModalData.totalEQ.toFixed(1)} EQ
                     </div>
                   </div>
                 </div>
                 <button
-                  onClick={() => { if (!postSplitFlow) setAssignModalData(null); else advancePostSplitFlow(); }}
+                  onClick={() => setAssignModalData(null)}
                   className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
                 ><X size={14} /></button>
               </div>
 
               <div className="flex-1 overflow-y-auto p-4 space-y-1.5 min-h-0">
+                {/* Split button at TOP — enabled iff this bucket/route has zero
+                    assigned workers. Title explains the disabled reason. */}
+                <button
+                  onClick={handleOpenSplitModal}
+                  disabled={!assignModalData.canSplit || assignLoading}
+                  title={assignModalData.canSplit
+                    ? 'Carve a new sub-bucket out of this route'
+                    : 'Unassign workers first before splitting'}
+                  className="w-full text-left px-3 py-2 bg-amber-600/20 hover:bg-amber-600 border border-amber-600/50 hover:border-amber-500 rounded-md text-amber-300 hover:text-white text-xs font-bold flex items-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-amber-600/20 disabled:hover:text-amber-300"
+                >
+                  <Scissors size={13} />
+                  Split this {assignModalData.letter ? `bucket (${assignModalData.displayRouteCode})` : 'route'}
+                </button>
+
+                {/* Divider */}
+                <div className="border-t border-gray-700 my-2"></div>
+
                 {/* Unassign — only shown if there's a current assignment */}
                 {assignModalData.currentWorkerIds.length > 0 && (
                   <button
@@ -3857,7 +3882,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                     className="w-full text-left px-3 py-2 bg-red-900/30 hover:bg-red-900/50 border border-red-700/50 rounded-md text-red-300 text-xs font-bold disabled:opacity-50"
                   >
                     {assignLoading ? <Loader size={12} className="inline animate-spin" /> : <X size={12} className="inline mr-1.5" />}
-                    Unassign {assignModalData.half ? `half ${assignModalData.half}` : 'route'}
+                    Unassign {assignModalData.letter ? `bucket ${assignModalData.letter}` : 'route'}
                   </button>
                 )}
 
@@ -3937,19 +3962,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                   })
                 )}
 
-                {/* Assign later — only present in postSplitFlow */}
-                {postSplitFlow && (
-                  <button
-                    onClick={handleAssignLater}
-                    disabled={assignLoading}
-                    className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-md text-gray-300 text-xs font-bold mt-2 disabled:opacity-50"
-                  >
-                    ⏭ Assign later
-                  </button>
-                )}
-
-                {/* Transfer to other manager — only on non-split, non-postsplit assignment */}
-                {!assignModalData.half && !postSplitFlow && (
+                {/* Transfer to other manager — only on non-split (whole-route) assignment */}
+                {!assignModalData.letter && (
                   <button
                     onClick={openTransferModal}
                     disabled={assignLoading}
@@ -4244,19 +4258,23 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           </div>
         )}
 
-        {/* ROUTE SPLIT MODAL — new feature.
-            Opened from the Routes-mode sidebar's Split button. Hands segments
-            and prebookings to RouteSplitModal; on Confirm, handleSplitConfirm
-            persists the split and opens the sequential post-split assignment
-            picker. */}
+        {/* ROUTE SPLIT MODAL — V2 RECURSIVE.
+            Opened from the Split button at the top of the assignment modal.
+            Hands segments, prebookings, current buckets, source letter, and
+            next available letter to RouteSplitModal. On Confirm, handleSplit-
+            Confirm persists the split and reopens the assignment modal for
+            the NEW LETTER. */}
         {splitModalData && (
           <RouteSplitModal
             isOpen={!!splitModalData}
             onClose={handleSplitCancel}
             routeCode={splitModalData.routeCode}
-            routeColor={splitModalData.routeColor}
+            baseRouteColor={splitModalData.baseRouteColor}
             segments={splitModalData.segments}
             prebookings={splitModalData.prebookings}
+            existingBuckets={splitModalData.existingBuckets}
+            splittingFromLetter={splitModalData.splittingFromLetter}
+            newLetter={splitModalData.newLetter}
             mapboxToken={import.meta.env.VITE_MAPBOX_TOKEN as string}
             onConfirm={handleSplitConfirm}
           />
