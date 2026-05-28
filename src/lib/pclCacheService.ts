@@ -1,5 +1,15 @@
 // src/lib/pclCacheService.ts
 //
+// CHANGELOG (this revision):
+//   - getWorkerPCL now THROWS on Supabase errors instead of silently returning
+//     an empty Map. Without this, real network failures looked identical to
+//     "no data exists for this route" and the UI had no way to retry.
+//     The empty-data case (no error, just no rows) still returns an empty Map
+//     as before.
+//   - Added logPCLError() — fire-and-forget write to the pcl_error_log
+//     Supabase table. Used by WorkerPCLTab when both load attempts fail.
+//   - loadAndCachePCL (admin write side) is UNCHANGED on this pass.
+//
 // PCL Cache Service
 //
 // Reads callbook spreadsheet data using a pre-authenticated Google OAuth token
@@ -344,6 +354,9 @@ export async function loadAndCachePCL(
  * Fetches cached PCL client groups for a set of route codes.
  * Returns a map of routeCode → PCLClientGroup[].
  * Workers call this — no Google OAuth required.
+ *
+ * IMPORTANT: throws on Supabase errors so callers can distinguish a real
+ * failure (worth retrying) from a clean empty result (no rows exist).
  */
 export async function getWorkerPCL(
   routeCodes: string[],
@@ -359,8 +372,9 @@ export async function getWorkerPCL(
     .in('route_code', routeCodes);
 
   if (error) {
-    console.warn('[PCL Cache] Failed to read from Supabase:', error.message);
-    return result;
+    // Throw so the UI can retry. The empty-data case (data === [] with no
+    // error) still falls through and returns an empty Map below.
+    throw new Error(`[PCL Cache] Supabase read failed: ${error.message}`);
   }
 
   for (const row of data || []) {
@@ -368,4 +382,44 @@ export async function getWorkerPCL(
   }
 
   return result;
+}
+
+// ─── ERROR LOGGING (worker-side diagnostics) ─────────────────────────────────
+
+/**
+ * Payload for logPCLError. Mirrors the pcl_error_log table schema.
+ */
+export interface PCLErrorLogInput {
+  commandCenterId: string | null;
+  workerUserId: string;
+  routeCodes: string[];
+  errorMessage: string;
+  errorStack: string | null;
+  userAgent: string | null;
+}
+
+/**
+ * Writes a row to the pcl_error_log Supabase table. Used by WorkerPCLTab
+ * when both its initial load and silent retry both fail.
+ *
+ * Fire-and-forget by design — never throws. If the insert itself fails,
+ * we just console.warn it; we never want diagnostic logging to break the
+ * already-broken UI.
+ */
+export async function logPCLError(input: PCLErrorLogInput): Promise<void> {
+  try {
+    const { error } = await supabase.from('pcl_error_log').insert({
+      command_center_id: input.commandCenterId,
+      worker_user_id: input.workerUserId,
+      route_codes: input.routeCodes,
+      error_message: input.errorMessage,
+      error_stack: input.errorStack,
+      user_agent: input.userAgent,
+    });
+    if (error) {
+      console.warn('[PCL Cache] Failed to write error log:', error.message);
+    }
+  } catch (err) {
+    console.warn('[PCL Cache] Exception writing error log:', err);
+  }
 }

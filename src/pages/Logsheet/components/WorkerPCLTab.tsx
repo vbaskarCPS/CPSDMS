@@ -1,11 +1,41 @@
 // src/pages/Logsheet/components/WorkerPCLTab.tsx
-import React, { useState, useEffect } from 'react';
-import { Loader, ChevronDown, ChevronUp, Phone, MapPin, Clock, AlertCircle } from 'lucide-react';
+//
+// CHANGELOG (this revision):
+//   - Added cancellation guard so a stale request can't overwrite fresh data
+//     when routeCodes change rapidly (latent race-condition fix).
+//   - Added silent retry: if the first load fails, waits 1.5s and tries again
+//     once. Worker never sees a red screen for transient network blips.
+//   - On final failure (both attempts threw), logs error details to the
+//     pcl_error_log Supabase table for server-side investigation.
+//   - Added "Try again" button to the red error screen so workers aren't stuck.
+//   - All UI (card layout, expand/collapse, history grid) is unchanged.
+//
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Loader,
+  ChevronDown,
+  ChevronUp,
+  Phone,
+  MapPin,
+  Clock,
+  AlertCircle,
+  RotateCw,
+} from 'lucide-react';
 import { commandCenterService } from '../../../lib/commandCenterService';
-import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
+import { getWorkerPCL, logPCLError, PCLClientGroup } from '../../../lib/pclCacheService';
+import { getStorageItem } from '../../../lib/localStorage';
 
 interface WorkerPCLTabProps {
   routeCodes: string[];
+}
+
+// Pull whichever id the current_user object happens to expose.
+// Worker objects use contractorId; other roles may use user_id or id.
+// Falls back to 'unknown' so the error log always has *something* useful.
+function getCurrentWorkerId(): string {
+  const user = getStorageItem<any>('current_user', null);
+  if (!user) return 'unknown';
+  return user.contractorId || user.user_id || user.id || 'unknown';
 }
 
 const ClientCard: React.FC<{ client: PCLClientGroup }> = ({ client }) => {
@@ -83,33 +113,85 @@ const WorkerPCLTab: React.FC<WorkerPCLTabProps> = ({ routeCodes }) => {
   const [loading, setLoading] = useState(true);
   const [pclMap, setPclMap] = useState<Map<string, PCLClientGroup[]>>(new Map());
   const [error, setError] = useState<string | null>(null);
+  // Bumped by the "Try again" button to re-trigger the effect.
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const routeKey = routeCodes.slice().sort().join(',');
+
+  // Single load attempt. Returns the data on success, throws on failure.
+  const attemptLoad = useCallback(async (): Promise<Map<string, PCLClientGroup[]>> => {
+    const cc = commandCenterService.getCurrentCommandCenter();
+    if (!cc) throw new Error('No command center context');
+    return await getWorkerPCL(routeCodes, cc.id);
+  }, [routeCodes]);
 
   useEffect(() => {
     if (routeCodes.length === 0) {
       setLoading(false);
+      setPclMap(new Map());
+      setError(null);
       return;
     }
 
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
     const load = async () => {
-      setLoading(true);
-      setError(null);
+      // Attempt 1
       try {
-        const cc = commandCenterService.getCurrentCommandCenter();
-        if (!cc) throw new Error('No command center context');
-        const data = await getWorkerPCL(routeCodes, cc.id);
-        setPclMap(data);
-      } catch (err: any) {
+        const data = await attemptLoad();
+        if (!cancelled) {
+          setPclMap(data);
+          setLoading(false);
+        }
+        return;
+      } catch {
+        // swallow — we're going to retry once before surfacing anything
+      }
+
+      // Wait 1.5s, then retry silently.
+      await new Promise(res => setTimeout(res, 1500));
+      if (cancelled) return;
+
+      // Attempt 2
+      try {
+        const data = await attemptLoad();
+        if (!cancelled) {
+          setPclMap(data);
+          setLoading(false);
+        }
+      } catch (err) {
+        if (cancelled) return;
+
+        // Both attempts failed — log it and show red screen.
         console.error('[WorkerPCLTab]', err);
+
+        const cc = commandCenterService.getCurrentCommandCenter();
+        // Fire-and-forget logging; we don't want it to block the UI.
+        logPCLError({
+          commandCenterId: cc?.id ?? null,
+          workerUserId: getCurrentWorkerId(),
+          routeCodes,
+          errorMessage:
+            (err instanceof Error ? err.message : String(err)) || 'Unknown error',
+          errorStack: err instanceof Error ? err.stack ?? null : null,
+          userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
+        }).catch(() => {
+          /* swallow — logging must never break the UI */
+        });
+
         setError('Could not load PCL data.');
-      } finally {
         setLoading(false);
       }
     };
 
     load();
-  }, [routeKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    return () => {
+      cancelled = true;
+    };
+  }, [routeKey, retryNonce, attemptLoad]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) {
     return (
@@ -125,9 +207,16 @@ const WorkerPCLTab: React.FC<WorkerPCLTabProps> = ({ routeCodes }) => {
       <div className="flex flex-col items-center justify-center h-48 text-gray-500 p-6 text-center">
         <AlertCircle size={32} className="mb-3 opacity-40" />
         <p className="text-sm">{error}</p>
-        <p className="text-xs text-gray-600 mt-1">
+        <p className="text-xs text-gray-600 mt-1 mb-4">
           PCL data is cached during session setup by the admin.
         </p>
+        <button
+          onClick={() => setRetryNonce(n => n + 1)}
+          className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-600 text-gray-200 rounded-lg text-sm transition-colors"
+        >
+          <RotateCw size={14} />
+          Try again
+        </button>
       </div>
     );
   }
