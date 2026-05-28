@@ -296,6 +296,19 @@ async function geocodeAddress(addr: string, pLat?: number, pLng?: number): Promi
   } catch { return null; }
 }
 
+// Helper: distance in meters between two lat/lng points using the simple
+// equirectangular approximation. Plenty accurate at city-block scale and
+// orders of magnitude cheaper than haversine. Used by the GPS watcher to
+// decide whether the user has moved far enough to derive a heading.
+function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const cosLat = Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
+  const mPerDegLat = 111320;
+  const mPerDegLng = 111320 * cosLat;
+  const dy = (lat2 - lat1) * mPerDegLat;
+  const dx = (lng2 - lng1) * mPerDegLng;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
 // Builds the GPS "you are here" marker. Returns an OUTER wrapper that's safe
 // to hand to Mapbox (Mapbox sets `transform: translate(...)` on it for
 // positioning) and an INNER rotating div that we control for heading rotation.
@@ -1596,6 +1609,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         'circle-stroke-color': '#000000',
         'circle-stroke-width': 1.67,
         'circle-opacity': 0.95,
+        // STROKE FIX: stroke gets its own opacity, paired with circle-opacity
+        // above. Without this, toggling the filter off only hides the fill —
+        // the stroke ring stays visible at full opacity.
+        'circle-stroke-opacity': 0.95,
       },
     });
     map.on('mouseenter', 'rm-pending-pins-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
@@ -1642,6 +1659,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         'circle-stroke-color': ['match', ['get', 'status'], 'completed', '#22c55e', 'new_sale', '#eab308', '#000000'],
         'circle-stroke-width': 1.67,
         'circle-opacity': 0.95,
+        // STROKE FIX: stroke opacity paired with fill opacity. Without this
+        // the green/yellow ring stays visible when the filter is off.
+        'circle-stroke-opacity': 0.95,
       },
     });
     map.on('mouseenter', 'rm-completed-pins-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
@@ -1719,6 +1739,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         'circle-stroke-color': '#3b82f6',
         'circle-stroke-width': 1.67,
         'circle-opacity': 0.95,
+        // STROKE FIX: stroke opacity paired with fill opacity. Without this
+        // the blue ring stays visible when the filter is off.
+        'circle-stroke-opacity': 0.95,
       },
     });
     map.on('mouseenter', 'rm-upsell-only-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
@@ -1824,6 +1847,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         'circle-stroke-color': '#374151',
         'circle-stroke-width': 0.5,
         'circle-opacity': 0,
+        // STROKE FIX: PCL is the layer that exposed this bug visually. Without
+        // a paired stroke-opacity, the dark grey stroke ring at every PCL
+        // location stays fully visible even when circle-opacity is 0, leaving
+        // the "light dots" the RM was seeing on the map when the toggle was
+        // off. Initial value is 0 to match circle-opacity since PCL defaults
+        // to filter-off.
+        'circle-stroke-opacity': 0,
       },
     });
   }, []);
@@ -1838,14 +1868,23 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
     if (map.getLayer('rm-pending-pins-circles')) {
       map.setPaintProperty('rm-pending-pins-circles', 'circle-opacity', filterVisibility.pendingBookings ? 0.95 : 0);
+      // STROKE FIX: pair stroke opacity with fill opacity so the black ring
+      // hides when the filter goes off.
+      map.setPaintProperty('rm-pending-pins-circles', 'circle-stroke-opacity', filterVisibility.pendingBookings ? 0.95 : 0);
     }
     if (map.getLayer('rm-completed-pins-circles')) {
       map.setPaintProperty('rm-completed-pins-circles', 'circle-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
+      // STROKE FIX: pair stroke opacity with fill opacity so the green/yellow
+      // status ring hides when the filter goes off.
+      map.setPaintProperty('rm-completed-pins-circles', 'circle-stroke-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
     }
     // Upsell layers piggyback on the same toggle (Q3 = grouped under
     // pendingSalesAndCompleted, no separate filter).
     if (map.getLayer('rm-upsell-only-circles')) {
       map.setPaintProperty('rm-upsell-only-circles', 'circle-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
+      // STROKE FIX: pair stroke opacity with fill opacity so the blue upsell
+      // ring hides when the filter goes off.
+      map.setPaintProperty('rm-upsell-only-circles', 'circle-stroke-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
     }
     if (map.getLayer('rm-overlap-half-symbols')) {
       map.setPaintProperty('rm-overlap-half-symbols', 'icon-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
@@ -1855,9 +1894,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
     if (map.getLayer('rm-pcl-circles')) {
       map.setPaintProperty('rm-pcl-circles', 'circle-opacity', filterVisibility.pcl ? 0.7 : 0);
+      // STROKE FIX: pair stroke opacity with fill opacity. This is the line
+      // that fixes the original bug — without it, PCL grey rings stay
+      // visible on the map even when the PCL filter button is grey/off.
+      map.setPaintProperty('rm-pcl-circles', 'circle-stroke-opacity', filterVisibility.pcl ? 0.7 : 0);
     }
   }, [filterVisibility, mapLoaded]);
-
   // --- SERIAL GEOCODING STATE MACHINE ---
 
   // Helper that geocodes a single address with cache write-through.
