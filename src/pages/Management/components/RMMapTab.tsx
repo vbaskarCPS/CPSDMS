@@ -7,7 +7,7 @@ import {
   Loader, ChevronLeft, ChevronRight, X, Users, Eye, Phone, MapPin,
   AlertCircle, LayoutList, AlertTriangle, Truck, Bookmark, Shovel, Leaf,
   FileText, Check, ArrowRight, ArrowRightLeft, Shuffle, Trash2, UserPlus,
-  UserMinus, Undo2, Navigation2, Compass,
+  UserMinus, Undo2, Navigation2, Compass, Scissors,
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { sessionService } from '../../../lib/sessionService';
@@ -22,12 +22,13 @@ import { setStorageItem } from '../../../lib/localStorage';
 import {
   RouteData, MasterBooking, LogsheetSession, Worker, ManagementUser,
   HistoricalProperty, SeasonType, TeamCart, PendingSale, SEASON_CONFIGS,
-  SessionTransaction,
+  SessionTransaction, RouteSplit,
 } from '../../../types';
 import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
 import ContractorJobs from './ContractorJobs';
 import PendingJobModal from '../../../components/PendingJobModal';
 import RMNavigation, { NavDestination } from './RMNavigation';
+import RouteSplitModal from '../../../components/RouteSplitModal';
 import type { GeocodePhase, GeocodeProgress, FilterVisibility } from '../RMLogbook';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -135,13 +136,69 @@ interface CartCardData {
   };
 }
 
+// RouteCardData extended for split awareness.
+//
+// For a route that ISN'T split, one card is generated with:
+//   isSplit = false, half = undefined, displayRouteCode = baseRouteCode = "BIN09"
+//
+// For a route that IS split, TWO cards are generated:
+//   - { isSplit: true, half: 'a', baseRouteCode: 'BIN09', displayRouteCode: 'BIN09a', routeColor: <original> }
+//   - { isSplit: true, half: 'b', baseRouteCode: 'BIN09', displayRouteCode: 'BIN09b', routeColor: <complementary> }
+//
+// assignedWorkerIds, prebookCount, prepayCount, totalEQ are scoped to that half.
+// The Split button is hidden when isSplit is true (already split) OR isAssigned is true.
 interface RouteCardData {
-  routeCode: string; routeColor: string; assignedWorkerIds: string[];
-  assignedWorkerLabel: string; prebookCount: number; prepayCount: number; totalEQ: number; isAssigned: boolean;
+  routeCode: string;          // baseRouteCode for split cards; full code for non-split
+  displayRouteCode: string;   // what to show in UI ("BIN09" or "BIN09a"/"BIN09b")
+  routeColor: string;
+  assignedWorkerIds: string[];
+  assignedWorkerLabel: string;
+  prebookCount: number;
+  prepayCount: number;
+  totalEQ: number;
+  isAssigned: boolean;
+  isSplit: boolean;
+  half?: 'a' | 'b';
+  baseRouteCode: string;      // always the underlying DB route_code
 }
 
+// AssignModalData extended to know about split halves.
+// half=undefined → regular full-route assignment (unchanged behaviour).
+// half='a' or 'b' → assigning that half of a split; handleAssignRoute calls
+// updateRouteSplitAssignment instead of the regular flow.
 interface AssignModalData {
-  routeCode: string; routeColor: string; prebookCount: number; prepayCount: number; totalEQ: number; currentWorkerIds: string[];
+  routeCode: string;          // base route code
+  displayRouteCode: string;   // header display ("BIN09" or "BIN09a"/"BIN09b")
+  routeColor: string;
+  prebookCount: number;
+  prepayCount: number;
+  totalEQ: number;
+  currentWorkerIds: string[];
+  half?: 'a' | 'b';
+  // Post-split flow context: when set, the modal shows an "Assign later" button
+  // that dismisses and advances the flow. Without this, only the standard
+  // Cancel-via-X behaviour is available.
+  postSplitFlow?: boolean;
+}
+
+// Post-split sequential assignment state. After Confirm in the split modal,
+// we open the assign modal for half 'a', then 'b'. This object tracks where
+// we are in that sequence. Null when not in a post-split flow.
+interface PostSplitFlowState {
+  routeCode: string;
+  routeColor: string;          // base colour (used for 'a'; 'b' uses complementary)
+  segmentBOsmIds: number[];
+  bookingBIds: string[];
+  // Computed once at Confirm time: how many segments/bookings ended up in each half.
+  aSegCount: number;
+  bSegCount: number;
+  aBookingCount: number;
+  bBookingCount: number;
+  aPrepayCount: number;
+  bPrepayCount: number;
+  aTotalEQ: number;
+  bTotalEQ: number;
+  currentlyAssigning: 'a' | 'b';
 }
 
 // NEW: nav-related state types.
@@ -203,6 +260,46 @@ const RC_TEAM_PATTERN = /^RC\d*$/;
 const isRcWorker = (teamId: string | null | undefined): boolean => {
   return !!teamId && RC_TEAM_PATTERN.test(teamId);
 };
+
+// --- HSL hue rotation by 180° for the 'b' half of a split route. ---
+//
+// Duplicated from RouteSplitModal.tsx so the master map's "b half" colour
+// matches the split modal preview exactly. If you ever want to factor this
+// out into a shared util, both files need to import the same function so
+// they stay in sync — silent colour drift between the modal preview and
+// the master map render would be a nasty bug to chase.
+function complementaryColor(hex: string): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
+  if (!m) return '#facc15';
+  const r = parseInt(m[1], 16) / 255;
+  const g = parseInt(m[2], 16) / 255;
+  const b = parseInt(m[3], 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let h = 0, s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0));
+    else if (max === g) h = ((b - r) / d + 2);
+    else h = ((r - g) / d + 4);
+    h *= 60;
+  }
+  const newH = (h + 180) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((newH / 60) % 2) - 1));
+  const mm = l - c / 2;
+  let rr = 0, gg = 0, bb = 0;
+  if (newH < 60) { rr = c; gg = x; bb = 0; }
+  else if (newH < 120) { rr = x; gg = c; bb = 0; }
+  else if (newH < 180) { rr = 0; gg = c; bb = x; }
+  else if (newH < 240) { rr = 0; gg = x; bb = c; }
+  else if (newH < 300) { rr = x; gg = 0; bb = c; }
+  else { rr = c; gg = 0; bb = x; }
+  const to = (v: number) => Math.round((v + mm) * 255).toString(16).padStart(2, '0');
+  return `#${to(rr)}${to(gg)}${to(bb)}`;
+}
 
 const formatAsphaltDollars = (n: number | undefined | null): string => {
   if (!n || n <= 0) return '$0';
@@ -565,6 +662,24 @@ function resolveNavDestination(financialStore: any[]): { lat: number; lng: numbe
   return null;
 }
 
+// --- SPLIT BUCKETING HELPERS ---
+//
+// Used at multiple points: building routeCardData (split a route into two
+// cards), painting the master map (per-segment colour), filtering bookings to
+// a half (for the assignment modal's count/EQ display).
+//
+// Mirrors the math in RouteSplitModal:
+//   - segmentMidpoint = middle index of coords array
+//   - segment in 'b' iff its midpoint is in segmentBOsmIds (precomputed at Confirm)
+//   - booking in 'b' iff its closest segment is in segmentBOsmIds
+//
+// Closest-segment math is duplicated rather than imported so this file stays
+// self-contained for the per-segment colour painting on the master map.
+function segmentMidCoord(coords: [number, number][]): [number, number] {
+  if (!coords || coords.length === 0) return [0, 0];
+  return coords[Math.floor(coords.length / 2)];
+}
+
 // --- COMPONENT ---
 
 const RMMapTab: React.FC<RMMapTabProps> = ({
@@ -625,32 +740,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // our rotation.
   const navArrowInnerRef = useRef<HTMLDivElement | null>(null);
   // --- COMPASS / HEADING ROTATION REFS ---
-  //
-  // The arrow rotation priority is:
-  //   1. GPS-derived heading IF it was computed recently (i.e. you're moving).
-  //      This reflects your actual direction of travel, which is what users
-  //      expect to see in a navigation map. Compass measures which way the
-  //      DEVICE is facing, not which way you're going — useless if you're
-  //      holding a tablet vertically while walking forward.
-  //   2. Compass heading as a fallback (when GPS-derived heading is stale,
-  //      i.e. you've been stationary for >5s). Compass works while parked
-  //      and helps orient the arrow before you start moving.
-  //
-  // Both update through applyArrowRotation() (defined below as a useCallback)
-  // so the priority logic lives in one place and both event sources stay
-  // consistent.
   const compassHeadingRef = useRef<number | null>(null);
   const gpsHeadingRef = useRef<number | null>(null);
-  // Timestamp (ms epoch) when gpsHeadingRef was last set. Determines whether
-  // the GPS-derived heading is "fresh" enough to win over compass.
   const gpsHeadingUpdatedAtRef = useRef<number>(0);
-  // Last GPS position seen, used to compute bearingDeg() between fixes.
   const lastGpsPosRef = useRef<{ lat: number; lng: number; ts: number } | null>(null);
-  // The compass event handler — kept so we can remove it on unmount.
   const compassHandlerRef = useRef<((e: DeviceOrientationEvent) => void) | null>(null);
-  // iOS Safari 13+ requires a user gesture to grant compass permission. When
-  // true, we render a small "Enable compass" button in HALF 2 that calls
-  // handleEnableCompass on tap.
   const [compassNeedsPermission, setCompassNeedsPermission] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('staff');
@@ -663,6 +757,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const sidebarModeRef = useRef<SidebarMode>('staff');
   const routesRef = useRef(routes);
   const bookingsRef = useRef(bookings);
+
+  // --- ROUTE SPLITS state ---
+  //
+  // routeSplits is the canonical list from the DB. routeSplitsByCode is the
+  // memoized map for fast lookup. splitModalData and postSplitFlow drive the
+  // new split UI: open modal → confirm → sequential assignment for each half.
+  const [routeSplits, setRouteSplits] = useState<RouteSplit[]>([]);
+  const [splitModalData, setSplitModalData] = useState<{
+    routeCode: string;
+    routeColor: string;
+    segments: SavedRoute['segments'];
+    prebookings: { bookingId: string; lat: number; lng: number }[];
+  } | null>(null);
+  const [postSplitFlow, setPostSplitFlow] = useState<PostSplitFlowState | null>(null);
 
   const [workerLocations, setWorkerLocations] = useState<WorkerLocation[]>([]);
   const workerLocationMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
@@ -718,22 +826,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [unassignError, setUnassignError] = useState<string | null>(null);
 
   // --- NEW: NAV STATE ---
-  // Active nav (null = not navigating). When set, RMNavigation overlay renders.
   const [navState, setNavState] = useState<NavState | null>(null);
-  // Confirmation popup when user taps Navigate while one is already active.
   const [switchNavConfirm, setSwitchNavConfirm] = useState<SwitchNavConfirmation | null>(null);
-  // Staff-mode route-line tap → "Navigate to who?" prompt. Null when closed.
-  // Single-entry shows as confirmation, multi-entry shows as picker.
   const [routeNavPrompt, setRouteNavPrompt] = useState<RouteNavPrompt | null>(null);
 
   // --- ARROW ROTATION ---
-  // Shared by the GPS watch callback, the compass listener, AND the map's
-  // rotate event so all three sources route through the same priority logic.
-  // GPS-derived heading wins when fresh (last computed within 5s), reflecting
-  // your actual direction of travel. Compass is the fallback for stationary
-  // use. The map's current bearing is SUBTRACTED so the arrow stays aligned
-  // to world-true heading even when the user rotates the map — otherwise a
-  // 30° map rotation would visually skew the arrow by 30°.
   const HEADING_FRESHNESS_MS = 5000;
   const applyArrowRotation = useCallback(() => {
     if (!navArrowInnerRef.current) return;
@@ -749,9 +846,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       heading = compassHeadingRef.current;
     }
     if (heading == null) return;
-    // Map bearing: degrees clockwise from north that the map is rotated.
-    // Subtract from heading so the arrow points to the world direction,
-    // not the screen direction.
     const mapBearing = mapRef.current?.getBearing() ?? 0;
     navArrowInnerRef.current.style.transform = `rotate(${heading - mapBearing}deg)`;
   }, []);
@@ -783,6 +877,29 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const myTeamWorkers = useMemo(() => workers.filter(w => w.assignedManagerId === managerId), [workers, managerId]);
   const routeColorMap = useMemo(() => { const m = new Map<string,string>(); routeMapData.forEach(r => m.set(r.route_code, r.route_color)); return m; }, [routeMapData]);
   const availableManagers = useMemo(() => allManagers.filter(m => m.userId !== managerId && m.role === 'RouteManager'), [allManagers, managerId]);
+
+  // Fast lookup: route code → its split row (if any). One source of truth used
+  // by routeCardData, the master map renderer, click handlers, and the
+  // assignment modal.
+  const routeSplitsByCode = useMemo(() => {
+    const m = new Map<string, RouteSplit>();
+    for (const rs of routeSplits) m.set(rs.routeCode, rs);
+    return m;
+  }, [routeSplits]);
+
+  // Fetch route splits on mount and whenever a refresh is triggered. Cheap
+  // table (one row per split, only digital-mapping CCs have it), so no
+  // pagination needed.
+  const reloadRouteSplits = useCallback(async () => {
+    try {
+      const rows = await sessionService.getRouteSplits();
+      if (mountedRef.current) setRouteSplits(rows);
+    } catch (err) {
+      console.warn('[RouteSplit] reload failed:', err);
+    }
+  }, []);
+
+  useEffect(() => { reloadRouteSplits(); }, [reloadRouteSplits]);
 
   const workerLastActive = useMemo(() => {
     const m = new Map<string,string>();
@@ -1066,19 +1183,115 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return eq;
   }, [seasonType, taxRate, productCostPercent]);
 
+  // routeCardData — SPLIT-AWARE.
+  //
+  // For each route managed by this RM:
+  //   - If NO split exists: emit a single RouteCardData as before, but with
+  //     isSplit=false, half=undefined, baseRouteCode=routeCode.
+  //   - If a split exists: emit TWO RouteCardData entries, one per half. The
+  //     'b' half's colour is HSL-rotated. Job counts, prepay counts, EQ, and
+  //     assigned workers are scoped to that half via the cached bucketing.
+  //
+  // The Split button on each card is hidden when isSplit is true OR
+  // isAssigned is true (see the Routes-mode sidebar render).
   const routeCardData = useMemo<RouteCardData[]>(() => {
-    return routes.filter(r => r.managerId===managerId).map(r => {
-      const rmi = routeMapData.find(rm => rm.route_code===r.routeCode);
-      const routeColor = rmi?.route_color||'#6b7280';
-      const assignedIds = r.assignedWorkerIds||[];
-      let label = '';
-      if (assignedIds.length===1) { const w=workers.find(wk=>wk.contractorId===assignedIds[0]); if(w) label=`${w.firstName} ${w.lastName.charAt(0)}.`; }
-      else if (assignedIds.length>1) { label=assignedIds.map(id=>{const w=workers.find(wk=>wk.contractorId===id);return w?`${w.firstName.charAt(0)}${w.lastName.charAt(0)}`:''}).filter(Boolean).join(' '); }
-      const rb = bookings.filter(b=>b['Route Number']===r.routeCode);
-      const totalEQ = rb.reduce((sum, b) => sum + calculateBookingEQ(b), 0);
-      return { routeCode:r.routeCode, routeColor, assignedWorkerIds:assignedIds, assignedWorkerLabel:label, prebookCount:rb.length, prepayCount:rb.filter(b=>b.Prepaid==='x').length, totalEQ, isAssigned:assignedIds.length>0 };
-    }).sort((a,b)=>{ if(a.isAssigned!==b.isAssigned) return a.isAssigned?1:-1; return a.routeCode.localeCompare(b.routeCode); });
-  }, [routes, managerId, routeMapData, workers, bookings, calculateBookingEQ]);
+    const result: RouteCardData[] = [];
+
+    for (const r of routes) {
+      if (r.managerId !== managerId) continue;
+      const rmi = routeMapData.find(rm => rm.route_code === r.routeCode);
+      const baseColor = rmi?.route_color || '#6b7280';
+      const split = routeSplitsByCode.get(r.routeCode);
+      const rb = bookings.filter(b => b['Route Number'] === r.routeCode);
+
+      if (!split) {
+        // No split — single card, same as before.
+        const assignedIds = r.assignedWorkerIds || [];
+        let label = '';
+        if (assignedIds.length === 1) {
+          const w = workers.find(wk => wk.contractorId === assignedIds[0]);
+          if (w) label = `${w.firstName} ${w.lastName.charAt(0)}.`;
+        } else if (assignedIds.length > 1) {
+          label = assignedIds.map(id => {
+            const w = workers.find(wk => wk.contractorId === id);
+            return w ? `${w.firstName.charAt(0)}${w.lastName.charAt(0)}` : '';
+          }).filter(Boolean).join(' ');
+        }
+        const totalEQ = rb.reduce((sum, b) => sum + calculateBookingEQ(b), 0);
+        result.push({
+          routeCode: r.routeCode,
+          displayRouteCode: r.routeCode,
+          routeColor: baseColor,
+          assignedWorkerIds: assignedIds,
+          assignedWorkerLabel: label,
+          prebookCount: rb.length,
+          prepayCount: rb.filter(b => b.Prepaid === 'x').length,
+          totalEQ,
+          isAssigned: assignedIds.length > 0,
+          isSplit: false,
+          baseRouteCode: r.routeCode,
+        });
+        continue;
+      }
+
+      // Split exists — emit two cards. Partition the bookings by the cached
+      // booking_b_ids list. The 'a' half is everything not in 'b'.
+      const bBookingSet = new Set(split.bookingBIds);
+      const aBookings = rb.filter(b => !bBookingSet.has(b['Booking ID']));
+      const bBookings = rb.filter(b => bBookingSet.has(b['Booking ID']));
+
+      const buildLabel = (ids: string[]): string => {
+        if (ids.length === 0) return '';
+        if (ids.length === 1) {
+          const w = workers.find(wk => wk.contractorId === ids[0]);
+          return w ? `${w.firstName} ${w.lastName.charAt(0)}.` : '';
+        }
+        return ids.map(id => {
+          const w = workers.find(wk => wk.contractorId === id);
+          return w ? `${w.firstName.charAt(0)}${w.lastName.charAt(0)}` : '';
+        }).filter(Boolean).join(' ');
+      };
+
+      const aAssigned = split.assignedWorkersA || [];
+      const bAssigned = split.assignedWorkersB || [];
+      const bColor = complementaryColor(baseColor);
+
+      result.push({
+        routeCode: r.routeCode,
+        displayRouteCode: `${r.routeCode}a`,
+        routeColor: baseColor,
+        assignedWorkerIds: aAssigned,
+        assignedWorkerLabel: buildLabel(aAssigned),
+        prebookCount: aBookings.length,
+        prepayCount: aBookings.filter(b => b.Prepaid === 'x').length,
+        totalEQ: aBookings.reduce((sum, b) => sum + calculateBookingEQ(b), 0),
+        isAssigned: aAssigned.length > 0,
+        isSplit: true,
+        half: 'a',
+        baseRouteCode: r.routeCode,
+      });
+      result.push({
+        routeCode: r.routeCode,
+        displayRouteCode: `${r.routeCode}b`,
+        routeColor: bColor,
+        assignedWorkerIds: bAssigned,
+        assignedWorkerLabel: buildLabel(bAssigned),
+        prebookCount: bBookings.length,
+        prepayCount: bBookings.filter(b => b.Prepaid === 'x').length,
+        totalEQ: bBookings.reduce((sum, b) => sum + calculateBookingEQ(b), 0),
+        isAssigned: bAssigned.length > 0,
+        isSplit: true,
+        half: 'b',
+        baseRouteCode: r.routeCode,
+      });
+    }
+
+    // Sort: unassigned cards first, then by displayRouteCode alphabetically.
+    return result.sort((a, b) => {
+      if (a.isAssigned !== b.isAssigned) return a.isAssigned ? 1 : -1;
+      return a.displayRouteCode.localeCompare(b.displayRouteCode);
+    });
+  }, [routes, managerId, routeMapData, workers, bookings, calculateBookingEQ, routeSplitsByCode]);
 
   // Split pins into pending-only and completed/new-sale-only — driven by the
   // new filter system. Each set is also visibility-gated separately downstream.
@@ -1140,12 +1353,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return result;
   }, [allSessions, myRouteCodes, myTeamIds]);
 
-  // Upsells live in financialStore as type='Upgrade' or 'Add-On'. They sit at
-  // the same address as their parent aeration job, so their addresses are
-  // typically already in geocodeCache once phase 2 has run — no new geocoding
-  // phase needed. We still build a separate source list so the rendering
-  // pipeline can treat them distinctly (blue ring, half-overlay at overlap
-  // points, dedicated popup).
   const upsellPinSource = useMemo<PinData[]>(() => {
     const result: PinData[] = [];
     const myRS = new Set(myRouteCodes);
@@ -1180,11 +1387,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return n?{lat:sLat/n,lng:sLng/n}:null;
   }, [routeMapData]);
 
-  // Most-recent transaction per session — drives the pulsing ring marker.
-  // INCLUDES upsells now (Upgrade / Add-On) since the user asked that the
-  // upsell pin be eligible as the most-recent location indicator. We look
-  // across BOTH the completed/sale pin set and the upsell pin set when
-  // resolving each session's latest jobId to a geocoded position.
   const mostRecentCompletionPins = useMemo<GeocodedPin[]>(() => {
     const latestByOwner = new Map<string, { jobId: string; timestamp: string }>();
     allSessions.forEach(s => {
@@ -1200,9 +1402,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
     const result: GeocodedPin[] = [];
     latestByOwner.forEach(({ jobId }) => {
-      // Try completed/sale first, then upsells. Whichever has the matching
-      // jobId wins. The pulsing ring uses the pin's routeColor for its
-      // color, so the visual is consistent regardless of which type.
       const pin =
         geocodedPins.find(p => p.id === jobId && (p.status === 'completed' || p.status === 'new_sale'))
         ?? geocodedUpsellPins.find(p => p.id === jobId);
@@ -1211,22 +1410,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return result;
   }, [allSessions, geocodedPins, geocodedUpsellPins, isTeamSeason]);
 
-  // Overlap detection: addresses (cache-key normalized) that have BOTH a
-  // completed/sale pin AND an upsell pin. At these positions the rendering
-  // logic does two things:
-  //   1) excludes the upsell from the "upsell-only" circle layer (we don't
-  //      want to draw two stacked full rings at the same point),
-  //   2) adds the address to the half-blue overlay symbol layer (drawing
-  //      a blue right-half arc on top of the existing green/yellow ring).
-  // Click handler for the underlying completed/sale pin also reads from this
-  // set to decide whether to show the combined popup (Q2 = B).
   const overlapInfo = useMemo(() => {
-    // Map<cacheKey, { upsellPin, basePin }>
-    // upsellPin: the upsell pin at this address (for popup details, overlay)
-    // basePin:   the completed/sale pin at this address (for left-side color)
     const map = new Map<string, { upsellPin: GeocodedPin; basePin: GeocodedPin }>();
     if (geocodedUpsellPins.length === 0) return map;
-    // Index completed/sale pins by address for fast lookup.
     const baseByKey = new Map<string, GeocodedPin>();
     for (const p of geocodedPins) {
       if (p.status === 'completed' || p.status === 'new_sale') {
@@ -1403,7 +1589,22 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return()=>{cancelled=true;};
   }, [myRouteCodes]);
 
-  // Draw routes
+  // Draw routes — SPLIT-AWARE.
+  //
+  // For each route, every segment becomes a Feature with a `bucket` property
+  // ('a' or 'b'). The line layer uses a data-driven colour expression:
+  //   bucket='a' → original route colour
+  //   bucket='b' → complementary colour (HSL hue rotated 180°)
+  //
+  // For unsplit routes, every segment gets bucket='a' so the result is
+  // identical to the pre-split behaviour. The colour expression handles both
+  // cases via a 'match' so no separate code paths are needed.
+  //
+  // Centroid number labels: unsplit routes get ONE label at the route centroid;
+  // split routes get TWO labels, one at each half's centroid, with the
+  // appropriate colour and the suffixed code (e.g. "11" → "11a" / "11b").
+  // The labels still use route_number-derived text (e.g. "11") for unsplit and
+  // the suffixed code ("11a", "11b") for split routes.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     loadedIdsRef.current.forEach(id=>{
@@ -1413,40 +1614,143 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     loadedIdsRef.current=[];
     const before=(map.getLayer('road-label')?'road-label':map.getStyle().layers?.find((l:any)=>l.type==='symbol')?.id)??undefined;
     const allCoords:[number,number][]=[];
+
     routeMapData.forEach(route=>{
       if(!route.segments?.length) return;
       const srcId=`rm-src-${route.id}`, lineId=`rm-line-${route.id}`;
       loadedIdsRef.current.push(route.id);
-      const features:GeoJSON.Feature[]=route.segments.map(seg=>({type:'Feature',properties:{route_code:route.route_code,color:route.route_color},geometry:{type:'LineString',coordinates:seg.coordinates}}));
+
+      const split = routeSplitsByCode.get(route.route_code);
+      const bSet = split ? new Set(split.segmentBOsmIds) : null;
+      const bColor = complementaryColor(route.route_color);
+
+      const features:GeoJSON.Feature[]=route.segments.map(seg=>{
+        const bucket = bSet && bSet.has(seg.osmId) ? 'b' : 'a';
+        return {
+          type:'Feature',
+          properties:{
+            route_code:route.route_code,
+            color:route.route_color,
+            bucket,
+            osmId: seg.osmId,
+          },
+          geometry:{type:'LineString',coordinates:seg.coordinates},
+        };
+      });
       features.forEach(f=>allCoords.push(...((f.geometry as GeoJSON.LineString).coordinates as [number,number][])));
       map.addSource(srcId,{type:'geojson',data:{type:'FeatureCollection',features}});
-      map.addLayer({id:lineId,type:'line',source:srcId,minzoom:0,maxzoom:24,paint:{'line-color':route.route_color,'line-width':7,'line-opacity':0.75},layout:{'line-cap':'round','line-join':'round'}},before);
-      const rc:[number,number][]=[];route.segments.forEach(s=>s.coordinates.forEach(c=>rc.push(c)));if(!rc.length) return;
-      const cLng=rc.reduce((s,c)=>s+c[0],0)/rc.length, cLat=rc.reduce((s,c)=>s+c[1],0)/rc.length;
+      map.addLayer({
+        id:lineId,
+        type:'line',
+        source:srcId,
+        minzoom:0,maxzoom:24,
+        paint:{
+          'line-color': [
+            'match',
+            ['get', 'bucket'],
+            'b', bColor,
+            route.route_color,
+          ],
+          'line-width':7,
+          'line-opacity':0.75,
+        },
+        layout:{'line-cap':'round','line-join':'round'},
+      },before);
+
+      // Centroid labels. Single centroid for unsplit; two for split.
       const nSrc=`rm-num-src-${route.id}`, nLbl=`rm-num-${route.id}`;
       loadedIdsRef.current.push(`num-${route.id}`);
-      map.addSource(nSrc,{type:'geojson',data:{type:'FeatureCollection',features:[{type:'Feature',properties:{num:String(route.route_number),color:route.route_color,route_code:route.route_code},geometry:{type:'Point',coordinates:[cLng,cLat]}}]}});
+
+      if (!split) {
+        const rc:[number,number][]=[];route.segments.forEach(s=>s.coordinates.forEach(c=>rc.push(c)));if(!rc.length) return;
+        const cLng=rc.reduce((s,c)=>s+c[0],0)/rc.length, cLat=rc.reduce((s,c)=>s+c[1],0)/rc.length;
+        map.addSource(nSrc,{type:'geojson',data:{type:'FeatureCollection',features:[{type:'Feature',properties:{num:String(route.route_number),color:route.route_color,route_code:route.route_code,half:''},geometry:{type:'Point',coordinates:[cLng,cLat]}}]}});
+      } else {
+        // Compute centroid per half from this route's segments.
+        const aCoords:[number,number][]=[];
+        const bCoords:[number,number][]=[];
+        route.segments.forEach(seg => {
+          (bSet!.has(seg.osmId) ? bCoords : aCoords).push(...seg.coordinates);
+        });
+        const features: GeoJSON.Feature[] = [];
+        if (aCoords.length > 0) {
+          const cLng=aCoords.reduce((s,c)=>s+c[0],0)/aCoords.length;
+          const cLat=aCoords.reduce((s,c)=>s+c[1],0)/aCoords.length;
+          features.push({type:'Feature',properties:{num:`${route.route_number}a`,color:route.route_color,route_code:route.route_code,half:'a'},geometry:{type:'Point',coordinates:[cLng,cLat]}});
+        }
+        if (bCoords.length > 0) {
+          const cLng=bCoords.reduce((s,c)=>s+c[0],0)/bCoords.length;
+          const cLat=bCoords.reduce((s,c)=>s+c[1],0)/bCoords.length;
+          features.push({type:'Feature',properties:{num:`${route.route_number}b`,color:bColor,route_code:route.route_code,half:'b'},geometry:{type:'Point',coordinates:[cLng,cLat]}});
+        }
+        map.addSource(nSrc,{type:'geojson',data:{type:'FeatureCollection',features}});
+      }
+
       map.addLayer({id:nLbl,type:'symbol',source:nSrc,layout:{'text-field':['get','num'],'text-font':['DIN Pro Bold','Arial Unicode MS Bold'],'text-size':28,'text-allow-overlap':true,'text-ignore-placement':true},paint:{'text-color':['get','color'],'text-halo-color':'rgba(255,255,255,0.85)','text-halo-width':2}});
     });
+
     if(allCoords.length&&!initialFitDoneRef.current){
       initialFitDoneRef.current=true;
       setTimeout(()=>{if(!mapRef.current) return; const b=allCoords.reduce((b,c)=>b.extend(c),new mapboxgl.LngLatBounds(allCoords[0],allCoords[0]));mapRef.current.fitBounds(b,{padding:80,maxZoom:15,duration:800});},300);
     }
-  }, [routeMapData, mapLoaded]);
+  }, [routeMapData, mapLoaded, routeSplitsByCode]);
 
-  // Worker name overlay
+  // Worker name overlay — SPLIT-AWARE.
+  // Unsplit routes get one label at the route centroid showing assigned workers.
+  // Split routes get TWO labels, each showing only that half's assigned workers
+  // (read from route_splits.assignedWorkersA / assignedWorkersB), positioned at
+  // each half's centroid, coloured with that half's colour.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     const myRS=new Set(myRouteCodes);
-    const features:GeoJSON.Feature[]=routeMapData.filter(r=>myRS.has(r.route_code)).map(route=>{
-      const rc:[number,number][]=[];route.segments.forEach(s=>s.coordinates.forEach(c=>rc.push(c)));if(!rc.length) return null;
-      const cLng=rc.reduce((s,c)=>s+c[0],0)/rc.length, cLat=rc.reduce((s,c)=>s+c[1],0)/rc.length;
-      const rp=routes.find(r=>r.routeCode===route.route_code), aids=rp?.assignedWorkerIds||[];
-      let label='';
-      if(aids.length===1){const w=workers.find(wk=>wk.contractorId===aids[0]);if(w) label=`${w.firstName} ${w.lastName.charAt(0)}.`;}
-      else if(aids.length>1){label=aids.map(id=>{const w=workers.find(wk=>wk.contractorId===id);return w?`${w.firstName.charAt(0)}${w.lastName.charAt(0)}`:''}).filter(Boolean).join(' ');}
-      return{type:'Feature' as const,properties:{label,color:route.route_color},geometry:{type:'Point' as const,coordinates:[cLng,cLat]}};
-    }).filter((f):f is GeoJSON.Feature=>f!==null);
+    const features:GeoJSON.Feature[]=[];
+
+    const labelForWorkerIds = (aids: string[]): string => {
+      if (aids.length === 1) {
+        const w = workers.find(wk => wk.contractorId === aids[0]);
+        return w ? `${w.firstName} ${w.lastName.charAt(0)}.` : '';
+      }
+      if (aids.length > 1) {
+        return aids.map(id => {
+          const w = workers.find(wk => wk.contractorId === id);
+          return w ? `${w.firstName.charAt(0)}${w.lastName.charAt(0)}` : '';
+        }).filter(Boolean).join(' ');
+      }
+      return '';
+    };
+
+    routeMapData.filter(r => myRS.has(r.route_code)).forEach(route => {
+      const split = routeSplitsByCode.get(route.route_code);
+      if (!split) {
+        const rc:[number,number][]=[];route.segments.forEach(s=>s.coordinates.forEach(c=>rc.push(c)));if(!rc.length) return;
+        const cLng=rc.reduce((s,c)=>s+c[0],0)/rc.length, cLat=rc.reduce((s,c)=>s+c[1],0)/rc.length;
+        const rp=routes.find(r=>r.routeCode===route.route_code), aids=rp?.assignedWorkerIds||[];
+        const label = labelForWorkerIds(aids);
+        features.push({type:'Feature',properties:{label,color:route.route_color},geometry:{type:'Point',coordinates:[cLng,cLat]}});
+        return;
+      }
+      // Split — emit two labels.
+      const bSet = new Set(split.segmentBOsmIds);
+      const bColor = complementaryColor(route.route_color);
+      const aCoords:[number,number][]=[];
+      const bCoords:[number,number][]=[];
+      route.segments.forEach(seg => {
+        (bSet.has(seg.osmId) ? bCoords : aCoords).push(...seg.coordinates);
+      });
+      if (aCoords.length > 0) {
+        const cLng=aCoords.reduce((s,c)=>s+c[0],0)/aCoords.length;
+        const cLat=aCoords.reduce((s,c)=>s+c[1],0)/aCoords.length;
+        const label = labelForWorkerIds(split.assignedWorkersA || []);
+        features.push({type:'Feature',properties:{label,color:route.route_color},geometry:{type:'Point',coordinates:[cLng,cLat]}});
+      }
+      if (bCoords.length > 0) {
+        const cLng=bCoords.reduce((s,c)=>s+c[0],0)/bCoords.length;
+        const cLat=bCoords.reduce((s,c)=>s+c[1],0)/bCoords.length;
+        const label = labelForWorkerIds(split.assignedWorkersB || []);
+        features.push({type:'Feature',properties:{label,color:bColor},geometry:{type:'Point',coordinates:[cLng,cLat]}});
+      }
+    });
+
     const gj:GeoJSON.FeatureCollection={type:'FeatureCollection',features};
     const src=map.getSource('rm-worker-overlay-src') as mapboxgl.GeoJSONSource;
     if(src){src.setData(gj);}
@@ -1454,15 +1758,25 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       map.addSource('rm-worker-overlay-src',{type:'geojson',data:gj});
       map.addLayer({id:'rm-worker-overlay',type:'symbol',source:'rm-worker-overlay-src',layout:{'text-field':['get','label'],'text-font':['DIN Pro Medium','Arial Unicode MS Regular'],'text-size':11,'text-offset':[0,2.3],'text-allow-overlap':true,'text-ignore-placement':true},paint:{'text-color':['get','color'],'text-halo-color':'rgba(255,255,255,0.9)','text-halo-width':1.5}});
     }
-  }, [routeMapData, routes, workers, mapLoaded, myRouteCodes]);
+  }, [routeMapData, routes, workers, mapLoaded, myRouteCodes, routeSplitsByCode]);
 
-  // Route opacity
+  // Route opacity — SPLIT-AWARE.
+  // For unsplit routes, behaviour is unchanged: one opacity for the whole route
+  // based on whether it has any assigned workers.
+  // For split routes, we can't set a per-feature opacity through line-opacity
+  // alone since it's the same layer for both halves. Compromise: if EITHER half
+  // is assigned, the route reads as "assigned" for opacity purposes. The visual
+  // colour distinction between halves still makes the split obvious, and the
+  // RM uses the sidebar's two cards to see which half is which.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     routeMapData.forEach(route=>{
       const lid=`rm-line-${route.id}`; if(!map.getLayer(lid)) return;
+      const split = routeSplitsByCode.get(route.route_code);
       const rp=routes.find(r=>r.routeCode===route.route_code);
-      const isAssigned = !!rp?.assignedWorkerIds?.length;
+      const baseAssigned = !!rp?.assignedWorkerIds?.length;
+      const splitAssigned = !!split && ((split.assignedWorkersA?.length || 0) + (split.assignedWorkersB?.length || 0) > 0);
+      const isAssigned = baseAssigned || splitAssigned;
 
       if (sidebarMode === 'routes' && myRouteCodes.includes(route.route_code)) {
         map.setPaintProperty(lid, 'line-opacity', isAssigned ? 0.9 : 0.3);
@@ -1470,22 +1784,26 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         map.setPaintProperty(lid, 'line-opacity', isAssigned ? 0.75 : 0.4);
       }
     });
-  }, [sidebarMode, routeMapData, routes, mapLoaded, myRouteCodes]);
+  }, [sidebarMode, routeMapData, routes, mapLoaded, myRouteCodes, routeSplitsByCode]);
 
-  // Route click handlers — mode-aware.
-  //   - In Routes mode (sidebar shows route cards), tapping a route line on
-  //     the map opens the route assignment modal as before.
-  //   - In Staff mode (sidebar shows staff cards), tapping a route line opens
-  //     a "Navigate to who?" prompt with one entry per assigned worker (or
-  //     cart, for team seasons). Unassigned routes silently do nothing.
+  // Route click handlers — SPLIT-AWARE.
+  //
+  // In Routes mode (sidebar shows route cards):
+  //   - Non-split route → opens the assignment modal for the whole route
+  //     (unchanged from before).
+  //   - Split route → identifies which half was clicked (via the segment's
+  //     osmId being in segmentBOsmIds) and opens the modal scoped to that half.
+  //
+  // In Staff mode (sidebar shows staff cards):
+  //   - Non-split route → "Navigate to who?" prompt as before.
+  //   - Split route → look at THAT half's assigned workers and build the prompt
+  //     from those instead of the union.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     const cleanups:Array<()=>void>=[];
     routeMapData.forEach(route=>{
       if(!myRouteCodes.includes(route.route_code)) return;
 
-      // Show pointer cursor in BOTH modes now — the click does something in
-      // either case (assignment modal in Routes mode, nav prompt in Staff mode).
       const enter=()=>{ map.getCanvas().style.cursor='pointer'; };
       const leave=()=>{ map.getCanvas().style.cursor=''; };
 
@@ -1495,15 +1813,53 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         const rc = route.route_code;
         const cr = routesRef.current, cb = bookingsRef.current;
         const rp = cr.find(r => r.routeCode === rc);
-        const assignedIds = rp?.assignedWorkerIds || [];
+        const split = routeSplitsByCode.get(rc);
+
+        // Determine which half was clicked (for split routes).
+        // The first feature in e.features has properties.osmId set; check
+        // against segmentBOsmIds.
+        let clickedHalf: 'a' | 'b' | undefined = undefined;
+        if (split && e.features && e.features.length > 0) {
+          const osmId = e.features[0].properties?.osmId;
+          if (osmId != null) {
+            const bSet = new Set(split.segmentBOsmIds);
+            clickedHalf = bSet.has(osmId) ? 'b' : 'a';
+          }
+        }
 
         if (mode === 'routes') {
-          // Existing behaviour — open the assignment modal.
+          if (split && clickedHalf) {
+            // Half-scoped assignment modal.
+            const bBookingSet = new Set(split.bookingBIds);
+            const rb = cb.filter(b => b['Route Number'] === rc);
+            const halfBookings = clickedHalf === 'b'
+              ? rb.filter(b => bBookingSet.has(b['Booking ID']))
+              : rb.filter(b => !bBookingSet.has(b['Booking ID']));
+            const totalEQ = halfBookings.reduce((sum, b) => sum + calculateBookingEQ(b), 0);
+            const halfColor = clickedHalf === 'b' ? complementaryColor(route.route_color) : route.route_color;
+            const halfAssigned = clickedHalf === 'b' ? (split.assignedWorkersB || []) : (split.assignedWorkersA || []);
+            if (popupRef.current) { popupRef.current.remove(); popupRef.current = null; }
+            setAssignModalData({
+              routeCode: rc,
+              displayRouteCode: `${rc}${clickedHalf}`,
+              routeColor: halfColor,
+              prebookCount: halfBookings.length,
+              prepayCount: halfBookings.filter(b => b.Prepaid === 'x').length,
+              totalEQ,
+              currentWorkerIds: halfAssigned,
+              half: clickedHalf,
+            });
+            return;
+          }
+
+          // Non-split — whole-route assignment.
+          const assignedIds = rp?.assignedWorkerIds || [];
           const rb = cb.filter(b => b['Route Number'] === rc);
           const totalEQ = rb.reduce((sum, b) => sum + calculateBookingEQ(b), 0);
           if (popupRef.current) { popupRef.current.remove(); popupRef.current = null; }
           setAssignModalData({
             routeCode: rc,
+            displayRouteCode: rc,
             routeColor: route.route_color,
             prebookCount: rb.length,
             prepayCount: rb.filter(b => b.Prepaid === 'x').length,
@@ -1513,15 +1869,18 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           return;
         }
 
-        // STAFF MODE — build the nav prompt entries.
-        if (assignedIds.length === 0) return; // silently ignore unassigned
+        // STAFF MODE — nav prompt.
+        // For split routes, only this half's assigned workers are in the prompt.
+        let assignedIds: string[];
+        if (split && clickedHalf) {
+          assignedIds = clickedHalf === 'b' ? (split.assignedWorkersB || []) : (split.assignedWorkersA || []);
+        } else {
+          assignedIds = rp?.assignedWorkerIds || [];
+        }
+        if (assignedIds.length === 0) return;
 
         const entries: RouteNavPromptEntry[] = [];
         if (isTeamSeason) {
-          // Group assigned workers by their cart (session). For team seasons,
-          // both members of a multi-member cart share the same financialStore,
-          // so they go in as a single entry. If a route happens to span two
-          // distinct carts (rare), each cart gets its own entry.
           const seenSessions = new Set<string>();
           for (const wid of assignedIds) {
             const cart = cartCardDataRef.current.find(c =>
@@ -1540,7 +1899,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             });
           }
         } else {
-          // Aeration — one entry per worker (each worker has their own session).
           for (const wid of assignedIds) {
             const card = workerCardDataRef.current.find(c => c.worker.contractorId === wid);
             if (!card) continue;
@@ -1553,11 +1911,15 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           }
         }
 
-        if (entries.length === 0) return; // defensive — shouldn't happen
+        if (entries.length === 0) return;
         if (popupRef.current) { popupRef.current.remove(); popupRef.current = null; }
+        const displayRC = split && clickedHalf ? `${rc}${clickedHalf}` : rc;
+        const halfColor = split && clickedHalf === 'b'
+          ? complementaryColor(route.route_color)
+          : route.route_color;
         setRouteNavPrompt({
-          routeCode: rc,
-          routeColor: route.route_color,
+          routeCode: displayRC,
+          routeColor: halfColor,
           entries,
         });
       };
@@ -1569,32 +1931,42 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     });
     return()=>cleanups.forEach(fn=>fn());
-  }, [routeMapData, mapLoaded, myRouteCodes, calculateBookingEQ, isTeamSeason]);
+  }, [routeMapData, mapLoaded, myRouteCodes, calculateBookingEQ, isTeamSeason, routeSplitsByCode]);
 
   // --- LAYER RENDERERS ---
 
-  // Ref-mirrored overlap info, read by the completed-pins click handler when
-  // deciding whether to append upsell details to its popup. We use a ref
-  // (not direct state) so the click handler closure registered once on layer
-  // creation always sees the current overlap data without needing to be
-  // re-registered every time the data changes.
   const overlapInfoRef = useRef<Map<string, { upsellPin: GeocodedPin; basePin: GeocodedPin }>>(new Map());
   useEffect(() => { overlapInfoRef.current = overlapInfo; }, [overlapInfo]);
 
-  // Pending bookings circles — separate layer from completed so they can be
-  // filter-toggled independently.
+  // Pending bookings circles — SPLIT-AWARE COLOURING.
+  //
+  // For a pending booking on a split route, the pin's stroke colour follows
+  // its bucket: 'a' → original route colour, 'b' → complementary colour. For
+  // unsplit routes the colour is the route colour as before.
+  //
+  // The data-driven colour is encoded as `pinColor` in the feature's
+  // properties so the layer paint expression can read it directly (no need
+  // for a separate layer per bucket). When a split is added/removed mid-day,
+  // re-running this updater with the same geocoded pins refreshes the colours
+  // immediately.
   const updatePendingBookingPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedPin[]) => {
     const gj: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
-      features: geocoded.map(pin => ({
-        type: 'Feature' as const,
-        properties: {
-          name: pin.name, address: pin.address, routeCode: pin.routeCode,
-          routeColor: pin.routeColor, phone: pin.phone || '', email: pin.email || '',
-          price: pin.price || '',
-        },
-        geometry: { type: 'Point' as const, coordinates: [pin.lng, pin.lat] },
-      })),
+      features: geocoded.map(pin => {
+        const split = routeSplitsByCode.get(pin.routeCode);
+        const isB = !!split && (split.bookingBIds || []).includes(pin.id);
+        const pinColor = isB ? complementaryColor(pin.routeColor) : pin.routeColor;
+        return {
+          type: 'Feature' as const,
+          properties: {
+            name: pin.name, address: pin.address, routeCode: pin.routeCode,
+            routeColor: pin.routeColor, pinColor,
+            phone: pin.phone || '', email: pin.email || '',
+            price: pin.price || '',
+          },
+          geometry: { type: 'Point' as const, coordinates: [pin.lng, pin.lat] },
+        };
+      }),
     };
     const src = map.getSource('rm-pending-pins-src') as mapboxgl.GeoJSONSource;
     if (src) { src.setData(gj); return; }
@@ -1604,14 +1976,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       type: 'circle',
       source: 'rm-pending-pins-src',
       paint: {
-        'circle-color': ['get', 'routeColor'],
+        'circle-color': ['get', 'pinColor'],
         'circle-radius': 3.33,
         'circle-stroke-color': '#000000',
         'circle-stroke-width': 1.67,
         'circle-opacity': 0.95,
-        // STROKE FIX: stroke gets its own opacity, paired with circle-opacity
-        // above. Without this, toggling the filter off only hides the fill —
-        // the stroke ring stays visible at full opacity.
         'circle-stroke-opacity': 0.95,
       },
     });
@@ -1630,9 +1999,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         `<div style="font-family:system-ui,sans-serif;font-size:13px;min-width:190px;line-height:1.4;"><div style="font-weight:700;margin-bottom:3px;">${sn}</div><div style="color:#555;font-size:11px;">${sa}</div>${pRow}${eRow}<div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;"><span style="background:${routeColor}22;color:${routeColor};border:1px solid ${routeColor}88;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${src2}</span><span style="color:#9ca3af;font-size:11px;font-weight:600;">⏳ Pending</span>${prTag}</div></div>`
       ).addTo(map);
     });
-  }, []);
+  }, [routeSplitsByCode]);
 
-  // Completed + new-sale circles
   const updateCompletedPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedPin[]) => {
     const gj: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
@@ -1659,8 +2027,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         'circle-stroke-color': ['match', ['get', 'status'], 'completed', '#22c55e', 'new_sale', '#eab308', '#000000'],
         'circle-stroke-width': 1.67,
         'circle-opacity': 0.95,
-        // STROKE FIX: stroke opacity paired with fill opacity. Without this
-        // the green/yellow ring stays visible when the filter is off.
         'circle-stroke-opacity': 0.95,
       },
     });
@@ -1679,9 +2045,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const prTag=spr?`<span style="background:#16a34a22;color:#4ade80;border:1px solid #16a34a66;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${spr}</span>`:'';
       const mTag=sm?`<span style="background:#37415122;color:#9ca3af;border:1px solid #37415166;border-radius:4px;padding:2px 7px;font-size:11px;">${sm}</span>`:'';
 
-      // Combined-popup branch: if this address has an upsell at the same
-      // location (i.e. is in overlapInfoRef), append upsell details to the
-      // bottom of the popup with a divider above. Per Q2=B requirement.
       const overlapEntry = overlapInfoRef.current.get(makeCacheKey(address));
       let upsellBlock = '';
       if (overlapEntry) {
@@ -1708,11 +2071,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, []);
 
-  // Upsell-ONLY circles (blue ring) — feeds addresses that have an upsell tx
-  // and NO completed/sale at the same point. Overlap points are drawn with a
-  // half-blue overlay symbol instead (see updateOverlapHalfPins below).
-  // Fill follows the route color like other pins; the stroke is the
-  // distinguishing blue (#3b82f6, Tailwind blue-500).
   const updateUpsellOnlyPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedPin[]) => {
     const gj: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
@@ -1739,8 +2097,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         'circle-stroke-color': '#3b82f6',
         'circle-stroke-width': 1.67,
         'circle-opacity': 0.95,
-        // STROKE FIX: stroke opacity paired with fill opacity. Without this
-        // the blue ring stays visible when the filter is off.
         'circle-stroke-opacity': 0.95,
       },
     });
@@ -1761,16 +2117,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, []);
 
-  // Half-blue overlay symbols at overlap addresses (where a completed/sale
-  // pin AND an upsell exist at the same lat/lng). Renders a symbol whose
-  // icon is the right-half-blue arc — overlayed on top of the underlying
-  // green/yellow completed-pin circle. Together they read as a single ring
-  // with the left half its original color and the right half blue.
-  //
-  // The icon itself is created in map onload (see the icon-creation block).
-  // No click handler on this layer — clicks fall through to the underlying
-  // rm-completed-pins-circles layer, which knows (via overlapInfoRef) to
-  // render the combined popup.
   const updateOverlapHalfPins = useCallback((map: mapboxgl.Map, points: Array<{ lat: number; lng: number }>) => {
     const gj: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
@@ -1797,7 +2143,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, []);
 
-  // Historical X markers
   const updateHistoricalPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedHistorical[]) => {
     const gj: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
@@ -1824,7 +2169,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, []);
 
-  // PCL grey circles — HALVED per spec. radius 1.75, stroke 0.5.
   const updatePclCircles = useCallback((map: mapboxgl.Map, entries: GeocodedPCLEntry[]) => {
     const gj: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
@@ -1847,43 +2191,38 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         'circle-stroke-color': '#374151',
         'circle-stroke-width': 0.5,
         'circle-opacity': 0,
-        // STROKE FIX: PCL is the layer that exposed this bug visually. Without
-        // a paired stroke-opacity, the dark grey stroke ring at every PCL
-        // location stays fully visible even when circle-opacity is 0, leaving
-        // the "light dots" the RM was seeing on the map when the toggle was
-        // off. Initial value is 0 to match circle-opacity since PCL defaults
-        // to filter-off.
         'circle-stroke-opacity': 0,
       },
     });
   }, []);
 
-  // FILTER-DRIVEN VISIBILITY — each layer reads its boolean from filterVisibility.
-  // The dashed-ring pending-sales markers, the pulsing completion markers, and
-  // the worker location markers are HTML element-based (not Mapbox layers) so
-  // they're handled separately in their own effects below.
+  // Re-render pending booking pins whenever the splits change, so when a split
+  // is freshly created the colours update without waiting for a geocode pass.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    if (geocodedPins.length === 0) return;
+    const pendingOnly = geocodedPins.filter(p => p.status === 'pending');
+    if (pendingOnly.length > 0) {
+      updatePendingBookingPins(map, pendingOnly);
+    }
+  }, [routeSplitsByCode, mapLoaded, geocodedPins, updatePendingBookingPins]);
+
+  // FILTER-DRIVEN VISIBILITY
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
     if (map.getLayer('rm-pending-pins-circles')) {
       map.setPaintProperty('rm-pending-pins-circles', 'circle-opacity', filterVisibility.pendingBookings ? 0.95 : 0);
-      // STROKE FIX: pair stroke opacity with fill opacity so the black ring
-      // hides when the filter goes off.
       map.setPaintProperty('rm-pending-pins-circles', 'circle-stroke-opacity', filterVisibility.pendingBookings ? 0.95 : 0);
     }
     if (map.getLayer('rm-completed-pins-circles')) {
       map.setPaintProperty('rm-completed-pins-circles', 'circle-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
-      // STROKE FIX: pair stroke opacity with fill opacity so the green/yellow
-      // status ring hides when the filter goes off.
       map.setPaintProperty('rm-completed-pins-circles', 'circle-stroke-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
     }
-    // Upsell layers piggyback on the same toggle (Q3 = grouped under
-    // pendingSalesAndCompleted, no separate filter).
     if (map.getLayer('rm-upsell-only-circles')) {
       map.setPaintProperty('rm-upsell-only-circles', 'circle-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
-      // STROKE FIX: pair stroke opacity with fill opacity so the blue upsell
-      // ring hides when the filter goes off.
       map.setPaintProperty('rm-upsell-only-circles', 'circle-stroke-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
     }
     if (map.getLayer('rm-overlap-half-symbols')) {
@@ -1894,15 +2233,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
     if (map.getLayer('rm-pcl-circles')) {
       map.setPaintProperty('rm-pcl-circles', 'circle-opacity', filterVisibility.pcl ? 0.7 : 0);
-      // STROKE FIX: pair stroke opacity with fill opacity. This is the line
-      // that fixes the original bug — without it, PCL grey rings stay
-      // visible on the map even when the PCL filter button is grey/off.
       map.setPaintProperty('rm-pcl-circles', 'circle-stroke-opacity', filterVisibility.pcl ? 0.7 : 0);
     }
   }, [filterVisibility, mapLoaded]);
+
   // --- SERIAL GEOCODING STATE MACHINE ---
 
-  // Helper that geocodes a single address with cache write-through.
   const geocodeOne = useCallback(async (address: string): Promise<{ lat: number; lng: number } | null> => {
     const addrKey = makeCacheKey(address);
     const cached = geocodeCache.get(addrKey);
@@ -1919,15 +2255,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'idle') return;
-
     const map = mapRef.current; if (!map) return;
     let cancelled = false;
-
     (async () => {
       const sources = pendingBookingPinSource;
       const enriched: GeocodedPin[] = [];
       const needsGeocoding: PinData[] = [];
-
       sources.forEach(pin => {
         const addrKey = makeCacheKey(pin.address);
         const cached = geocodeCache.get(addrKey);
@@ -1937,14 +2270,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           needsGeocoding.push(pin);
         }
       });
-
       const total = needsGeocoding.length;
       onGeocodeProgress('phase1_pending_bookings', 'pendingBookings', 0, total, false);
-
       enriched.forEach(p => knownPinsRef.current.set(p.id, p));
       const allKnown = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'pending');
       updatePendingBookingPins(map, allKnown);
-
       for (let i = 0; i < needsGeocoding.length; i++) {
         if (cancelled || !mountedRef.current) return;
         const pin = needsGeocoding[i];
@@ -1961,15 +2291,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
         if (i < needsGeocoding.length - 1) await new Promise(r => setTimeout(r, 80));
       }
-
       if (cancelled || !mountedRef.current) return;
       const final = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'pending');
       updatePendingBookingPins(map, final);
       setGeocodedPins(Array.from(knownPinsRef.current.values()));
-
       onGeocodeProgress('phase2_completed_and_sales', 'pendingBookings', total, total, true);
     })();
-
     return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, pendingBookingPinSource, routeColorMap, geocodeOne, updatePendingBookingPins, onGeocodeProgress]);
 
@@ -1977,15 +2304,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'phase2_completed_and_sales') return;
-
     const map = mapRef.current; if (!map) return;
     let cancelled = false;
-
     (async () => {
       const sources = completedAndNewSalePinSource;
       const enriched: GeocodedPin[] = [];
       const needsGeocoding: PinData[] = [];
-
       sources.forEach(pin => {
         const addrKey = makeCacheKey(pin.address);
         const cached = geocodeCache.get(addrKey);
@@ -2000,10 +2324,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           needsGeocoding.push(pin);
         }
       });
-
       const pendingSalesNeedsGeocoding: Array<{ booking: MasterBooking; address: string; id: string }> = [];
       const pendingSalesCached: GeocodedPendingSale[] = [];
-
       if (isTeamSeason) {
         const merged = mergePendingSalesForDisplay(pendingSalesByManager);
         merged.forEach(booking => {
@@ -2018,19 +2340,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           }
         });
       }
-
       const totalToGeocode = needsGeocoding.length + pendingSalesNeedsGeocoding.length;
       onGeocodeProgress('phase2_completed_and_sales', 'pendingSalesAndCompleted', 0, totalToGeocode, false);
-
       enriched.forEach(p => knownPinsRef.current.set(p.id, p));
       const allCompleted = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'completed' || p.status === 'new_sale');
       updateCompletedPins(map, allCompleted);
-      if (isTeamSeason) {
-        setGeocodedPendingSales(pendingSalesCached);
-      }
-
+      if (isTeamSeason) setGeocodedPendingSales(pendingSalesCached);
       let progressDone = 0;
-
       for (let i = 0; i < needsGeocoding.length; i++) {
         if (cancelled || !mountedRef.current) return;
         const pin = needsGeocoding[i];
@@ -2048,30 +2364,22 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
         if (i < needsGeocoding.length - 1) await new Promise(r => setTimeout(r, 80));
       }
-
       const newPSResults: GeocodedPendingSale[] = [...pendingSalesCached];
       for (let i = 0; i < pendingSalesNeedsGeocoding.length; i++) {
         if (cancelled || !mountedRef.current) return;
         const { booking, address, id } = pendingSalesNeedsGeocoding[i];
         const coord = await geocodeOne(address);
-        if (coord) {
-          newPSResults.push({ id, lat: coord.lat, lng: coord.lng, booking });
-        }
+        if (coord) newPSResults.push({ id, lat: coord.lat, lng: coord.lng, booking });
         if (cancelled || !mountedRef.current) return;
         progressDone++;
         onGeocodeProgress('phase2_completed_and_sales', 'pendingSalesAndCompleted', progressDone, totalToGeocode, false);
         if (i < pendingSalesNeedsGeocoding.length - 1) await new Promise(r => setTimeout(r, 80));
       }
-
       if (cancelled || !mountedRef.current) return;
-      if (isTeamSeason) {
-        setGeocodedPendingSales(newPSResults);
-      }
+      if (isTeamSeason) setGeocodedPendingSales(newPSResults);
       setGeocodedPins(Array.from(knownPinsRef.current.values()));
-
       onGeocodeProgress('phase3_historical', 'pendingSalesAndCompleted', totalToGeocode, totalToGeocode, true);
     })();
-
     return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, completedAndNewSalePinSource, pendingSalesByManager, isTeamSeason, routeColorMap, geocodeOne, updateCompletedPins, onGeocodeProgress]);
 
@@ -2079,14 +2387,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'phase3_historical') return;
-
     const map = mapRef.current; if (!map) return;
     let cancelled = false;
-
     (async () => {
       const enriched: GeocodedHistorical[] = [];
       const needsGeocoding: HistoricalProperty[] = [];
-
       historicalProps.forEach(h => {
         const addrKey = makeCacheKey(h.address);
         const uniqueKey = `${h.routeCode}::${addrKey}`;
@@ -2097,14 +2402,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           needsGeocoding.push(h);
         }
       });
-
       const total = needsGeocoding.length;
       onGeocodeProgress('phase3_historical', 'historical', 0, total, false);
-
       const snap = Array.from(knownHistoricalRef.current.values());
       setGeocodedHistorical(snap);
       updateHistoricalPins(map, snap);
-
       for (let i = 0; i < needsGeocoding.length; i++) {
         if (cancelled || !mountedRef.current) return;
         const h = needsGeocoding[i];
@@ -2123,15 +2425,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
         if (i < needsGeocoding.length - 1) await new Promise(r => setTimeout(r, 80));
       }
-
       if (cancelled || !mountedRef.current) return;
       const final = Array.from(knownHistoricalRef.current.values());
       setGeocodedHistorical(final);
       updateHistoricalPins(map, final);
-
       onGeocodeProgress('phase4_pcl', 'historical', total, total, true);
     })();
-
     return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, historicalProps, geocodeOne, updateHistoricalPins, onGeocodeProgress]);
 
@@ -2139,14 +2438,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'phase4_pcl') return;
-
     const map = mapRef.current; if (!map) return;
     let cancelled = false;
-
     (async () => {
       const known = new Map<string, GeocodedPCLEntry>();
       const needsGeocoding: Array<{ key: string; address: string }> = [];
-
       pclByRoute.forEach((clients, routeCode) => {
         clients.forEach(c => {
           const address = `${c.houseNum} ${c.streetName}`.trim();
@@ -2161,21 +2457,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           }
         });
       });
-
       const total = needsGeocoding.length;
       onGeocodeProgress('phase4_pcl', 'pcl', 0, total, false);
-
       const snap = Array.from(known.values());
       setGeocodedPCL(snap);
       updatePclCircles(map, snap);
-
       for (let i = 0; i < needsGeocoding.length; i++) {
         if (cancelled || !mountedRef.current) return;
         const { key, address } = needsGeocoding[i];
         const coord = await geocodeOne(address);
-        if (coord) {
-          known.set(key, { key, lat: coord.lat, lng: coord.lng });
-        }
+        if (coord) known.set(key, { key, lat: coord.lat, lng: coord.lng });
         if (cancelled || !mountedRef.current) return;
         onGeocodeProgress('phase4_pcl', 'pcl', i + 1, total, false);
         if ((i + 1) % 20 === 0 || i === needsGeocoding.length - 1) {
@@ -2185,15 +2476,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
         if (i < needsGeocoding.length - 1) await new Promise(r => setTimeout(r, 80));
       }
-
       if (cancelled || !mountedRef.current) return;
       const final = Array.from(known.values());
       setGeocodedPCL(final);
       updatePclCircles(map, final);
-
       onGeocodeProgress('complete', 'pcl', total, total, true);
     })();
-
     return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, pclByRoute, geocodeOne, updatePclCircles, onGeocodeProgress]);
 
@@ -2202,129 +2490,81 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'complete') return;
     if (!isTeamSeason) return;
-
     let cancelled = false;
     (async () => {
       const merged = mergePendingSalesForDisplay(pendingSalesByManager);
       const knownIds = new Set(geocodedPendingSales.map(g => g.id));
       const additions: GeocodedPendingSale[] = [];
-
       for (const booking of merged) {
         if (cancelled) return;
         if (knownIds.has(booking['Booking ID'])) continue;
         const address = booking['Full Address'] || '';
         if (!address) continue;
         const coord = await geocodeOne(address);
-        if (coord) {
-          additions.push({ id: booking['Booking ID'], lat: coord.lat, lng: coord.lng, booking });
-        }
+        if (coord) additions.push({ id: booking['Booking ID'], lat: coord.lat, lng: coord.lng, booking });
         await new Promise(r => setTimeout(r, 80));
       }
-
       if (cancelled || !mountedRef.current) return;
+      const stillRelevant = new Set(merged.map(b => b['Booking ID']));
       if (additions.length > 0) {
-        const stillRelevant = new Set(merged.map(b => b['Booking ID']));
-        setGeocodedPendingSales(prev => {
-          const next = [...prev.filter(g => stillRelevant.has(g.id)), ...additions];
-          return next;
-        });
+        setGeocodedPendingSales(prev => [...prev.filter(g => stillRelevant.has(g.id)), ...additions]);
       } else {
-        const stillRelevant = new Set(merged.map(b => b['Booking ID']));
         setGeocodedPendingSales(prev => prev.filter(g => stillRelevant.has(g.id)));
       }
     })();
     return () => { cancelled = true; };
   }, [pendingSalesByManager, geocodePhase, isTeamSeason, mapLoaded, geocodeCacheHydrated, geocodeOne]);
 
-  // --- UPSELL GEOCODING ---
-  // Upsells (Upgrade / Add-On tx) sit at the same address as their parent
-  // aeration job. Once Phase 2 has populated geocodeCache with those parent
-  // addresses, the vast majority of upsell pins resolve from cache instantly
-  // — no Mapbox calls needed. For the rare upsell at an address that didn't
-  // get geocoded by phase 2 (shouldn't happen, but defensive), we fall
-  // through to geocodeOne which itself checks the cache and only hits the
-  // network if nothing is found.
-  //
-  // We trigger this after Phase 2 finishes (geocodePhase past 'phase2_*'),
-  // and re-run incrementally whenever upsellPinSource changes (a worker
-  // adds a new upsell mid-day).
+  // Upsell geocoding
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
-    // Only run once Phase 2 has populated cache with completed/sale addresses.
     if (geocodePhase === 'idle' || geocodePhase === 'phase1_pending_bookings') return;
-
     let cancelled = false;
     (async () => {
       const sources = upsellPinSource;
       const additions: GeocodedPin[] = [];
-
       for (const pin of sources) {
         if (cancelled) return;
         if (knownUpsellPinsRef.current.has(pin.id)) continue;
         const coord = await geocodeOne(pin.address);
         if (coord) {
-          additions.push({
-            ...pin,
-            lat: coord.lat,
-            lng: coord.lng,
-            routeColor: routeColorMap.get(pin.routeCode) || '#888888',
-          });
+          additions.push({ ...pin, lat: coord.lat, lng: coord.lng, routeColor: routeColorMap.get(pin.routeCode) || '#888888' });
         }
-        // Small yield between iterations even when serving from cache — keeps
-        // the main thread responsive on large upsell lists.
         await new Promise(r => setTimeout(r, 0));
       }
-
       if (cancelled || !mountedRef.current) return;
       const stillRelevantIds = new Set(sources.map(p => p.id));
       additions.forEach(p => knownUpsellPinsRef.current.set(p.id, p));
-      // Prune any cached upsells whose source no longer lists them (rare —
-      // e.g. an upsell tx was retracted).
       for (const id of Array.from(knownUpsellPinsRef.current.keys())) {
-        if (!stillRelevantIds.has(id)) {
-          knownUpsellPinsRef.current.delete(id);
-        }
+        if (!stillRelevantIds.has(id)) knownUpsellPinsRef.current.delete(id);
       }
       setGeocodedUpsellPins(Array.from(knownUpsellPinsRef.current.values()));
     })();
     return () => { cancelled = true; };
   }, [upsellPinSource, geocodePhase, mapLoaded, geocodeCacheHydrated, geocodeOne, routeColorMap]);
 
-  // Drive the upsell-only and overlap-half layers. Recomputes from the
-  // current overlapInfo + geocodedUpsellPins state on every change.
+  // Drive upsell-only and overlap-half layers
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-
-    // Upsell-only: upsells whose address ISN'T in overlapInfo.
-    const upsellOnly = geocodedUpsellPins.filter(
-      p => !overlapInfo.has(makeCacheKey(p.address))
-    );
+    const upsellOnly = geocodedUpsellPins.filter(p => !overlapInfo.has(makeCacheKey(p.address)));
     updateUpsellOnlyPins(map, upsellOnly);
-
-    // Overlap points: one entry per overlap address, using the base pin's
-    // coordinates (which match the upsell's, since they share an address).
     const overlapPoints: Array<{ lat: number; lng: number }> = [];
-    overlapInfo.forEach(({ basePin }) => {
-      overlapPoints.push({ lat: basePin.lat, lng: basePin.lng });
-    });
+    overlapInfo.forEach(({ basePin }) => { overlapPoints.push({ lat: basePin.lat, lng: basePin.lng }); });
     updateOverlapHalfPins(map, overlapPoints);
   }, [geocodedUpsellPins, overlapInfo, mapLoaded, updateUpsellOnlyPins, updateOverlapHalfPins]);
 
-  // Render pending-sales markers
+  // Pending sales markers
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-
     const existingIds = new Set(pendingSaleMarkersRef.current.keys());
     const showThem = filterVisibility.pendingSalesAndCompleted;
-
     if (!showThem) {
       pendingSaleMarkersRef.current.forEach(m => m.remove());
       pendingSaleMarkersRef.current.clear();
       return;
     }
-
     geocodedPendingSales.forEach(ps => {
       const existing = pendingSaleMarkersRef.current.get(ps.id);
       if (existing) {
@@ -2332,17 +2572,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         existingIds.delete(ps.id);
       } else {
         const el = createDashedRotatingRing();
-        el.addEventListener('click', (e) => {
-          e.stopPropagation();
-          setPendingJobForModal(ps.booking);
-        });
-        const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
-          .setLngLat([ps.lng, ps.lat])
-          .addTo(map);
+        el.addEventListener('click', (e) => { e.stopPropagation(); setPendingJobForModal(ps.booking); });
+        const marker = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([ps.lng, ps.lat]).addTo(map);
         pendingSaleMarkersRef.current.set(ps.id, marker);
       }
     });
-
     existingIds.forEach(id => {
       pendingSaleMarkersRef.current.get(id)?.remove();
       pendingSaleMarkersRef.current.delete(id);
@@ -2353,36 +2587,22 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-
     pulsingMarkersRef.current.forEach(m => m.remove());
     pulsingMarkersRef.current = [];
-
     if (!filterVisibility.pendingSalesAndCompleted) return;
-
     mostRecentCompletionPins.forEach(pin => {
       const color = pin.routeColor || '#22c55e';
       const el = createPulsingRing(color);
-      const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
-        .setLngLat([pin.lng, pin.lat])
-        .addTo(map);
+      const marker = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([pin.lng, pin.lat]).addTo(map);
       pulsingMarkersRef.current.push(marker);
     });
-
     return () => {
       pulsingMarkersRef.current.forEach(m => m.remove());
       pulsingMarkersRef.current = [];
     };
   }, [mostRecentCompletionPins, mapLoaded, filterVisibility.pendingSalesAndCompleted]);
 
-  // GPS (RM's own location) + drag-to-disable-follow-me + cart-aware on-route
-  //
-  // Arrow rotation: GPS-derived heading is PREFERRED when fresh (the user is
-  // moving). This watchPosition callback computes that heading from successive
-  // fixes (>5m apart, above walking pace) and stamps gpsHeadingUpdatedAtRef so
-  // applyArrowRotation knows it's current. Compass is the fallback for when
-  // GPS-derived heading is stale (stationary >5s). Both sources route through
-  // applyArrowRotation (defined in PART 1) so the priority logic lives in one
-  // place.
+  // GPS + drag-to-disable-follow-me + cart-aware on-route
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!navigator.geolocation) return;
     if(!navArrowElRef.current) {
@@ -2391,51 +2611,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       navArrowInnerRef.current = arrow.inner;
     }
     navMarkerRef.current=new mapboxgl.Marker({element:navArrowElRef.current}).setLngLat([0,0]).addTo(map);
-
-    const handleDragStart = (e: any) => {
-      if (!e.originalEvent) return;
-      if (centerOnLocationRef.current) {
-        onFollowMeAutoDisable();
-      }
-    };
+    const handleDragStart = (e: any) => { if (!e.originalEvent) return; if (centerOnLocationRef.current) onFollowMeAutoDisable(); };
     map.on('dragstart', handleDragStart);
-
-    // Re-apply arrow rotation whenever the map's bearing changes — keeps the
-    // arrow pointing at the world heading rather than the screen heading
-    // when the user rotates the map (two-finger gesture on touch, or
-    // shift-drag on desktop). Without this, the arrow visibly skews by the
-    // rotation angle.
     map.on('rotate', applyArrowRotation);
-
     watchIdRef.current=navigator.geolocation.watchPosition(pos=>{
       if(!navMarkerRef.current||!mapRef.current) return;
       const{latitude:lat,longitude:lng,heading,speed}=pos.coords;
       navMarkerRef.current.setLngLat([lng,lat]);
-
-      // --- Heading computation ---
-      // Priority 1: native pos.coords.heading (browser-reported course over
-      // ground). Often null at rest or low speeds.
-      // Priority 2: bearing from previous fix to current fix, but only if
-      // we moved enough that GPS noise won't dominate (>5m).
-      // When set, stamp gpsHeadingUpdatedAtRef so the rotation priority logic
-      // knows this heading is fresh.
-      // Heading derivation. We PREFER `pos.coords.heading` (GPS course
-      // over ground per the W3C Geolocation spec — reliable on Android
-      // Chrome when actively moving) and fall back to a bearing computed
-      // from successive GPS fixes only when the OS doesn't report a
-      // heading. The 5m displacement gate filters out parked GPS jitter.
-      // Earlier we tried inverting this priority to dodge a phantom
-      // compass-based-heading problem; that's not actually how the spec
-      // works, and the inversion stopped the arrow updating at low speed.
       let derivedHeading: number | null = null;
       if (heading != null && !isNaN(heading)) {
         derivedHeading = heading;
       } else if (lastGpsPosRef.current) {
         const prev = lastGpsPosRef.current;
         const dist = distanceMeters(prev.lat, prev.lng, lat, lng);
-        if (dist >= 5) {
-          derivedHeading = bearingDeg(prev.lat, prev.lng, lat, lng);
-        }
+        if (dist >= 5) derivedHeading = bearingDeg(prev.lat, prev.lng, lat, lng);
       }
       if (derivedHeading != null) {
         gpsHeadingRef.current = derivedHeading;
@@ -2443,18 +2632,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
       lastGpsPosRef.current = { lat, lng, ts: Date.now() };
       applyArrowRotation();
-
-      // Follow-me map centering — re-center on EVERY GPS fix (no movement
-      // threshold). The previous threshold of 1m / 3m made follow-me feel
-      // static when walking; the real cause of the original flicker was the
-      // 1000ms easeTo duration creating overlapping animations. At 300ms,
-      // each animation completes before the next GPS fix arrives so there's
-      // no stacking and no flicker even at high GPS rates.
       if (centerOnLocationRef.current) {
         mapRef.current.easeTo({ center: [lng, lat], duration: 300 });
         lastCenteredAtRef.current = { lat, lng };
       }
-
       if (centerOnLocationRef.current) {
         const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, managerId, 100);
         if (nearest) {
@@ -2466,10 +2647,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               setOnRouteCartCard(cart);
               setOnRouteWorkerCard(null);
             } else {
-              onRouteCartIdRef.current = null;
-              onRouteWorkerIdRef.current = null;
-              setOnRouteCartCard(null);
-              setOnRouteWorkerCard(null);
+              onRouteCartIdRef.current = null; onRouteWorkerIdRef.current = null;
+              setOnRouteCartCard(null); setOnRouteWorkerCard(null);
             }
           } else {
             const card = workerCardDataRef.current.find(c => c.worker.contractorId === nearest.workerId) || null;
@@ -2479,16 +2658,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             setOnRouteCartCard(null);
           }
         } else {
-          onRouteWorkerIdRef.current = null;
-          onRouteCartIdRef.current = null;
-          setOnRouteWorkerCard(null);
-          setOnRouteCartCard(null);
+          onRouteWorkerIdRef.current = null; onRouteCartIdRef.current = null;
+          setOnRouteWorkerCard(null); setOnRouteCartCard(null);
         }
       } else {
-        onRouteWorkerIdRef.current = null;
-        onRouteCartIdRef.current = null;
-        setOnRouteWorkerCard(null);
-        setOnRouteCartCard(null);
+        onRouteWorkerIdRef.current = null; onRouteCartIdRef.current = null;
+        setOnRouteWorkerCard(null); setOnRouteCartCard(null);
       }
     },()=>{},{enableHighAccuracy:true,maximumAge:15000,timeout:30000});
     return()=>{
@@ -2499,29 +2674,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     };
   }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable, applyArrowRotation]);
 
-  // --- COMPASS LISTENER WIRING ---
-  // On mount (and after a permission grant on iOS), attach a deviceorientation
-  // listener that pushes compass headings into compassHeadingRef and applies
-  // rotation. Android tablets and desktop just have this work without any
-  // permission flow; iOS 13+ Safari requires a user gesture, which we handle
-  // by showing a small button overlay in HALF 2 that calls handleEnableCompass.
+  // Compass
   const attachCompassListener = useCallback(() => {
-    if (compassHandlerRef.current) return; // already attached
+    if (compassHandlerRef.current) return;
     const handler = (e: DeviceOrientationEvent) => {
-      // iOS provides webkitCompassHeading directly — degrees clockwise from north.
       const webkit = (e as any).webkitCompassHeading;
-      if (typeof webkit === 'number' && !isNaN(webkit)) {
-        compassHeadingRef.current = webkit;
-      } else if (e.alpha != null && !isNaN(e.alpha)) {
-        // Android/desktop: alpha is 0 when device is pointing north and increases
-        // counterclockwise. Invert to get clockwise-from-north.
-        compassHeadingRef.current = (360 - e.alpha) % 360;
-      }
-      // Route through the shared rotation logic so the GPS-fresh-wins
-      // priority is honoured. If the user is actively moving, GPS-derived
-      // heading is fresh and the compass value won't be applied — even
-      // though we just updated compassHeadingRef. That's intentional: when
-      // moving, direction of travel matters more than device orientation.
+      if (typeof webkit === 'number' && !isNaN(webkit)) compassHeadingRef.current = webkit;
+      else if (e.alpha != null && !isNaN(e.alpha)) compassHeadingRef.current = (360 - e.alpha) % 360;
       applyArrowRotation();
     };
     window.addEventListener('deviceorientation', handler, true);
@@ -2531,35 +2690,24 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const handleEnableCompass = useCallback(async () => {
     const DOE: any = (window as any).DeviceOrientationEvent;
     if (!DOE || typeof DOE.requestPermission !== 'function') {
-      // Shouldn't happen — the button only renders when this exists — but
-      // defensive: attach anyway and dismiss the button.
       attachCompassListener();
       setCompassNeedsPermission(false);
       return;
     }
     try {
       const result = await DOE.requestPermission();
-      if (result === 'granted') {
-        attachCompassListener();
-      }
+      if (result === 'granted') attachCompassListener();
     } catch (err) {
       console.warn('Compass permission request failed:', err);
     }
-    // Either way, dismiss the button — if denied, we silently fall back to
-    // GPS-derived heading. No point pestering the user.
     setCompassNeedsPermission(false);
   }, [attachCompassListener]);
 
   useEffect(() => {
     const DOE: any = (window as any).DeviceOrientationEvent;
-    if (!DOE) return; // device has no orientation API at all
-    if (typeof DOE.requestPermission === 'function') {
-      // iOS 13+ — needs user gesture, show the enable button.
-      setCompassNeedsPermission(true);
-    } else {
-      // Android/desktop — no permission flow, attach now.
-      attachCompassListener();
-    }
+    if (!DOE) return;
+    if (typeof DOE.requestPermission === 'function') setCompassNeedsPermission(true);
+    else attachCompassListener();
     return () => {
       if (compassHandlerRef.current) {
         window.removeEventListener('deviceorientation', compassHandlerRef.current, true);
@@ -2573,19 +2721,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const ll = navMarkerRef.current.getLngLat();
       if (ll.lng !== 0 || ll.lat !== 0) {
         mapRef.current.easeTo({ center: [ll.lng, ll.lat], duration: 800 });
-        // Seed the throttle so we don't immediately re-center again on the
-        // next GPS update.
         lastCenteredAtRef.current = { lat: ll.lat, lng: ll.lng };
       }
     }
     if (!centerOnLocation) {
-      // Clear the throttle so the next time follow-me turns on, the first
-      // GPS update will re-center (any distance > 3m from a null reference).
       lastCenteredAtRef.current = null;
-      onRouteWorkerIdRef.current = null;
-      onRouteCartIdRef.current = null;
-      setOnRouteWorkerCard(null);
-      setOnRouteCartCard(null);
+      onRouteWorkerIdRef.current = null; onRouteCartIdRef.current = null;
+      setOnRouteWorkerCard(null); setOnRouteCartCard(null);
     }
   }, [centerOnLocation]);
 
@@ -2599,9 +2741,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       map.resize();
       const xh=['poi-label','housenum-label','road-number-shield','transit-label'];
       xh.forEach(id=>{if(map.getLayer(id)) map.setLayoutProperty(id,'visibility','none');});
-      // Defensive: also hide any other layer whose id mentions transit or bus
-      // — covers bus-stop icons, transit lines, transit shields, station
-      // labels, etc. across any Mapbox style variant.
       map.getStyle().layers?.forEach((layer:any)=>{
         const id=layer.id.toLowerCase();
         if(id.includes('transit')||id.includes('bus-stop')||id.includes('busstop')) {
@@ -2628,61 +2767,32 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
       const xCanvasSize = 16;
       const xCanvas = document.createElement('canvas');
-      xCanvas.width = xCanvasSize;
-      xCanvas.height = xCanvasSize;
+      xCanvas.width = xCanvasSize; xCanvas.height = xCanvasSize;
       const ctx = xCanvas.getContext('2d');
       if (ctx) {
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 3;
-        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#000000'; ctx.lineWidth = 3; ctx.lineCap = 'round';
         const pad = 3;
         ctx.beginPath();
-        ctx.moveTo(pad, pad);
-        ctx.lineTo(xCanvasSize - pad, xCanvasSize - pad);
-        ctx.moveTo(xCanvasSize - pad, pad);
-        ctx.lineTo(pad, xCanvasSize - pad);
+        ctx.moveTo(pad, pad); ctx.lineTo(xCanvasSize - pad, xCanvasSize - pad);
+        ctx.moveTo(xCanvasSize - pad, pad); ctx.lineTo(pad, xCanvasSize - pad);
         ctx.stroke();
-
         const imgData = ctx.getImageData(0, 0, xCanvasSize, xCanvasSize);
-        if (!map.hasImage('rm-historical-x')) {
-          map.addImage('rm-historical-x', imgData, { pixelRatio: 2 });
-        }
+        if (!map.hasImage('rm-historical-x')) map.addImage('rm-historical-x', imgData, { pixelRatio: 2 });
       }
-
-      // ---- Half-blue overlay icon (rm-upsell-half-blue) ----
-      // Draws ONLY the right half of a ring (semicircle, π to 0 going through
-      // 0 from the top, then back) at the same radius/stroke-width as the
-      // underlying completed-pin circles. Drawn at pixelRatio 2 for crispness
-      // on retina displays. The left half is transparent so the underlying
-      // pin's green/yellow stroke shows through unmodified.
       const upsellCanvasSize = 16;
       const upsellCanvas = document.createElement('canvas');
-      upsellCanvas.width = upsellCanvasSize;
-      upsellCanvas.height = upsellCanvasSize;
+      upsellCanvas.width = upsellCanvasSize; upsellCanvas.height = upsellCanvasSize;
       const uctx = upsellCanvas.getContext('2d');
       if (uctx) {
-        const cx = upsellCanvasSize / 2;
-        const cy = upsellCanvasSize / 2;
-        // Underlying circle is radius 3.33 with stroke 1.67. At pixelRatio 2,
-        // the icon's nominal pixel space is 2x. So our drawing radius needs
-        // to match the painted ring: drawing radius ~= (3.33 + 1.67/2) * 2 ≈
-        // 8.3 in canvas pixels. We use slightly larger to ensure full overlap
-        // of the stroke.
-        const ringRadius = 4.17;     // (3.33 + half stroke) * 2-ish, eyeballed
-        const strokeWidth = 1.67 * 2; // double for hi-DPI canvas
-        uctx.strokeStyle = '#3b82f6'; // Tailwind blue-500
-        uctx.lineWidth = strokeWidth;
-        uctx.lineCap = 'butt';
+        const cx = upsellCanvasSize / 2; const cy = upsellCanvasSize / 2;
+        const ringRadius = 4.17; const strokeWidth = 1.67 * 2;
+        uctx.strokeStyle = '#3b82f6'; uctx.lineWidth = strokeWidth; uctx.lineCap = 'butt';
         uctx.beginPath();
-        // Right half arc: from top (-π/2) clockwise to bottom (π/2)
         uctx.arc(cx, cy, ringRadius, -Math.PI / 2, Math.PI / 2, false);
         uctx.stroke();
         const upsellImgData = uctx.getImageData(0, 0, upsellCanvasSize, upsellCanvasSize);
-        if (!map.hasImage('rm-upsell-half-blue')) {
-          map.addImage('rm-upsell-half-blue', upsellImgData, { pixelRatio: 2 });
-        }
+        if (!map.hasImage('rm-upsell-half-blue')) map.addImage('rm-upsell-half-blue', upsellImgData, { pixelRatio: 2 });
       }
-
       setMapLoaded(true);
     });
     mapRef.current=map;
@@ -2723,100 +2833,42 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   };
 
-  // --- NEW: NAV ACTION HANDLERS ---
-  //
-  // Common flow for both worker and cart nav requests:
-  //   1. Resolve destination via the fallback chain (newest geocodable transaction).
-  //   2. If none found → toast/log and abort (the button shouldn't have been
-  //      visible in the first place; this is just defence in depth).
-  //   3. If no nav is currently active → start nav directly.
-  //   4. If nav is active and same target → no-op.
-  //   5. If nav is active and different target → show switch-confirmation popup.
-  //
-  // When nav starts, force follow-me on if it's off so the camera tracks the RM.
-  // The auto-disable-on-drag still works (handleDragStart in the GPS effect),
-  // so the RM can tap-pan to inspect mid-trip and follow-me silently turns off.
-
-  const startNavToDestination = useCallback((
-    dest: NavDestination,
-    targetKey: string
-  ) => {
-    // Force follow-me on if it's off.
-    if (!centerOnLocation && onForceFollowMeOn) {
-      onForceFollowMeOn();
-    }
+  // --- NAV ACTION HANDLERS ---
+  const startNavToDestination = useCallback((dest: NavDestination, targetKey: string) => {
+    if (!centerOnLocation && onForceFollowMeOn) onForceFollowMeOn();
     setNavState({ destination: dest, targetKey });
-    // Defensive: close any overlays that would visually fight the maneuver card.
     if (popupRef.current) { popupRef.current.remove(); popupRef.current = null; }
   }, [centerOnLocation, onForceFollowMeOn]);
 
   const handleNavigateToWorker = useCallback((card: WorkerCardData) => {
     const resolved = resolveNavDestination(card.financialStore);
-    if (!resolved) {
-      console.warn('[RMNav] No geocoded address available for', card.worker.contractorId);
-      return;
-    }
+    if (!resolved) { console.warn('[RMNav] No geocoded address for', card.worker.contractorId); return; }
     const label = `${card.worker.firstName} ${card.worker.lastName.charAt(0)}.`;
     const newDest: NavDestination = { lat: resolved.lat, lng: resolved.lng, label };
     const newKey = `worker:${card.worker.contractorId}`;
-
-    if (!navState) {
-      startNavToDestination(newDest, newKey);
-      return;
-    }
-    if (navState.targetKey === newKey) return; // tapping the same target — no-op
-    setSwitchNavConfirm({
-      newDestination: newDest,
-      newTargetKey: newKey,
-      currentLabel: navState.destination.label,
-      newLabel: label,
-    });
+    if (!navState) { startNavToDestination(newDest, newKey); return; }
+    if (navState.targetKey === newKey) return;
+    setSwitchNavConfirm({ newDestination: newDest, newTargetKey: newKey, currentLabel: navState.destination.label, newLabel: label });
   }, [navState, startNavToDestination]);
 
   const handleNavigateToCart = useCallback((cart: CartCardData) => {
     const resolved = resolveNavDestination(cart.sharedFinancialStore);
-    if (!resolved) {
-      console.warn('[RMNav] No geocoded address available for cart', cart.sessionId);
-      return;
-    }
+    if (!resolved) { console.warn('[RMNav] No geocoded address for cart', cart.sessionId); return; }
     const label = cart.members.length > 1
       ? cart.members.map(m => m.firstName).join(' & ')
       : `${cart.members[0]?.firstName || ''} ${cart.members[0]?.lastName.charAt(0) || ''}.`;
     const newDest: NavDestination = { lat: resolved.lat, lng: resolved.lng, label };
     const newKey = `cart:${cart.sessionId}`;
-
-    if (!navState) {
-      startNavToDestination(newDest, newKey);
-      return;
-    }
+    if (!navState) { startNavToDestination(newDest, newKey); return; }
     if (navState.targetKey === newKey) return;
-    setSwitchNavConfirm({
-      newDestination: newDest,
-      newTargetKey: newKey,
-      currentLabel: navState.destination.label,
-      newLabel: label,
-    });
+    setSwitchNavConfirm({ newDestination: newDest, newTargetKey: newKey, currentLabel: navState.destination.label, newLabel: label });
   }, [navState, startNavToDestination]);
 
-  // Worker/cart cards expose "can navigate?" — used to hide the Navigate icon
-  // when there's no geocodable address. Cheap enough to recompute per-render
-  // since it's just cache lookups.
-  const workerCanNavigate = useCallback((card: WorkerCardData): boolean => {
-    return resolveNavDestination(card.financialStore) !== null;
-  }, []);
+  const workerCanNavigate = useCallback((card: WorkerCardData): boolean => resolveNavDestination(card.financialStore) !== null, []);
+  const cartCanNavigate = useCallback((cart: CartCardData): boolean => resolveNavDestination(cart.sharedFinancialStore) !== null, []);
 
-  const cartCanNavigate = useCallback((cart: CartCardData): boolean => {
-    return resolveNavDestination(cart.sharedFinancialStore) !== null;
-  }, []);
-
-  const handleNavCancel = useCallback(() => {
-    setNavState(null);
-  }, []);
-
-  const handleNavArrived = useCallback(() => {
-    // Silent end — drops back to regular map. No modal auto-open per spec.
-    setNavState(null);
-  }, []);
+  const handleNavCancel = useCallback(() => { setNavState(null); }, []);
+  const handleNavArrived = useCallback(() => { setNavState(null); }, []);
 
   const handleSwitchNavConfirm = useCallback(() => {
     if (!switchNavConfirm) return;
@@ -2824,26 +2876,208 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     setSwitchNavConfirm(null);
   }, [switchNavConfirm, startNavToDestination]);
 
-  // Route-prompt picker → trigger the existing nav handler for the chosen
-  // contractor/cart, then dismiss the prompt. Disabled entries (no
-  // geocodable address) shouldn't reach this handler — the button is
-  // disabled in the modal — but we defensively no-op if they do.
   const handleRouteNavPromptSelect = useCallback((entry: RouteNavPromptEntry) => {
     if (!entry.hasGeocodableAddress) return;
     setRouteNavPrompt(null);
-    if (entry.type === 'cart') {
-      handleNavigateToCart(entry.card as CartCardData);
-    } else {
-      handleNavigateToWorker(entry.card as WorkerCardData);
-    }
+    if (entry.type === 'cart') handleNavigateToCart(entry.card as CartCardData);
+    else handleNavigateToWorker(entry.card as WorkerCardData);
   }, [handleNavigateToWorker, handleNavigateToCart]);
 
-  // --- EXISTING ACTIONS ---
+  // --- ROUTE SPLIT HANDLERS ---
+  //
+  // handleOpenSplitModal: tapped on a route card's Split button. Builds the
+  // segments + prebookings payload from the current routeMapData and
+  // geocodedPins, then opens RouteSplitModal.
+  //
+  // handleSplitConfirm: RouteSplitModal called back with the chosen bucket.
+  // Saves to DB via sessionService.createRouteSplit, reloads splits, then
+  // computes the per-half preview stats and opens the post-split assignment
+  // picker for half 'a'.
+  //
+  // handlePostSplitAssign: the user clicks a worker in the post-split picker.
+  // Calls updateRouteSplitAssignment, then advances the flow: if just finished
+  // 'a', open the picker for 'b'; if just finished 'b', close everything and
+  // refresh.
+  //
+  // handlePostSplitAssignLater: same advance logic, but skips the assignment.
 
-  const handleAssignRoute=async(workerId:string|null)=>{
-    if(!assignModalData) return; setAssignLoading(true);
-    try{
-      const { routeCode } = assignModalData;
+  const handleOpenSplitModal = useCallback((card: RouteCardData) => {
+    const rmd = routeMapData.find(r => r.route_code === card.baseRouteCode);
+    if (!rmd || !rmd.segments?.length) {
+      console.warn('[Split] No segment geometry for route', card.baseRouteCode);
+      return;
+    }
+    // Prebookings: read from geocodedPins (pending status), filter to this route,
+    // map to the modal's expected shape.
+    const prebookings = geocodedPins
+      .filter(p => p.status === 'pending' && p.routeCode === card.baseRouteCode)
+      .map(p => ({ bookingId: p.id, lat: p.lat, lng: p.lng }));
+    setSplitModalData({
+      routeCode: card.baseRouteCode,
+      routeColor: card.routeColor,
+      segments: rmd.segments,
+      prebookings,
+    });
+  }, [routeMapData, geocodedPins]);
+
+  const handleSplitConfirm = useCallback(async (segmentBOsmIds: number[], bookingBIds: string[]) => {
+    if (!splitModalData) return;
+    const { routeCode, routeColor } = splitModalData;
+    try {
+      await sessionService.createRouteSplit({ routeCode, segmentBOsmIds, bookingBIds });
+    } catch (err) {
+      console.error('[Split] createRouteSplit failed:', err);
+      // Close the modal anyway so the user isn't stuck. Surface the error
+      // through a console log; the RM can retry if the DB insert failed.
+      setSplitModalData(null);
+      return;
+    }
+    // Refresh splits so routeCardData re-renders with two cards.
+    await reloadRouteSplits();
+
+    // Compute per-half stats for the post-split picker preview. Read from
+    // current bookings to count.
+    const allRouteBookings = bookings.filter(b => b['Route Number'] === routeCode);
+    const bBookingSet = new Set(bookingBIds);
+    const aBookings = allRouteBookings.filter(b => !bBookingSet.has(b['Booking ID']));
+    const bBookingsList = allRouteBookings.filter(b => bBookingSet.has(b['Booking ID']));
+    const rmd = routeMapData.find(r => r.route_code === routeCode);
+    const totalSegs = rmd?.segments?.length || 0;
+    const bSegs = segmentBOsmIds.length;
+    const aSegs = Math.max(0, totalSegs - bSegs);
+
+    const flow: PostSplitFlowState = {
+      routeCode,
+      routeColor,
+      segmentBOsmIds,
+      bookingBIds,
+      aSegCount: aSegs,
+      bSegCount: bSegs,
+      aBookingCount: aBookings.length,
+      bBookingCount: bBookingsList.length,
+      aPrepayCount: aBookings.filter(b => b.Prepaid === 'x').length,
+      bPrepayCount: bBookingsList.filter(b => b.Prepaid === 'x').length,
+      aTotalEQ: aBookings.reduce((sum, b) => sum + calculateBookingEQ(b), 0),
+      bTotalEQ: bBookingsList.reduce((sum, b) => sum + calculateBookingEQ(b), 0),
+      currentlyAssigning: 'a',
+    };
+    setPostSplitFlow(flow);
+    setSplitModalData(null);
+
+    // Open the assignment picker for half 'a'.
+    setAssignModalData({
+      routeCode,
+      displayRouteCode: `${routeCode}a`,
+      routeColor,
+      prebookCount: flow.aBookingCount,
+      prepayCount: flow.aPrepayCount,
+      totalEQ: flow.aTotalEQ,
+      currentWorkerIds: [],
+      half: 'a',
+      postSplitFlow: true,
+    });
+  }, [splitModalData, reloadRouteSplits, bookings, routeMapData, calculateBookingEQ]);
+
+  const handleSplitCancel = useCallback(() => {
+    setSplitModalData(null);
+  }, []);
+
+  // Advance the post-split flow after an 'a' assignment (or "later"). Opens
+  // the 'b' picker if we just finished 'a'; closes everything and refreshes
+  // if we just finished 'b'.
+  const advancePostSplitFlow = useCallback(() => {
+    if (!postSplitFlow) {
+      // Not in a flow — just close the modal.
+      setAssignModalData(null);
+      return;
+    }
+    if (postSplitFlow.currentlyAssigning === 'a') {
+      // Move on to 'b'.
+      const bColor = complementaryColor(postSplitFlow.routeColor);
+      setPostSplitFlow({ ...postSplitFlow, currentlyAssigning: 'b' });
+      setAssignModalData({
+        routeCode: postSplitFlow.routeCode,
+        displayRouteCode: `${postSplitFlow.routeCode}b`,
+        routeColor: bColor,
+        prebookCount: postSplitFlow.bBookingCount,
+        prepayCount: postSplitFlow.bPrepayCount,
+        totalEQ: postSplitFlow.bTotalEQ,
+        currentWorkerIds: [],
+        half: 'b',
+        postSplitFlow: true,
+      });
+    } else {
+      // Done with 'b' — close everything.
+      setAssignModalData(null);
+      setPostSplitFlow(null);
+      onRefresh();
+    }
+  }, [postSplitFlow, onRefresh]);
+
+  // --- ASSIGN ROUTE ---
+  // Branches by half:
+  //   - assignModalData.half undefined: original whole-route assignment flow.
+  //   - assignModalData.half = 'a' | 'b': writes to route_splits via
+  //     updateRouteSplitAssignment, which handles both the splits row and the
+  //     routes.assigned_worker_ids union AND the per-booking assignment for
+  //     the affected half's bookings.
+  //
+  // When in postSplitFlow, advances after a successful assignment.
+  const handleAssignRoute = async (workerId: string | null) => {
+    if (!assignModalData) return;
+    setAssignLoading(true);
+    try {
+      const { routeCode, half } = assignModalData;
+
+      if (half) {
+        // Split-half assignment.
+        const workerIds = workerId === null ? [] : [workerId];
+        // For team seasons, cart members need to be included on the route's
+        // assigned_worker_ids union so the existing per-booking session logic
+        // still works. updateRouteSplitAssignment handles the union math.
+        let halfWorkerIds = workerIds;
+        if (isTeamSeason && workerId !== null) {
+          const worker = myTeamWorkers.find(w => w.contractorId === workerId);
+          const teamId = worker?.teamId || workerId;
+          const cart = teamCarts.find(c => c.teamId === teamId);
+          if (cart && cart.workerIds.length > 1) halfWorkerIds = cart.workerIds;
+        }
+        await sessionService.updateRouteSplitAssignment(routeCode, half, halfWorkerIds);
+
+        // For team seasons, also push session_id onto the affected half's
+        // bookings so the worker logsheet routes them correctly.
+        if (isTeamSeason && workerId !== null) {
+          const session = await sessionService.getWorkerLogsheetSession(workerId);
+          const sessionId = session?.id;
+          if (sessionId) {
+            // Read which bookings belong to this half.
+            const split = await sessionService.getRouteSplitForRoute(routeCode);
+            if (split) {
+              const allRouteBookings = bookings.filter(b => b['Route Number'] === routeCode);
+              const bBookingSet = new Set(split.bookingBIds);
+              const halfBookings = half === 'b'
+                ? allRouteBookings.filter(b => bBookingSet.has(b['Booking ID']))
+                : allRouteBookings.filter(b => !bBookingSet.has(b['Booking ID']));
+              const halfBookingIds = halfBookings.map(b => b['Booking ID']);
+              if (halfBookingIds.length > 0) {
+                await sessionService.assignBookingsToSession(halfBookingIds, sessionId);
+              }
+            }
+          }
+        }
+
+        if (postSplitFlow) {
+          // In the flow — advance.
+          advancePostSplitFlow();
+        } else {
+          // Direct half assignment (RM tapped the line on the map).
+          setAssignModalData(null);
+          onRefresh();
+        }
+        return;
+      }
+
+      // Whole-route (non-split) assignment — unchanged behaviour.
       const routeBookings = bookings.filter(b => b['Route Number'] === routeCode);
       const pendingItems = routeBookings.filter(b => b.Status !== 'completed' && b.Completed !== 'x');
       const pendingBookingIds = pendingItems.map(j => j['Booking ID']);
@@ -2851,13 +3085,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       if (workerId === null) {
         await sessionService.assignRouteToWorkers(routeCode, []);
         if (isTeamSeason) {
-          await Promise.all(pendingItems.map(job =>
-            sessionService.assignBookingToSession(job['Booking ID'], null)
-          ));
+          await Promise.all(pendingItems.map(job => sessionService.assignBookingToSession(job['Booking ID'], null)));
         } else {
-          await Promise.all(pendingItems.map(job =>
-            sessionService.assignBookingToWorker(job['Booking ID'], null)
-          ));
+          await Promise.all(pendingItems.map(job => sessionService.assignBookingToWorker(job['Booking ID'], null)));
         }
       } else if (isTeamSeason) {
         const worker = myTeamWorkers.find(w => w.contractorId === workerId);
@@ -2871,15 +3101,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         } else {
           await sessionService.assignRouteToWorkers(routeCode, [workerId]);
         }
-
         if (sessionId && pendingBookingIds.length > 0) {
           await sessionService.assignBookingsToSession(pendingBookingIds, sessionId);
         }
       } else {
         await sessionService.assignRouteToWorkers(routeCode, [workerId]);
-        await Promise.all(pendingItems.map(job =>
-          sessionService.assignBookingToWorker(job['Booking ID'], workerId)
-        ));
+        await Promise.all(pendingItems.map(job => sessionService.assignBookingToWorker(job['Booking ID'], workerId)));
       }
       setAssignModalData(null);
       onRefresh();
@@ -2890,23 +3117,24 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   };
 
+  // "Assign later" — only present when postSplitFlow is active. Skips the
+  // current half's assignment and advances to the next half (or closes).
+  const handleAssignLater = useCallback(() => {
+    if (!postSplitFlow) return;
+    advancePostSplitFlow();
+  }, [postSplitFlow, advancePostSplitFlow]);
+
   const handleTransferConfirm = async (newManagerId: string) => {
     if (!transferModalData) return;
     try {
       if (transferModalData.type === 'ROUTE') {
         await sessionService.transferRouteToManager(transferModalData.routeCode, newManagerId);
       } else {
-        await sessionService.transferBookingToManager(
-          transferModalData.targetId,
-          transferModalData.routeCode,
-          newManagerId
-        );
+        await sessionService.transferBookingToManager(transferModalData.targetId, transferModalData.routeCode, newManagerId);
       }
       setTransferModalData(null);
       onRefresh();
-    } catch (e) {
-      console.error(e);
-    }
+    } catch (e) { console.error(e); }
   };
 
   const openTransferModal = () => {
@@ -2915,7 +3143,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       type: 'ROUTE',
       targetId: assignModalData.routeCode,
       routeCode: assignModalData.routeCode,
-      title: `Transfer Route ${assignModalData.routeCode}`,
+      title: `Transfer Route ${assignModalData.displayRouteCode}`,
     });
     setAssignModalData(null);
   };
@@ -2927,40 +3155,25 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       | { type: 'different_manager'; targetManagerId: string }
   ) => {
     if (!selectedWorkerToMove) return;
-    setReassignLoading(true);
-    setReassignError(null);
-    setReassignSuccess(null);
-
+    setReassignLoading(true); setReassignError(null); setReassignSuccess(null);
     try {
       await sessionService.reassignWorker(selectedWorkerToMove.contractorId, destination);
-
       let msg = '';
-      if (destination.type === 'existing_cart') {
-        msg = `${selectedWorkerToMove.firstName} moved to ${destination.label}`;
-      } else if (destination.type === 'new_solo') {
-        msg = `${selectedWorkerToMove.firstName} is now a solo cart`;
-      } else {
-        const mgr = allManagers.find(m => m.userId === destination.targetManagerId);
-        msg = `${selectedWorkerToMove.firstName} moved to ${mgr?.name || 'new manager'}`;
-      }
-
+      if (destination.type === 'existing_cart') msg = `${selectedWorkerToMove.firstName} moved to ${destination.label}`;
+      else if (destination.type === 'new_solo') msg = `${selectedWorkerToMove.firstName} is now a solo cart`;
+      else { const mgr = allManagers.find(m => m.userId === destination.targetManagerId); msg = `${selectedWorkerToMove.firstName} moved to ${mgr?.name || 'new manager'}`; }
       setReassignSuccess(msg);
-      setSelectedWorkerToMove(null);
-      setSelectedWorkerSourceCart(null);
+      setSelectedWorkerToMove(null); setSelectedWorkerSourceCart(null);
       onRefresh();
     } catch (err: any) {
       console.error('Reassign failed:', err);
       setReassignError(err.message || 'Failed to reassign worker. Please try again.');
-    } finally {
-      setReassignLoading(false);
-    }
+    } finally { setReassignLoading(false); }
   };
 
   const handleAerationTransfer = async (targetManagerId: string) => {
     if (!selectedWorkerToMove) return;
-    setReassignLoading(true);
-    setReassignError(null);
-    setReassignSuccess(null);
+    setReassignLoading(true); setReassignError(null); setReassignSuccess(null);
     try {
       await sessionService.transferWorker(selectedWorkerToMove.contractorId, targetManagerId);
       const mgr = allManagers.find(m => m.userId === targetManagerId);
@@ -2970,9 +3183,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     } catch (err: any) {
       console.error('Transfer failed:', err);
       setReassignError(err.message || 'Failed to transfer worker.');
-    } finally {
-      setReassignLoading(false);
-    }
+    } finally { setReassignLoading(false); }
   };
 
   const handleRemoveWorkerNoShow = async () => {
@@ -2980,30 +3191,19 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (!window.confirm(
       `Remove ${selectedWorkerToMove.firstName} ${selectedWorkerToMove.lastName} completely?\n\nThis removes them from the session and all stats. Use this for no-shows only.`
     )) return;
-
-    setReassignLoading(true);
-    setReassignError(null);
-    setReassignSuccess(null);
-
+    setReassignLoading(true); setReassignError(null); setReassignSuccess(null);
     try {
       if (isTeamSeason && selectedWorkerSourceCart && selectedWorkerSourceCart.members.length > 1) {
-        await sessionService.reassignWorker(
-          selectedWorkerToMove.contractorId,
-          { type: 'new_solo' }
-        );
+        await sessionService.reassignWorker(selectedWorkerToMove.contractorId, { type: 'new_solo' });
       }
       await sessionService.deleteWorker(selectedWorkerToMove.contractorId);
-
       setReassignSuccess(`${selectedWorkerToMove.firstName} removed from session`);
-      setSelectedWorkerToMove(null);
-      setSelectedWorkerSourceCart(null);
+      setSelectedWorkerToMove(null); setSelectedWorkerSourceCart(null);
       onRefresh();
     } catch (err: any) {
       console.error('Remove failed:', err);
       setReassignError(err.message || 'Failed to remove worker. Please try again.');
-    } finally {
-      setReassignLoading(false);
-    }
+    } finally { setReassignLoading(false); }
   };
 
   const handleUnassignAsphalt = async (asphaltRowId: string, addressLabel: string) => {
@@ -3011,7 +3211,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       `Unassign asphalt at ${addressLabel}?\n\nThe assigned RC will no longer see it. ` +
       `The row returns to the asphalt queue for reassignment. The driveway sale is unaffected.`
     )) return;
-
     setUnassigningAsphaltId(asphaltRowId);
     setUnassignError(null);
     try {
@@ -3020,9 +3219,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     } catch (err: any) {
       console.error('Unassign asphalt failed:', err);
       setUnassignError(err?.message || 'Failed to unassign asphalt. Please try again.');
-    } finally {
-      setUnassigningAsphaltId(null);
-    }
+    } finally { setUnassigningAsphaltId(null); }
   };
 
   const isAerationWorkerModifiable = (worker: Worker): boolean => {
@@ -3034,52 +3231,98 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const selectedRouteBookings=useMemo(()=>selectedRouteForBookings?bookings.filter(b=>b['Route Number']===selectedRouteForBookings):[], [selectedRouteForBookings,bookings]);
   const selectedRouteFinancialStore=useMemo(()=>selectedRouteForBookings?allSessions.flatMap(s=>(s.financialStore||[]).filter((tx:any)=>tx.routeCode===selectedRouteForBookings)):[], [selectedRouteForBookings,allSessions]);
 
-  const handleCopyPhone = (phone: string, id: string) => {
-    navigator.clipboard.writeText(phone);
-  };
+  const handleCopyPhone = (phone: string, id: string) => { navigator.clipboard.writeText(phone); };
 
-  // --- SIDEBAR RESIZE: when sidebar opens/closes, the map's container
-  // changes width. Tell Mapbox to redraw at the new size. Mapbox keeps the
-  // same center automatically on resize, so the view stays put.
+  // Resize map when sidebar opens/closes
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    // Wait for the CSS transition to settle, then resize. A single resize
-    // after ~250ms covers the 200ms slide animation plus paint.
-    const t = setTimeout(() => {
-      try { map.resize(); } catch {}
-    }, 250);
+    const t = setTimeout(() => { try { map.resize(); } catch {} }, 250);
     return () => clearTimeout(t);
   }, [sidebarOpen]);
+
+  // --- ROUTE ASSIGNMENT MODAL HELPERS (sort + route-badge data) ---
+  //
+  // For the new wider assignment modal, each worker/cart button shows route
+  // badges underneath. We need:
+  //   - For each worker: the list of routes they're currently on (with their colours)
+  //   - For each cart: same, but routes shared by the cart
+  // And we sort by fewest current route assignments (ascending), with
+  // alphabetical tiebreaker.
+
+  // Map workerId -> list of {routeCode, color} they're currently assigned to.
+  // For split routes, "assigned" means the worker is on either half.
+  const workerRouteBadges = useMemo(() => {
+    const m = new Map<string, Array<{ code: string; color: string }>>();
+    for (const r of routes) {
+      if (r.managerId !== managerId) continue;
+      const split = routeSplitsByCode.get(r.routeCode);
+      const baseColor = routeColorMap.get(r.routeCode) || '#6b7280';
+      if (!split) {
+        const ids = r.assignedWorkerIds || [];
+        for (const id of ids) {
+          if (!m.has(id)) m.set(id, []);
+          m.get(id)!.push({ code: r.routeCode, color: baseColor });
+        }
+      } else {
+        const aIds = split.assignedWorkersA || [];
+        const bIds = split.assignedWorkersB || [];
+        const bColor = complementaryColor(baseColor);
+        for (const id of aIds) {
+          if (!m.has(id)) m.set(id, []);
+          m.get(id)!.push({ code: `${r.routeCode}a`, color: baseColor });
+        }
+        for (const id of bIds) {
+          if (!m.has(id)) m.set(id, []);
+          m.get(id)!.push({ code: `${r.routeCode}b`, color: bColor });
+        }
+      }
+    }
+    return m;
+  }, [routes, managerId, routeSplitsByCode, routeColorMap]);
+
+  // Sorted worker list (aeration): fewest routes first, alphabetical tiebreaker.
+  const sortedAerationAssignList = useMemo(() => {
+    return [...myTeamWorkers].sort((a, b) => {
+      const ar = (workerRouteBadges.get(a.contractorId) || []).length;
+      const br = (workerRouteBadges.get(b.contractorId) || []).length;
+      if (ar !== br) return ar - br;
+      return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`);
+    });
+  }, [myTeamWorkers, workerRouteBadges]);
+
+  // Sorted cart list (team seasons): fewest routes per cart, alphabetical tiebreaker.
+  // Each "cart" here is keyed by session worker_id (the cart's primary worker).
+  const sortedTeamAssignList = useMemo(() => {
+    if (!contractorsByCart) return [];
+    const entries = Array.from(contractorsByCart.entries());
+    return entries.sort(([, aMembers], [, bMembers]) => {
+      // A cart's "route count" is the number of routes ANY member is on. Take
+      // the max member's count as the proxy (since cart members share routes
+      // via the union).
+      const aRouteCount = Math.max(...aMembers.map(m => (workerRouteBadges.get(m.contractorId) || []).length), 0);
+      const bRouteCount = Math.max(...bMembers.map(m => (workerRouteBadges.get(m.contractorId) || []).length), 0);
+      if (aRouteCount !== bRouteCount) return aRouteCount - bRouteCount;
+      const aName = aMembers[0]?.lastName || '';
+      const bName = bMembers[0]?.lastName || '';
+      return aName.localeCompare(bName);
+    });
+  }, [contractorsByCart, workerRouteBadges]);
 
   // --- RENDER ---
   return (
     <>
-      {/* Inline keyframes for sidebar slide animation */}
       <style>{`
         @keyframes rmSlideIn { from { transform: translateX(-100%); } to { transform: translateX(0); } }
         @keyframes rmSlideOut { from { transform: translateX(0); } to { transform: translateX(-100%); } }
       `}</style>
 
-      {/*
-        OUTER WRAPPER — fills the viewport minus the RMLogbook header.
-        Uses calc(100vh - 160px) as a guaranteed height so flex-1 from the
-        parent doesn't race against Mapbox's initial measurement on mobile.
-        If your header height differs, adjust 160px up or down by 10-20px.
-
-        Inner layout is a flex row: sidebar on the left (when open), map on
-        the right (flex-1, fills remaining space). When the sidebar opens,
-        the map shrinks to fit; when it closes, the map expands back to
-        full width. A useEffect above calls map.resize() on every toggle so
-        Mapbox redraws cleanly at the new size.
-      */}
       <div
         className="relative w-full flex flex-row"
         style={{ height: 'calc(100vh - 160px)' }}
       >
 
-        {/* SIDEBAR — flex sibling, not an overlay. Takes up real width when
-            open, so the map shrinks to fit beside it. */}
+        {/* SIDEBAR */}
         {sidebarOpen && (
           <div
             className="flex-shrink-0 w-[min(380px,90vw)] bg-gray-900 border-r border-gray-700 z-30 shadow-2xl flex flex-col h-full"
@@ -3087,7 +3330,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           >
             {/* Header */}
             <div className="flex-shrink-0 p-3 border-b border-gray-700 bg-gray-900/95">
-              {/* Close button row */}
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">
                   {sidebarMode === 'staff' ? 'Staff' : 'Routes'}
@@ -3101,14 +3343,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 </button>
               </div>
 
-              {/* Mode toggle */}
               <div className="flex bg-gray-800 rounded-lg p-0.5 mb-3">
                 <button
                   onClick={() => setSidebarMode('staff')}
                   className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors ${
-                    sidebarMode === 'staff'
-                      ? 'bg-blue-600 text-white'
-                      : 'text-gray-400 hover:text-white'
+                    sidebarMode === 'staff' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
                   }`}
                 >
                   <Users size={12} className="inline mr-1" />
@@ -3117,9 +3356,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 <button
                   onClick={() => setSidebarMode('routes')}
                   className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors ${
-                    sidebarMode === 'routes'
-                      ? 'bg-blue-600 text-white'
-                      : 'text-gray-400 hover:text-white'
+                    sidebarMode === 'routes' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
                   }`}
                 >
                   <MapPin size={12} className="inline mr-1" />
@@ -3127,7 +3364,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 </button>
               </div>
 
-              {/* Sort */}
               {sidebarMode === 'staff' && (
                 <select
                   value={sortBy}
@@ -3146,7 +3382,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             {/* Body — scrollable */}
             <div className="flex-1 overflow-y-auto p-2 space-y-2">
 
-              {/* STAFF MODE: worker cards (aeration) or cart cards (team seasons) */}
+              {/* STAFF MODE — workers (aeration) */}
               {sidebarMode === 'staff' && !isTeamSeason && sortedWorkerCards.map(card => {
                 const canNav = workerCanNavigate(card);
                 const { hasFlag, flags } = computeRedFlags(card.financialStore);
@@ -3162,11 +3398,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                           <span className="text-white font-bold text-sm truncate">
                             {card.worker.firstName} {card.worker.lastName}
                           </span>
-                          {hasFlag && (
-                            <span title={`Red flags: ${flags.join(', ')}`} className="text-red-400">
-                              <AlertTriangle size={12} />
-                            </span>
-                          )}
+                          {hasFlag && (<span title={`Red flags: ${flags.join(', ')}`} className="text-red-400"><AlertTriangle size={12} /></span>)}
                         </div>
                         {card.lastActiveAddress && (
                           <div className="text-[10px] text-gray-400 truncate mt-0.5">
@@ -3174,42 +3406,33 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                           </div>
                         )}
                         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1.5 text-[10px] text-gray-300">
-                          <span>{card.stats.steps} steps</span>
-                          <span className="text-gray-600">•</span>
-                          <span className={card.stats.pending > 0 ? 'text-amber-400' : ''}>{card.stats.pending} pend</span>
-                          <span className="text-gray-600">•</span>
-                          <span>{card.stats.eq.toFixed(1)} EQ</span>
-                          <span className="text-gray-600">•</span>
-                          <span>{card.stats.upsellCount} up</span>
-                          <span className="text-gray-600">•</span>
+                          <span>{card.stats.steps} steps</span><span className="text-gray-600">•</span>
+                          <span className={card.stats.pending > 0 ? 'text-amber-400' : ''}>{card.stats.pending} pend</span><span className="text-gray-600">•</span>
+                          <span>{card.stats.eq.toFixed(1)} EQ</span><span className="text-gray-600">•</span>
+                          <span>{card.stats.upsellCount} up</span><span className="text-gray-600">•</span>
                           <span>${card.stats.upsellGross.toFixed(0)}</span>
                         </div>
                       </div>
-
-                      {/* Icon row */}
                       <div className="flex-shrink-0 flex items-center gap-1">
                         {canNav && (
                           <button
                             onClick={(e) => { e.stopPropagation(); handleNavigateToWorker(card); }}
                             className="w-7 h-7 rounded-md bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white flex items-center justify-center transition-colors"
                             title={`Navigate to ${card.worker.firstName}`}
-                          >
-                            <Navigation2 size={13} />
-                          </button>
+                          ><Navigation2 size={13} /></button>
                         )}
                         <button
                           onClick={(e) => { e.stopPropagation(); handleViewLogsheet(card.worker); }}
                           className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
                           title="Open logsheet"
-                        >
-                          <Eye size={13} />
-                        </button>
+                        ><Eye size={13} /></button>
                       </div>
                     </div>
                   </div>
                 );
               })}
 
+              {/* STAFF MODE — carts (team seasons) */}
               {sidebarMode === 'staff' && isTeamSeason && sortedCartCards.map(cart => {
                 const canNav = cartCanNavigate(cart);
                 const { hasFlag, flags } = computeRedFlags(cart.sharedFinancialStore);
@@ -3227,64 +3450,46 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                         <div className="flex items-center gap-1.5">
                           {cart.isRcCart && <Truck size={11} className="text-orange-400 flex-shrink-0" title="Ramp Crew" />}
                           <span className="text-white font-bold text-sm truncate">{label}</span>
-                          {hasFlag && (
-                            <span title={`Red flags: ${flags.join(', ')}`} className="text-red-400">
-                              <AlertTriangle size={12} />
-                            </span>
-                          )}
+                          {hasFlag && (<span title={`Red flags: ${flags.join(', ')}`} className="text-red-400"><AlertTriangle size={12} /></span>)}
                         </div>
                         {cart.lastActiveAddress && (
-                          <div className="text-[10px] text-gray-400 truncate mt-0.5">
-                            {cart.lastActiveTime} • {cart.lastActiveAddress}
-                          </div>
+                          <div className="text-[10px] text-gray-400 truncate mt-0.5">{cart.lastActiveTime} • {cart.lastActiveAddress}</div>
                         )}
                         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1.5 text-[10px] text-gray-300">
-                          <span>{cart.stats.steps} steps</span>
-                          <span className="text-gray-600">•</span>
-                          <span className={cart.stats.pending > 0 ? 'text-amber-400' : ''}>{cart.stats.pending} pend</span>
-                          <span className="text-gray-600">•</span>
-                          <span>{cart.stats.eq.toFixed(1)} EQ</span>
-                          <span className="text-gray-600">•</span>
-                          <span>{cart.stats.upsellCount} up</span>
-                          <span className="text-gray-600">•</span>
+                          <span>{cart.stats.steps} steps</span><span className="text-gray-600">•</span>
+                          <span className={cart.stats.pending > 0 ? 'text-amber-400' : ''}>{cart.stats.pending} pend</span><span className="text-gray-600">•</span>
+                          <span>{cart.stats.eq.toFixed(1)} EQ</span><span className="text-gray-600">•</span>
+                          <span>{cart.stats.upsellCount} up</span><span className="text-gray-600">•</span>
                           <span>${cart.stats.upsellGross.toFixed(0)}</span>
-                          {cart.stats.pendingSaleCount > 0 && (
-                            <>
-                              <span className="text-gray-600">•</span>
-                              <span className="text-amber-400">{cart.stats.pendingSaleCount} sale</span>
-                            </>
-                          )}
+                          {cart.stats.pendingSaleCount > 0 && (<><span className="text-gray-600">•</span><span className="text-amber-400">{cart.stats.pendingSaleCount} sale</span></>)}
                         </div>
                       </div>
-
                       <div className="flex-shrink-0 flex items-center gap-1">
                         {canNav && (
                           <button
                             onClick={(e) => { e.stopPropagation(); handleNavigateToCart(cart); }}
                             className="w-7 h-7 rounded-md bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white flex items-center justify-center transition-colors"
                             title={`Navigate to ${label}`}
-                          >
-                            <Navigation2 size={13} />
-                          </button>
+                          ><Navigation2 size={13} /></button>
                         )}
                         <button
                           onClick={(e) => { e.stopPropagation(); handleViewLogsheet(cart.members[0], cart.members); }}
                           className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
                           title="Open logsheet"
-                        >
-                          <Eye size={13} />
-                        </button>
+                        ><Eye size={13} /></button>
                       </div>
                     </div>
                   </div>
                 );
               })}
 
-              {/* ROUTES MODE */}
+              {/* ROUTES MODE — SPLIT-AWARE.
+                  Each card shows its display code (e.g. "BIN09a" for split halves).
+                  Split button appears only on cards that are: not split AND not assigned. */}
               {sidebarMode === 'routes' && routeCardData.map(rc => (
                 <div
-                  key={rc.routeCode}
-                  onClick={() => setSelectedRouteForBookings(rc.routeCode)}
+                  key={`${rc.baseRouteCode}-${rc.half || 'whole'}`}
+                  onClick={() => setSelectedRouteForBookings(rc.baseRouteCode)}
                   className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
                 >
                   <div className="flex items-center gap-2">
@@ -3292,18 +3497,26 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                       className="h-8 px-2 min-w-[44px] rounded-md flex items-center justify-center font-bold text-white text-[11px] flex-shrink-0 leading-none whitespace-nowrap"
                       style={{ background: rc.routeColor }}
                     >
-                      {rc.routeCode}
+                      {rc.displayRouteCode}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-white text-xs font-bold truncate">
-                        {rc.assignedWorkerLabel || (
-                          <span className="text-amber-400">⚠ Unassigned</span>
-                        )}
+                        {rc.assignedWorkerLabel || <span className="text-amber-400">⚠ Unassigned</span>}
                       </div>
                       <div className="text-[10px] text-gray-400">
                         {rc.prebookCount} jobs • {rc.prepayCount} prepaid • {rc.totalEQ.toFixed(1)} EQ
                       </div>
                     </div>
+                    {/* SPLIT BUTTON — only on unsplit, unassigned routes. */}
+                    {!rc.isSplit && !rc.isAssigned && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleOpenSplitModal(rc); }}
+                        className="flex-shrink-0 w-7 h-7 rounded-md bg-amber-600/20 hover:bg-amber-600 text-amber-300 hover:text-white flex items-center justify-center transition-colors"
+                        title="Split this route into two halves"
+                      >
+                        <Scissors size={13} />
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -3311,19 +3524,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           </div>
         )}
 
-        {/*
-          MAP AREA — flex-1 means it fills whatever width is left after the
-          sidebar (full width when sidebar closed, full minus 380px when open).
-          It's `relative` so everything inside (map container, sidebar toggle
-          when sidebar closed, on-route card, nav maneuver card overlay) is
-          positioned within the map area, not the whole viewport.
-        */}
+        {/* MAP AREA */}
         <div className="flex-1 relative h-full min-w-0">
-
-          {/* Map container */}
           <div ref={mapContainerRef} className="absolute inset-0 bg-gray-900" />
 
-          {/* Routes loading overlay */}
           {routesLoading && (
             <div className="absolute top-3 left-3 z-30 bg-gray-900/90 text-white text-xs px-3 py-2 rounded-lg flex items-center gap-2 shadow-lg">
               <Loader size={14} className="animate-spin" />
@@ -3331,7 +3535,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             </div>
           )}
 
-          {/* No-routes-on-map message */}
           {!routesLoading && mapLoaded && routeMapData.length === 0 && myRouteCodes.length > 0 && (
             <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-amber-900/90 text-amber-100 text-xs px-3 py-2 rounded-lg shadow-lg max-w-md text-center">
               <AlertCircle size={14} className="inline mr-1" />
@@ -3339,14 +3542,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             </div>
           )}
 
-          {/*
-            Compass enable button — iOS Safari 13+ only. iOS requires a user
-            gesture to grant access to DeviceOrientationEvent, so we show this
-            small pill until the user taps it. After tap (whether granted or
-            denied), the button disappears for the rest of the session. If
-            denied, the arrow falls back to GPS-derived heading (works while
-            moving, doesn't rotate while stationary).
-          */}
           {compassNeedsPermission && !navState && (
             <button
               onClick={handleEnableCompass}
@@ -3358,21 +3553,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             </button>
           )}
 
-          {/* Sidebar toggle (top-left of MAP AREA) — only shown when sidebar
-              is closed. When sidebar is open it has its own close button in
-              its header, so this hides. */}
           {!sidebarOpen && !navState && (
             <button
               onClick={() => setSidebarOpen(true)}
               className="absolute top-3 left-3 z-40 w-11 h-11 bg-gray-900/95 hover:bg-gray-800 text-white rounded-lg shadow-xl flex items-center justify-center transition-all border border-gray-700"
               title="Open sidebar"
-            >
-              <LayoutList size={20} />
-            </button>
+            ><LayoutList size={20} /></button>
           )}
 
-          {/* ON-ROUTE FLOATING CARD (bottom-center of MAP AREA) — UNCHANGED.
-              Still opens the worker/cart detail modal on tap. */}
           {(onRouteWorkerCard || onRouteCartCard) && !navState && (
             <div
               onClick={() => {
@@ -3390,30 +3578,18 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                         ? onRouteCartCard.members.map(m => m.firstName).join(' & ')
                         : `${onRouteCartCard.members[0]?.firstName} ${onRouteCartCard.members[0]?.lastName.charAt(0)}.`)
                     : `${onRouteWorkerCard!.worker.firstName} ${onRouteWorkerCard!.worker.lastName.charAt(0)}.`}
-                  {onRouteRedFlags.hasFlag && (
-                    <AlertTriangle size={12} className="inline ml-1.5 text-red-400" />
-                  )}
+                  {onRouteRedFlags.hasFlag && (<AlertTriangle size={12} className="inline ml-1.5 text-red-400" />)}
                 </div>
               </div>
             </div>
           )}
 
-          {/* NAV OVERLAY — renders the maneuver card + route line on top of the
-              map. Because we're inside the map area's `relative` container, the
-              maneuver card's `absolute top-0 left-0 right-0` naturally hugs
-              just the map area — it won't overlap the sidebar. */}
           {navState && mapRef.current && (
             <RMNavigation
               map={mapRef.current}
               destination={navState.destination}
               onArrived={handleNavArrived}
               onCancel={handleNavCancel}
-              // Seed RMNavigation with whatever heading we've already
-              // tracked here, so the very first route fetch can apply a
-              // bearings constraint and avoid routes that start with a
-              // U-turn. Only pass the value if it's fresh (last updated
-              // within 5 minutes) — older than that and the user has
-              // likely been parked and could be facing any direction.
               initialHeading={
                 gpsHeadingRef.current != null
                   && (Date.now() - gpsHeadingUpdatedAtRef.current) < 300000
@@ -3422,20 +3598,18 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               }
             />
           )}
-
         </div>
 
-        {/* WORKER DETAIL MODAL (aeration) */}
+        {/* WORKER DETAIL MODAL — WIDENED to max-w-3xl */}
         {selectedWorkerForModal && (
           <div
             className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
             onClick={() => setSelectedWorkerForModal(null)}
           >
             <div
-              className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-md max-h-[90vh] flex flex-col"
+              className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
               onClick={e => e.stopPropagation()}
             >
-              {/* Header with inline action buttons */}
               <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="text-white font-bold text-base truncate">
@@ -3448,50 +3622,31 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 <div className="flex-shrink-0 flex items-center gap-1.5">
                   {workerCanNavigate(selectedWorkerForModal) && (
                     <button
-                      onClick={() => {
-                        const card = selectedWorkerForModal;
-                        setSelectedWorkerForModal(null);
-                        handleNavigateToWorker(card);
-                      }}
+                      onClick={() => { const card = selectedWorkerForModal; setSelectedWorkerForModal(null); handleNavigateToWorker(card); }}
                       className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors"
                       title="Navigate to most recent transaction"
-                    >
-                      <Navigation2 size={12} />
-                      Navigate
-                    </button>
+                    ><Navigation2 size={12} />Navigate</button>
                   )}
                   <button
                     onClick={() => handleViewLogsheet(selectedWorkerForModal.worker)}
                     className="px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md flex items-center gap-1.5"
                     title="View logsheet"
-                  >
-                    <FileText size={12} />
-                    Logsheet
-                  </button>
+                  ><FileText size={12} />Logsheet</button>
                   <button
-                    onClick={() => handleToggleUpsells(
-                      selectedWorkerForModal.worker.contractorId,
-                      selectedWorkerForModal.upsellsEnabled,
-                    )}
+                    onClick={() => handleToggleUpsells(selectedWorkerForModal.worker.contractorId, selectedWorkerForModal.upsellsEnabled)}
                     className={`px-2.5 py-1.5 text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors ${
                       selectedWorkerForModal.upsellsEnabled
                         ? 'bg-green-600/20 text-green-300 hover:bg-green-600 hover:text-white'
                         : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                     }`}
                     title="Toggle upsells"
-                  >
-                    {selectedWorkerForModal.upsellsEnabled ? 'Upsells ✓' : 'Upsells ✗'}
-                  </button>
+                  >{selectedWorkerForModal.upsellsEnabled ? 'Upsells ✓' : 'Upsells ✗'}</button>
                   <button
                     onClick={() => setSelectedWorkerForModal(null)}
                     className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
-                  >
-                    <X size={14} />
-                  </button>
+                  ><X size={14} /></button>
                 </div>
               </div>
-
-              {/* Body */}
               <div className="flex-1 overflow-y-auto p-3 min-h-0">
                 <ContractorJobs
                   bookings={selectedWorkerForModal.displayBookings}
@@ -3504,23 +3659,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           </div>
         )}
 
-        {/* CART DETAIL MODAL (team seasons) */}
+        {/* CART DETAIL MODAL — WIDENED to max-w-3xl */}
         {selectedCartForModal && (
           <div
             className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
             onClick={() => setSelectedCartForModal(null)}
           >
             <div
-              className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-md max-h-[90vh] flex flex-col"
+              className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
               onClick={e => e.stopPropagation()}
             >
-              {/* Header */}
               <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
-                    {selectedCartForModal.isRcCart && (
-                      <Truck size={13} className="text-orange-400 flex-shrink-0" />
-                    )}
+                    {selectedCartForModal.isRcCart && (<Truck size={13} className="text-orange-400 flex-shrink-0" />)}
                     <div className="text-white font-bold text-base truncate">
                       {selectedCartForModal.members.length > 1
                         ? selectedCartForModal.members.map(m => m.firstName).join(' & ')
@@ -3534,126 +3686,77 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 <div className="flex-shrink-0 flex items-center gap-1.5">
                   {cartCanNavigate(selectedCartForModal) && (
                     <button
-                      onClick={() => {
-                        const cart = selectedCartForModal;
-                        setSelectedCartForModal(null);
-                        handleNavigateToCart(cart);
-                      }}
+                      onClick={() => { const cart = selectedCartForModal; setSelectedCartForModal(null); handleNavigateToCart(cart); }}
                       className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors"
                       title="Navigate to most recent transaction"
-                    >
-                      <Navigation2 size={12} />
-                      Navigate
-                    </button>
+                    ><Navigation2 size={12} />Navigate</button>
                   )}
                   <button
-                    onClick={() => handleViewLogsheet(
-                      selectedCartForModal.members[0],
-                      selectedCartForModal.members,
-                    )}
+                    onClick={() => handleViewLogsheet(selectedCartForModal.members[0], selectedCartForModal.members)}
                     className="px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md flex items-center gap-1.5"
                     title="Open cart logsheet"
-                  >
-                    <FileText size={12} />
-                    Logsheet
-                  </button>
+                  ><FileText size={12} />Logsheet</button>
                   <button
                     onClick={() => setSelectedCartForModal(null)}
                     className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
-                  >
-                    <X size={14} />
-                  </button>
+                  ><X size={14} /></button>
                 </div>
               </div>
 
-              {/* Body */}
               <div className="flex-1 overflow-y-auto p-3 min-h-0 space-y-3">
-                {/* Cart members list */}
                 <div>
-                  <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">
-                    Cart members
-                  </div>
+                  <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Cart members</div>
                   <div className="space-y-1.5">
                     {selectedCartForModal.members.map(m => (
                       <div key={m.contractorId} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
                         <Users size={11} className="text-gray-400 flex-shrink-0" />
-                        <span className="text-white text-xs font-medium flex-1 min-w-0 truncate">
-                          {m.firstName} {m.lastName}
-                        </span>
-                        {isRcWorker(m.teamId) && (
-                          <span className="text-[9px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded font-bold">RC</span>
-                        )}
-                        {m.cellPhone && (
-                          <a
-                            href={`tel:${m.cellPhone}`}
-                            className="text-blue-400 hover:text-blue-300"
-                            title="Call"
-                          >
-                            <Phone size={11} />
-                          </a>
-                        )}
+                        <span className="text-white text-xs font-medium flex-1 min-w-0 truncate">{m.firstName} {m.lastName}</span>
+                        {isRcWorker(m.teamId) && (<span className="text-[9px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded font-bold">RC</span>)}
+                        {m.cellPhone && (<a href={`tel:${m.cellPhone}`} className="text-blue-400 hover:text-blue-300" title="Call"><Phone size={11} /></a>)}
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Asphalt sections (sealing only) */}
                 {isSealing && selectedCartForModal.asphaltOwnedRows.length > 0 && (
                   <div>
-                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">
-                      Asphalt sold by this cart
-                    </div>
+                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Asphalt sold by this cart</div>
                     <div className="space-y-1">
                       {selectedCartForModal.asphaltOwnedRows.map(ps => (
                         <div key={ps.id} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
                           <Shovel size={11} className="text-amber-400 flex-shrink-0" />
-                          <span className="text-white text-xs flex-1 min-w-0 truncate">
-                            {assembleAddressFromPending(ps)}
-                          </span>
-                          <span className="text-amber-300 text-[10px] font-bold">
-                            {formatAsphaltDollars(ps.asphaltAmount)}
-                          </span>
+                          <span className="text-white text-xs flex-1 min-w-0 truncate">{assembleAddressFromPending(ps)}</span>
+                          <span className="text-amber-300 text-[10px] font-bold">{formatAsphaltDollars(ps.asphaltAmount)}</span>
                           {ps.assignedRcSessionId && (
                             <button
                               onClick={() => handleUnassignAsphalt(ps.id, assembleAddressFromPending(ps))}
                               disabled={unassigningAsphaltId === ps.id}
                               className="text-[9px] bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white px-1.5 py-0.5 rounded font-bold transition-colors disabled:opacity-50"
                               title="Unassign asphalt"
-                            >
-                              {unassigningAsphaltId === ps.id ? '...' : 'Unassign'}
-                            </button>
+                            >{unassigningAsphaltId === ps.id ? '...' : 'Unassign'}</button>
                           )}
                         </div>
                       ))}
                     </div>
-                    {unassignError && (
-                      <div className="text-[10px] text-red-400 mt-1">{unassignError}</div>
-                    )}
+                    {unassignError && (<div className="text-[10px] text-red-400 mt-1">{unassignError}</div>)}
                   </div>
                 )}
 
                 {isSealing && selectedCartForModal.asphaltIncomingRows.length > 0 && (
                   <div>
-                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">
-                      Asphalt assigned to this RC
-                    </div>
+                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Asphalt assigned to this RC</div>
                     <div className="space-y-1">
                       {selectedCartForModal.asphaltIncomingRows.map(ps => (
                         <div key={ps.id} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
                           <Shovel size={11} className="text-amber-400 flex-shrink-0" />
-                          <span className="text-white text-xs flex-1 min-w-0 truncate">
-                            {assembleAddressFromPending(ps)}
-                          </span>
-                          <span className="text-amber-300 text-[10px] font-bold">
-                            {formatAsphaltDollars(ps.asphaltAmount)}
-                          </span>
+                          <span className="text-white text-xs flex-1 min-w-0 truncate">{assembleAddressFromPending(ps)}</span>
+                          <span className="text-amber-300 text-[10px] font-bold">{formatAsphaltDollars(ps.asphaltAmount)}</span>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* Shared jobs */}
                 <div>
                   <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">
                     Cart jobs ({selectedCartForModal.sharedBookings.length})
@@ -3674,7 +3777,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           </div>
         )}
 
-        {/* ROUTE PREBOOKINGS POPUP */}
+        {/* ROUTE PREBOOKINGS POPUP — unchanged width (max-w-md) */}
         {selectedRouteForBookings && (
           <div
             className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
@@ -3685,15 +3788,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               onClick={e => e.stopPropagation()}
             >
               <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between">
-                <div className="text-white font-bold text-sm">
-                  Route {selectedRouteForBookings} • {selectedRouteBookings.length} jobs
-                </div>
+                <div className="text-white font-bold text-sm">Route {selectedRouteForBookings} • {selectedRouteBookings.length} jobs</div>
                 <button
                   onClick={() => setSelectedRouteForBookings(null)}
                   className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
-                >
-                  <X size={14} />
-                </button>
+                ><X size={14} /></button>
               </div>
               <div className="flex-1 overflow-y-auto p-3 min-h-0">
                 <ContractorJobs
@@ -3707,7 +3806,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           </div>
         )}
 
-        {/* PENDING JOB MODAL (clicking a pending-sale ring on the map) */}
         {pendingJobForModal && (
           <PendingJobModal
             booking={pendingJobForModal}
@@ -3716,41 +3814,42 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           />
         )}
 
-        {/* ROUTE ASSIGNMENT MODAL */}
+        {/* ROUTE ASSIGNMENT MODAL — WIDENED to max-w-3xl, route badges, fewest-routes sort,
+            and (when postSplitFlow is active) an "Assign later" button. */}
         {assignModalData && (
           <div
             className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
-            onClick={() => setAssignModalData(null)}
+            onClick={() => { if (!postSplitFlow) setAssignModalData(null); }}
           >
             <div
-              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md p-4"
+              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
               onClick={e => e.stopPropagation()}
             >
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex-shrink-0 p-4 border-b border-gray-700 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <div
                     className="h-9 px-2.5 min-w-[48px] rounded-md flex items-center justify-center font-bold text-white text-xs flex-shrink-0 leading-none whitespace-nowrap"
                     style={{ background: assignModalData.routeColor }}
                   >
-                    {assignModalData.routeCode}
+                    {assignModalData.displayRouteCode}
                   </div>
                   <div>
-                    <div className="text-white font-bold text-sm">Assign Route</div>
+                    <div className="text-white font-bold text-sm">
+                      {postSplitFlow ? `Assign ${assignModalData.displayRouteCode}` : 'Assign Route'}
+                    </div>
                     <div className="text-[10px] text-gray-400">
                       {assignModalData.prebookCount} jobs • {assignModalData.prepayCount} prepaid • {assignModalData.totalEQ.toFixed(1)} EQ
                     </div>
                   </div>
                 </div>
                 <button
-                  onClick={() => setAssignModalData(null)}
+                  onClick={() => { if (!postSplitFlow) setAssignModalData(null); else advancePostSplitFlow(); }}
                   className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
-                >
-                  <X size={14} />
-                </button>
+                ><X size={14} /></button>
               </div>
 
-              <div className="space-y-1.5 max-h-[50vh] overflow-y-auto">
-                {/* Unassign */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-1.5 min-h-0">
+                {/* Unassign — only shown if there's a current assignment */}
                 {assignModalData.currentWorkerIds.length > 0 && (
                   <button
                     onClick={() => handleAssignRoute(null)}
@@ -3758,71 +3857,113 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                     className="w-full text-left px-3 py-2 bg-red-900/30 hover:bg-red-900/50 border border-red-700/50 rounded-md text-red-300 text-xs font-bold disabled:opacity-50"
                   >
                     {assignLoading ? <Loader size={12} className="inline animate-spin" /> : <X size={12} className="inline mr-1.5" />}
-                    Unassign route
+                    Unassign {assignModalData.half ? `half ${assignModalData.half}` : 'route'}
                   </button>
                 )}
 
-                {/* Workers / carts */}
+                {/* Worker / cart list — sorted by fewest current routes first */}
                 {isTeamSeason ? (
-                  Array.from(contractorsByCart?.entries() || []).map(([sessionWorkerId, cartMembers]) => {
+                  sortedTeamAssignList.map(([sessionWorkerId, cartMembers]) => {
                     const cart = teamCarts.find(c => c.workerIds.includes(cartMembers[0].contractorId));
                     const sessionWorker = cartMembers[0];
                     const label = cartMembers.length > 1
                       ? cartMembers.map(m => m.firstName).join(' & ')
                       : `${sessionWorker.firstName} ${sessionWorker.lastName}`;
                     const isAssigned = cart?.workerIds.some(wid => assignModalData.currentWorkerIds.includes(wid));
+                    // Combine route badges across cart members (deduped by code).
+                    const badgeMap = new Map<string, string>();
+                    for (const m of cartMembers) {
+                      const badges = workerRouteBadges.get(m.contractorId) || [];
+                      for (const b of badges) badgeMap.set(b.code, b.color);
+                    }
+                    const badges = Array.from(badgeMap.entries()).map(([code, color]) => ({ code, color }));
                     return (
                       <button
                         key={sessionWorkerId}
                         onClick={() => handleAssignRoute(sessionWorker.contractorId)}
                         disabled={assignLoading}
-                        className={`w-full text-left px-3 py-2 rounded-md text-xs font-medium flex items-center justify-between ${
-                          isAssigned
-                            ? 'bg-blue-900/40 border border-blue-700 text-blue-200'
-                            : 'bg-gray-800 hover:bg-gray-700 text-white border border-gray-700'
+                        className={`w-full text-left px-3 py-2.5 rounded-md text-xs font-medium border ${
+                          isAssigned ? 'bg-blue-900/40 border-blue-700 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700'
                         } disabled:opacity-50`}
                       >
-                        <span className="truncate">{label}</span>
-                        {isAssigned && <Check size={12} className="text-blue-400" />}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-bold">{label}</span>
+                          {isAssigned && <Check size={12} className="text-blue-400 flex-shrink-0" />}
+                        </div>
+                        {badges.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                            {badges.map(b => (
+                              <span
+                                key={b.code}
+                                className="h-5 px-1.5 rounded text-[9px] font-bold text-white leading-none flex items-center"
+                                style={{ background: b.color }}
+                              >{b.code}</span>
+                            ))}
+                          </div>
+                        )}
                       </button>
                     );
                   })
                 ) : (
-                  myTeamWorkers.map(w => {
+                  sortedAerationAssignList.map(w => {
                     const isAssigned = assignModalData.currentWorkerIds.includes(w.contractorId);
+                    const badges = workerRouteBadges.get(w.contractorId) || [];
                     return (
                       <button
                         key={w.contractorId}
                         onClick={() => handleAssignRoute(w.contractorId)}
                         disabled={assignLoading}
-                        className={`w-full text-left px-3 py-2 rounded-md text-xs font-medium flex items-center justify-between ${
-                          isAssigned
-                            ? 'bg-blue-900/40 border border-blue-700 text-blue-200'
-                            : 'bg-gray-800 hover:bg-gray-700 text-white border border-gray-700'
+                        className={`w-full text-left px-3 py-2.5 rounded-md text-xs font-medium border ${
+                          isAssigned ? 'bg-blue-900/40 border-blue-700 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700'
                         } disabled:opacity-50`}
                       >
-                        <span className="truncate">{w.firstName} {w.lastName}</span>
-                        {isAssigned && <Check size={12} className="text-blue-400" />}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-bold">{w.firstName} {w.lastName}</span>
+                          {isAssigned && <Check size={12} className="text-blue-400 flex-shrink-0" />}
+                        </div>
+                        {badges.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                            {badges.map(b => (
+                              <span
+                                key={b.code}
+                                className="h-5 px-1.5 rounded text-[9px] font-bold text-white leading-none flex items-center"
+                                style={{ background: b.color }}
+                              >{b.code}</span>
+                            ))}
+                          </div>
+                        )}
                       </button>
                     );
                   })
                 )}
 
-                {/* Transfer to other manager */}
-                <button
-                  onClick={openTransferModal}
-                  disabled={assignLoading}
-                  className="w-full text-left px-3 py-2 bg-purple-900/30 hover:bg-purple-900/50 border border-purple-700/50 rounded-md text-purple-300 text-xs font-bold mt-2 disabled:opacity-50"
-                >
-                  <ArrowRightLeft size={12} className="inline mr-1.5" />
-                  Transfer to another manager…
-                </button>
+                {/* Assign later — only present in postSplitFlow */}
+                {postSplitFlow && (
+                  <button
+                    onClick={handleAssignLater}
+                    disabled={assignLoading}
+                    className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-md text-gray-300 text-xs font-bold mt-2 disabled:opacity-50"
+                  >
+                    ⏭ Assign later
+                  </button>
+                )}
+
+                {/* Transfer to other manager — only on non-split, non-postsplit assignment */}
+                {!assignModalData.half && !postSplitFlow && (
+                  <button
+                    onClick={openTransferModal}
+                    disabled={assignLoading}
+                    className="w-full text-left px-3 py-2 bg-purple-900/30 hover:bg-purple-900/50 border border-purple-700/50 rounded-md text-purple-300 text-xs font-bold mt-2 disabled:opacity-50"
+                  >
+                    <ArrowRightLeft size={12} className="inline mr-1.5" />
+                    Transfer to another manager…
+                  </button>
+                )}
               </div>
             </div>
           </div>
         )}
 
-        {/* TRANSFER ROUTE MODAL */}
         {transferModalData && (
           <div
             className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
@@ -3837,9 +3978,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 <button
                   onClick={() => setTransferModalData(null)}
                   className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
-                >
-                  <X size={14} />
-                </button>
+                ><X size={14} /></button>
               </div>
               <div className="space-y-1.5">
                 {availableManagers.map(mgr => (
@@ -3847,17 +3986,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                     key={mgr.userId}
                     onClick={() => handleTransferConfirm(mgr.userId)}
                     className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700"
-                  >
-                    <ArrowRight size={12} className="inline mr-1.5 text-purple-400" />
-                    {mgr.name}
-                  </button>
+                  ><ArrowRight size={12} className="inline mr-1.5 text-purple-400" />{mgr.name}</button>
                 ))}
               </div>
             </div>
           </div>
         )}
 
-        {/* MANAGE TEAM MODAL */}
+        {/* MANAGE TEAM MODAL — unchanged width (max-w-lg) */}
         {showManageTeamModal && (
           <div
             className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
@@ -3875,48 +4011,36 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 <button
                   onClick={onCloseManageTeamModal}
                   className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
-                >
-                  <X size={14} />
-                </button>
+                ><X size={14} /></button>
               </div>
 
               <div className="flex-1 overflow-y-auto p-3 min-h-0">
                 {reassignSuccess && (
                   <div className="mb-3 px-3 py-2 bg-green-900/30 border border-green-700 rounded-md text-green-300 text-xs">
-                    <Check size={11} className="inline mr-1" />
-                    {reassignSuccess}
+                    <Check size={11} className="inline mr-1" />{reassignSuccess}
                   </div>
                 )}
                 {reassignError && (
                   <div className="mb-3 px-3 py-2 bg-red-900/30 border border-red-700 rounded-md text-red-300 text-xs">
-                    <AlertCircle size={11} className="inline mr-1" />
-                    {reassignError}
+                    <AlertCircle size={11} className="inline mr-1" />{reassignError}
                   </div>
                 )}
 
                 {!selectedWorkerToMove ? (
-                  // STEP 1: pick a worker
                   <div className="space-y-1.5">
-                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1">
-                      Pick a worker to move
-                    </div>
+                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1">Pick a worker to move</div>
                     {isTeamSeason ? (
                       cartCardData.map(cart =>
                         cart.members.map(m => (
                           <button
                             key={m.contractorId}
-                            onClick={() => {
-                              setSelectedWorkerToMove(m);
-                              setSelectedWorkerSourceCart(cart);
-                            }}
+                            onClick={() => { setSelectedWorkerToMove(m); setSelectedWorkerSourceCart(cart); }}
                             className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700 flex items-center gap-2"
                           >
                             <Users size={11} className="text-gray-400" />
                             <span className="flex-1 truncate">{m.firstName} {m.lastName}</span>
                             <span className="text-[9px] text-gray-500">
-                              {cart.members.length > 1
-                                ? cart.members.map(x => x.firstName).join(' & ')
-                                : 'solo'}
+                              {cart.members.length > 1 ? cart.members.map(x => x.firstName).join(' & ') : 'solo'}
                             </span>
                           </button>
                         ))
@@ -3925,39 +4049,26 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                       myTeamWorkers.map(w => (
                         <button
                           key={w.contractorId}
-                          onClick={() => {
-                            setSelectedWorkerToMove(w);
-                            setSelectedWorkerSourceCart(null);
-                          }}
+                          onClick={() => { setSelectedWorkerToMove(w); setSelectedWorkerSourceCart(null); }}
                           className={`w-full text-left px-3 py-2 rounded-md text-xs font-medium border flex items-center gap-2 ${
-                            isAerationWorkerModifiable(w)
-                              ? 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700'
-                              : 'bg-gray-800/40 text-gray-500 border-gray-800 cursor-not-allowed'
+                            isAerationWorkerModifiable(w) ? 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700' : 'bg-gray-800/40 text-gray-500 border-gray-800 cursor-not-allowed'
                           }`}
                           disabled={!isAerationWorkerModifiable(w)}
                         >
                           <Users size={11} className="text-gray-400" />
                           <span className="flex-1 truncate">{w.firstName} {w.lastName}</span>
-                          {!isAerationWorkerModifiable(w) && (
-                            <span className="text-[9px] text-amber-400">has txs — locked</span>
-                          )}
+                          {!isAerationWorkerModifiable(w) && (<span className="text-[9px] text-amber-400">has txs — locked</span>)}
                         </button>
                       ))
                     )}
                   </div>
                 ) : (
-                  // STEP 2: pick destination
                   <div className="space-y-2.5">
                     <div className="px-3 py-2 bg-blue-900/20 border border-blue-700/40 rounded-md flex items-center gap-2">
                       <button
-                        onClick={() => {
-                          setSelectedWorkerToMove(null);
-                          setSelectedWorkerSourceCart(null);
-                        }}
+                        onClick={() => { setSelectedWorkerToMove(null); setSelectedWorkerSourceCart(null); }}
                         className="text-blue-300 hover:text-white"
-                      >
-                        <Undo2 size={12} />
-                      </button>
+                      ><Undo2 size={12} /></button>
                       <div className="text-white text-xs font-bold flex-1 truncate">
                         Move {selectedWorkerToMove.firstName} {selectedWorkerToMove.lastName}
                       </div>
@@ -3965,66 +4076,45 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
                     {isTeamSeason ? (
                       <>
-                        {/* Move to existing cart */}
-                        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">
-                          Move to another cart
-                        </div>
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">Move to another cart</div>
                         {cartCardData
                           .filter(c => c.sessionId !== selectedWorkerSourceCart?.sessionId)
                           .map(c => {
-                            const label = c.members.length > 1
-                              ? c.members.map(m => m.firstName).join(' & ')
-                              : c.members[0]?.firstName;
+                            const label = c.members.length > 1 ? c.members.map(m => m.firstName).join(' & ') : c.members[0]?.firstName;
                             return (
                               <button
                                 key={c.sessionId}
                                 onClick={() => handleReassignWorker({ type: 'existing_cart', targetSessionId: c.sessionId, label: label || '' })}
                                 disabled={reassignLoading}
                                 className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700 disabled:opacity-50"
-                              >
-                                <UserPlus size={11} className="inline mr-1.5 text-green-400" />
-                                {label}
-                              </button>
+                              ><UserPlus size={11} className="inline mr-1.5 text-green-400" />{label}</button>
                             );
                           })}
-
-                        {/* New solo */}
                         {selectedWorkerSourceCart && selectedWorkerSourceCart.members.length > 1 && (
                           <button
                             onClick={() => handleReassignWorker({ type: 'new_solo' })}
                             disabled={reassignLoading}
                             className="w-full text-left px-3 py-2 bg-amber-900/30 hover:bg-amber-900/50 border border-amber-700/50 rounded-md text-amber-300 text-xs font-bold disabled:opacity-50"
-                          >
-                            <UserMinus size={11} className="inline mr-1.5" />
-                            Make solo cart
-                          </button>
+                          ><UserMinus size={11} className="inline mr-1.5" />Make solo cart</button>
                         )}
                       </>
                     ) : (
                       <>
-                        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">
-                          Transfer to another manager
-                        </div>
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">Transfer to another manager</div>
                         {availableManagers.map(mgr => (
                           <button
                             key={mgr.userId}
                             onClick={() => handleAerationTransfer(mgr.userId)}
                             disabled={reassignLoading}
                             className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700 disabled:opacity-50"
-                          >
-                            <ArrowRight size={11} className="inline mr-1.5 text-purple-400" />
-                            {mgr.name}
-                          </button>
+                          ><ArrowRight size={11} className="inline mr-1.5 text-purple-400" />{mgr.name}</button>
                         ))}
                       </>
                     )}
 
-                    {/* Move to another manager (team seasons) */}
                     {isTeamSeason && availableManagers.length > 0 && (
                       <>
-                        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mt-2">
-                          Transfer to another manager
-                        </div>
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mt-2">Transfer to another manager</div>
                         <div className="flex gap-1.5">
                           <select
                             value={reassignManagerId}
@@ -4032,30 +4122,22 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                             className="flex-1 bg-gray-800 text-white text-xs rounded-md px-2 py-1.5 border border-gray-700"
                           >
                             <option value="">Pick a manager…</option>
-                            {availableManagers.map(m => (
-                              <option key={m.userId} value={m.userId}>{m.name}</option>
-                            ))}
+                            {availableManagers.map(m => (<option key={m.userId} value={m.userId}>{m.name}</option>))}
                           </select>
                           <button
                             onClick={() => reassignManagerId && handleReassignWorker({ type: 'different_manager', targetManagerId: reassignManagerId })}
                             disabled={!reassignManagerId || reassignLoading}
                             className="px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white text-xs font-bold rounded-md disabled:opacity-50"
-                          >
-                            Move
-                          </button>
+                          >Move</button>
                         </div>
                       </>
                     )}
 
-                    {/* Remove (no-show) */}
                     <button
                       onClick={handleRemoveWorkerNoShow}
                       disabled={reassignLoading}
                       className="w-full text-left px-3 py-2 bg-red-900/30 hover:bg-red-900/50 border border-red-700/50 rounded-md text-red-300 text-xs font-bold mt-3 disabled:opacity-50"
-                    >
-                      <Trash2 size={11} className="inline mr-1.5" />
-                      Remove worker (no-show)
-                    </button>
+                    ><Trash2 size={11} className="inline mr-1.5" />Remove worker (no-show)</button>
                   </div>
                 )}
               </div>
@@ -4078,35 +4160,26 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 <div className="text-white font-bold text-sm">Switch navigation?</div>
               </div>
               <div className="text-xs text-gray-300 mb-1">
-                You're currently navigating to{' '}
-                <span className="text-white font-bold">{switchNavConfirm.currentLabel}</span>.
+                You're currently navigating to <span className="text-white font-bold">{switchNavConfirm.currentLabel}</span>.
               </div>
               <div className="text-xs text-gray-300 mb-3">
-                Cancel current navigation and go to{' '}
-                <span className="text-blue-300 font-bold">{switchNavConfirm.newLabel}</span>?
+                Cancel current navigation and go to <span className="text-blue-300 font-bold">{switchNavConfirm.newLabel}</span>?
               </div>
               <div className="flex gap-2">
                 <button
                   onClick={() => setSwitchNavConfirm(null)}
                   className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md"
-                >
-                  Cancel
-                </button>
+                >Cancel</button>
                 <button
                   onClick={handleSwitchNavConfirm}
                   className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md"
-                >
-                  Switch navigation
-                </button>
+                >Switch navigation</button>
               </div>
             </div>
           </div>
         )}
 
-        {/* ROUTE-NAV PROMPT (Staff mode — tapped a route line on the map).
-            Single-entry shows as a confirmation; multi-entry shows as a picker.
-            Entries without a geocodable address render with a disabled button
-            and a "no recent location" note. */}
+        {/* ROUTE-NAV PROMPT */}
         {routeNavPrompt && (
           <div
             className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4"
@@ -4120,54 +4193,38 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 <div
                   className="h-8 px-2 min-w-[44px] rounded-md flex items-center justify-center font-bold text-white text-[11px] flex-shrink-0 leading-none whitespace-nowrap"
                   style={{ background: routeNavPrompt.routeColor }}
-                >
-                  {routeNavPrompt.routeCode}
-                </div>
+                >{routeNavPrompt.routeCode}</div>
                 <div className="text-white font-bold text-sm">
-                  {routeNavPrompt.entries.length === 1
-                    ? 'Navigate to…'
-                    : 'Pick who to navigate to'}
+                  {routeNavPrompt.entries.length === 1 ? 'Navigate to…' : 'Pick who to navigate to'}
                 </div>
                 <button
                   onClick={() => setRouteNavPrompt(null)}
                   className="ml-auto w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
                   title="Cancel"
-                >
-                  <X size={14} />
-                </button>
+                ><X size={14} /></button>
               </div>
 
               {routeNavPrompt.entries.length === 1 ? (
-                // Single-entry → confirmation
                 <>
                   <div className="text-sm text-gray-200 mb-3">
-                    Navigate to{' '}
-                    <span className="text-blue-300 font-bold">{routeNavPrompt.entries[0].label}</span>?
+                    Navigate to <span className="text-blue-300 font-bold">{routeNavPrompt.entries[0].label}</span>?
                     {!routeNavPrompt.entries[0].hasGeocodableAddress && (
-                      <span className="block text-[11px] text-amber-400 mt-1">
-                        No recent transactions to navigate to.
-                      </span>
+                      <span className="block text-[11px] text-amber-400 mt-1">No recent transactions to navigate to.</span>
                     )}
                   </div>
                   <div className="flex gap-2">
                     <button
                       onClick={() => setRouteNavPrompt(null)}
                       className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md"
-                    >
-                      Cancel
-                    </button>
+                    >Cancel</button>
                     <button
                       onClick={() => handleRouteNavPromptSelect(routeNavPrompt.entries[0])}
                       disabled={!routeNavPrompt.entries[0].hasGeocodableAddress}
                       className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed text-white text-xs font-bold rounded-md flex items-center justify-center gap-1.5 transition-colors"
-                    >
-                      <Navigation2 size={12} />
-                      Navigate
-                    </button>
+                    ><Navigation2 size={12} />Navigate</button>
                   </div>
                 </>
               ) : (
-                // Multi-entry → picker
                 <div className="space-y-1.5">
                   {routeNavPrompt.entries.map((entry, i) => (
                     <button
@@ -4176,24 +4233,33 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                       disabled={!entry.hasGeocodableAddress}
                       className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:bg-gray-800/40 disabled:cursor-not-allowed rounded-md border border-gray-700 text-xs flex items-center gap-2 transition-colors"
                     >
-                      <Navigation2
-                        size={12}
-                        className={entry.hasGeocodableAddress ? 'text-blue-400' : 'text-gray-600'}
-                      />
-                      <span className={`flex-1 font-bold truncate ${entry.hasGeocodableAddress ? 'text-white' : 'text-gray-500'}`}>
-                        {entry.label}
-                      </span>
-                      {!entry.hasGeocodableAddress && (
-                        <span className="text-[10px] text-amber-400 flex-shrink-0">
-                          no recent location
-                        </span>
-                      )}
+                      <Navigation2 size={12} className={entry.hasGeocodableAddress ? 'text-blue-400' : 'text-gray-600'} />
+                      <span className={`flex-1 font-bold truncate ${entry.hasGeocodableAddress ? 'text-white' : 'text-gray-500'}`}>{entry.label}</span>
+                      {!entry.hasGeocodableAddress && (<span className="text-[10px] text-amber-400 flex-shrink-0">no recent location</span>)}
                     </button>
                   ))}
                 </div>
               )}
             </div>
           </div>
+        )}
+
+        {/* ROUTE SPLIT MODAL — new feature.
+            Opened from the Routes-mode sidebar's Split button. Hands segments
+            and prebookings to RouteSplitModal; on Confirm, handleSplitConfirm
+            persists the split and opens the sequential post-split assignment
+            picker. */}
+        {splitModalData && (
+          <RouteSplitModal
+            isOpen={!!splitModalData}
+            onClose={handleSplitCancel}
+            routeCode={splitModalData.routeCode}
+            routeColor={splitModalData.routeColor}
+            segments={splitModalData.segments}
+            prebookings={splitModalData.prebookings}
+            mapboxToken={import.meta.env.VITE_MAPBOX_TOKEN as string}
+            onConfirm={handleSplitConfirm}
+          />
         )}
 
       </div>

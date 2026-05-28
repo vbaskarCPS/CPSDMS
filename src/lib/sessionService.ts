@@ -34,6 +34,7 @@ import {
   PendingSaleUpdate,
   AsphaltMeta,
   AsphaltRole,
+  RouteSplit,
 } from '../types';
 
 // Import metadata type - re-export for other modules
@@ -276,6 +277,24 @@ class SessionService {
         payoutShare: tx.payout_share != null ? Number(tx.payout_share) : undefined,
         asphaltMeta: tx.asphalt_meta || undefined,
     } as SessionTransaction & { sessionId?: string };
+  }
+
+  // --- HELPER: Map DB row → RouteSplit. Trivial column-rename mapper kept
+  // alongside the other mapDbXxx helpers so this file's "shape of DB rows"
+  // logic stays in one neighborhood.
+  private mapDbRouteSplit(row: any): RouteSplit {
+    return {
+      id: row.id,
+      commandCenterId: row.command_center_id,
+      sessionDate: row.session_date,
+      routeCode: row.route_code,
+      segmentBOsmIds: Array.isArray(row.segment_b_osm_ids) ? row.segment_b_osm_ids : [],
+      bookingBIds: Array.isArray(row.booking_b_ids) ? row.booking_b_ids : [],
+      assignedWorkersA: Array.isArray(row.assigned_workers_a) ? row.assigned_workers_a : [],
+      assignedWorkersB: Array.isArray(row.assigned_workers_b) ? row.assigned_workers_b : [],
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
   }
 
   /**
@@ -898,6 +917,249 @@ class SessionService {
     }
   }
 
+  // --- 2i. ROUTE SPLITS (Digital mapping CCs only) ---
+  //
+  // RouteSplits are an RM-side visual division of a route into two halves.
+  // The underlying route_code on bookings/routes never changes — splits are
+  // a tooling overlay that affects what the RM sees on the master map and
+  // which workers receive which subset of bookings via per-half assignment.
+  //
+  // Eligibility (enforced in calling UI, not here):
+  //   - createRouteSplit only called on UNASSIGNED routes
+  //   - createRouteSplit refuses if a split already exists (DB unique constraint)
+  //
+  // Lifecycle: split is wiped automatically when adminResetDailySession runs.
+
+  /**
+   * Fetch all route splits for the current session. Returns an empty array if
+   * no splits exist or the session is missing.
+   */
+  public async getRouteSplits(): Promise<RouteSplit[]> {
+    try {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return [];
+
+      const { data, error } = await supabase
+        .from('route_splits')
+        .select('*')
+        .eq('command_center_id', ccId)
+        .eq('session_date', date);
+
+      if (error) {
+        console.warn('[RouteSplit] getRouteSplits failed:', error);
+        return [];
+      }
+      return (data || []).map(r => this.mapDbRouteSplit(r));
+    } catch (err) {
+      console.warn('[RouteSplit] getRouteSplits error:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Fetch a single route's split (if any). Returns null when the route isn't split.
+   */
+  public async getRouteSplitForRoute(routeCode: string): Promise<RouteSplit | null> {
+    try {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return null;
+
+      const { data, error } = await supabase
+        .from('route_splits')
+        .select('*')
+        .eq('command_center_id', ccId)
+        .eq('session_date', date)
+        .eq('route_code', routeCode)
+        .maybeSingle();
+
+      if (error || !data) return null;
+      return this.mapDbRouteSplit(data);
+    } catch (err) {
+      console.warn('[RouteSplit] getRouteSplitForRoute error:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Create a new route split. Caller has already done the bucketing math —
+   * this method just writes the row. Throws if a split already exists for
+   * this (CC, date, route_code) — see the unique constraint on the table.
+   *
+   * The route's existing routes.assigned_worker_ids is NOT touched here. The
+   * RM will assign workers to half-a and half-b via the post-Confirm picker,
+   * which calls updateRouteSplitAssignment for each half. That method writes
+   * to both route_splits AND routes.assigned_worker_ids (the latter holds the
+   * union so the existing per-booking assignment code keeps working).
+   */
+  public async createRouteSplit(input: {
+    routeCode: string;
+    segmentBOsmIds: number[];
+    bookingBIds: string[];
+  }): Promise<RouteSplit> {
+    const ccId = this.getCCId();
+    const date = await this.getDailySessionDate();
+    if (!date) throw new Error('No active session');
+
+    const row = {
+      command_center_id: ccId,
+      session_date: date,
+      route_code: input.routeCode,
+      segment_b_osm_ids: input.segmentBOsmIds || [],
+      booking_b_ids: input.bookingBIds || [],
+      assigned_workers_a: [],
+      assigned_workers_b: [],
+    };
+
+    const { data, error } = await supabase
+      .from('route_splits')
+      .insert(row)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[RouteSplit] createRouteSplit failed:', error);
+      throw error;
+    }
+    return this.mapDbRouteSplit(data);
+  }
+
+  /**
+   * Delete a route split (undo / re-split). Removes the route_splits row.
+   * Does NOT touch routes.assigned_worker_ids — the caller is responsible for
+   * unassigning workers if needed before deleting.
+   */
+  public async deleteRouteSplit(routeCode: string): Promise<void> {
+    const ccId = this.getCCId();
+    const date = await this.getDailySessionDate();
+    if (!date) return;
+
+    const { error } = await supabase
+      .from('route_splits')
+      .delete()
+      .eq('command_center_id', ccId)
+      .eq('session_date', date)
+      .eq('route_code', routeCode);
+
+    if (error) {
+      console.error('[RouteSplit] deleteRouteSplit failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Assign workers to a specific half of a split route.
+   *
+   * Effects:
+   *   1. Updates route_splits.assigned_workers_a or assigned_workers_b for the
+   *      target half.
+   *   2. Updates routes.assigned_worker_ids to be the UNION of (a + b) so that
+   *      the existing booking-assignment code (assignBookingToWorker, etc.)
+   *      continues to know "these workers are on this route".
+   *   3. For each booking in this half (driven by booking_b_ids for 'b', or
+   *      everything-not-in-booking_b_ids for 'a'), runs assignBookingToWorker
+   *      so the worker's logsheet only sees their half's prebooks.
+   *
+   * Pass workerIds=[] to unassign that half.
+   */
+  public async updateRouteSplitAssignment(
+    routeCode: string,
+    half: 'a' | 'b',
+    workerIds: string[]
+  ): Promise<void> {
+    const ccId = this.getCCId();
+    const date = await this.getDailySessionDate();
+    if (!date) throw new Error('No active session');
+
+    // Fetch existing split to know booking buckets and the OTHER half's workers.
+    const existing = await this.getRouteSplitForRoute(routeCode);
+    if (!existing) {
+      throw new Error(`Cannot update split assignment: no split exists for route ${routeCode}`);
+    }
+
+    const newA = half === 'a' ? workerIds : (existing.assignedWorkersA || []);
+    const newB = half === 'b' ? workerIds : (existing.assignedWorkersB || []);
+
+    // 1) Update the route_splits row.
+    const updateColumn = half === 'a' ? 'assigned_workers_a' : 'assigned_workers_b';
+    const { error: splitErr } = await supabase
+      .from('route_splits')
+      .update({
+        [updateColumn]: workerIds,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('command_center_id', ccId)
+      .eq('session_date', date)
+      .eq('route_code', routeCode);
+
+    if (splitErr) {
+      console.error('[RouteSplit] updateRouteSplitAssignment (splits) failed:', splitErr);
+      throw splitErr;
+    }
+
+    // 2) Update routes.assigned_worker_ids to UNION(a, b). Deduplicate.
+    const unionWorkers = Array.from(new Set([...newA, ...newB]));
+    const { error: routeErr } = await supabase
+      .from('routes')
+      .update({ assigned_worker_ids: unionWorkers })
+      .eq('route_code', routeCode)
+      .eq('session_date', date)
+      .eq('command_center_id', ccId);
+
+    if (routeErr) {
+      console.error('[RouteSplit] updateRouteSplitAssignment (routes union) failed:', routeErr);
+      throw routeErr;
+    }
+
+    // 3) Per-booking reassignment for the half we just changed.
+    //    'b' half = bookings whose IDs appear in existing.bookingBIds.
+    //    'a' half = bookings on this route NOT in existing.bookingBIds.
+    //
+    //    We fetch all pending bookings on this route, partition by half, and
+    //    write contractor_id for the affected half. Workers in the assigned
+    //    list each "claim" the bookings — we use the first worker as the
+    //    single-assigned contractor (matching the behaviour of the existing
+    //    assignBookingToWorker flow). When workerIds is empty, we clear
+    //    contractor_id on the half's bookings.
+    const { data: routeBookings } = await supabase
+      .from('bookings')
+      .select('booking_id')
+      .eq('route_number', routeCode)
+      .eq('session_date', date)
+      .eq('command_center_id', ccId)
+      .neq('status', 'completed');
+
+    if (routeBookings && routeBookings.length > 0) {
+      const bookingBSet = new Set(existing.bookingBIds);
+      const halfBookingIds = routeBookings
+        .filter(b =>
+          half === 'b'
+            ? bookingBSet.has(b.booking_id)
+            : !bookingBSet.has(b.booking_id)
+        )
+        .map(b => b.booking_id);
+
+      if (halfBookingIds.length > 0) {
+        // Match the existing single-contractor model: first worker (or null).
+        // For team seasons that use session_id instead of contractor_id, the
+        // calling UI should use assignBookingsToSession separately; this code
+        // path is the aeration / per-booking-contractor pattern.
+        const newContractorId = workerIds.length > 0 ? workerIds[0] : null;
+        const { error: bkErr } = await supabase
+          .from('bookings')
+          .update({ contractor_id: newContractorId })
+          .in('booking_id', halfBookingIds)
+          .eq('command_center_id', ccId);
+
+        if (bkErr) {
+          console.error('[RouteSplit] updateRouteSplitAssignment (bookings) failed:', bkErr);
+          throw bkErr;
+        }
+      }
+    }
+  }
+
   // --- 3. SESSION MANAGEMENT ---
 
   public async uploadDailySession(
@@ -1099,6 +1361,8 @@ class SessionService {
     await supabase.from('geocode_cache').delete().eq('command_center_id', ccId);
     await supabase.from('route_historical_properties').delete().eq('command_center_id', ccId);
     await supabase.from('pending_sales').delete().eq('command_center_id', ccId);
+    // Wipe route splits — RM-side visual overlays only live for the day.
+    await supabase.from('route_splits').delete().eq('command_center_id', ccId);
     
     await supabase.from('transactions').delete().eq('command_center_id', ccId); 
     await supabase.from('logsheet_sessions').delete().eq('date', date).eq('command_center_id', ccId);
