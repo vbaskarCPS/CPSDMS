@@ -18,19 +18,24 @@
 //     Rectangles are persisted by sessionService so the master map can
 //     re-render with the same algorithm after the modal closes.
 //
-// Tablet-friendly:
-//   - Map is rendered with interactive: false so Mapbox doesn't fight us for
-//     pointer events. The user can't pan/zoom — the map is fitted to the route
-//     bounds on load and stays there.
-//   - Pointer events on the map container drive the box-drag: pointerdown starts
-//     a rectangle, pointermove updates the in-progress drag, pointerup commits.
+// Tablet/touch-friendly with mode toggle:
+//   - The modal has two modes — 'navigate' (default) and 'draw' — toggled by
+//     a button in the header.
+//   - In NAVIGATE mode: Mapbox's full gesture set is enabled (pinch-zoom,
+//     two-finger rotate + tilt, single-finger pan, double-tap zoom). The
+//     drawing overlay is transparent to pointer events so all gestures reach
+//     the map. Initial fit-to-route happens on first load only.
+//   - In DRAW mode: every Mapbox gesture handler is disabled. The overlay
+//     gets touch-action: none and captures pointer events for single-finger
+//     box-drag — pointerdown starts a rectangle, pointermove updates it,
+//     pointerup commits.
 //   - Multiple rectangles accumulate. Undo removes the most recent. Cancel
 //     discards everything. Confirm fires the callback.
 
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import { X, Undo2, Check } from 'lucide-react';
+import { X, Undo2, Check, Pencil, Move } from 'lucide-react';
 
 // --- Public input types ---
 
@@ -248,6 +253,11 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
 
+  // Mode toggle: 'navigate' lets the user pan/pinch-zoom/rotate the map;
+  // 'draw' freezes the map and lets the user drag rectangles. Default to
+  // navigate so the RM can orient the map before drawing.
+  const [mode, setMode] = useState<'navigate' | 'draw'>('navigate');
+
   // Rectangles the user has committed so far for the NEW bucket.
   const [rectangles, setRectangles] = useState<Rect[]>([]);
   // In-progress drag (null when not dragging).
@@ -449,7 +459,7 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
       style: 'mapbox://styles/mapbox/streets-v12',
       center: [-79.87, 43.32],
       zoom: 13,
-      interactive: false,
+      interactive: true,
       attributionControl: false,
     });
     map.on('load', () => {
@@ -465,6 +475,33 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
       setMapLoaded(false);
     };
   }, [isOpen, mapboxToken, routeBounds]);
+
+  // --- Mode effect: enable/disable Mapbox handlers based on mode. ---
+  //
+  // In 'navigate' mode, all gesture handlers are on so the RM can pinch-zoom,
+  // two-finger rotate, two-finger tilt, drag-pan, double-click-zoom, etc.
+  //
+  // In 'draw' mode, every handler is disabled so the map is frozen while the
+  // user drags rectangles. Also cancels any in-progress drag if the user
+  // switches modes mid-drag.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const handlers: Array<{ enable: () => void; disable: () => void }> = [
+      map.dragPan, map.dragRotate, map.scrollZoom, map.boxZoom,
+      map.doubleClickZoom, map.keyboard, map.touchZoomRotate, map.touchPitch,
+    ];
+    if (mode === 'navigate') {
+      for (const h of handlers) { try { h.enable(); } catch {} }
+    } else {
+      for (const h of handlers) { try { h.disable(); } catch {} }
+      // Cancel any in-progress drag.
+      if (dragStartLngLatRef.current) {
+        dragStartLngLatRef.current = null;
+        setDragRect(null);
+      }
+    }
+  }, [mode, mapLoaded]);
 
   // --- Render pieces as a layer driven by the bucket property + match expression. ---
   useEffect(() => {
@@ -618,15 +655,17 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!mapLoaded) return;
+    if (mode !== 'draw') return;
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     const ll = pixelToLngLat(e.clientX, e.clientY);
     if (!ll) return;
     dragStartLngLatRef.current = ll;
     setDragRect({ west: ll.lng, east: ll.lng, south: ll.lat, north: ll.lat });
-  }, [mapLoaded, pixelToLngLat]);
+  }, [mapLoaded, mode, pixelToLngLat]);
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (mode !== 'draw') return;
     if (!dragStartLngLatRef.current) return;
     const ll = pixelToLngLat(e.clientX, e.clientY);
     if (!ll) return;
@@ -637,7 +676,7 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
       south: Math.min(a.lat, ll.lat),
       north: Math.max(a.lat, ll.lat),
     });
-  }, [pixelToLngLat]);
+  }, [mode, pixelToLngLat]);
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragStartLngLatRef.current) return;
@@ -668,6 +707,7 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
       setRectangles([]);
       setDragRect(null);
       dragStartLngLatRef.current = null;
+      setMode('navigate');
     }
   }, [isOpen]);
 
@@ -694,6 +734,19 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          {/* Mode toggle: swaps icon+label between Draw (currently navigating)
+              and Move (currently drawing). The active mode is highlighted. */}
+          <button
+            onClick={() => setMode(m => m === 'navigate' ? 'draw' : 'navigate')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors ${
+              mode === 'draw'
+                ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                : 'bg-blue-600 hover:bg-blue-500 text-white'
+            }`}
+            title={mode === 'navigate' ? 'Switch to drawing mode' : 'Switch to navigate mode (pinch/pan/rotate)'}
+          >
+            {mode === 'navigate' ? <><Pencil size={12} />Draw</> : <><Move size={12} />Move map</>}
+          </button>
           <button
             onClick={handleUndo}
             disabled={rectangles.length === 0}
@@ -711,7 +764,7 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
         </div>
       </div>
 
-      {/* Sub-header: counts */}
+      {/* Sub-header: counts + mode-aware instruction */}
       <div className="flex-shrink-0 bg-gray-900/80 border-b border-gray-800 px-4 py-2 text-xs text-gray-300 flex items-center gap-4 flex-wrap">
         <span>
           <span className="font-bold" style={{ color: sourceColor }}>
@@ -729,15 +782,25 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
           {headerCounts.newBookings} prebooks
         </span>
         <span className="text-gray-500 ml-auto">
-          Drag to select streets you want in <span className="font-bold" style={{ color: newColor }}>{newLetter}</span>. Draw multiple rectangles to add more. Use <span className="font-bold">Undo</span> to remove the last one.
+          {mode === 'navigate' ? (
+            <>Pinch to zoom, two-finger twist to rotate, drag to pan. Tap <span className="font-bold text-amber-300">Draw</span> when ready to select streets.</>
+          ) : (
+            <>Drag to select streets you want in <span className="font-bold" style={{ color: newColor }}>{newLetter}</span>. Draw more rectangles to add. Tap <span className="font-bold text-blue-300">Move map</span> to pinch/rotate.</>
+          )}
         </span>
       </div>
 
-      {/* Map area with pointer overlay */}
+      {/* Map area with pointer overlay.
+          In 'navigate' mode the overlay is transparent to pointer events
+          (pointer-events: none) so Mapbox's own touch handlers receive the
+          gestures. In 'draw' mode it captures pointers with touch-action: none
+          so the browser doesn't try to scroll/pinch-zoom the page during a
+          single-finger drag. */}
       <div className="flex-1 relative min-h-0">
         <div ref={containerRef} className="absolute inset-0" />
         <div
-          className="absolute inset-0 cursor-crosshair"
+          className={`absolute inset-0 ${mode === 'draw' ? 'cursor-crosshair' : 'pointer-events-none'}`}
+          style={{ touchAction: mode === 'draw' ? 'none' : 'auto' }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
