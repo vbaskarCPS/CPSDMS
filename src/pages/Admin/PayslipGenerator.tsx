@@ -110,6 +110,11 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
   const [originalDays, setOriginalDays] = useState<Map<string, PayslipDayRow[]>>(new Map());
   // "Set all rates" input value (string while typing; applied on the button).
   const [bulkRate, setBulkRate] = useState<string>('');
+  // Raw text for the per-day rate cell currently being typed in (one at a time).
+  // Holding the raw string while focused prevents the leading-zero glitch.
+  const [rateDraft, setRateDraft] = useState<{ key: string; text: string } | null>(null);
+  // Raw text for each worker's per-slip "set rate" box, keyed by contractorId.
+  const [slipRateDrafts, setSlipRateDrafts] = useState<Map<string, string>>(new Map());
 
   // Global defaults
   const [stdHotels, setStdHotels] = useState<number>(0);
@@ -268,14 +273,14 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
   };
 
   // ─── Rate editing ───────────────────────────────────────────────────────────
-  // Commission = EQ × Rate. A day's Total contains its AER Comm as the commission
-  // piece, so editing the rate recomputes Comm (EQ × newRate) and shifts Total by
-  // the difference (Total − oldComm + newComm), leaving bonus / mach / labor cost
-  // untouched. Everything is in-memory and print-only — no write-back to the Sheet.
+  // Commission = EQ × Rate. Editing the rate recomputes Comm (EQ × newRate) and
+  // adjusts the day's Total by the rate-driven delta only — EQ × (newRate − oldRate)
+  // is added straight to the Total, leaving bonus / mach / labor cost untouched.
+  // Everything is in-memory and print-only — no write-back to the Sheet.
 
   const recalcDayForRate = (d: PayslipDayRow, rate: number): PayslipDayRow => {
     const newComm = r2(d.equiv * rate);
-    const newTotal = r2(d.totalPayout - d.aerComm + newComm);
+    const newTotal = r2(d.totalPayout + d.equiv * (rate - d.payoutRate));
     return { ...d, payoutRate: rate, aerComm: newComm, totalPayout: newTotal };
   };
 
@@ -311,6 +316,18 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
       ...worker,
       days: worker.days.map(d => recalcDayForRate(d, parsed)),
     })));
+  };
+
+  // Stamp one rate onto every day of ONE worker — overwrites that worker's edits only.
+  const applyRateToSlip = (id: string) => {
+    const parsed = parseFloat(slipRateDrafts.get(id) ?? '');
+    if (isNaN(parsed)) return;
+    setWorkerList(prev => prev.map(worker => {
+      if (worker.contractorId !== id) return worker;
+      return { ...worker, days: worker.days.map(d => recalcDayForRate(d, parsed)) };
+    }));
+    // Clear the box back to its placeholder after applying.
+    setSlipRateDrafts(prev => { const n = new Map(prev); n.delete(id); return n; });
   };
 
   // ─── Worker settings helpers ──────────────────────────────────────────────
@@ -516,6 +533,20 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
           </label>
           <span className="text-gray-700 text-xs">|</span>
 
+          {/* Per-slip rate — stamps one rate onto every day of THIS worker */}
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <span className="text-xs text-gray-500">Rate</span>
+            <div className="relative"><span className={$}>$</span>
+              <input type="text" inputMode="decimal" placeholder="0"
+                value={slipRateDrafts.get(w.contractorId) ?? ''}
+                onChange={e => setSlipRateDrafts(prev => new Map(prev).set(w.contractorId, e.target.value))}
+                className={iCls}/>
+            </div>
+            <button onClick={() => applyRateToSlip(w.contractorId)}
+              className="text-xs bg-blue-600 hover:bg-blue-500 text-white px-1.5 py-0.5 rounded transition-colors flex-shrink-0">Set</button>
+          </div>
+          <span className="text-gray-700 text-xs">|</span>
+
           {/* Hotels — only shown if not hidden */}
           {!hiddenFields.hotels && (
             <div className="flex items-center gap-1 flex-shrink-0">
@@ -601,6 +632,8 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
                   {w.days.map((d, i) => {
                     const origRate = origDaysForWorker?.[i]?.payoutRate;
                     const rateEdited = origRate !== undefined && r2(origRate) !== r2(d.payoutRate);
+                    const rateKey = `${w.contractorId}:${i}`;
+                    const rateDisplay = (rateDraft && rateDraft.key === rateKey) ? rateDraft.text : String(d.payoutRate);
                     return (
                       <tr key={i} className="border-b border-gray-700/50 last:border-0">
                         <td className="py-1 pr-3">{d.date}</td>
@@ -615,8 +648,9 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
                                 className="text-gray-500 hover:text-blue-400 flex-shrink-0"><RotateCcw size={10}/></button>
                             )}
                             <span className="text-gray-500">$</span>
-                            <input type="number" min="0" step="0.01" value={d.payoutRate}
-                              onChange={e => updateDayRate(w.contractorId, i, e.target.value)}
+                            <input type="text" inputMode="decimal" value={rateDisplay}
+                              onChange={e => { setRateDraft({ key: rateKey, text: e.target.value }); updateDayRate(w.contractorId, i, e.target.value); }}
+                              onBlur={() => setRateDraft(null)}
                               className={`w-14 bg-gray-900 border rounded py-0.5 px-1 text-xs text-right focus:ring-1 focus:ring-blue-500 focus:outline-none ${
                                 rateEdited ? 'border-blue-500 text-blue-300' : 'border-gray-600 text-white'
                               }`}/>
@@ -812,7 +846,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
               <span className="text-xs text-gray-400">Set all rates</span>
               <div className="relative">
                 <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-500 text-xs pointer-events-none">$</span>
-                <input type="number" min="0" step="0.01" placeholder="0" value={bulkRate}
+                <input type="text" inputMode="decimal" placeholder="0" value={bulkRate}
                   onChange={e => setBulkRate(e.target.value)}
                   className="w-20 bg-gray-900 border border-gray-600 rounded py-1 pl-4 pr-1 text-xs text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
               </div>
