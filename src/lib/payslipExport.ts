@@ -129,8 +129,8 @@ export function parsePayoutStatsRows(
 
 // ─── PDF Layout Constants ─────────────────────────────────────────────────────
 
-const PW = 612;               // Letter width in pt
-const PH = 792;               // Letter height in pt
+const PW = 612;               // Letter/Legal share the same width in pt
+const PH = 792;               // Letter height in pt (default; Legal handled per-tier)
 const ML = 18;                 // Margin left
 const MR = 18;                 // Margin right
 const MT = 18;                 // Margin top
@@ -143,6 +143,10 @@ const H_HDR  = 26;
 const H_DATA = 15;
 const H_SUM  = 16;
 const H_GAP  = 4;
+
+// Manual-item colours on the printed summary block.
+const COLOR_ADDITION  = '#1A7F37';   // green — manual additions (+)
+const COLOR_DEDUCTION = '#CC0000';   // red   — manual extra deductions (−)
 
 // Payslip columns (11 visible — UPSELL COMM hidden, same as Excel)
 interface ColDef {
@@ -161,7 +165,7 @@ const COLS: ColDef[] = [
   { label: 'PAYOUT\nRATE',   w: 45,  color: '#666666', align: 'center' },
   { label: 'AER\nCOMM',      w: 45,  color: '#666666', align: 'right'  },
   { label: 'MACH\nRENT',     w: 50,  color: '#CC0000', align: 'right'  },
-  { label: 'DEDUC-\nTIONS',  w: 45,  color: '#CC0000', align: 'right'  },
+  { label: 'LABOR\nCOST',    w: 45,  color: '#CC0000', align: 'right'  },
   { label: 'DAILY\nBONUS',   w: 45,  color: '#CC0000', align: 'right'  },
   { label: 'TOTAL\nPAYOUT',  w: 81,  color: '#660000', align: 'right'  },
 ];
@@ -243,6 +247,7 @@ function renderSignOutList(
   endDate: string,
   hiddenFields: HiddenFields,
   batchName?: string,
+  pageHeight: number = PH,
 ) {
   const sorted = [...workers].sort((a, b) => {
     const last = a.lastName.localeCompare(b.lastName);
@@ -266,7 +271,7 @@ function renderSignOutList(
   const TITLE_H = 36;
   const SUB_H = 18;
   const SO_HDR_H = 22;
-  const availH = PH - MT - MB - TITLE_H - SUB_H - SO_HDR_H;
+  const availH = pageHeight - MT - MB - TITLE_H - SUB_H - SO_HDR_H;
   const SO_ROW_H = Math.min(Math.floor(availH / ROWS_PER_PAGE), 27);
 
   for (let page = 0; page < pages; page++) {
@@ -463,19 +468,22 @@ function drawPayslip(
   if (!hiddenFields.travelPkg)rightRows.push({ label: 'Travel Pkg', value: travelVal,    isFinal: false });
   rightRows.push({ label: 'Final Pay:', value: finalPay, isFinal: true });
 
-  // Build left-side items
-  const leftItems: { label: string; value: number }[] = [];
+  // Build left-side items. `kind` drives the printed colour + sign:
+  //   info      → black, plain (120-program lines)
+  //   addition  → green, prefixed +
+  //   deduction → red,   prefixed −
+  const leftItems: { label: string; value: number; kind: 'info' | 'addition' | 'deduction' }[] = [];
   if (worker.is120Program) {
-    leftItems.push({ label: 'Earned Commission', value: earnedComm });
-    leftItems.push({ label: 'Training Bump',     value: trainingBump });
+    leftItems.push({ label: 'Earned Commission', value: earnedComm,  kind: 'info' });
+    leftItems.push({ label: 'Training Bump',     value: trainingBump, kind: 'info' });
   }
-  worker.extraDeductions.forEach(d => leftItems.push({ label: d.label || 'Deduction', value: d.amount }));
-  worker.additions.forEach(a       => leftItems.push({ label: a.label || 'Addition',  value: a.amount }));
+  worker.extraDeductions.forEach(d => leftItems.push({ label: d.label || 'Deduction', value: d.amount, kind: 'deduction' }));
+  worker.additions.forEach(a       => leftItems.push({ label: a.label || 'Addition',  value: a.amount, kind: 'addition' }));
 
   const nSummary = rightRows.length;
 
   // Summary x positions — right half of table
-  // COLS indices: 0=DATE 1=MGR 2=STEPS 3=EQUIV 4=PREPAY 5=RATE 6=AER 7=MACH 8=DED 9=BONUS 10=TOTAL
+  // COLS indices: 0=DATE 1=MGR 2=STEPS 3=EQUIV 4=PREPAY 5=RATE 6=AER 7=MACH 8=LABOR 9=BONUS 10=TOTAL
   let sumStartX = x;
   for (let c = 0; c < 5; c++) sumStartX += COLS[c].w;
   // sumStartX is now at RATE column
@@ -484,8 +492,8 @@ function drawPayslip(
   const leftLabelW = COLS[5].w + COLS[6].w;               // RATE + AER width
   const leftValueX = leftLabelX + leftLabelW;             // MACH col start
   const leftValueW = COLS[7].w;                           // MACH width
-  const rightLabelX = leftValueX + leftValueW;            // DED col start
-  const rightLabelW = COLS[8].w + COLS[9].w;              // DED + BONUS width
+  const rightLabelX = leftValueX + leftValueW;            // LABOR col start
+  const rightLabelW = COLS[8].w + COLS[9].w;              // LABOR + BONUS width
   const rightValueX = rightLabelX + rightLabelW;          // TOTAL col start
   const rightValueW = COLS[10].w;                         // TOTAL width
   const sumTotalW = leftLabelW + leftValueW + rightLabelW + rightValueW;
@@ -499,24 +507,34 @@ function drawPayslip(
     // Fill summary area
     drawRect(doc, sumStartX, y, sumTotalW, H_SUM, sumBg);
 
-    // Left side items (lighter bg)
+    // Left side items (lighter bg) — colour + sign by kind
     if (left) {
       drawRect(doc, leftLabelX, y, leftLabelW, H_SUM, '#F2F2F2');
       drawRect(doc, leftValueX, y, leftValueW, H_SUM, '#F2F2F2');
+
+      const leftColor =
+        left.kind === 'addition'  ? COLOR_ADDITION :
+        left.kind === 'deduction' ? COLOR_DEDUCTION : '#000000';
+      const leftValueText =
+        left.kind === 'addition'  ? `+${curr(left.value)}` :
+        left.kind === 'deduction' ? `-${curr(left.value)}` :
+        curr(left.value);
+
       drawText(doc, left.label, leftLabelX, y, leftLabelW, H_SUM, {
-        align: 'right', size: 8, color: '#000000',
+        align: 'right', size: 8, color: leftColor,
       });
-      drawText(doc, curr(left.value), leftValueX, y, leftValueW, H_SUM, {
-        align: 'right', size: 8, bold: true, color: '#000000',
+      drawText(doc, leftValueText, leftValueX, y, leftValueW, H_SUM, {
+        align: 'right', size: 8, bold: true, color: leftColor,
       });
     }
 
-    // Right side
+    // Right side — Final Pay prints red when negative; everything else black.
+    const rightColor = (isFinal && right.value < 0) ? COLOR_DEDUCTION : '#000000';
     drawText(doc, right.label, rightLabelX, y, rightLabelW, H_SUM, {
-      align: 'right', size: isFinal ? 9 : 8, bold: isFinal, color: '#000000',
+      align: 'right', size: isFinal ? 9 : 8, bold: isFinal, color: rightColor,
     });
     drawText(doc, curr(right.value), rightValueX, y, rightValueW, H_SUM, {
-      align: 'right', size: isFinal ? 10 : 9, bold: true, color: '#000000',
+      align: 'right', size: isFinal ? 10 : 9, bold: true, color: rightColor,
     });
 
     // Side borders on left + right of payslip
@@ -542,6 +560,44 @@ function payslipBlockHeight(maxData: number, nSummaryRows: number): number {
   return H_NAME + H_HDR + maxData * H_DATA + nSummaryRows * H_SUM + H_GAP;
 }
 
+// ─── Paper tier selection ──────────────────────────────────────────────────────
+//
+// Four tiers, driven by the number of calendar days in the selected range:
+//   ≤ 7    → 8 rows,  3 per Letter page   (unchanged)
+//   8–16   → 16 rows, 2 per Letter page   (unchanged)
+//   17–21  → one row per day, 2 per Legal page (15pt rows, no squeezing)
+//   22+    → one row per day, 1 per page; Letter while a single slip fits,
+//            Legal once it can't (≈42+ rows).
+//
+// maxData is the number of day-row slots a slip draws. For tiers 3 & 4 this equals
+// the range length, so a worker can never have more worked days than row slots —
+// nothing truncates.
+function chooseLayout(totalDaysInRange: number, nSummary: number): {
+  maxData: number;
+  format: 'letter' | 'legal';
+  pageHeight: number;
+} {
+  const LETTER_H = 792;
+  const LEGAL_H  = 1008;
+
+  if (totalDaysInRange <= 7)  return { maxData: 8,  format: 'letter', pageHeight: LETTER_H };
+  if (totalDaysInRange <= 16) return { maxData: 16, format: 'letter', pageHeight: LETTER_H };
+
+  const maxData = totalDaysInRange;
+
+  // Tier 3 (17–21): two slips per Legal page.
+  if (totalDaysInRange <= 21) {
+    return { maxData, format: 'legal', pageHeight: LEGAL_H };
+  }
+
+  // Tier 4 (22+): one per page. Stay on Letter while one slip fits; else Legal.
+  const blockH = payslipBlockHeight(maxData, nSummary);
+  if (blockH <= LETTER_H - MT - MB) {
+    return { maxData, format: 'letter', pageHeight: LETTER_H };
+  }
+  return { maxData, format: 'legal', pageHeight: LEGAL_H };
+}
+
 // ─── Main export function ─────────────────────────────────────────────────────
 
 export async function generatePayslipsPDF(
@@ -553,23 +609,23 @@ export async function generatePayslipsPDF(
   hiddenFields: HiddenFields,
   batchName?: string,
 ): Promise<void> {
-  const isLong  = totalDaysInRange > 7;
-  const maxData = isLong ? 16 : 8;
-
-  // Count summary rows
+  // Count summary rows (drives both block height and the per-page math).
   let nSummary = 2; // Earned Income + Final Pay always present
   if (!hiddenFields.hotels)    nSummary++;
   if (!hiddenFields.advances)  nSummary++;
   if (!hiddenFields.travelPkg) nSummary++;
 
+  // Pick rows-per-slip + paper size from the date-range tier.
+  const { maxData, format, pageHeight } = chooseLayout(totalDaysInRange, nSummary);
+
   const blockH  = payslipBlockHeight(maxData, nSummary);
-  const usableH = PH - MT - MB;
+  const usableH = pageHeight - MT - MB;
   const perPage = Math.max(1, Math.floor(usableH / blockH));
 
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format });
 
   // ── Sign-out list (first pages) ──
-  renderSignOutList(doc, workers, startDate, endDate, hiddenFields, batchName);
+  renderSignOutList(doc, workers, startDate, endDate, hiddenFields, batchName, pageHeight);
 
   // ── Payslips ──
   let y = MT;

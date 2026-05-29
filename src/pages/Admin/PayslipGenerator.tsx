@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import {
   ChevronLeft, ChevronRight, ChevronDown, ArrowLeft, Download,
   Loader, AlertCircle, Plus, Trash2, CheckCircle,
-  Users, FileSpreadsheet,
+  Users, FileSpreadsheet, RotateCcw,
 } from 'lucide-react';
 import { googleSheetsService } from '../../lib/googleSheetsService';
 import { commandCenterService } from '../../lib/commandCenterService';
@@ -11,6 +11,7 @@ import {
   generatePayslipsPDF,
   parsePayoutStatsRows,
   WorkerPayslipUI,
+  PayslipDayRow,
   ExtraItem,
   HiddenFields,
 } from '../../lib/payslipExport';
@@ -58,6 +59,16 @@ function calendarDays(start: string, end: string): number {
   return Math.round((b.getTime() - a.getTime()) / 86400000) + 1;
 }
 
+// Compact hint for the payslip layout tier, matching payslipExport.chooseLayout:
+//   ≤7 → 8-row / 3 per page · 8–16 → 16-row / 2 per page ·
+//   17–21 → N-row / 2 per page (Legal) · 22+ → N-row / 1 per page
+function tierHint(days: number): string {
+  if (days <= 7)  return '8-row / 3 per page';
+  if (days <= 16) return '16-row / 2 per page';
+  if (days <= 21) return `${days}-row / 2 per page · Legal`;
+  return `${days}-row / 1 per page`;
+}
+
 function defaultSettings(): WorkerSettings {
   return { is120Program: false, hotels: 0, advances: 0, travelPkg: 0, extraDeductions: [], additions: [], batchId: '' };
 }
@@ -65,6 +76,8 @@ function defaultSettings(): WorkerSettings {
 function makeBatchId(): string {
   return `batch_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 }
+
+function r2(v: number): number { return Math.round(v * 100) / 100; }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -91,6 +104,12 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
   const [workerSettings, setWorkerSettings] = useState<Map<string, WorkerSettings>>(new Map());
   const [expandedWorkers, setExpandedWorkers] = useState<Set<string>>(new Set());
   const [isExporting, setIsExporting] = useState(false);
+
+  // Original (sheet-loaded) day snapshots, for rate-edit highlighting + reset.
+  // Keyed by contractorId. Captured at load; never mutated.
+  const [originalDays, setOriginalDays] = useState<Map<string, PayslipDayRow[]>>(new Map());
+  // "Set all rates" input value (string while typing; applied on the button).
+  const [bulkRate, setBulkRate] = useState<string>('');
 
   // Global defaults
   const [stdHotels, setStdHotels] = useState<number>(0);
@@ -232,6 +251,9 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
       return last !== 0 ? last : a.firstName.localeCompare(b.firstName);
     });
     setWorkerList(workers);
+    // Snapshot originals (deep copy of days) for rate-edit reset + highlight.
+    setOriginalDays(new Map(workers.map(w => [w.contractorId, w.days.map(d => ({ ...d }))])));
+    setBulkRate('');
     const s = new Map<string, WorkerSettings>();
     // If only 1 batch, auto-assign
     const autoBatchId = batches.length === 1 ? batches[0].id : '';
@@ -243,6 +265,52 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
     }));
     setWorkerSettings(s);
     setStep('workers');
+  };
+
+  // ─── Rate editing ───────────────────────────────────────────────────────────
+  // Commission = EQ × Rate. A day's Total contains its AER Comm as the commission
+  // piece, so editing the rate recomputes Comm (EQ × newRate) and shifts Total by
+  // the difference (Total − oldComm + newComm), leaving bonus / mach / labor cost
+  // untouched. Everything is in-memory and print-only — no write-back to the Sheet.
+
+  const recalcDayForRate = (d: PayslipDayRow, rate: number): PayslipDayRow => {
+    const newComm = r2(d.equiv * rate);
+    const newTotal = r2(d.totalPayout - d.aerComm + newComm);
+    return { ...d, payoutRate: rate, aerComm: newComm, totalPayout: newTotal };
+  };
+
+  const updateDayRate = (id: string, dayIndex: number, value: string) => {
+    const parsed = parseFloat(value);
+    const rate = isNaN(parsed) ? 0 : parsed;
+    setWorkerList(prev => prev.map(worker => {
+      if (worker.contractorId !== id) return worker;
+      return {
+        ...worker,
+        days: worker.days.map((d, idx) => idx === dayIndex ? recalcDayForRate(d, rate) : d),
+      };
+    }));
+  };
+
+  const resetDayRate = (id: string, dayIndex: number) => {
+    const orig = originalDays.get(id)?.[dayIndex];
+    if (!orig) return;
+    setWorkerList(prev => prev.map(worker => {
+      if (worker.contractorId !== id) return worker;
+      return {
+        ...worker,
+        days: worker.days.map((d, idx) => idx === dayIndex ? { ...orig } : d),
+      };
+    }));
+  };
+
+  // Stamp one rate onto every day of every worker — overwrites all individual edits.
+  const applyRateToAll = () => {
+    const parsed = parseFloat(bulkRate);
+    if (isNaN(parsed)) return;
+    setWorkerList(prev => prev.map(worker => ({
+      ...worker,
+      days: worker.days.map(d => recalcDayForRate(d, parsed)),
+    })));
   };
 
   // ─── Worker settings helpers ──────────────────────────────────────────────
@@ -377,7 +445,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
             <span className="text-green-400 font-medium">
               {startDate} → {endDate}
               <span className="text-gray-400 ml-2">
-                ({calendarDays(startDate, endDate)} days · {calendarDays(startDate, endDate) > 7 ? '16-row / 2 per page' : '8-row / 3 per page'})
+                ({calendarDays(startDate, endDate)} days · {tierHint(calendarDays(startDate, endDate))})
               </span>
             </span>
           ) : startDate ? (
@@ -419,6 +487,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
     const finalPay = calcFinalPay(w, s);
     const totalEquiv = w.days.reduce((sum, d) => sum + d.equiv, 0);
     const isUnassigned = !s.batchId;
+    const origDaysForWorker = originalDays.get(w.contractorId);
     const iCls = "bg-gray-900 border border-gray-600 rounded py-0.5 pl-4 pr-1 text-xs text-white w-16 focus:ring-1 focus:ring-blue-500 focus:outline-none";
     const $ = "absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-500 text-xs pointer-events-none";
 
@@ -523,27 +592,44 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
                     <th className="text-right py-1 pr-3 font-medium">Rate</th>
                     <th className="text-right py-1 pr-3 font-medium">Comm</th>
                     <th className="text-right py-1 pr-3 font-medium">Mach</th>
-                    <th className="text-right py-1 pr-3 font-medium">Deduct</th>
+                    <th className="text-right py-1 pr-3 font-medium">Labor Cost</th>
                     <th className="text-right py-1 font-medium">Bonus</th>
                     <th className="text-right py-1 pl-3 font-medium text-white">Total</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {w.days.map((d, i) => (
-                    <tr key={i} className="border-b border-gray-700/50 last:border-0">
-                      <td className="py-1 pr-3">{d.date}</td>
-                      <td className="py-1 pr-3">{d.manager}</td>
-                      <td className="py-1 pr-3 text-right">{d.steps}</td>
-                      <td className="py-1 pr-3 text-right">{d.equiv.toFixed(2)}</td>
-                      <td className="py-1 pr-3 text-right">{d.totalPrepay ? `$${d.totalPrepay.toFixed(2)}` : '—'}</td>
-                      <td className="py-1 pr-3 text-right">${d.payoutRate}</td>
-                      <td className="py-1 pr-3 text-right">${d.aerComm.toFixed(2)}</td>
-                      <td className="py-1 pr-3 text-right">{d.machRent ? `$${d.machRent}` : '—'}</td>
-                      <td className="py-1 pr-3 text-right">{d.deductions ? `$${d.deductions}` : '—'}</td>
-                      <td className="py-1 text-right">{d.dailyBonus ? `$${d.dailyBonus}` : '—'}</td>
-                      <td className="py-1 pl-3 text-right font-bold text-white">${d.totalPayout.toFixed(2)}</td>
-                    </tr>
-                  ))}
+                  {w.days.map((d, i) => {
+                    const origRate = origDaysForWorker?.[i]?.payoutRate;
+                    const rateEdited = origRate !== undefined && r2(origRate) !== r2(d.payoutRate);
+                    return (
+                      <tr key={i} className="border-b border-gray-700/50 last:border-0">
+                        <td className="py-1 pr-3">{d.date}</td>
+                        <td className="py-1 pr-3">{d.manager}</td>
+                        <td className="py-1 pr-3 text-right">{d.steps}</td>
+                        <td className="py-1 pr-3 text-right">{d.equiv.toFixed(2)}</td>
+                        <td className="py-1 pr-3 text-right">{d.totalPrepay ? `$${d.totalPrepay.toFixed(2)}` : '—'}</td>
+                        <td className="py-1 pr-3 text-right">
+                          <div className="inline-flex items-center gap-1 justify-end">
+                            {rateEdited && (
+                              <button onClick={() => resetDayRate(w.contractorId, i)} title="Reset to loaded rate"
+                                className="text-gray-500 hover:text-blue-400 flex-shrink-0"><RotateCcw size={10}/></button>
+                            )}
+                            <span className="text-gray-500">$</span>
+                            <input type="number" min="0" step="0.01" value={d.payoutRate}
+                              onChange={e => updateDayRate(w.contractorId, i, e.target.value)}
+                              className={`w-14 bg-gray-900 border rounded py-0.5 px-1 text-xs text-right focus:ring-1 focus:ring-blue-500 focus:outline-none ${
+                                rateEdited ? 'border-blue-500 text-blue-300' : 'border-gray-600 text-white'
+                              }`}/>
+                          </div>
+                        </td>
+                        <td className="py-1 pr-3 text-right">${d.aerComm.toFixed(2)}</td>
+                        <td className="py-1 pr-3 text-right">{d.machRent ? `$${d.machRent}` : '—'}</td>
+                        <td className="py-1 pr-3 text-right">{d.deductions ? `$${d.deductions}` : '—'}</td>
+                        <td className="py-1 text-right">{d.dailyBonus ? `$${d.dailyBonus}` : '—'}</td>
+                        <td className="py-1 pl-3 text-right font-bold text-white">${d.totalPayout.toFixed(2)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -649,7 +735,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
           <div className="flex items-center justify-between bg-gray-800 rounded-lg border border-gray-700 px-4 py-2.5">
             <span className="text-sm text-gray-400">
               <span className="text-white font-bold">{workerList.length}</span> workers ·{' '}
-              {startDate && endDate && (calendarDays(startDate, endDate) > 7 ? '16-row blocks · 2 per page' : '8-row blocks · 3 per page')}
+              {startDate && endDate && tierHint(calendarDays(startDate, endDate))}
             </span>
             <span className="text-xs text-gray-500 truncate ml-4">
               {cc?.displayName} {startDate} - {endDate} Payslips.pdf
@@ -719,7 +805,24 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
               </button>
             </div>
 
-            <span className="text-xs text-gray-600 ml-1">— click eye to show/hide fields</span>
+            <span className="text-gray-700 text-xs">|</span>
+
+            {/* Set all rates — stamps one payout rate onto every day of every worker */}
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              <span className="text-xs text-gray-400">Set all rates</span>
+              <div className="relative">
+                <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-gray-500 text-xs pointer-events-none">$</span>
+                <input type="number" min="0" step="0.01" placeholder="0" value={bulkRate}
+                  onChange={e => setBulkRate(e.target.value)}
+                  className="w-20 bg-gray-900 border border-gray-600 rounded py-1 pl-4 pr-1 text-xs text-white focus:ring-1 focus:ring-blue-500 focus:outline-none" />
+              </div>
+              <button onClick={applyRateToAll}
+                className="text-xs bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded transition-colors flex-shrink-0">
+                Apply
+              </button>
+            </div>
+
+            <span className="text-xs text-gray-600 ml-1">— eye toggles fields · "Apply" overwrites every day's rate</span>
           </div>
 
           {/* Batch setup bar */}
