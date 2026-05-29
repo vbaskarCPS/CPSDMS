@@ -288,11 +288,45 @@ class SessionService {
     // The new v2 schema stores a buckets jsonb array. Each element should
     // already match the RouteSplitBucket interface. Defensive normalisation
     // here in case the row was hand-written or has missing fields.
+    //
+    // BACK-COMPAT: an earlier iteration of RouteSplitRectangle stored axis-
+    // aligned bounds {west, east, south, north} instead of explicit corners.
+    // We convert old-shape rectangles to corners-shape on read so existing
+    // splits keep working without a data migration. New writes are always
+    // corners-shape. A single bucket can contain a mix of old + new
+    // rectangles and it will still render correctly.
+    const normalizeRect = (r: any): RouteSplitRectangle | null => {
+      if (!r || typeof r !== 'object') return null;
+      // New shape: { corners: [...] }
+      if (Array.isArray(r.corners) && r.corners.length === 4) {
+        return {
+          corners: r.corners.map((c: any) => ({
+            lng: Number(c.lng),
+            lat: Number(c.lat),
+          })),
+        };
+      }
+      // Old shape: { west, east, south, north } — build a north-up corners list.
+      if (typeof r.west === 'number' && typeof r.east === 'number'
+        && typeof r.south === 'number' && typeof r.north === 'number') {
+        return {
+          corners: [
+            { lng: r.west, lat: r.north }, // TL
+            { lng: r.east, lat: r.north }, // TR
+            { lng: r.east, lat: r.south }, // BR
+            { lng: r.west, lat: r.south }, // BL
+          ],
+        };
+      }
+      return null;
+    };
     const rawBuckets = Array.isArray(row.buckets) ? row.buckets : [];
     const buckets: RouteSplitBucket[] = rawBuckets.map((b: any) => ({
       letter: typeof b.letter === 'string' ? b.letter : 'a',
       sourceLetter: typeof b.sourceLetter === 'string' ? b.sourceLetter : null,
-      rectangles: Array.isArray(b.rectangles) ? b.rectangles : [],
+      rectangles: Array.isArray(b.rectangles)
+        ? b.rectangles.map(normalizeRect).filter((r: RouteSplitRectangle | null): r is RouteSplitRectangle => r !== null)
+        : [],
       bookingIds: Array.isArray(b.bookingIds) ? b.bookingIds : [],
       assignedWorkers: Array.isArray(b.assignedWorkers) ? b.assignedWorkers : [],
     }));

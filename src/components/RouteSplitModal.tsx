@@ -54,11 +54,12 @@ export interface RouteSplitBooking {
 
 // Mirror of RouteSplitRectangle from types.ts — duplicated here so the modal
 // can be imported as a standalone component without circular imports.
+//
+// Corners-based storage (not axis-aligned bounds) so that rectangles drawn
+// while the map is rotated stay screen-aligned at draw time and lock to
+// their geographic positions afterward.
 export interface SplitRect {
-  west: number;
-  east: number;
-  south: number;
-  north: number;
+  corners: Array<{ lng: number; lat: number }>;
 }
 
 // Mirror of RouteSplitBucket from types.ts. The modal needs to know the full
@@ -93,23 +94,36 @@ export interface RouteSplitModalProps {
   onConfirm: (rectangles: SplitRect[], bookingsMovingToNew: string[]) => void;
 }
 
-// --- Internal rectangle (same shape as SplitRect, kept separate for clarity) ---
-
+// --- Internal rectangle representation (4 geographic corners) ---
+//
+// Same shape as SplitRect — kept as a separate local alias only so changes
+// to the public type don't accidentally ripple into internal state code.
 interface Rect {
-  west: number;
-  east: number;
-  south: number;
-  north: number;
+  corners: Array<{ lng: number; lat: number }>;
 }
 
 // --- Geometry helpers ---
 
-function pointInRect(lng: number, lat: number, r: Rect): boolean {
-  return lng >= r.west && lng <= r.east && lat >= r.south && lat <= r.north;
+// Standard ray-casting point-in-polygon. Works for any simple polygon (no
+// self-intersections). The 4-corner quadrilaterals we draw always satisfy
+// that constraint since they're built from a screen-aligned pixel rectangle
+// projected through map.unproject.
+function pointInPolygon(lng: number, lat: number, corners: Array<{lng: number; lat: number}>): boolean {
+  let inside = false;
+  for (let i = 0, j = corners.length - 1; i < corners.length; j = i++) {
+    const xi = corners[i].lng, yi = corners[i].lat;
+    const xj = corners[j].lng, yj = corners[j].lat;
+    const intersect = ((yi > lat) !== (yj > lat))
+      && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
 }
 
 function pointInAnyRect(lng: number, lat: number, rects: Rect[]): boolean {
-  for (const r of rects) if (pointInRect(lng, lat, r)) return true;
+  for (const r of rects) {
+    if (r.corners && r.corners.length >= 3 && pointInPolygon(lng, lat, r.corners)) return true;
+  }
   return false;
 }
 
@@ -260,8 +274,12 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
 
   // Rectangles the user has committed so far for the NEW bucket.
   const [rectangles, setRectangles] = useState<Rect[]>([]);
-  // In-progress drag (null when not dragging).
-  const dragStartLngLatRef = useRef<{ lng: number; lat: number } | null>(null);
+  // In-progress drag — track the START pixel within the container. We can't
+  // store the start lng/lat because if the map were rotated mid-drag (it
+  // can't, but defensively) the geographic anchor would slide. The pixel is
+  // the canonical anchor; we project to lng/lat on each move using the
+  // current camera so corners come out screen-aligned at the drag's end.
+  const dragStartPixelRef = useRef<{ x: number; y: number } | null>(null);
   const [dragRect, setDragRect] = useState<Rect | null>(null);
 
   // --- Compute the effective buckets array including the in-progress new bucket.
@@ -482,8 +500,14 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
   // two-finger rotate, two-finger tilt, drag-pan, double-click-zoom, etc.
   //
   // In 'draw' mode, every handler is disabled so the map is frozen while the
-  // user drags rectangles. Also cancels any in-progress drag if the user
-  // switches modes mid-drag.
+  // user drags rectangles. Rectangle drawing works at any map rotation/pitch
+  // because rectangles are stored as 4 explicit geographic corners (not as
+  // axis-aligned bounds): the drag computes a screen-aligned pixel rectangle
+  // and projects its 4 corners through the current camera. The drawn shape
+  // therefore appears as a clean rectangle on screen, then later rotates with
+  // the streets in the master map.
+  //
+  // Also cancels any in-progress drag if the user switches modes mid-drag.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
@@ -496,8 +520,8 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
     } else {
       for (const h of handlers) { try { h.disable(); } catch {} }
       // Cancel any in-progress drag.
-      if (dragStartLngLatRef.current) {
-        dragStartLngLatRef.current = null;
+      if (dragStartPixelRef.current) {
+        dragStartPixelRef.current = null;
         setDragRect(null);
       }
     }
@@ -594,20 +618,20 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
     const lyrFill = 'split-rects-fill';
     const lyrLine = 'split-rects-line';
 
-    const features = activeNewRects.map(r => ({
-      type: 'Feature' as const,
-      properties: {},
-      geometry: {
-        type: 'Polygon' as const,
-        coordinates: [[
-          [r.west, r.south],
-          [r.east, r.south],
-          [r.east, r.north],
-          [r.west, r.north],
-          [r.west, r.south],
-        ]],
-      },
-    }));
+    const features = activeNewRects.map(r => {
+      // Build a closed polygon ring from the 4 stored corners. We close by
+      // repeating the first corner at the end (GeoJSON convention).
+      const ring: [number, number][] = r.corners.map(c => [c.lng, c.lat] as [number, number]);
+      if (ring.length > 0) ring.push(ring[0]);
+      return {
+        type: 'Feature' as const,
+        properties: {},
+        geometry: {
+          type: 'Polygon' as const,
+          coordinates: [ring],
+        },
+      };
+    });
     const data = { type: 'FeatureCollection' as const, features };
 
     const newColor = colorForBucket(baseRouteColor, newLetter);
@@ -643,14 +667,41 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
   }, [activeNewRects, baseRouteColor, newLetter, mapLoaded]);
 
   // --- Pointer interaction: drag to draw a rectangle. ---
-  const pixelToLngLat = useCallback((clientX: number, clientY: number): { lng: number; lat: number } | null => {
-    const map = mapRef.current;
-    if (!map || !containerRef.current) return null;
+  // Helpers: convert client coordinates to container-local pixels and back
+  // to lng/lat. We split these because the drag math operates in PIXELS (so
+  // the resulting rectangle is screen-aligned), but the storage is lng/lat
+  // (so the rectangle locks to its geographic position after the drag ends).
+  const clientToPixel = useCallback((clientX: number, clientY: number): { x: number; y: number } | null => {
+    if (!containerRef.current) return null;
     const rect = containerRef.current.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    const ll = map.unproject([x, y] as any);
-    return { lng: ll.lng, lat: ll.lat };
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  }, []);
+
+  // Given two screen-pixel diagonal points, build the 4 corners of the
+  // axis-aligned-on-screen rectangle they bound and unproject each through
+  // the current camera. The result is a lng/lat quadrilateral that renders
+  // as a clean rectangle at the current rotation/pitch and stays locked to
+  // those geographic positions afterward.
+  const pixelDiagonalToCorners = useCallback((
+    p1: { x: number; y: number },
+    p2: { x: number; y: number }
+  ): Array<{ lng: number; lat: number }> | null => {
+    const map = mapRef.current;
+    if (!map) return null;
+    const minX = Math.min(p1.x, p2.x);
+    const maxX = Math.max(p1.x, p2.x);
+    const minY = Math.min(p1.y, p2.y);
+    const maxY = Math.max(p1.y, p2.y);
+    const tl = map.unproject([minX, minY] as any);
+    const tr = map.unproject([maxX, minY] as any);
+    const br = map.unproject([maxX, maxY] as any);
+    const bl = map.unproject([minX, maxY] as any);
+    return [
+      { lng: tl.lng, lat: tl.lat },
+      { lng: tr.lng, lat: tr.lat },
+      { lng: br.lng, lat: br.lat },
+      { lng: bl.lng, lat: bl.lat },
+    ];
   }, []);
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -658,39 +709,45 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
     if (mode !== 'draw') return;
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    const ll = pixelToLngLat(e.clientX, e.clientY);
-    if (!ll) return;
-    dragStartLngLatRef.current = ll;
-    setDragRect({ west: ll.lng, east: ll.lng, south: ll.lat, north: ll.lat });
-  }, [mapLoaded, mode, pixelToLngLat]);
+    const px = clientToPixel(e.clientX, e.clientY);
+    if (!px) return;
+    dragStartPixelRef.current = px;
+    // Initial drag rect is degenerate (all 4 corners at the same point).
+    const corners = pixelDiagonalToCorners(px, px);
+    if (!corners) return;
+    setDragRect({ corners });
+  }, [mapLoaded, mode, clientToPixel, pixelDiagonalToCorners]);
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (mode !== 'draw') return;
-    if (!dragStartLngLatRef.current) return;
-    const ll = pixelToLngLat(e.clientX, e.clientY);
-    if (!ll) return;
-    const a = dragStartLngLatRef.current;
-    setDragRect({
-      west: Math.min(a.lng, ll.lng),
-      east: Math.max(a.lng, ll.lng),
-      south: Math.min(a.lat, ll.lat),
-      north: Math.max(a.lat, ll.lat),
-    });
-  }, [mode, pixelToLngLat]);
+    if (!dragStartPixelRef.current) return;
+    const px = clientToPixel(e.clientX, e.clientY);
+    if (!px) return;
+    const corners = pixelDiagonalToCorners(dragStartPixelRef.current, px);
+    if (!corners) return;
+    setDragRect({ corners });
+  }, [mode, clientToPixel, pixelDiagonalToCorners]);
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragStartLngLatRef.current) return;
+    if (!dragStartPixelRef.current) return;
     try { (e.target as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
     const finalDrag = dragRect;
-    dragStartLngLatRef.current = null;
+    const startPx = dragStartPixelRef.current;
+    const endPx = clientToPixel(e.clientX, e.clientY);
+    dragStartPixelRef.current = null;
     setDragRect(null);
     if (!finalDrag) return;
-    // Reject tiny accidental clicks: require the rect to have meaningful area.
-    const dLng = finalDrag.east - finalDrag.west;
-    const dLat = finalDrag.north - finalDrag.south;
-    if (dLng < 1e-5 || dLat < 1e-5) return;
+    // Reject tiny accidental clicks: require the drag to span at least 8
+    // pixels diagonally on screen. Geographic checks (lng/lat span) don't
+    // work cleanly with rotated rectangles — pixel distance is the right
+    // unit for "did the user actually drag?".
+    if (endPx) {
+      const dx = endPx.x - startPx.x;
+      const dy = endPx.y - startPx.y;
+      if (Math.sqrt(dx * dx + dy * dy) < 8) return;
+    }
     setRectangles(prev => [...prev, finalDrag]);
-  }, [dragRect]);
+  }, [dragRect, clientToPixel]);
 
   const handleUndo = useCallback(() => {
     setRectangles(prev => prev.slice(0, -1));
@@ -706,7 +763,7 @@ const RouteSplitModal: React.FC<RouteSplitModalProps> = ({
     if (!isOpen) {
       setRectangles([]);
       setDragRect(null);
-      dragStartLngLatRef.current = null;
+      dragStartPixelRef.current = null;
       setMode('navigate');
     }
   }, [isOpen]);
