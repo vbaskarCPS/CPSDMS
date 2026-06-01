@@ -302,17 +302,54 @@ function colorForBucket(baseHex: string, letter: string | undefined): string {
 // and has no rectangles). For each non-'a' bucket B:
 //   if currentBucket == B.sourceLetter AND point inside any B.rectangle →
 //   currentBucket = B.letter
-function bucketForPoint(lng: number, lat: number, buckets: Array<{letter: string; sourceLetter: string | null; rectangles: Array<{west: number; east: number; south: number; north: number}>}>): string {
+// pointInPolygon: standard ray-casting test. Works for any simple polygon,
+// including the 4-corner quadrilaterals the split modal draws (which stay
+// simple because they come from a screen-aligned pixel rectangle projected
+// through map.unproject). Kept identical in behaviour to RouteSplitModal's
+// copy so the master map and the modal preview agree on which bucket a point
+// falls in.
+function pointInPolygon(lng: number, lat: number, corners: Array<{ lng: number; lat: number }>): boolean {
+  let inside = false;
+  for (let i = 0, j = corners.length - 1; i < corners.length; j = i++) {
+    const xi = corners[i].lng, yi = corners[i].lat;
+    const xj = corners[j].lng, yj = corners[j].lat;
+    const intersect = ((yi > lat) !== (yj > lat))
+      && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// pointInAnyRect: true if the point lies inside any of the corners-shaped
+// rectangles. The service (mapDbRouteSplit) always normalises stored
+// rectangles to the { corners: [...] } shape before they ever reach this
+// file — including converting legacy {west,east,south,north} rows — so we
+// only need to handle corners here.
+function pointInAnyRect(lng: number, lat: number, rects: Array<{ corners: Array<{ lng: number; lat: number }> }>): boolean {
+  for (const r of rects) {
+    if (r.corners && r.corners.length >= 3 && pointInPolygon(lng, lat, r.corners)) return true;
+  }
+  return false;
+}
+
+// --- bucketForPoint: cascade algorithm shared with RouteSplitModal.
+//
+// Determines which bucket a (lng, lat) point belongs to given the buckets
+// array. Identical algorithm to RouteSplitModal so master map render and
+// modal preview agree pixel-for-pixel.
+//
+// Process buckets in chronological order (skipping index 0, which is 'a'
+// and has no rectangles). For each non-'a' bucket B:
+//   if currentBucket == B.sourceLetter AND point inside any B.rectangle →
+//   currentBucket = B.letter
+function bucketForPoint(lng: number, lat: number, buckets: Array<{letter: string; sourceLetter: string | null; rectangles: Array<{ corners: Array<{ lng: number; lat: number }> }>}>): string {
   let current = 'a';
   for (let i = 1; i < buckets.length; i++) {
     const b = buckets[i];
     if (b.sourceLetter !== current) continue;
     if (!b.rectangles || b.rectangles.length === 0) continue;
-    for (const r of b.rectangles) {
-      if (lng >= r.west && lng <= r.east && lat >= r.south && lat <= r.north) {
-        current = b.letter;
-        break;
-      }
+    if (pointInAnyRect(lng, lat, b.rectangles)) {
+      current = b.letter;
     }
   }
   return current;
@@ -702,7 +739,7 @@ function lineMidCoord(a: [number, number], b: [number, number]): [number, number
 // Used for placing the route's letter label on the master map.
 function bucketCentroid(
   segments: Array<{ coordinates: [number, number][] }>,
-  buckets: Array<{ letter: string; sourceLetter: string | null; rectangles: Array<{west: number; east: number; south: number; north: number}> }>,
+  buckets: Array<{ letter: string; sourceLetter: string | null; rectangles: Array<{ corners: Array<{ lng: number; lat: number }> }> }>,
   targetLetter: string
 ): { lng: number; lat: number } | null {
   let sumLng = 0, sumLat = 0, count = 0;
