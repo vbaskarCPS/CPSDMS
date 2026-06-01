@@ -329,6 +329,53 @@ class ContractorService {
   }
 
   // -------------------------------------------------------------------
+  // BULK UNLOCK (whole command center — used by the "Unlock All Levels" action)
+  // -------------------------------------------------------------------
+
+  /**
+   * Unlock Level 2 for EVERY contractor in a command center in a single query.
+   * Only touches contractors that are not already unlocked (level_2_unlocked_at
+   * IS NULL), so anyone unlocked individually keeps their original unlock date.
+   * NOTE: This does NOT send any emails — it is a silent bulk write.
+   * Returns the number of contractors newly unlocked.
+   */
+  public async unlockAllLevel2ForCC(commandCenterId: string): Promise<number> {
+    const now = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('contractors')
+      .update({ level_2_unlocked_at: now })
+      .eq('command_center_id', commandCenterId)
+      .is('level_2_unlocked_at', null)
+      .select('id');
+
+    if (error) throw new Error(error.message);
+    return data?.length ?? 0;
+  }
+
+  /**
+   * Unlock Level 3 (Driveway Sealing) for EVERY contractor in a command center
+   * in a single query. Only touches contractors that are not already unlocked
+   * (level_3_unlocked_at IS NULL), so anyone unlocked individually keeps their
+   * original unlock date.
+   * NOTE: This does NOT send any emails — it is a silent bulk write.
+   * Returns the number of contractors newly unlocked.
+   */
+  public async unlockAllLevel3ForCC(commandCenterId: string): Promise<number> {
+    const now = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('contractors')
+      .update({ level_3_unlocked_at: now })
+      .eq('command_center_id', commandCenterId)
+      .is('level_3_unlocked_at', null)
+      .select('id');
+
+    if (error) throw new Error(error.message);
+    return data?.length ?? 0;
+  }
+
+  // -------------------------------------------------------------------
   // DELETE CONTRACTOR
   // -------------------------------------------------------------------
 

@@ -45,6 +45,7 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
   const [sendingEmailId, setSendingEmailId] = useState<string | null>(null);
   const [unlockingId, setUnlockingId] = useState<string | null>(null);
   const [unlockingLevel3Id, setUnlockingLevel3Id] = useState<string | null>(null);
+  const [bulkUnlocking, setBulkUnlocking] = useState(false);
 
   // Modules relevant to this CC's region, split by level
   const region = commandCenter.region as any;
@@ -345,6 +346,32 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
     }
   };
 
+  // --- UNLOCK ALL LEVELS FOR ALL CONTRACTORS (this CC only — no emails) ---
+  const handleUnlockAllLevels = async () => {
+    const confirmMsg =
+      `Unlock ALL levels (Level 2 and Driveway Sealing) for ALL contractors in ${commandCenter.displayName}?\n\n` +
+      `No emails will be sent.\n\n` +
+      `This cannot be undone in bulk.`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    setBulkUnlocking(true);
+    setError(null);
+
+    try {
+      // Two single-query bulk writes — no per-contractor loop, no emails.
+      await contractorService.unlockAllLevel2ForCC(commandCenter.id);
+      await contractorService.unlockAllLevel3ForCC(commandCenter.id);
+
+      // Refresh the list so every row reflects the new unlock state.
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to unlock all levels');
+    } finally {
+      setBulkUnlocking(false);
+    }
+  };
+
   // --- FILTERED & SORTED SUMMARIES ---
   const filtered = summaries
     .filter((s) => {
@@ -465,6 +492,21 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
             placeholder="Search contractors..."
             className="w-full bg-gray-800 border border-gray-700 rounded-lg py-2 pl-9 pr-4 text-white text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
           />
+        </div>
+
+        {/* Bulk unlock — set apart from the sync controls so it isn't fat-fingered.
+            Unlocks Level 2 + Driveway Sealing for every contractor in this CC.
+            Silent: no emails are sent. */}
+        <div className="mt-3 flex justify-end">
+          <button
+            onClick={handleUnlockAllLevels}
+            disabled={bulkUnlocking || loading || summaries.length === 0}
+            className="flex items-center gap-2 px-3 py-1.5 bg-amber-900/30 hover:bg-amber-900/50 text-amber-300 border border-amber-700/50 rounded-lg text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Unlock Level 2 and Driveway Sealing for every contractor in this command center (no emails sent)"
+          >
+            {bulkUnlocking ? <Loader size={14} className="animate-spin" /> : <Unlock size={14} />}
+            {bulkUnlocking ? 'Unlocking all…' : 'Unlock All Levels (All Contractors)'}
+          </button>
         </div>
       </div>
 
