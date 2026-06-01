@@ -52,6 +52,15 @@ export interface Level2UnlockEmailData {
   commandCenterName: string;
 }
 
+export interface Level3UnlockEmailData {
+  contractorId: string;       // CN# e.g. "H1001"
+  firstName: string;
+  lastName: string;
+  email: string;
+  commandCenterId: string;
+  commandCenterName: string;
+}
+
 // --- HELPER ---
 const getCCId = (): string => {
   const ccId = commandCenterService.getCurrentCommandCenterId();
@@ -243,6 +252,31 @@ class OnboardingService {
   }
 
   // ---------------------------------------------------------------
+  // SEND LEVEL 3 UNLOCK EMAIL (Driveway Sealing)
+  // ---------------------------------------------------------------
+
+  public async sendLevel3UnlockEmail(emailData: Level3UnlockEmailData): Promise<void> {
+    const config = await this.getConfig();
+
+    const html = this.buildLevel3UnlockEmailHtml(emailData, config);
+    const subject = `Driveway Sealing Training Now Available, ${emailData.firstName}! 🛢️`;
+
+    const { data, error } = await supabase.functions.invoke('bright-processor', {
+      body: {
+        emailType: 'onboarding',
+        customerEmail: emailData.email,
+        subject,
+        html,
+        replyTo: config?.replyToEmail || undefined,
+        commandCenterId: emailData.commandCenterId,
+        fromAddress: 'onboarding@propertystars.app',
+      },
+    });
+
+    if (error) throw new Error(error.message || 'Failed to send Level 3 unlock email');
+  }
+
+  // ---------------------------------------------------------------
   // LEVEL 2 UNLOCK EMAIL HTML BUILDER
   // ---------------------------------------------------------------
 
@@ -350,6 +384,153 @@ class OnboardingService {
                   <td style="padding: 20px; text-align: center;">
                     <p style="margin: 0; color: #ffffff; font-size: 16px; font-weight: bold;">
                       🏆 Take your game to the next level — complete all 5 modules!
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Signature -->
+          ${hasSignature ? `
+          <tr>
+            <td style="padding: 20px 30px 10px 30px;">
+              ${signatureHtml}
+            </td>
+          </tr>
+          ` : ''}
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 20px 30px 30px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
+              <p style="margin: 0; color: #9ca3af; font-size: 12px;">
+                © 2026 ${commandCenterName}. All rights reserved.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `.trim();
+  }
+
+  // ---------------------------------------------------------------
+  // LEVEL 3 UNLOCK EMAIL HTML BUILDER (Driveway Sealing)
+  // ---------------------------------------------------------------
+
+  public buildLevel3UnlockEmailHtml(
+    emailData: Level3UnlockEmailData,
+    config: OnboardingConfig | null
+  ): string {
+    const { firstName, contractorId, commandCenterName } = emailData;
+
+    // Signature
+    const hasSignature = config?.signatureName;
+    const signatureHtml = hasSignature
+      ? `
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-top: 25px; border-top: 1px solid #e5e7eb; padding-top: 20px;">
+          <tr>
+            <td style="font-size: 14px; color: #374151;">
+              <strong style="font-size: 16px;">${config.signatureName}</strong><br/>
+              ${config.signatureTitle ? `<span style="color: #6b7280;">${config.signatureTitle}</span><br/>` : ''}
+              ${config.signaturePhone ? `<span style="color: #6b7280;">📞 ${config.signaturePhone}</span><br/>` : ''}
+              ${config.signatureEmail ? `<span style="color: #6b7280;">✉️ ${config.signatureEmail}</span>` : ''}
+            </td>
+          </tr>
+        </table>
+      `
+      : '';
+
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; background-color: #f3f4f6; font-family: Arial, sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+
+          <!-- Header with Logo -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #1f2937 0%, #374151 100%); padding: 30px; border-radius: 12px 12px 0 0; text-align: center;">
+              <img src="${LOGO_URL}" alt="${commandCenterName}" style="max-width: 200px; height: auto;" />
+            </td>
+          </tr>
+
+          <!-- Heading -->
+          <tr>
+            <td style="padding: 30px 30px 10px 30px;">
+              <h1 style="margin: 0; color: #1f2937; font-size: 24px;">Driveway Sealing Training Unlocked! 🛢️</h1>
+              <p style="margin: 10px 0 0 0; color: #4b5563; font-size: 16px; line-height: 1.6;">
+                Great work, ${firstName}! Your manager has unlocked <strong>Driveway Sealing Training</strong> for you. Ten new modules — covering everything from safety to sales — are now available in your training portal.
+              </p>
+            </td>
+          </tr>
+
+          <!-- What's in Driveway Sealing -->
+          <tr>
+            <td style="padding: 15px 30px;">
+              <h2 style="margin: 0 0 12px 0; color: #1f2937; font-size: 18px;">📚 What's in Driveway Sealing?</h2>
+              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px;">
+                <tr>
+                  <td style="padding: 18px; font-size: 14px; color: #166534; line-height: 2;">
+                    <strong>Module 11:</strong> Health, Safety & WHMIS for Sealing<br/>
+                    <strong>Module 12:</strong> Intro to Driveway Sealing<br/>
+                    <strong>Module 13:</strong> The Service, Step by Step<br/>
+                    <strong>Module 14:</strong> Sales Script: The Intro & Reason for the Deal<br/>
+                    <strong>Module 15:</strong> Sales Script: Building Value<br/>
+                    <strong>Module 16:</strong> Pricing & Closing<br/>
+                    <strong>Module 17:</strong> Price Objections<br/>
+                    <strong>Module 18:</strong> Linking & Working the Bubble<br/>
+                    <strong>Module 19:</strong> 5 Steps to Sealing Success + Operations<br/>
+                    <strong>Module 20:</strong> Selling in the Rain (PROS)
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Description -->
+          <tr>
+            <td style="padding: 10px 30px;">
+              <p style="margin: 0; color: #4b5563; font-size: 14px; line-height: 1.6;">
+                Driveway sealing is a different service with its own product knowledge, safety requirements, and sales approach. <strong>Start with the Health, Safety & WHMIS module</strong> — it covers the hazardous materials you'll handle and is essential before you work with the product. Each module includes a quiz you'll need to pass at 80% or higher.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Login Instructions -->
+          <tr>
+            <td style="padding: 15px 30px;">
+              <h2 style="margin: 0 0 12px 0; color: #1f2937; font-size: 18px;">💻 Log In to Get Started</h2>
+              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px;">
+                <tr>
+                  <td style="padding: 18px; font-size: 14px; color: #1e40af; line-height: 1.8;">
+                    <strong>Website:</strong> <a href="https://propertystars.app" style="color: #2563eb; font-weight: bold;">propertystars.app</a><br/>
+                    <strong>Username:</strong> <span style="font-size: 16px; font-weight: bold; color: #1e3a8a;">${contractorId}</span><br/>
+                    <strong>Password:</strong> <span style="font-size: 16px; font-weight: bold; color: #1e3a8a;">${firstName}</span> <span style="font-size: 12px; color: #6b7280;">(case sensitive)</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Motivational CTA -->
+          <tr>
+            <td style="padding: 10px 30px;">
+              <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #059669 0%, #047857 100%); border-radius: 8px;">
+                <tr>
+                  <td style="padding: 20px; text-align: center;">
+                    <p style="margin: 0; color: #ffffff; font-size: 16px; font-weight: bold;">
+                      🏆 Master driveway sealing — complete all 10 modules!
                     </p>
                   </td>
                 </tr>

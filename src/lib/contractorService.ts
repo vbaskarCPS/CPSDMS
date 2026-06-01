@@ -19,6 +19,7 @@ export interface Contractor {
   createdAt?: string;
   onboardingEmailSentAt?: string;  // null = not sent, timestamp = sent
   level2UnlockedAt?: string;       // null = locked, timestamp = unlocked
+  level3UnlockedAt?: string;       // null = locked, timestamp = unlocked (independent of L2)
 }
 
 export interface TrainingProgress {
@@ -52,6 +53,7 @@ export interface TrainingContractor {
   shuttle?: string;
   firstDayBooked?: string;
   level2UnlockedAt?: string;
+  level3UnlockedAt?: string;
 }
 
 // Per-worker summary for the CC admin view
@@ -298,6 +300,35 @@ class ContractorService {
   }
 
   // -------------------------------------------------------------------
+  // LEVEL 3 UNLOCK (Driveway Sealing — independent of Level 2)
+  // -------------------------------------------------------------------
+
+  /**
+   * Unlock Level 3 (Driveway Sealing) training for a contractor.
+   * Sets level_3_unlocked_at to the current timestamp.
+   * This is INDEPENDENT of Level 2 — a contractor can have Level 3 unlocked
+   * with or without Level 2 being unlocked.
+   * Returns the updated contractor.
+   */
+  public async unlockLevel3(
+    contractorId: string,
+    commandCenterId: string
+  ): Promise<Contractor> {
+    const now = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('contractors')
+      .update({ level_3_unlocked_at: now })
+      .eq('contractor_id', contractorId)
+      .eq('command_center_id', commandCenterId)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    return this.mapDbToContractor(data);
+  }
+
+  // -------------------------------------------------------------------
   // DELETE CONTRACTOR
   // -------------------------------------------------------------------
 
@@ -481,6 +512,7 @@ class ContractorService {
       createdAt: data.created_at,
       onboardingEmailSentAt: data.onboarding_email_sent_at,
       level2UnlockedAt: data.level_2_unlocked_at,
+      level3UnlockedAt: data.level_3_unlocked_at,
     };
   }
 

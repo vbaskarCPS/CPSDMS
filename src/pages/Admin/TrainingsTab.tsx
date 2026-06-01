@@ -44,11 +44,13 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [sendingEmailId, setSendingEmailId] = useState<string | null>(null);
   const [unlockingId, setUnlockingId] = useState<string | null>(null);
+  const [unlockingLevel3Id, setUnlockingLevel3Id] = useState<string | null>(null);
 
   // Modules relevant to this CC's region, split by level
   const region = commandCenter.region as any;
   const level1Modules = getModulesForLevel(1, region);
   const level2Modules = getModulesForLevel(2, region);
+  const level3Modules = getModulesForLevel(3, region);
   const allModules = getModulesForRegion(region);
   const totalModules = allModules.length;
 
@@ -104,7 +106,10 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
       setSummaries(freshSummaries);
 
       // Build contractorId → training status map
-      const colorMap = new Map<string, 'none' | 'started' | 'level1' | 'level2'>();
+      // Status precedence (highest wins): level3 > level2 > level1 > started > none.
+      // Levels 2 and 3 unlock independently, so a worker may have completed
+      // either or both. We surface the "highest" completed level for the colour.
+      const colorMap = new Map<string, 'none' | 'started' | 'level1' | 'level2' | 'level3'>();
 
       for (const s of freshSummaries) {
         const l1Completed = level1Modules.filter(m =>
@@ -113,15 +118,23 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
         const l2Completed = level2Modules.filter(m =>
           s.progress.some(p => p.moduleId === m.module_id && p.isCompleted)
         ).length;
+        const l3Completed = level3Modules.filter(m =>
+          s.progress.some(p => p.moduleId === m.module_id && p.isCompleted)
+        ).length;
 
         const l1Done = level1Modules.length > 0 && l1Completed === level1Modules.length;
         const l2Done =
           level2Modules.length > 0 &&
           l2Completed === level2Modules.length &&
           !!s.contractor.level2UnlockedAt;
+        const l3Done =
+          level3Modules.length > 0 &&
+          l3Completed === level3Modules.length &&
+          !!s.contractor.level3UnlockedAt;
 
-        let status: 'none' | 'started' | 'level1' | 'level2' = 'none';
-        if (l2Done) status = 'level2';
+        let status: 'none' | 'started' | 'level1' | 'level2' | 'level3' = 'none';
+        if (l3Done) status = 'level3';
+        else if (l2Done) status = 'level2';
         else if (l1Done) status = 'level1';
         else if (s.progress.some(p => p.isCompleted)) status = 'started';
 
@@ -275,6 +288,63 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
     }
   };
 
+  // --- UNLOCK LEVEL 3 (Driveway Sealing — independent of Level 2) ---
+  const handleUnlockLevel3 = async (summary: ContractorTrainingSummary) => {
+    const { contractor } = summary;
+    const displayName = `${contractor.firstName} ${contractor.lastName} (${contractor.contractorId})`;
+
+    const hasEmail = !!contractor.email;
+    const confirmMsg = hasEmail
+      ? `Unlock Driveway Sealing Training for ${displayName}?\n\nThis will send a notification email to ${contractor.email}.`
+      : `Unlock Driveway Sealing Training for ${displayName}?\n\nNote: No email on file — they will not receive a notification.`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    setUnlockingLevel3Id(contractor.id);
+    setError(null);
+
+    try {
+      // 1. Write timestamp to DB
+      await contractorService.unlockLevel3(contractor.contractorId, commandCenter.id);
+
+      // 2. Send email if they have one
+      if (hasEmail) {
+        try {
+          await onboardingService.sendLevel3UnlockEmail({
+            contractorId: contractor.contractorId,
+            firstName: contractor.firstName,
+            lastName: contractor.lastName,
+            email: contractor.email!,
+            commandCenterId: commandCenter.id,
+            commandCenterName: commandCenter.displayName,
+          });
+        } catch (emailErr) {
+          // Don't fail the unlock if just the email fails
+          console.error('Level 3 email failed:', emailErr);
+        }
+      }
+
+      // 3. Update local state
+      setSummaries((prev) =>
+        prev.map((s) =>
+          s.contractor.id === contractor.id
+            ? {
+                ...s,
+                contractor: {
+                  ...s.contractor,
+                  level3UnlockedAt: new Date().toISOString(),
+                },
+              }
+            : s
+        )
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to unlock Driveway Sealing');
+    } finally {
+      setUnlockingLevel3Id(null);
+    }
+  };
+
   // --- FILTERED & SORTED SUMMARIES ---
   const filtered = summaries
     .filter((s) => {
@@ -307,6 +377,10 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
     setExpandedContractorId((prev) => (prev === contractorId ? null : contractorId));
   };
 
+  // Shared grid template — keep header and rows in lockstep.
+  // Columns: email | name | L1 | L2 | L3 | unlockL2 | unlockL3 | delete | expand
+  const GRID_TEMPLATE = '32px 1fr 80px 80px 90px 36px 36px 36px 36px';
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -321,6 +395,7 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
               {summaries.length} contractor{summaries.length !== 1 ? 's' : ''} •{' '}
               L1: {level1Modules.length} module{level1Modules.length !== 1 ? 's' : ''}
               {level2Modules.length > 0 && ` • L2: ${level2Modules.length} module${level2Modules.length !== 1 ? 's' : ''}`}
+              {level3Modules.length > 0 && ` • Sealing: ${level3Modules.length} module${level3Modules.length !== 1 ? 's' : ''}`}
             </p>
           </div>
 
@@ -418,13 +493,15 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
             {/* Column headers */}
             <div
               className="grid gap-2 px-4 pb-2 border-b border-gray-800 items-end"
-              style={{ gridTemplateColumns: '32px 1fr 100px 100px 40px 40px 40px' }}
+              style={{ gridTemplateColumns: GRID_TEMPLATE }}
             >
               <span /> {/* Email column */}
               <span className="text-xs font-medium text-gray-500 uppercase">Contractor</span>
               <span className="text-xs font-medium text-gray-500 uppercase text-center">Level 1</span>
               <span className="text-xs font-medium text-gray-500 uppercase text-center">Level 2</span>
-              <span /> {/* Unlock column */}
+              <span className="text-xs font-medium text-gray-500 uppercase text-center">Sealing</span>
+              <span /> {/* Unlock L2 column */}
+              <span /> {/* Unlock L3 column */}
               <span /> {/* Delete column */}
               <span /> {/* Expand column */}
             </div>
@@ -437,12 +514,15 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
                 <ContractorRow
                   key={summary.contractor.id}
                   summary={summary}
+                  gridTemplate={GRID_TEMPLATE}
                   level1Modules={level1Modules}
                   level2Modules={level2Modules}
+                  level3Modules={level3Modules}
                   isExpanded={isExpanded}
                   isDeleting={isDeleting}
                   isSendingEmail={sendingEmailId === summary.contractor.id}
                   isUnlocking={unlockingId === summary.contractor.id}
+                  isUnlockingLevel3={unlockingLevel3Id === summary.contractor.id}
                   onToggle={() => toggleExpand(summary.contractor.contractorId)}
                   onDelete={() =>
                     handleDelete(
@@ -452,6 +532,7 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
                   }
                   onSendEmail={() => handleSendOnboardingEmail(summary)}
                   onUnlockLevel2={() => handleUnlockLevel2(summary)}
+                  onUnlockLevel3={() => handleUnlockLevel3(summary)}
                 />
               );
             })}
@@ -465,30 +546,38 @@ const TrainingsTab: React.FC<TrainingsTabProps> = ({ commandCenter }) => {
 // --- CONTRACTOR ROW ---
 interface ContractorRowProps {
   summary: ContractorTrainingSummary;
+  gridTemplate: string;
   level1Modules: typeof TRAINING_MODULES;
   level2Modules: typeof TRAINING_MODULES;
+  level3Modules: typeof TRAINING_MODULES;
   isExpanded: boolean;
   isDeleting: boolean;
   isSendingEmail: boolean;
   isUnlocking: boolean;
+  isUnlockingLevel3: boolean;
   onToggle: () => void;
   onDelete: () => void;
   onSendEmail: () => void;
   onUnlockLevel2: () => void;
+  onUnlockLevel3: () => void;
 }
 
 const ContractorRow: React.FC<ContractorRowProps> = ({
   summary,
+  gridTemplate,
   level1Modules,
   level2Modules,
+  level3Modules,
   isExpanded,
   isDeleting,
   isSendingEmail,
   isUnlocking,
+  isUnlockingLevel3,
   onToggle,
   onDelete,
   onSendEmail,
   onUnlockLevel2,
+  onUnlockLevel3,
 }) => {
   const { contractor, progress, attempts } = summary;
 
@@ -503,11 +592,15 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
   // Per-level completion counts
   const l1Completed = level1Modules.filter((m) => getModuleStatus(m.module_id)).length;
   const l2Completed = level2Modules.filter((m) => getModuleStatus(m.module_id)).length;
+  const l3Completed = level3Modules.filter((m) => getModuleStatus(m.module_id)).length;
   const l1Total = level1Modules.length;
   const l2Total = level2Modules.length;
+  const l3Total = level3Modules.length;
   const l1Done = l1Completed === l1Total && l1Total > 0;
   const l2Done = l2Completed === l2Total && l2Total > 0;
+  const l3Done = l3Completed === l3Total && l3Total > 0;
   const l2Unlocked = !!contractor.level2UnlockedAt;
+  const l3Unlocked = !!contractor.level3UnlockedAt;
 
   // Email status
   const hasEmail = !!contractor.email;
@@ -523,15 +616,12 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
     emailTooltip = `Click to send onboarding email to ${contractor.email}`;
   }
 
-  // All modules combined for expanded view
-  const allModules = [...level1Modules, ...level2Modules];
-
   return (
     <div className={`bg-gray-900 rounded-lg border border-gray-800 overflow-hidden transition-opacity ${isDeleting ? 'opacity-40 pointer-events-none' : ''}`}>
       {/* Main row */}
       <div
         className="grid gap-2 items-center px-4 py-3 hover:bg-gray-800/50 transition-colors"
-        style={{ gridTemplateColumns: '32px 1fr 100px 100px 40px 40px 40px' }}
+        style={{ gridTemplateColumns: gridTemplate }}
       >
         {/* Email icon */}
         <div className="flex justify-center">
@@ -593,6 +683,20 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
           )}
         </button>
 
+        {/* Level 3 (Sealing) progress */}
+        <button onClick={onToggle} className="flex items-center justify-center">
+          {l3Unlocked ? (
+            <>
+              <span className={`text-sm font-bold ${l3Done ? 'text-green-400' : 'text-gray-300'}`}>
+                {l3Completed}/{l3Total}
+              </span>
+              {l3Done && <CheckCircle size={14} className="text-green-400 ml-1" />}
+            </>
+          ) : (
+            <span className="text-xs text-gray-600">Locked</span>
+          )}
+        </button>
+
         {/* Unlock Level 2 button */}
         <div className="flex justify-center">
           {isUnlocking ? (
@@ -612,6 +716,31 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
               }}
               className="p-1 text-amber-500 hover:text-amber-400 hover:bg-amber-900/20 rounded transition-colors"
               title="Unlock Level 2 Training"
+            >
+              <Lock size={15} />
+            </button>
+          )}
+        </div>
+
+        {/* Unlock Level 3 (Sealing) button */}
+        <div className="flex justify-center">
+          {isUnlockingLevel3 ? (
+            <Loader size={16} className="animate-spin text-amber-400" />
+          ) : l3Unlocked ? (
+            <div
+              className="p-1 cursor-default"
+              title={`Driveway Sealing unlocked ${new Date(contractor.level3UnlockedAt!).toLocaleDateString()}`}
+            >
+              <Unlock size={15} className="text-green-500" />
+            </div>
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onUnlockLevel3();
+              }}
+              className="p-1 text-sky-500 hover:text-sky-400 hover:bg-sky-900/20 rounded transition-colors"
+              title="Unlock Driveway Sealing Training"
             >
               <Lock size={15} />
             </button>
@@ -683,6 +812,31 @@ const ContractorRow: React.FC<ContractorRowProps> = ({
             <div className="text-center py-3 text-gray-600 text-xs flex items-center justify-center gap-2">
               <Lock size={12} />
               Level 2 not yet unlocked for this contractor
+            </div>
+          )}
+
+          {/* Level 3 (Sealing) section */}
+          {l3Unlocked && level3Modules.length > 0 && (
+            <div>
+              <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-3 flex items-center gap-2">
+                <GraduationCap size={13} className="text-sky-400" />
+                Driveway Sealing
+                <span className={`ml-auto text-xs font-medium ${l3Done ? 'text-green-400' : 'text-gray-500'}`}>
+                  {l3Completed}/{l3Total}
+                </span>
+              </h4>
+              <div className="space-y-3">
+                {level3Modules.map((m) => (
+                  <ModuleDetail key={m.module_id} module={m} getModuleStatus={getModuleStatus} getModuleAttempts={getModuleAttempts} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!l3Unlocked && level3Modules.length > 0 && (
+            <div className="text-center py-3 text-gray-600 text-xs flex items-center justify-center gap-2">
+              <Lock size={12} />
+              Driveway Sealing not yet unlocked for this contractor
             </div>
           )}
         </div>
