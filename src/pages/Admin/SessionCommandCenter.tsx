@@ -56,8 +56,17 @@ import DigitalWorkerbook from './DigitalWorkerbook';
 // --- FLOATER PALETTE (Digital mapping CCs only) ---
 // The palette + colour-assignment helper now live in a shared module so
 // RMLogbook and RMMapTab can import the SAME source without depending on this
-// Admin page component. Re-exported here so any existing importer of
-// `{ MANAGER_PALETTE, getManagerColor }` from SessionCommandCenter keeps working.
+// Admin page component.
+//
+// Two statements, on purpose:
+//   1. The `import` below brings getManagerColor into THIS file's scope so the
+//      floater picker render can actually call it. A
+//      re-export alone does NOT create a local binding — that omission is what
+//      caused the "getManagerColor is not defined" crash when the picker opened.
+//   2. The `export ... from` re-export keeps any module that imports
+//      `{ MANAGER_PALETTE, getManagerColor }` FROM SessionCommandCenter working,
+//      so we don't have to hunt down and rewrite those importers.
+import { getManagerColor } from '../../lib/managerPalette';
 export { MANAGER_PALETTE, getManagerColor } from '../../lib/managerPalette';
 
 const SessionCommandCenter: React.FC = () => {
