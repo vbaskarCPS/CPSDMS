@@ -745,7 +745,27 @@ const WORKER_LOCATION_POLL_MS = 5 * 60 * 1000;
 // Cache priority per spec:
 //   1. jobIdCache (per-tx accurate — populated by Phase 2 geocoding)
 //   2. geocodeCache (address-level — populated by all phases)
-function resolveNavDestination(financialStore: any[]): { lat: number; lng: number; address: string } | null {
+function resolveNavDestination(
+  financialStore: any[],
+  pendingWinner?: { createdAt?: string; lat: number; lng: number; address: string } | null
+): { lat: number; lng: number; address: string } | null {
+  // Item 3: if a pending sale is later than the newest transaction AND is
+  // geocoded, navigate there. If it's later but NOT geocoded, we fall through
+  // to the newest completed job below (the caller passes pendingWinner only
+  // when it has coords, so "later but ungeocoded" simply means pendingWinner
+  // is undefined here and the transaction path wins — the required fallback).
+  if (pendingWinner && pendingWinner.lat != null && pendingWinner.lng != null) {
+    const newestTxTime = (() => {
+      if (!financialStore || financialStore.length === 0) return 0;
+      const sorted = [...financialStore].sort((a, b) =>
+        (b?.timestamp || '').localeCompare(a?.timestamp || ''));
+      return sorted[0]?.timestamp ? new Date(sorted[0].timestamp).getTime() : 0;
+    })();
+    const pendTime = pendingWinner.createdAt ? new Date(pendingWinner.createdAt).getTime() : 0;
+    if (pendTime > newestTxTime) {
+      return { lat: pendingWinner.lat, lng: pendingWinner.lng, address: pendingWinner.address };
+    }
+  }
   if (!financialStore || financialStore.length === 0) return null;
 
   // Sort newest-first. Defensive copy — we don't mutate caller's array.
@@ -1240,6 +1260,23 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           lastTimestamp = sorted[0].timestamp;
           lastTime = formatTimeShort(sorted[0].timestamp);
         }
+        // Item 3: a pending sale counts as activity. Find this cart's newest
+        // pending sale by createdAt; if it's later than the newest transaction
+        // (or there are no transactions), it becomes the last-active.
+        if (pendingSales.length > 0) {
+          const newestPending = [...pendingSales]
+            .filter(ps => ps.createdAt)
+            .sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime())[0];
+          if (newestPending && newestPending.createdAt) {
+            const pendingNewer = !lastTimestamp ||
+              new Date(newestPending.createdAt).getTime() > new Date(lastTimestamp).getTime();
+            if (pendingNewer) {
+              lastAddr = assembleAddressFromPending(newestPending);
+              lastTimestamp = newestPending.createdAt;
+              lastTime = formatTimeShort(newestPending.createdAt);
+            }
+          }
+        }
 
         return {
           sessionId: session.id,
@@ -1547,6 +1584,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [routeMapData]);
 
   const mostRecentCompletionPins = useMemo<GeocodedPin[]>(() => {
+    // Newest COMPLETED transaction per owner (session for teams, worker for aeration).
     const latestByOwner = new Map<string, { jobId: string; timestamp: string }>();
     allSessions.forEach(s => {
       const ownerKey = isTeamSeason ? s.id : s.workerId;
@@ -1559,15 +1597,69 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     });
 
+    // Item 3: newest geocoded PENDING SALE per owning session. Only teams have
+    // pending sales, and the pulse for teams is keyed by session id — which is
+    // exactly the sessionId we carried onto each GeocodedPendingSale.
+    const latestPendingBySession = new Map<string, GeocodedPendingSale>();
+    if (isTeamSeason) {
+      geocodedPendingSales.forEach(ps => {
+        if (!ps.sessionId || !ps.createdAt) return;
+        const existing = latestPendingBySession.get(ps.sessionId);
+        if (!existing || !existing.createdAt ||
+            new Date(ps.createdAt).getTime() > new Date(existing.createdAt).getTime()) {
+          latestPendingBySession.set(ps.sessionId, ps);
+        }
+      });
+    }
+
     const result: GeocodedPin[] = [];
-    latestByOwner.forEach(({ jobId }) => {
+    latestByOwner.forEach(({ jobId, timestamp }, ownerKey) => {
+      // Does a pending sale for this owner beat the newest transaction?
+      const pendingWinner = latestPendingBySession.get(ownerKey);
+      if (pendingWinner && pendingWinner.createdAt &&
+          new Date(pendingWinner.createdAt).getTime() > new Date(timestamp).getTime()) {
+        // Pulse the pending sale's geocoded location instead. Synthesize a
+        // minimal GeocodedPin from it (only lat/lng/routeColor are read by the
+        // pulse renderer; the rest is cosmetic).
+        result.push({
+          id: pendingWinner.id,
+          address: pendingWinner.booking['Full Address'] || '',
+          routeCode: pendingWinner.booking['Route Number'] || '',
+          name: '',
+          status: 'new_sale',
+          lat: pendingWinner.lat,
+          lng: pendingWinner.lng,
+          routeColor: routeColorMap.get(pendingWinner.booking['Route Number'] || '') || '#22c55e',
+        });
+        return;
+      }
+      // Otherwise, pulse the newest completed transaction as before.
       const pin =
         geocodedPins.find(p => p.id === jobId && (p.status === 'completed' || p.status === 'new_sale'))
         ?? geocodedUpsellPins.find(p => p.id === jobId);
       if (pin) result.push(pin);
     });
+
+    // Edge case: a cart with a pending sale but ZERO completed transactions yet
+    // has no entry in latestByOwner, so the loop above misses it. Add those.
+    if (isTeamSeason) {
+      latestPendingBySession.forEach((ps, sessionId) => {
+        if (latestByOwner.has(sessionId)) return; // already handled above
+        result.push({
+          id: ps.id,
+          address: ps.booking['Full Address'] || '',
+          routeCode: ps.booking['Route Number'] || '',
+          name: '',
+          status: 'new_sale',
+          lat: ps.lat,
+          lng: ps.lng,
+          routeColor: routeColorMap.get(ps.booking['Route Number'] || '') || '#22c55e',
+        });
+      });
+    }
+
     return result;
-  }, [allSessions, geocodedPins, geocodedUpsellPins, isTeamSeason]);
+  }, [allSessions, geocodedPins, geocodedUpsellPins, isTeamSeason, geocodedPendingSales, routeColorMap]);
 
   const overlapInfo = useMemo(() => {
     const map = new Map<string, { upsellPin: GeocodedPin; basePin: GeocodedPin }>();
@@ -3135,7 +3227,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [navState, startNavToDestination]);
 
   const handleNavigateToCart = useCallback((cart: CartCardData) => {
-    const resolved = resolveNavDestination(cart.sharedFinancialStore);
+    // Item 3: find this cart's newest GEOCODED pending sale to compete for the
+    // nav target. If the newest pending sale isn't geocoded, we pass nothing —
+    // resolveNavDestination then falls back to the newest completed job.
+    const cartPending = geocodedPendingSales
+      .filter(ps => ps.sessionId === cart.sessionId && ps.createdAt)
+      .sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime())[0];
+    const pendingWinner = cartPending
+      ? { createdAt: cartPending.createdAt, lat: cartPending.lat, lng: cartPending.lng, address: cartPending.booking['Full Address'] || '' }
+      : null;
+    const resolved = resolveNavDestination(cart.sharedFinancialStore, pendingWinner);
     if (!resolved) { console.warn('[RMNav] No geocoded address for cart', cart.sessionId); return; }
     const label = cart.members.length > 1
       ? cart.members.map(m => m.firstName).join(' & ')
@@ -3145,7 +3246,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (!navState) { startNavToDestination(newDest, newKey); return; }
     if (navState.targetKey === newKey) return;
     setSwitchNavConfirm({ newDestination: newDest, newTargetKey: newKey, currentLabel: navState.destination.label, newLabel: label });
-  }, [navState, startNavToDestination]);
+  }, [navState, startNavToDestination, geocodedPendingSales]);
 
   const workerCanNavigate = useCallback((card: WorkerCardData): boolean => resolveNavDestination(card.financialStore) !== null, []);
   const cartCanNavigate = useCallback((cart: CartCardData): boolean => resolveNavDestination(cart.sharedFinancialStore) !== null, []);
