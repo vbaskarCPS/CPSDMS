@@ -270,6 +270,18 @@ export async function runRouteFinderUpdate(
   const matchedKeys = new Set<string>();
   const cityLabels = new Map<string, Set<string>>(); // key -> raw city labels (for FYI)
 
+  // Secondary index: HOUSE # + SUGGESTED street -> answer. Lets a master row
+  // that already holds the CLEAN street spelling still match an address keyed
+  // on its ORIGINAL street (e.g. "Euston Rd" in the finder vs "Euston Road" in
+  // the master). Carries origKey so matched-address tracking stays correct.
+  const bySuggested = new Map<string, { rc: string | null; street: string | null; origKey: string }>();
+  for (const [k, ans] of resolved) {
+    if (ans.street) {
+      const house = k.split('|')[0];
+      bySuggested.set(`${house}|${normStreet(ans.street)}`, { ...ans, origKey: k });
+    }
+  }
+
   // ── 3. Master tab ids + existing notes
   log('Reading master sheet structure…');
   const tabIds = await getTabIds(accessToken, masterSheetId);
@@ -298,15 +310,18 @@ export async function runRouteFinderUpdate(
     const row = cbRows[i];
     if (!row) continue;
     const key = makeKey(cell(row, cbHouse), cell(row, cbStreet));
-    const ans = resolved.get(key);
+    const direct = resolved.get(key);
+    const viaSug = direct ? null : bySuggested.get(key);
+    const ans = direct || viaSug;
     if (!ans) continue;
-    matchedKeys.add(key);
+    const matchKey = direct ? key : viaSug!.origKey;
+    matchedKeys.add(matchKey);
     cbResult.rowsMatched++;
     const rowNumber = i + 1;
 
     if (includeCityFyi && cbCity >= 0) {
       const c = normCity(cell(row, cbCity));
-      if (c) { if (!cityLabels.has(key)) cityLabels.set(key, new Set()); cityLabels.get(key)!.add(cell(row, cbCity).trim()); }
+      if (c) { if (!cityLabels.has(matchKey)) cityLabels.set(matchKey, new Set()); cityLabels.get(matchKey)!.add(cell(row, cbCity).trim()); }
     }
 
     if (ans.rc) {
@@ -349,16 +364,6 @@ export async function runRouteFinderUpdate(
       const bkHouse  = findCol(bkHeader, ['HOUSE #', 'HOUSE#', 'HOUSE']);
       const bkStreet = findCol(bkHeader, ['STREET NAME', 'STREET']);
 
-      // Build a secondary lookup so a Bookings row already holding the CLEAN
-      // street still matches: suggestedStreetKey -> resolved answer.
-      const bySuggested = new Map<string, { rc: string | null; street: string | null }>();
-      for (const [key, ans] of resolved) {
-        if (ans.street) {
-          const house = key.split('|')[0];
-          bySuggested.set(`${house}|${normStreet(ans.street)}`, ans);
-        }
-      }
-
       if (bkRC >= 0 && bkHouse >= 0 && bkStreet >= 0) {
         const bkNotes = await getExistingNotes(accessToken, masterSheetId, MB_BOOKINGS_TAB, [bkRC, bkStreet]);
         for (let i = bkHeaderIdx + 1; i < bkRows.length; i++) {
@@ -368,10 +373,11 @@ export async function runRouteFinderUpdate(
           const street = cell(row, bkStreet);
           if (!house && !street) continue;
           const origKey = makeKey(house, street);
-          const ans = resolved.get(origKey) || bySuggested.get(origKey);
+          const direct = resolved.get(origKey);
+          const viaSug = direct ? null : bySuggested.get(origKey);
+          const ans = direct || viaSug;
           if (!ans) continue;
-          // Mark the ORIGINAL-key address matched if that's how we hit it.
-          if (resolved.has(origKey)) matchedKeys.add(origKey);
+          matchedKeys.add(direct ? origKey : viaSug!.origKey);
           bkResult.rowsMatched++;
           const rowNumber = i + 1;
 
