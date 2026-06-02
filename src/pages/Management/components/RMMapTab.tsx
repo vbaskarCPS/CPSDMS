@@ -29,6 +29,7 @@ import ContractorJobs from './ContractorJobs';
 import PendingJobModal from '../../../components/PendingJobModal';
 import RMNavigation, { NavDestination } from './RMNavigation';
 import RouteSplitModal from '../../../components/RouteSplitModal';
+import { getManagerColor } from '../../../lib/managerPalette';
 import type { GeocodePhase, GeocodeProgress, FilterVisibility } from '../RMLogbook';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -952,6 +953,44 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     () => (myRouteCodesSignature ? myRouteCodesSignature.split('|') : []),
     [myRouteCodesSignature]
   );
+
+  // FLOATER PALETTE: CC-wide manager id list, userId-sorted, so each manager's
+  // hue is identical on every floater's map (matches managerPalette's contract).
+  // We sort ALL managers in the CC — not just the covered set — so colours don't
+  // reshuffle as the covered set changes between floaters.
+  const sortedManagerIds = useMemo(
+    () => allManagers.map(m => m.userId).sort(),
+    [allManagers]
+  );
+
+  // Whether floater colouring is active at all. A non-floater (covers only their
+  // own id) keeps the original route-map colours untouched — we only switch to
+  // per-manager hues when the user is actually floating for others.
+  const floaterColouringActive = useMemo(
+    () => coveredManagerIds.size > 1,
+    [coveredManagerIds]
+  );
+
+  // Resolve the OWNING manager of a route, or of one bucket within it.
+  // Bucket ownership (bucket.managerId) wins when present; otherwise fall back to
+  // the route's manager_id. This is the single question every render site asks.
+  const ownerOf = useCallback(
+    (routeManagerId: string, bucketManagerId?: string): string =>
+      (bucketManagerId && bucketManagerId.trim()) ? bucketManagerId : routeManagerId,
+    []
+  );
+
+  // The hue for an owning manager: the floater's OWN routes stay on the route-map
+  // colour (red is reserved for self per the palette comment, and self-routes
+  // already read naturally); covered OTHER managers get their palette hue. When
+  // floater colouring is inactive, callers should not use this (they keep route_color).
+  const colorForOwner = useCallback(
+    (ownerManagerId: string, fallbackRouteColor: string): string => {
+      if (ownerManagerId === managerId) return fallbackRouteColor;
+      return getManagerColor(ownerManagerId, sortedManagerIds);
+    },
+    [managerId, sortedManagerIds]
+  );
   const myTeamIds = useMemo(() => new Set(workers.filter(w => coveredManagerIds.has(w.assignedManagerId as string)).map(w => w.contractorId)), [workers, coveredManagerIds]);
   const myTeamWorkers = useMemo(() => workers.filter(w => coveredManagerIds.has(w.assignedManagerId as string)), [workers, coveredManagerIds]);
   const routeColorMap = useMemo(() => { const m = new Map<string,string>(); routeMapData.forEach(r => m.set(r.route_code, r.route_color)); return m; }, [routeMapData]);
@@ -1681,7 +1720,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const split = routeSplitsByCode.get(route.route_code);
       const buckets = split ? split.buckets : [];
 
-      // Build per-line-piece features.
+      // Resolve the route-level owner once (used for unsplit routes and as the
+      // fallback for buckets with no managerId stamp).
+      const routeRow = routes.find(r => r.routeCode === route.route_code);
+      const routeOwner = routeRow?.managerId || managerId;
+
+      // Build per-line-piece features. Each piece carries an ownerColor resolved
+      // from its bucket's owner (falling back to the route owner), so a cross-
+      // assigned bucket paints in that manager's hue — the two-tone route.
       const features: GeoJSON.Feature[] = [];
       route.segments.forEach(seg => {
         const cs = seg.coordinates;
@@ -1690,13 +1736,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           const a = cs[i];
           const b = cs[i + 1];
           const mid = lineMidCoord(a, b);
-          const bucket = buckets.length > 0 ? bucketForPoint(mid[0], mid[1], buckets) : 'a';
+          const bucketLetter = buckets.length > 0 ? bucketForPoint(mid[0], mid[1], buckets) : 'a';
+          let ownerColor = route.route_color;
+          if (floaterColouringActive) {
+            const bk = buckets.find(bb => bb.letter === bucketLetter);
+            const owner = ownerOf(routeOwner, bk?.managerId);
+            ownerColor = colorForOwner(owner, route.route_color);
+          }
           features.push({
             type: 'Feature',
             properties: {
               route_code: route.route_code,
               color: route.route_color,
-              bucket,
+              ownerColor,
+              bucket: bucketLetter,
               osmId: seg.osmId,
             },
             geometry: { type: 'LineString', coordinates: [a, b] },
@@ -1705,14 +1758,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
       });
 
-      // Build colour match expression from the palette letters.
-      const lineColorExpr: any = ['match', ['get', 'bucket']];
-      for (const L of PALETTE_LETTERS) {
-        lineColorExpr.push(L);
-        lineColorExpr.push(colorForBucket(route.route_color, L));
-      }
-      lineColorExpr.push(route.route_color); // default
-
       map.addSource(srcId,{type:'geojson',data:{type:'FeatureCollection',features}});
       map.addLayer({
         id:lineId,
@@ -1720,7 +1765,18 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         source:srcId,
         minzoom:0,maxzoom:24,
         paint:{
-          'line-color': lineColorExpr,
+          // When floater colouring is active, paint each piece by its owner's
+          // hue (data-driven via the ownerColor property set above). Otherwise
+          // fall back to the per-bucket split-colour match expression (the
+          // original behaviour for non-floaters).
+          'line-color': floaterColouringActive
+            ? ['get', 'ownerColor']
+            : (() => {
+                const expr: any = ['match', ['get', 'bucket']];
+                for (const L of PALETTE_LETTERS) { expr.push(L); expr.push(colorForBucket(route.route_color, L)); }
+                expr.push(route.route_color);
+                return expr;
+              })(),
           'line-width':7,
           'line-opacity':0.75,
         },
@@ -1756,7 +1812,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       initialFitDoneRef.current=true;
       setTimeout(()=>{if(!mapRef.current) return; const b=allCoords.reduce((b,c)=>b.extend(c),new mapboxgl.LngLatBounds(allCoords[0],allCoords[0]));mapRef.current.fitBounds(b,{padding:80,maxZoom:15,duration:800});},300);
     }
-  }, [routeMapData, mapLoaded, routeSplitsByCode]);
+  }, [routeMapData, mapLoaded, routeSplitsByCode, routes, floaterColouringActive, ownerOf, colorForOwner, managerId]);
 
   // Worker name overlay — V2 RECURSIVE-SPLIT-AWARE.
   // Unsplit routes get one label at the route centroid showing assigned workers.
