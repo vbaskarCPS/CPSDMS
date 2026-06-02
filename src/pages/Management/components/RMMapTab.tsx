@@ -928,9 +928,19 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const isLawnRejuv = seasonType === 'lawn_rejuv';
   const isSealing = seasonType === 'sealing';
 
-  const myRouteCodes = useMemo(() => routes.filter(r => r.managerId === managerId).map(r => r.routeCode), [routes, managerId]);
-  const myTeamIds = useMemo(() => new Set(workers.filter(w => w.assignedManagerId === managerId).map(w => w.contractorId)), [workers, managerId]);
-  const myTeamWorkers = useMemo(() => workers.filter(w => w.assignedManagerId === managerId), [workers, managerId]);
+  // FLOATER SCOPE: the set of manager ids this user covers — their own id plus
+  // everyone in currentUser.floatingFor. A non-floater's set is just [own id],
+  // so all the membership checks below collapse to the original behaviour.
+  const coveredManagerIds = useMemo(() => {
+    const s = new Set<string>([managerId]);
+    const ff = (currentUser as any)?.floatingFor;
+    if (Array.isArray(ff)) ff.forEach((id: string) => { if (id) s.add(id); });
+    return s;
+  }, [managerId, currentUser]);
+
+  const myRouteCodes = useMemo(() => routes.filter(r => coveredManagerIds.has(r.managerId)).map(r => r.routeCode), [routes, coveredManagerIds]);
+  const myTeamIds = useMemo(() => new Set(workers.filter(w => coveredManagerIds.has(w.assignedManagerId as string)).map(w => w.contractorId)), [workers, coveredManagerIds]);
+  const myTeamWorkers = useMemo(() => workers.filter(w => coveredManagerIds.has(w.assignedManagerId as string)), [workers, coveredManagerIds]);
   const routeColorMap = useMemo(() => { const m = new Map<string,string>(); routeMapData.forEach(r => m.set(r.route_code, r.route_color)); return m; }, [routeMapData]);
   const availableManagers = useMemo(() => allManagers.filter(m => m.userId !== managerId && m.role === 'RouteManager'), [allManagers, managerId]);
 
@@ -985,7 +995,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // Worker card data (aeration only)
   const workerCardData = useMemo<WorkerCardData[]>(() => {
     if (isTeamSeason) return [];
-    return workers.filter(w => w.assignedManagerId === managerId).map(worker => {
+    return workers.filter(w => coveredManagerIds.has(w.assignedManagerId as string)).map(worker => {
       const session = allSessions.find(s => s.workerId === worker.contractorId);
       const st = session?.stats; const fs = session?.financialStore || [];
       const wb = bookings.filter(b => b['Contractor Number'] === worker.contractorId);
@@ -1023,7 +1033,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
       };
     });
-  }, [workers, managerId, allSessions, bookings, isTeamSeason]);
+  }, [workers, coveredManagerIds, allSessions, bookings, isTeamSeason]);
 
   useEffect(() => { workerCardDataRef.current = workerCardData; }, [workerCardData]);
 
@@ -1268,7 +1278,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     };
 
     for (const r of routes) {
-      if (r.managerId !== managerId) continue;
+      if (!coveredManagerIds.has(r.managerId)) continue;
       const rmi = routeMapData.find(rm => rm.route_code === r.routeCode);
       const baseColor = rmi?.route_color || '#6b7280';
       const split = routeSplitsByCode.get(r.routeCode);
@@ -1322,7 +1332,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       if (a.isAssigned !== b.isAssigned) return a.isAssigned ? 1 : -1;
       return a.displayRouteCode.localeCompare(b.displayRouteCode);
     });
-  }, [routes, managerId, routeMapData, workers, bookings, calculateBookingEQ, routeSplitsByCode]);
+  }, [routes, coveredManagerIds, routeMapData, workers, bookings, calculateBookingEQ, routeSplitsByCode]);
 
   // Split pins into pending-only and completed/new-sale-only — driven by the
   // new filter system. Each set is also visibility-gated separately downstream.
@@ -1482,7 +1492,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // Worker location fetch
   const fetchWorkerLocations = useCallback(async () => {
     const teamIds = workers
-      .filter(w => w.assignedManagerId === managerId)
+      .filter(w => coveredManagerIds.has(w.assignedManagerId as string))
       .map(w => w.contractorId);
     if (!teamIds.length) return;
     try {
@@ -1496,7 +1506,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     } catch (e) {
       console.error('Failed to fetch worker locations:', e);
     }
-  }, [workers, managerId]);
+  }, [workers, coveredManagerIds]);
 
   useEffect(() => {
     if (!mapLoaded) return;
@@ -3260,7 +3270,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const workerRouteBadges = useMemo(() => {
     const m = new Map<string, Array<{ code: string; color: string }>>();
     for (const r of routes) {
-      if (r.managerId !== managerId) continue;
+      if (!coveredManagerIds.has(r.managerId)) continue;
       const split = routeSplitsByCode.get(r.routeCode);
       const baseColor = routeColorMap.get(r.routeCode) || '#6b7280';
       if (!split || split.buckets.length === 0) {
@@ -3280,8 +3290,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
     }
     return m;
-  }, [routes, managerId, routeSplitsByCode, routeColorMap]);
-
+  }, [routes, coveredManagerIds, routeSplitsByCode, routeColorMap]);
+  
   // Sorted worker list (aeration): fewest routes first, alphabetical tiebreaker.
   const sortedAerationAssignList = useMemo(() => {
     return [...myTeamWorkers].sort((a, b) => {

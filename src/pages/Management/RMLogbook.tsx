@@ -213,9 +213,12 @@ const RMLogbook: React.FC = () => {
           const userId = overrideUser?.userId || currentUser?.userId;
           if (seasonHasTeams(sessionSeasonType) && session && userId) {
             try {
+              // FLOATER: cover own workers plus those of every floated manager.
+              const ffList = (overrideUser?.floatingFor || currentUser?.floatingFor || []);
+              const coveredIds = new Set<string>([userId, ...ffList]);
               const myWorkerIds = new Set(
                 session.workers
-                  .filter(w => w.assignedManagerId === userId)
+                  .filter(w => coveredIds.has(w.assignedManagerId as string))
                   .map(w => w.contractorId)
               );
               const mySessions = sessions.filter(s => {
