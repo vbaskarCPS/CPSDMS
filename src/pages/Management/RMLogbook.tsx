@@ -213,12 +213,36 @@ const RMLogbook: React.FC = () => {
           }
 
           const sessionSeasonType = session?.seasonType || 'aeration';
-          const userId = overrideUser?.userId || currentUser?.userId;
+
+          // --- FLOATER FIX (Item 1) ---
+          // Resolve the viewing user (override on first load, else current_user),
+          // then build the OWNER SET = that user's own id + everyone on their
+          // floatingFor list. This mirrors the floatedManagerIds memo, but is
+          // computed locally here so the pending-sales fetch uses the SAME
+          // ownership definition the stats panel already uses.
+          //
+          // Why local instead of reading the memo: refreshData is wired into the
+          // realtime subscription and the 30s timer, and can run before React
+          // state (and therefore the memo) has settled for the user this refresh
+          // is actually running for. Deriving the set from the resolved user
+          // object avoids a stale-closure mismatch. A non-floater collapses to
+          // [own id] → identical to the previous single-manager behaviour.
+          const resolvedUser = overrideUser || currentUser;
+          const userId = resolvedUser?.userId;
+          const ownerFloats = Array.isArray(resolvedUser?.floatingFor) ? resolvedUser!.floatingFor : [];
+          const ownerSet = userId
+            ? new Set<string>([userId, ...ownerFloats])
+            : new Set<string>();
+
           if (seasonHasTeams(sessionSeasonType) && session && userId) {
             try {
+              // Widened: match workers assigned to ANY manager in the owner set,
+              // not just the single logged-in userId. This is the one and only
+              // behavioural change — everything downstream (session filter,
+              // Promise.all, flatten, setState) is unchanged.
               const myWorkerIds = new Set(
                 session.workers
-                  .filter(w => w.assignedManagerId === userId)
+                  .filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId))
                   .map(w => w.contractorId)
               );
               const mySessions = sessions.filter(s => {
