@@ -756,6 +756,11 @@ export interface RouteSplitBucket {
   // Worker IDs assigned to this bucket. The route's assigned_worker_ids is
   // the UNION across all buckets so existing flows keep working.
   assignedWorkers: string[];
+  // FLOATER: the manager who owns THIS bucket. Absent = fall back to
+  // routes.manager_id (the unsplit/unstamped default). Stamped when a bucket
+  // is cross-assigned to a cart under a different manager, so "half a route"
+  // can belong to a different manager than the rest.
+  managerId?: string;
 }
 
 export interface RouteSplit {

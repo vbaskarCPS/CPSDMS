@@ -330,6 +330,7 @@ class SessionService {
         : [],
       bookingIds: Array.isArray(b.bookingIds) ? b.bookingIds : [],
       assignedWorkers: Array.isArray(b.assignedWorkers) ? b.assignedWorkers : [],
+      managerId: typeof b.managerId === 'string' ? b.managerId : undefined,
     }));
     return {
       id: row.id,
@@ -1239,6 +1240,8 @@ class SessionService {
         rectangles: input.rectangles,
         bookingIds: newBucketBookingIds,
         assignedWorkers: [],
+        // Inherit the source bucket's owner so a carve doesn't re-home geometry.
+        managerId: source.managerId,
       });
   
       // Upsert: if existing, update; else insert.
@@ -1319,7 +1322,8 @@ class SessionService {
     public async updateRouteSplitAssignment(
       routeCode: string,
       letter: string,
-      workerIds: string[]
+      workerIds: string[],
+      managerId?: string
     ): Promise<void> {
       const ccId = this.getCCId();
       const date = await this.getDailySessionDate();
@@ -1331,9 +1335,12 @@ class SessionService {
       }
   
       // Build new buckets array with this bucket's assignedWorkers updated.
+      // When managerId is provided (floater cross-assignment), stamp bucket
+      // ownership too so this bucket can belong to a different manager than
+      // the rest of the route.
       const newBuckets = existing.buckets.map(b =>
         b.letter === letter
-          ? { ...b, assignedWorkers: [...workerIds] }
+          ? { ...b, assignedWorkers: [...workerIds], ...(managerId !== undefined ? { managerId } : {}) }
           : b
       );
   
