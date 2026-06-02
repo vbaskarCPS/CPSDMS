@@ -22,7 +22,7 @@ import { setStorageItem } from '../../../lib/localStorage';
 import {
   RouteData, MasterBooking, LogsheetSession, Worker, ManagementUser,
   HistoricalProperty, SeasonType, TeamCart, PendingSale, SEASON_CONFIGS,
-  SessionTransaction, RouteSplit, ManagerLocation,
+  SessionTransaction, RouteSplit,
 } from '../../../types';
 import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
 import ContractorJobs from './ContractorJobs';
@@ -52,9 +52,8 @@ interface GeocodedPendingSale {
   lat: number;
   lng: number;
   booking: MasterBooking;
-  createdAt?: string;   // carried from PendingSale.createdAt for recency comparison
-  sessionId?: string;   // carried from PendingSale.sessionId for per-cart grouping
 }
+
 interface GeocodedPCLEntry {
   key: string;
   lat: number;
@@ -99,16 +98,6 @@ interface RMMapTabProps {
   onForceFollowMeOn?: () => void;
   showManageTeamModal: boolean;
   onCloseManageTeamModal: () => void;
-  // NEW (Phase 3 — Floater): the union set of manager userIds this RM sees +
-  // controls (own id + floatingFor). For a non-floater this is just [own id],
-  // so every ownership memo below behaves exactly as before. managerColours is
-  // the stable palette map (managerId → hex) computed once in RMLogbook from the
-  // full sorted CC manager list; red for the current viewer is layered on top
-  // here at render time. shouldWriteLocation gates whether THIS device reports
-  // its own GPS position to manager_locations.
-  floatedManagerIds?: string[];
-  managerColours?: Map<string, string>;
-  shouldWriteLocation?: boolean;
 }
 
 interface WorkerCardData {
@@ -313,54 +302,17 @@ function colorForBucket(baseHex: string, letter: string | undefined): string {
 // and has no rectangles). For each non-'a' bucket B:
 //   if currentBucket == B.sourceLetter AND point inside any B.rectangle →
 //   currentBucket = B.letter
-// pointInPolygon: standard ray-casting test. Works for any simple polygon,
-// including the 4-corner quadrilaterals the split modal draws (which stay
-// simple because they come from a screen-aligned pixel rectangle projected
-// through map.unproject). Kept identical in behaviour to RouteSplitModal's
-// copy so the master map and the modal preview agree on which bucket a point
-// falls in.
-function pointInPolygon(lng: number, lat: number, corners: Array<{ lng: number; lat: number }>): boolean {
-  let inside = false;
-  for (let i = 0, j = corners.length - 1; i < corners.length; j = i++) {
-    const xi = corners[i].lng, yi = corners[i].lat;
-    const xj = corners[j].lng, yj = corners[j].lat;
-    const intersect = ((yi > lat) !== (yj > lat))
-      && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
-
-// pointInAnyRect: true if the point lies inside any of the corners-shaped
-// rectangles. The service (mapDbRouteSplit) always normalises stored
-// rectangles to the { corners: [...] } shape before they ever reach this
-// file — including converting legacy {west,east,south,north} rows — so we
-// only need to handle corners here.
-function pointInAnyRect(lng: number, lat: number, rects: Array<{ corners: Array<{ lng: number; lat: number }> }>): boolean {
-  for (const r of rects) {
-    if (r.corners && r.corners.length >= 3 && pointInPolygon(lng, lat, r.corners)) return true;
-  }
-  return false;
-}
-
-// --- bucketForPoint: cascade algorithm shared with RouteSplitModal.
-//
-// Determines which bucket a (lng, lat) point belongs to given the buckets
-// array. Identical algorithm to RouteSplitModal so master map render and
-// modal preview agree pixel-for-pixel.
-//
-// Process buckets in chronological order (skipping index 0, which is 'a'
-// and has no rectangles). For each non-'a' bucket B:
-//   if currentBucket == B.sourceLetter AND point inside any B.rectangle →
-//   currentBucket = B.letter
-function bucketForPoint(lng: number, lat: number, buckets: Array<{letter: string; sourceLetter: string | null; rectangles: Array<{ corners: Array<{ lng: number; lat: number }> }>}>): string {
+function bucketForPoint(lng: number, lat: number, buckets: Array<{letter: string; sourceLetter: string | null; rectangles: Array<{west: number; east: number; south: number; north: number}>}>): string {
   let current = 'a';
   for (let i = 1; i < buckets.length; i++) {
     const b = buckets[i];
     if (b.sourceLetter !== current) continue;
     if (!b.rectangles || b.rectangles.length === 0) continue;
-    if (pointInAnyRect(lng, lat, b.rectangles)) {
-      current = b.letter;
+    for (const r of b.rectangles) {
+      if (lng >= r.west && lng <= r.east && lat >= r.south && lat <= r.north) {
+        current = b.letter;
+        break;
+      }
     }
   }
   return current;
@@ -408,8 +360,6 @@ const convertPendingSaleToBooking = (ps: PendingSale): MasterBooking => {
     services: ps.services,
     isPendingSale: true,
     pendingSaleId: ps.id,
-    pendingCreatedAt: ps.createdAt,
-    pendingSessionId: ps.sessionId,
     asphaltAmount: ps.asphaltAmount,
     upsoldAsphaltAmount: ps.upsoldAsphaltAmount,
     saleType: ps.saleType,
@@ -506,51 +456,6 @@ function getStalenessColor(updatedAt: string): string {
   return '#ef4444';
 }
 
-// --- MANAGER LOCATION (Phase 3 — Floater) ---
-//
-// Managers report far more often than workers (5s write / 10s read vs the
-// worker 5-min poll), so they get their OWN poll interval and their OWN
-// staleness bands. The worker getStalenessColor above is intentionally left
-// untouched — it's shared with the worker dot markers and its 10/60/120-min
-// bands are correct for that use.
-//
-// Manager staleness bands (locked to spec): green ≤1min, yellow 1-15min,
-// red >15min. The bubble is the small dot behind the arrow; its colour tells
-// the floater at a glance how fresh that manager's position is.
-const MANAGER_LOCATION_POLL_MS = 10 * 1000;
-
-function getManagerStalenessColor(updatedAt: string): string {
-  const ageMin = (Date.now() - new Date(updatedAt).getTime()) / 60000;
-  if (ageMin <= 1)  return '#22c55e'; // green — fresh (≤1 min)
-  if (ageMin <= 15) return '#eab308'; // yellow — getting stale (1-15 min)
-  return '#ef4444';                   // red — stale (>15 min)
-}
-
-// Builds a coloured directional arrow marker for a MANAGER's live location.
-// Mirrors createNavArrow's outer/inner split (outer = Mapbox translate, inner
-// = our heading rotation) but the arrow fill is the manager's palette colour
-// (or red for the current viewer's own arrow), and a staleness "bubble" dot
-// sits behind it. arrowColor + bubbleColor are passed in by the caller.
-//
-// Returns { outer, inner } so the caller can rotate `inner` by the manager's
-// heading exactly as the GPS arrow does.
-function createManagerArrow(arrowColor: string, bubbleColor: string, initials: string): { outer: HTMLDivElement; inner: HTMLDivElement } {
-  const outer = document.createElement('div');
-  outer.style.cssText = 'pointer-events:auto;cursor:pointer;width:34px;height:34px;';
-
-  const inner = document.createElement('div');
-  inner.style.cssText = 'width:100%;height:100%;transition:transform 0.2s linear;transform-origin:50% 50%;';
-  // Outer ring = staleness bubble (colour encodes freshness). Inner arrow =
-  // manager palette colour (or red for self). Black outline keeps it legible
-  // on any basemap. The initials are NOT drawn inside the arrow (too small to
-  // read while rotating) — they live in the marker title/tooltip instead.
-  inner.innerHTML = `<svg width="34" height="34" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="${bubbleColor}" stroke="#000000" stroke-width="1" opacity="0.55"/><path d="M12 3 L18.5 19 L12 14.5 L5.5 19 Z" fill="${arrowColor}" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
-
-  outer.appendChild(inner);
-  outer.title = initials;
-  return { outer, inner };
-}
-
 function createWorkerMarkerEl(initials: string, borderColor: string, label: string): HTMLDivElement {
   const el = document.createElement('div');
   el.style.cssText = [
@@ -612,17 +517,13 @@ function findNearestAssignedRoute(
   lat: number, lng: number,
   routeMapData: SavedRoute[],
   routes: RouteData[],
-  ownerSet: Set<string>,
+  managerId: string,
   threshold: number = 50
 ): { routeCode: string; workerId: string } | null {
-  // FLOATER (Phase 4): ownerSet is the floated set (own id + covered managers).
-  // For a non-floater it's just {managerId}, so this matches the original
-  // single-manager behaviour. The "On route" card now lights up over any route
-  // belonging to a manager the floater covers, not only the floater's own.
   let best: { routeCode: string; workerId: string; dist: number } | null = null;
 
   for (const rmd of routeMapData) {
-    const rd = routes.find(r => r.routeCode === rmd.route_code && r.managerId != null && ownerSet.has(r.managerId));
+    const rd = routes.find(r => r.routeCode === rmd.route_code && r.managerId === managerId);
     if (!rd) continue;
     if (!rd.assignedWorkerIds || rd.assignedWorkerIds.length < 1) continue;
     const workerId = rd.assignedWorkerIds[0];
@@ -705,7 +606,7 @@ function createPulsingRing(color: string): HTMLDivElement {
   return el;
 }
 
-function createDashedRotatingRing(routeColor?: string): HTMLDivElement {
+function createDashedRotatingRing(): HTMLDivElement {
   let spinStyle = document.getElementById('rm-spin-keyframes') as HTMLStyleElement | null;
   if (!spinStyle) {
     spinStyle = document.createElement('style');
@@ -713,15 +614,14 @@ function createDashedRotatingRing(routeColor?: string): HTMLDivElement {
     document.head.appendChild(spinStyle);
   }
   spinStyle.textContent = `@keyframes rmDashedSpin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}`;
-  const centreColor = routeColor || '#6b7280';
   const el = document.createElement('div');
   el.style.cssText = 'width:0;height:0;overflow:visible;pointer-events:auto;cursor:pointer;';
   el.innerHTML = `
     <div style="position:relative;width:12px;height:12px;margin-left:-6px;margin-top:-6px;">
       <svg width="12" height="12" viewBox="0 0 12 12" style="position:absolute;top:0;left:0;animation:rmDashedSpin 3s linear infinite;">
-        <circle cx="6" cy="6" r="5" fill="none" stroke="#000000" stroke-width="2.2" stroke-dasharray="2.5,2" opacity="0.95"/>
+        <circle cx="6" cy="6" r="5" fill="none" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="2.5,2" opacity="0.85"/>
       </svg>
-      <div style="position:absolute;top:4px;left:4px;width:4px;height:4px;border-radius:50%;background:${centreColor};"></div>
+      <div style="position:absolute;top:4px;left:4px;width:4px;height:4px;border-radius:50%;background:#6b7280;"></div>
     </div>
   `;
   return el;
@@ -745,27 +645,7 @@ const WORKER_LOCATION_POLL_MS = 5 * 60 * 1000;
 // Cache priority per spec:
 //   1. jobIdCache (per-tx accurate — populated by Phase 2 geocoding)
 //   2. geocodeCache (address-level — populated by all phases)
-function resolveNavDestination(
-  financialStore: any[],
-  pendingWinner?: { createdAt?: string; lat: number; lng: number; address: string } | null
-): { lat: number; lng: number; address: string } | null {
-  // Item 3: if a pending sale is later than the newest transaction AND is
-  // geocoded, navigate there. If it's later but NOT geocoded, we fall through
-  // to the newest completed job below (the caller passes pendingWinner only
-  // when it has coords, so "later but ungeocoded" simply means pendingWinner
-  // is undefined here and the transaction path wins — the required fallback).
-  if (pendingWinner && pendingWinner.lat != null && pendingWinner.lng != null) {
-    const newestTxTime = (() => {
-      if (!financialStore || financialStore.length === 0) return 0;
-      const sorted = [...financialStore].sort((a, b) =>
-        (b?.timestamp || '').localeCompare(a?.timestamp || ''));
-      return sorted[0]?.timestamp ? new Date(sorted[0].timestamp).getTime() : 0;
-    })();
-    const pendTime = pendingWinner.createdAt ? new Date(pendingWinner.createdAt).getTime() : 0;
-    if (pendTime > newestTxTime) {
-      return { lat: pendingWinner.lat, lng: pendingWinner.lng, address: pendingWinner.address };
-    }
-  }
+function resolveNavDestination(financialStore: any[]): { lat: number; lng: number; address: string } | null {
   if (!financialStore || financialStore.length === 0) return null;
 
   // Sort newest-first. Defensive copy — we don't mutate caller's array.
@@ -822,7 +702,7 @@ function lineMidCoord(a: [number, number], b: [number, number]): [number, number
 // Used for placing the route's letter label on the master map.
 function bucketCentroid(
   segments: Array<{ coordinates: [number, number][] }>,
-  buckets: Array<{ letter: string; sourceLetter: string | null; rectangles: Array<{ corners: Array<{ lng: number; lat: number }> }> }>,
+  buckets: Array<{ letter: string; sourceLetter: string | null; rectangles: Array<{west: number; east: number; south: number; north: number}> }>,
   targetLetter: string
 ): { lng: number; lat: number } | null {
   let sumLng = 0, sumLat = 0, count = 0;
@@ -867,9 +747,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   onForceFollowMeOn,
   showManageTeamModal,
   onCloseManageTeamModal,
-  floatedManagerIds = [],
-  managerColours,
-  shouldWriteLocation = false,
 }) => {
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -885,6 +762,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const initialFitDoneRef = useRef(false);
   const knownPinsRef = useRef<Map<string, GeocodedPin>>(new Map());
   const [geocodedPins, setGeocodedPins] = useState<GeocodedPin[]>([]);
+  // Phase 1 in-flight guard: prevents an effect re-fire from restarting a
+  // geocode pass that's already running (belt-and-braces alongside the
+  // RMLogbook bookings-identity stabiliser).
+  const phase1RunningRef = useRef(false);
   // Upsells (Upgrade / Add-On tx) — geocoded separately so we can render
   // them with their own blue-ring style and detect overlap with completed/sale
   // pins at the same address.
@@ -954,16 +835,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [workerLocations, setWorkerLocations] = useState<WorkerLocation[]>([]);
   const workerLocationMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
 
-  // --- MANAGER LOCATIONS (Phase 3 — Floater) ---
-  // Live positions of the managers this floater covers (+ self), polled every
-  // MANAGER_LOCATION_POLL_MS. One arrow marker per manager, keyed by managerId.
-  // The inner (rotating) div of each is tracked so the poll can update heading
-  // without rebuilding the marker.
-  const [managerLocations, setManagerLocations] = useState<ManagerLocation[]>([]);
-  const managerLocationMarkersRef = useRef<Map<string, { marker: mapboxgl.Marker; inner: HTMLDivElement }>>(new Map());
-  // Throttle for the WRITER — last time this device wrote its own position.
-  const lastLocationWriteRef = useRef<number>(0);
-
   const [onRouteWorkerCard, setOnRouteWorkerCard] = useState<WorkerCardData | null>(null);
   const [onRouteCartCard, setOnRouteCartCard] = useState<CartCardData | null>(null);
   const onRouteWorkerIdRef = useRef<string | null>(null);
@@ -1019,15 +890,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [switchNavConfirm, setSwitchNavConfirm] = useState<SwitchNavConfirmation | null>(null);
   const [routeNavPrompt, setRouteNavPrompt] = useState<RouteNavPrompt | null>(null);
 
-  // --- FLOATER: the effective ownership set (Phase 3 — Union-A) ---
-  // own id + everyone floated-for. Empty prop → just [managerId], so all the
-  // ownership memos below collapse to the original single-manager behaviour.
-  // ownerSet is the Set form used by the broadened filters.
-  const ownerSet = useMemo(
-    () => new Set(floatedManagerIds.length ? floatedManagerIds : [managerId]),
-    [floatedManagerIds, managerId]
-  );
-
   // --- ARROW ROTATION ---
   const HEADING_FRESHNESS_MS = 5000;
   const applyArrowRotation = useCallback(() => {
@@ -1070,16 +932,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const isLawnRejuv = seasonType === 'lawn_rejuv';
   const isSealing = seasonType === 'sealing';
 
-  // FLOATER Union-A: ownership memos broaden from `=== managerId` to `∈ ownerSet`.
-  // For a non-floater ownerSet is {managerId}, so these are unchanged.
-  const myRouteCodes = useMemo(() => routes.filter(r => r.managerId && ownerSet.has(r.managerId)).map(r => r.routeCode), [routes, ownerSet]);
-  const myTeamIds = useMemo(() => new Set(workers.filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId)).map(w => w.contractorId)), [workers, ownerSet]);
-  const myTeamWorkers = useMemo(() => workers.filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId)), [workers, ownerSet]);
+  const myRouteCodes = useMemo(() => routes.filter(r => r.managerId === managerId).map(r => r.routeCode), [routes, managerId]);
+  const myTeamIds = useMemo(() => new Set(workers.filter(w => w.assignedManagerId === managerId).map(w => w.contractorId)), [workers, managerId]);
+  const myTeamWorkers = useMemo(() => workers.filter(w => w.assignedManagerId === managerId), [workers, managerId]);
   const routeColorMap = useMemo(() => { const m = new Map<string,string>(); routeMapData.forEach(r => m.set(r.route_code, r.route_color)); return m; }, [routeMapData]);
-  // availableManagers (transfer targets) = all CC RouteManagers except those
-  // already in the floated set. A floater shouldn't "transfer to" a manager
-  // they already control — that's a no-op move.
-  const availableManagers = useMemo(() => allManagers.filter(m => !ownerSet.has(m.userId) && m.role === 'RouteManager'), [allManagers, ownerSet]);
+  const availableManagers = useMemo(() => allManagers.filter(m => m.userId !== managerId && m.role === 'RouteManager'), [allManagers, managerId]);
 
   // Fast lookup: route code → its split row (if any). One source of truth used
   // by routeCardData, the master map renderer, click handlers, and the
@@ -1130,10 +987,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [seasonType]);
 
   // Worker card data (aeration only)
-  // FLOATER Union-A: filter broadened from `=== managerId` to `∈ ownerSet`.
   const workerCardData = useMemo<WorkerCardData[]>(() => {
     if (isTeamSeason) return [];
-    return workers.filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId)).map(worker => {
+    return workers.filter(w => w.assignedManagerId === managerId).map(worker => {
       const session = allSessions.find(s => s.workerId === worker.contractorId);
       const st = session?.stats; const fs = session?.financialStore || [];
       const wb = bookings.filter(b => b['Contractor Number'] === worker.contractorId);
@@ -1171,7 +1027,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
       };
     });
-  }, [workers, ownerSet, allSessions, bookings, isTeamSeason]);
+  }, [workers, managerId, allSessions, bookings, isTeamSeason]);
 
   useEffect(() => { workerCardDataRef.current = workerCardData; }, [workerCardData]);
 
@@ -1259,23 +1115,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           lastAddr = sorted[0].address;
           lastTimestamp = sorted[0].timestamp;
           lastTime = formatTimeShort(sorted[0].timestamp);
-        }
-        // Item 3: a pending sale counts as activity. Find this cart's newest
-        // pending sale by createdAt; if it's later than the newest transaction
-        // (or there are no transactions), it becomes the last-active.
-        if (pendingSales.length > 0) {
-          const newestPending = [...pendingSales]
-            .filter(ps => ps.createdAt)
-            .sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime())[0];
-          if (newestPending && newestPending.createdAt) {
-            const pendingNewer = !lastTimestamp ||
-              new Date(newestPending.createdAt).getTime() > new Date(lastTimestamp).getTime();
-            if (pendingNewer) {
-              lastAddr = assembleAddressFromPending(newestPending);
-              lastTimestamp = newestPending.createdAt;
-              lastTime = formatTimeShort(newestPending.createdAt);
-            }
-          }
         }
 
         return {
@@ -1433,7 +1272,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     };
 
     for (const r of routes) {
-      if (!r.managerId || !ownerSet.has(r.managerId)) continue;
+      if (r.managerId !== managerId) continue;
       const rmi = routeMapData.find(rm => rm.route_code === r.routeCode);
       const baseColor = rmi?.route_color || '#6b7280';
       const split = routeSplitsByCode.get(r.routeCode);
@@ -1487,7 +1326,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       if (a.isAssigned !== b.isAssigned) return a.isAssigned ? 1 : -1;
       return a.displayRouteCode.localeCompare(b.displayRouteCode);
     });
-  }, [routes, ownerSet, routeMapData, workers, bookings, calculateBookingEQ, routeSplitsByCode]);
+  }, [routes, managerId, routeMapData, workers, bookings, calculateBookingEQ, routeSplitsByCode]);
 
   // Split pins into pending-only and completed/new-sale-only — driven by the
   // new filter system. Each set is also visibility-gated separately downstream.
@@ -1584,7 +1423,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [routeMapData]);
 
   const mostRecentCompletionPins = useMemo<GeocodedPin[]>(() => {
-    // Newest COMPLETED transaction per owner (session for teams, worker for aeration).
     const latestByOwner = new Map<string, { jobId: string; timestamp: string }>();
     allSessions.forEach(s => {
       const ownerKey = isTeamSeason ? s.id : s.workerId;
@@ -1597,69 +1435,15 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     });
 
-    // Item 3: newest geocoded PENDING SALE per owning session. Only teams have
-    // pending sales, and the pulse for teams is keyed by session id — which is
-    // exactly the sessionId we carried onto each GeocodedPendingSale.
-    const latestPendingBySession = new Map<string, GeocodedPendingSale>();
-    if (isTeamSeason) {
-      geocodedPendingSales.forEach(ps => {
-        if (!ps.sessionId || !ps.createdAt) return;
-        const existing = latestPendingBySession.get(ps.sessionId);
-        if (!existing || !existing.createdAt ||
-            new Date(ps.createdAt).getTime() > new Date(existing.createdAt).getTime()) {
-          latestPendingBySession.set(ps.sessionId, ps);
-        }
-      });
-    }
-
     const result: GeocodedPin[] = [];
-    latestByOwner.forEach(({ jobId, timestamp }, ownerKey) => {
-      // Does a pending sale for this owner beat the newest transaction?
-      const pendingWinner = latestPendingBySession.get(ownerKey);
-      if (pendingWinner && pendingWinner.createdAt &&
-          new Date(pendingWinner.createdAt).getTime() > new Date(timestamp).getTime()) {
-        // Pulse the pending sale's geocoded location instead. Synthesize a
-        // minimal GeocodedPin from it (only lat/lng/routeColor are read by the
-        // pulse renderer; the rest is cosmetic).
-        result.push({
-          id: pendingWinner.id,
-          address: pendingWinner.booking['Full Address'] || '',
-          routeCode: pendingWinner.booking['Route Number'] || '',
-          name: '',
-          status: 'new_sale',
-          lat: pendingWinner.lat,
-          lng: pendingWinner.lng,
-          routeColor: routeColorMap.get(pendingWinner.booking['Route Number'] || '') || '#22c55e',
-        });
-        return;
-      }
-      // Otherwise, pulse the newest completed transaction as before.
+    latestByOwner.forEach(({ jobId }) => {
       const pin =
         geocodedPins.find(p => p.id === jobId && (p.status === 'completed' || p.status === 'new_sale'))
         ?? geocodedUpsellPins.find(p => p.id === jobId);
       if (pin) result.push(pin);
     });
-
-    // Edge case: a cart with a pending sale but ZERO completed transactions yet
-    // has no entry in latestByOwner, so the loop above misses it. Add those.
-    if (isTeamSeason) {
-      latestPendingBySession.forEach((ps, sessionId) => {
-        if (latestByOwner.has(sessionId)) return; // already handled above
-        result.push({
-          id: ps.id,
-          address: ps.booking['Full Address'] || '',
-          routeCode: ps.booking['Route Number'] || '',
-          name: '',
-          status: 'new_sale',
-          lat: ps.lat,
-          lng: ps.lng,
-          routeColor: routeColorMap.get(ps.booking['Route Number'] || '') || '#22c55e',
-        });
-      });
-    }
-
     return result;
-  }, [allSessions, geocodedPins, geocodedUpsellPins, isTeamSeason, geocodedPendingSales, routeColorMap]);
+  }, [allSessions, geocodedPins, geocodedUpsellPins, isTeamSeason]);
 
   const overlapInfo = useMemo(() => {
     const map = new Map<string, { upsellPin: GeocodedPin; basePin: GeocodedPin }>();
@@ -1700,11 +1484,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, []);
 
   // Worker location fetch
-  // FLOATER Union-A: fetch locations for everyone on the floated team, not just
-  // the logged-in manager's own workers.
   const fetchWorkerLocations = useCallback(async () => {
     const teamIds = workers
-      .filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId))
+      .filter(w => w.assignedManagerId === managerId)
       .map(w => w.contractorId);
     if (!teamIds.length) return;
     try {
@@ -1718,7 +1500,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     } catch (e) {
       console.error('Failed to fetch worker locations:', e);
     }
-  }, [workers, ownerSet]);
+  }, [workers, managerId]);
 
   useEffect(() => {
     if (!mapLoaded) return;
@@ -1762,105 +1544,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       workerLocationMarkersRef.current.delete(id);
     });
   }, [workerLocations, mapLoaded, workers]);
-
-  // --- MANAGER LOCATION READER (Phase 3 — Floater) ---
-  //
-  // Polls manager_locations every MANAGER_LOCATION_POLL_MS (10s — far tighter
-  // than the 5-min worker poll). getManagerLocations() returns the whole CC's
-  // manager rows; we filter to the floated set (own id + floatingFor) so a
-  // floater sees their covered managers and a non-floater sees only themselves.
-  //
-  // NOTE: the current viewer's OWN arrow is already drawn by the red GPS arrow
-  // (navMarkerRef) from live device GPS, which is fresher than the DB row. So
-  // we EXCLUDE managerId from the rendered set here to avoid two arrows on top
-  // of each other for the person looking at the screen.
-  const fetchManagerLocations = useCallback(async () => {
-    try {
-      const rows = await sessionService.getManagerLocations();
-      if (!mountedRef.current) return;
-      const filtered = rows.filter(r => ownerSet.has(r.managerId) && r.managerId !== managerId);
-      setManagerLocations(filtered);
-    } catch (e) {
-      console.error('Failed to fetch manager locations:', e);
-    }
-  }, [ownerSet, managerId]);
-
-  useEffect(() => {
-    if (!mapLoaded) return;
-    fetchManagerLocations();
-    const interval = setInterval(fetchManagerLocations, MANAGER_LOCATION_POLL_MS);
-    return () => clearInterval(interval);
-  }, [mapLoaded, fetchManagerLocations]);
-
-  // Render / update manager arrow markers. Colour = the manager's palette hue
-  // from managerColours (red is reserved for the viewer's own GPS arrow, which
-  // is drawn separately, so palette colours are correct for everyone here). The
-  // staleness bubble behind each arrow encodes freshness via getManager
-  // StalenessColor. Heading rotates the inner div, same trick as the GPS arrow.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !mapLoaded) return;
-
-    const existingIds = new Set(managerLocationMarkersRef.current.keys());
-
-    managerLocations.forEach(loc => {
-      const mgr = allManagers.find(m => m.userId === loc.managerId);
-      const name = mgr?.name || 'Manager';
-      const initials = name.split(/\s+/).map(p => p.charAt(0)).join('').slice(0, 2).toUpperCase() || 'M';
-      const arrowColor = managerColours?.get(loc.managerId) || '#9ca3af';
-      const bubbleColor = getManagerStalenessColor(loc.updatedAt);
-      const heading = (loc.heading != null && !isNaN(loc.heading)) ? loc.heading : 0;
-      const mapBearing = map.getBearing();
-
-      const existing = managerLocationMarkersRef.current.get(loc.managerId);
-      if (existing) {
-        existing.marker.setLngLat([loc.lng, loc.lat]);
-        // Update colours + heading without rebuilding the marker.
-        const svg = existing.inner.querySelector('svg');
-        if (svg) {
-          const circle = svg.querySelector('circle');
-          const path = svg.querySelector('path');
-          if (circle) circle.setAttribute('fill', bubbleColor);
-          if (path) path.setAttribute('fill', arrowColor);
-        }
-        existing.inner.style.transform = `rotate(${heading - mapBearing}deg)`;
-        existing.marker.getElement().title = name;
-        existingIds.delete(loc.managerId);
-      } else {
-        const { outer, inner } = createManagerArrow(arrowColor, bubbleColor, name);
-        inner.style.transform = `rotate(${heading - mapBearing}deg)`;
-        const marker = new mapboxgl.Marker({ element: outer, anchor: 'center' })
-          .setLngLat([loc.lng, loc.lat])
-          .addTo(map);
-        // Tapping a manager arrow could open a detail card in a later phase;
-        // for now it's a no-op beyond the title tooltip.
-        managerLocationMarkersRef.current.set(loc.managerId, { marker, inner });
-      }
-    });
-
-    existingIds.forEach(id => {
-      managerLocationMarkersRef.current.get(id)?.marker.remove();
-      managerLocationMarkersRef.current.delete(id);
-    });
-  }, [managerLocations, mapLoaded, allManagers, managerColours]);
-
-  // Keep manager arrows pointing correctly when the MAP rotates (their heading
-  // is absolute, so the on-screen rotation must subtract the map bearing).
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !mapLoaded) return;
-    const onRotate = () => {
-      const mapBearing = map.getBearing();
-      managerLocations.forEach(loc => {
-        const entry = managerLocationMarkersRef.current.get(loc.managerId);
-        if (!entry) return;
-        const heading = (loc.heading != null && !isNaN(loc.heading)) ? loc.heading : 0;
-        entry.inner.style.transform = `rotate(${heading - mapBearing}deg)`;
-      });
-    };
-    map.on('rotate', onRotate);
-    return () => { map.off('rotate', onRotate); };
-  }, [managerLocations, mapLoaded]);
 
   // Geocode cache hydration
   useEffect(() => {
@@ -2613,7 +2296,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'idle') return;
     const map = mapRef.current; if (!map) return;
+    if (phase1RunningRef.current) return;
     let cancelled = false;
+    phase1RunningRef.current = true;
     (async () => {
       const sources = pendingBookingPinSource;
       const enriched: GeocodedPin[] = [];
@@ -2652,9 +2337,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const final = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'pending');
       updatePendingBookingPins(map, final);
       setGeocodedPins(Array.from(knownPinsRef.current.values()));
+      phase1RunningRef.current = false;
       onGeocodeProgress('phase2_completed_and_sales', 'pendingBookings', total, total, true);
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; phase1RunningRef.current = false; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, pendingBookingPinSource, routeColorMap, geocodeOne, updatePendingBookingPins, onGeocodeProgress]);
 
   // PHASE 2: Completed + new sales + pending sales
@@ -2691,7 +2377,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           const addrKey = makeCacheKey(address);
           const cached = geocodeCache.get(addrKey);
           if (cached) {
-            pendingSalesCached.push({ id: booking['Booking ID'], lat: cached.lat, lng: cached.lng, booking, createdAt: (booking as any).pendingCreatedAt, sessionId: (booking as any).pendingSessionId });
+            pendingSalesCached.push({ id: booking['Booking ID'], lat: cached.lat, lng: cached.lng, booking });
           } else {
             pendingSalesNeedsGeocoding.push({ booking, address, id: booking['Booking ID'] });
           }
@@ -2726,7 +2412,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         if (cancelled || !mountedRef.current) return;
         const { booking, address, id } = pendingSalesNeedsGeocoding[i];
         const coord = await geocodeOne(address);
-        if (coord) newPSResults.push({ id, lat: coord.lat, lng: coord.lng, booking, createdAt: (booking as any).pendingCreatedAt, sessionId: (booking as any).pendingSessionId });
+        if (coord) newPSResults.push({ id, lat: coord.lat, lng: coord.lng, booking });
         if (cancelled || !mountedRef.current) return;
         progressDone++;
         onGeocodeProgress('phase2_completed_and_sales', 'pendingSalesAndCompleted', progressDone, totalToGeocode, false);
@@ -2858,7 +2544,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         const address = booking['Full Address'] || '';
         if (!address) continue;
         const coord = await geocodeOne(address);
-        if (coord) additions.push({ id: booking['Booking ID'], lat: coord.lat, lng: coord.lng, booking, createdAt: (booking as any).pendingCreatedAt, sessionId: (booking as any).pendingSessionId });
+        if (coord) additions.push({ id: booking['Booking ID'], lat: coord.lat, lng: coord.lng, booking });
         await new Promise(r => setTimeout(r, 80));
       }
       if (cancelled || !mountedRef.current) return;
@@ -2928,9 +2614,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         existing.setLngLat([ps.lng, ps.lat]);
         existingIds.delete(ps.id);
       } else {
-        const psRouteCode = ps.booking['Route Number'] || '';
-        const psRouteColor = routeColorMap.get(psRouteCode) || '#6b7280';
-        const el = createDashedRotatingRing(psRouteColor);
+        const el = createDashedRotatingRing();
         el.addEventListener('click', (e) => { e.stopPropagation(); setPendingJobForModal(ps.booking); });
         const marker = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([ps.lng, ps.lat]).addTo(map);
         pendingSaleMarkersRef.current.set(ps.id, marker);
@@ -2991,25 +2675,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
       lastGpsPosRef.current = { lat, lng, ts: Date.now() };
       applyArrowRotation();
-      // FLOATER (Phase 3 — Floater): report THIS device's own position to
-      // manager_locations, throttled to one write per 5 seconds, and only when
-      // this manager is a floater or is covered by one (shouldWriteLocation).
-      // The heading written is the real derivedHeading, so floaters see the
-      // arrow pointing the right way. If derivedHeading is null (stationary /
-      // no fix delta), we write undefined — the column is nullable.
-      if (shouldWriteLocation) {
-        const nowMs = Date.now();
-        if (nowMs - lastLocationWriteRef.current >= 5000) {
-          lastLocationWriteRef.current = nowMs;
-          sessionService.upsertManagerLocation(lat, lng, derivedHeading ?? undefined).catch(() => {});
-        }
-      }
       if (centerOnLocationRef.current) {
         mapRef.current.easeTo({ center: [lng, lat], duration: 300 });
         lastCenteredAtRef.current = { lat, lng };
       }
       if (centerOnLocationRef.current) {
-        const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, ownerSet, 100);
+        const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, managerId, 100);
         if (nearest) {
           if (isTeamSeason) {
             const cart = cartCardDataRef.current.find(c => c.members.some(m => m.contractorId === nearest.workerId));
@@ -3044,7 +2715,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}
       navMarkerRef.current?.remove();navMarkerRef.current=null;
     };
-  }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable, applyArrowRotation, shouldWriteLocation, ownerSet]);
+  }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable, applyArrowRotation]);
 
   // Compass
   const attachCompassListener = useCallback(() => {
@@ -3178,9 +2849,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       pendingSaleMarkersRef.current.clear();
       workerLocationMarkersRef.current.forEach(m => m.remove());
       workerLocationMarkersRef.current.clear();
-      // FLOATER (Phase 3): tear down manager-location arrow markers too.
-      managerLocationMarkersRef.current.forEach(({ marker }) => marker.remove());
-      managerLocationMarkersRef.current.clear();
       map.remove();mapRef.current=null;setMapLoaded(false);
     };
   }, [suppressDuplicateLabels]);
@@ -3226,20 +2894,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     setSwitchNavConfirm({ newDestination: newDest, newTargetKey: newKey, currentLabel: navState.destination.label, newLabel: label });
   }, [navState, startNavToDestination]);
 
-  // Item 3: a cart's newest GEOCODED pending sale, shaped for resolveNavDestination.
-  // Returns null if the cart has no geocoded pending sale. Shared by both the
-  // Navigate handler and the can-navigate check so they never disagree.
-  const cartPendingWinner = useCallback((cart: CartCardData) => {
-    const cartPending = geocodedPendingSales
-      .filter(ps => ps.sessionId === cart.sessionId && ps.createdAt)
-      .sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime())[0];
-    return cartPending
-      ? { createdAt: cartPending.createdAt, lat: cartPending.lat, lng: cartPending.lng, address: cartPending.booking['Full Address'] || '' }
-      : null;
-  }, [geocodedPendingSales]);
-
   const handleNavigateToCart = useCallback((cart: CartCardData) => {
-    const resolved = resolveNavDestination(cart.sharedFinancialStore, cartPendingWinner(cart));
+    const resolved = resolveNavDestination(cart.sharedFinancialStore);
     if (!resolved) { console.warn('[RMNav] No geocoded address for cart', cart.sessionId); return; }
     const label = cart.members.length > 1
       ? cart.members.map(m => m.firstName).join(' & ')
@@ -3249,14 +2905,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (!navState) { startNavToDestination(newDest, newKey); return; }
     if (navState.targetKey === newKey) return;
     setSwitchNavConfirm({ newDestination: newDest, newTargetKey: newKey, currentLabel: navState.destination.label, newLabel: label });
-  }, [navState, startNavToDestination, cartPendingWinner]);
+  }, [navState, startNavToDestination]);
 
   const workerCanNavigate = useCallback((card: WorkerCardData): boolean => resolveNavDestination(card.financialStore) !== null, []);
-  const cartCanNavigate = useCallback(
-    (cart: CartCardData): boolean => resolveNavDestination(cart.sharedFinancialStore, cartPendingWinner(cart)) !== null,
-    [cartPendingWinner]
-  );
-  
+  const cartCanNavigate = useCallback((cart: CartCardData): boolean => resolveNavDestination(cart.sharedFinancialStore) !== null, []);
+
   const handleNavCancel = useCallback(() => { setNavState(null); }, []);
   const handleNavArrived = useCallback(() => { setNavState(null); }, []);
 
@@ -3614,10 +3267,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const workerRouteBadges = useMemo(() => {
     const m = new Map<string, Array<{ code: string; color: string }>>();
     for (const r of routes) {
-      // FLOATER (Phase 4): badges span the floated set so a covered manager's
-      // worker shows their route badges (and the fewest-routes sort counts them).
-      // Non-floater ownerSet is {managerId} → original behaviour.
-      if (!r.managerId || !ownerSet.has(r.managerId)) continue;
+      if (r.managerId !== managerId) continue;
       const split = routeSplitsByCode.get(r.routeCode);
       const baseColor = routeColorMap.get(r.routeCode) || '#6b7280';
       if (!split || split.buckets.length === 0) {
@@ -3637,7 +3287,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
     }
     return m;
-  }, [routes, ownerSet, routeSplitsByCode, routeColorMap]);
+  }, [routes, managerId, routeSplitsByCode, routeColorMap]);
 
   // Sorted worker list (aeration): fewest routes first, alphabetical tiebreaker.
   const sortedAerationAssignList = useMemo(() => {

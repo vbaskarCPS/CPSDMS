@@ -14,7 +14,6 @@ import {
 import { sessionService } from '../../lib/sessionService';
 import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
 import { subscribeAsRouteManager } from '../../lib/realtimeService';
-import { getManagerColor } from '../../lib/managerPalette';
 
 import RMTeamTab from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
@@ -101,6 +100,47 @@ function getPendingDollarValue(priceStr: string | undefined | null, seasonType: 
   return isNaN(parsed) ? 0 : parsed;
 }
 
+// --- PENDING BOOKINGS IDENTITY STABILISER ---
+// The map's Phase 1 geocode loop keys off the pendingBookings array identity.
+// Realtime fires refreshData on any CC-wide change (5 tables), each replacing
+// dailyData with a freshly-fetched object — minting a new pendingBookings array
+// even when its contents are unchanged, which restarts the geocode loop. We
+// reuse the previous array reference when the content signature is unchanged.
+// Watched fields: Booking ID, Route Number, Full Address, Prepaid, Status,
+// Completed, Contractor Number, Price. (Name/phone/email intentionally excluded.)
+function pendingBookingsSignature(bookings: any[]): string {
+  return bookings
+    .map(b => [
+      b['Booking ID'],
+      b['Route Number'],
+      b['Full Address'],
+      b['Prepaid'],
+      b['Status'],
+      b['Completed'],
+      b['Contractor Number'],
+      b['Price'],
+    ].join('|'))
+    .join('§');
+}
+
+// Returns a session whose pendingBookings reuses the previous reference when
+// content is unchanged. Everything else stays the fresh object.
+function reconcilePendingBookings(
+  prev: DailySessionData | null,
+  next: DailySessionData | null,
+): DailySessionData | null {
+  if (!next || !prev) return next;
+  const prevB = prev.pendingBookings || [];
+  const nextB = next.pendingBookings || [];
+  if (
+    prevB.length === nextB.length &&
+    pendingBookingsSignature(prevB) === pendingBookingsSignature(nextB)
+  ) {
+    return { ...next, pendingBookings: prevB };
+  }
+  return next;
+}
+
 const RMLogbook: React.FC = () => {
   const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<ManagementUser | null>(null);
@@ -152,49 +192,6 @@ const RMLogbook: React.FC = () => {
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // --- FLOATER (digital-mapping CCs) ---
-  // The set of manager userIds whose data this RM should see + control: their
-  // OWN id plus everyone on their floatingFor list. A non-floater (empty list)
-  // collapses to just [their own id] → identical to pre-floater behaviour.
-  // RMMapTab receives this and broadens its ownership memos to span the set.
-  const floatedManagerIds = useMemo(() => {
-    if (!currentUser) return [];
-    const floats = Array.isArray(currentUser.floatingFor) ? currentUser.floatingFor : [];
-    return Array.from(new Set([currentUser.userId, ...floats]));
-  }, [currentUser]);
-
-  // --- FLOATER: palette colour map (managerId → hex) ---
-  // Computed from the FULL CC manager list sorted by userId so every floater's
-  // map agrees on a given manager's colour. Red is layered on top for the
-  // current viewer inside RMMapTab — this map holds only the stable palette
-  // colours. Passed down so the map and (later) the arrows read one source.
-  const managerColours = useMemo(() => {
-    const m = new Map<string, string>();
-    if (!dailyData) return m;
-    const sortedIds = dailyData.managers.map(mgr => mgr.userId).sort();
-    for (const id of sortedIds) m.set(id, getManagerColor(id, sortedIds));
-    return m;
-  }, [dailyData]);
-
-  // --- FLOATER: should THIS device write its own manager_location? ---
-  // Per the locked design, only floaters and the managers they cover report
-  // location. A device can't know on its own whether it's covered (that fact
-  // lives on OTHER managers' floatingFor lists), so we derive it from the full
-  // CC manager list: write if my own floatingFor is non-empty OR my userId
-  // appears in any other manager's floatingFor. Idle, uncovered managers stay
-  // silent. (A newly-covered manager begins writing after their next dailyData
-  // refresh picks up the change — up to ~30s.)
-  const shouldWriteLocation = useMemo(() => {
-    if (!currentUser || !dailyData) return false;
-    const myFloats = Array.isArray(currentUser.floatingFor) ? currentUser.floatingFor : [];
-    if (myFloats.length > 0) return true;
-    return dailyData.managers.some(mgr =>
-      mgr.userId !== currentUser.userId &&
-      Array.isArray(mgr.floatingFor) &&
-      mgr.floatingFor.includes(currentUser.userId)
-    );
-  }, [currentUser, dailyData]);
-
   const refreshData = async (overrideUser?: ManagementUser) => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
@@ -205,7 +202,7 @@ const RMLogbook: React.FC = () => {
             sessionService.getDailySession(),
             sessionService.getLogsheetSessions()
           ]);
-          setDailyData(session);
+          setDailyData(prev => reconcilePendingBookings(prev, session));
           setAllSessions(sessions);
 
           if (session?.seasonType) {
@@ -213,36 +210,12 @@ const RMLogbook: React.FC = () => {
           }
 
           const sessionSeasonType = session?.seasonType || 'aeration';
-
-          // --- FLOATER FIX (Item 1) ---
-          // Resolve the viewing user (override on first load, else current_user),
-          // then build the OWNER SET = that user's own id + everyone on their
-          // floatingFor list. This mirrors the floatedManagerIds memo, but is
-          // computed locally here so the pending-sales fetch uses the SAME
-          // ownership definition the stats panel already uses.
-          //
-          // Why local instead of reading the memo: refreshData is wired into the
-          // realtime subscription and the 30s timer, and can run before React
-          // state (and therefore the memo) has settled for the user this refresh
-          // is actually running for. Deriving the set from the resolved user
-          // object avoids a stale-closure mismatch. A non-floater collapses to
-          // [own id] → identical to the previous single-manager behaviour.
-          const resolvedUser = overrideUser || currentUser;
-          const userId = resolvedUser?.userId;
-          const ownerFloats = Array.isArray(resolvedUser?.floatingFor) ? resolvedUser!.floatingFor : [];
-          const ownerSet = userId
-            ? new Set<string>([userId, ...ownerFloats])
-            : new Set<string>();
-
+          const userId = overrideUser?.userId || currentUser?.userId;
           if (seasonHasTeams(sessionSeasonType) && session && userId) {
             try {
-              // Widened: match workers assigned to ANY manager in the owner set,
-              // not just the single logged-in userId. This is the one and only
-              // behavioural change — everything downstream (session filter,
-              // Promise.all, flatten, setState) is unchanged.
               const myWorkerIds = new Set(
                 session.workers
-                  .filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId))
+                  .filter(w => w.assignedManagerId === userId)
                   .map(w => w.contractorId)
               );
               const mySessions = sessions.filter(s => {
@@ -404,12 +377,7 @@ const RMLogbook: React.FC = () => {
   useEffect(() => {
     if (!dailyData || !allSessions || !currentUser) return;
 
-    // FLOATER Union-A: ownership spans the floated set (own id + floatingFor),
-    // not just the logged-in manager. For a non-floater this is a single-id set,
-    // so the stats below are computed exactly as before.
-    const ownerSet = new Set(floatedManagerIds.length ? floatedManagerIds : [currentUser.userId]);
-
-    const myTeam = dailyData.workers.filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId));
+    const myTeam = dailyData.workers.filter(w => w.assignedManagerId === currentUser.userId);
     const myTeamIdsSet = new Set(myTeam.map(w => w.contractorId));
 
     const mySessions = allSessions.filter(s => {
@@ -420,7 +388,7 @@ const RMLogbook: React.FC = () => {
       return false;
     });
 
-    const myRoutes = dailyData.routes.filter(r => r.managerId && ownerSet.has(r.managerId));
+    const myRoutes = dailyData.routes.filter(r => r.managerId === currentUser.userId);
     const myRouteCodes = new Set(myRoutes.map(r => r.routeCode));
 
     const workerCount = myTeam.length;
@@ -504,7 +472,7 @@ const RMLogbook: React.FC = () => {
         teamCartAvgGross,
     });
 
-  }, [dailyData, allSessions, currentUser, isTeamSeason, pendingSalesByManager, seasonType, floatedManagerIds]);
+  }, [dailyData, allSessions, currentUser, isTeamSeason, pendingSalesByManager, seasonType]);
 
   if (loading || !currentUser || !dailyData)
     return (
@@ -981,10 +949,6 @@ const RMLogbook: React.FC = () => {
             onForceFollowMeOn={handleForceFollowMeOn}
             showManageTeamModal={showManageTeamModal}
             onCloseManageTeamModal={() => setShowManageTeamModal(false)}
-            // NEW (Phase 3 — Floater): union set, palette, location-write gate
-            floatedManagerIds={floatedManagerIds}
-            managerColours={managerColours}
-            shouldWriteLocation={shouldWriteLocation}
           />
         )}
       </div>
