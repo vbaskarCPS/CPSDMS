@@ -3226,17 +3226,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     setSwitchNavConfirm({ newDestination: newDest, newTargetKey: newKey, currentLabel: navState.destination.label, newLabel: label });
   }, [navState, startNavToDestination]);
 
-  const handleNavigateToCart = useCallback((cart: CartCardData) => {
-    // Item 3: find this cart's newest GEOCODED pending sale to compete for the
-    // nav target. If the newest pending sale isn't geocoded, we pass nothing —
-    // resolveNavDestination then falls back to the newest completed job.
+  // Item 3: a cart's newest GEOCODED pending sale, shaped for resolveNavDestination.
+  // Returns null if the cart has no geocoded pending sale. Shared by both the
+  // Navigate handler and the can-navigate check so they never disagree.
+  const cartPendingWinner = useCallback((cart: CartCardData) => {
     const cartPending = geocodedPendingSales
       .filter(ps => ps.sessionId === cart.sessionId && ps.createdAt)
       .sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime())[0];
-    const pendingWinner = cartPending
+    return cartPending
       ? { createdAt: cartPending.createdAt, lat: cartPending.lat, lng: cartPending.lng, address: cartPending.booking['Full Address'] || '' }
       : null;
-    const resolved = resolveNavDestination(cart.sharedFinancialStore, pendingWinner);
+  }, [geocodedPendingSales]);
+
+  const handleNavigateToCart = useCallback((cart: CartCardData) => {
+    const resolved = resolveNavDestination(cart.sharedFinancialStore, cartPendingWinner(cart));
     if (!resolved) { console.warn('[RMNav] No geocoded address for cart', cart.sessionId); return; }
     const label = cart.members.length > 1
       ? cart.members.map(m => m.firstName).join(' & ')
@@ -3246,11 +3249,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (!navState) { startNavToDestination(newDest, newKey); return; }
     if (navState.targetKey === newKey) return;
     setSwitchNavConfirm({ newDestination: newDest, newTargetKey: newKey, currentLabel: navState.destination.label, newLabel: label });
-  }, [navState, startNavToDestination, geocodedPendingSales]);
+  }, [navState, startNavToDestination, cartPendingWinner]);
 
   const workerCanNavigate = useCallback((card: WorkerCardData): boolean => resolveNavDestination(card.financialStore) !== null, []);
-  const cartCanNavigate = useCallback((cart: CartCardData): boolean => resolveNavDestination(cart.sharedFinancialStore) !== null, []);
-
+  const cartCanNavigate = useCallback(
+    (cart: CartCardData): boolean => resolveNavDestination(cart.sharedFinancialStore, cartPendingWinner(cart)) !== null,
+    [cartPendingWinner]
+  );
+  
   const handleNavCancel = useCallback(() => { setNavState(null); }, []);
   const handleNavArrived = useCallback(() => { setNavState(null); }, []);
 
