@@ -21,9 +21,23 @@
 //   This file is unassigned-only. Unassigning a previously-assigned asphalt
 //   row is handled elsewhere (cart cards in RMTeamTab, delivery #16).
 //
+// FLOATER (Phase 4):
+//   A floater RM has CC-wide asphalt authority. When the logged-in user is a
+//   floater (current_user.floatingFor non-empty, self-detected from localStorage
+//   — same precedent as sessionService.upsertManagerLocation), this modal:
+//     - reads the queue via getUnassignedAsphaltForFloater() (ALL unassigned
+//       asphalt in the command center, regardless of which manager's contractor
+//       sold it), instead of getUnassignedAsphaltForManager(managerId).
+//     - offers ALL RC carts in the command center as assign targets, not just
+//       the RC carts under managerId.
+//   A non-floater RM sees exactly the original behaviour — own team's asphalt,
+//   own RC carts. The branch is a single isFloater flag; everything else is shared.
+//
 // Service contract:
 //   - sessionService.getUnassignedAsphaltForManager(managerId)
 //       → PendingSale[]  (filtered to this RM's team, sale_type='asphalt', unassigned)
+//   - sessionService.getUnassignedAsphaltForFloater()
+//       → PendingSale[]  (CC-wide, sale_type='asphalt', unassigned) — floater path
 //   - sessionService.assignAsphaltToRcSession(id, rcSessionId)  → void
 //   - sessionService.getDailySession()
 //       → workers + teamCarts (we read workers for assigned-manager + teamId)
@@ -33,10 +47,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { X, Shovel, Loader, AlertCircle, CheckCircle, Users, MapPin, RefreshCw } from 'lucide-react';
 import { sessionService } from '../lib/sessionService';
+import { getStorageItem } from '../lib/localStorage';
 import {
   PendingSale,
   LogsheetSession,
   Worker as WorkerType,
+  ManagementUser,
   RAMP_CREW_TEAM_ID_PATTERN,
 } from '../types';
 
@@ -108,6 +124,21 @@ const RMAsphaltModal: React.FC<RMAsphaltModalProps> = ({
   onClose,
   onAssignmentChange,
 }) => {
+  // --- FLOATER DETECTION (Phase 4) ---
+  // Self-detect whether the logged-in RM is a floater by reading current_user
+  // from localStorage and checking floatingFor. Same precedent as
+  // sessionService.upsertManagerLocation, which self-resolves identity from
+  // current_user rather than taking it as an argument. Computed once via
+  // useState initializer so it's stable for the modal's lifetime (the logged-in
+  // user can't change while the modal is open).
+  //
+  // isFloater === true  → CC-wide asphalt queue + ALL RC carts as targets.
+  // isFloater === false → original behaviour (own team's asphalt, own RC carts).
+  const [isFloater] = useState<boolean>(() => {
+    const cu = getStorageItem<ManagementUser | null>('current_user', null);
+    return Array.isArray(cu?.floatingFor) && cu!.floatingFor.length > 0;
+  });
+
   // --- DATA STATE ---
   // Three parallel fetches drive initial render: unassigned asphalt rows, the
   // daily session (for worker → teamId + manager assignment), and all logsheet
@@ -133,13 +164,20 @@ const RMAsphaltModal: React.FC<RMAsphaltModalProps> = ({
   // fires when something actually happened (avoids spurious refreshes).
   const [assignedThisSession, setAssignedThisSession] = useState(0);
 
+  // --- HELPER: fetch the unassigned-asphalt queue for the current viewer. ---
+  // Floater → CC-wide (no args). Non-floater → scoped to this manager.
+  const fetchUnassignedQueue = (): Promise<PendingSale[]> =>
+    isFloater
+      ? sessionService.getUnassignedAsphaltForFloater()
+      : sessionService.getUnassignedAsphaltForManager(managerId);
+
   // --- INITIAL FETCH ---
   const refreshAll = async () => {
     setError(null);
     setLoading(true);
     try {
       const [unassignedRows, dailySession, allSessions] = await Promise.all([
-        sessionService.getUnassignedAsphaltForManager(managerId),
+        fetchUnassignedQueue(),
         sessionService.getDailySession(),
         sessionService.getLogsheetSessions(),
       ]);
@@ -159,7 +197,7 @@ const RMAsphaltModal: React.FC<RMAsphaltModalProps> = ({
   // workers + sessions don't change mid-modal in any normal flow.
   const refreshUnassignedOnly = async () => {
     try {
-      const rows = await sessionService.getUnassignedAsphaltForManager(managerId);
+      const rows = await fetchUnassignedQueue();
       setUnassigned(rows);
     } catch (err: any) {
       console.error('[RMAsphaltModal] post-assign refresh failed:', err);
@@ -173,14 +211,18 @@ const RMAsphaltModal: React.FC<RMAsphaltModalProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [managerId]);
 
-  // --- DERIVE: assignable RC sessions under this manager ---
+  // --- DERIVE: assignable RC sessions ---
   // We do this every render with useMemo because both `workers` and `sessions`
   // can change after refreshAll. The cost is small (cross-reference of a
   // typically-small worker list).
+  //
+  // FLOATER (Phase 4): a floater can assign CC-wide asphalt to ANY RC cart in
+  // the command center, so we DROP the assignedManagerId filter and keep only
+  // the isRC(teamId) test. A non-floater keeps the original "my team only" filter.
   const assignableRcSessions: AssignableRcSession[] = useMemo(() => {
-    // 1. Filter workers: this manager's team, AND teamId is RC-shaped.
+    // 1. Filter workers: RC-shaped teamId, AND (for non-floaters) this manager's team.
     const rcWorkers = workers.filter(w =>
-      w.assignedManagerId === managerId && isRC(w.teamId)
+      isRC(w.teamId) && (isFloater || w.assignedManagerId === managerId)
     );
 
     if (rcWorkers.length === 0) return [];
@@ -229,7 +271,7 @@ const RMAsphaltModal: React.FC<RMAsphaltModalProps> = ({
       return safeA - safeB;
     });
     return result;
-  }, [workers, sessions, managerId]);
+  }, [workers, sessions, managerId, isFloater]);
 
   // --- DERIVE: cart-attribution lookup (sessionId → worker first+last name) ---
   // The asphalt child's session_id points to the SELLING cart's session.
@@ -298,8 +340,9 @@ const RMAsphaltModal: React.FC<RMAsphaltModalProps> = ({
   };
 
   // --- NO RC SESSIONS AVAILABLE BANNER ---
-  // If the RM has no RC carts under their authority, the dropdown will be
-  // empty and there's nothing to do. Surface this clearly.
+  // If there are no RC carts in scope, the dropdown will be empty and there's
+  // nothing to do. Surface this clearly. (Scope is CC-wide for a floater, own
+  // team for a regular RM.)
   const noRcAvailable = !loading && assignableRcSessions.length === 0;
 
   return (
@@ -313,7 +356,7 @@ const RMAsphaltModal: React.FC<RMAsphaltModalProps> = ({
             <div>
               <h2 className="text-lg font-bold text-white">Unassigned Asphalt</h2>
               <p className="text-xs text-gray-400">
-                {managerName ? `${managerName} · ` : ''}
+                {isFloater ? 'Floater · CC-wide · ' : (managerName ? `${managerName} · ` : '')}
                 {loading
                   ? 'Loading…'
                   : unassigned.length === 0
@@ -353,10 +396,15 @@ const RMAsphaltModal: React.FC<RMAsphaltModalProps> = ({
             <div className="p-3 bg-amber-900/20 text-amber-300 border border-amber-700/60 rounded-md text-sm flex items-start gap-2">
               <Users size={16} className="mt-0.5 shrink-0" />
               <div className="flex-1">
-                <p className="font-bold mb-0.5">No Ramp Crew sessions under your authority.</p>
+                <p className="font-bold mb-0.5">
+                  {isFloater
+                    ? 'No Ramp Crew sessions in the command center.'
+                    : 'No Ramp Crew sessions under your authority.'}
+                </p>
                 <p className="text-[11px] opacity-90">
                   Asphalt rows cannot be assigned until at least one cart with a teamId matching
-                  &quot;RC&quot;, &quot;RC1&quot;, &quot;RC2&quot;, etc. is set up under your management.
+                  &quot;RC&quot;, &quot;RC1&quot;, &quot;RC2&quot;, etc. is set up
+                  {isFloater ? ' in this command center' : ' under your management'}.
                   Contact your CC admin if this is unexpected.
                 </p>
               </div>

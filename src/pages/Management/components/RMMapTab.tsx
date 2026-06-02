@@ -609,13 +609,17 @@ function findNearestAssignedRoute(
   lat: number, lng: number,
   routeMapData: SavedRoute[],
   routes: RouteData[],
-  managerId: string,
+  ownerSet: Set<string>,
   threshold: number = 50
 ): { routeCode: string; workerId: string } | null {
+  // FLOATER (Phase 4): ownerSet is the floated set (own id + covered managers).
+  // For a non-floater it's just {managerId}, so this matches the original
+  // single-manager behaviour. The "On route" card now lights up over any route
+  // belonging to a manager the floater covers, not only the floater's own.
   let best: { routeCode: string; workerId: string; dist: number } | null = null;
 
   for (const rmd of routeMapData) {
-    const rd = routes.find(r => r.routeCode === rmd.route_code && r.managerId === managerId);
+    const rd = routes.find(r => r.routeCode === rmd.route_code && r.managerId != null && ownerSet.has(r.managerId));
     if (!rd) continue;
     if (!rd.assignedWorkerIds || rd.assignedWorkerIds.length < 1) continue;
     const workerId = rd.assignedWorkerIds[0];
@@ -2907,7 +2911,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         lastCenteredAtRef.current = { lat, lng };
       }
       if (centerOnLocationRef.current) {
-        const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, managerId, 100);
+        const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, ownerSet, 100);
         if (nearest) {
           if (isTeamSeason) {
             const cart = cartCardDataRef.current.find(c => c.members.some(m => m.contractorId === nearest.workerId));
@@ -2942,7 +2946,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}
       navMarkerRef.current?.remove();navMarkerRef.current=null;
     };
-  }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable, applyArrowRotation, shouldWriteLocation]);
+  }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable, applyArrowRotation, shouldWriteLocation, ownerSet]);
 
   // Compass
   const attachCompassListener = useCallback(() => {
@@ -3497,7 +3501,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const workerRouteBadges = useMemo(() => {
     const m = new Map<string, Array<{ code: string; color: string }>>();
     for (const r of routes) {
-      if (r.managerId !== managerId) continue;
+      // FLOATER (Phase 4): badges span the floated set so a covered manager's
+      // worker shows their route badges (and the fewest-routes sort counts them).
+      // Non-floater ownerSet is {managerId} → original behaviour.
+      if (!r.managerId || !ownerSet.has(r.managerId)) continue;
       const split = routeSplitsByCode.get(r.routeCode);
       const baseColor = routeColorMap.get(r.routeCode) || '#6b7280';
       if (!split || split.buckets.length === 0) {
@@ -3517,7 +3524,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
     }
     return m;
-  }, [routes, managerId, routeSplitsByCode, routeColorMap]);
+  }, [routes, ownerSet, routeSplitsByCode, routeColorMap]);
 
   // Sorted worker list (aeration): fewest routes first, alphabetical tiebreaker.
   const sortedAerationAssignList = useMemo(() => {
