@@ -762,10 +762,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const initialFitDoneRef = useRef(false);
   const knownPinsRef = useRef<Map<string, GeocodedPin>>(new Map());
   const [geocodedPins, setGeocodedPins] = useState<GeocodedPin[]>([]);
-  // Phase 1 in-flight guard: prevents an effect re-fire from restarting a
-  // geocode pass that's already running (belt-and-braces alongside the
-  // RMLogbook bookings-identity stabiliser).
-  const phase1RunningRef = useRef(false);
   // Upsells (Upgrade / Add-On tx) — geocoded separately so we can render
   // them with their own blue-ring style and detect overlap with completed/sale
   // pins at the same address.
@@ -2296,9 +2292,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'idle') return;
     const map = mapRef.current; if (!map) return;
-    if (phase1RunningRef.current) return;
     let cancelled = false;
-    phase1RunningRef.current = true;
     (async () => {
       const sources = pendingBookingPinSource;
       const enriched: GeocodedPin[] = [];
@@ -2337,10 +2331,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const final = Array.from(knownPinsRef.current.values()).filter(p => p.status === 'pending');
       updatePendingBookingPins(map, final);
       setGeocodedPins(Array.from(knownPinsRef.current.values()));
-      phase1RunningRef.current = false;
       onGeocodeProgress('phase2_completed_and_sales', 'pendingBookings', total, total, true);
     })();
-    return () => { cancelled = true; phase1RunningRef.current = false; };
+    return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, pendingBookingPinSource, routeColorMap, geocodeOne, updatePendingBookingPins, onGeocodeProgress]);
 
   // PHASE 2: Completed + new sales + pending sales

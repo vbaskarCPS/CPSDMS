@@ -202,7 +202,7 @@ const RMLogbook: React.FC = () => {
             sessionService.getDailySession(),
             sessionService.getLogsheetSessions()
           ]);
-          setDailyData(prev => reconcilePendingBookings(prev, session));
+          setDailyData(session);
           setAllSessions(sessions);
 
           if (session?.seasonType) {
