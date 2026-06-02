@@ -37,6 +37,7 @@ import {
   RouteSplit,
   RouteSplitBucket,
   RouteSplitRectangle,
+  ManagerLocation,
 } from '../types';
 
 // Import metadata type - re-export for other modules
@@ -498,6 +499,8 @@ class SessionService {
       phone: m.metadata?.phone || '',
       role: 'RouteManager' as const,
       commandCenterId: m.command_center_id,
+      // Round-trip the floater config so the RM logbook can read who-floats-for-whom.
+      floatingFor: Array.isArray(m.metadata?.floatingFor) ? m.metadata.floatingFor : [],
     }));
 
     const workers: Worker[] = (workersRes.data || []).map((w) => ({
@@ -673,6 +676,33 @@ class SessionService {
       .from('users')
       .update({ metadata: newMetadata })
       .eq('user_id', workerId)
+      .eq('command_center_id', ccId);
+
+    if (updateError) throw updateError;
+  }
+
+  // --- FLOATER: update a single manager's floatingFor list (live-edit path).
+  // Reads existing metadata, merges in the new floatingFor array, writes back.
+  // Preserves phone and any other metadata keys. Pass [] to clear (un-float).
+  public async updateManagerFloatingFor(managerId: string, floatingFor: string[]): Promise<void> {
+    const ccId = this.getCCId();
+
+    const { data: user, error: fetchError } = await supabase
+      .from('users')
+      .select('metadata')
+      .eq('user_id', managerId)
+      .eq('role', 'RouteManager')
+      .eq('command_center_id', ccId)
+      .single();
+
+    if (fetchError || !user) throw new Error('Manager not found');
+
+    const newMetadata = { ...(user.metadata || {}), floatingFor: floatingFor || [] };
+
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ metadata: newMetadata })
+      .eq('user_id', managerId)
       .eq('command_center_id', ccId);
 
     if (updateError) throw updateError;
@@ -925,6 +955,97 @@ class SessionService {
     }
   }
 
+  // --- 2g-loc. MANAGER LIVE LOCATIONS (Floater feature, digital-mapping CCs) ---
+  //
+  // Mirrors the worker_locations pattern: one row per manager_id, OVERWRITTEN on
+  // each update (no history). A manager's own device writes its position via
+  // upsertManagerLocation while RMMapTab is open with GPS active; floaters read
+  // every manager's row via getManagerLocations to draw the coloured arrows.
+  //
+  // heading is nullable: if the device has no compass/bearing fix yet, we store
+  // null and the map renders a north-pointing arrow. No background reporting —
+  // a manager who never opens the map simply has no row (invisible).
+
+  /**
+   * Write THIS manager's own live location. Self-resolves the manager from the
+   * logged-in `current_user` in localStorage — never takes a managerId argument,
+   * so a device can only ever report its OWN position (can't spoof another's).
+   *
+   * Safely no-ops (with a warning) if there's no current_user, if the user isn't
+   * a RouteManager, or if there's no CC context — so a worker's device or a
+   * half-populated session won't write a junk row.
+   *
+   * heading: pass the compass bearing in degrees if available; omit/undefined
+   * when there's no fix (stored as null → north-pointing arrow downstream).
+   */
+  public async upsertManagerLocation(lat: number, lng: number, heading?: number): Promise<void> {
+    try {
+      const ccId = this.getCCId();
+
+      // Self-resolve the manager from the logged-in user. Read lazily to avoid a
+      // top-of-file import cycle (localStorage helper is tiny and sync).
+      const { getStorageItem } = await import('./localStorage');
+      const currentUser = getStorageItem<ManagementUser | null>('current_user', null);
+
+      if (!currentUser || currentUser.role !== 'RouteManager' || !currentUser.userId) {
+        console.warn('[ManagerLoc] upsert skipped — no RouteManager current_user to self-resolve.');
+        return;
+      }
+
+      const row = {
+        manager_id: currentUser.userId,
+        command_center_id: ccId,
+        lat,
+        lng,
+        heading: heading ?? null,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await supabase
+        .from('manager_locations')
+        .upsert(row, { onConflict: 'manager_id' });
+
+      if (error) {
+        console.warn('[ManagerLoc] upsertManagerLocation failed:', error);
+      }
+    } catch (err) {
+      console.warn('[ManagerLoc] upsertManagerLocation error:', err);
+    }
+  }
+
+  /**
+   * Read EVERY manager's live location for the current CC. No manager filter —
+   * a floater needs all of them, and the map layer decides which to actually
+   * render based on the floated set (later phase). Returns the typed
+   * ManagerLocation shape so downstream arrow/staleness code can't drift.
+   */
+  public async getManagerLocations(): Promise<ManagerLocation[]> {
+    try {
+      const ccId = this.getCCId();
+      const { data, error } = await supabase
+        .from('manager_locations')
+        .select('*')
+        .eq('command_center_id', ccId);
+
+      if (error) {
+        console.warn('[ManagerLoc] getManagerLocations failed:', error);
+        return [];
+      }
+
+      return (data || []).map((row: any) => ({
+        managerId: row.manager_id,
+        lat: Number(row.lat),
+        lng: Number(row.lng),
+        heading: row.heading != null ? Number(row.heading) : null,
+        updatedAt: row.updated_at,
+        commandCenterId: row.command_center_id,
+      }));
+    } catch (err) {
+      console.warn('[ManagerLoc] getManagerLocations error:', err);
+      return [];
+    }
+  }
+
   // --- 2h. HISTORICAL PROPERTIES (purple dots) ---
 
   public async getHistoricalPropertiesForRoutes(routeCodes: string[]): Promise<HistoricalProperty[]> {
@@ -989,1381 +1110,375 @@ class SessionService {
         .eq('command_center_id', ccId)
         .eq('session_date', date);
 
-      if (error) {
-        console.warn('[RouteSplit] getRouteSplits failed:', error);
+        if (error) {
+          console.warn('[RouteSplit] getRouteSplits failed:', error);
+          return [];
+        }
+        return (data || []).map(r => this.mapDbRouteSplit(r));
+      } catch (err) {
+        console.warn('[RouteSplit] getRouteSplits error:', err);
         return [];
       }
-      return (data || []).map(r => this.mapDbRouteSplit(r));
-    } catch (err) {
-      console.warn('[RouteSplit] getRouteSplits error:', err);
-      return [];
     }
-  }
-
-  /**
-   * Fetch a single route's split (if any). Returns null when the route isn't split.
-   */
-  public async getRouteSplitForRoute(routeCode: string): Promise<RouteSplit | null> {
-    try {
+  
+    /**
+     * Fetch a single route's split (if any). Returns null when the route isn't split.
+     */
+    public async getRouteSplitForRoute(routeCode: string): Promise<RouteSplit | null> {
+      try {
+        const ccId = this.getCCId();
+        const date = await this.getDailySessionDate();
+        if (!date) return null;
+  
+        const { data, error } = await supabase
+          .from('route_splits')
+          .select('*')
+          .eq('command_center_id', ccId)
+          .eq('session_date', date)
+          .eq('route_code', routeCode)
+          .maybeSingle();
+  
+        if (error || !data) return null;
+        return this.mapDbRouteSplit(data);
+      } catch (err) {
+        console.warn('[RouteSplit] getRouteSplitForRoute error:', err);
+        return null;
+      }
+    }
+  
+    /**
+     * Compute the next available letter for a route, given its current buckets.
+     * Pure function — exported on the service for use by the UI (the split
+     * modal needs to know which letter it's previewing as the new bucket).
+     *
+     * Sequence is a, b, c, ..., z. We assume routes never need >26 buckets;
+     * if a 27th split is requested, throws.
+     */
+    public nextAvailableLetter(buckets: RouteSplitBucket[]): string {
+      const used = new Set(buckets.map(b => b.letter));
+      const ALPHA = 'abcdefghijklmnopqrstuvwxyz';
+      for (const ch of ALPHA) {
+        if (!used.has(ch)) return ch;
+      }
+      throw new Error('Route already has 26 buckets — refusing to split further');
+    }
+  
+    /**
+     * Split an existing bucket. Atomically:
+     *   1. If no split row exists yet, create one with bucket 'a' containing
+     *      input.allBookingIds (the full list of pending bookings on this route).
+     *   2. Compute the next available letter (b, c, d, ...).
+     *   3. Append a new bucket entry: { letter, sourceLetter, rectangles,
+     *      bookingIds: input.bookingsMovingToNew, assignedWorkers: [] }.
+     *   4. Update the source bucket: remove input.bookingsMovingToNew from its
+     *      bookingIds.
+     *   5. Save the row.
+     *
+     * Returns the updated RouteSplit so the caller can read which letter was
+     * assigned. Note: routes.assigned_worker_ids is NOT touched here — assigning
+     * workers to the new bucket happens via updateRouteSplitAssignment, which
+     * does the union math.
+     *
+     * The caller (RouteSplitModal at confirm time) is responsible for computing
+     * input.bookingsMovingToNew correctly based on which prebookings in the source
+     * bucket fall inside the new rectangles.
+     */
+    public async splitBucket(input: {
+      routeCode: string;
+      sourceLetter: string;
+      rectangles: RouteSplitRectangle[];
+      bookingsMovingToNew: string[];
+      // Used only when no split row exists yet. The first split has to
+      // initialize 'a' with all bookings; from that point on we ignore this.
+      allBookingIdsOnRoute: string[];
+    }): Promise<RouteSplit> {
       const ccId = this.getCCId();
       const date = await this.getDailySessionDate();
-      if (!date) return null;
-
-      const { data, error } = await supabase
-        .from('route_splits')
-        .select('*')
-        .eq('command_center_id', ccId)
-        .eq('session_date', date)
-        .eq('route_code', routeCode)
-        .maybeSingle();
-
-      if (error || !data) return null;
-      return this.mapDbRouteSplit(data);
-    } catch (err) {
-      console.warn('[RouteSplit] getRouteSplitForRoute error:', err);
-      return null;
-    }
-  }
-
-  /**
-   * Compute the next available letter for a route, given its current buckets.
-   * Pure function — exported on the service for use by the UI (the split
-   * modal needs to know which letter it's previewing as the new bucket).
-   *
-   * Sequence is a, b, c, ..., z. We assume routes never need >26 buckets;
-   * if a 27th split is requested, throws.
-   */
-  public nextAvailableLetter(buckets: RouteSplitBucket[]): string {
-    const used = new Set(buckets.map(b => b.letter));
-    const ALPHA = 'abcdefghijklmnopqrstuvwxyz';
-    for (const ch of ALPHA) {
-      if (!used.has(ch)) return ch;
-    }
-    throw new Error('Route already has 26 buckets — refusing to split further');
-  }
-
-  /**
-   * Split an existing bucket. Atomically:
-   *   1. If no split row exists yet, create one with bucket 'a' containing
-   *      input.allBookingIds (the full list of pending bookings on this route).
-   *   2. Compute the next available letter (b, c, d, ...).
-   *   3. Append a new bucket entry: { letter, sourceLetter, rectangles,
-   *      bookingIds: input.bookingsMovingToNew, assignedWorkers: [] }.
-   *   4. Update the source bucket: remove input.bookingsMovingToNew from its
-   *      bookingIds.
-   *   5. Save the row.
-   *
-   * Returns the updated RouteSplit so the caller can read which letter was
-   * assigned. Note: routes.assigned_worker_ids is NOT touched here — assigning
-   * workers to the new bucket happens via updateRouteSplitAssignment, which
-   * does the union math.
-   *
-   * The caller (RouteSplitModal at confirm time) is responsible for computing
-   * input.bookingsMovingToNew correctly based on which prebookings in the source
-   * bucket fall inside the new rectangles.
-   */
-  public async splitBucket(input: {
-    routeCode: string;
-    sourceLetter: string;
-    rectangles: RouteSplitRectangle[];
-    bookingsMovingToNew: string[];
-    // Used only when no split row exists yet. The first split has to
-    // initialize 'a' with all bookings; from that point on we ignore this.
-    allBookingIdsOnRoute: string[];
-  }): Promise<RouteSplit> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) throw new Error('No active session');
-
-    // Read existing row (if any).
-    let existing = await this.getRouteSplitForRoute(input.routeCode);
-
-    // If no row exists, initialize with bucket 'a' containing all bookings.
-    let buckets: RouteSplitBucket[];
-    if (!existing) {
-      if (input.sourceLetter !== 'a') {
-        throw new Error(`Cannot split bucket '${input.sourceLetter}' — no split exists yet for ${input.routeCode}; the first split must source from 'a'`);
+      if (!date) throw new Error('No active session');
+  
+      // Read existing row (if any).
+      let existing = await this.getRouteSplitForRoute(input.routeCode);
+  
+      // If no row exists, initialize with bucket 'a' containing all bookings.
+      let buckets: RouteSplitBucket[];
+      if (!existing) {
+        if (input.sourceLetter !== 'a') {
+          throw new Error(`Cannot split bucket '${input.sourceLetter}' — no split exists yet for ${input.routeCode}; the first split must source from 'a'`);
+        }
+        buckets = [{
+          letter: 'a',
+          sourceLetter: null,
+          rectangles: [],
+          bookingIds: [...input.allBookingIdsOnRoute],
+          assignedWorkers: [],
+        }];
+      } else {
+        buckets = existing.buckets.map(b => ({ ...b, rectangles: [...b.rectangles], bookingIds: [...b.bookingIds], assignedWorkers: [...b.assignedWorkers] }));
       }
-      buckets = [{
-        letter: 'a',
-        sourceLetter: null,
-        rectangles: [],
-        bookingIds: [...input.allBookingIdsOnRoute],
+  
+      // Find the source bucket. If missing, the caller has a stale view.
+      const source = buckets.find(b => b.letter === input.sourceLetter);
+      if (!source) {
+        throw new Error(`Cannot split bucket '${input.sourceLetter}' — bucket not found on route ${input.routeCode}`);
+      }
+      if (source.assignedWorkers.length > 0) {
+        throw new Error(`Cannot split bucket '${input.sourceLetter}' — it has assigned workers`);
+      }
+  
+      // Compute the new letter.
+      const newLetter = this.nextAvailableLetter(buckets);
+  
+      // Move bookings from source → new bucket.
+      const movingSet = new Set(input.bookingsMovingToNew);
+      const newBucketBookingIds = source.bookingIds.filter(id => movingSet.has(id));
+      source.bookingIds = source.bookingIds.filter(id => !movingSet.has(id));
+  
+      buckets.push({
+        letter: newLetter,
+        sourceLetter: input.sourceLetter,
+        rectangles: input.rectangles,
+        bookingIds: newBucketBookingIds,
         assignedWorkers: [],
-      }];
-    } else {
-      buckets = existing.buckets.map(b => ({ ...b, rectangles: [...b.rectangles], bookingIds: [...b.bookingIds], assignedWorkers: [...b.assignedWorkers] }));
-    }
-
-    // Find the source bucket. If missing, the caller has a stale view.
-    const source = buckets.find(b => b.letter === input.sourceLetter);
-    if (!source) {
-      throw new Error(`Cannot split bucket '${input.sourceLetter}' — bucket not found on route ${input.routeCode}`);
-    }
-    if (source.assignedWorkers.length > 0) {
-      throw new Error(`Cannot split bucket '${input.sourceLetter}' — it has assigned workers`);
-    }
-
-    // Compute the new letter.
-    const newLetter = this.nextAvailableLetter(buckets);
-
-    // Move bookings from source → new bucket.
-    const movingSet = new Set(input.bookingsMovingToNew);
-    const newBucketBookingIds = source.bookingIds.filter(id => movingSet.has(id));
-    source.bookingIds = source.bookingIds.filter(id => !movingSet.has(id));
-
-    buckets.push({
-      letter: newLetter,
-      sourceLetter: input.sourceLetter,
-      rectangles: input.rectangles,
-      bookingIds: newBucketBookingIds,
-      assignedWorkers: [],
-    });
-
-    // Upsert: if existing, update; else insert.
-    if (existing) {
-      const { data, error } = await supabase
-        .from('route_splits')
-        .update({ buckets, updated_at: new Date().toISOString() })
-        .eq('command_center_id', ccId)
-        .eq('session_date', date)
-        .eq('route_code', input.routeCode)
-        .select()
-        .single();
-      if (error) {
-        console.error('[RouteSplit] splitBucket update failed:', error);
-        throw error;
-      }
-      return this.mapDbRouteSplit(data);
-    } else {
-      const { data, error } = await supabase
-        .from('route_splits')
-        .insert({
-          command_center_id: ccId,
-          session_date: date,
-          route_code: input.routeCode,
-          buckets,
-        })
-        .select()
-        .single();
-      if (error) {
-        console.error('[RouteSplit] splitBucket insert failed:', error);
-        throw error;
-      }
-      return this.mapDbRouteSplit(data);
-    }
-  }
-
-  /**
-   * Delete the entire split row for a route. Removes all bucket info.
-   * Does NOT touch routes.assigned_worker_ids or bookings — caller is
-   * responsible for any cleanup. Primarily called from adminResetDailySession
-   * (which wipes the whole table) but exposed in case admin tooling wants
-   * per-route control.
-   */
-  public async deleteRouteSplit(routeCode: string): Promise<void> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) return;
-
-    const { error } = await supabase
-      .from('route_splits')
-      .delete()
-      .eq('command_center_id', ccId)
-      .eq('session_date', date)
-      .eq('route_code', routeCode);
-
-    if (error) {
-      console.error('[RouteSplit] deleteRouteSplit failed:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Assign workers to a specific bucket of a split route.
-   *
-   * Effects:
-   *   1. Updates the target bucket's assignedWorkers field within the row's
-   *      buckets array.
-   *   2. Updates routes.assigned_worker_ids to the UNION across ALL buckets so
-   *      that the existing booking-assignment code (assignBookingToWorker)
-   *      continues to know "these workers are on this route".
-   *   3. For each booking in this bucket (from bucket.bookingIds), writes
-   *      contractor_id so the worker's logsheet only sees their bucket's
-   *      prebooks. (Team seasons use session_id instead — the calling UI
-   *      should use assignBookingsToSession for that flow.)
-   *
-   * Pass workerIds=[] to unassign that bucket.
-   */
-  public async updateRouteSplitAssignment(
-    routeCode: string,
-    letter: string,
-    workerIds: string[]
-  ): Promise<void> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) throw new Error('No active session');
-
-    const existing = await this.getRouteSplitForRoute(routeCode);
-    if (!existing) {
-      throw new Error(`Cannot update split assignment: no split exists for route ${routeCode}`);
-    }
-
-    // Build new buckets array with this bucket's assignedWorkers updated.
-    const newBuckets = existing.buckets.map(b =>
-      b.letter === letter
-        ? { ...b, assignedWorkers: [...workerIds] }
-        : b
-    );
-
-    // Verify the target bucket actually exists.
-    if (!newBuckets.some(b => b.letter === letter)) {
-      throw new Error(`Cannot update split assignment: bucket '${letter}' not found on route ${routeCode}`);
-    }
-
-    // 1) Save the row.
-    const { error: splitErr } = await supabase
-      .from('route_splits')
-      .update({ buckets: newBuckets, updated_at: new Date().toISOString() })
-      .eq('command_center_id', ccId)
-      .eq('session_date', date)
-      .eq('route_code', routeCode);
-
-    if (splitErr) {
-      console.error('[RouteSplit] updateRouteSplitAssignment (splits) failed:', splitErr);
-      throw splitErr;
-    }
-
-    // 2) Compute UNION of all buckets' assignedWorkers, dedup, push to routes.
-    const unionSet = new Set<string>();
-    for (const b of newBuckets) for (const w of b.assignedWorkers) unionSet.add(w);
-    const unionWorkers = Array.from(unionSet);
-
-    const { error: routeErr } = await supabase
-      .from('routes')
-      .update({ assigned_worker_ids: unionWorkers })
-      .eq('route_code', routeCode)
-      .eq('session_date', date)
-      .eq('command_center_id', ccId);
-
-    if (routeErr) {
-      console.error('[RouteSplit] updateRouteSplitAssignment (routes union) failed:', routeErr);
-      throw routeErr;
-    }
-
-    // 3) Per-booking reassignment for this bucket's bookings (aeration pattern).
-    // The bucket.bookingIds is our cached membership list.
-    const target = newBuckets.find(b => b.letter === letter)!;
-    if (target.bookingIds.length > 0) {
-      const newContractorId = workerIds.length > 0 ? workerIds[0] : null;
-      const { error: bkErr } = await supabase
-        .from('bookings')
-        .update({ contractor_id: newContractorId })
-        .in('booking_id', target.bookingIds)
-        .eq('command_center_id', ccId);
-
-      if (bkErr) {
-        console.error('[RouteSplit] updateRouteSplitAssignment (bookings) failed:', bkErr);
-        throw bkErr;
-      }
-    }
-  }
-
-  // --- 3. SESSION MANAGEMENT ---
-
-  public async uploadDailySession(
-    data: DailySessionData, 
-    emailEnabled: boolean = true,
-    importMeta?: ImportMeta
-  ): Promise<void> {
-    const ccId = this.getCCId();
-    const seasonType = data.seasonType || 'aeration';
-    const isTeamSeason = seasonHasTeams(seasonType);
-    
-    const defaultProductCost = SEASON_CONFIGS[seasonType].defaultProductCostPercent;
-    
-    const meta = importMeta || (data as any)._importMeta || { 
-      source: 'file', 
-      sheetsExported: false,
-      seasonType,
-      productCostPercent: defaultProductCost
-    };
-    
-    if (meta.productCostPercent === undefined) {
-      meta.productCostPercent = defaultProductCost;
-    }
-
-    const { error: sessError } = await supabase
-      .from('daily_sessions')
-      .insert({ 
-        date: data.date, 
-        is_active: true,
-        import_meta: meta,
-        command_center_id: ccId,
-        season_type: seasonType,
       });
-    if (sessError) throw sessError;
-
-    const allUsers = [
-      ...data.managers.map((m) => ({
-        user_id: m.userId,
-        name: m.name,
-        username: m.username,
-        password: m.password,
-        role: 'RouteManager',
-        metadata: {
-          phone: m.phone,
-        },
-        command_center_id: ccId,
-      })),
-      ...data.workers.map((w) => ({
-        user_id: w.contractorId,
-        name: `${w.firstName} ${w.lastName}`,
-        role: 'Worker',
-        password: w.firstName,
-        metadata: {
-          phone: w.cellPhone,
-          alumniRate: w.alumniRate,
-          silverRate: w.silverRate,
-          assignedManagerId: w.assignedManagerId,
-          upsellsEnabled: true,
-          teamId: w.teamId,
-        },
-        command_center_id: ccId,
-      })),
-    ];
-
-    const { error: userError } = await supabase
-      .from('users')
-      .upsert(allUsers, { onConflict: 'user_id' });
-    if (userError) throw userError;
-
-    const routeRows = data.routes.map((r) => ({
-      route_code: r.routeCode,
-      manager_id: r.managerId,
-      assigned_worker_ids: r.assignedWorkerIds || [],
-      streets: r.streets,
-      session_date: data.date,
-      command_center_id: ccId,
-    }));
-    const { error: routeError } = await supabase
-      .from('routes')
-      .insert(routeRows);
-    if (routeError) throw routeError;
-
-    const bookingRows = data.pendingBookings.map((b) => ({
-      booking_id: b['Booking ID'],
-      route_number: b['Route Number'],
-      status: 'pending',
-      price: String(b.Price || ''), 
-      customer_details: {
-        'First Name': b['First Name'],
-        'Last Name': b['Last Name'],
-        'Full Address': b['Full Address'],
-        'Home Phone': b['Home Phone'],
-        'Cell Phone': b['Cell Phone'],
-        'Email Address': b['Email Address'],
-        'FO/BO/FP': b['FO/BO/FP'],
-      },
-      log_notes: b['Log Sheet Notes'],
-      is_prepaid: b.Prepaid === 'x',
-      session_date: data.date,
-      data: b,
-      command_center_id: ccId,
-      services: b.services,
-    }));
-
-    const { error: bookingError } = await supabase
-      .from('bookings')
-      .insert(bookingRows);
-    if (bookingError) throw bookingError;
-
-    if (isTeamSeason && data.teamCarts) {
-      const logsheetRows = data.teamCarts.map((cart) => {
-        const primaryWorker = cart.workers[0];
-        const equalSplit = createEqualSplit(cart.workerIds);
-        
-        return {
-          id: `sess_${cart.teamId}_${Date.now()}`,
-          worker_id: primaryWorker.contractorId,
-          team_worker_ids: cart.workerIds,
-          date: data.date,
-          status: 'OPEN',
-          stats: this.getEmptyStats(),
-          email_enabled: emailEnabled,
-          command_center_id: ccId,
-          equiv_split: equalSplit,
-          upsell_split: equalSplit,
-        };
-      });
-      
-      const { error: lsError } = await supabase
-        .from('logsheet_sessions')
-        .insert(logsheetRows);
-      if (lsError) throw lsError;
-    } else {
-      const logsheetRows = data.workers.map((w) => ({
-        id: `sess_${w.contractorId}_${Date.now()}`,
-        worker_id: w.contractorId,
-        date: data.date,
-        status: 'OPEN',
-        stats: this.getEmptyStats(),
-        email_enabled: emailEnabled,
-        command_center_id: ccId,
-      }));
-      
-      const { error: lsError } = await supabase
-        .from('logsheet_sessions')
-        .insert(logsheetRows);
-      if (lsError) throw lsError;
-    }
-
-    if (hasItems(data.historicalProperties)) {
-      const rows = data.historicalProperties!.map((h) => ({
-        command_center_id: ccId,
-        session_date: data.date,
-        route_code: h.routeCode,
-        address: h.address,
-        customer_name: h.customerName || null,
-        phone: h.phone || null,
-        email: h.email || null,
-        client_type: h.clientType || null,
-        property_type: h.propertyType || null,
-        notes: h.notes || null,
-        price: h.price || null,
-        payment_type: h.paymentType || null,
-        contractor_name: h.contractorName || null,
-      }));
-
-      const CHUNK = 500;
-      for (let i = 0; i < rows.length; i += CHUNK) {
-        const slice = rows.slice(i, i + CHUNK);
-        const { error } = await supabase.from('route_historical_properties').insert(slice);
+  
+      // Upsert: if existing, update; else insert.
+      if (existing) {
+        const { data, error } = await supabase
+          .from('route_splits')
+          .update({ buckets, updated_at: new Date().toISOString() })
+          .eq('command_center_id', ccId)
+          .eq('session_date', date)
+          .eq('route_code', input.routeCode)
+          .select()
+          .single();
         if (error) {
-          console.error('[HistoricalProps] Failed to insert chunk:', error);
-          break;
+          console.error('[RouteSplit] splitBucket update failed:', error);
+          throw error;
         }
-      }
-      console.log(`[HistoricalProps] Inserted ${rows.length} historical properties`);
-    }
-
-    const cc = commandCenterService.getCurrentCommandCenter();
-    if (cc?.digitalMappingEnabled && cc.callbookSheetId) {
-      const sheetId = cc.callbookSheetId;
-      const routeCodes = data.routes.map(r => r.routeCode);
-      Promise.all([
-        import('./googleSheetsService'),
-        import('./pclCacheService'),
-      ]).then(([{ googleSheetsService }, { loadAndCachePCL }]) => {
-        const accessToken = googleSheetsService.getAccessToken();
-        if (!accessToken) return;
-        loadAndCachePCL(sheetId, routeCodes, accessToken, ccId).catch(err =>
-          console.warn('[PCL Cache] Non-blocking load failed:', err)
-        );
-      }).catch(err => console.warn('[PCL Cache] Module import failed:', err));
-    }
-  }
-
-  public async adminResetDailySession(date: string): Promise<void> {
-    const ccId = this.getCCId();
-    
-    await supabase.from('geocode_cache').delete().eq('command_center_id', ccId);
-    await supabase.from('route_historical_properties').delete().eq('command_center_id', ccId);
-    await supabase.from('pending_sales').delete().eq('command_center_id', ccId);
-    // Wipe route splits — RM-side visual overlays only live for the day.
-    await supabase.from('route_splits').delete().eq('command_center_id', ccId);
-    
-    await supabase.from('transactions').delete().eq('command_center_id', ccId); 
-    await supabase.from('logsheet_sessions').delete().eq('date', date).eq('command_center_id', ccId);
-    await supabase.from('routes').delete().eq('session_date', date).eq('command_center_id', ccId);
-    await supabase.from('bookings').delete().eq('session_date', date).eq('command_center_id', ccId);
-    await supabase.from('daily_sessions').delete().eq('date', date).eq('command_center_id', ccId);
-    await supabase.from('users').delete().in('role', ['Worker', 'RouteManager']).eq('command_center_id', ccId);
-    
-    const isSuperAdmin = commandCenterService.isSuperAdminMode();
-    const currentCC = commandCenterService.getCurrentCommandCenter();
-    
-    localStorage.clear();
-    
-    if (isSuperAdmin && currentCC) {
-      commandCenterService.setSuperAdminMode(true);
-      commandCenterService.setCurrentCommandCenter(currentCC);
-    }
-    
-    window.location.href = '/login';
-  }
-
-  public async deleteWorker(workerId: string): Promise<void> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    
-    if (date) {
-      const { data: routes } = await supabase
-        .from('routes')
-        .select('route_code, assigned_worker_ids')
-        .eq('session_date', date)
-        .eq('command_center_id', ccId);
-      
-      if (routes) {
-        for (const route of routes) {
-          if (route.assigned_worker_ids && route.assigned_worker_ids.includes(workerId)) {
-            const updatedIds = route.assigned_worker_ids.filter((id: string) => id !== workerId);
-            await supabase
-              .from('routes')
-              .update({ assigned_worker_ids: updatedIds })
-              .eq('route_code', route.route_code)
-              .eq('session_date', date)
-              .eq('command_center_id', ccId);
-          }
-        }
-      }
-    }
-
-    await supabase.from('bookings').update({ contractor_id: null }).eq('contractor_id', workerId).eq('command_center_id', ccId);
-    await supabase.from('logsheet_sessions').delete().eq('worker_id', workerId).eq('command_center_id', ccId);
-    await supabase.from('transactions').delete().eq('worker_id', workerId).eq('command_center_id', ccId);
-
-    const { error } = await supabase.from('users').delete().eq('user_id', workerId).eq('command_center_id', ccId);
-    
-    if (error) {
-        console.error("Failed to delete user:", error);
-        throw error;
-    }
-  }
-
-  public async transferWorker(workerId: string, newManagerId: string): Promise<void> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-
-    const { data: user, error: fetchError } = await supabase
-        .from('users')
-        .select('metadata')
-        .eq('user_id', workerId)
-        .eq('command_center_id', ccId)
-        .single();
-    
-    if (fetchError || !user) throw new Error("Worker not found");
-
-    const newMetadata = { ...user.metadata, assignedManagerId: newManagerId };
-    
-    const { error: updateError } = await supabase
-        .from('users')
-        .update({ metadata: newMetadata })
-        .eq('user_id', workerId)
-        .eq('command_center_id', ccId);
-
-    if (updateError) throw updateError;
-
-    if (date) {
-      const { data: routes } = await supabase
-        .from('routes')
-        .select('route_code, assigned_worker_ids')
-        .eq('session_date', date)
-        .eq('command_center_id', ccId);
-      
-      if (routes) {
-        for (const route of routes) {
-          if (route.assigned_worker_ids && route.assigned_worker_ids.includes(workerId)) {
-            await supabase
-              .from('routes')
-              .update({ manager_id: newManagerId })
-              .eq('route_code', route.route_code)
-              .eq('session_date', date)
-              .eq('command_center_id', ccId);
-          }
-        }
-      }
-    }
-  }
-
-  public async transferRouteToManager(routeCode: string, newManagerId: string): Promise<void> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) return;
-    
-    const { error } = await supabase
-      .from('routes')
-      .update({ manager_id: newManagerId })
-      .eq('route_code', routeCode)
-      .eq('session_date', date)
-      .eq('command_center_id', ccId);
-    
-    if (error) {
-      console.error("Error transferring route to manager:", error);
-      throw error;
-    }
-  }
-
-  public async transferBookingToManager(
-    bookingId: string,
-    routeNumber: string,
-    newManagerId: string
-  ): Promise<void> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) return;
-
-    const { data: existingRoute } = await supabase
-      .from('routes')
-      .select('*')
-      .eq('route_code', routeNumber)
-      .eq('manager_id', newManagerId)
-      .eq('session_date', date)
-      .eq('command_center_id', ccId)
-      .maybeSingle();
-
-    if (!existingRoute) {
-      const { data: sourceRoute } = await supabase
-        .from('routes')
-        .select('streets')
-        .eq('route_code', routeNumber)
-        .eq('session_date', date)
-        .eq('command_center_id', ccId)
-        .maybeSingle();
-
-      const streets = sourceRoute?.streets || [];
-
-      const { error: createError } = await supabase
-        .from('routes')
-        .insert({
-          route_code: routeNumber,
-          manager_id: newManagerId,
-          assigned_worker_ids: [],
-          streets: streets,
-          session_date: date,
-          command_center_id: ccId,
-        });
-
-      if (createError) {
-        console.error("Error creating route for new manager:", createError);
-        throw createError;
-      }
-    }
-  }
-
-  // --- 3b. REASSIGN WORKER ---
-
-  public async reassignWorker(
-    workerId: string,
-    destination:
-      | { type: 'existing_cart'; targetSessionId: string }
-      | { type: 'new_solo' }
-      | { type: 'different_manager'; targetManagerId: string }
-  ): Promise<void> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) throw new Error('No active session');
-
-    const currentSession = await this.getWorkerLogsheetSession(workerId);
-    if (!currentSession) throw new Error('Worker has no active session');
-
-    const currentTeamIds: string[] = hasItems(currentSession.teamWorkerIds)
-      ? [...currentSession.teamWorkerIds]
-      : [currentSession.workerId];
-
-    const updatedCurrentTeam = currentTeamIds.filter(id => id !== workerId);
-
-    if (updatedCurrentTeam.length === 0) {
-      await supabase
-        .from('logsheet_sessions')
-        .delete()
-        .eq('id', currentSession.id)
-        .eq('command_center_id', ccId);
-    } else {
-      const newEqualSplit = createEqualSplit(updatedCurrentTeam);
-      await supabase
-        .from('logsheet_sessions')
-        .update({
-          team_worker_ids: updatedCurrentTeam,
-          worker_id: updatedCurrentTeam[0],
-          equiv_split: newEqualSplit,
-          upsell_split: newEqualSplit,
-        })
-        .eq('id', currentSession.id)
-        .eq('command_center_id', ccId);
-    }
-
-    if (destination.type === 'existing_cart') {
-      const { data: targetSessionData, error } = await supabase
-        .from('logsheet_sessions')
-        .select('*')
-        .eq('id', destination.targetSessionId)
-        .eq('command_center_id', ccId)
-        .single();
-
-      if (error || !targetSessionData) throw new Error('Target session not found');
-
-      const existingTargetIds: string[] = hasItems(targetSessionData.team_worker_ids)
-        ? targetSessionData.team_worker_ids
-        : [targetSessionData.worker_id];
-
-      if (!existingTargetIds.includes(workerId)) {
-        const newTargetTeam = [...existingTargetIds, workerId];
-        const newTargetSplit = createEqualSplit(newTargetTeam);
-
-        await supabase
-          .from('logsheet_sessions')
-          .update({
-            team_worker_ids: newTargetTeam,
-            equiv_split: newTargetSplit,
-            upsell_split: newTargetSplit,
+        return this.mapDbRouteSplit(data);
+      } else {
+        const { data, error } = await supabase
+          .from('route_splits')
+          .insert({
+            command_center_id: ccId,
+            session_date: date,
+            route_code: input.routeCode,
+            buckets,
           })
-          .eq('id', destination.targetSessionId)
-          .eq('command_center_id', ccId);
-      }
-
-    } else if (destination.type === 'new_solo') {
-      const { error } = await supabase.from('logsheet_sessions').insert({
-        id: `sess_${workerId}_${Date.now()}`,
-        worker_id: workerId,
-        team_worker_ids: [workerId],
-        date,
-        status: 'OPEN',
-        stats: this.getEmptyStats(),
-        email_enabled: true,
-        command_center_id: ccId,
-        equiv_split: { [workerId]: 100 },
-        upsell_split: { [workerId]: 100 },
-      });
-      if (error) throw error;
-
-    } else if (destination.type === 'different_manager') {
-      const { data: user, error: fetchError } = await supabase
-        .from('users')
-        .select('metadata')
-        .eq('user_id', workerId)
-        .eq('command_center_id', ccId)
-        .single();
-
-      if (fetchError || !user) throw new Error('Worker not found');
-
-      const { error: updateError } = await supabase
-        .from('users')
-        .update({ metadata: { ...user.metadata, assignedManagerId: destination.targetManagerId } })
-        .eq('user_id', workerId)
-        .eq('command_center_id', ccId);
-      if (updateError) throw updateError;
-
-      const { error: sessError } = await supabase.from('logsheet_sessions').insert({
-        id: `sess_${workerId}_${Date.now()}`,
-        worker_id: workerId,
-        team_worker_ids: [workerId],
-        date,
-        status: 'OPEN',
-        stats: this.getEmptyStats(),
-        email_enabled: true,
-        command_center_id: ccId,
-        equiv_split: { [workerId]: 100 },
-        upsell_split: { [workerId]: 100 },
-      });
-      if (sessError) throw sessError;
-    }
-  }
-
-  // --- 4. AUTHENTICATION ---
-
-  public async authenticateRM(username: string, password: string): Promise<ManagementUser | null> {
-    const { data } = await supabase
-      .from('users')
-      .select('*')
-      .ilike('username', username)
-      .ilike('password', password)
-      .eq('role', 'RouteManager')
-      .maybeSingle();
-    
-    if (!data) return null;
-    
-    if (data.command_center_id) {
-      const cc = await commandCenterService.getCommandCenterById(data.command_center_id);
-      if (cc) {
-        commandCenterService.setCurrentCommandCenter(cc);
-      }
-    }
-    
-    return { 
-      userId: data.user_id, 
-      name: data.name, 
-      username: data.username, 
-      phone: data.metadata?.phone || '', 
-      role: 'RouteManager',
-      commandCenterId: data.command_center_id,
-    };
-  }
-
-  public async authenticateWorker(contractorId: string, password: string): Promise<Worker | null> {
-    const { data } = await supabase
-      .from('users')
-      .select('*')
-      .ilike('user_id', contractorId)
-      .ilike('password', password)
-      .eq('role', 'Worker')
-      .maybeSingle();
-    
-    if (!data) return null;
-    
-    if (data.command_center_id) {
-      const cc = await commandCenterService.getCommandCenterById(data.command_center_id);
-      if (cc) {
-        commandCenterService.setCurrentCommandCenter(cc);
-      }
-    }
-    
-    const isLockedOut = await this.isWorkerLockedOut(contractorId);
-    if (isLockedOut) {
-      throw new Error('SESSION_FINALIZED');
-    }
-    
-    const names = data.name.split(' ');
-    return {
-      contractorId: data.user_id,
-      firstName: names[0],
-      lastName: names.slice(1).join(' '),
-      cellPhone: data.metadata?.phone,
-      status: 'Return',
-      alumniRate: data.metadata?.alumniRate,
-      silverRate: data.metadata?.silverRate,
-      assignedManagerId: data.metadata?.assignedManagerId,
-      upsellsEnabled: data.metadata?.upsellsEnabled !== false,
-      commandCenterId: data.command_center_id,
-      teamId: data.metadata?.teamId,
-    };
-  }
-
-  // --- 5. LOGSHEETS & TRANSACTIONS ---
-
-  public async getWorkerAssignments(workerId: string): Promise<MasterBooking[]> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) return [];
-
-    const seasonType = await this.getSessionSeasonType();
-    const isTeamSeason = seasonHasTeams(seasonType);
-
-    let sessionId: string | null = null;
-    if (isTeamSeason) {
-      const session = await this.getWorkerLogsheetSession(workerId);
-      sessionId = session?.id || null;
-    }
-
-    const { data: allRoutes } = await supabase
-      .from('routes')
-      .select('route_code, assigned_worker_ids')
-      .eq('session_date', date)
-      .eq('command_center_id', ccId);
-    
-    const myRouteCodes = (allRoutes || [])
-      .filter(r => r.assigned_worker_ids && r.assigned_worker_ids.includes(workerId))
-      .map(r => r.route_code);
-
-    const { data: allBookings } = await supabase
-      .from('bookings')
-      .select('*')
-      .eq('session_date', date)
-      .eq('command_center_id', ccId)
-      .neq('status', 'completed');
-
-    let myPending: any[];
-    
-    if (isTeamSeason && sessionId) {
-      myPending = (allBookings || []).filter((b) => {
-        if (b.session_id === sessionId) return true;
-        const isMyRoute = myRouteCodes.includes(b.route_number);
-        const isUnassigned = !b.session_id && !b.contractor_id;
-        return isMyRoute && isUnassigned;
-      });
-    } else {
-      myPending = (allBookings || []).filter((b) => {
-        const isMyRoute = myRouteCodes.includes(b.route_number);
-        const isAssignedToMe = b.contractor_id === workerId;
-        const isAssignedToOther = b.contractor_id && b.contractor_id !== workerId;
-        return (isMyRoute && !isAssignedToOther) || isAssignedToMe;
-      });
-    }
-
-    let myTransactionsData: any[] | null = null;
-
-    if (isTeamSeason && sessionId) {
-      const { data: sessionTx } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('session_id', sessionId)
-        .eq('command_center_id', ccId);
-
-      if (sessionTx && sessionTx.length > 0) {
-        myTransactionsData = sessionTx;
-      } else {
-        const session = await this.getWorkerLogsheetSession(workerId);
-        const teamWorkerIds = hasItems(session?.teamWorkerIds) ? session!.teamWorkerIds! : [workerId];
-        const { data: workerTx } = await supabase
-          .from('transactions')
-          .select('*')
-          .in('worker_id', teamWorkerIds)
-          .eq('command_center_id', ccId);
-        myTransactionsData = workerTx;
-      }
-    } else {
-      const { data: workerTx } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('worker_id', workerId)
-        .eq('command_center_id', ccId);
-      myTransactionsData = workerTx;
-    }
-
-    const myTransactions = myTransactionsData || [];
-
-    const pendingMapped = myPending.map((b) => ({
-      ...b.data,
-      ...b.customer_details,
-      'Booking ID': b.booking_id,
-      'Route Number': b.route_number,
-      'Contractor Number': b.contractor_id,
-      Status: b.status,
-      Price: b.price?.toString(),
-      'Log Sheet Notes': b.log_notes,
-      Prepaid: b.is_prepaid ? 'x' : undefined,
-      commandCenterId: b.command_center_id,
-      services: b.services,
-      sessionId: b.session_id,
-    }));
-
-    const completedMapped = (myTransactions || []).map(tx => {
-        const mapped = this.mapDbTransaction(tx);
-        return {
-            'Booking ID': mapped.jobId,
-            'First Name': mapped.customerName.split(' ')[0],
-            'Last Name': mapped.customerName.split(' ').slice(1).join(' '),
-            'Full Address': mapped.address,
-            'Completed': 'x',
-            'Status': 'completed',
-            'Price': mapped.displayPrice,
-            'Route Number': mapped.routeCode,
-            'Log Sheet Notes': mapped.itemDescription,
-            'Home Phone': mapped.customerPhone,
-            'Email Address': mapped.customerEmail,
-            'Payment Method': mapped.paymentMethod,
-            'paymentBreakdown': mapped.paymentBreakdown,
-            'FO/BO/FP': mapped.serviceType,
-            'Contract Title': (mapped.items && mapped.items.length > 0) ? mapped.items[0].name : (mapped.serviceName || mapped.displayPrice),
-            'invoiceNumber': mapped.invoiceNumber,
-            'chequeNumber': mapped.chequeNumber,
-            'etransferEmail': mapped.etransferEmail,
-            isContract: ['Upgrade', 'Add-On'].includes(mapped.type),
-            isUpgrade: mapped.type === 'Upgrade',
-            isAddOn: mapped.type === 'Add-On',
-            isNewSale: mapped.type === 'Sale',
-            Prepaid: mapped.isPrepaid ? 'x' : undefined,
-            commandCenterId: mapped.commandCenterId,
-            services: mapped.services,
-        };
-    });
-
-    return [...pendingMapped, ...completedMapped];
-  }
-
-  public async getSessionAssignments(sessionId: string): Promise<MasterBooking[]> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) return [];
-
-    const { data: pendingBookings } = await supabase
-      .from('bookings')
-      .select('*')
-      .eq('session_date', date)
-      .eq('command_center_id', ccId)
-      .eq('session_id', sessionId)
-      .neq('status', 'completed');
-
-    const { data: sessionData } = await supabase
-      .from('logsheet_sessions')
-      .select('team_worker_ids, worker_id')
-      .eq('id', sessionId)
-      .eq('command_center_id', ccId)
-      .maybeSingle();
-
-    const teamWorkerIds = hasItems(sessionData?.team_worker_ids) 
-      ? sessionData.team_worker_ids 
-      : [sessionData?.worker_id].filter(Boolean);
-
-    let transactions: any[] | null = null;
-    const { data: sessionTx } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('session_id', sessionId)
-      .eq('command_center_id', ccId);
-
-    if (sessionTx && sessionTx.length > 0) {
-      transactions = sessionTx;
-    } else {
-      const { data: workerTx } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('command_center_id', ccId)
-        .in('worker_id', teamWorkerIds);
-      transactions = workerTx;
-    }
-
-    const pendingMapped = (pendingBookings || []).map((b) => ({
-      ...b.data,
-      ...b.customer_details,
-      'Booking ID': b.booking_id,
-      'Route Number': b.route_number,
-      'Contractor Number': b.contractor_id,
-      Status: b.status,
-      Price: b.price?.toString(),
-      'Log Sheet Notes': b.log_notes,
-      Prepaid: b.is_prepaid ? 'x' : undefined,
-      commandCenterId: b.command_center_id,
-      services: b.services,
-      sessionId: b.session_id,
-    }));
-
-    const completedMapped = (transactions || []).map(tx => {
-        const mapped = this.mapDbTransaction(tx);
-        return {
-            'Booking ID': mapped.jobId,
-            'First Name': mapped.customerName.split(' ')[0],
-            'Last Name': mapped.customerName.split(' ').slice(1).join(' '),
-            'Full Address': mapped.address,
-            'Completed': 'x',
-            'Status': 'completed',
-            'Price': mapped.displayPrice,
-            'Route Number': mapped.routeCode,
-            'Log Sheet Notes': mapped.itemDescription,
-            'Home Phone': mapped.customerPhone,
-            'Email Address': mapped.customerEmail,
-            'Payment Method': mapped.paymentMethod,
-            'paymentBreakdown': mapped.paymentBreakdown,
-            'FO/BO/FP': mapped.serviceType,
-            'Contract Title': (mapped.items && mapped.items.length > 0) ? mapped.items[0].name : (mapped.serviceName || mapped.displayPrice),
-            'invoiceNumber': mapped.invoiceNumber,
-            'chequeNumber': mapped.chequeNumber,
-            'etransferEmail': mapped.etransferEmail,
-            isContract: ['Upgrade', 'Add-On'].includes(mapped.type),
-            isUpgrade: mapped.type === 'Upgrade',
-            isAddOn: mapped.type === 'Add-On',
-            isNewSale: mapped.type === 'Sale',
-            Prepaid: mapped.isPrepaid ? 'x' : undefined,
-            commandCenterId: mapped.commandCenterId,
-            services: mapped.services,
-        };
-    });
-
-    return [...pendingMapped, ...completedMapped];
-  }
-
-  public async getStreetsForRoute(routeCode: string): Promise<string[]> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    
-    const res = await supabase
-      .from('routes')
-      .select('streets')
-      .eq('route_code', routeCode)
-      .eq('command_center_id', ccId)
-      .eq('session_date', date)
-      .maybeSingle();
-      
-    return res.data?.streets || [];
-  }
-
-  public async getLogsheetSessions(): Promise<LogsheetSession[]> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) return [];
-    
-    const seasonType = await this.getSessionSeasonType();
-    const productCostPercent = await this.getProductCostPercent();
-    const noTaxOnCash = await this.getSessionNoTaxOnCash();
-    const taxRate = this.getCurrentTaxRate();
-    const isTeamSeason = seasonHasTeams(seasonType);
-    
-    const [sessionsRes, transactionsRes] = await Promise.all([
-      supabase.from('logsheet_sessions').select('*').eq('date', date).eq('command_center_id', ccId),
-      supabase.from('transactions').select('*').eq('command_center_id', ccId)
-    ]);
-    
-    const sessions = sessionsRes.data || [];
-    const allTransactions = (transactionsRes.data || []).map(tx => this.mapDbTransaction(tx));
-    
-    const transactionsBySessionId: Record<string, SessionTransaction[]> = {};
-    const transactionsByWorker: Record<string, SessionTransaction[]> = {};
-
-    allTransactions.forEach(tx => {
-      const sid = (tx as any).sessionId;
-      if (sid) {
-        if (!transactionsBySessionId[sid]) transactionsBySessionId[sid] = [];
-        transactionsBySessionId[sid].push(tx);
-      }
-      if (!transactionsByWorker[tx.workerId]) transactionsByWorker[tx.workerId] = [];
-      transactionsByWorker[tx.workerId].push(tx);
-    });
-    
-    return sessions.map((d) => {
-      const sessionTx = isTeamSeason
-        ? (transactionsBySessionId[d.id] || [])
-        : [];
-
-      let teamTransactions: SessionTransaction[];
-      if (sessionTx.length > 0) {
-        teamTransactions = sessionTx;
-      } else {
-        const teamWorkerIds = hasItems(d.team_worker_ids) ? d.team_worker_ids : [d.worker_id];
-        teamTransactions = [];
-        teamWorkerIds.forEach((wid: string) => {
-          if (transactionsByWorker[wid]) {
-            teamTransactions.push(...transactionsByWorker[wid]);
-          }
-        });
-      }
-
-      const liveStats = this.recalculateStats(teamTransactions, taxRate, seasonType, productCostPercent, noTaxOnCash);
-
-      return {
-        id: d.id,
-        workerId: d.worker_id,
-        date: d.date,
-        status: d.status,
-        stats: liveStats,
-        validation: d.validation,
-        bonuses: d.bonuses,
-        dailyRouteStore: [],
-        financialStore: teamTransactions,
-        commandCenterId: d.command_center_id,
-        teamWorkerIds: d.team_worker_ids,
-        equivSplit: d.equiv_split,
-        upsellSplit: d.upsell_split,
-      };
-    });
-  }
-
-  public async getActiveLogsheetSession(workerId: string): Promise<LogsheetSession | null> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) return null;
-
-    const { data: teamSession } = await supabase
-      .from('logsheet_sessions')
-      .select('*')
-      .eq('date', date)
-      .eq('command_center_id', ccId)
-      .contains('team_worker_ids', [workerId])
-      .maybeSingle();
-
-    const sessionData = teamSession || (await supabase
-      .from('logsheet_sessions')
-      .select('*')
-      .eq('worker_id', workerId)
-      .eq('date', date)
-      .eq('command_center_id', ccId)
-      .single()).data;
-
-    if (!sessionData) return null;
-
-    const seasonType = await this.getSessionSeasonType();
-    const noTaxOnCash = await this.getSessionNoTaxOnCash();
-
-    let financialData: any[] | null = null;
-
-    if (seasonHasTeams(seasonType) && sessionData.id) {
-      const { data: sessionTx } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('session_id', sessionData.id)
-        .eq('command_center_id', ccId);
-
-      if (sessionTx && sessionTx.length > 0) {
-        financialData = sessionTx;
-      }
-    }
-
-    if (!financialData || financialData.length === 0) {
-      const workerIds = hasItems(sessionData.team_worker_ids) 
-        ? sessionData.team_worker_ids 
-        : [sessionData.worker_id];
-      
-      const { data: workerTx } = await supabase
-        .from('transactions')
-        .select('*')
-        .in('worker_id', workerIds)
-        .eq('command_center_id', ccId);
-      
-      financialData = workerTx;
-    }
-    
-    const cleanFinancials = (financialData || []).map(tx => this.mapDbTransaction(tx));
-    
-    const taxRate = this.getCurrentTaxRate();
-    const productCostPercent = await this.getProductCostPercent();
-    const liveStats = this.recalculateStats(cleanFinancials, taxRate, seasonType, productCostPercent, noTaxOnCash);
-
-    return {
-      id: sessionData.id,
-      workerId: sessionData.worker_id,
-      date: sessionData.date,
-      status: sessionData.status,
-      stats: liveStats,
-      validation: sessionData.validation,
-      bonuses: sessionData.bonuses,
-      dailyRouteStore: [],
-      financialStore: cleanFinancials,
-      commandCenterId: sessionData.command_center_id,
-      teamWorkerIds: sessionData.team_worker_ids,
-      equivSplit: sessionData.equiv_split,
-      upsellSplit: sessionData.upsell_split,
-    };
-  }
-
-  public async startLogsheetSession(workerId: string): Promise<LogsheetSession> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) throw new Error('No active session day found');
-    
-    const existing = await this.getActiveLogsheetSession(workerId);
-    if (existing) return existing;
-    
-    const newSession = {
-      id: `sess_${workerId}_${Date.now()}`,
-      worker_id: workerId,
-      date: date,
-      status: 'OPEN',
-      stats: this.getEmptyStats(),
-      email_enabled: true,
-      command_center_id: ccId,
-    };
-    
-    const { error } = await supabase.from('logsheet_sessions').insert(newSession);
-    if (error) throw error;
-    
-    return this.getActiveLogsheetSession(workerId) as Promise<LogsheetSession>;
-  }
-
-  public async addAdditionalSessionData(
-    newData: DailySessionData
-  ): Promise<{ managersAdded: number; workersAdded: number; routesAdded: number; bookingsAdded: number }> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) throw new Error('No active session found');
-
-    const seasonType = await this.getSessionSeasonType();
-    const isTeamSeason = seasonHasTeams(seasonType);
-
-    const [existingUsersRes, existingRoutesRes, existingBookingsRes] = await Promise.all([
-      supabase.from('users').select('user_id').eq('command_center_id', ccId),
-      supabase.from('routes').select('route_code').eq('session_date', date).eq('command_center_id', ccId),
-      supabase.from('bookings').select('route_number, customer_details').eq('session_date', date).eq('command_center_id', ccId),
-    ]);
-
-    const existingUserIds = new Set((existingUsersRes.data || []).map(u => u.user_id));
-    const existingRouteCodes = new Set((existingRoutesRes.data || []).map(r => r.route_code));
-    const existingBookingKeys = new Set(
-      (existingBookingsRes.data || []).map(b => {
-        const addr = (b.customer_details?.['Full Address'] || '').toLowerCase().trim();
-        return `${b.route_number}::${addr}`;
-      })
-    );
-
-    const newManagers = newData.managers.filter(m => !existingUserIds.has(m.userId));
-    const newWorkers  = newData.workers.filter(w => !existingUserIds.has(w.contractorId));
-    const newRoutes   = newData.routes.filter(r => !existingRouteCodes.has(r.routeCode));
-    const newBookings = newData.pendingBookings.filter(b => {
-      const addr = (b['Full Address'] || '').toLowerCase().trim();
-      const key  = `${b['Route Number']}::${addr}`;
-      return !existingBookingKeys.has(key);
-    });
-
-    if (newManagers.length > 0) {
-      const managerRows = newManagers.map(m => ({
-        user_id: m.userId,
-        name: m.name,
-        username: m.username,
-        password: m.password,
-        role: 'RouteManager',
-        metadata: { phone: m.phone },
-        command_center_id: ccId,
-      }));
-      const { error } = await supabase.from('users').upsert(managerRows, { onConflict: 'user_id' });
-      if (error) throw error;
-    }
-
-    if (newWorkers.length > 0) {
-      const workerRows = newWorkers.map(w => ({
-        user_id: w.contractorId,
-        name: `${w.firstName} ${w.lastName}`,
-        role: 'Worker',
-        password: w.firstName,
-        metadata: {
-          phone: w.cellPhone,
-          alumniRate: w.alumniRate,
-          silverRate: w.silverRate,
-          assignedManagerId: w.assignedManagerId,
-          upsellsEnabled: true,
-          teamId: w.teamId,
-        },
-        command_center_id: ccId,
-      }));
-      const { error } = await supabase.from('users').upsert(workerRows, { onConflict: 'user_id' });
-      if (error) throw error;
-
-      if (isTeamSeason && newData.teamCarts) {
-        const newWorkerIdSet = new Set(newWorkers.map(w => w.contractorId));
-        const newCarts = newData.teamCarts.filter(cart =>
-          cart.workerIds.some(id => newWorkerIdSet.has(id))
-        );
-        if (newCarts.length > 0) {
-          const logsheetRows = newCarts.map(cart => {
-            const primaryWorker = cart.workers[0];
-            const equalSplit = createEqualSplit(cart.workerIds);
-            return {
-              id: `sess_${cart.teamId}_${Date.now()}`,
-              worker_id: primaryWorker.contractorId,
-              team_worker_ids: cart.workerIds,
-              date,
-              status: 'OPEN',
-              stats: this.getEmptyStats(),
-              email_enabled: true,
-              command_center_id: ccId,
-              equiv_split: equalSplit,
-              upsell_split: equalSplit,
-            };
-          });
-          const { error } = await supabase.from('logsheet_sessions').insert(logsheetRows);
-          if (error) throw error;
+          .select()
+          .single();
+        if (error) {
+          console.error('[RouteSplit] splitBucket insert failed:', error);
+          throw error;
         }
-      } else {
-        const logsheetRows = newWorkers.map(w => ({
-          id: `sess_${w.contractorId}_${Date.now()}`,
-          worker_id: w.contractorId,
-          date,
-          status: 'OPEN',
-          stats: this.getEmptyStats(),
-          email_enabled: true,
-          command_center_id: ccId,
-        }));
-        const { error } = await supabase.from('logsheet_sessions').insert(logsheetRows);
-        if (error) throw error;
+        return this.mapDbRouteSplit(data);
       }
     }
-
-    if (newRoutes.length > 0) {
-      const routeRows = newRoutes.map(r => ({
+  
+    /**
+     * Delete the entire split row for a route. Removes all bucket info.
+     * Does NOT touch routes.assigned_worker_ids or bookings — caller is
+     * responsible for any cleanup. Primarily called from adminResetDailySession
+     * (which wipes the whole table) but exposed in case admin tooling wants
+     * per-route control.
+     */
+    public async deleteRouteSplit(routeCode: string): Promise<void> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return;
+  
+      const { error } = await supabase
+        .from('route_splits')
+        .delete()
+        .eq('command_center_id', ccId)
+        .eq('session_date', date)
+        .eq('route_code', routeCode);
+  
+      if (error) {
+        console.error('[RouteSplit] deleteRouteSplit failed:', error);
+        throw error;
+      }
+    }
+  
+    /**
+     * Assign workers to a specific bucket of a split route.
+     *
+     * Effects:
+     *   1. Updates the target bucket's assignedWorkers field within the row's
+     *      buckets array.
+     *   2. Updates routes.assigned_worker_ids to the UNION across ALL buckets so
+     *      that the existing booking-assignment code (assignBookingToWorker)
+     *      continues to know "these workers are on this route".
+     *   3. For each booking in this bucket (from bucket.bookingIds), writes
+     *      contractor_id so the worker's logsheet only sees their bucket's
+     *      prebooks. (Team seasons use session_id instead — the calling UI
+     *      should use assignBookingsToSession for that flow.)
+     *
+     * Pass workerIds=[] to unassign that bucket.
+     */
+    public async updateRouteSplitAssignment(
+      routeCode: string,
+      letter: string,
+      workerIds: string[]
+    ): Promise<void> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) throw new Error('No active session');
+  
+      const existing = await this.getRouteSplitForRoute(routeCode);
+      if (!existing) {
+        throw new Error(`Cannot update split assignment: no split exists for route ${routeCode}`);
+      }
+  
+      // Build new buckets array with this bucket's assignedWorkers updated.
+      const newBuckets = existing.buckets.map(b =>
+        b.letter === letter
+          ? { ...b, assignedWorkers: [...workerIds] }
+          : b
+      );
+  
+      // Verify the target bucket actually exists.
+      if (!newBuckets.some(b => b.letter === letter)) {
+        throw new Error(`Cannot update split assignment: bucket '${letter}' not found on route ${routeCode}`);
+      }
+  
+      // 1) Save the row.
+      const { error: splitErr } = await supabase
+        .from('route_splits')
+        .update({ buckets: newBuckets, updated_at: new Date().toISOString() })
+        .eq('command_center_id', ccId)
+        .eq('session_date', date)
+        .eq('route_code', routeCode);
+  
+      if (splitErr) {
+        console.error('[RouteSplit] updateRouteSplitAssignment (splits) failed:', splitErr);
+        throw splitErr;
+      }
+  
+      // 2) Compute UNION of all buckets' assignedWorkers, dedup, push to routes.
+      const unionSet = new Set<string>();
+      for (const b of newBuckets) for (const w of b.assignedWorkers) unionSet.add(w);
+      const unionWorkers = Array.from(unionSet);
+  
+      const { error: routeErr } = await supabase
+        .from('routes')
+        .update({ assigned_worker_ids: unionWorkers })
+        .eq('route_code', routeCode)
+        .eq('session_date', date)
+        .eq('command_center_id', ccId);
+  
+      if (routeErr) {
+        console.error('[RouteSplit] updateRouteSplitAssignment (routes union) failed:', routeErr);
+        throw routeErr;
+      }
+  
+      // 3) Per-booking reassignment for this bucket's bookings (aeration pattern).
+      // The bucket.bookingIds is our cached membership list.
+      const target = newBuckets.find(b => b.letter === letter)!;
+      if (target.bookingIds.length > 0) {
+        const newContractorId = workerIds.length > 0 ? workerIds[0] : null;
+        const { error: bkErr } = await supabase
+          .from('bookings')
+          .update({ contractor_id: newContractorId })
+          .in('booking_id', target.bookingIds)
+          .eq('command_center_id', ccId);
+  
+        if (bkErr) {
+          console.error('[RouteSplit] updateRouteSplitAssignment (bookings) failed:', bkErr);
+          throw bkErr;
+        }
+      }
+    }
+  
+    // --- 3. SESSION MANAGEMENT ---
+  
+    public async uploadDailySession(
+      data: DailySessionData, 
+      emailEnabled: boolean = true,
+      importMeta?: ImportMeta
+    ): Promise<void> {
+      const ccId = this.getCCId();
+      const seasonType = data.seasonType || 'aeration';
+      const isTeamSeason = seasonHasTeams(seasonType);
+      
+      const defaultProductCost = SEASON_CONFIGS[seasonType].defaultProductCostPercent;
+      
+      const meta = importMeta || (data as any)._importMeta || { 
+        source: 'file', 
+        sheetsExported: false,
+        seasonType,
+        productCostPercent: defaultProductCost
+      };
+      
+      if (meta.productCostPercent === undefined) {
+        meta.productCostPercent = defaultProductCost;
+      }
+  
+      const { error: sessError } = await supabase
+        .from('daily_sessions')
+        .insert({ 
+          date: data.date, 
+          is_active: true,
+          import_meta: meta,
+          command_center_id: ccId,
+          season_type: seasonType,
+        });
+      if (sessError) throw sessError;
+  
+      const allUsers = [
+        ...data.managers.map((m) => ({
+          user_id: m.userId,
+          name: m.name,
+          username: m.username,
+          password: m.password,
+          role: 'RouteManager',
+          metadata: {
+            phone: m.phone,
+            // Persist preview-staged floater config on Initialize Session.
+            floatingFor: m.floatingFor || [],
+          },
+          command_center_id: ccId,
+        })),
+        ...data.workers.map((w) => ({
+          user_id: w.contractorId,
+          name: `${w.firstName} ${w.lastName}`,
+          role: 'Worker',
+          password: w.firstName,
+          metadata: {
+            phone: w.cellPhone,
+            alumniRate: w.alumniRate,
+            silverRate: w.silverRate,
+            assignedManagerId: w.assignedManagerId,
+            upsellsEnabled: true,
+            teamId: w.teamId,
+          },
+          command_center_id: ccId,
+        })),
+      ];
+  
+      const { error: userError } = await supabase
+        .from('users')
+        .upsert(allUsers, { onConflict: 'user_id' });
+      if (userError) throw userError;
+  
+      const routeRows = data.routes.map((r) => ({
         route_code: r.routeCode,
         manager_id: r.managerId,
         assigned_worker_ids: r.assignedWorkerIds || [],
         streets: r.streets,
-        session_date: date,
+        session_date: data.date,
         command_center_id: ccId,
       }));
-      const { error } = await supabase.from('routes').insert(routeRows);
-      if (error) throw error;
-    }
-
-    if (newBookings.length > 0) {
-      const bookingRows = newBookings.map(b => ({
+      const { error: routeError } = await supabase
+        .from('routes')
+        .insert(routeRows);
+      if (routeError) throw routeError;
+  
+      const bookingRows = data.pendingBookings.map((b) => ({
         booking_id: b['Booking ID'],
         route_number: b['Route Number'],
         status: 'pending',
-        price: String(b.Price || ''),
+        price: String(b.Price || ''), 
         customer_details: {
           'First Name': b['First Name'],
           'Last Name': b['Last Name'],
@@ -2375,129 +1490,1117 @@ class SessionService {
         },
         log_notes: b['Log Sheet Notes'],
         is_prepaid: b.Prepaid === 'x',
-        session_date: date,
+        session_date: data.date,
         data: b,
         command_center_id: ccId,
         services: b.services,
       }));
-      const { error } = await supabase.from('bookings').insert(bookingRows);
+  
+      const { error: bookingError } = await supabase
+        .from('bookings')
+        .insert(bookingRows);
+      if (bookingError) throw bookingError;
+  
+      if (isTeamSeason && data.teamCarts) {
+        const logsheetRows = data.teamCarts.map((cart) => {
+          const primaryWorker = cart.workers[0];
+          const equalSplit = createEqualSplit(cart.workerIds);
+          
+          return {
+            id: `sess_${cart.teamId}_${Date.now()}`,
+            worker_id: primaryWorker.contractorId,
+            team_worker_ids: cart.workerIds,
+            date: data.date,
+            status: 'OPEN',
+            stats: this.getEmptyStats(),
+            email_enabled: emailEnabled,
+            command_center_id: ccId,
+            equiv_split: equalSplit,
+            upsell_split: equalSplit,
+          };
+        });
+        
+        const { error: lsError } = await supabase
+          .from('logsheet_sessions')
+          .insert(logsheetRows);
+        if (lsError) throw lsError;
+      } else {
+        const logsheetRows = data.workers.map((w) => ({
+          id: `sess_${w.contractorId}_${Date.now()}`,
+          worker_id: w.contractorId,
+          date: data.date,
+          status: 'OPEN',
+          stats: this.getEmptyStats(),
+          email_enabled: emailEnabled,
+          command_center_id: ccId,
+        }));
+        
+        const { error: lsError } = await supabase
+          .from('logsheet_sessions')
+          .insert(logsheetRows);
+        if (lsError) throw lsError;
+      }
+  
+      if (hasItems(data.historicalProperties)) {
+        const rows = data.historicalProperties!.map((h) => ({
+          command_center_id: ccId,
+          session_date: data.date,
+          route_code: h.routeCode,
+          address: h.address,
+          customer_name: h.customerName || null,
+          phone: h.phone || null,
+          email: h.email || null,
+          client_type: h.clientType || null,
+          property_type: h.propertyType || null,
+          notes: h.notes || null,
+          price: h.price || null,
+          payment_type: h.paymentType || null,
+          contractor_name: h.contractorName || null,
+        }));
+  
+        const CHUNK = 500;
+        for (let i = 0; i < rows.length; i += CHUNK) {
+          const slice = rows.slice(i, i + CHUNK);
+          const { error } = await supabase.from('route_historical_properties').insert(slice);
+          if (error) {
+            console.error('[HistoricalProps] Failed to insert chunk:', error);
+            break;
+          }
+        }
+        console.log(`[HistoricalProps] Inserted ${rows.length} historical properties`);
+      }
+  
+      const cc = commandCenterService.getCurrentCommandCenter();
+      if (cc?.digitalMappingEnabled && cc.callbookSheetId) {
+        const sheetId = cc.callbookSheetId;
+        const routeCodes = data.routes.map(r => r.routeCode);
+        Promise.all([
+          import('./googleSheetsService'),
+          import('./pclCacheService'),
+        ]).then(([{ googleSheetsService }, { loadAndCachePCL }]) => {
+          const accessToken = googleSheetsService.getAccessToken();
+          if (!accessToken) return;
+          loadAndCachePCL(sheetId, routeCodes, accessToken, ccId).catch(err =>
+            console.warn('[PCL Cache] Non-blocking load failed:', err)
+          );
+        }).catch(err => console.warn('[PCL Cache] Module import failed:', err));
+      }
+    }
+  
+    public async adminResetDailySession(date: string): Promise<void> {
+      const ccId = this.getCCId();
+      
+      await supabase.from('geocode_cache').delete().eq('command_center_id', ccId);
+      await supabase.from('route_historical_properties').delete().eq('command_center_id', ccId);
+      await supabase.from('pending_sales').delete().eq('command_center_id', ccId);
+      // Wipe route splits — RM-side visual overlays only live for the day.
+      await supabase.from('route_splits').delete().eq('command_center_id', ccId);
+      
+      await supabase.from('transactions').delete().eq('command_center_id', ccId); 
+      await supabase.from('logsheet_sessions').delete().eq('date', date).eq('command_center_id', ccId);
+      await supabase.from('routes').delete().eq('session_date', date).eq('command_center_id', ccId);
+      await supabase.from('bookings').delete().eq('session_date', date).eq('command_center_id', ccId);
+      await supabase.from('daily_sessions').delete().eq('date', date).eq('command_center_id', ccId);
+      await supabase.from('users').delete().in('role', ['Worker', 'RouteManager']).eq('command_center_id', ccId);
+      
+      const isSuperAdmin = commandCenterService.isSuperAdminMode();
+      const currentCC = commandCenterService.getCurrentCommandCenter();
+      
+      localStorage.clear();
+      
+      if (isSuperAdmin && currentCC) {
+        commandCenterService.setSuperAdminMode(true);
+        commandCenterService.setCurrentCommandCenter(currentCC);
+      }
+      
+      window.location.href = '/login';
+    }
+  
+    public async deleteWorker(workerId: string): Promise<void> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      
+      if (date) {
+        const { data: routes } = await supabase
+          .from('routes')
+          .select('route_code, assigned_worker_ids')
+          .eq('session_date', date)
+          .eq('command_center_id', ccId);
+        
+        if (routes) {
+          for (const route of routes) {
+            if (route.assigned_worker_ids && route.assigned_worker_ids.includes(workerId)) {
+              const updatedIds = route.assigned_worker_ids.filter((id: string) => id !== workerId);
+              await supabase
+                .from('routes')
+                .update({ assigned_worker_ids: updatedIds })
+                .eq('route_code', route.route_code)
+                .eq('session_date', date)
+                .eq('command_center_id', ccId);
+            }
+          }
+        }
+      }
+  
+      await supabase.from('bookings').update({ contractor_id: null }).eq('contractor_id', workerId).eq('command_center_id', ccId);
+      await supabase.from('logsheet_sessions').delete().eq('worker_id', workerId).eq('command_center_id', ccId);
+      await supabase.from('transactions').delete().eq('worker_id', workerId).eq('command_center_id', ccId);
+  
+      const { error } = await supabase.from('users').delete().eq('user_id', workerId).eq('command_center_id', ccId);
+      
+      if (error) {
+          console.error("Failed to delete user:", error);
+          throw error;
+      }
+    }
+  
+    public async transferWorker(workerId: string, newManagerId: string): Promise<void> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+  
+      const { data: user, error: fetchError } = await supabase
+          .from('users')
+          .select('metadata')
+          .eq('user_id', workerId)
+          .eq('command_center_id', ccId)
+          .single();
+      
+      if (fetchError || !user) throw new Error("Worker not found");
+  
+      const newMetadata = { ...user.metadata, assignedManagerId: newManagerId };
+      
+      const { error: updateError } = await supabase
+          .from('users')
+          .update({ metadata: newMetadata })
+          .eq('user_id', workerId)
+          .eq('command_center_id', ccId);
+  
+      if (updateError) throw updateError;
+  
+      if (date) {
+        const { data: routes } = await supabase
+          .from('routes')
+          .select('route_code, assigned_worker_ids')
+          .eq('session_date', date)
+          .eq('command_center_id', ccId);
+        
+        if (routes) {
+          for (const route of routes) {
+            if (route.assigned_worker_ids && route.assigned_worker_ids.includes(workerId)) {
+              await supabase
+                .from('routes')
+                .update({ manager_id: newManagerId })
+                .eq('route_code', route.route_code)
+                .eq('session_date', date)
+                .eq('command_center_id', ccId);
+            }
+          }
+        }
+      }
+    }
+  
+    public async transferRouteToManager(routeCode: string, newManagerId: string): Promise<void> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return;
+      
+      const { error } = await supabase
+        .from('routes')
+        .update({ manager_id: newManagerId })
+        .eq('route_code', routeCode)
+        .eq('session_date', date)
+        .eq('command_center_id', ccId);
+      
+      if (error) {
+        console.error("Error transferring route to manager:", error);
+        throw error;
+      }
+    }
+  
+    public async transferBookingToManager(
+      bookingId: string,
+      routeNumber: string,
+      newManagerId: string
+    ): Promise<void> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return;
+  
+      const { data: existingRoute } = await supabase
+        .from('routes')
+        .select('*')
+        .eq('route_code', routeNumber)
+        .eq('manager_id', newManagerId)
+        .eq('session_date', date)
+        .eq('command_center_id', ccId)
+        .maybeSingle();
+  
+      if (!existingRoute) {
+        const { data: sourceRoute } = await supabase
+          .from('routes')
+          .select('streets')
+          .eq('route_code', routeNumber)
+          .eq('session_date', date)
+          .eq('command_center_id', ccId)
+          .maybeSingle();
+  
+        const streets = sourceRoute?.streets || [];
+  
+        const { error: createError } = await supabase
+          .from('routes')
+          .insert({
+            route_code: routeNumber,
+            manager_id: newManagerId,
+            assigned_worker_ids: [],
+            streets: streets,
+            session_date: date,
+            command_center_id: ccId,
+          });
+  
+        if (createError) {
+          console.error("Error creating route for new manager:", createError);
+          throw createError;
+        }
+      }
+    }
+  
+    // --- 3b. REASSIGN WORKER ---
+  
+    public async reassignWorker(
+      workerId: string,
+      destination:
+        | { type: 'existing_cart'; targetSessionId: string }
+        | { type: 'new_solo' }
+        | { type: 'different_manager'; targetManagerId: string }
+    ): Promise<void> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) throw new Error('No active session');
+  
+      const currentSession = await this.getWorkerLogsheetSession(workerId);
+      if (!currentSession) throw new Error('Worker has no active session');
+  
+      const currentTeamIds: string[] = hasItems(currentSession.teamWorkerIds)
+        ? [...currentSession.teamWorkerIds]
+        : [currentSession.workerId];
+  
+      const updatedCurrentTeam = currentTeamIds.filter(id => id !== workerId);
+  
+      if (updatedCurrentTeam.length === 0) {
+        await supabase
+          .from('logsheet_sessions')
+          .delete()
+          .eq('id', currentSession.id)
+          .eq('command_center_id', ccId);
+      } else {
+        const newEqualSplit = createEqualSplit(updatedCurrentTeam);
+        await supabase
+          .from('logsheet_sessions')
+          .update({
+            team_worker_ids: updatedCurrentTeam,
+            worker_id: updatedCurrentTeam[0],
+            equiv_split: newEqualSplit,
+            upsell_split: newEqualSplit,
+          })
+          .eq('id', currentSession.id)
+          .eq('command_center_id', ccId);
+      }
+  
+      if (destination.type === 'existing_cart') {
+        const { data: targetSessionData, error } = await supabase
+          .from('logsheet_sessions')
+          .select('*')
+          .eq('id', destination.targetSessionId)
+          .eq('command_center_id', ccId)
+          .single();
+  
+        if (error || !targetSessionData) throw new Error('Target session not found');
+  
+        const existingTargetIds: string[] = hasItems(targetSessionData.team_worker_ids)
+          ? targetSessionData.team_worker_ids
+          : [targetSessionData.worker_id];
+  
+        if (!existingTargetIds.includes(workerId)) {
+          const newTargetTeam = [...existingTargetIds, workerId];
+          const newTargetSplit = createEqualSplit(newTargetTeam);
+  
+          await supabase
+            .from('logsheet_sessions')
+            .update({
+              team_worker_ids: newTargetTeam,
+              equiv_split: newTargetSplit,
+              upsell_split: newTargetSplit,
+            })
+            .eq('id', destination.targetSessionId)
+            .eq('command_center_id', ccId);
+        }
+  
+      } else if (destination.type === 'new_solo') {
+        const { error } = await supabase.from('logsheet_sessions').insert({
+          id: `sess_${workerId}_${Date.now()}`,
+          worker_id: workerId,
+          team_worker_ids: [workerId],
+          date,
+          status: 'OPEN',
+          stats: this.getEmptyStats(),
+          email_enabled: true,
+          command_center_id: ccId,
+          equiv_split: { [workerId]: 100 },
+          upsell_split: { [workerId]: 100 },
+        });
+        if (error) throw error;
+  
+      } else if (destination.type === 'different_manager') {
+        const { data: user, error: fetchError } = await supabase
+          .from('users')
+          .select('metadata')
+          .eq('user_id', workerId)
+          .eq('command_center_id', ccId)
+          .single();
+  
+        if (fetchError || !user) throw new Error('Worker not found');
+  
+        const { error: updateError } = await supabase
+          .from('users')
+          .update({ metadata: { ...user.metadata, assignedManagerId: destination.targetManagerId } })
+          .eq('user_id', workerId)
+          .eq('command_center_id', ccId);
+        if (updateError) throw updateError;
+  
+        const { error: sessError } = await supabase.from('logsheet_sessions').insert({
+          id: `sess_${workerId}_${Date.now()}`,
+          worker_id: workerId,
+          team_worker_ids: [workerId],
+          date,
+          status: 'OPEN',
+          stats: this.getEmptyStats(),
+          email_enabled: true,
+          command_center_id: ccId,
+          equiv_split: { [workerId]: 100 },
+          upsell_split: { [workerId]: 100 },
+        });
+        if (sessError) throw sessError;
+      }
+    }
+  
+    // --- 4. AUTHENTICATION ---
+  
+    public async authenticateRM(username: string, password: string): Promise<ManagementUser | null> {
+      const { data } = await supabase
+        .from('users')
+        .select('*')
+        .ilike('username', username)
+        .ilike('password', password)
+        .eq('role', 'RouteManager')
+        .maybeSingle();
+      
+      if (!data) return null;
+      
+      if (data.command_center_id) {
+        const cc = await commandCenterService.getCommandCenterById(data.command_center_id);
+        if (cc) {
+          commandCenterService.setCurrentCommandCenter(cc);
+        }
+      }
+      
+      return { 
+        userId: data.user_id, 
+        name: data.name, 
+        username: data.username, 
+        phone: data.metadata?.phone || '', 
+        role: 'RouteManager',
+        commandCenterId: data.command_center_id,
+      };
+    }
+  
+    public async authenticateWorker(contractorId: string, password: string): Promise<Worker | null> {
+      const { data } = await supabase
+        .from('users')
+        .select('*')
+        .ilike('user_id', contractorId)
+        .ilike('password', password)
+        .eq('role', 'Worker')
+        .maybeSingle();
+      
+      if (!data) return null;
+      
+      if (data.command_center_id) {
+        const cc = await commandCenterService.getCommandCenterById(data.command_center_id);
+        if (cc) {
+          commandCenterService.setCurrentCommandCenter(cc);
+        }
+      }
+      
+      const isLockedOut = await this.isWorkerLockedOut(contractorId);
+      if (isLockedOut) {
+        throw new Error('SESSION_FINALIZED');
+      }
+      
+      const names = data.name.split(' ');
+      return {
+        contractorId: data.user_id,
+        firstName: names[0],
+        lastName: names.slice(1).join(' '),
+        cellPhone: data.metadata?.phone,
+        status: 'Return',
+        alumniRate: data.metadata?.alumniRate,
+        silverRate: data.metadata?.silverRate,
+        assignedManagerId: data.metadata?.assignedManagerId,
+        upsellsEnabled: data.metadata?.upsellsEnabled !== false,
+        commandCenterId: data.command_center_id,
+        teamId: data.metadata?.teamId,
+      };
+    }
+  
+    // --- 5. LOGSHEETS & TRANSACTIONS ---
+  
+    public async getWorkerAssignments(workerId: string): Promise<MasterBooking[]> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return [];
+  
+      const seasonType = await this.getSessionSeasonType();
+      const isTeamSeason = seasonHasTeams(seasonType);
+  
+      let sessionId: string | null = null;
+      if (isTeamSeason) {
+        const session = await this.getWorkerLogsheetSession(workerId);
+        sessionId = session?.id || null;
+      }
+  
+      const { data: allRoutes } = await supabase
+        .from('routes')
+        .select('route_code, assigned_worker_ids')
+        .eq('session_date', date)
+        .eq('command_center_id', ccId);
+      
+      const myRouteCodes = (allRoutes || [])
+        .filter(r => r.assigned_worker_ids && r.assigned_worker_ids.includes(workerId))
+        .map(r => r.route_code);
+  
+      const { data: allBookings } = await supabase
+        .from('bookings')
+        .select('*')
+        .eq('session_date', date)
+        .eq('command_center_id', ccId)
+        .neq('status', 'completed');
+  
+      let myPending: any[];
+      
+      if (isTeamSeason && sessionId) {
+        myPending = (allBookings || []).filter((b) => {
+          if (b.session_id === sessionId) return true;
+          const isMyRoute = myRouteCodes.includes(b.route_number);
+          const isUnassigned = !b.session_id && !b.contractor_id;
+          return isMyRoute && isUnassigned;
+        });
+      } else {
+        myPending = (allBookings || []).filter((b) => {
+          const isMyRoute = myRouteCodes.includes(b.route_number);
+          const isAssignedToMe = b.contractor_id === workerId;
+          const isAssignedToOther = b.contractor_id && b.contractor_id !== workerId;
+          return (isMyRoute && !isAssignedToOther) || isAssignedToMe;
+        });
+      }
+  
+      let myTransactionsData: any[] | null = null;
+  
+      if (isTeamSeason && sessionId) {
+        const { data: sessionTx } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('session_id', sessionId)
+          .eq('command_center_id', ccId);
+  
+        if (sessionTx && sessionTx.length > 0) {
+          myTransactionsData = sessionTx;
+        } else {
+          const session = await this.getWorkerLogsheetSession(workerId);
+          const teamWorkerIds = hasItems(session?.teamWorkerIds) ? session!.teamWorkerIds! : [workerId];
+          const { data: workerTx } = await supabase
+            .from('transactions')
+            .select('*')
+            .in('worker_id', teamWorkerIds)
+            .eq('command_center_id', ccId);
+          myTransactionsData = workerTx;
+        }
+      } else {
+        const { data: workerTx } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('worker_id', workerId)
+          .eq('command_center_id', ccId);
+        myTransactionsData = workerTx;
+      }
+  
+      const myTransactions = myTransactionsData || [];
+  
+      const pendingMapped = myPending.map((b) => ({
+        ...b.data,
+        ...b.customer_details,
+        'Booking ID': b.booking_id,
+        'Route Number': b.route_number,
+        'Contractor Number': b.contractor_id,
+        Status: b.status,
+        Price: b.price?.toString(),
+        'Log Sheet Notes': b.log_notes,
+        Prepaid: b.is_prepaid ? 'x' : undefined,
+        commandCenterId: b.command_center_id,
+        services: b.services,
+        sessionId: b.session_id,
+      }));
+  
+      const completedMapped = (myTransactions || []).map(tx => {
+          const mapped = this.mapDbTransaction(tx);
+          return {
+              'Booking ID': mapped.jobId,
+              'First Name': mapped.customerName.split(' ')[0],
+              'Last Name': mapped.customerName.split(' ').slice(1).join(' '),
+              'Full Address': mapped.address,
+              'Completed': 'x',
+              'Status': 'completed',
+              'Price': mapped.displayPrice,
+              'Route Number': mapped.routeCode,
+              'Log Sheet Notes': mapped.itemDescription,
+              'Home Phone': mapped.customerPhone,
+              'Email Address': mapped.customerEmail,
+              'Payment Method': mapped.paymentMethod,
+              'paymentBreakdown': mapped.paymentBreakdown,
+              'FO/BO/FP': mapped.serviceType,
+              'Contract Title': (mapped.items && mapped.items.length > 0) ? mapped.items[0].name : (mapped.serviceName || mapped.displayPrice),
+              'invoiceNumber': mapped.invoiceNumber,
+              'chequeNumber': mapped.chequeNumber,
+              'etransferEmail': mapped.etransferEmail,
+              isContract: ['Upgrade', 'Add-On'].includes(mapped.type),
+              isUpgrade: mapped.type === 'Upgrade',
+              isAddOn: mapped.type === 'Add-On',
+              isNewSale: mapped.type === 'Sale',
+              Prepaid: mapped.isPrepaid ? 'x' : undefined,
+              commandCenterId: mapped.commandCenterId,
+              services: mapped.services,
+          };
+      });
+  
+      return [...pendingMapped, ...completedMapped];
+    }
+  
+    public async getSessionAssignments(sessionId: string): Promise<MasterBooking[]> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return [];
+  
+      const { data: pendingBookings } = await supabase
+        .from('bookings')
+        .select('*')
+        .eq('session_date', date)
+        .eq('command_center_id', ccId)
+        .eq('session_id', sessionId)
+        .neq('status', 'completed');
+  
+      const { data: sessionData } = await supabase
+        .from('logsheet_sessions')
+        .select('team_worker_ids, worker_id')
+        .eq('id', sessionId)
+        .eq('command_center_id', ccId)
+        .maybeSingle();
+  
+      const teamWorkerIds = hasItems(sessionData?.team_worker_ids) 
+        ? sessionData.team_worker_ids 
+        : [sessionData?.worker_id].filter(Boolean);
+  
+      let transactions: any[] | null = null;
+      const { data: sessionTx } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('session_id', sessionId)
+        .eq('command_center_id', ccId);
+  
+      if (sessionTx && sessionTx.length > 0) {
+        transactions = sessionTx;
+      } else {
+        const { data: workerTx } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('command_center_id', ccId)
+          .in('worker_id', teamWorkerIds);
+        transactions = workerTx;
+      }
+  
+      const pendingMapped = (pendingBookings || []).map((b) => ({
+        ...b.data,
+        ...b.customer_details,
+        'Booking ID': b.booking_id,
+        'Route Number': b.route_number,
+        'Contractor Number': b.contractor_id,
+        Status: b.status,
+        Price: b.price?.toString(),
+        'Log Sheet Notes': b.log_notes,
+        Prepaid: b.is_prepaid ? 'x' : undefined,
+        commandCenterId: b.command_center_id,
+        services: b.services,
+        sessionId: b.session_id,
+      }));
+  
+      const completedMapped = (transactions || []).map(tx => {
+          const mapped = this.mapDbTransaction(tx);
+          return {
+              'Booking ID': mapped.jobId,
+              'First Name': mapped.customerName.split(' ')[0],
+              'Last Name': mapped.customerName.split(' ').slice(1).join(' '),
+              'Full Address': mapped.address,
+              'Completed': 'x',
+              'Status': 'completed',
+              'Price': mapped.displayPrice,
+              'Route Number': mapped.routeCode,
+              'Log Sheet Notes': mapped.itemDescription,
+              'Home Phone': mapped.customerPhone,
+              'Email Address': mapped.customerEmail,
+              'Payment Method': mapped.paymentMethod,
+              'paymentBreakdown': mapped.paymentBreakdown,
+              'FO/BO/FP': mapped.serviceType,
+              'Contract Title': (mapped.items && mapped.items.length > 0) ? mapped.items[0].name : (mapped.serviceName || mapped.displayPrice),
+              'invoiceNumber': mapped.invoiceNumber,
+              'chequeNumber': mapped.chequeNumber,
+              'etransferEmail': mapped.etransferEmail,
+              isContract: ['Upgrade', 'Add-On'].includes(mapped.type),
+              isUpgrade: mapped.type === 'Upgrade',
+              isAddOn: mapped.type === 'Add-On',
+              isNewSale: mapped.type === 'Sale',
+              Prepaid: mapped.isPrepaid ? 'x' : undefined,
+              commandCenterId: mapped.commandCenterId,
+              services: mapped.services,
+          };
+      });
+  
+      return [...pendingMapped, ...completedMapped];
+    }
+  
+    public async getStreetsForRoute(routeCode: string): Promise<string[]> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      
+      const res = await supabase
+        .from('routes')
+        .select('streets')
+        .eq('route_code', routeCode)
+        .eq('command_center_id', ccId)
+        .eq('session_date', date)
+        .maybeSingle();
+        
+      return res.data?.streets || [];
+    }
+  
+    public async getLogsheetSessions(): Promise<LogsheetSession[]> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return [];
+      
+      const seasonType = await this.getSessionSeasonType();
+      const productCostPercent = await this.getProductCostPercent();
+      const noTaxOnCash = await this.getSessionNoTaxOnCash();
+      const taxRate = this.getCurrentTaxRate();
+      const isTeamSeason = seasonHasTeams(seasonType);
+      
+      const [sessionsRes, transactionsRes] = await Promise.all([
+        supabase.from('logsheet_sessions').select('*').eq('date', date).eq('command_center_id', ccId),
+        supabase.from('transactions').select('*').eq('command_center_id', ccId)
+      ]);
+      
+      const sessions = sessionsRes.data || [];
+      const allTransactions = (transactionsRes.data || []).map(tx => this.mapDbTransaction(tx));
+      
+      const transactionsBySessionId: Record<string, SessionTransaction[]> = {};
+      const transactionsByWorker: Record<string, SessionTransaction[]> = {};
+  
+      allTransactions.forEach(tx => {
+        const sid = (tx as any).sessionId;
+        if (sid) {
+          if (!transactionsBySessionId[sid]) transactionsBySessionId[sid] = [];
+          transactionsBySessionId[sid].push(tx);
+        }
+        if (!transactionsByWorker[tx.workerId]) transactionsByWorker[tx.workerId] = [];
+        transactionsByWorker[tx.workerId].push(tx);
+      });
+      
+      return sessions.map((d) => {
+        const sessionTx = isTeamSeason
+          ? (transactionsBySessionId[d.id] || [])
+          : [];
+  
+        let teamTransactions: SessionTransaction[];
+        if (sessionTx.length > 0) {
+          teamTransactions = sessionTx;
+        } else {
+          const teamWorkerIds = hasItems(d.team_worker_ids) ? d.team_worker_ids : [d.worker_id];
+          teamTransactions = [];
+          teamWorkerIds.forEach((wid: string) => {
+            if (transactionsByWorker[wid]) {
+              teamTransactions.push(...transactionsByWorker[wid]);
+            }
+          });
+        }
+  
+        const liveStats = this.recalculateStats(teamTransactions, taxRate, seasonType, productCostPercent, noTaxOnCash);
+  
+        return {
+          id: d.id,
+          workerId: d.worker_id,
+          date: d.date,
+          status: d.status,
+          stats: liveStats,
+          validation: d.validation,
+          bonuses: d.bonuses,
+          dailyRouteStore: [],
+          financialStore: teamTransactions,
+          commandCenterId: d.command_center_id,
+          teamWorkerIds: d.team_worker_ids,
+          equivSplit: d.equiv_split,
+          upsellSplit: d.upsell_split,
+        };
+      });
+    }
+  
+    public async getActiveLogsheetSession(workerId: string): Promise<LogsheetSession | null> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return null;
+  
+      const { data: teamSession } = await supabase
+        .from('logsheet_sessions')
+        .select('*')
+        .eq('date', date)
+        .eq('command_center_id', ccId)
+        .contains('team_worker_ids', [workerId])
+        .maybeSingle();
+  
+      const sessionData = teamSession || (await supabase
+        .from('logsheet_sessions')
+        .select('*')
+        .eq('worker_id', workerId)
+        .eq('date', date)
+        .eq('command_center_id', ccId)
+        .single()).data;
+  
+      if (!sessionData) return null;
+  
+      const seasonType = await this.getSessionSeasonType();
+      const noTaxOnCash = await this.getSessionNoTaxOnCash();
+  
+      let financialData: any[] | null = null;
+  
+      if (seasonHasTeams(seasonType) && sessionData.id) {
+        const { data: sessionTx } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('session_id', sessionData.id)
+          .eq('command_center_id', ccId);
+  
+        if (sessionTx && sessionTx.length > 0) {
+          financialData = sessionTx;
+        }
+      }
+  
+      if (!financialData || financialData.length === 0) {
+        const workerIds = hasItems(sessionData.team_worker_ids) 
+          ? sessionData.team_worker_ids 
+          : [sessionData.worker_id];
+        
+        const { data: workerTx } = await supabase
+          .from('transactions')
+          .select('*')
+          .in('worker_id', workerIds)
+          .eq('command_center_id', ccId);
+        
+        financialData = workerTx;
+      }
+      
+      const cleanFinancials = (financialData || []).map(tx => this.mapDbTransaction(tx));
+      
+      const taxRate = this.getCurrentTaxRate();
+      const productCostPercent = await this.getProductCostPercent();
+      const liveStats = this.recalculateStats(cleanFinancials, taxRate, seasonType, productCostPercent, noTaxOnCash);
+  
+      return {
+        id: sessionData.id,
+        workerId: sessionData.worker_id,
+        date: sessionData.date,
+        status: sessionData.status,
+        stats: liveStats,
+        validation: sessionData.validation,
+        bonuses: sessionData.bonuses,
+        dailyRouteStore: [],
+        financialStore: cleanFinancials,
+        commandCenterId: sessionData.command_center_id,
+        teamWorkerIds: sessionData.team_worker_ids,
+        equivSplit: sessionData.equiv_split,
+        upsellSplit: sessionData.upsell_split,
+      };
+    }
+  
+    public async startLogsheetSession(workerId: string): Promise<LogsheetSession> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) throw new Error('No active session day found');
+      
+      const existing = await this.getActiveLogsheetSession(workerId);
+      if (existing) return existing;
+      
+      const newSession = {
+        id: `sess_${workerId}_${Date.now()}`,
+        worker_id: workerId,
+        date: date,
+        status: 'OPEN',
+        stats: this.getEmptyStats(),
+        email_enabled: true,
+        command_center_id: ccId,
+      };
+      
+      const { error } = await supabase.from('logsheet_sessions').insert(newSession);
+      if (error) throw error;
+      
+      return this.getActiveLogsheetSession(workerId) as Promise<LogsheetSession>;
+    }
+  
+    public async addAdditionalSessionData(
+      newData: DailySessionData
+    ): Promise<{ managersAdded: number; workersAdded: number; routesAdded: number; bookingsAdded: number }> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) throw new Error('No active session found');
+  
+      const seasonType = await this.getSessionSeasonType();
+      const isTeamSeason = seasonHasTeams(seasonType);
+  
+      const [existingUsersRes, existingRoutesRes, existingBookingsRes] = await Promise.all([
+        supabase.from('users').select('user_id').eq('command_center_id', ccId),
+        supabase.from('routes').select('route_code').eq('session_date', date).eq('command_center_id', ccId),
+        supabase.from('bookings').select('route_number, customer_details').eq('session_date', date).eq('command_center_id', ccId),
+      ]);
+  
+      const existingUserIds = new Set((existingUsersRes.data || []).map(u => u.user_id));
+      const existingRouteCodes = new Set((existingRoutesRes.data || []).map(r => r.route_code));
+      const existingBookingKeys = new Set(
+        (existingBookingsRes.data || []).map(b => {
+          const addr = (b.customer_details?.['Full Address'] || '').toLowerCase().trim();
+          return `${b.route_number}::${addr}`;
+        })
+      );
+  
+      const newManagers = newData.managers.filter(m => !existingUserIds.has(m.userId));
+      const newWorkers  = newData.workers.filter(w => !existingUserIds.has(w.contractorId));
+      const newRoutes   = newData.routes.filter(r => !existingRouteCodes.has(r.routeCode));
+      const newBookings = newData.pendingBookings.filter(b => {
+        const addr = (b['Full Address'] || '').toLowerCase().trim();
+        const key  = `${b['Route Number']}::${addr}`;
+        return !existingBookingKeys.has(key);
+      });
+  
+      if (newManagers.length > 0) {
+        const managerRows = newManagers.map(m => ({
+          user_id: m.userId,
+          name: m.name,
+          username: m.username,
+          password: m.password,
+          role: 'RouteManager',
+          metadata: { phone: m.phone },
+          command_center_id: ccId,
+        }));
+        const { error } = await supabase.from('users').upsert(managerRows, { onConflict: 'user_id' });
+        if (error) throw error;
+      }
+  
+      if (newWorkers.length > 0) {
+        const workerRows = newWorkers.map(w => ({
+          user_id: w.contractorId,
+          name: `${w.firstName} ${w.lastName}`,
+          role: 'Worker',
+          password: w.firstName,
+          metadata: {
+            phone: w.cellPhone,
+            alumniRate: w.alumniRate,
+            silverRate: w.silverRate,
+            assignedManagerId: w.assignedManagerId,
+            upsellsEnabled: true,
+            teamId: w.teamId,
+          },
+          command_center_id: ccId,
+        }));
+        const { error } = await supabase.from('users').upsert(workerRows, { onConflict: 'user_id' });
+        if (error) throw error;
+  
+        if (isTeamSeason && newData.teamCarts) {
+          const newWorkerIdSet = new Set(newWorkers.map(w => w.contractorId));
+          const newCarts = newData.teamCarts.filter(cart =>
+            cart.workerIds.some(id => newWorkerIdSet.has(id))
+          );
+          if (newCarts.length > 0) {
+            const logsheetRows = newCarts.map(cart => {
+              const primaryWorker = cart.workers[0];
+              const equalSplit = createEqualSplit(cart.workerIds);
+              return {
+                id: `sess_${cart.teamId}_${Date.now()}`,
+                worker_id: primaryWorker.contractorId,
+                team_worker_ids: cart.workerIds,
+                date,
+                status: 'OPEN',
+                stats: this.getEmptyStats(),
+                email_enabled: true,
+                command_center_id: ccId,
+                equiv_split: equalSplit,
+                upsell_split: equalSplit,
+              };
+            });
+            const { error } = await supabase.from('logsheet_sessions').insert(logsheetRows);
+            if (error) throw error;
+          }
+        } else {
+          const logsheetRows = newWorkers.map(w => ({
+            id: `sess_${w.contractorId}_${Date.now()}`,
+            worker_id: w.contractorId,
+            date,
+            status: 'OPEN',
+            stats: this.getEmptyStats(),
+            email_enabled: true,
+            command_center_id: ccId,
+          }));
+          const { error } = await supabase.from('logsheet_sessions').insert(logsheetRows);
+          if (error) throw error;
+        }
+      }
+  
+      if (newRoutes.length > 0) {
+        const routeRows = newRoutes.map(r => ({
+          route_code: r.routeCode,
+          manager_id: r.managerId,
+          assigned_worker_ids: r.assignedWorkerIds || [],
+          streets: r.streets,
+          session_date: date,
+          command_center_id: ccId,
+        }));
+        const { error } = await supabase.from('routes').insert(routeRows);
+        if (error) throw error;
+      }
+  
+      if (newBookings.length > 0) {
+        const bookingRows = newBookings.map(b => ({
+          booking_id: b['Booking ID'],
+          route_number: b['Route Number'],
+          status: 'pending',
+          price: String(b.Price || ''),
+          customer_details: {
+            'First Name': b['First Name'],
+            'Last Name': b['Last Name'],
+            'Full Address': b['Full Address'],
+            'Home Phone': b['Home Phone'],
+            'Cell Phone': b['Cell Phone'],
+            'Email Address': b['Email Address'],
+            'FO/BO/FP': b['FO/BO/FP'],
+          },
+          log_notes: b['Log Sheet Notes'],
+          is_prepaid: b.Prepaid === 'x',
+          session_date: date,
+          data: b,
+          command_center_id: ccId,
+          services: b.services,
+        }));
+        const { error } = await supabase.from('bookings').insert(bookingRows);
+        if (error) throw error;
+      }
+  
+      return {
+        managersAdded: newManagers.length,
+        workersAdded:  newWorkers.length,
+        routesAdded:   newRoutes.length,
+        bookingsAdded: newBookings.length,
+      };
+    }
+  
+    public async updateLogsheetSession(sessionId: string, updates: Partial<LogsheetSession>): Promise<void> {
+      const ccId = this.getCCId();
+      const safeUpdates: any = {};
+      
+      if (updates.stats) safeUpdates.stats = updates.stats;
+      if (updates.validation) safeUpdates.validation = updates.validation;
+      if (updates.bonuses !== undefined) safeUpdates.bonuses = updates.bonuses;
+      if (updates.status) safeUpdates.status = updates.status;
+      if (updates.equivSplit) safeUpdates.equiv_split = updates.equivSplit;
+      if (updates.upsellSplit) safeUpdates.upsell_split = updates.upsellSplit;
+      
+      await supabase
+        .from('logsheet_sessions')
+        .update(safeUpdates)
+        .eq('id', sessionId)
+        .eq('command_center_id', ccId);
+    }
+  
+    public async updateTeamSplits(
+      sessionId: string, 
+      equivSplit: TeamSplitConfig, 
+      upsellSplit: TeamSplitConfig
+    ): Promise<void> {
+      const ccId = this.getCCId();
+      
+      const { error } = await supabase
+        .from('logsheet_sessions')
+        .update({ 
+          equiv_split: equivSplit, 
+          upsell_split: upsellSplit 
+        })
+        .eq('id', sessionId)
+        .eq('command_center_id', ccId);
+  
       if (error) throw error;
     }
-
-    return {
-      managersAdded: newManagers.length,
-      workersAdded:  newWorkers.length,
-      routesAdded:   newRoutes.length,
-      bookingsAdded: newBookings.length,
-    };
-  }
-
-  public async updateLogsheetSession(sessionId: string, updates: Partial<LogsheetSession>): Promise<void> {
-    const ccId = this.getCCId();
-    const safeUpdates: any = {};
-    
-    if (updates.stats) safeUpdates.stats = updates.stats;
-    if (updates.validation) safeUpdates.validation = updates.validation;
-    if (updates.bonuses !== undefined) safeUpdates.bonuses = updates.bonuses;
-    if (updates.status) safeUpdates.status = updates.status;
-    if (updates.equivSplit) safeUpdates.equiv_split = updates.equivSplit;
-    if (updates.upsellSplit) safeUpdates.upsell_split = updates.upsellSplit;
-    
-    await supabase
-      .from('logsheet_sessions')
-      .update(safeUpdates)
-      .eq('id', sessionId)
-      .eq('command_center_id', ccId);
-  }
-
-  public async updateTeamSplits(
-    sessionId: string, 
-    equivSplit: TeamSplitConfig, 
-    upsellSplit: TeamSplitConfig
-  ): Promise<void> {
-    const ccId = this.getCCId();
-    
-    const { error } = await supabase
-      .from('logsheet_sessions')
-      .update({ 
-        equiv_split: equivSplit, 
-        upsell_split: upsellSplit 
-      })
-      .eq('id', sessionId)
-      .eq('command_center_id', ccId);
-
-    if (error) throw error;
-  }
-
-  public async assignBookingToWorker(bookingId: string, workerId: string | null): Promise<void> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) return;
-
-    const { data: booking } = await supabase
-      .from('bookings')
-      .select('route_number, contractor_id')
-      .eq('booking_id', bookingId)
-      .eq('command_center_id', ccId)
-      .single();
-
-    if (!booking || !booking.route_number) {
-      await supabase
+  
+    public async assignBookingToWorker(bookingId: string, workerId: string | null): Promise<void> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return;
+  
+      const { data: booking } = await supabase
+        .from('bookings')
+        .select('route_number, contractor_id')
+        .eq('booking_id', bookingId)
+        .eq('command_center_id', ccId)
+        .single();
+  
+      if (!booking || !booking.route_number) {
+        await supabase
+          .from('bookings')
+          .update({ contractor_id: workerId })
+          .eq('booking_id', bookingId)
+          .eq('command_center_id', ccId);
+        return;
+      }
+  
+      const routeNumber = booking.route_number;
+      const oldWorkerId = booking.contractor_id;
+  
+      const { error } = await supabase
         .from('bookings')
         .update({ contractor_id: workerId })
         .eq('booking_id', bookingId)
         .eq('command_center_id', ccId);
-      return;
-    }
-
-    const routeNumber = booking.route_number;
-    const oldWorkerId = booking.contractor_id;
-
-    const { error } = await supabase
-      .from('bookings')
-      .update({ contractor_id: workerId })
-      .eq('booking_id', bookingId)
-      .eq('command_center_id', ccId);
-    
-    if (error) {
-      console.error("Error assigning booking:", error);
-      return;
-    }
-
-    const { data: route } = await supabase
-      .from('routes')
-      .select('assigned_worker_ids')
-      .eq('route_code', routeNumber)
-      .eq('session_date', date)
-      .eq('command_center_id', ccId)
-      .maybeSingle();
-
-    if (!route) return;
-
-    let assignedWorkerIds: string[] = route.assigned_worker_ids || [];
-
-    if (workerId && !assignedWorkerIds.includes(workerId)) {
-      assignedWorkerIds = [...assignedWorkerIds, workerId];
-      await supabase
+      
+      if (error) {
+        console.error("Error assigning booking:", error);
+        return;
+      }
+  
+      const { data: route } = await supabase
         .from('routes')
-        .update({ assigned_worker_ids: assignedWorkerIds })
+        .select('assigned_worker_ids')
         .eq('route_code', routeNumber)
         .eq('session_date', date)
-        .eq('command_center_id', ccId);
-    }
-
-    if (oldWorkerId && oldWorkerId !== workerId) {
-      const { data: otherBookings } = await supabase
-        .from('bookings')
-        .select('booking_id')
-        .eq('route_number', routeNumber)
-        .eq('contractor_id', oldWorkerId)
-        .eq('session_date', date)
         .eq('command_center_id', ccId)
-        .neq('booking_id', bookingId);
-
-      if (!otherBookings || otherBookings.length === 0) {
-        assignedWorkerIds = assignedWorkerIds.filter(id => id !== oldWorkerId);
+        .maybeSingle();
+  
+      if (!route) return;
+  
+      let assignedWorkerIds: string[] = route.assigned_worker_ids || [];
+  
+      if (workerId && !assignedWorkerIds.includes(workerId)) {
+        assignedWorkerIds = [...assignedWorkerIds, workerId];
         await supabase
           .from('routes')
           .update({ assigned_worker_ids: assignedWorkerIds })
@@ -2505,723 +2608,743 @@ class SessionService {
           .eq('session_date', date)
           .eq('command_center_id', ccId);
       }
-    }
-  }
-
-  public async assignBookingToSession(bookingId: string, sessionId: string | null): Promise<void> {
-    const ccId = this.getCCId();
-
-    const { error } = await supabase
-      .from('bookings')
-      .update({ session_id: sessionId })
-      .eq('booking_id', bookingId)
-      .eq('command_center_id', ccId);
-    
-    if (error) {
-      console.error("Error assigning booking to session:", error);
-      throw error;
-    }
-  }
-
-  public async assignBookingsToSession(bookingIds: string[], sessionId: string): Promise<void> {
-    const ccId = this.getCCId();
-
-    const { error } = await supabase
-      .from('bookings')
-      .update({ session_id: sessionId })
-      .in('booking_id', bookingIds)
-      .eq('command_center_id', ccId);
-    
-    if (error) {
-      console.error("Error batch assigning bookings to session:", error);
-      throw error;
-    }
-  }
-
-  public async assignRouteToWorker(routeCode: string, workerId: string | null): Promise<void> {
-    const newAssignedWorkerIds = workerId ? [workerId] : [];
-    await this.assignRouteToWorkers(routeCode, newAssignedWorkerIds);
-  }
-
-  public async assignRouteToWorkers(routeCode: string, workerIds: string[]): Promise<void> {
-    const ccId = this.getCCId();
-    const date = await this.getDailySessionDate();
-    if (!date) return;
-    
-    const { error } = await supabase
-      .from('routes')
-      .update({ assigned_worker_ids: workerIds })
-      .eq('route_code', routeCode)
-      .eq('session_date', date)
-      .eq('command_center_id', ccId);
-    
-    if (error) console.error("Error assigning route to workers:", error);
-  }
-
-  // --- 6. BOOKING STATUS UPDATES ---
-
-  public async updateBookingStatus(bookingId: string, status: 'next_time' | 'cancelled'): Promise<void> {
-    const ccId = this.getCCId();
-    const { error } = await supabase
-      .from('bookings')
-      .update({ status })
-      .eq('booking_id', bookingId)
-      .eq('command_center_id', ccId);
-    
-    if (error) {
-      console.error("Error updating booking status:", error);
-      throw error;
-    }
-  }
-
-  public async updateBookingNotes(bookingId: string, notes: string): Promise<void> {
-    const ccId = this.getCCId();
-    const { error } = await supabase
-      .from('bookings')
-      .update({ log_notes: notes })
-      .eq('booking_id', bookingId)
-      .eq('command_center_id', ccId);
-    
-    if (error) {
-      console.error("Error updating booking notes:", error);
-      throw error;
-    }
-  }
-
-  public async updateBookingRoute(bookingId: string, newRouteCode: string): Promise<void> {
-    const ccId = this.getCCId();
-    const { error } = await supabase
-      .from('bookings')
-      .update({ route_number: newRouteCode })
-      .eq('booking_id', bookingId)
-      .eq('command_center_id', ccId);
-
-    if (error) {
-      console.error("Error updating booking route:", error);
-      throw error;
-    }
-  }
-
-  public async deleteTransactionByJobId(jobId: string): Promise<void> {
-    const ccId = this.getCCId();
-    await supabase.from('transactions').delete().eq('job_id', jobId).eq('command_center_id', ccId);
-  }
-
-  public async revertTransaction(transactionId: string, jobId?: string): Promise<void> {
-    const ccId = this.getCCId();
-    
-    const { data: txData } = await supabase
-      .from('transactions')
-      .select('worker_id')
-      .eq('id', transactionId)
-      .eq('command_center_id', ccId)
-      .maybeSingle();
-    
-    const workerId = txData?.worker_id;
-
-    const { error: txError } = await supabase
-      .from('transactions')
-      .delete()
-      .eq('id', transactionId)
-      .eq('command_center_id', ccId);
-    if (txError) throw txError;
-    
-    if (jobId && !jobId.startsWith('NEW-')) {
-        const { error: bkError } = await supabase
+  
+      if (oldWorkerId && oldWorkerId !== workerId) {
+        const { data: otherBookings } = await supabase
           .from('bookings')
-          .update({ status: 'pending' })
-          .eq('booking_id', jobId)
-          .eq('command_center_id', ccId);
-        if (bkError) throw bkError;
+          .select('booking_id')
+          .eq('route_number', routeNumber)
+          .eq('contractor_id', oldWorkerId)
+          .eq('session_date', date)
+          .eq('command_center_id', ccId)
+          .neq('booking_id', bookingId);
+  
+        if (!otherBookings || otherBookings.length === 0) {
+          assignedWorkerIds = assignedWorkerIds.filter(id => id !== oldWorkerId);
+          await supabase
+            .from('routes')
+            .update({ assigned_worker_ids: assignedWorkerIds })
+            .eq('route_code', routeNumber)
+            .eq('session_date', date)
+            .eq('command_center_id', ccId);
+        }
+      }
     }
-
-    if (workerId) {
-      await this.recalculateAndSaveWorkerStats(workerId);
+  
+    public async assignBookingToSession(bookingId: string, sessionId: string | null): Promise<void> {
+      const ccId = this.getCCId();
+  
+      const { error } = await supabase
+        .from('bookings')
+        .update({ session_id: sessionId })
+        .eq('booking_id', bookingId)
+        .eq('command_center_id', ccId);
+      
+      if (error) {
+        console.error("Error assigning booking to session:", error);
+        throw error;
+      }
     }
-  }
-
-  public async updateTransaction(transactionId: string, updates: Partial<SessionTransaction>): Promise<void> {
+  
+    public async assignBookingsToSession(bookingIds: string[], sessionId: string): Promise<void> {
+      const ccId = this.getCCId();
+  
+      const { error } = await supabase
+        .from('bookings')
+        .update({ session_id: sessionId })
+        .in('booking_id', bookingIds)
+        .eq('command_center_id', ccId);
+      
+      if (error) {
+        console.error("Error batch assigning bookings to session:", error);
+        throw error;
+      }
+    }
+  
+    public async assignRouteToWorker(routeCode: string, workerId: string | null): Promise<void> {
+      const newAssignedWorkerIds = workerId ? [workerId] : [];
+      await this.assignRouteToWorkers(routeCode, newAssignedWorkerIds);
+    }
+  
+    public async assignRouteToWorkers(routeCode: string, workerIds: string[]): Promise<void> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return;
+      
+      const { error } = await supabase
+        .from('routes')
+        .update({ assigned_worker_ids: workerIds })
+        .eq('route_code', routeCode)
+        .eq('session_date', date)
+        .eq('command_center_id', ccId);
+      
+      if (error) console.error("Error assigning route to workers:", error);
+    }
+  
+    // --- 6. BOOKING STATUS UPDATES ---
+  
+    public async updateBookingStatus(bookingId: string, status: 'next_time' | 'cancelled'): Promise<void> {
+      const ccId = this.getCCId();
+      const { error } = await supabase
+        .from('bookings')
+        .update({ status })
+        .eq('booking_id', bookingId)
+        .eq('command_center_id', ccId);
+      
+      if (error) {
+        console.error("Error updating booking status:", error);
+        throw error;
+      }
+    }
+  
+    public async updateBookingNotes(bookingId: string, notes: string): Promise<void> {
+      const ccId = this.getCCId();
+      const { error } = await supabase
+        .from('bookings')
+        .update({ log_notes: notes })
+        .eq('booking_id', bookingId)
+        .eq('command_center_id', ccId);
+      
+      if (error) {
+        console.error("Error updating booking notes:", error);
+        throw error;
+      }
+    }
+  
+    public async updateBookingRoute(bookingId: string, newRouteCode: string): Promise<void> {
+      const ccId = this.getCCId();
+      const { error } = await supabase
+        .from('bookings')
+        .update({ route_number: newRouteCode })
+        .eq('booking_id', bookingId)
+        .eq('command_center_id', ccId);
+  
+      if (error) {
+        console.error("Error updating booking route:", error);
+        throw error;
+      }
+    }
+  
+    public async deleteTransactionByJobId(jobId: string): Promise<void> {
+      const ccId = this.getCCId();
+      await supabase.from('transactions').delete().eq('job_id', jobId).eq('command_center_id', ccId);
+    }
+  
+    public async revertTransaction(transactionId: string, jobId?: string): Promise<void> {
       const ccId = this.getCCId();
       
-      const { data: existingTx } = await supabase
+      const { data: txData } = await supabase
         .from('transactions')
-        .select('*')
+        .select('worker_id')
         .eq('id', transactionId)
         .eq('command_center_id', ccId)
         .maybeSingle();
-
-      const existingSnapshot = existingTx?.customer_snapshot || {};
-
-      const dbPayload: any = {};
       
-      if (updates.price !== undefined) dbPayload.price = updates.price;
-      if (updates.displayPrice !== undefined) dbPayload.display_price = updates.displayPrice;
-      if (updates.paymentMethod !== undefined) dbPayload.payment_method = updates.paymentMethod;
-      if (updates.paymentBreakdown !== undefined) dbPayload.payment_breakdown = updates.paymentBreakdown;
-      if (updates.type !== undefined) dbPayload.type = updates.type;
-      if (updates.customerPhone !== undefined) dbPayload.customer_phone = updates.customerPhone;
-      if (updates.customerEmail !== undefined) dbPayload.customer_email = updates.customerEmail;
-      if (updates.itemDescription !== undefined) dbPayload.item_description = updates.itemDescription;
-      if (updates.items !== undefined) dbPayload.items = updates.items;
-      if (updates.etransferEmail !== undefined) dbPayload.etransfer_email = updates.etransferEmail;
-      if (updates.chequeNumber !== undefined) dbPayload.cheque_number = updates.chequeNumber;
-      if (updates.invoiceNumber !== undefined) dbPayload.invoice_number = updates.invoiceNumber;
-      if (updates.isWestSplit !== undefined) dbPayload.is_west_split = updates.isWestSplit;
-      if (updates.services !== undefined) dbPayload.services = updates.services;
-      if (updates.refId !== undefined) dbPayload.ref_id = updates.refId;
-      
-      if (updates.customerName !== undefined || 
-          updates.address !== undefined || 
-          updates.routeCode !== undefined ||
-          updates.serviceType !== undefined ||
-          updates.serviceName !== undefined) {
-          
-          const mergedSnapshot = {
-              firstName: existingSnapshot.firstName || '',
-              lastName: existingSnapshot.lastName || '',
-              address: existingSnapshot.address || '',
-              routeCode: existingSnapshot.routeCode || '',
-              serviceType: existingSnapshot.serviceType || 'FP',
-              serviceName: existingSnapshot.serviceName || ''
-          };
-          
-          if (updates.customerName !== undefined) {
-              mergedSnapshot.firstName = updates.customerName.split(' ')[0] || '';
-              mergedSnapshot.lastName = updates.customerName.split(' ').slice(1).join(' ') || '';
-          }
-          if (updates.address !== undefined) {
-              mergedSnapshot.address = updates.address;
-          }
-          if (updates.routeCode !== undefined) {
-              mergedSnapshot.routeCode = updates.routeCode;
-          }
-          if (updates.serviceType !== undefined) {
-              mergedSnapshot.serviceType = updates.serviceType;
-          }
-          if (updates.serviceName !== undefined) {
-              mergedSnapshot.serviceName = updates.serviceName;
-          }
-          
-          dbPayload.customer_snapshot = mergedSnapshot;
-      }
-
-      const { error } = await supabase
+      const workerId = txData?.worker_id;
+  
+      const { error: txError } = await supabase
         .from('transactions')
-        .update(dbPayload)
+        .delete()
         .eq('id', transactionId)
         .eq('command_center_id', ccId);
-      if (error) throw error;
-
-      const workerId = existingTx?.worker_id;
+      if (txError) throw txError;
+      
+      if (jobId && !jobId.startsWith('NEW-')) {
+          const { error: bkError } = await supabase
+            .from('bookings')
+            .update({ status: 'pending' })
+            .eq('booking_id', jobId)
+            .eq('command_center_id', ccId);
+          if (bkError) throw bkError;
+      }
+  
       if (workerId) {
         await this.recalculateAndSaveWorkerStats(workerId);
       }
-  }
-
-  /**
-   * Complete a job — writes a transaction row and (if applicable) cleans up the
-   * source pending sale.
-   *
-   * `asphaltContext`:
-   *   When set, the job has an asphalt component. completeJob branches into
-   *   completeAsphaltJob, which switches on ctx.mode and handles 1 or 2
-   *   transactions plus any pending_sales bookkeeping. See the
-   *   AsphaltCompletionContext discriminated union at the top of this file for
-   *   the four modes (completer-with-phantom, self-both, driveway-deferred,
-   *   asphalt-executor-only).
-   *
-   *   When omitted (the normal case), behaviour is unchanged from pre-asphalt code.
-   */
-  public async completeJob(
-    transaction: SessionTransaction, 
-    jobId: string, 
-    workerId: string,
-    teamWorkerIds?: string[],
-    pendingSaleId?: string,
-    asphaltContext?: AsphaltCompletionContext
-  ): Promise<void> {
-    // Asphalt completion is a different flow — branch immediately.
-    if (asphaltContext) {
-      return this.completeAsphaltJob(transaction, jobId, workerId, teamWorkerIds, asphaltContext);
     }
-
-    const ccId = this.getCCId();
-
-    let currentSessionId: string | undefined;
-    try {
-      const workerSession = await this.getWorkerLogsheetSession(workerId);
-      currentSessionId = workerSession?.id;
-    } catch (e) {
-      console.warn('Could not fetch session_id for transaction stamp:', e);
-    }
-    
-    const payload = {
-      job_id: jobId, 
-      worker_id: workerId,
-      session_id: currentSessionId,
-      timestamp: transaction.timestamp,
-      type: transaction.type,
-      price: transaction.price,
-      payment_method: transaction.paymentMethod,
-      payment_breakdown: transaction.paymentBreakdown,
-      is_west_split: transaction.isWestSplit, 
-      display_price: transaction.displayPrice,
-      item_description: transaction.itemDescription,
-      invoice_number: transaction.invoiceNumber,
-      cheque_number: transaction.chequeNumber,
-      etransfer_email: transaction.etransferEmail,
-      customer_phone: transaction.customerPhone,
-      customer_email: transaction.customerEmail,
-      items: transaction.items, 
-      services: transaction.services,
-      completed_by_worker_ids: teamWorkerIds || [workerId],
-      ref_id: transaction.refId,
-      
-      cc_full_number: (transaction as any).ccFullNumber,
-      cc_expiry: (transaction as any).ccExpiry,
-      cc_cvc: (transaction as any).ccCVC,
-
-      customer_snapshot: {
-        firstName: transaction.customerName ? transaction.customerName.split(' ')[0] : 'Unknown',
-        lastName: transaction.customerName ? transaction.customerName.split(' ').slice(1).join(' ') : '',
-        address: transaction.address,
-        routeCode: transaction.routeCode,
-        serviceType: transaction.serviceType,
-        serviceName: transaction.serviceName 
-      },
-      command_center_id: ccId,
-    };
-
-    let existingId: string | null = null;
-    
-    if (jobId) {
-       const { data } = await supabase
-         .from('transactions')
-         .select('id')
-         .eq('job_id', jobId)
-         .eq('command_center_id', ccId)
-         .maybeSingle();
-       if (data) existingId = data.id;
-    }
-
-    if (existingId) {
+  
+    public async updateTransaction(transactionId: string, updates: Partial<SessionTransaction>): Promise<void> {
+        const ccId = this.getCCId();
+        
+        const { data: existingTx } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('id', transactionId)
+          .eq('command_center_id', ccId)
+          .maybeSingle();
+  
+        const existingSnapshot = existingTx?.customer_snapshot || {};
+  
+        const dbPayload: any = {};
+        
+        if (updates.price !== undefined) dbPayload.price = updates.price;
+        if (updates.displayPrice !== undefined) dbPayload.display_price = updates.displayPrice;
+        if (updates.paymentMethod !== undefined) dbPayload.payment_method = updates.paymentMethod;
+        if (updates.paymentBreakdown !== undefined) dbPayload.payment_breakdown = updates.paymentBreakdown;
+        if (updates.type !== undefined) dbPayload.type = updates.type;
+        if (updates.customerPhone !== undefined) dbPayload.customer_phone = updates.customerPhone;
+        if (updates.customerEmail !== undefined) dbPayload.customer_email = updates.customerEmail;
+        if (updates.itemDescription !== undefined) dbPayload.item_description = updates.itemDescription;
+        if (updates.items !== undefined) dbPayload.items = updates.items;
+        if (updates.etransferEmail !== undefined) dbPayload.etransfer_email = updates.etransferEmail;
+        if (updates.chequeNumber !== undefined) dbPayload.cheque_number = updates.chequeNumber;
+        if (updates.invoiceNumber !== undefined) dbPayload.invoice_number = updates.invoiceNumber;
+        if (updates.isWestSplit !== undefined) dbPayload.is_west_split = updates.isWestSplit;
+        if (updates.services !== undefined) dbPayload.services = updates.services;
+        if (updates.refId !== undefined) dbPayload.ref_id = updates.refId;
+        
+        if (updates.customerName !== undefined || 
+            updates.address !== undefined || 
+            updates.routeCode !== undefined ||
+            updates.serviceType !== undefined ||
+            updates.serviceName !== undefined) {
+            
+            const mergedSnapshot = {
+                firstName: existingSnapshot.firstName || '',
+                lastName: existingSnapshot.lastName || '',
+                address: existingSnapshot.address || '',
+                routeCode: existingSnapshot.routeCode || '',
+                serviceType: existingSnapshot.serviceType || 'FP',
+                serviceName: existingSnapshot.serviceName || ''
+            };
+            
+            if (updates.customerName !== undefined) {
+                mergedSnapshot.firstName = updates.customerName.split(' ')[0] || '';
+                mergedSnapshot.lastName = updates.customerName.split(' ').slice(1).join(' ') || '';
+            }
+            if (updates.address !== undefined) {
+                mergedSnapshot.address = updates.address;
+            }
+            if (updates.routeCode !== undefined) {
+                mergedSnapshot.routeCode = updates.routeCode;
+            }
+            if (updates.serviceType !== undefined) {
+                mergedSnapshot.serviceType = updates.serviceType;
+            }
+            if (updates.serviceName !== undefined) {
+                mergedSnapshot.serviceName = updates.serviceName;
+            }
+            
+            dbPayload.customer_snapshot = mergedSnapshot;
+        }
+  
         const { error } = await supabase
           .from('transactions')
-          .update(payload)
-          .eq('id', existingId)
+          .update(dbPayload)
+          .eq('id', transactionId)
           .eq('command_center_id', ccId);
         if (error) throw error;
-    } else {
-        const { error } = await supabase.from('transactions').insert({ ...payload, id: transaction.id });
-        if (error) throw error;
+  
+        const workerId = existingTx?.worker_id;
+        if (workerId) {
+          await this.recalculateAndSaveWorkerStats(workerId);
+        }
     }
-
-    if (jobId && !jobId.startsWith('NEW-')) {
-      await supabase
-        .from('bookings')
-        .update({
-          status: 'completed',
-          contractor_id: workerId,
-        })
-        .eq('booking_id', jobId)
-        .eq('command_center_id', ccId);
-    }
-
-    if (pendingSaleId) {
-      this.deletePendingSale(pendingSaleId).catch(err => {
-        console.warn('[PendingSale] cleanup after completeJob failed:', err);
-      });
-    }
-
-    await this.recalculateAndSaveWorkerStats(workerId);
-
-    if (transaction.customerEmail && transaction.customerEmail.trim() !== '') {
-      this.sendReceiptEmail({
-        customerEmail: transaction.customerEmail,
-        customerName: transaction.customerName,
-        customerAddress: transaction.address || '',
-        date: new Date(transaction.timestamp).toLocaleDateString(),
-        serviceName: transaction.items?.[0]?.name || transaction.serviceName || 'Service',
-        amount: transaction.displayPrice || `$${transaction.price.toFixed(2)}`,
-        price: transaction.price,
-        paymentMethod: transaction.paymentMethod,
-        workerName: transaction.workerName || '',
-        transactionId: transaction.id,
-        commandCenterId: ccId,
-        type: transaction.type,
-        refId: transaction.refId,
-        isPrepaid: transaction.isPrepaid,
-      }).catch(err => {
-        console.error('Email send failed (non-blocking):', err);
-      });
-    }
-  }
-
-  // --- 6b. ASPHALT COMPLETION (Sealing season only) ---
-  //
-  // Dispatcher for the four AsphaltCompletionContext modes. Each branch writes
-  // the right transactions, reconciles pending_sales rows, and recalcs stats.
-  //
-  // Shared steps (all modes):
-  //   - Resolve completer's session for transaction stamping.
-  //   - Calculate split via calculateAsphaltSplit(driveway, asphalt, upsold).
-  //   - Build completer's customer_snapshot from transaction fields.
-  //   - Upsert completer's transaction (insert new or update existing by id).
-  //   - Mark booking completed (if jobId is a real booking, not 'NEW-').
-  //   - Send receipt email (from completer's tx — has the cash and the customer email).
-  //
-  // Mode-specific:
-  //   completer-with-phantom → also writes the partner's phantom tx; deletes BOTH
-  //     pending rows; recalcs BOTH carts.
-  //   self-both              → no phantom; deletes any provided pending rows;
-  //     recalcs only completer.
-  //   driveway-deferred      → no phantom; CREATES an asphalt child pending_sale
-  //     atomically; no pending rows to delete; recalcs only completer.
-  //   asphalt-executor-only  → no phantom; deletes the asphalt child pending_sale;
-  //     recalcs only completer (cart's stats are correctly locked from earlier).
-  private async completeAsphaltJob(
-    transaction: SessionTransaction,
-    jobId: string,
-    workerId: string,
-    teamWorkerIds: string[] | undefined,
-    ctx: AsphaltCompletionContext
-  ): Promise<void> {
-    const ccId = this.getCCId();
-
-    // Resolve completer's session for transaction stamping. All four modes need this.
-    let completerSessionId: string | undefined;
-    try {
-      const completerSession = await this.getWorkerLogsheetSession(workerId);
-      completerSessionId = completerSession?.id;
-    } catch (e) {
-      console.warn('[AsphaltComplete] Could not fetch completer session_id:', e);
-    }
-    if (!completerSessionId) {
-      throw new Error('Asphalt completion requires an active completer session');
-    }
-
-    // --- COMMON: split calculation ---
-    const split = calculateAsphaltSplit(ctx.drivewayAmount, ctx.asphaltAmount, ctx.upsoldAmount);
-    const didUpsell = (ctx.upsoldAmount || 0) > 0;
-
-    // --- MODE-DRIVEN: completer's payout share, partner role/share, sharedJobKey, partner_session_id ---
-    // partnerRole !== null implies a phantom tx will be written (completer-with-phantom only).
-    let completerShare: number;
-    let partnerShare: number;
-    let partnerRole: AsphaltRole | null;
-    let sharedJobKey: string;
-    let partnerSessionIdForMeta: string | null;
-
-    if (ctx.mode === 'completer-with-phantom') {
-      if (ctx.completerRole === 'driveway-seller') {
-        completerShare = split.cartShare;
-        partnerShare = split.rcShare;
-        partnerRole = 'asphalt-executor';
-      } else {
-        // completerRole === 'asphalt-executor'
-        completerShare = split.rcShare;
-        partnerShare = split.cartShare;
-        partnerRole = 'driveway-seller';
+  
+    /**
+     * Complete a job — writes a transaction row and (if applicable) cleans up the
+     * source pending sale.
+     *
+     * `asphaltContext`:
+     *   When set, the job has an asphalt component. completeJob branches into
+     *   completeAsphaltJob, which switches on ctx.mode and handles 1 or 2
+     *   transactions plus any pending_sales bookkeeping. See the
+     *   AsphaltCompletionContext discriminated union at the top of this file for
+     *   the four modes (completer-with-phantom, self-both, driveway-deferred,
+     *   asphalt-executor-only).
+     *
+     *   When omitted (the normal case), behaviour is unchanged from pre-asphalt code.
+     */
+    public async completeJob(
+      transaction: SessionTransaction, 
+      jobId: string, 
+      workerId: string,
+      teamWorkerIds?: string[],
+      pendingSaleId?: string,
+      asphaltContext?: AsphaltCompletionContext
+    ): Promise<void> {
+      // Asphalt completion is a different flow — branch immediately.
+      if (asphaltContext) {
+        return this.completeAsphaltJob(transaction, jobId, workerId, teamWorkerIds, asphaltContext);
       }
-      sharedJobKey = this.generateSharedJobKey();
-      partnerSessionIdForMeta = ctx.partner.sessionId;
-    } else if (ctx.mode === 'self-both') {
-      completerShare = split.total;
-      partnerShare = 0;
-      partnerRole = null;
-      sharedJobKey = this.generateSharedJobKey();
-      partnerSessionIdForMeta = null;
-    } else if (ctx.mode === 'driveway-deferred') {
-      // Defensive: must have a positive asphalt amount, or this mode is meaningless.
-      if (!(ctx.asphaltAmount > 0)) {
-        throw new Error('driveway-deferred mode requires asphaltAmount > 0');
-      }
-      completerShare = split.cartShare;
-      partnerShare = 0;
-      partnerRole = null;
-      sharedJobKey = this.generateSharedJobKey();
-      // RC isn't assigned yet (or only auto-assigned to self for an RC voluntarily
-      // deferring). partner_session_id on meta stays null — export pairs via sharedJobKey,
-      // not session id, so this is fine.
-      partnerSessionIdForMeta = null;
-    } else if (ctx.mode === 'asphalt-executor-only') {
-      completerShare = split.rcShare;
-      partnerShare = 0;
-      partnerRole = null;
-      // Inherit the key from the cart's already-written tx (was stamped on the
-      // asphalt child pending_sale at cart's completion time).
-      sharedJobKey = ctx.existingParentSharedJobKey;
-      // Look up the asphalt child's session_id (the cart's session) for the meta.
-      // Best-effort — if the row is gone (e.g., already completed), proceed with null.
+  
+      const ccId = this.getCCId();
+  
+      let currentSessionId: string | undefined;
       try {
-        const childRow = await this.getPendingSaleById(ctx.childSaleId);
-        partnerSessionIdForMeta = childRow?.sessionId || null;
+        const workerSession = await this.getWorkerLogsheetSession(workerId);
+        currentSessionId = workerSession?.id;
       } catch (e) {
-        console.warn('[AsphaltComplete] Could not look up asphalt child for partner_session_id:', e);
-        partnerSessionIdForMeta = null;
+        console.warn('Could not fetch session_id for transaction stamp:', e);
       }
-    } else {
-      // Exhaustiveness check — TypeScript should catch unhandled modes at compile time.
-      const _exhaustive: never = ctx;
-      throw new Error('Unhandled asphalt completion mode');
-    }
-
-    // --- COMMON: build completer's asphalt_meta ---
-    const completerMeta: AsphaltMeta = {
-      sharedJobKey,
-      role: ctx.completerRole,
-      driveway_amount: ctx.drivewayAmount,
-      asphalt_amount: ctx.asphaltAmount,
-      upsold_asphalt_amount: ctx.upsoldAmount,
-      is_partner_phantom: false,
-      partner_session_id: partnerSessionIdForMeta,
-      did_upsell: didUpsell,
-    };
-
-    const completerPayload: any = {
-      job_id: jobId,
-      worker_id: workerId,
-      session_id: completerSessionId,
-      timestamp: transaction.timestamp,
-      type: transaction.type,
-      price: transaction.price,
-      payment_method: transaction.paymentMethod,
-      payment_breakdown: transaction.paymentBreakdown,
-      is_west_split: transaction.isWestSplit,
-      display_price: transaction.displayPrice,
-      item_description: transaction.itemDescription,
-      invoice_number: transaction.invoiceNumber,
-      cheque_number: transaction.chequeNumber,
-      etransfer_email: transaction.etransferEmail,
-      customer_phone: transaction.customerPhone,
-      customer_email: transaction.customerEmail,
-      items: transaction.items,
-      services: transaction.services,
-      completed_by_worker_ids: teamWorkerIds || [workerId],
-      ref_id: transaction.refId,
-      cc_full_number: (transaction as any).ccFullNumber,
-      cc_expiry: (transaction as any).ccExpiry,
-      cc_cvc: (transaction as any).ccCVC,
-      customer_snapshot: {
-        firstName: transaction.customerName ? transaction.customerName.split(' ')[0] : 'Unknown',
-        lastName: transaction.customerName ? transaction.customerName.split(' ').slice(1).join(' ') : '',
-        address: transaction.address,
-        routeCode: transaction.routeCode,
-        serviceType: transaction.serviceType,
-        serviceName: transaction.serviceName,
-      },
-      command_center_id: ccId,
-      payout_share: completerShare,
-      asphalt_meta: completerMeta,
-    };
-
-    // Upsert completer's transaction. Match by id (the form-provided one) so
-    // re-completions update rather than duplicate.
-    const { data: existingCompleter } = await supabase
-      .from('transactions')
-      .select('id')
-      .eq('id', transaction.id)
-      .eq('command_center_id', ccId)
-      .maybeSingle();
-
-    if (existingCompleter) {
-      const { error } = await supabase
-        .from('transactions')
-        .update(completerPayload)
-        .eq('id', transaction.id)
-        .eq('command_center_id', ccId);
-      if (error) throw error;
-    } else {
-      const { error } = await supabase
-        .from('transactions')
-        .insert({ ...completerPayload, id: transaction.id });
-      if (error) throw error;
-    }
-
-    // --- MODE: completer-with-phantom — write partner's phantom transaction ---
-    if (ctx.mode === 'completer-with-phantom' && partnerRole) {
-      const partnerMeta: AsphaltMeta = {
-        sharedJobKey,
-        role: partnerRole,
-        driveway_amount: ctx.drivewayAmount,
-        asphalt_amount: ctx.asphaltAmount,
-        upsold_asphalt_amount: ctx.upsoldAmount,
-        is_partner_phantom: true,
-        partner_session_id: completerSessionId,
-        did_upsell: didUpsell,
-      };
-
-      // Phantom uses a stable derived id so re-completions update rather than dupe.
-      const phantomTxId = `${transaction.id}_partner`;
-      const phantomJobId = `${jobId}__asphalt_partner_${partnerRole === 'asphalt-executor' ? 'rc' : 'cart'}`;
-
-      const partnerPayload: any = {
-        job_id: phantomJobId,
-        worker_id: ctx.partner.workerId,
-        session_id: ctx.partner.sessionId,
+      
+      const payload = {
+        job_id: jobId, 
+        worker_id: workerId,
+        session_id: currentSessionId,
         timestamp: transaction.timestamp,
         type: transaction.type,
-        // tx.price set to share so the phantom shows a meaningful number on the
-        // partner's logsheet; cash bucket math reads from payment_breakdown ({})
-        // so this contributes $0 to actual cash counts.
-        price: partnerShare,
-        payment_method: 'Asphalt Share',
-        payment_breakdown: {},
-        is_west_split: false,
-        display_price: `$${partnerShare.toFixed(2)}`,
-        item_description: partnerRole === 'driveway-seller' ? 'Driveway (asphalt share)' : 'Asphalt (share)',
-        invoice_number: null,
-        cheque_number: null,
-        etransfer_email: null,
+        price: transaction.price,
+        payment_method: transaction.paymentMethod,
+        payment_breakdown: transaction.paymentBreakdown,
+        is_west_split: transaction.isWestSplit, 
+        display_price: transaction.displayPrice,
+        item_description: transaction.itemDescription,
+        invoice_number: transaction.invoiceNumber,
+        cheque_number: transaction.chequeNumber,
+        etransfer_email: transaction.etransferEmail,
         customer_phone: transaction.customerPhone,
-        customer_email: null,
-        items: transaction.items,
+        customer_email: transaction.customerEmail,
+        items: transaction.items, 
         services: transaction.services,
-        completed_by_worker_ids: ctx.partner.teamWorkerIds,
+        completed_by_worker_ids: teamWorkerIds || [workerId],
         ref_id: transaction.refId,
-        cc_full_number: null,
-        cc_expiry: null,
-        cc_cvc: null,
+        
+        cc_full_number: (transaction as any).ccFullNumber,
+        cc_expiry: (transaction as any).ccExpiry,
+        cc_cvc: (transaction as any).ccCVC,
+  
         customer_snapshot: {
           firstName: transaction.customerName ? transaction.customerName.split(' ')[0] : 'Unknown',
           lastName: transaction.customerName ? transaction.customerName.split(' ').slice(1).join(' ') : '',
           address: transaction.address,
           routeCode: transaction.routeCode,
           serviceType: transaction.serviceType,
-          serviceName: partnerRole === 'driveway-seller' ? 'Driveway' : 'Asphalt',
+          serviceName: transaction.serviceName 
         },
         command_center_id: ccId,
-        payout_share: partnerShare,
-        asphalt_meta: partnerMeta,
       };
-
-      const { data: existingPhantom } = await supabase
+  
+      let existingId: string | null = null;
+      
+      if (jobId) {
+         const { data } = await supabase
+           .from('transactions')
+           .select('id')
+           .eq('job_id', jobId)
+           .eq('command_center_id', ccId)
+           .maybeSingle();
+         if (data) existingId = data.id;
+      }
+  
+      if (existingId) {
+          const { error } = await supabase
+            .from('transactions')
+            .update(payload)
+            .eq('id', existingId)
+            .eq('command_center_id', ccId);
+          if (error) throw error;
+      } else {
+          const { error } = await supabase.from('transactions').insert({ ...payload, id: transaction.id });
+          if (error) throw error;
+      }
+  
+      if (jobId && !jobId.startsWith('NEW-')) {
+        await supabase
+          .from('bookings')
+          .update({
+            status: 'completed',
+            contractor_id: workerId,
+          })
+          .eq('booking_id', jobId)
+          .eq('command_center_id', ccId);
+      }
+  
+      if (pendingSaleId) {
+        this.deletePendingSale(pendingSaleId).catch(err => {
+          console.warn('[PendingSale] cleanup after completeJob failed:', err);
+        });
+      }
+  
+      await this.recalculateAndSaveWorkerStats(workerId);
+  
+      if (transaction.customerEmail && transaction.customerEmail.trim() !== '') {
+        this.sendReceiptEmail({
+          customerEmail: transaction.customerEmail,
+          customerName: transaction.customerName,
+          customerAddress: transaction.address || '',
+          date: new Date(transaction.timestamp).toLocaleDateString(),
+          serviceName: transaction.items?.[0]?.name || transaction.serviceName || 'Service',
+          amount: transaction.displayPrice || `$${transaction.price.toFixed(2)}`,
+          price: transaction.price,
+          paymentMethod: transaction.paymentMethod,
+          workerName: transaction.workerName || '',
+          transactionId: transaction.id,
+          commandCenterId: ccId,
+          type: transaction.type,
+          refId: transaction.refId,
+          isPrepaid: transaction.isPrepaid,
+        }).catch(err => {
+          console.error('Email send failed (non-blocking):', err);
+        });
+      }
+    }
+  
+    // --- 6b. ASPHALT COMPLETION (Sealing season only) ---
+    //
+    // Dispatcher for the four AsphaltCompletionContext modes. Each branch writes
+    // the right transactions, reconciles pending_sales rows, and recalcs stats.
+    //
+    // Shared steps (all modes):
+    //   - Resolve completer's session for transaction stamping.
+    //   - Calculate split via calculateAsphaltSplit(driveway, asphalt, upsold).
+    //   - Build completer's customer_snapshot from transaction fields.
+    //   - Upsert completer's transaction (insert new or update existing by id).
+    //   - Mark booking completed (if jobId is a real booking, not 'NEW-').
+    //   - Send receipt email (from completer's tx — has the cash and the customer email).
+    //
+    // Mode-specific:
+    //   completer-with-phantom → also writes the partner's phantom tx; deletes BOTH
+    //     pending rows; recalcs BOTH carts.
+    //   self-both              → no phantom; deletes any provided pending rows;
+    //     recalcs only completer.
+    //   driveway-deferred      → no phantom; CREATES an asphalt child pending_sale
+    //     atomically; no pending rows to delete; recalcs only completer.
+    //   asphalt-executor-only  → no phantom; deletes the asphalt child pending_sale;
+    //     recalcs only completer (cart's stats are correctly locked from earlier).
+    private async completeAsphaltJob(
+      transaction: SessionTransaction,
+      jobId: string,
+      workerId: string,
+      teamWorkerIds: string[] | undefined,
+      ctx: AsphaltCompletionContext
+    ): Promise<void> {
+      const ccId = this.getCCId();
+  
+      // Resolve completer's session for transaction stamping. All four modes need this.
+      let completerSessionId: string | undefined;
+      try {
+        const completerSession = await this.getWorkerLogsheetSession(workerId);
+        completerSessionId = completerSession?.id;
+      } catch (e) {
+        console.warn('[AsphaltComplete] Could not fetch completer session_id:', e);
+      }
+      if (!completerSessionId) {
+        throw new Error('Asphalt completion requires an active completer session');
+      }
+  
+      // --- COMMON: split calculation ---
+      const split = calculateAsphaltSplit(ctx.drivewayAmount, ctx.asphaltAmount, ctx.upsoldAmount);
+      const didUpsell = (ctx.upsoldAmount || 0) > 0;
+  
+      // --- MODE-DRIVEN: completer's payout share, partner role/share, sharedJobKey, partner_session_id ---
+      // partnerRole !== null implies a phantom tx will be written (completer-with-phantom only).
+      let completerShare: number;
+      let partnerShare: number;
+      let partnerRole: AsphaltRole | null;
+      let sharedJobKey: string;
+      let partnerSessionIdForMeta: string | null;
+  
+      if (ctx.mode === 'completer-with-phantom') {
+        if (ctx.completerRole === 'driveway-seller') {
+          completerShare = split.cartShare;
+          partnerShare = split.rcShare;
+          partnerRole = 'asphalt-executor';
+        } else {
+          // completerRole === 'asphalt-executor'
+          completerShare = split.rcShare;
+          partnerShare = split.cartShare;
+          partnerRole = 'driveway-seller';
+        }
+        sharedJobKey = this.generateSharedJobKey();
+        partnerSessionIdForMeta = ctx.partner.sessionId;
+      } else if (ctx.mode === 'self-both') {
+        completerShare = split.total;
+        partnerShare = 0;
+        partnerRole = null;
+        sharedJobKey = this.generateSharedJobKey();
+        partnerSessionIdForMeta = null;
+      } else if (ctx.mode === 'driveway-deferred') {
+        // Defensive: must have a positive asphalt amount, or this mode is meaningless.
+        if (!(ctx.asphaltAmount > 0)) {
+          throw new Error('driveway-deferred mode requires asphaltAmount > 0');
+        }
+        completerShare = split.cartShare;
+        partnerShare = 0;
+        partnerRole = null;
+        sharedJobKey = this.generateSharedJobKey();
+        // RC isn't assigned yet (or only auto-assigned to self for an RC voluntarily
+        // deferring). partner_session_id on meta stays null — export pairs via sharedJobKey,
+        // not session id, so this is fine.
+        partnerSessionIdForMeta = null;
+      } else if (ctx.mode === 'asphalt-executor-only') {
+        completerShare = split.rcShare;
+        partnerShare = 0;
+        partnerRole = null;
+        // Inherit the key from the cart's already-written tx (was stamped on the
+        // asphalt child pending_sale at cart's completion time).
+        sharedJobKey = ctx.existingParentSharedJobKey;
+        // Look up the asphalt child's session_id (the cart's session) for the meta.
+        // Best-effort — if the row is gone (e.g., already completed), proceed with null.
+        try {
+          const childRow = await this.getPendingSaleById(ctx.childSaleId);
+          partnerSessionIdForMeta = childRow?.sessionId || null;
+        } catch (e) {
+          console.warn('[AsphaltComplete] Could not look up asphalt child for partner_session_id:', e);
+          partnerSessionIdForMeta = null;
+        }
+      } else {
+        // Exhaustiveness check — TypeScript should catch unhandled modes at compile time.
+        const _exhaustive: never = ctx;
+        throw new Error('Unhandled asphalt completion mode');
+      }
+  
+      // --- COMMON: build completer's asphalt_meta ---
+      const completerMeta: AsphaltMeta = {
+        sharedJobKey,
+        role: ctx.completerRole,
+        driveway_amount: ctx.drivewayAmount,
+        asphalt_amount: ctx.asphaltAmount,
+        upsold_asphalt_amount: ctx.upsoldAmount,
+        is_partner_phantom: false,
+        partner_session_id: partnerSessionIdForMeta,
+        did_upsell: didUpsell,
+      };
+  
+      const completerPayload: any = {
+        job_id: jobId,
+        worker_id: workerId,
+        session_id: completerSessionId,
+        timestamp: transaction.timestamp,
+        type: transaction.type,
+        price: transaction.price,
+        payment_method: transaction.paymentMethod,
+        payment_breakdown: transaction.paymentBreakdown,
+        is_west_split: transaction.isWestSplit,
+        display_price: transaction.displayPrice,
+        item_description: transaction.itemDescription,
+        invoice_number: transaction.invoiceNumber,
+        cheque_number: transaction.chequeNumber,
+        etransfer_email: transaction.etransferEmail,
+        customer_phone: transaction.customerPhone,
+        customer_email: transaction.customerEmail,
+        items: transaction.items,
+        services: transaction.services,
+        completed_by_worker_ids: teamWorkerIds || [workerId],
+        ref_id: transaction.refId,
+        cc_full_number: (transaction as any).ccFullNumber,
+        cc_expiry: (transaction as any).ccExpiry,
+        cc_cvc: (transaction as any).ccCVC,
+        customer_snapshot: {
+          firstName: transaction.customerName ? transaction.customerName.split(' ')[0] : 'Unknown',
+          lastName: transaction.customerName ? transaction.customerName.split(' ').slice(1).join(' ') : '',
+          address: transaction.address,
+          routeCode: transaction.routeCode,
+          serviceType: transaction.serviceType,
+          serviceName: transaction.serviceName,
+        },
+        command_center_id: ccId,
+        payout_share: completerShare,
+        asphalt_meta: completerMeta,
+      };
+  
+      // Upsert completer's transaction. Match by id (the form-provided one) so
+      // re-completions update rather than duplicate.
+      const { data: existingCompleter } = await supabase
         .from('transactions')
         .select('id')
-        .eq('id', phantomTxId)
+        .eq('id', transaction.id)
         .eq('command_center_id', ccId)
         .maybeSingle();
-
-      if (existingPhantom) {
+  
+      if (existingCompleter) {
         const { error } = await supabase
           .from('transactions')
-          .update(partnerPayload)
-          .eq('id', phantomTxId)
+          .update(completerPayload)
+          .eq('id', transaction.id)
           .eq('command_center_id', ccId);
         if (error) throw error;
       } else {
         const { error } = await supabase
           .from('transactions')
-          .insert({ ...partnerPayload, id: phantomTxId });
+          .insert({ ...completerPayload, id: transaction.id });
         if (error) throw error;
       }
-    }
-
-    // --- MODE: driveway-deferred — create the asphalt child pending_sale row ---
-    // sharedJobKey on the child is what RC's later asphalt-executor-only completion
-    // will pass back as ctx.existingParentSharedJobKey to link the two real txs.
-    if (ctx.mode === 'driveway-deferred') {
-      try {
-        await this.createDeferredAsphaltChild({
+  
+      // --- MODE: completer-with-phantom — write partner's phantom transaction ---
+      if (ctx.mode === 'completer-with-phantom' && partnerRole) {
+        const partnerMeta: AsphaltMeta = {
           sharedJobKey,
-          sessionId: ctx.childPending.sessionId,
-          workerId: ctx.childPending.workerId,
-          routeCode: ctx.childPending.routeCode,
-          houseNumber: ctx.childPending.houseNumber,
-          streetName: ctx.childPending.streetName,
-          propertyType: ctx.childPending.propertyType,
-          notes: ctx.childPending.notes,
-          asphaltAmount: ctx.asphaltAmount,
-          upsoldAsphaltAmount: ctx.upsoldAmount > 0 ? ctx.upsoldAmount : undefined,
-          assignedRcSessionId: ctx.childPending.autoAssignToRcSessionId,
+          role: partnerRole,
+          driveway_amount: ctx.drivewayAmount,
+          asphalt_amount: ctx.asphaltAmount,
+          upsold_asphalt_amount: ctx.upsoldAmount,
+          is_partner_phantom: true,
+          partner_session_id: completerSessionId,
+          did_upsell: didUpsell,
+        };
+  
+        // Phantom uses a stable derived id so re-completions update rather than dupe.
+        const phantomTxId = `${transaction.id}_partner`;
+        const phantomJobId = `${jobId}__asphalt_partner_${partnerRole === 'asphalt-executor' ? 'rc' : 'cart'}`;
+  
+        const partnerPayload: any = {
+          job_id: phantomJobId,
+          worker_id: ctx.partner.workerId,
+          session_id: ctx.partner.sessionId,
+          timestamp: transaction.timestamp,
+          type: transaction.type,
+          // tx.price set to share so the phantom shows a meaningful number on the
+          // partner's logsheet; cash bucket math reads from payment_breakdown ({})
+          // so this contributes $0 to actual cash counts.
+          price: partnerShare,
+          payment_method: 'Asphalt Share',
+          payment_breakdown: {},
+          is_west_split: false,
+          display_price: `$${partnerShare.toFixed(2)}`,
+          item_description: partnerRole === 'driveway-seller' ? 'Driveway (asphalt share)' : 'Asphalt (share)',
+          invoice_number: null,
+          cheque_number: null,
+          etransfer_email: null,
+          customer_phone: transaction.customerPhone,
+          customer_email: null,
+          items: transaction.items,
+          services: transaction.services,
+          completed_by_worker_ids: ctx.partner.teamWorkerIds,
+          ref_id: transaction.refId,
+          cc_full_number: null,
+          cc_expiry: null,
+          cc_cvc: null,
+          customer_snapshot: {
+            firstName: transaction.customerName ? transaction.customerName.split(' ')[0] : 'Unknown',
+            lastName: transaction.customerName ? transaction.customerName.split(' ').slice(1).join(' ') : '',
+            address: transaction.address,
+            routeCode: transaction.routeCode,
+            serviceType: transaction.serviceType,
+            serviceName: partnerRole === 'driveway-seller' ? 'Driveway' : 'Asphalt',
+          },
+          command_center_id: ccId,
+          payout_share: partnerShare,
+          asphalt_meta: partnerMeta,
+        };
+  
+        const { data: existingPhantom } = await supabase
+          .from('transactions')
+          .select('id')
+          .eq('id', phantomTxId)
+          .eq('command_center_id', ccId)
+          .maybeSingle();
+  
+        if (existingPhantom) {
+          const { error } = await supabase
+            .from('transactions')
+            .update(partnerPayload)
+            .eq('id', phantomTxId)
+            .eq('command_center_id', ccId);
+          if (error) throw error;
+        } else {
+          const { error } = await supabase
+            .from('transactions')
+            .insert({ ...partnerPayload, id: phantomTxId });
+          if (error) throw error;
+        }
+      }
+  
+      // --- MODE: driveway-deferred — create the asphalt child pending_sale row ---
+      // sharedJobKey on the child is what RC's later asphalt-executor-only completion
+      // will pass back as ctx.existingParentSharedJobKey to link the two real txs.
+      if (ctx.mode === 'driveway-deferred') {
+        try {
+          await this.createDeferredAsphaltChild({
+            sharedJobKey,
+            sessionId: ctx.childPending.sessionId,
+            workerId: ctx.childPending.workerId,
+            routeCode: ctx.childPending.routeCode,
+            houseNumber: ctx.childPending.houseNumber,
+            streetName: ctx.childPending.streetName,
+            propertyType: ctx.childPending.propertyType,
+            notes: ctx.childPending.notes,
+            asphaltAmount: ctx.asphaltAmount,
+            upsoldAsphaltAmount: ctx.upsoldAmount > 0 ? ctx.upsoldAmount : undefined,
+            assignedRcSessionId: ctx.childPending.autoAssignToRcSessionId,
+          });
+        } catch (err) {
+          // The cart's tx is already written at this point. Rolling it back is
+          // complex (would need to delete the just-inserted tx and re-throw). Instead,
+          // log loudly so the RM can see the orphan and create the asphalt child
+          // manually via QuickPending if needed.
+          console.error(
+            '[AsphaltComplete] CRITICAL: driveway-deferred tx written but child pending creation FAILED.',
+            'Cart tx id:', transaction.id, 'sharedJobKey:', sharedJobKey, 'Error:', err
+          );
+          throw err;
+        }
+      }
+  
+      // --- COMMON: Mark booking completed (real bookings only) ---
+      if (jobId && !jobId.startsWith('NEW-')) {
+        await supabase
+          .from('bookings')
+          .update({
+            status: 'completed',
+            contractor_id: workerId,
+          })
+          .eq('booking_id', jobId)
+          .eq('command_center_id', ccId);
+      }
+  
+      // --- MODE-DRIVEN: pending_sales cleanup ---
+      // completer-with-phantom + self-both: delete parent and child rows when present.
+      // asphalt-executor-only: delete the child row (cart's tx already consumed any parent).
+      // driveway-deferred: nothing to delete (we just CREATED a child instead).
+      const pendingIdsToDelete: string[] = [];
+      if (ctx.mode === 'completer-with-phantom') {
+        if (ctx.parentSaleId) pendingIdsToDelete.push(ctx.parentSaleId);
+        if (ctx.childSaleId) pendingIdsToDelete.push(ctx.childSaleId);
+      } else if (ctx.mode === 'self-both') {
+        if (ctx.parentSaleId) pendingIdsToDelete.push(ctx.parentSaleId);
+        if (ctx.childSaleId) pendingIdsToDelete.push(ctx.childSaleId);
+      } else if (ctx.mode === 'asphalt-executor-only') {
+        pendingIdsToDelete.push(ctx.childSaleId);
+      }
+      // driveway-deferred: no cleanup needed.
+  
+      if (pendingIdsToDelete.length > 0) {
+        const { error } = await supabase
+          .from('pending_sales')
+          .delete()
+          .in('id', pendingIdsToDelete)
+          .eq('command_center_id', ccId);
+        if (error) {
+          console.warn('[AsphaltComplete] pending_sales cleanup failed:', error);
+        }
+      }
+  
+      // --- MODE-DRIVEN: recalculate stats ---
+      // Always recalc the completer. Only recalc partner in completer-with-phantom.
+      //   self-both              → no partner to recalc.
+      //   driveway-deferred      → RC's tx doesn't exist yet; nothing to recalc on partner side.
+      //   asphalt-executor-only  → cart's tx already exists and its payoutShare-vs-cash
+      //                            delta was locked at the cart's earlier completion.
+      //                            Cart's stats are still correct without re-running.
+      await this.recalculateAndSaveWorkerStats(workerId);
+      if (ctx.mode === 'completer-with-phantom') {
+        await this.recalculateAndSaveWorkerStats(ctx.partner.workerId);
+      }
+  
+      // --- COMMON: Receipt email (only from collecting cart, since the partner's row is phantom) ---
+      if (transaction.customerEmail && transaction.customerEmail.trim() !== '') {
+        this.sendReceiptEmail({
+          customerEmail: transaction.customerEmail,
+          customerName: transaction.customerName,
+          customerAddress: transaction.address || '',
+          date: new Date(transaction.timestamp).toLocaleDateString(),
+          serviceName: transaction.items?.[0]?.name || transaction.serviceName || 'Service',
+          amount: transaction.displayPrice || `$${transaction.price.toFixed(2)}`,
+          price: transaction.price,
+          paymentMethod: transaction.paymentMethod,
+          workerName: transaction.workerName || '',
+          transactionId: transaction.id,
+          commandCenterId: ccId,
+          type: transaction.type,
+          refId: transaction.refId,
+          isPrepaid: transaction.isPrepaid,
+        }).catch(err => {
+          console.error('Email send failed (non-blocking):', err);
         });
-      } catch (err) {
-        // The cart's tx is already written at this point. Rolling it back is
-        // complex (would need to delete the just-inserted tx and re-throw). Instead,
-        // log loudly so the RM can see the orphan and create the asphalt child
-        // manually via QuickPending if needed.
-        console.error(
-          '[AsphaltComplete] CRITICAL: driveway-deferred tx written but child pending creation FAILED.',
-          'Cart tx id:', transaction.id, 'sharedJobKey:', sharedJobKey, 'Error:', err
-        );
-        throw err;
       }
     }
-
-    // --- COMMON: Mark booking completed (real bookings only) ---
-    if (jobId && !jobId.startsWith('NEW-')) {
-      await supabase
-        .from('bookings')
-        .update({
-          status: 'completed',
-          contractor_id: workerId,
-        })
-        .eq('booking_id', jobId)
-        .eq('command_center_id', ccId);
-    }
-
-    // --- MODE-DRIVEN: pending_sales cleanup ---
-    // completer-with-phantom + self-both: delete parent and child rows when present.
-    // asphalt-executor-only: delete the child row (cart's tx already consumed any parent).
-    // driveway-deferred: nothing to delete (we just CREATED a child instead).
-    const pendingIdsToDelete: string[] = [];
-    if (ctx.mode === 'completer-with-phantom') {
-      if (ctx.parentSaleId) pendingIdsToDelete.push(ctx.parentSaleId);
-      if (ctx.childSaleId) pendingIdsToDelete.push(ctx.childSaleId);
-    } else if (ctx.mode === 'self-both') {
-      if (ctx.parentSaleId) pendingIdsToDelete.push(ctx.parentSaleId);
-      if (ctx.childSaleId) pendingIdsToDelete.push(ctx.childSaleId);
-    } else if (ctx.mode === 'asphalt-executor-only') {
-      pendingIdsToDelete.push(ctx.childSaleId);
-    }
-    // driveway-deferred: no cleanup needed.
-
-    if (pendingIdsToDelete.length > 0) {
-      const { error } = await supabase
-        .from('pending_sales')
-        .delete()
-        .in('id', pendingIdsToDelete)
-        .eq('command_center_id', ccId);
-      if (error) {
-        console.warn('[AsphaltComplete] pending_sales cleanup failed:', error);
-      }
-    }
-
-    // --- MODE-DRIVEN: recalculate stats ---
-    // Always recalc the completer. Only recalc partner in completer-with-phantom.
-    //   self-both              → no partner to recalc.
-    //   driveway-deferred      → RC's tx doesn't exist yet; nothing to recalc on partner side.
-    //   asphalt-executor-only  → cart's tx already exists and its payoutShare-vs-cash
-    //                            delta was locked at the cart's earlier completion.
-    //                            Cart's stats are still correct without re-running.
-    await this.recalculateAndSaveWorkerStats(workerId);
-    if (ctx.mode === 'completer-with-phantom') {
-      await this.recalculateAndSaveWorkerStats(ctx.partner.workerId);
-    }
-
-    // --- COMMON: Receipt email (only from collecting cart, since the partner's row is phantom) ---
-    if (transaction.customerEmail && transaction.customerEmail.trim() !== '') {
-      this.sendReceiptEmail({
-        customerEmail: transaction.customerEmail,
-        customerName: transaction.customerName,
-        customerAddress: transaction.address || '',
-        date: new Date(transaction.timestamp).toLocaleDateString(),
-        serviceName: transaction.items?.[0]?.name || transaction.serviceName || 'Service',
-        amount: transaction.displayPrice || `$${transaction.price.toFixed(2)}`,
-        price: transaction.price,
-        paymentMethod: transaction.paymentMethod,
-        workerName: transaction.workerName || '',
-        transactionId: transaction.id,
-        commandCenterId: ccId,
-        type: transaction.type,
-        refId: transaction.refId,
-        isPrepaid: transaction.isPrepaid,
-      }).catch(err => {
-        console.error('Email send failed (non-blocking):', err);
-      });
-    }
-  }
-
+  
   /**
    * Create an asphalt child pending_sale row as part of a driveway-deferred
    * completion. Distinct from createPendingSale's 3-way orchestrator because:
@@ -4139,6 +4262,48 @@ class SessionService {
       return (rows || []).map(r => this.mapDbPendingSale(r));
     } catch (err) {
       console.warn('[Asphalt] getUnassignedAsphaltForManager error:', err);
+      return [];
+    }
+  }
+
+  /**
+   * CC-WIDE unassigned asphalt — the floater's version of
+   * getUnassignedAsphaltForManager with the ownership chain dropped.
+   *
+   * A floater gets cross-manager asphalt-assignment power, and pending_sales has
+   * no manager column (ownership is only inferable via
+   * session → logsheet_session → team_worker_ids → worker → assignedManagerId).
+   * Rather than walk that chain for every manager the floater covers, we simply
+   * return EVERY unassigned asphalt row in the CC for today: sale_type='asphalt'
+   * AND assigned_rc_session_id IS NULL. This is both simpler and exactly the
+   * "assign asphalt regardless of which manager's contractor sold it" behaviour
+   * the floater design calls for.
+   *
+   * Note: this is intentionally CC-wide, not floated-set-scoped. Per the locked
+   * design, a floater's asphalt authority spans the whole command center.
+   */
+  public async getUnassignedAsphaltForFloater(): Promise<PendingSale[]> {
+    try {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return [];
+
+      const { data: rows, error } = await supabase
+        .from('pending_sales')
+        .select('*')
+        .eq('command_center_id', ccId)
+        .eq('session_date', date)
+        .eq('sale_type', 'asphalt')
+        .is('assigned_rc_session_id', null)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.warn('[Asphalt] getUnassignedAsphaltForFloater failed:', error);
+        return [];
+      }
+      return (rows || []).map(r => this.mapDbPendingSale(r));
+    } catch (err) {
+      console.warn('[Asphalt] getUnassignedAsphaltForFloater error:', err);
       return [];
     }
   }

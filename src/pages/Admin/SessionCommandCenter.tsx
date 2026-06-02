@@ -33,6 +33,9 @@ import {
   PlusCircle,
   CreditCard,
   Banknote,
+  Navigation2,
+  X,
+  Check,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
@@ -49,6 +52,13 @@ import PayslipGenerator from './PayslipGenerator';
 import RouteFinderView from '../../components/RouteFinder/RouteFinderView';
 import DigitalMasterBookings from './DigitalMasterBookings';
 import DigitalWorkerbook from './DigitalWorkerbook';
+
+// --- FLOATER PALETTE (Digital mapping CCs only) ---
+// The palette + colour-assignment helper now live in a shared module so
+// RMLogbook and RMMapTab can import the SAME source without depending on this
+// Admin page component. Re-exported here so any existing importer of
+// `{ MANAGER_PALETTE, getManagerColor }` from SessionCommandCenter keeps working.
+export { MANAGER_PALETTE, getManagerColor } from '../../lib/managerPalette';
 
 const SessionCommandCenter: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -123,6 +133,21 @@ const SessionCommandCenter: React.FC = () => {
 
   // No Tax on Cash toggle (Rejuv + Sealing, default ON)
   const [noTaxOnCash, setNoTaxOnCash] = useState(true);
+
+  // --- FLOATER STATE (Digital mapping CCs only) ---
+  // floaterDraft stages the floater config DURING PREVIEW, before the managers
+  // exist in the DB. Keyed by manager userId -> array of the OTHER manager
+  // userIds they float for. On Initialize Session, this is folded into
+  // previewData.managers so uploadDailySession persists it.
+  //
+  // For a LIVE session, edits write straight to the DB via
+  // sessionService.updateManagerFloatingFor and we reload; floaterDraft is then
+  // re-seeded from the reloaded managers so the two paths stay consistent.
+  const [floaterDraft, setFloaterDraft] = useState<Record<string, string[]>>({});
+  // Which manager's picker panel is currently expanded (userId), or null.
+  const [floaterPickerFor, setFloaterPickerFor] = useState<string | null>(null);
+  // Per-manager saving spinner on the live path.
+  const [floaterSavingId, setFloaterSavingId] = useState<string | null>(null);
 
   // --- ADD ADDITIONAL STATE ---
   const [showAddAdditional, setShowAddAdditional] = useState(false);
@@ -228,6 +253,15 @@ const SessionCommandCenter: React.FC = () => {
           setNoTaxOnCash(meta.noTaxOnCash);
         }
         
+        // Seed the floater draft from the live managers so the LIVE-edit UI and
+        // the preview UI share one state shape. Each manager's floatingFor (read
+        // back by getDailySession from metadata) becomes the draft entry.
+        const seeded: Record<string, string[]> = {};
+        session.managers.forEach(m => {
+          seeded[m.userId] = Array.isArray(m.floatingFor) ? m.floatingFor : [];
+        });
+        setFloaterDraft(seeded);
+
         // Load logsheet sessions for validation check
         const sessions = await sessionService.getLogsheetSessions();
         setLogsheetSessions(sessions);
@@ -244,6 +278,18 @@ const SessionCommandCenter: React.FC = () => {
       loadSession();
     }
   }, [currentCC?.id, loadSession]);
+
+  // When a fresh preview is parsed, seed the floater draft from it (so toggles
+  // have a place to live before the session is initialized). Managers from a
+  // file/sheet import won't carry floatingFor yet, so default to empty arrays.
+  useEffect(() => {
+    if (!previewData) return;
+    const seeded: Record<string, string[]> = {};
+    previewData.managers.forEach(m => {
+      seeded[m.userId] = Array.isArray(m.floatingFor) ? m.floatingFor : [];
+    });
+    setFloaterDraft(seeded);
+  }, [previewData]);
 
   const handleTabChange = (tab: 'lifecycle' | 'payout' | 'onboarding') => {
     setActiveTab(tab);
@@ -433,6 +479,15 @@ const SessionCommandCenter: React.FC = () => {
         
         // Ensure season type is set
         previewData.seasonType = selectedSeasonType;
+
+        // FLOATER: fold the preview-staged floater config into each manager so
+        // uploadDailySession persists it into users.metadata.floatingFor. We
+        // mutate a shallow-copied managers array to avoid surprising other
+        // readers of previewData mid-flight.
+        previewData.managers = previewData.managers.map(m => ({
+          ...m,
+          floatingFor: floaterDraft[m.userId] || [],
+        }));
         
         await sessionService.uploadDailySession(previewData, emailEnabled, meta);
         await loadSession(); // Reload from DB
@@ -454,11 +509,11 @@ const SessionCommandCenter: React.FC = () => {
       const warnings: string[] = [];
       
       if (!payoutStatus.hasValidatedPayouts) {
-        warnings.push(`⚠️ No payouts have been validated yet (${payoutStatus.validatedWorkers}/${payoutStatus.totalWorkers} workers complete)`);
+        warnings.push(`\u26a0\ufe0f No payouts have been validated yet (${payoutStatus.validatedWorkers}/${payoutStatus.totalWorkers} workers complete)`);
       }
       
       if (!payoutStatus.hasBonuses) {
-        warnings.push(`⚠️ No bonuses have been assigned yet`);
+        warnings.push(`\u26a0\ufe0f No bonuses have been assigned yet`);
       }
 
       const warningMessage = [
@@ -507,6 +562,8 @@ const SessionCommandCenter: React.FC = () => {
         setProductCostPercent(SEASON_CONFIGS['aeration'].defaultProductCostPercent);
         setLiveCardEnabled(false);
         setNoTaxOnCash(true); // Reset to default ON
+        setFloaterDraft({});
+        setFloaterPickerFor(null);
       } catch (err) {
         alert('Error: ' + err);
       } finally {
@@ -593,6 +650,8 @@ const SessionCommandCenter: React.FC = () => {
   };
 
   // --- REPORT GENERATION HELPERS ---
+  // Each row now also carries userId + floatingFor so the Floater button and
+  // picker can read/write per-manager state.
   const generateManagerReport = (data: DailySessionData) => {
       return data.managers.map(m => {
           const workerCount = data.workers.filter(w => w.assignedManagerId === m.userId).length;
@@ -602,10 +661,12 @@ const SessionCommandCenter: React.FC = () => {
           const prebookCount = data.pendingBookings.filter(b => b['Route Number'] && myRouteCodes.has(b['Route Number'])).length;
 
           return {
+              userId: m.userId,
               name: m.name,
               workers: workerCount,
               routes: routeCount,
-              prebooks: prebookCount
+              prebooks: prebookCount,
+              floatingFor: Array.isArray(m.floatingFor) ? m.floatingFor : [],
           };
       });
   };
@@ -615,6 +676,61 @@ const SessionCommandCenter: React.FC = () => {
       if (currentSession) return generateManagerReport(currentSession);
       return [];
   }, [previewData, currentSession]);
+
+  // Whether the report currently reflects a LIVE session (vs a preview). Drives
+  // whether floater edits persist immediately (live) or stage in draft (preview).
+  const reportIsLive = !!currentSession && !previewData;
+
+  // All RouteManager userIds in the report, sorted — the canonical ordering for
+  // palette colour assignment. Identical sort key (userId) as later phases.
+  const sortedManagerIds = useMemo(
+    () => activeReportData.map(m => m.userId).sort(),
+    [activeReportData]
+  );
+
+  // Set of managers who are ALREADY being floated for by someone (anyone). A
+  // manager in this set cannot be picked as a float target by a DIFFERENT
+  // manager — that would let two managers float for each other, which the design
+  // forbids. Built from the live draft so it updates as toggles happen.
+  const managersFloatedBySomeone = useMemo(() => {
+    const s = new Set<string>();
+    for (const [, targets] of Object.entries(floaterDraft)) {
+      (targets || []).forEach(t => s.add(t));
+    }
+    return s;
+  }, [floaterDraft]);
+
+  // Persist one manager's floater list. On a LIVE session, writes immediately to
+  // the DB and reloads. In PREVIEW, only updates the draft (persisted later at
+  // Initialize). Either way floaterDraft is the in-memory source of truth.
+  const commitFloaterList = useCallback(async (managerId: string, nextList: string[]) => {
+    setFloaterDraft(prev => ({ ...prev, [managerId]: nextList }));
+    if (!reportIsLive) return; // preview — staged only
+    setFloaterSavingId(managerId);
+    try {
+      await sessionService.updateManagerFloatingFor(managerId, nextList);
+      await loadSession();
+    } catch (err) {
+      console.error('Failed to save floater config:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save floater config.');
+    } finally {
+      setFloaterSavingId(null);
+    }
+  }, [reportIsLive, loadSession]);
+
+  // Toggle a single float target for a manager.
+  const toggleFloatTarget = useCallback((managerId: string, targetId: string) => {
+    const current = floaterDraft[managerId] || [];
+    const next = current.includes(targetId)
+      ? current.filter(id => id !== targetId)
+      : [...current, targetId];
+    commitFloaterList(managerId, next);
+  }, [floaterDraft, commitFloaterList]);
+
+  // Turn floating OFF entirely for a manager (clears their list).
+  const clearFloater = useCallback((managerId: string) => {
+    commitFloaterList(managerId, []);
+  }, [commitFloaterList]);
 
   // Get season config for display
   const seasonConfig = SEASON_CONFIGS[selectedSeasonType];
@@ -1115,11 +1231,40 @@ const SessionCommandCenter: React.FC = () => {
                                         <th className="py-3 font-medium text-center">Workers</th>
                                         <th className="py-3 font-medium text-center">Routes</th>
                                         <th className="py-3 font-medium text-center">Pre-books</th>
+                                        {/* FLOATER column — only on digital-mapping CCs */}
+                                        {hasDigitalMapping && (
+                                          <th className="py-3 font-medium text-center">Floater</th>
+                                        )}
                                     </tr>
                                 </thead>
                                 <tbody className="text-gray-200">
-                                    {activeReportData.map((manager, idx) => (
-                                        <tr key={idx} className="border-b border-gray-800 hover:bg-gray-700/30 transition-colors">
+                                    {activeReportData.map((manager, idx) => {
+                                        const myFloat = floaterDraft[manager.userId] || [];
+                                        const isFloating = myFloat.length > 0;
+                                        const pickerOpen = floaterPickerFor === manager.userId;
+                                        const savingThis = floaterSavingId === manager.userId;
+                                        // Candidates this manager may float for: every OTHER manager who
+                                        // is NOT already floated-for by someone else (loop prevention),
+                                        // unless they're already in THIS manager's list (so we can show
+                                        // the tick + allow un-ticking).
+                                        const candidates = activeReportData.filter(other => {
+                                          if (other.userId === manager.userId) return false; // not self
+                                          const alreadyMine = myFloat.includes(other.userId);
+                                          const takenByOther = managersFloatedBySomeone.has(other.userId) && !alreadyMine;
+                                          // Also: a manager who is THEMSELVES floating for people cannot
+                                          // be a float target (no chains / mutual). If `other` has a
+                                          // non-empty list, exclude unless already mine (lets you untick).
+                                          const otherIsFloater = (floaterDraft[other.userId] || []).length > 0;
+                                          if (takenByOther) return false;
+                                          if (otherIsFloater && !alreadyMine) return false;
+                                          return true;
+                                        });
+                                        // This manager can't BE a floater if someone is already floating
+                                        // for them (mutual ban). Disable the toggle in that case.
+                                        const blockedAsFloater = managersFloatedBySomeone.has(manager.userId);
+                                        return (
+                                        <React.Fragment key={manager.userId || idx}>
+                                        <tr className="border-b border-gray-800 hover:bg-gray-700/30 transition-colors">
                                             <td className="py-3 font-bold">{manager.name}</td>
                                             <td className="py-3 text-center">
                                                 <span className="bg-gray-700 px-2 py-1 rounded text-xs text-blue-300 font-mono">{manager.workers}</span>
@@ -1130,13 +1275,112 @@ const SessionCommandCenter: React.FC = () => {
                                             <td className="py-3 text-center">
                                                 <span className="bg-gray-700 px-2 py-1 rounded text-xs text-yellow-300 font-mono">{manager.prebooks}</span>
                                             </td>
+                                            {hasDigitalMapping && (
+                                              <td className="py-3 text-center">
+                                                <button
+                                                  onClick={() => setFloaterPickerFor(pickerOpen ? null : manager.userId)}
+                                                  disabled={blockedAsFloater || savingThis}
+                                                  title={
+                                                    blockedAsFloater
+                                                      ? 'Another manager is floating for this manager — cannot also float (no mutual floating)'
+                                                      : isFloating
+                                                        ? `Floating for ${myFloat.length} manager${myFloat.length === 1 ? '' : 's'}`
+                                                        : 'Set up floating'
+                                                  }
+                                                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                                                    isFloating
+                                                      ? 'bg-red-600/20 text-red-300 border-red-600/50 hover:bg-red-600/30'
+                                                      : 'bg-gray-700 text-gray-300 border-gray-600 hover:bg-gray-600 hover:text-white'
+                                                  }`}
+                                                >
+                                                  {savingThis ? <Loader size={12} className="animate-spin" /> : <Navigation2 size={12} />}
+                                                  {isFloating ? `Floater (${myFloat.length})` : 'Floater'}
+                                                </button>
+                                              </td>
+                                            )}
                                         </tr>
-                                    ))}
+                                        {/* FLOATER PICKER ROW — expands beneath the manager when open */}
+                                        {hasDigitalMapping && pickerOpen && (
+                                          <tr className="bg-gray-900/40">
+                                            <td colSpan={5} className="px-3 py-3">
+                                              <div className="bg-gray-900 border border-gray-700 rounded-lg p-3">
+                                                <div className="flex items-center justify-between mb-2">
+                                                  <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                                                    <Navigation2 size={13} className="text-red-400" />
+                                                    {manager.name} floats for…
+                                                  </div>
+                                                  <div className="flex items-center gap-2">
+                                                    {isFloating && (
+                                                      <button
+                                                        onClick={() => clearFloater(manager.userId)}
+                                                        disabled={savingThis}
+                                                        className="text-[11px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 disabled:opacity-50"
+                                                      >
+                                                        Clear all
+                                                      </button>
+                                                    )}
+                                                    <button
+                                                      onClick={() => setFloaterPickerFor(null)}
+                                                      className="w-6 h-6 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 flex items-center justify-center"
+                                                      title="Close"
+                                                    >
+                                                      <X size={12} />
+                                                    </button>
+                                                  </div>
+                                                </div>
+
+                                                {candidates.length === 0 ? (
+                                                  <div className="text-[11px] text-gray-500 py-2">
+                                                    No eligible managers to float for. (A manager who is
+                                                    already a floater, or who is already being floated for,
+                                                    can't be selected — no mutual or chained floating.)
+                                                  </div>
+                                                ) : (
+                                                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                                                    {candidates.map(other => {
+                                                      const ticked = myFloat.includes(other.userId);
+                                                      const colour = getManagerColor(other.userId, sortedManagerIds);
+                                                      return (
+                                                        <button
+                                                          key={other.userId}
+                                                          onClick={() => toggleFloatTarget(manager.userId, other.userId)}
+                                                          disabled={savingThis}
+                                                          className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors disabled:opacity-50 ${
+                                                            ticked
+                                                              ? 'bg-gray-800 border-gray-600 text-white'
+                                                              : 'bg-gray-800/50 border-gray-700 text-gray-300 hover:bg-gray-800'
+                                                          }`}
+                                                        >
+                                                          <span
+                                                            className="w-3 h-3 rounded-full flex-shrink-0 border border-black/30"
+                                                            style={{ background: colour }}
+                                                          />
+                                                          <span className="flex-1 truncate text-left">{other.name}</span>
+                                                          {ticked && <Check size={12} className="text-green-400 flex-shrink-0" />}
+                                                        </button>
+                                                      );
+                                                    })}
+                                                  </div>
+                                                )}
+
+                                                <div className="text-[10px] text-gray-500 mt-2">
+                                                  {reportIsLive
+                                                    ? 'Changes save immediately to the live session.'
+                                                    : 'Changes are staged and saved when you Initialize the session.'}
+                                                </div>
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        )}
+                                        </React.Fragment>
+                                        );
+                                    })}
                                     <tr className="bg-gray-900/30 font-bold">
                                         <td className="py-3 text-right pr-4 text-gray-400">TOTALS:</td>
                                         <td className="py-3 text-center text-white">{activeReportData.reduce((sum, m) => sum + m.workers, 0)}</td>
                                         <td className="py-3 text-center text-white">{activeReportData.reduce((sum, m) => sum + m.routes, 0)}</td>
                                         <td className="py-3 text-center text-white">{activeReportData.reduce((sum, m) => sum + m.prebooks, 0)}</td>
+                                        {hasDigitalMapping && <td className="py-3" />}
                                     </tr>
                                 </tbody>
                             </table>

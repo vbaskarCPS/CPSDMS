@@ -22,7 +22,7 @@ import { setStorageItem } from '../../../lib/localStorage';
 import {
   RouteData, MasterBooking, LogsheetSession, Worker, ManagementUser,
   HistoricalProperty, SeasonType, TeamCart, PendingSale, SEASON_CONFIGS,
-  SessionTransaction, RouteSplit,
+  SessionTransaction, RouteSplit, ManagerLocation,
 } from '../../../types';
 import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
 import ContractorJobs from './ContractorJobs';
@@ -98,6 +98,16 @@ interface RMMapTabProps {
   onForceFollowMeOn?: () => void;
   showManageTeamModal: boolean;
   onCloseManageTeamModal: () => void;
+  // NEW (Phase 3 — Floater): the union set of manager userIds this RM sees +
+  // controls (own id + floatingFor). For a non-floater this is just [own id],
+  // so every ownership memo below behaves exactly as before. managerColours is
+  // the stable palette map (managerId → hex) computed once in RMLogbook from the
+  // full sorted CC manager list; red for the current viewer is layered on top
+  // here at render time. shouldWriteLocation gates whether THIS device reports
+  // its own GPS position to manager_locations.
+  floatedManagerIds?: string[];
+  managerColours?: Map<string, string>;
+  shouldWriteLocation?: boolean;
 }
 
 interface WorkerCardData {
@@ -493,6 +503,51 @@ function getStalenessColor(updatedAt: string): string {
   return '#ef4444';
 }
 
+// --- MANAGER LOCATION (Phase 3 — Floater) ---
+//
+// Managers report far more often than workers (5s write / 10s read vs the
+// worker 5-min poll), so they get their OWN poll interval and their OWN
+// staleness bands. The worker getStalenessColor above is intentionally left
+// untouched — it's shared with the worker dot markers and its 10/60/120-min
+// bands are correct for that use.
+//
+// Manager staleness bands (locked to spec): green ≤1min, yellow 1-15min,
+// red >15min. The bubble is the small dot behind the arrow; its colour tells
+// the floater at a glance how fresh that manager's position is.
+const MANAGER_LOCATION_POLL_MS = 10 * 1000;
+
+function getManagerStalenessColor(updatedAt: string): string {
+  const ageMin = (Date.now() - new Date(updatedAt).getTime()) / 60000;
+  if (ageMin <= 1)  return '#22c55e'; // green — fresh (≤1 min)
+  if (ageMin <= 15) return '#eab308'; // yellow — getting stale (1-15 min)
+  return '#ef4444';                   // red — stale (>15 min)
+}
+
+// Builds a coloured directional arrow marker for a MANAGER's live location.
+// Mirrors createNavArrow's outer/inner split (outer = Mapbox translate, inner
+// = our heading rotation) but the arrow fill is the manager's palette colour
+// (or red for the current viewer's own arrow), and a staleness "bubble" dot
+// sits behind it. arrowColor + bubbleColor are passed in by the caller.
+//
+// Returns { outer, inner } so the caller can rotate `inner` by the manager's
+// heading exactly as the GPS arrow does.
+function createManagerArrow(arrowColor: string, bubbleColor: string, initials: string): { outer: HTMLDivElement; inner: HTMLDivElement } {
+  const outer = document.createElement('div');
+  outer.style.cssText = 'pointer-events:auto;cursor:pointer;width:34px;height:34px;';
+
+  const inner = document.createElement('div');
+  inner.style.cssText = 'width:100%;height:100%;transition:transform 0.2s linear;transform-origin:50% 50%;';
+  // Outer ring = staleness bubble (colour encodes freshness). Inner arrow =
+  // manager palette colour (or red for self). Black outline keeps it legible
+  // on any basemap. The initials are NOT drawn inside the arrow (too small to
+  // read while rotating) — they live in the marker title/tooltip instead.
+  inner.innerHTML = `<svg width="34" height="34" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="${bubbleColor}" stroke="#000000" stroke-width="1" opacity="0.55"/><path d="M12 3 L18.5 19 L12 14.5 L5.5 19 Z" fill="${arrowColor}" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+
+  outer.appendChild(inner);
+  outer.title = initials;
+  return { outer, inner };
+}
+
 function createWorkerMarkerEl(initials: string, borderColor: string, label: string): HTMLDivElement {
   const el = document.createElement('div');
   el.style.cssText = [
@@ -784,6 +839,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   onForceFollowMeOn,
   showManageTeamModal,
   onCloseManageTeamModal,
+  floatedManagerIds = [],
+  managerColours,
+  shouldWriteLocation = false,
 }) => {
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -868,6 +926,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [workerLocations, setWorkerLocations] = useState<WorkerLocation[]>([]);
   const workerLocationMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
 
+  // --- MANAGER LOCATIONS (Phase 3 — Floater) ---
+  // Live positions of the managers this floater covers (+ self), polled every
+  // MANAGER_LOCATION_POLL_MS. One arrow marker per manager, keyed by managerId.
+  // The inner (rotating) div of each is tracked so the poll can update heading
+  // without rebuilding the marker.
+  const [managerLocations, setManagerLocations] = useState<ManagerLocation[]>([]);
+  const managerLocationMarkersRef = useRef<Map<string, { marker: mapboxgl.Marker; inner: HTMLDivElement }>>(new Map());
+  // Throttle for the WRITER — last time this device wrote its own position.
+  const lastLocationWriteRef = useRef<number>(0);
+
   const [onRouteWorkerCard, setOnRouteWorkerCard] = useState<WorkerCardData | null>(null);
   const [onRouteCartCard, setOnRouteCartCard] = useState<CartCardData | null>(null);
   const onRouteWorkerIdRef = useRef<string | null>(null);
@@ -923,6 +991,15 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [switchNavConfirm, setSwitchNavConfirm] = useState<SwitchNavConfirmation | null>(null);
   const [routeNavPrompt, setRouteNavPrompt] = useState<RouteNavPrompt | null>(null);
 
+  // --- FLOATER: the effective ownership set (Phase 3 — Union-A) ---
+  // own id + everyone floated-for. Empty prop → just [managerId], so all the
+  // ownership memos below collapse to the original single-manager behaviour.
+  // ownerSet is the Set form used by the broadened filters.
+  const ownerSet = useMemo(
+    () => new Set(floatedManagerIds.length ? floatedManagerIds : [managerId]),
+    [floatedManagerIds, managerId]
+  );
+
   // --- ARROW ROTATION ---
   const HEADING_FRESHNESS_MS = 5000;
   const applyArrowRotation = useCallback(() => {
@@ -965,11 +1042,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const isLawnRejuv = seasonType === 'lawn_rejuv';
   const isSealing = seasonType === 'sealing';
 
-  const myRouteCodes = useMemo(() => routes.filter(r => r.managerId === managerId).map(r => r.routeCode), [routes, managerId]);
-  const myTeamIds = useMemo(() => new Set(workers.filter(w => w.assignedManagerId === managerId).map(w => w.contractorId)), [workers, managerId]);
-  const myTeamWorkers = useMemo(() => workers.filter(w => w.assignedManagerId === managerId), [workers, managerId]);
+  // FLOATER Union-A: ownership memos broaden from `=== managerId` to `∈ ownerSet`.
+  // For a non-floater ownerSet is {managerId}, so these are unchanged.
+  const myRouteCodes = useMemo(() => routes.filter(r => r.managerId && ownerSet.has(r.managerId)).map(r => r.routeCode), [routes, ownerSet]);
+  const myTeamIds = useMemo(() => new Set(workers.filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId)).map(w => w.contractorId)), [workers, ownerSet]);
+  const myTeamWorkers = useMemo(() => workers.filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId)), [workers, ownerSet]);
   const routeColorMap = useMemo(() => { const m = new Map<string,string>(); routeMapData.forEach(r => m.set(r.route_code, r.route_color)); return m; }, [routeMapData]);
-  const availableManagers = useMemo(() => allManagers.filter(m => m.userId !== managerId && m.role === 'RouteManager'), [allManagers, managerId]);
+  // availableManagers (transfer targets) = all CC RouteManagers except those
+  // already in the floated set. A floater shouldn't "transfer to" a manager
+  // they already control — that's a no-op move.
+  const availableManagers = useMemo(() => allManagers.filter(m => !ownerSet.has(m.userId) && m.role === 'RouteManager'), [allManagers, ownerSet]);
 
   // Fast lookup: route code → its split row (if any). One source of truth used
   // by routeCardData, the master map renderer, click handlers, and the
@@ -1020,9 +1102,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [seasonType]);
 
   // Worker card data (aeration only)
+  // FLOATER Union-A: filter broadened from `=== managerId` to `∈ ownerSet`.
   const workerCardData = useMemo<WorkerCardData[]>(() => {
     if (isTeamSeason) return [];
-    return workers.filter(w => w.assignedManagerId === managerId).map(worker => {
+    return workers.filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId)).map(worker => {
       const session = allSessions.find(s => s.workerId === worker.contractorId);
       const st = session?.stats; const fs = session?.financialStore || [];
       const wb = bookings.filter(b => b['Contractor Number'] === worker.contractorId);
@@ -1060,7 +1143,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
       };
     });
-  }, [workers, managerId, allSessions, bookings, isTeamSeason]);
+  }, [workers, ownerSet, allSessions, bookings, isTeamSeason]);
 
   useEffect(() => { workerCardDataRef.current = workerCardData; }, [workerCardData]);
 
@@ -1305,7 +1388,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     };
 
     for (const r of routes) {
-      if (r.managerId !== managerId) continue;
+      if (!r.managerId || !ownerSet.has(r.managerId)) continue;
       const rmi = routeMapData.find(rm => rm.route_code === r.routeCode);
       const baseColor = rmi?.route_color || '#6b7280';
       const split = routeSplitsByCode.get(r.routeCode);
@@ -1359,7 +1442,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       if (a.isAssigned !== b.isAssigned) return a.isAssigned ? 1 : -1;
       return a.displayRouteCode.localeCompare(b.displayRouteCode);
     });
-  }, [routes, managerId, routeMapData, workers, bookings, calculateBookingEQ, routeSplitsByCode]);
+  }, [routes, ownerSet, routeMapData, workers, bookings, calculateBookingEQ, routeSplitsByCode]);
 
   // Split pins into pending-only and completed/new-sale-only — driven by the
   // new filter system. Each set is also visibility-gated separately downstream.
@@ -1517,9 +1600,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, []);
 
   // Worker location fetch
+  // FLOATER Union-A: fetch locations for everyone on the floated team, not just
+  // the logged-in manager's own workers.
   const fetchWorkerLocations = useCallback(async () => {
     const teamIds = workers
-      .filter(w => w.assignedManagerId === managerId)
+      .filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId))
       .map(w => w.contractorId);
     if (!teamIds.length) return;
     try {
@@ -1533,7 +1618,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     } catch (e) {
       console.error('Failed to fetch worker locations:', e);
     }
-  }, [workers, managerId]);
+  }, [workers, ownerSet]);
 
   useEffect(() => {
     if (!mapLoaded) return;
@@ -1577,6 +1662,105 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       workerLocationMarkersRef.current.delete(id);
     });
   }, [workerLocations, mapLoaded, workers]);
+
+  // --- MANAGER LOCATION READER (Phase 3 — Floater) ---
+  //
+  // Polls manager_locations every MANAGER_LOCATION_POLL_MS (10s — far tighter
+  // than the 5-min worker poll). getManagerLocations() returns the whole CC's
+  // manager rows; we filter to the floated set (own id + floatingFor) so a
+  // floater sees their covered managers and a non-floater sees only themselves.
+  //
+  // NOTE: the current viewer's OWN arrow is already drawn by the red GPS arrow
+  // (navMarkerRef) from live device GPS, which is fresher than the DB row. So
+  // we EXCLUDE managerId from the rendered set here to avoid two arrows on top
+  // of each other for the person looking at the screen.
+  const fetchManagerLocations = useCallback(async () => {
+    try {
+      const rows = await sessionService.getManagerLocations();
+      if (!mountedRef.current) return;
+      const filtered = rows.filter(r => ownerSet.has(r.managerId) && r.managerId !== managerId);
+      setManagerLocations(filtered);
+    } catch (e) {
+      console.error('Failed to fetch manager locations:', e);
+    }
+  }, [ownerSet, managerId]);
+
+  useEffect(() => {
+    if (!mapLoaded) return;
+    fetchManagerLocations();
+    const interval = setInterval(fetchManagerLocations, MANAGER_LOCATION_POLL_MS);
+    return () => clearInterval(interval);
+  }, [mapLoaded, fetchManagerLocations]);
+
+  // Render / update manager arrow markers. Colour = the manager's palette hue
+  // from managerColours (red is reserved for the viewer's own GPS arrow, which
+  // is drawn separately, so palette colours are correct for everyone here). The
+  // staleness bubble behind each arrow encodes freshness via getManager
+  // StalenessColor. Heading rotates the inner div, same trick as the GPS arrow.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+
+    const existingIds = new Set(managerLocationMarkersRef.current.keys());
+
+    managerLocations.forEach(loc => {
+      const mgr = allManagers.find(m => m.userId === loc.managerId);
+      const name = mgr?.name || 'Manager';
+      const initials = name.split(/\s+/).map(p => p.charAt(0)).join('').slice(0, 2).toUpperCase() || 'M';
+      const arrowColor = managerColours?.get(loc.managerId) || '#9ca3af';
+      const bubbleColor = getManagerStalenessColor(loc.updatedAt);
+      const heading = (loc.heading != null && !isNaN(loc.heading)) ? loc.heading : 0;
+      const mapBearing = map.getBearing();
+
+      const existing = managerLocationMarkersRef.current.get(loc.managerId);
+      if (existing) {
+        existing.marker.setLngLat([loc.lng, loc.lat]);
+        // Update colours + heading without rebuilding the marker.
+        const svg = existing.inner.querySelector('svg');
+        if (svg) {
+          const circle = svg.querySelector('circle');
+          const path = svg.querySelector('path');
+          if (circle) circle.setAttribute('fill', bubbleColor);
+          if (path) path.setAttribute('fill', arrowColor);
+        }
+        existing.inner.style.transform = `rotate(${heading - mapBearing}deg)`;
+        existing.marker.getElement().title = name;
+        existingIds.delete(loc.managerId);
+      } else {
+        const { outer, inner } = createManagerArrow(arrowColor, bubbleColor, name);
+        inner.style.transform = `rotate(${heading - mapBearing}deg)`;
+        const marker = new mapboxgl.Marker({ element: outer, anchor: 'center' })
+          .setLngLat([loc.lng, loc.lat])
+          .addTo(map);
+        // Tapping a manager arrow could open a detail card in a later phase;
+        // for now it's a no-op beyond the title tooltip.
+        managerLocationMarkersRef.current.set(loc.managerId, { marker, inner });
+      }
+    });
+
+    existingIds.forEach(id => {
+      managerLocationMarkersRef.current.get(id)?.marker.remove();
+      managerLocationMarkersRef.current.delete(id);
+    });
+  }, [managerLocations, mapLoaded, allManagers, managerColours]);
+
+  // Keep manager arrows pointing correctly when the MAP rotates (their heading
+  // is absolute, so the on-screen rotation must subtract the map bearing).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const onRotate = () => {
+      const mapBearing = map.getBearing();
+      managerLocations.forEach(loc => {
+        const entry = managerLocationMarkersRef.current.get(loc.managerId);
+        if (!entry) return;
+        const heading = (loc.heading != null && !isNaN(loc.heading)) ? loc.heading : 0;
+        entry.inner.style.transform = `rotate(${heading - mapBearing}deg)`;
+      });
+    };
+    map.on('rotate', onRotate);
+    return () => { map.off('rotate', onRotate); };
+  }, [managerLocations, mapLoaded]);
 
   // Geocode cache hydration
   useEffect(() => {
@@ -2705,6 +2889,19 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
       lastGpsPosRef.current = { lat, lng, ts: Date.now() };
       applyArrowRotation();
+      // FLOATER (Phase 3 — Floater): report THIS device's own position to
+      // manager_locations, throttled to one write per 5 seconds, and only when
+      // this manager is a floater or is covered by one (shouldWriteLocation).
+      // The heading written is the real derivedHeading, so floaters see the
+      // arrow pointing the right way. If derivedHeading is null (stationary /
+      // no fix delta), we write undefined — the column is nullable.
+      if (shouldWriteLocation) {
+        const nowMs = Date.now();
+        if (nowMs - lastLocationWriteRef.current >= 5000) {
+          lastLocationWriteRef.current = nowMs;
+          sessionService.upsertManagerLocation(lat, lng, derivedHeading ?? undefined).catch(() => {});
+        }
+      }
       if (centerOnLocationRef.current) {
         mapRef.current.easeTo({ center: [lng, lat], duration: 300 });
         lastCenteredAtRef.current = { lat, lng };
@@ -2745,7 +2942,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}
       navMarkerRef.current?.remove();navMarkerRef.current=null;
     };
-  }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable, applyArrowRotation]);
+  }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable, applyArrowRotation, shouldWriteLocation]);
 
   // Compass
   const attachCompassListener = useCallback(() => {
@@ -2879,6 +3076,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       pendingSaleMarkersRef.current.clear();
       workerLocationMarkersRef.current.forEach(m => m.remove());
       workerLocationMarkersRef.current.clear();
+      // FLOATER (Phase 3): tear down manager-location arrow markers too.
+      managerLocationMarkersRef.current.forEach(({ marker }) => marker.remove());
+      managerLocationMarkersRef.current.clear();
       map.remove();mapRef.current=null;setMapLoaded(false);
     };
   }, [suppressDuplicateLabels]);

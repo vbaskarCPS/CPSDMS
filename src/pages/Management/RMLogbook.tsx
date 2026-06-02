@@ -14,6 +14,7 @@ import {
 import { sessionService } from '../../lib/sessionService';
 import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterService';
 import { subscribeAsRouteManager } from '../../lib/realtimeService';
+import { getManagerColor } from '../../lib/managerPalette';
 
 import RMTeamTab from './components/RMTeamTab';
 import RMRoutesTab from './components/RMRoutesTab';
@@ -150,6 +151,49 @@ const RMLogbook: React.FC = () => {
   const [showAsphaltModal, setShowAsphaltModal] = useState(false);
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // --- FLOATER (digital-mapping CCs) ---
+  // The set of manager userIds whose data this RM should see + control: their
+  // OWN id plus everyone on their floatingFor list. A non-floater (empty list)
+  // collapses to just [their own id] → identical to pre-floater behaviour.
+  // RMMapTab receives this and broadens its ownership memos to span the set.
+  const floatedManagerIds = useMemo(() => {
+    if (!currentUser) return [];
+    const floats = Array.isArray(currentUser.floatingFor) ? currentUser.floatingFor : [];
+    return Array.from(new Set([currentUser.userId, ...floats]));
+  }, [currentUser]);
+
+  // --- FLOATER: palette colour map (managerId → hex) ---
+  // Computed from the FULL CC manager list sorted by userId so every floater's
+  // map agrees on a given manager's colour. Red is layered on top for the
+  // current viewer inside RMMapTab — this map holds only the stable palette
+  // colours. Passed down so the map and (later) the arrows read one source.
+  const managerColours = useMemo(() => {
+    const m = new Map<string, string>();
+    if (!dailyData) return m;
+    const sortedIds = dailyData.managers.map(mgr => mgr.userId).sort();
+    for (const id of sortedIds) m.set(id, getManagerColor(id, sortedIds));
+    return m;
+  }, [dailyData]);
+
+  // --- FLOATER: should THIS device write its own manager_location? ---
+  // Per the locked design, only floaters and the managers they cover report
+  // location. A device can't know on its own whether it's covered (that fact
+  // lives on OTHER managers' floatingFor lists), so we derive it from the full
+  // CC manager list: write if my own floatingFor is non-empty OR my userId
+  // appears in any other manager's floatingFor. Idle, uncovered managers stay
+  // silent. (A newly-covered manager begins writing after their next dailyData
+  // refresh picks up the change — up to ~30s.)
+  const shouldWriteLocation = useMemo(() => {
+    if (!currentUser || !dailyData) return false;
+    const myFloats = Array.isArray(currentUser.floatingFor) ? currentUser.floatingFor : [];
+    if (myFloats.length > 0) return true;
+    return dailyData.managers.some(mgr =>
+      mgr.userId !== currentUser.userId &&
+      Array.isArray(mgr.floatingFor) &&
+      mgr.floatingFor.includes(currentUser.userId)
+    );
+  }, [currentUser, dailyData]);
 
   const refreshData = async (overrideUser?: ManagementUser) => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -336,7 +380,12 @@ const RMLogbook: React.FC = () => {
   useEffect(() => {
     if (!dailyData || !allSessions || !currentUser) return;
 
-    const myTeam = dailyData.workers.filter(w => w.assignedManagerId === currentUser.userId);
+    // FLOATER Union-A: ownership spans the floated set (own id + floatingFor),
+    // not just the logged-in manager. For a non-floater this is a single-id set,
+    // so the stats below are computed exactly as before.
+    const ownerSet = new Set(floatedManagerIds.length ? floatedManagerIds : [currentUser.userId]);
+
+    const myTeam = dailyData.workers.filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId));
     const myTeamIdsSet = new Set(myTeam.map(w => w.contractorId));
 
     const mySessions = allSessions.filter(s => {
@@ -347,7 +396,7 @@ const RMLogbook: React.FC = () => {
       return false;
     });
 
-    const myRoutes = dailyData.routes.filter(r => r.managerId === currentUser.userId);
+    const myRoutes = dailyData.routes.filter(r => r.managerId && ownerSet.has(r.managerId));
     const myRouteCodes = new Set(myRoutes.map(r => r.routeCode));
 
     const workerCount = myTeam.length;
@@ -431,7 +480,7 @@ const RMLogbook: React.FC = () => {
         teamCartAvgGross,
     });
 
-  }, [dailyData, allSessions, currentUser, isTeamSeason, pendingSalesByManager, seasonType]);
+  }, [dailyData, allSessions, currentUser, isTeamSeason, pendingSalesByManager, seasonType, floatedManagerIds]);
 
   if (loading || !currentUser || !dailyData)
     return (
@@ -908,6 +957,10 @@ const RMLogbook: React.FC = () => {
             onForceFollowMeOn={handleForceFollowMeOn}
             showManageTeamModal={showManageTeamModal}
             onCloseManageTeamModal={() => setShowManageTeamModal(false)}
+            // NEW (Phase 3 — Floater): union set, palette, location-write gate
+            floatedManagerIds={floatedManagerIds}
+            managerColours={managerColours}
+            shouldWriteLocation={shouldWriteLocation}
           />
         )}
       </div>

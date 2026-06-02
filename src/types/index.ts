@@ -129,6 +129,11 @@ export interface ManagementUser {
   phone?: string; // Manager's phone number
   role: 'Admin' | 'RouteManager'; 
   commandCenterId?: string; // Links to CommandCenter.id
+  // --- FLOATER (Digital mapping CCs only) ---
+  // List of OTHER managers' userIds this manager is floating for. A floater
+  // sees all routes/bookings/workers/locations for everyone in this list, plus
+  // their own. Stored in users.metadata.floatingFor. Absent/empty = not floating.
+  floatingFor?: string[];
 }
 
 // --- BONUS STRUCTURE ---
@@ -193,6 +198,21 @@ export interface HistoricalProperty {
   price?: string;
   paymentType?: string;
   contractorName?: string;
+}
+
+// --- MANAGER LIVE LOCATION (Floater feature — digital-mapping CCs only) ---
+// One row per manager in the manager_locations table, overwritten on each GPS
+// update (no history — mirrors worker_locations). A manager's own device writes
+// its position while RMMapTab is open; floaters read every manager's row to draw
+// coloured directional arrows with staleness bubbles. Single source of truth for
+// this shape so the arrow/staleness consumers (later phases) can't drift.
+export interface ManagerLocation {
+  managerId: string;
+  lat: number;
+  lng: number;
+  heading: number | null;   // bearing in degrees; null = no compass fix → north-pointing arrow
+  updatedAt: string;        // ISO timestamp; staleness bubbles (green/yellow/red) key off this
+  commandCenterId?: string;
 }
 
 // --- DATA FEED STRUCTURE ---
