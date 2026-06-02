@@ -52,8 +52,9 @@ interface GeocodedPendingSale {
   lat: number;
   lng: number;
   booking: MasterBooking;
+  createdAt?: string;   // carried from PendingSale.createdAt for recency comparison
+  sessionId?: string;   // carried from PendingSale.sessionId for per-cart grouping
 }
-
 interface GeocodedPCLEntry {
   key: string;
   lat: number;
@@ -407,6 +408,8 @@ const convertPendingSaleToBooking = (ps: PendingSale): MasterBooking => {
     services: ps.services,
     isPendingSale: true,
     pendingSaleId: ps.id,
+    pendingCreatedAt: ps.createdAt,
+    pendingSessionId: ps.sessionId,
     asphaltAmount: ps.asphaltAmount,
     upsoldAsphaltAmount: ps.upsoldAsphaltAmount,
     saleType: ps.saleType,
@@ -2596,7 +2599,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           const addrKey = makeCacheKey(address);
           const cached = geocodeCache.get(addrKey);
           if (cached) {
-            pendingSalesCached.push({ id: booking['Booking ID'], lat: cached.lat, lng: cached.lng, booking });
+            pendingSalesCached.push({ id: booking['Booking ID'], lat: cached.lat, lng: cached.lng, booking, createdAt: (booking as any).pendingCreatedAt, sessionId: (booking as any).pendingSessionId });
           } else {
             pendingSalesNeedsGeocoding.push({ booking, address, id: booking['Booking ID'] });
           }
@@ -2631,7 +2634,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         if (cancelled || !mountedRef.current) return;
         const { booking, address, id } = pendingSalesNeedsGeocoding[i];
         const coord = await geocodeOne(address);
-        if (coord) newPSResults.push({ id, lat: coord.lat, lng: coord.lng, booking });
+        if (coord) newPSResults.push({ id, lat: coord.lat, lng: coord.lng, booking, createdAt: (booking as any).pendingCreatedAt, sessionId: (booking as any).pendingSessionId });
         if (cancelled || !mountedRef.current) return;
         progressDone++;
         onGeocodeProgress('phase2_completed_and_sales', 'pendingSalesAndCompleted', progressDone, totalToGeocode, false);
@@ -2763,7 +2766,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         const address = booking['Full Address'] || '';
         if (!address) continue;
         const coord = await geocodeOne(address);
-        if (coord) additions.push({ id: booking['Booking ID'], lat: coord.lat, lng: coord.lng, booking });
+        if (coord) additions.push({ id: booking['Booking ID'], lat: coord.lat, lng: coord.lng, booking, createdAt: (booking as any).pendingCreatedAt, sessionId: (booking as any).pendingSessionId });
         await new Promise(r => setTimeout(r, 80));
       }
       if (cancelled || !mountedRef.current) return;
