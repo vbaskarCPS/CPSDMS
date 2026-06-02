@@ -52,6 +52,7 @@ import PayslipGenerator from './PayslipGenerator';
 import RouteFinderView from '../../components/RouteFinder/RouteFinderView';
 import DigitalMasterBookings from './DigitalMasterBookings';
 import DigitalWorkerbook from './DigitalWorkerbook';
+import RouteFinderUpdater from './RouteFinderUpdater';
 
 // --- FLOATER PALETTE (Digital mapping CCs only) ---
 // The palette + colour-assignment helper now live in a shared module so
@@ -94,6 +95,9 @@ const SessionCommandCenter: React.FC = () => {
 
   // Digital Workerbook visibility
   const [showDigitalWorkerbook, setShowDigitalWorkerbook] = useState(false);
+
+  // Route Finder Updater visibility
+  const [showRouteFinderUpdater, setShowRouteFinderUpdater] = useState(false);
 
   // --- COMMAND CENTER CONTEXT (stored in state to avoid infinite loops) ---
   const [currentCC, setCurrentCC] = useState(() => commandCenterService.getCurrentCommandCenter());
@@ -761,6 +765,10 @@ const SessionCommandCenter: React.FC = () => {
     return <DigitalWorkerbook onBack={() => setShowDigitalWorkerbook(false)} />;
   }
 
+  if (showRouteFinderUpdater) {
+    return <RouteFinderUpdater onBack={() => setShowRouteFinderUpdater(false)} />;
+  }
+
   // Helper for active-session header badge styling
   // TODO: When 'cleaning' season ships, add a 4th branch here for cleaning badges.
   const getSeasonBadgeClasses = (seasonType?: SeasonType): string => {
@@ -942,6 +950,15 @@ const SessionCommandCenter: React.FC = () => {
                     <MapPin size={16} className="text-blue-400" />
                     Route Finder
                   </button>
+                  {hasDigitalMapping && (
+                    <button
+                      onClick={() => setShowRouteFinderUpdater(true)}
+                      className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-700 transition-colors text-sm font-medium"
+                    >
+                      <Navigation2 size={16} className="text-amber-400" />
+                      Route Finder Updater
+                    </button>
+                  )}
                   <button
                     onClick={() => setShowPayslipGenerator(true)}
                     className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-700 transition-colors text-sm font-medium"
