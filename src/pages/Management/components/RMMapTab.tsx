@@ -938,7 +938,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return s;
   }, [managerId, currentUser]);
 
-  const myRouteCodes = useMemo(() => routes.filter(r => coveredManagerIds.has(r.managerId)).map(r => r.routeCode), [routes, coveredManagerIds]);
+  // Stable-identity route-code list. routes gets a fresh array identity on every
+  // realtime fire even when contents are unchanged; without stabilising here,
+  // pendingBookingPinSource churns and Phase 1's geocode loop restarts each
+  // refresh (the "geocodes one more every refresh" creep). We compute a content
+  // signature and only return a NEW array when the actual set of codes changes —
+  // same technique as RMLogbook's reconcilePendingBookings (Fix 1), one level down.
+  const myRouteCodesSignature = useMemo(
+    () => routes.filter(r => coveredManagerIds.has(r.managerId)).map(r => r.routeCode).sort().join('|'),
+    [routes, coveredManagerIds]
+  );
+  const myRouteCodes = useMemo(
+    () => (myRouteCodesSignature ? myRouteCodesSignature.split('|') : []),
+    [myRouteCodesSignature]
+  );
   const myTeamIds = useMemo(() => new Set(workers.filter(w => coveredManagerIds.has(w.assignedManagerId as string)).map(w => w.contractorId)), [workers, coveredManagerIds]);
   const myTeamWorkers = useMemo(() => workers.filter(w => coveredManagerIds.has(w.assignedManagerId as string)), [workers, coveredManagerIds]);
   const routeColorMap = useMemo(() => { const m = new Map<string,string>(); routeMapData.forEach(r => m.set(r.route_code, r.route_color)); return m; }, [routeMapData]);
@@ -3291,7 +3304,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
     return m;
   }, [routes, coveredManagerIds, routeSplitsByCode, routeColorMap]);
-  
+
   // Sorted worker list (aeration): fewest routes first, alphabetical tiebreaker.
   const sortedAerationAssignList = useMemo(() => {
     return [...myTeamWorkers].sort((a, b) => {
