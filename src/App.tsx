@@ -7,6 +7,10 @@ import HomePage from './pages/HomePage';
 import SessionCommandCenter from './pages/Admin/SessionCommandCenter';
 import CommandCenterCreator from './pages/SuperAdmin/CommandCenterCreator';
 
+// DEBUG: temporary error boundary so a render crash shows the real error
+// on-screen (readable on a tablet) instead of a black screen.
+import ErrorBoundary from './components/ErrorBoundary';
+
 // Admin pages - regular imports for reliability (avoid chunk loading issues)
 import EmailTemplates from './pages/Admin/EmailTemplates';
 import EmailTemplateEditor from './pages/Admin/EmailTemplateEditor';
@@ -62,8 +66,11 @@ function App() {
         <Route path="/super-admin/map-viewer" element={<MapViewer />} />
 
         {/* Command Center Admin Routes */}
-        <Route path="/admin" element={<SessionCommandCenter />} />
-        <Route path="/admin/command-center" element={<SessionCommandCenter />} />
+        {/* DEBUG: SessionCommandCenter wrapped in ErrorBoundary to surface the
+            floater-button crash as readable on-screen text. Remove the two
+            <ErrorBoundary> wrappers (and the import above) once fixed. */}
+        <Route path="/admin" element={<ErrorBoundary><SessionCommandCenter /></ErrorBoundary>} />
+        <Route path="/admin/command-center" element={<ErrorBoundary><SessionCommandCenter /></ErrorBoundary>} />
         <Route path="/admin/payout/:contractorId" element={<PayoutContractor />} />
         <Route path="/admin/email-templates" element={<EmailTemplates />} />
         <Route path="/admin/email-templates/:templateType" element={<EmailTemplateEditor />} />
