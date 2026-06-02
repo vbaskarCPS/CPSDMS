@@ -22,7 +22,7 @@ import { setStorageItem } from '../../../lib/localStorage';
 import {
   RouteData, MasterBooking, LogsheetSession, Worker, ManagementUser,
   HistoricalProperty, SeasonType, TeamCart, PendingSale, SEASON_CONFIGS,
-  SessionTransaction, RouteSplit,
+  SessionTransaction, RouteSplit, ManagerLocation,
 } from '../../../types';
 import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
 import ContractorJobs from './ContractorJobs';
@@ -98,6 +98,16 @@ interface RMMapTabProps {
   onForceFollowMeOn?: () => void;
   showManageTeamModal: boolean;
   onCloseManageTeamModal: () => void;
+  // NEW (Phase 3 — Floater): the union set of manager userIds this RM sees +
+  // controls (own id + floatingFor). For a non-floater this is just [own id],
+  // so every ownership memo below behaves exactly as before. managerColours is
+  // the stable palette map (managerId → hex) computed once in RMLogbook from the
+  // full sorted CC manager list; red for the current viewer is layered on top
+  // here at render time. shouldWriteLocation gates whether THIS device reports
+  // its own GPS position to manager_locations.
+  floatedManagerIds?: string[];
+  managerColours?: Map<string, string>;
+  shouldWriteLocation?: boolean;
 }
 
 interface WorkerCardData {
@@ -136,9 +146,23 @@ interface CartCardData {
   };
 }
 
+// RouteCardData extended for recursive split awareness.
+//
+// For a route with NO splits, one card is generated with:
+//   isSplit = false, letter = undefined, displayRouteCode = baseRouteCode = "BIN09"
+//
+// For a route that HAS splits, N cards are generated (one per bucket):
+//   - { isSplit: true, letter: 'a', baseRouteCode: 'BIN09', displayRouteCode: 'BIN09a', routeColor: <original> }
+//   - { isSplit: true, letter: 'b', baseRouteCode: 'BIN09', displayRouteCode: 'BIN09b', routeColor: <60° rotated> }
+//   - { isSplit: true, letter: 'c', baseRouteCode: 'BIN09', displayRouteCode: 'BIN09c', routeColor: <120° rotated> }
+//   - ...
+//
+// Each card's prebookCount, prepayCount, totalEQ, assignedWorkerIds are scoped
+// to that bucket. The Split button is no longer on these cards — it lives
+// inside the assignment modal that opens when a card is tapped.
 interface RouteCardData {
-  routeCode: string;
-  displayRouteCode: string;
+  routeCode: string;          // baseRouteCode for split cards; full code for non-split
+  displayRouteCode: string;   // what to show in UI ("BIN09" or "BIN09a"/"BIN09b"/...)
   routeColor: string;
   assignedWorkerIds: string[];
   assignedWorkerLabel: string;
@@ -147,27 +171,39 @@ interface RouteCardData {
   totalEQ: number;
   isAssigned: boolean;
   isSplit: boolean;
-  letter?: string;
-  baseRouteCode: string;
+  letter?: string;            // the bucket letter for split cards; undefined for whole-route
+  baseRouteCode: string;      // always the underlying DB route_code
 }
 
+// AssignModalData extended for recursive splits.
+// letter=undefined → regular full-route assignment (unchanged behaviour).
+// letter is set → assigning that bucket of a split route; handleAssignRoute
+// calls updateRouteSplitAssignment(routeCode, letter, workerIds).
+//
+// canSplit is true iff the current bucket has zero assigned workers. When
+// true, the Split button at the TOP of the modal is enabled.
 interface AssignModalData {
-  routeCode: string;
-  displayRouteCode: string;
-  routeColor: string;
+  routeCode: string;          // base route code
+  displayRouteCode: string;   // header display ("BIN09" or "BIN09a"/"BIN09b"/...)
+  routeColor: string;         // colour for this specific bucket
   prebookCount: number;
   prepayCount: number;
   totalEQ: number;
   currentWorkerIds: string[];
-  letter?: string;
-  canSplit: boolean;
+  letter?: string;            // bucket letter, undefined for whole-route
+  canSplit: boolean;          // controls Split button enabled state
 }
 
+// NEW: nav-related state types.
+// Active nav state — destination + label for the maneuver card.
 interface NavState {
   destination: NavDestination;
-  targetKey: string;
+  // Lightweight identifier so we can detect "is this the same target?" if user re-taps.
+  targetKey: string;       // e.g. 'worker:abc123' or 'cart:sess_xyz'
 }
 
+// Switch-target confirmation popup data — shown when user taps Navigate on a
+// different worker/cart while another nav is active.
 interface SwitchNavConfirmation {
   newDestination: NavDestination;
   newTargetKey: string;
@@ -175,10 +211,25 @@ interface SwitchNavConfirmation {
   newLabel: string;
 }
 
+// NEW: route-line-click navigation prompt (Staff mode only).
+// When the RM taps a route line on the map while the Staff sidebar is open,
+// we offer to navigate to whoever's working that route. If exactly one
+// contractor/cart is assigned, the modal is a confirmation ("Navigate to
+// John?"). If multiple distinct carts are assigned (rare), it's a picker
+// with one Navigate button per cart. Unassigned routes are silently ignored
+// (no popup at all) — to (re)assign a route, switch to Routes mode.
 interface RouteNavPromptEntry {
+  // 'worker' for aeration solo workers, 'cart' for team-season carts
+  // (including multi-member carts and single-member team carts).
   type: 'worker' | 'cart';
+  // Display label: "John D." or "John & Mike"
   label: string;
+  // The card object — shape depends on `type`. Cast at the call site of the
+  // existing handleNavigate{ToWorker,ToCart} handlers.
   card: WorkerCardData | CartCardData;
+  // Whether resolveNavDestination() returns a coordinate for this contractor.
+  // False means there's no geocoded transaction to navigate to — we still
+  // render the entry but the Navigate button is disabled.
   hasGeocodableAddress: boolean;
 }
 
@@ -203,6 +254,18 @@ const isRcWorker = (teamId: string | null | undefined): boolean => {
   return !!teamId && RC_TEAM_PATTERN.test(teamId);
 };
 
+// --- colorForBucket: HSL hue rotation by 60° per bucket letter index. ---
+//
+// Same algorithm as RouteSplitModal.tsx — keep the two in sync. 'a' returns
+// baseColor unchanged; each subsequent letter rotates hue +60° from 'a'.
+// Supports up to 'f' (6 buckets total = full 360° wheel); 'g'..'z' would
+// land on a duplicate hue but we cap splits at 26 buckets in the service
+// and visually they'd be indistinguishable anyway.
+//
+// If you ever want to factor this into a shared util, both files need to
+// import the same function so they stay in sync — silent colour drift
+// between the modal preview and the master map render would be a nasty
+// bug to chase.
 function colorForBucket(baseHex: string, letter: string | undefined): string {
   if (!letter || letter === 'a') return baseHex;
   const idx = letter.charCodeAt(0) - 'a'.charCodeAt(0);
@@ -239,17 +302,64 @@ function colorForBucket(baseHex: string, letter: string | undefined): string {
   return `#${to(rr)}${to(gg)}${to(bb)}`;
 }
 
-function bucketForPoint(lng: number, lat: number, buckets: Array<{letter: string; sourceLetter: string | null; rectangles: Array<{west: number; east: number; south: number; north: number}>}>): string {
+// --- bucketForPoint: cascade algorithm shared with RouteSplitModal.
+//
+// Determines which bucket a (lng, lat) point belongs to given the buckets
+// array. Identical algorithm to RouteSplitModal so master map render and
+// modal preview agree pixel-for-pixel.
+//
+// Process buckets in chronological order (skipping index 0, which is 'a'
+// and has no rectangles). For each non-'a' bucket B:
+//   if currentBucket == B.sourceLetter AND point inside any B.rectangle →
+//   currentBucket = B.letter
+// pointInPolygon: standard ray-casting test. Works for any simple polygon,
+// including the 4-corner quadrilaterals the split modal draws (which stay
+// simple because they come from a screen-aligned pixel rectangle projected
+// through map.unproject). Kept identical in behaviour to RouteSplitModal's
+// copy so the master map and the modal preview agree on which bucket a point
+// falls in.
+function pointInPolygon(lng: number, lat: number, corners: Array<{ lng: number; lat: number }>): boolean {
+  let inside = false;
+  for (let i = 0, j = corners.length - 1; i < corners.length; j = i++) {
+    const xi = corners[i].lng, yi = corners[i].lat;
+    const xj = corners[j].lng, yj = corners[j].lat;
+    const intersect = ((yi > lat) !== (yj > lat))
+      && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// pointInAnyRect: true if the point lies inside any of the corners-shaped
+// rectangles. The service (mapDbRouteSplit) always normalises stored
+// rectangles to the { corners: [...] } shape before they ever reach this
+// file — including converting legacy {west,east,south,north} rows — so we
+// only need to handle corners here.
+function pointInAnyRect(lng: number, lat: number, rects: Array<{ corners: Array<{ lng: number; lat: number }> }>): boolean {
+  for (const r of rects) {
+    if (r.corners && r.corners.length >= 3 && pointInPolygon(lng, lat, r.corners)) return true;
+  }
+  return false;
+}
+
+// --- bucketForPoint: cascade algorithm shared with RouteSplitModal.
+//
+// Determines which bucket a (lng, lat) point belongs to given the buckets
+// array. Identical algorithm to RouteSplitModal so master map render and
+// modal preview agree pixel-for-pixel.
+//
+// Process buckets in chronological order (skipping index 0, which is 'a'
+// and has no rectangles). For each non-'a' bucket B:
+//   if currentBucket == B.sourceLetter AND point inside any B.rectangle →
+//   currentBucket = B.letter
+function bucketForPoint(lng: number, lat: number, buckets: Array<{letter: string; sourceLetter: string | null; rectangles: Array<{ corners: Array<{ lng: number; lat: number }> }>}>): string {
   let current = 'a';
   for (let i = 1; i < buckets.length; i++) {
     const b = buckets[i];
     if (b.sourceLetter !== current) continue;
     if (!b.rectangles || b.rectangles.length === 0) continue;
-    for (const r of b.rectangles) {
-      if (lng >= r.west && lng <= r.east && lat >= r.south && lat <= r.north) {
-        current = b.letter;
-        break;
-      }
+    if (pointInAnyRect(lng, lat, b.rectangles)) {
+      current = b.letter;
     }
   }
   return current;
@@ -347,6 +457,10 @@ async function geocodeAddress(addr: string, pLat?: number, pLng?: number): Promi
   } catch { return null; }
 }
 
+// Helper: distance in meters between two lat/lng points using the simple
+// equirectangular approximation. Plenty accurate at city-block scale and
+// orders of magnitude cheaper than haversine. Used by the GPS watcher to
+// decide whether the user has moved far enough to derive a heading.
 function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const cosLat = Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
   const mPerDegLat = 111320;
@@ -356,12 +470,25 @@ function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number):
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+// Builds the GPS "you are here" marker. Returns an OUTER wrapper that's safe
+// to hand to Mapbox (Mapbox sets `transform: translate(...)` on it for
+// positioning) and an INNER rotating div that we control for heading rotation.
+//
+// This split matters: if we tried to rotate the same div Mapbox uses for
+// positioning, Mapbox would clobber our rotate() on every map move with its
+// own translate(). Two nested divs sidestep the conflict — outer gets
+// translate, inner gets rotate, neither fights the other.
 function createNavArrow(): { outer: HTMLDivElement; inner: HTMLDivElement } {
   const outer = document.createElement('div');
   outer.style.cssText = 'pointer-events:none;width:29px;height:29px;';
 
   const inner = document.createElement('div');
+  // 0.15s transition smooths low-rate GPS-derived heading updates without
+  // adding noticeable lag to high-rate compass events.
   inner.style.cssText = 'width:100%;height:100%;transition:transform 0.15s linear;transform-origin:50% 50%;';
+  // Red arrow with black outline on a translucent black halo. Higher visual
+  // weight than the original blue-on-white version — easier to spot on busy
+  // map backgrounds.
   inner.innerHTML = `<svg width="29" height="29" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#000000" stroke="#ffffff" stroke-width="1.5" opacity="0.35"/><path d="M12 3 L18.5 19 L12 14.5 L5.5 19 Z" fill="#ef4444" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 
   outer.appendChild(inner);
@@ -374,6 +501,51 @@ function getStalenessColor(updatedAt: string): string {
   if (ageMin <= 60)  return '#eab308';
   if (ageMin <= 120) return '#f97316';
   return '#ef4444';
+}
+
+// --- MANAGER LOCATION (Phase 3 — Floater) ---
+//
+// Managers report far more often than workers (5s write / 10s read vs the
+// worker 5-min poll), so they get their OWN poll interval and their OWN
+// staleness bands. The worker getStalenessColor above is intentionally left
+// untouched — it's shared with the worker dot markers and its 10/60/120-min
+// bands are correct for that use.
+//
+// Manager staleness bands (locked to spec): green ≤1min, yellow 1-15min,
+// red >15min. The bubble is the small dot behind the arrow; its colour tells
+// the floater at a glance how fresh that manager's position is.
+const MANAGER_LOCATION_POLL_MS = 10 * 1000;
+
+function getManagerStalenessColor(updatedAt: string): string {
+  const ageMin = (Date.now() - new Date(updatedAt).getTime()) / 60000;
+  if (ageMin <= 1)  return '#22c55e'; // green — fresh (≤1 min)
+  if (ageMin <= 15) return '#eab308'; // yellow — getting stale (1-15 min)
+  return '#ef4444';                   // red — stale (>15 min)
+}
+
+// Builds a coloured directional arrow marker for a MANAGER's live location.
+// Mirrors createNavArrow's outer/inner split (outer = Mapbox translate, inner
+// = our heading rotation) but the arrow fill is the manager's palette colour
+// (or red for the current viewer's own arrow), and a staleness "bubble" dot
+// sits behind it. arrowColor + bubbleColor are passed in by the caller.
+//
+// Returns { outer, inner } so the caller can rotate `inner` by the manager's
+// heading exactly as the GPS arrow does.
+function createManagerArrow(arrowColor: string, bubbleColor: string, initials: string): { outer: HTMLDivElement; inner: HTMLDivElement } {
+  const outer = document.createElement('div');
+  outer.style.cssText = 'pointer-events:auto;cursor:pointer;width:34px;height:34px;';
+
+  const inner = document.createElement('div');
+  inner.style.cssText = 'width:100%;height:100%;transition:transform 0.2s linear;transform-origin:50% 50%;';
+  // Outer ring = staleness bubble (colour encodes freshness). Inner arrow =
+  // manager palette colour (or red for self). Black outline keeps it legible
+  // on any basemap. The initials are NOT drawn inside the arrow (too small to
+  // read while rotating) — they live in the marker title/tooltip instead.
+  inner.innerHTML = `<svg width="34" height="34" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="${bubbleColor}" stroke="#000000" stroke-width="1" opacity="0.55"/><path d="M12 3 L18.5 19 L12 14.5 L5.5 19 Z" fill="${arrowColor}" stroke="#000000" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+
+  outer.appendChild(inner);
+  outer.title = initials;
+  return { outer, inner };
 }
 
 function createWorkerMarkerEl(initials: string, borderColor: string, label: string): HTMLDivElement {
@@ -420,6 +592,9 @@ function distToSegmentMeters(
   return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
 }
 
+// Compute great-circle bearing (degrees clockwise from north) from point 1 to point 2.
+// Used to derive a heading from two successive GPS fixes when the device compass
+// isn't available (Android tablets, desktop, or iOS with denied permission).
 function bearingDeg(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const phi1 = lat1 * Math.PI / 180;
   const phi2 = lat2 * Math.PI / 180;
@@ -434,13 +609,17 @@ function findNearestAssignedRoute(
   lat: number, lng: number,
   routeMapData: SavedRoute[],
   routes: RouteData[],
-  managerId: string,
+  ownerSet: Set<string>,
   threshold: number = 50
 ): { routeCode: string; workerId: string } | null {
+  // FLOATER (Phase 4): ownerSet is the floated set (own id + covered managers).
+  // For a non-floater it's just {managerId}, so this matches the original
+  // single-manager behaviour. The "On route" card now lights up over any route
+  // belonging to a manager the floater covers, not only the floater's own.
   let best: { routeCode: string; workerId: string; dist: number } | null = null;
 
   for (const rmd of routeMapData) {
-    const rd = routes.find(r => r.routeCode === rmd.route_code && r.managerId === managerId);
+    const rd = routes.find(r => r.routeCode === rmd.route_code && r.managerId != null && ownerSet.has(r.managerId));
     if (!rd) continue;
     if (!rd.assignedWorkerIds || rd.assignedWorkerIds.length < 1) continue;
     const workerId = rd.assignedWorkerIds[0];
@@ -523,19 +702,6 @@ function createPulsingRing(color: string): HTMLDivElement {
   return el;
 }
 
-// --- createDashedRotatingRing — RING RESTYLE (Item 2) ---
-//
-// Marker used for pending-sale dots. RESTYLED per request:
-//   - dashes are now BLACK (#000000) instead of grey
-//   - dash stroke is a little THICKER (1.5 -> 2.2)
-//   - the ring still SPINS (rmDashedSpin animation unchanged)
-//   - the centre dot is now painted the ROUTE COLOUR (passed in), matching the
-//     colour the completed-transaction pins use for that route. Falls back to
-//     the previous grey (#6b7280) when no colour is supplied, so any other
-//     caller (or a sale with an unknown route) degrades gracefully.
-//
-// routeColor: hex string for this pending sale's route. The call site looks it
-// up from routeColorMap by the sale's route code.
 function createDashedRotatingRing(routeColor?: string): HTMLDivElement {
   let spinStyle = document.getElementById('rm-spin-keyframes') as HTMLStyleElement | null;
   if (!spinStyle) {
@@ -560,39 +726,80 @@ function createDashedRotatingRing(routeColor?: string): HTMLDivElement {
 
 const WORKER_LOCATION_POLL_MS = 5 * 60 * 1000;
 
+// --- NAV DESTINATION RESOLVER ---
+//
+// Walk the financialStore newest-first and find the first transaction whose
+// address has a geocode. Returns null if nothing geocodable exists — the
+// Navigate button is hidden in that case.
+//
+// Upsells (Upgrade / Add-On tx) are NOT skipped — they're valid nav targets
+// when they're the most recent transaction. Their address typically matches
+// the parent aeration tx at the same location, so navigating "to the upsell"
+// and navigating "to the parent job" land you at the same coordinates anyway.
+// What matters is that the most-recent record wins regardless of type, so
+// the Navigate button always points at where the worker last logged work.
+//
+// Cache priority per spec:
+//   1. jobIdCache (per-tx accurate — populated by Phase 2 geocoding)
+//   2. geocodeCache (address-level — populated by all phases)
 function resolveNavDestination(financialStore: any[]): { lat: number; lng: number; address: string } | null {
   if (!financialStore || financialStore.length === 0) return null;
+
+  // Sort newest-first. Defensive copy — we don't mutate caller's array.
   const sorted = [...financialStore].sort((a, b) => {
     const ta = a?.timestamp || '';
     const tb = b?.timestamp || '';
     return tb.localeCompare(ta);
   });
+
   for (const tx of sorted) {
     if (!tx) continue;
     const address: string = tx.address || '';
     if (!address) continue;
+
+    // Try jobIdCache first.
     if (tx.jobId) {
       const ic = jobIdCache.get(tx.jobId);
       if (ic && ic.lat != null && ic.lng != null) {
         return { lat: ic.lat, lng: ic.lng, address: ic.address || address };
       }
     }
+    // Fall back to geocodeCache by normalized address.
     const key = makeCacheKey(address);
     const gc = geocodeCache.get(key);
     if (gc && gc.lat != null && gc.lng != null) {
       return { lat: gc.lat, lng: gc.lng, address };
     }
+    // No hit for this tx — move on to the next-most-recent.
   }
+
   return null;
 }
 
+// --- SPLIT BUCKETING HELPERS ---
+//
+// In v2 recursive splits, the master map bucket-paints each line PIECE (not
+// each segment as a whole). A piece is a pair of consecutive coords in a
+// segment. The bucket for each piece is computed by bucketForPoint() using
+// the buckets array's stored rectangles. This gives sharp half-segment edges.
+//
+// For bookings, we use the cached bookingIds on each bucket — those were
+// precomputed at split time so we don't recompute closest-line-piece every
+// render. To look up a pin's bucket: iterate the route's buckets, find the
+// one whose bookingIds contains the booking ID. Default to 'a' (the original
+// bucket) when the route isn't split or the booking isn't in any bucket.
+
+// Line-piece midpoint = average of the two endpoints.
 function lineMidCoord(a: [number, number], b: [number, number]): [number, number] {
   return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 }
 
+// Compute the centroid of all pieces in a given bucket on a given route.
+// Returns null if the bucket has no pieces (e.g. all of 'a' got carved away).
+// Used for placing the route's letter label on the master map.
 function bucketCentroid(
   segments: Array<{ coordinates: [number, number][] }>,
-  buckets: Array<{ letter: string; sourceLetter: string | null; rectangles: Array<{west: number; east: number; south: number; north: number}> }>,
+  buckets: Array<{ letter: string; sourceLetter: string | null; rectangles: Array<{ corners: Array<{ lng: number; lat: number }> }> }>,
   targetLetter: string
 ): { lng: number; lat: number } | null {
   let sumLng = 0, sumLat = 0, count = 0;
@@ -637,6 +844,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   onForceFollowMeOn,
   showManageTeamModal,
   onCloseManageTeamModal,
+  floatedManagerIds = [],
+  managerColours,
+  shouldWriteLocation = false,
 }) => {
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -652,15 +862,28 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const initialFitDoneRef = useRef(false);
   const knownPinsRef = useRef<Map<string, GeocodedPin>>(new Map());
   const [geocodedPins, setGeocodedPins] = useState<GeocodedPin[]>([]);
+  // Upsells (Upgrade / Add-On tx) — geocoded separately so we can render
+  // them with their own blue-ring style and detect overlap with completed/sale
+  // pins at the same address.
   const knownUpsellPinsRef = useRef<Map<string, GeocodedPin>>(new Map());
   const [geocodedUpsellPins, setGeocodedUpsellPins] = useState<GeocodedPin[]>([]);
   const mountedRef = useRef(true);
   const centerOnLocationRef = useRef(false);
+  // Last GPS position we ACTUALLY re-centered the map at. Used with a small
+  // movement threshold to avoid restarting easeTo animations every GPS fix
+  // when the device is stationary and GPS is jittering by a metre or two —
+  // the cause of the follow-me "flicker".
   const lastCenteredAtRef = useRef<{ lat: number; lng: number } | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const navMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  // The OUTER wrapper of the GPS arrow — Mapbox sets translate(...) here for
+  // positioning. We never touch this transform.
   const navArrowElRef = useRef<HTMLDivElement | null>(null);
+  // The INNER div nested inside navArrowElRef — we rotate this for heading.
+  // Decoupled from the outer so Mapbox's positioning translate doesn't clobber
+  // our rotation.
   const navArrowInnerRef = useRef<HTMLDivElement | null>(null);
+  // --- COMPASS / HEADING ROTATION REFS ---
   const compassHeadingRef = useRef<number | null>(null);
   const gpsHeadingRef = useRef<number | null>(null);
   const gpsHeadingUpdatedAtRef = useRef<number>(0);
@@ -679,20 +902,44 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const routesRef = useRef(routes);
   const bookingsRef = useRef(bookings);
 
+  // --- ROUTE SPLITS state ---
+  //
+  // routeSplits is the canonical list from the DB. routeSplitsByCode is the
+  // memoized map for fast lookup. splitModalData drives the split modal —
+  // includes the source bucket being carved and the new letter to assign.
+  //
+  // Flow: assignment modal open → user taps Split → assignment modal closes
+  // → splitModalData populated → RouteSplitModal renders → user confirms →
+  // handleSplitConfirm persists and immediately reopens the assignment modal
+  // for the NEW LETTER. There is no longer a postSplitFlow state because the
+  // flow is naturally recursive: from inside the picker for the new letter,
+  // the user can Split again, etc.
   const [routeSplits, setRouteSplits] = useState<RouteSplit[]>([]);
   const [splitModalData, setSplitModalData] = useState<{
     routeCode: string;
-    baseRouteColor: string;
+    baseRouteColor: string;        // original 'a' colour for HSL derivation
     segments: SavedRoute['segments'];
     prebookings: { bookingId: string; lat: number; lng: number }[];
     existingBuckets: RouteSplit['buckets'] | null;
     splittingFromLetter: string;
     newLetter: string;
+    // We stash the full booking-id list so handleSplitConfirm can pass it
+    // to splitBucket for the FIRST-split case (bootstraps bucket 'a').
     allBookingIdsOnRoute: string[];
   } | null>(null);
 
   const [workerLocations, setWorkerLocations] = useState<WorkerLocation[]>([]);
   const workerLocationMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
+
+  // --- MANAGER LOCATIONS (Phase 3 — Floater) ---
+  // Live positions of the managers this floater covers (+ self), polled every
+  // MANAGER_LOCATION_POLL_MS. One arrow marker per manager, keyed by managerId.
+  // The inner (rotating) div of each is tracked so the poll can update heading
+  // without rebuilding the marker.
+  const [managerLocations, setManagerLocations] = useState<ManagerLocation[]>([]);
+  const managerLocationMarkersRef = useRef<Map<string, { marker: mapboxgl.Marker; inner: HTMLDivElement }>>(new Map());
+  // Throttle for the WRITER — last time this device wrote its own position.
+  const lastLocationWriteRef = useRef<number>(0);
 
   const [onRouteWorkerCard, setOnRouteWorkerCard] = useState<WorkerCardData | null>(null);
   const [onRouteCartCard, setOnRouteCartCard] = useState<CartCardData | null>(null);
@@ -703,22 +950,28 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const workerCardDataRef = useRef<WorkerCardData[]>([]);
   const cartCardDataRef = useRef<CartCardData[]>([]);
 
+  // Historical properties
   const [historicalProps, setHistoricalProps] = useState<HistoricalProperty[]>([]);
   const [geocodedHistorical, setGeocodedHistorical] = useState<GeocodedHistorical[]>([]);
   const knownHistoricalRef = useRef<Map<string, GeocodedHistorical>>(new Map());
   const [geocodeCacheHydrated, setGeocodeCacheHydrated] = useState(false);
 
+  // Pending sales (geocoded for team seasons)
   const [geocodedPendingSales, setGeocodedPendingSales] = useState<GeocodedPendingSale[]>([]);
   const pendingSaleMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
 
+  // PCL reference circles
   const [pclByRoute, setPclByRoute] = useState<Map<string, PCLClientGroup[]>>(new Map());
   const [geocodedPCL, setGeocodedPCL] = useState<GeocodedPCLEntry[]>([]);
 
+  // Team-season cart data
   const [cartCardData, setCartCardData] = useState<CartCardData[]>([]);
 
+  // EQ math fix
   const [taxRate, setTaxRate] = useState<number>(5);
   const [productCostPercent, setProductCostPercent] = useState<number>(0);
 
+  // Routes-side overhaul
   const [pendingJobForModal, setPendingJobForModal] = useState<MasterBooking | null>(null);
   const [transferModalData, setTransferModalData] = useState<{
     type: 'ROUTE' | 'JOB';
@@ -727,6 +980,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     title: string;
   } | null>(null);
 
+  // Manage Team modal sub-state (modal itself controlled by parent prop)
   const [selectedWorkerToMove, setSelectedWorkerToMove] = useState<Worker | null>(null);
   const [selectedWorkerSourceCart, setSelectedWorkerSourceCart] = useState<CartCardData | null>(null);
   const [reassignLoading, setReassignLoading] = useState(false);
@@ -737,10 +991,21 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [unassigningAsphaltId, setUnassigningAsphaltId] = useState<string | null>(null);
   const [unassignError, setUnassignError] = useState<string | null>(null);
 
+  // --- NEW: NAV STATE ---
   const [navState, setNavState] = useState<NavState | null>(null);
   const [switchNavConfirm, setSwitchNavConfirm] = useState<SwitchNavConfirmation | null>(null);
   const [routeNavPrompt, setRouteNavPrompt] = useState<RouteNavPrompt | null>(null);
 
+  // --- FLOATER: the effective ownership set (Phase 3 — Union-A) ---
+  // own id + everyone floated-for. Empty prop → just [managerId], so all the
+  // ownership memos below collapse to the original single-manager behaviour.
+  // ownerSet is the Set form used by the broadened filters.
+  const ownerSet = useMemo(
+    () => new Set(floatedManagerIds.length ? floatedManagerIds : [managerId]),
+    [floatedManagerIds, managerId]
+  );
+
+  // --- ARROW ROTATION ---
   const HEADING_FRESHNESS_MS = 5000;
   const applyArrowRotation = useCallback(() => {
     if (!navArrowInnerRef.current) return;
@@ -760,6 +1025,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     navArrowInnerRef.current.style.transform = `rotate(${heading - mapBearing}deg)`;
   }, []);
 
+  // Reset Manage Team sub-state when modal closes
   useEffect(() => {
     if (!showManageTeamModal) {
       setSelectedWorkerToMove(null);
@@ -781,18 +1047,29 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const isLawnRejuv = seasonType === 'lawn_rejuv';
   const isSealing = seasonType === 'sealing';
 
-  const myRouteCodes = useMemo(() => routes.filter(r => r.managerId === managerId).map(r => r.routeCode), [routes, managerId]);
-  const myTeamIds = useMemo(() => new Set(workers.filter(w => w.assignedManagerId === managerId).map(w => w.contractorId)), [workers, managerId]);
-  const myTeamWorkers = useMemo(() => workers.filter(w => w.assignedManagerId === managerId), [workers, managerId]);
+  // FLOATER Union-A: ownership memos broaden from `=== managerId` to `∈ ownerSet`.
+  // For a non-floater ownerSet is {managerId}, so these are unchanged.
+  const myRouteCodes = useMemo(() => routes.filter(r => r.managerId && ownerSet.has(r.managerId)).map(r => r.routeCode), [routes, ownerSet]);
+  const myTeamIds = useMemo(() => new Set(workers.filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId)).map(w => w.contractorId)), [workers, ownerSet]);
+  const myTeamWorkers = useMemo(() => workers.filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId)), [workers, ownerSet]);
   const routeColorMap = useMemo(() => { const m = new Map<string,string>(); routeMapData.forEach(r => m.set(r.route_code, r.route_color)); return m; }, [routeMapData]);
-  const availableManagers = useMemo(() => allManagers.filter(m => m.userId !== managerId && m.role === 'RouteManager'), [allManagers, managerId]);
+  // availableManagers (transfer targets) = all CC RouteManagers except those
+  // already in the floated set. A floater shouldn't "transfer to" a manager
+  // they already control — that's a no-op move.
+  const availableManagers = useMemo(() => allManagers.filter(m => !ownerSet.has(m.userId) && m.role === 'RouteManager'), [allManagers, ownerSet]);
 
+  // Fast lookup: route code → its split row (if any). One source of truth used
+  // by routeCardData, the master map renderer, click handlers, and the
+  // assignment modal.
   const routeSplitsByCode = useMemo(() => {
     const m = new Map<string, RouteSplit>();
     for (const rs of routeSplits) m.set(rs.routeCode, rs);
     return m;
   }, [routeSplits]);
 
+  // Fetch route splits on mount and whenever a refresh is triggered. Cheap
+  // table (one row per split, only digital-mapping CCs have it), so no
+  // pagination needed.
   const reloadRouteSplits = useCallback(async () => {
     try {
       const rows = await sessionService.getRouteSplits();
@@ -814,6 +1091,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return m;
   }, [allSessions]);
 
+  // EQ math fix
   useEffect(() => {
     const loadRates = async () => {
       try {
@@ -828,9 +1106,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     loadRates();
   }, [seasonType]);
 
+  // Worker card data (aeration only)
+  // FLOATER Union-A: filter broadened from `=== managerId` to `∈ ownerSet`.
   const workerCardData = useMemo<WorkerCardData[]>(() => {
     if (isTeamSeason) return [];
-    return workers.filter(w => w.assignedManagerId === managerId).map(worker => {
+    return workers.filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId)).map(worker => {
       const session = allSessions.find(s => s.workerId === worker.contractorId);
       const st = session?.stats; const fs = session?.financialStore || [];
       const wb = bookings.filter(b => b['Contractor Number'] === worker.contractorId);
@@ -868,7 +1148,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
       };
     });
-  }, [workers, managerId, allSessions, bookings, isTeamSeason]);
+  }, [workers, ownerSet, allSessions, bookings, isTeamSeason]);
 
   useEffect(() => { workerCardDataRef.current = workerCardData; }, [workerCardData]);
 
@@ -878,6 +1158,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (updated) setOnRouteWorkerCard(updated);
   }, [workerCardData]);
 
+  // Cart card data
   useEffect(() => {
     if (!isTeamSeason) { setCartCardData([]); return; }
     let cancelled = false;
@@ -1083,6 +1364,19 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return eq;
   }, [seasonType, taxRate, productCostPercent]);
 
+  // routeCardData — V2 RECURSIVE SPLIT-AWARE.
+  //
+  // For each route managed by this RM:
+  //   - If NO split row exists: emit a single RouteCardData with isSplit=false,
+  //     letter=undefined, baseRouteCode=routeCode. (Same as before.)
+  //   - If a split row exists: emit N RouteCardData entries, one per bucket
+  //     in the buckets array. Each card's colour is colorForBucket(baseColor,
+  //     bucket.letter). Job counts, prepay counts, EQ, and assigned workers
+  //     are scoped to that bucket via the cached bookingIds and assignedWorkers.
+  //
+  // The Split button has been moved into the assignment modal (header), so
+  // it no longer appears on these cards. Whether a bucket is splittable
+  // (zero assigned workers) is computed at modal-open time.
   const routeCardData = useMemo<RouteCardData[]>(() => {
     const result: RouteCardData[] = [];
 
@@ -1099,13 +1393,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     };
 
     for (const r of routes) {
-      if (r.managerId !== managerId) continue;
+      if (!r.managerId || !ownerSet.has(r.managerId)) continue;
       const rmi = routeMapData.find(rm => rm.route_code === r.routeCode);
       const baseColor = rmi?.route_color || '#6b7280';
       const split = routeSplitsByCode.get(r.routeCode);
       const rb = bookings.filter(b => b['Route Number'] === r.routeCode);
 
       if (!split || split.buckets.length === 0) {
+        // No split — single card.
         const assignedIds = r.assignedWorkerIds || [];
         const totalEQ = rb.reduce((sum, b) => sum + calculateBookingEQ(b), 0);
         result.push({
@@ -1124,6 +1419,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         continue;
       }
 
+      // Split exists — emit N cards (one per bucket).
       for (const bucket of split.buckets) {
         const bookingIdSet = new Set(bucket.bookingIds);
         const bucketBookings = rb.filter(b => bookingIdSet.has(b['Booking ID']));
@@ -1146,12 +1442,15 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
     }
 
+    // Sort: unassigned cards first, then by displayRouteCode alphabetically.
     return result.sort((a, b) => {
       if (a.isAssigned !== b.isAssigned) return a.isAssigned ? 1 : -1;
       return a.displayRouteCode.localeCompare(b.displayRouteCode);
     });
-  }, [routes, managerId, routeMapData, workers, bookings, calculateBookingEQ, routeSplitsByCode]);
+  }, [routes, ownerSet, routeMapData, workers, bookings, calculateBookingEQ, routeSplitsByCode]);
 
+  // Split pins into pending-only and completed/new-sale-only — driven by the
+  // new filter system. Each set is also visibility-gated separately downstream.
   const pendingBookingPinSource = useMemo<PinData[]>(() => {
     const result: PinData[] = [];
     const myRS = new Set(myRouteCodes);
@@ -1305,9 +1604,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, []);
 
+  // Worker location fetch
+  // FLOATER Union-A: fetch locations for everyone on the floated team, not just
+  // the logged-in manager's own workers.
   const fetchWorkerLocations = useCallback(async () => {
     const teamIds = workers
-      .filter(w => w.assignedManagerId === managerId)
+      .filter(w => w.assignedManagerId && ownerSet.has(w.assignedManagerId))
       .map(w => w.contractorId);
     if (!teamIds.length) return;
     try {
@@ -1321,7 +1623,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     } catch (e) {
       console.error('Failed to fetch worker locations:', e);
     }
-  }, [workers, managerId]);
+  }, [workers, ownerSet]);
 
   useEffect(() => {
     if (!mapLoaded) return;
@@ -1366,6 +1668,106 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, [workerLocations, mapLoaded, workers]);
 
+  // --- MANAGER LOCATION READER (Phase 3 — Floater) ---
+  //
+  // Polls manager_locations every MANAGER_LOCATION_POLL_MS (10s — far tighter
+  // than the 5-min worker poll). getManagerLocations() returns the whole CC's
+  // manager rows; we filter to the floated set (own id + floatingFor) so a
+  // floater sees their covered managers and a non-floater sees only themselves.
+  //
+  // NOTE: the current viewer's OWN arrow is already drawn by the red GPS arrow
+  // (navMarkerRef) from live device GPS, which is fresher than the DB row. So
+  // we EXCLUDE managerId from the rendered set here to avoid two arrows on top
+  // of each other for the person looking at the screen.
+  const fetchManagerLocations = useCallback(async () => {
+    try {
+      const rows = await sessionService.getManagerLocations();
+      if (!mountedRef.current) return;
+      const filtered = rows.filter(r => ownerSet.has(r.managerId) && r.managerId !== managerId);
+      setManagerLocations(filtered);
+    } catch (e) {
+      console.error('Failed to fetch manager locations:', e);
+    }
+  }, [ownerSet, managerId]);
+
+  useEffect(() => {
+    if (!mapLoaded) return;
+    fetchManagerLocations();
+    const interval = setInterval(fetchManagerLocations, MANAGER_LOCATION_POLL_MS);
+    return () => clearInterval(interval);
+  }, [mapLoaded, fetchManagerLocations]);
+
+  // Render / update manager arrow markers. Colour = the manager's palette hue
+  // from managerColours (red is reserved for the viewer's own GPS arrow, which
+  // is drawn separately, so palette colours are correct for everyone here). The
+  // staleness bubble behind each arrow encodes freshness via getManager
+  // StalenessColor. Heading rotates the inner div, same trick as the GPS arrow.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+
+    const existingIds = new Set(managerLocationMarkersRef.current.keys());
+
+    managerLocations.forEach(loc => {
+      const mgr = allManagers.find(m => m.userId === loc.managerId);
+      const name = mgr?.name || 'Manager';
+      const initials = name.split(/\s+/).map(p => p.charAt(0)).join('').slice(0, 2).toUpperCase() || 'M';
+      const arrowColor = managerColours?.get(loc.managerId) || '#9ca3af';
+      const bubbleColor = getManagerStalenessColor(loc.updatedAt);
+      const heading = (loc.heading != null && !isNaN(loc.heading)) ? loc.heading : 0;
+      const mapBearing = map.getBearing();
+
+      const existing = managerLocationMarkersRef.current.get(loc.managerId);
+      if (existing) {
+        existing.marker.setLngLat([loc.lng, loc.lat]);
+        // Update colours + heading without rebuilding the marker.
+        const svg = existing.inner.querySelector('svg');
+        if (svg) {
+          const circle = svg.querySelector('circle');
+          const path = svg.querySelector('path');
+          if (circle) circle.setAttribute('fill', bubbleColor);
+          if (path) path.setAttribute('fill', arrowColor);
+        }
+        existing.inner.style.transform = `rotate(${heading - mapBearing}deg)`;
+        existing.marker.getElement().title = name;
+        existingIds.delete(loc.managerId);
+      } else {
+        const { outer, inner } = createManagerArrow(arrowColor, bubbleColor, name);
+        inner.style.transform = `rotate(${heading - mapBearing}deg)`;
+        const marker = new mapboxgl.Marker({ element: outer, anchor: 'center' })
+          .setLngLat([loc.lng, loc.lat])
+          .addTo(map);
+        // Tapping a manager arrow could open a detail card in a later phase;
+        // for now it's a no-op beyond the title tooltip.
+        managerLocationMarkersRef.current.set(loc.managerId, { marker, inner });
+      }
+    });
+
+    existingIds.forEach(id => {
+      managerLocationMarkersRef.current.get(id)?.marker.remove();
+      managerLocationMarkersRef.current.delete(id);
+    });
+  }, [managerLocations, mapLoaded, allManagers, managerColours]);
+
+  // Keep manager arrows pointing correctly when the MAP rotates (their heading
+  // is absolute, so the on-screen rotation must subtract the map bearing).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const onRotate = () => {
+      const mapBearing = map.getBearing();
+      managerLocations.forEach(loc => {
+        const entry = managerLocationMarkersRef.current.get(loc.managerId);
+        if (!entry) return;
+        const heading = (loc.heading != null && !isNaN(loc.heading)) ? loc.heading : 0;
+        entry.inner.style.transform = `rotate(${heading - mapBearing}deg)`;
+      });
+    };
+    map.on('rotate', onRotate);
+    return () => { map.off('rotate', onRotate); };
+  }, [managerLocations, mapLoaded]);
+
+  // Geocode cache hydration
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1387,6 +1789,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, []);
 
+  // Historical fetch
   useEffect(() => {
     if (!myRouteCodes.length) { setHistoricalProps([]); return; }
     let cancelled = false;
@@ -1403,6 +1806,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [myRouteCodes.join(',')]);
 
+  // PCL fetch
   useEffect(() => {
     if (!myRouteCodes.length) { setPclByRoute(new Map()); return; }
     const ccId = commandCenterService.getCurrentCommandCenterId();
@@ -1423,6 +1827,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [myRouteCodes.join(',')]);
 
+  // Load route geometry
   useEffect(() => {
     if(!myRouteCodes.length){setRouteMapData([]);setRoutesLoading(false);routeDataLoadedRef.current=false;prevRouteCodesKeyRef.current='';return;}
     const key=[...myRouteCodes].sort().join(',');
@@ -1441,6 +1846,22 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return()=>{cancelled=true;};
   }, [myRouteCodes]);
 
+  // Draw routes — V2 RECURSIVE-SPLIT-AWARE with per-line-piece bucketing.
+  //
+  // For each route, we no longer render one feature per SEGMENT. Instead, each
+  // pair of consecutive coords within a segment becomes its own LineString
+  // feature. The bucket for each piece is determined at render time by
+  // bucketForPoint() against the buckets array — sharp half-segment edges.
+  //
+  // The line layer uses a 'match' colour expression keyed off the piece's
+  // bucket property: each letter maps to colorForBucket(baseColor, letter).
+  // Default colour = baseColor (so anything unaccounted for shows as 'a').
+  //
+  // Centroid labels: N labels per split route (one per bucket with non-zero
+  // piece count), positioned at the centroid of the bucket's pieces and
+  // coloured with that bucket's colour. Non-split routes get one label as
+  // before. Labels use route_number-derived text suffixed with the letter
+  // (e.g. "11" → "11a"/"11b"/"11c"/...).
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     loadedIdsRef.current.forEach(id=>{
@@ -1451,6 +1872,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const before=(map.getLayer('road-label')?'road-label':map.getStyle().layers?.find((l:any)=>l.type==='symbol')?.id)??undefined;
     const allCoords:[number,number][]=[];
 
+    // Letters we'll honour in the match expression. Up to 'f' is the
+    // documented palette (60° rotations covering the full 360° wheel).
     const PALETTE_LETTERS = ['a', 'b', 'c', 'd', 'e', 'f'];
 
     routeMapData.forEach(route=>{
@@ -1461,6 +1884,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const split = routeSplitsByCode.get(route.route_code);
       const buckets = split ? split.buckets : [];
 
+      // Build per-line-piece features.
       const features: GeoJSON.Feature[] = [];
       route.segments.forEach(seg => {
         const cs = seg.coordinates;
@@ -1484,12 +1908,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
       });
 
+      // Build colour match expression from the palette letters.
       const lineColorExpr: any = ['match', ['get', 'bucket']];
       for (const L of PALETTE_LETTERS) {
         lineColorExpr.push(L);
         lineColorExpr.push(colorForBucket(route.route_color, L));
       }
-      lineColorExpr.push(route.route_color);
+      lineColorExpr.push(route.route_color); // default
 
       map.addSource(srcId,{type:'geojson',data:{type:'FeatureCollection',features}});
       map.addLayer({
@@ -1505,6 +1930,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         layout:{'line-cap':'round','line-join':'round'},
       },before);
 
+      // Centroid labels.
       const nSrc=`rm-num-src-${route.id}`, nLbl=`rm-num-${route.id}`;
       loadedIdsRef.current.push(`num-${route.id}`);
 
@@ -1535,6 +1961,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   }, [routeMapData, mapLoaded, routeSplitsByCode]);
 
+  // Worker name overlay — V2 RECURSIVE-SPLIT-AWARE.
+  // Unsplit routes get one label at the route centroid showing assigned workers.
+  // Split routes get N labels, each at the bucket's centroid (per the cascade
+  // algorithm), coloured with that bucket's colour, showing only that bucket's
+  // assignedWorkers.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     const myRS=new Set(myRouteCodes);
@@ -1564,6 +1995,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         features.push({type:'Feature',properties:{label,color:route.route_color},geometry:{type:'Point',coordinates:[cLng,cLat]}});
         return;
       }
+      // Split — emit one label per bucket (with non-empty pieces).
       for (const bucket of split.buckets) {
         const c = bucketCentroid(route.segments, split.buckets, bucket.letter);
         if (!c) continue;
@@ -1582,6 +2014,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   }, [routeMapData, routes, workers, mapLoaded, myRouteCodes, routeSplitsByCode]);
 
+  // Route opacity — V2 SPLIT-AWARE.
+  // For unsplit routes, behaviour is unchanged. For split routes, "any bucket
+  // assigned" is the OR across all buckets' assignedWorkers. Since all buckets
+  // share one line layer, we can't paint different opacities per bucket — the
+  // RM uses the sidebar's N cards (one per bucket) to see exactly which
+  // bucket is assigned.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     routeMapData.forEach(route=>{
@@ -1600,6 +2038,21 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, [sidebarMode, routeMapData, routes, mapLoaded, myRouteCodes, routeSplitsByCode]);
 
+  // Route click handlers — V2 RECURSIVE-SPLIT-AWARE.
+  //
+  // The line layer's features carry a `bucket` property (set at draw time by
+  // bucketForPoint). When the user taps a line piece, e.features[0].properties
+  // .bucket gives us the bucket letter directly — no recomputation needed.
+  //
+  // In Routes mode (sidebar shows route cards):
+  //   - Non-split route → opens the assignment modal for the whole route.
+  //   - Split route → identifies which bucket was clicked and opens the modal
+  //     scoped to that bucket (e.g. "BIN09c"). canSplit is true iff that
+  //     bucket has zero assigned workers.
+  //
+  // In Staff mode (sidebar shows staff cards):
+  //   - Non-split route → "Navigate to who?" prompt as before.
+  //   - Split route → only that bucket's assignedWorkers populate the prompt.
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     const cleanups:Array<()=>void>=[];
@@ -1617,6 +2070,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         const rp = cr.find(r => r.routeCode === rc);
         const split = routeSplitsByCode.get(rc);
 
+        // Determine clicked bucket from the feature's `bucket` property.
         let clickedLetter: string | undefined = undefined;
         if (split && split.buckets.length > 0 && e.features && e.features.length > 0) {
           const fb = e.features[0].properties?.bucket;
@@ -1625,6 +2079,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
         if (mode === 'routes') {
           if (split && clickedLetter) {
+            // Bucket-scoped assignment modal.
             const bucket = split.buckets.find(b => b.letter === clickedLetter);
             if (!bucket) return;
             const bucketBookingSet = new Set(bucket.bookingIds);
@@ -1648,6 +2103,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             return;
           }
 
+          // Non-split — whole-route assignment.
           const assignedIds = rp?.assignedWorkerIds || [];
           const rb = cb.filter(b => b['Route Number'] === rc);
           const totalEQ = rb.reduce((sum, b) => sum + calculateBookingEQ(b), 0);
@@ -1665,6 +2121,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           return;
         }
 
+        // STAFF MODE — nav prompt. Only clicked bucket's workers in the prompt.
         let assignedIds: string[];
         if (split && clickedLetter) {
           const bucket = split.buckets.find(b => b.letter === clickedLetter);
@@ -1733,10 +2190,24 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const overlapInfoRef = useRef<Map<string, { upsellPin: GeocodedPin; basePin: GeocodedPin }>>(new Map());
   useEffect(() => { overlapInfoRef.current = overlapInfo; }, [overlapInfo]);
 
+  // Pending bookings circles — SPLIT-AWARE COLOURING.
+  //
+  // For a pending booking on a split route, the pin's stroke colour follows
+  // its bucket: 'a' → original route colour, 'b' → complementary colour. For
+  // unsplit routes the colour is the route colour as before.
+  //
+  // The data-driven colour is encoded as `pinColor` in the feature's
+  // properties so the layer paint expression can read it directly (no need
+  // for a separate layer per bucket). When a split is added/removed mid-day,
+  // re-running this updater with the same geocoded pins refreshes the colours
+  // immediately.
   const updatePendingBookingPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedPin[]) => {
     const gj: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
       features: geocoded.map(pin => {
+        // Find which bucket this booking belongs to (if route is split).
+        // The bucket's bookingIds is the cached membership list. Default to
+        // the route's base colour for unsplit routes or unfound bookings.
         const split = routeSplitsByCode.get(pin.routeCode);
         let pinColor = pin.routeColor;
         if (split) {
@@ -1987,6 +2458,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, []);
 
+  // Re-render pending booking pins whenever the splits change, so when a split
+  // is freshly created the colours update without waiting for a geocode pass.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
@@ -1997,6 +2470,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   }, [routeSplitsByCode, mapLoaded, geocodedPins, updatePendingBookingPins]);
 
+  // FILTER-DRIVEN VISIBILITY
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
@@ -2025,6 +2499,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   }, [filterVisibility, mapLoaded]);
 
+  // --- SERIAL GEOCODING STATE MACHINE ---
+
   const geocodeOne = useCallback(async (address: string): Promise<{ lat: number; lng: number } | null> => {
     const addrKey = makeCacheKey(address);
     const cached = geocodeCache.get(addrKey);
@@ -2037,6 +2513,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return coord;
   }, [routeCentroid]);
 
+  // PHASE 1: Pending Prebooks
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'idle') return;
@@ -2085,6 +2562,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, pendingBookingPinSource, routeColorMap, geocodeOne, updatePendingBookingPins, onGeocodeProgress]);
 
+  // PHASE 2: Completed + new sales + pending sales
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'phase2_completed_and_sales') return;
@@ -2167,6 +2645,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, completedAndNewSalePinSource, pendingSalesByManager, isTeamSeason, routeColorMap, geocodeOne, updateCompletedPins, onGeocodeProgress]);
 
+  // PHASE 3: Historical
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'phase3_historical') return;
@@ -2217,6 +2696,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, historicalProps, geocodeOne, updateHistoricalPins, onGeocodeProgress]);
 
+  // PHASE 4: PCL
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'phase4_pcl') return;
@@ -2267,6 +2747,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [mapLoaded, geocodeCacheHydrated, geocodePhase, pclByRoute, geocodeOne, updatePclCircles, onGeocodeProgress]);
 
+  // INCREMENTAL: mid-day pending-sales additions
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase !== 'complete') return;
@@ -2296,6 +2777,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [pendingSalesByManager, geocodePhase, isTeamSeason, mapLoaded, geocodeCacheHydrated, geocodeOne]);
 
+  // Upsell geocoding
   useEffect(() => {
     if (!mapLoaded || !geocodeCacheHydrated) return;
     if (geocodePhase === 'idle' || geocodePhase === 'phase1_pending_bookings') return;
@@ -2323,6 +2805,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { cancelled = true; };
   }, [upsellPinSource, geocodePhase, mapLoaded, geocodeCacheHydrated, geocodeOne, routeColorMap]);
 
+  // Drive upsell-only and overlap-half layers
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
@@ -2333,7 +2816,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     updateOverlapHalfPins(map, overlapPoints);
   }, [geocodedUpsellPins, overlapInfo, mapLoaded, updateUpsellOnlyPins, updateOverlapHalfPins]);
 
-  // Pending sales markers — RING RESTYLE (Item 2) call site.
+  // Pending sales markers
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
@@ -2350,9 +2833,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         existing.setLngLat([ps.lng, ps.lat]);
         existingIds.delete(ps.id);
       } else {
-        // RING RESTYLE (Item 2): pull this sale's route colour from
-        // routeColorMap (same source completed pins use) and hand it to
-        // createDashedRotatingRing so the centre dot matches the route.
         const psRouteCode = ps.booking['Route Number'] || '';
         const psRouteColor = routeColorMap.get(psRouteCode) || '#6b7280';
         const el = createDashedRotatingRing(psRouteColor);
@@ -2365,8 +2845,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       pendingSaleMarkersRef.current.get(id)?.remove();
       pendingSaleMarkersRef.current.delete(id);
     });
-  }, [geocodedPendingSales, mapLoaded, filterVisibility.pendingSalesAndCompleted, routeColorMap]);
+  }, [geocodedPendingSales, mapLoaded, filterVisibility.pendingSalesAndCompleted]);
 
+  // Pulsing completion dots
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
@@ -2385,6 +2866,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     };
   }, [mostRecentCompletionPins, mapLoaded, filterVisibility.pendingSalesAndCompleted]);
 
+  // GPS + drag-to-disable-follow-me + cart-aware on-route
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!navigator.geolocation) return;
     if(!navArrowElRef.current) {
@@ -2414,12 +2896,25 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
       lastGpsPosRef.current = { lat, lng, ts: Date.now() };
       applyArrowRotation();
+      // FLOATER (Phase 3 — Floater): report THIS device's own position to
+      // manager_locations, throttled to one write per 5 seconds, and only when
+      // this manager is a floater or is covered by one (shouldWriteLocation).
+      // The heading written is the real derivedHeading, so floaters see the
+      // arrow pointing the right way. If derivedHeading is null (stationary /
+      // no fix delta), we write undefined — the column is nullable.
+      if (shouldWriteLocation) {
+        const nowMs = Date.now();
+        if (nowMs - lastLocationWriteRef.current >= 5000) {
+          lastLocationWriteRef.current = nowMs;
+          sessionService.upsertManagerLocation(lat, lng, derivedHeading ?? undefined).catch(() => {});
+        }
+      }
       if (centerOnLocationRef.current) {
         mapRef.current.easeTo({ center: [lng, lat], duration: 300 });
         lastCenteredAtRef.current = { lat, lng };
       }
       if (centerOnLocationRef.current) {
-        const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, managerId, 100);
+        const nearest = findNearestAssignedRoute(lat, lng, routeMapDataRef.current, routesRef.current, ownerSet, 100);
         if (nearest) {
           if (isTeamSeason) {
             const cart = cartCardDataRef.current.find(c => c.members.some(m => m.contractorId === nearest.workerId));
@@ -2454,8 +2949,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}
       navMarkerRef.current?.remove();navMarkerRef.current=null;
     };
-  }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable, applyArrowRotation]);
+  }, [mapLoaded, isTeamSeason, managerId, onFollowMeAutoDisable, applyArrowRotation, shouldWriteLocation, ownerSet]);
 
+  // Compass
   const attachCompassListener = useCallback(() => {
     if (compassHandlerRef.current) return;
     const handler = (e: DeviceOrientationEvent) => {
@@ -2512,6 +3008,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   }, [centerOnLocation]);
 
+  // Map init
   useEffect(() => {
     mountedRef.current=true;
     if(!mapContainerRef.current||mapRef.current) return;
@@ -2586,6 +3083,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       pendingSaleMarkersRef.current.clear();
       workerLocationMarkersRef.current.forEach(m => m.remove());
       workerLocationMarkersRef.current.clear();
+      // FLOATER (Phase 3): tear down manager-location arrow markers too.
+      managerLocationMarkersRef.current.forEach(({ marker }) => marker.remove());
+      managerLocationMarkersRef.current.clear();
       map.remove();mapRef.current=null;setMapLoaded(false);
     };
   }, [suppressDuplicateLabels]);
@@ -2613,6 +3113,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   };
 
+  // --- NAV ACTION HANDLERS ---
   const startNavToDestination = useCallback((dest: NavDestination, targetKey: string) => {
     if (!centerOnLocation && onForceFollowMeOn) onForceFollowMeOn();
     setNavState({ destination: dest, targetKey });
@@ -2662,6 +3163,24 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     else handleNavigateToWorker(entry.card as WorkerCardData);
   }, [handleNavigateToWorker, handleNavigateToCart]);
 
+  // --- ROUTE SPLIT HANDLERS (V2 RECURSIVE) ---
+  //
+  // handleOpenSplitModal: invoked from the Split button at the TOP of the
+  // assignment modal. Takes the assignModalData snapshot, builds the split
+  // modal payload (segments, prebookings, current buckets, source letter,
+  // next available letter), and opens RouteSplitModal.
+  //
+  // handleSplitConfirm: RouteSplitModal called back with the new rectangles
+  // and the list of bookings moving from source → new bucket. Persists via
+  // sessionService.splitBucket, then reopens the assignment modal scoped to
+  // the NEW LETTER so the RM can assign it immediately. From inside that
+  // re-opened modal they can choose to assign or to split further (recursive).
+  //
+  // handleSplitCancel: closes the split modal. The assignment modal is NOT
+  // automatically re-opened — the user dismissed the split intentionally,
+  // so we leave them in a clean state where they can tap the route again
+  // if they want.
+
   const handleOpenSplitModal = useCallback(() => {
     if (!assignModalData) return;
     const { routeCode, routeColor, letter } = assignModalData;
@@ -2671,24 +3190,35 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       return;
     }
 
+    // Read the current split row (if any) so the modal can render existing
+    // buckets and so we know the next available letter.
     const existingSplit = routeSplitsByCode.get(routeCode);
     const existingBuckets = existingSplit?.buckets || null;
     const splittingFromLetter = letter || 'a';
 
+    // Compute the next available letter. If no split exists yet, the next
+    // letter is 'b' (since 'a' is implicit).
     const newLetter = existingBuckets
       ? sessionService.nextAvailableLetter(existingBuckets)
       : 'b';
 
+    // baseRouteColor: always the 'a' bucket's colour, derived from the route
+    // map record (not assignModalData.routeColor — that could be the bucket-
+    // specific colour).
     const baseRouteColor = rmd.route_color;
 
+    // All prebookings on this route (regardless of bucket) — modal renders all.
     const prebookings = geocodedPins
       .filter(p => p.status === 'pending' && p.routeCode === routeCode)
       .map(p => ({ bookingId: p.id, lat: p.lat, lng: p.lng }));
 
+    // For the first-split case, splitBucket needs the full list of booking
+    // IDs to initialize bucket 'a'. We compute it from the current bookings.
     const allBookingIdsOnRoute = bookings
       .filter(b => b['Route Number'] === routeCode)
       .map(b => b['Booking ID']);
 
+    // Close the assignment modal before opening split.
     setAssignModalData(null);
 
     setSplitModalData({
@@ -2722,8 +3252,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       setSplitModalData(null);
       return;
     }
+    // Refresh splits so routeCardData re-renders with N cards.
     await reloadRouteSplits();
 
+    // Compute new-bucket stats for the assignment modal we're about to open.
     const movingSet = new Set(bookingsMovingToNew);
     const newBucketBookings = bookings.filter(b =>
       b['Route Number'] === routeCode && movingSet.has(b['Booking ID'])
@@ -2732,6 +3264,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
     setSplitModalData(null);
 
+    // Open the assignment picker for the NEW LETTER. canSplit is true since
+    // it has zero assigned workers.
     setAssignModalData({
       routeCode,
       displayRouteCode: `${routeCode}${newLetter}`,
@@ -2749,6 +3283,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     setSplitModalData(null);
   }, []);
 
+  // --- ASSIGN ROUTE ---
+  // Branches by letter:
+  //   - assignModalData.letter undefined: whole-route assignment flow.
+  //   - assignModalData.letter set: writes to route_splits via
+  //     updateRouteSplitAssignment, which handles the buckets array and the
+  //     routes.assigned_worker_ids union AND the per-booking assignment for
+  //     the affected bucket's bookings.
   const handleAssignRoute = async (workerId: string | null) => {
     if (!assignModalData) return;
     setAssignLoading(true);
@@ -2756,7 +3297,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const { routeCode, letter } = assignModalData;
 
       if (letter) {
+        // Bucket-scoped assignment.
         const workerIds = workerId === null ? [] : [workerId];
+        // For team seasons, cart members need to be included on the route's
+        // assigned_worker_ids union so the existing per-booking session logic
+        // still works. updateRouteSplitAssignment handles the union math.
         let bucketWorkerIds = workerIds;
         if (isTeamSeason && workerId !== null) {
           const worker = myTeamWorkers.find(w => w.contractorId === workerId);
@@ -2766,6 +3311,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
         await sessionService.updateRouteSplitAssignment(routeCode, letter, bucketWorkerIds);
 
+        // For team seasons, also push session_id onto this bucket's bookings
+        // so the worker logsheet routes them correctly.
         if (isTeamSeason && workerId !== null) {
           const session = await sessionService.getWorkerLogsheetSession(workerId);
           const sessionId = session?.id;
@@ -2785,6 +3332,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         return;
       }
 
+      // Whole-route (non-split) assignment — unchanged behaviour.
       const routeBookings = bookings.filter(b => b['Route Number'] === routeCode);
       const pendingItems = routeBookings.filter(b => b.Status !== 'completed' && b.Completed !== 'x');
       const pendingBookingIds = pendingItems.map(j => j['Booking ID']);
@@ -2933,6 +3481,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   const handleCopyPhone = (phone: string, id: string) => { navigator.clipboard.writeText(phone); };
 
+  // Resize map when sidebar opens/closes
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -2940,10 +3489,25 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => clearTimeout(t);
   }, [sidebarOpen]);
 
+  // --- ROUTE ASSIGNMENT MODAL HELPERS (sort + route-badge data) ---
+  //
+  // For the new wider assignment modal, each worker/cart button shows route
+  // badges underneath. We need:
+  //   - For each worker: the list of routes they're currently on (with their colours)
+  //   - For each cart: same, but routes shared by the cart
+  // And we sort by fewest current route assignments (ascending), with
+  // alphabetical tiebreaker.
+
+  // Map workerId -> list of {routeCode, color} they're currently assigned to.
+  // For split routes, one entry per bucket the worker is in (e.g. a worker
+  // assigned to BIN09c shows up as "BIN09c" with the c-bucket colour).
   const workerRouteBadges = useMemo(() => {
     const m = new Map<string, Array<{ code: string; color: string }>>();
     for (const r of routes) {
-      if (r.managerId !== managerId) continue;
+      // FLOATER (Phase 4): badges span the floated set so a covered manager's
+      // worker shows their route badges (and the fewest-routes sort counts them).
+      // Non-floater ownerSet is {managerId} → original behaviour.
+      if (!r.managerId || !ownerSet.has(r.managerId)) continue;
       const split = routeSplitsByCode.get(r.routeCode);
       const baseColor = routeColorMap.get(r.routeCode) || '#6b7280';
       if (!split || split.buckets.length === 0) {
@@ -2963,8 +3527,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
     }
     return m;
-  }, [routes, managerId, routeSplitsByCode, routeColorMap]);
+  }, [routes, ownerSet, routeSplitsByCode, routeColorMap]);
 
+  // Sorted worker list (aeration): fewest routes first, alphabetical tiebreaker.
   const sortedAerationAssignList = useMemo(() => {
     return [...myTeamWorkers].sort((a, b) => {
       const ar = (workerRouteBadges.get(a.contractorId) || []).length;
@@ -2974,10 +3539,15 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, [myTeamWorkers, workerRouteBadges]);
 
+  // Sorted cart list (team seasons): fewest routes per cart, alphabetical tiebreaker.
+  // Each "cart" here is keyed by session worker_id (the cart's primary worker).
   const sortedTeamAssignList = useMemo(() => {
     if (!contractorsByCart) return [];
     const entries = Array.from(contractorsByCart.entries());
     return entries.sort(([, aMembers], [, bMembers]) => {
+      // A cart's "route count" is the number of routes ANY member is on. Take
+      // the max member's count as the proxy (since cart members share routes
+      // via the union).
       const aRouteCount = Math.max(...aMembers.map(m => (workerRouteBadges.get(m.contractorId) || []).length), 0);
       const bRouteCount = Math.max(...bMembers.map(m => (workerRouteBadges.get(m.contractorId) || []).length), 0);
       if (aRouteCount !== bRouteCount) return aRouteCount - bRouteCount;
@@ -2988,729 +3558,977 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [contractorsByCart, workerRouteBadges]);
 
   // --- RENDER ---
-
   return (
-    <div className="relative w-full h-full overflow-hidden">
-      <div ref={mapContainerRef} className="absolute inset-0" />
+    <>
+      <style>{`
+        @keyframes rmSlideIn { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+        @keyframes rmSlideOut { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+      `}</style>
 
-      {(!mapLoaded || routesLoading) && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-900/40 pointer-events-none z-10">
-          <Loader className="animate-spin text-white" size={28} />
-        </div>
-      )}
-
-      {/* Compass enable prompt (iOS permission) */}
-      {compassNeedsPermission && (
-        <button
-          onClick={handleEnableCompass}
-          className="absolute top-3 left-3 z-20 flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-800/90 text-white text-xs font-medium shadow-lg border border-gray-700 hover:bg-gray-700"
-        >
-          <Compass size={14} /> Enable compass
-        </button>
-      )}
-
-      {/* Sidebar toggle */}
-      <button
-        onClick={() => setSidebarOpen(o => !o)}
-        className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-2 rounded-full bg-gray-800/90 text-white text-xs font-semibold shadow-lg border border-gray-700 hover:bg-gray-700"
-      >
-        {sidebarOpen ? <ChevronLeft size={14} /> : <LayoutList size={14} />}
-        {sidebarOpen ? 'Hide' : (isTeamSeason ? 'Carts & Routes' : 'Staff & Routes')}
-      </button>
-
-      {/* SIDEBAR */}
       <div
-        className={`absolute top-0 left-0 h-full z-30 bg-gray-900/95 backdrop-blur-sm border-r border-gray-700 shadow-2xl transition-transform duration-200 flex flex-col ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
-        style={{ width: 'min(370px, 88vw)' }}
+        className="relative w-full flex flex-row"
+        style={{ height: 'calc(100vh - 160px)' }}
       >
-        <div className="flex items-center justify-between p-2 border-b border-gray-700 flex-shrink-0">
-          <div className="flex gap-1 bg-gray-800 p-1 rounded-lg">
-            <button
-              onClick={() => setSidebarMode('staff')}
-              className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
-                sidebarMode === 'staff' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              {isTeamSeason ? 'Carts' : 'Staff'}
-            </button>
-            <button
-              onClick={() => setSidebarMode('routes')}
-              className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-all ${
-                sidebarMode === 'routes' ? 'bg-gray-700 text-white shadow-sm' : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              Routes
-            </button>
-          </div>
-          <button onClick={() => setSidebarOpen(false)} className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800">
-            <X size={16} />
-          </button>
-        </div>
 
-        {sidebarMode === 'staff' && (
-          <div className="flex items-center gap-1 px-2 py-1.5 border-b border-gray-700 flex-shrink-0 overflow-x-auto">
-            <span className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mr-1 flex-shrink-0">Sort</span>
-            {([['recent','Recent'],['alpha','A-Z'],['steps','Steps'],['equiv','EQ'],['upGross','Up$']] as Array<[SortOption,string]>).map(([k,label])=>(
-              <button
-                key={k}
-                onClick={()=>setSortBy(k)}
-                className={`px-2 py-1 rounded-md text-[11px] font-medium whitespace-nowrap transition-all ${
-                  sortBy===k ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+        {/* SIDEBAR */}
+        {sidebarOpen && (
+          <div
+            className="flex-shrink-0 w-[min(380px,90vw)] bg-gray-900 border-r border-gray-700 z-30 shadow-2xl flex flex-col h-full"
+            style={{ animation: 'rmSlideIn 0.2s ease-out forwards' }}
+          >
+            {/* Header */}
+            <div className="flex-shrink-0 p-3 border-b border-gray-700 bg-gray-900/95">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">
+                  {sidebarMode === 'staff' ? 'Staff' : 'Routes'}
+                </span>
+                <button
+                  onClick={() => setSidebarOpen(false)}
+                  className="w-7 h-7 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 flex items-center justify-center"
+                  title="Close sidebar"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+              </div>
+
+              <div className="flex bg-gray-800 rounded-lg p-0.5 mb-3">
+                <button
+                  onClick={() => setSidebarMode('staff')}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors ${
+                    sidebarMode === 'staff' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <Users size={12} className="inline mr-1" />
+                  Staff
+                </button>
+                <button
+                  onClick={() => setSidebarMode('routes')}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors ${
+                    sidebarMode === 'routes' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <MapPin size={12} className="inline mr-1" />
+                  Routes
+                </button>
+              </div>
+
+              {sidebarMode === 'staff' && (
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as SortOption)}
+                  className="w-full bg-gray-800 text-white text-xs rounded-md px-2 py-1.5 border border-gray-700"
+                >
+                  <option value="recent">Most recent</option>
+                  <option value="alpha">Alphabetical</option>
+                  <option value="steps">Steps</option>
+                  <option value="equiv">EQ</option>
+                  <option value="upGross">Upsell $</option>
+                </select>
+              )}
+            </div>
+
+            {/* Body — scrollable */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-2">
+
+              {/* STAFF MODE — workers (aeration) */}
+              {sidebarMode === 'staff' && !isTeamSeason && sortedWorkerCards.map(card => {
+                const canNav = workerCanNavigate(card);
+                const { hasFlag, flags } = computeRedFlags(card.financialStore);
+                return (
+                  <div
+                    key={card.worker.contractorId}
+                    onClick={() => setSelectedWorkerForModal(card)}
+                    className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-white font-bold text-sm truncate">
+                            {card.worker.firstName} {card.worker.lastName}
+                          </span>
+                          {hasFlag && (<span title={`Red flags: ${flags.join(', ')}`} className="text-red-400"><AlertTriangle size={12} /></span>)}
+                        </div>
+                        {card.lastActiveAddress && (
+                          <div className="text-[10px] text-gray-400 truncate mt-0.5">
+                            {card.lastActiveTime} • {card.lastActiveAddress}
+                          </div>
+                        )}
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1.5 text-[10px] text-gray-300">
+                          <span>{card.stats.steps} steps</span><span className="text-gray-600">•</span>
+                          <span className={card.stats.pending > 0 ? 'text-amber-400' : ''}>{card.stats.pending} pend</span><span className="text-gray-600">•</span>
+                          <span>{card.stats.eq.toFixed(1)} EQ</span><span className="text-gray-600">•</span>
+                          <span>{card.stats.upsellCount} up</span><span className="text-gray-600">•</span>
+                          <span>${card.stats.upsellGross.toFixed(0)}</span>
+                        </div>
+                      </div>
+                      <div className="flex-shrink-0 flex items-center gap-1">
+                        {canNav && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleNavigateToWorker(card); }}
+                            className="w-7 h-7 rounded-md bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white flex items-center justify-center transition-colors"
+                            title={`Navigate to ${card.worker.firstName}`}
+                          ><Navigation2 size={13} /></button>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleViewLogsheet(card.worker); }}
+                          className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                          title="Open logsheet"
+                        ><Eye size={13} /></button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* STAFF MODE — carts (team seasons) */}
+              {sidebarMode === 'staff' && isTeamSeason && sortedCartCards.map(cart => {
+                const canNav = cartCanNavigate(cart);
+                const { hasFlag, flags } = computeRedFlags(cart.sharedFinancialStore);
+                const label = cart.members.length > 1
+                  ? cart.members.map(m => m.firstName).join(' & ')
+                  : `${cart.members[0]?.firstName || ''} ${cart.members[0]?.lastName || ''}`.trim() || cart.teamId;
+                return (
+                  <div
+                    key={cart.sessionId}
+                    onClick={() => setSelectedCartForModal(cart)}
+                    className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          {cart.isRcCart && <Truck size={11} className="text-orange-400 flex-shrink-0" title="Ramp Crew" />}
+                          <span className="text-white font-bold text-sm truncate">{label}</span>
+                          {hasFlag && (<span title={`Red flags: ${flags.join(', ')}`} className="text-red-400"><AlertTriangle size={12} /></span>)}
+                        </div>
+                        {cart.lastActiveAddress && (
+                          <div className="text-[10px] text-gray-400 truncate mt-0.5">{cart.lastActiveTime} • {cart.lastActiveAddress}</div>
+                        )}
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1.5 text-[10px] text-gray-300">
+                          <span>{cart.stats.steps} steps</span><span className="text-gray-600">•</span>
+                          <span className={cart.stats.pending > 0 ? 'text-amber-400' : ''}>{cart.stats.pending} pend</span><span className="text-gray-600">•</span>
+                          <span>{cart.stats.eq.toFixed(1)} EQ</span><span className="text-gray-600">•</span>
+                          <span>{cart.stats.upsellCount} up</span><span className="text-gray-600">•</span>
+                          <span>${cart.stats.upsellGross.toFixed(0)}</span>
+                          {cart.stats.pendingSaleCount > 0 && (<><span className="text-gray-600">•</span><span className="text-amber-400">{cart.stats.pendingSaleCount} sale</span></>)}
+                        </div>
+                      </div>
+                      <div className="flex-shrink-0 flex items-center gap-1">
+                        {canNav && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleNavigateToCart(cart); }}
+                            className="w-7 h-7 rounded-md bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white flex items-center justify-center transition-colors"
+                            title={`Navigate to ${label}`}
+                          ><Navigation2 size={13} /></button>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleViewLogsheet(cart.members[0], cart.members); }}
+                          className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                          title="Open logsheet"
+                        ><Eye size={13} /></button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* ROUTES MODE — SPLIT-AWARE.
+                  Each card shows its display code (e.g. "BIN09a" for split halves).
+                  Split button appears only on cards that are: not split AND not assigned. */}
+              {sidebarMode === 'routes' && routeCardData.map(rc => (
+                <div
+                  key={`${rc.baseRouteCode}-${rc.letter || 'whole'}`}
+                  onClick={() => {
+                    // V2 design: sidebar card tap opens the assignment modal
+                    // (matching the route-line tap on the map). The Split
+                    // button is inside the modal, so this is the entry point
+                    // for both assignment and split flows.
+                    setAssignModalData({
+                      routeCode: rc.baseRouteCode,
+                      displayRouteCode: rc.displayRouteCode,
+                      routeColor: rc.routeColor,
+                      prebookCount: rc.prebookCount,
+                      prepayCount: rc.prepayCount,
+                      totalEQ: rc.totalEQ,
+                      currentWorkerIds: rc.assignedWorkerIds,
+                      letter: rc.letter,
+                      canSplit: rc.assignedWorkerIds.length === 0,
+                    });
+                  }}
+                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="h-8 px-2 min-w-[44px] rounded-md flex items-center justify-center font-bold text-white text-[11px] flex-shrink-0 leading-none whitespace-nowrap"
+                      style={{ background: rc.routeColor }}
+                    >
+                      {rc.displayRouteCode}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-white text-xs font-bold truncate">
+                        {rc.assignedWorkerLabel || <span className="text-amber-400">⚠ Unassigned</span>}
+                      </div>
+                      <div className="text-[10px] text-gray-400">
+                        {rc.prebookCount} jobs • {rc.prepayCount} prepaid • {rc.totalEQ.toFixed(1)} EQ
+                      </div>
+                    </div>
+                    {/* SPLIT BUTTON removed in v2 — Split now lives inside the
+                        assignment modal (opens when the card or line is tapped),
+                        which is also how the user splits buckets recursively. */}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
-          {sidebarMode === 'staff' && !isTeamSeason && sortedWorkerCards.map(card => (
-            <button
-              key={card.worker.contractorId}
-              onClick={() => setSelectedWorkerForModal(card)}
-              className="w-full text-left p-2.5 rounded-lg bg-gray-800 hover:bg-gray-750 border border-gray-700 transition-all"
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-white text-sm">{card.worker.firstName} {card.worker.lastName}</span>
-                {card.lastActiveTime && <span className="text-[10px] text-gray-500">{card.lastActiveTime}</span>}
-              </div>
-              <div className="flex items-center gap-2 mt-1 text-[11px] text-gray-400">
-                <span>{card.stats.steps} steps</span>
-                <span>·</span>
-                <span>EQ {card.stats.eq.toFixed(1)}</span>
-                {card.assignedRoutes.length > 0 && (<><span>·</span><span className="truncate">{card.assignedRoutes.join(', ')}</span></>)}
-              </div>
-              {card.lastActiveAddress && (
-                <div className="text-[10px] text-gray-500 mt-0.5 truncate">📍 {card.lastActiveAddress}</div>
-              )}
-            </button>
-          ))}
+        {/* MAP AREA */}
+        <div className="flex-1 relative h-full min-w-0">
+          <div ref={mapContainerRef} className="absolute inset-0 bg-gray-900" />
 
-          {sidebarMode === 'staff' && isTeamSeason && sortedCartCards.map(card => (
-            <button
-              key={card.sessionId}
-              onClick={() => setSelectedCartForModal(card)}
-              className="w-full text-left p-2.5 rounded-lg bg-gray-800 hover:bg-gray-750 border border-gray-700 transition-all"
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-white text-sm flex items-center gap-1.5">
-                  {card.members.length > 1 ? <Truck size={13} className="opacity-70" /> : null}
-                  {card.members.map(m => m.firstName).join(' & ') || card.teamId}
-                  {card.isRcCart && <Shovel size={11} className="text-amber-400" />}
-                </span>
-                {card.lastActiveTime && <span className="text-[10px] text-gray-500">{card.lastActiveTime}</span>}
-              </div>
-              <div className="flex items-center gap-2 mt-1 text-[11px] text-gray-400">
-                <span>{card.stats.steps} steps</span>
-                <span>·</span>
-                <span>EQ {card.stats.eq.toFixed(1)}</span>
-                {card.stats.pendingSaleCount > 0 && (
-                  <><span>·</span><span className="text-yellow-400 flex items-center gap-0.5"><Bookmark size={9} />{card.stats.pendingSaleCount}</span></>
-                )}
-                {card.assignedRoutes.length > 0 && (<><span>·</span><span className="truncate">{card.assignedRoutes.join(', ')}</span></>)}
-              </div>
-              {card.lastActiveAddress && (
-                <div className="text-[10px] text-gray-500 mt-0.5 truncate">📍 {card.lastActiveAddress}</div>
-              )}
-            </button>
-          ))}
+          {routesLoading && (
+            <div className="absolute top-3 left-3 z-30 bg-gray-900/90 text-white text-xs px-3 py-2 rounded-lg flex items-center gap-2 shadow-lg">
+              <Loader size={14} className="animate-spin" />
+              Loading routes…
+            </div>
+          )}
 
-          {sidebarMode === 'routes' && routeCardData.map(card => (
+          {!routesLoading && mapLoaded && routeMapData.length === 0 && myRouteCodes.length > 0 && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-amber-900/90 text-amber-100 text-xs px-3 py-2 rounded-lg shadow-lg max-w-md text-center">
+              <AlertCircle size={14} className="inline mr-1" />
+              No approved route geometry found. Have a Senior RM approve routes.
+            </div>
+          )}
+
+          {compassNeedsPermission && !navState && (
             <button
-              key={card.displayRouteCode}
+              onClick={handleEnableCompass}
+              className="absolute top-3 left-1/2 -translate-x-1/2 z-[55] bg-blue-600/95 hover:bg-blue-500 text-white text-xs font-bold px-3 py-2 rounded-lg shadow-xl flex items-center gap-2 border border-blue-400 transition-colors"
+              title="Enable compass for nav arrow rotation"
+            >
+              <Compass size={14} />
+              Enable compass
+            </button>
+          )}
+
+          {!sidebarOpen && !navState && (
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="absolute top-3 left-3 z-40 w-11 h-11 bg-gray-900/95 hover:bg-gray-800 text-white rounded-lg shadow-xl flex items-center justify-center transition-all border border-gray-700"
+              title="Open sidebar"
+            ><LayoutList size={20} /></button>
+          )}
+
+          {(onRouteWorkerCard || onRouteCartCard) && !navState && (
+            <div
               onClick={() => {
-                setAssignModalData({
-                  routeCode: card.routeCode,
-                  displayRouteCode: card.displayRouteCode,
-                  routeColor: card.routeColor,
-                  prebookCount: card.prebookCount,
-                  prepayCount: card.prepayCount,
-                  totalEQ: card.totalEQ,
-                  currentWorkerIds: card.assignedWorkerIds,
-                  letter: card.isSplit ? card.letter : undefined,
-                  canSplit: card.assignedWorkerIds.length === 0,
-                });
+                if (onRouteCartCard) setSelectedCartForModal(onRouteCartCard);
+                else if (onRouteWorkerCard) setSelectedWorkerForModal(onRouteWorkerCard);
               }}
-              className="w-full text-left p-2.5 rounded-lg bg-gray-800 hover:bg-gray-750 border border-gray-700 transition-all"
+              className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 bg-gray-900/95 backdrop-blur-sm border border-blue-500/60 rounded-xl shadow-2xl px-4 py-2.5 cursor-pointer hover:bg-gray-800 transition-colors flex items-center gap-3 max-w-[90%]"
             >
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-sm flex items-center gap-1.5">
-                  <span className="inline-block w-3 h-3 rounded-full" style={{ background: card.routeColor }} />
-                  <span className="text-white">{card.displayRouteCode}</span>
-                </span>
-                {card.isAssigned
-                  ? <span className="text-[10px] text-green-400 font-medium truncate max-w-[160px]">{card.assignedWorkerLabel}</span>
-                  : <span className="text-[10px] text-amber-400 font-medium">Unassigned</span>}
+              <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+              <div className="min-w-0">
+                <div className="text-[10px] text-blue-300 font-bold uppercase tracking-wide">On route</div>
+                <div className="text-white text-sm font-bold truncate">
+                  {onRouteCartCard
+                    ? (onRouteCartCard.members.length > 1
+                        ? onRouteCartCard.members.map(m => m.firstName).join(' & ')
+                        : `${onRouteCartCard.members[0]?.firstName} ${onRouteCartCard.members[0]?.lastName.charAt(0)}.`)
+                    : `${onRouteWorkerCard!.worker.firstName} ${onRouteWorkerCard!.worker.lastName.charAt(0)}.`}
+                  {onRouteRedFlags.hasFlag && (<AlertTriangle size={12} className="inline ml-1.5 text-red-400" />)}
+                </div>
               </div>
-              <div className="flex items-center gap-2 mt-1 text-[11px] text-gray-400">
-                <span>{card.prebookCount} jobs</span>
-                <span>·</span>
-                <span>{card.prepayCount} prepay</span>
-                <span>·</span>
-                <span>EQ {card.totalEQ.toFixed(1)}</span>
-              </div>
-            </button>
-          ))}
+            </div>
+          )}
 
-          {sidebarMode === 'staff' && !isTeamSeason && sortedWorkerCards.length === 0 && (
-            <div className="text-center text-gray-500 text-xs py-8">No staff to show.</div>
-          )}
-          {sidebarMode === 'staff' && isTeamSeason && sortedCartCards.length === 0 && (
-            <div className="text-center text-gray-500 text-xs py-8">No carts to show.</div>
-          )}
-          {sidebarMode === 'routes' && routeCardData.length === 0 && (
-            <div className="text-center text-gray-500 text-xs py-8">No routes to show.</div>
+          {navState && mapRef.current && (
+            <RMNavigation
+              map={mapRef.current}
+              destination={navState.destination}
+              onArrived={handleNavArrived}
+              onCancel={handleNavCancel}
+              initialHeading={
+                gpsHeadingRef.current != null
+                  && (Date.now() - gpsHeadingUpdatedAtRef.current) < 300000
+                  ? gpsHeadingRef.current
+                  : null
+              }
+            />
           )}
         </div>
-      </div>
 
-      {/* ON-ROUTE FLOATER CARD */}
-      {(onRouteWorkerCard || onRouteCartCard) && !navState && (
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 w-[min(340px,90vw)]">
-          <div className="bg-gray-900/95 backdrop-blur-sm rounded-xl border border-gray-700 shadow-2xl p-3">
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="font-bold text-white text-sm flex items-center gap-1.5">
-                <MapPin size={14} className="text-blue-400" />
-                {onRouteCartCard
-                  ? (onRouteCartCard.members.map(m => m.firstName).join(' & ') || onRouteCartCard.teamId)
-                  : `${onRouteWorkerCard!.worker.firstName} ${onRouteWorkerCard!.worker.lastName}`}
-              </span>
-              {onRouteRedFlags.hasFlag && <AlertTriangle size={15} className="text-amber-400" />}
-            </div>
-            <div className="flex items-center gap-2 text-[11px] text-gray-400">
-              {onRouteCartCard ? (
-                <>
-                  <span>{onRouteCartCard.stats.steps} steps</span>
-                  <span>·</span>
-                  <span>EQ {onRouteCartCard.stats.eq.toFixed(1)}</span>
-                </>
-              ) : (
-                <>
-                  <span>{onRouteWorkerCard!.stats.steps} steps</span>
-                  <span>·</span>
-                  <span>EQ {onRouteWorkerCard!.stats.eq.toFixed(1)}</span>
-                </>
-              )}
-            </div>
-            <button
-              onClick={() => onRouteCartCard ? handleNavigateToCart(onRouteCartCard) : handleNavigateToWorker(onRouteWorkerCard!)}
-              className="mt-2 w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold"
+        {/* WORKER DETAIL MODAL — WIDENED to max-w-3xl */}
+        {selectedWorkerForModal && (
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+            onClick={() => setSelectedWorkerForModal(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
             >
-              <Navigation2 size={13} /> Navigate
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ACTIVE NAVIGATION */}
-      {navState && (
-        <RMNavigation
-          destination={navState.destination}
-          onCancel={handleNavCancel}
-          onArrived={handleNavArrived}
-        />
-      )}
-
-      {/* WORKER DETAIL MODAL (aeration) */}
-      {selectedWorkerForModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSelectedWorkerForModal(null)}>
-          <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-md max-h-[85vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-3 border-b border-gray-700">
-              <span className="font-bold text-white">{selectedWorkerForModal.worker.firstName} {selectedWorkerForModal.worker.lastName}</span>
-              <button onClick={() => setSelectedWorkerForModal(null)} className="p-1 text-gray-400 hover:text-white"><X size={18} /></button>
-            </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3">
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="bg-gray-800 rounded-lg p-2">
-                  <div className="text-[9px] uppercase text-gray-500 font-bold">Steps</div>
-                  <div className="text-white font-bold">{selectedWorkerForModal.stats.steps}</div>
+              <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="text-white font-bold text-base truncate">
+                    {selectedWorkerForModal.worker.firstName} {selectedWorkerForModal.worker.lastName}
+                  </div>
+                  <div className="text-[11px] text-gray-400">
+                    {selectedWorkerForModal.stats.steps} steps • {selectedWorkerForModal.stats.eq.toFixed(1)} EQ • ${selectedWorkerForModal.stats.upsellGross.toFixed(0)} upsell
+                  </div>
                 </div>
-                <div className="bg-gray-800 rounded-lg p-2">
-                  <div className="text-[9px] uppercase text-gray-500 font-bold">EQ</div>
-                  <div className="text-white font-bold">{selectedWorkerForModal.stats.eq.toFixed(1)}</div>
-                </div>
-                <div className="bg-gray-800 rounded-lg p-2">
-                  <div className="text-[9px] uppercase text-gray-500 font-bold">Up $</div>
-                  <div className="text-white font-bold">{selectedWorkerForModal.stats.upsellGross.toFixed(0)}</div>
-                </div>
-              </div>
-
-              <div className="flex gap-2">
-                {workerCanNavigate(selectedWorkerForModal) && (
+                <div className="flex-shrink-0 flex items-center gap-1.5">
+                  {workerCanNavigate(selectedWorkerForModal) && (
+                    <button
+                      onClick={() => { const card = selectedWorkerForModal; setSelectedWorkerForModal(null); handleNavigateToWorker(card); }}
+                      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors"
+                      title="Navigate to most recent transaction"
+                    ><Navigation2 size={12} />Navigate</button>
+                  )}
                   <button
-                    onClick={() => { handleNavigateToWorker(selectedWorkerForModal); setSelectedWorkerForModal(null); }}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold"
-                  >
-                    <Navigation2 size={14} /> Navigate
-                  </button>
-                )}
-                <button
-                  onClick={() => handleViewLogsheet(selectedWorkerForModal.worker)}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold"
-                >
-                  <Eye size={14} /> Logsheet
-                </button>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-semibold text-gray-300">Upsells</span>
+                    onClick={() => handleViewLogsheet(selectedWorkerForModal.worker)}
+                    className="px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md flex items-center gap-1.5"
+                    title="View logsheet"
+                  ><FileText size={12} />Logsheet</button>
                   <button
                     onClick={() => handleToggleUpsells(selectedWorkerForModal.worker.contractorId, selectedWorkerForModal.upsellsEnabled)}
-                    className={`px-2 py-1 rounded-md text-[11px] font-medium ${
-                      selectedWorkerForModal.upsellsEnabled ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-400'
+                    className={`px-2.5 py-1.5 text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors ${
+                      selectedWorkerForModal.upsellsEnabled
+                        ? 'bg-green-600/20 text-green-300 hover:bg-green-600 hover:text-white'
+                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                     }`}
-                  >
-                    {selectedWorkerForModal.upsellsEnabled ? 'Enabled' : 'Disabled'}
-                  </button>
+                    title="Toggle upsells"
+                  >{selectedWorkerForModal.upsellsEnabled ? 'Upsells ✓' : 'Upsells ✗'}</button>
+                  <button
+                    onClick={() => setSelectedWorkerForModal(null)}
+                    className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                  ><X size={14} /></button>
                 </div>
               </div>
-
-              <ContractorJobs
-                bookings={selectedWorkerForModal.displayBookings}
-                financialStore={selectedWorkerForModal.financialStore}
-                seasonType={seasonType}
-              />
+              <div className="flex-1 overflow-y-auto p-3 min-h-0">
+                <ContractorJobs
+                  bookings={selectedWorkerForModal.displayBookings}
+                  financialStore={selectedWorkerForModal.financialStore}
+                  workerName={`${selectedWorkerForModal.worker.firstName} ${selectedWorkerForModal.worker.lastName}`}
+                  isReadOnly
+                />
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* CART DETAIL MODAL (team) */}
-      {selectedCartForModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSelectedCartForModal(null)}>
-          <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-md max-h-[85vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-3 border-b border-gray-700">
-              <span className="font-bold text-white flex items-center gap-1.5">
-                {selectedCartForModal.members.length > 1 ? <Truck size={15} className="opacity-70" /> : null}
-                {selectedCartForModal.members.map(m => m.firstName).join(' & ') || selectedCartForModal.teamId}
-                {selectedCartForModal.isRcCart && <Shovel size={13} className="text-amber-400" />}
-              </span>
-              <button onClick={() => setSelectedCartForModal(null)} className="p-1 text-gray-400 hover:text-white"><X size={18} /></button>
-            </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3">
-              <div className="grid grid-cols-4 gap-2 text-center">
-                <div className="bg-gray-800 rounded-lg p-2">
-                  <div className="text-[9px] uppercase text-gray-500 font-bold">Steps</div>
-                  <div className="text-white font-bold">{selectedCartForModal.stats.steps}</div>
-                </div>
-                <div className="bg-gray-800 rounded-lg p-2">
-                  <div className="text-[9px] uppercase text-gray-500 font-bold">EQ</div>
-                  <div className="text-white font-bold">{selectedCartForModal.stats.eq.toFixed(1)}</div>
-                </div>
-                <div className="bg-gray-800 rounded-lg p-2">
-                  <div className="text-[9px] uppercase text-gray-500 font-bold">Pend</div>
-                  <div className="text-white font-bold">{selectedCartForModal.stats.pending}</div>
-                </div>
-                <div className="bg-gray-800 rounded-lg p-2">
-                  <div className="text-[9px] uppercase text-gray-500 font-bold">Up $</div>
-                  <div className="text-white font-bold">{selectedCartForModal.stats.upsellGross.toFixed(0)}</div>
-                </div>
-              </div>
-
-              {selectedCartForModal.asphaltOwnedRows.length > 0 && (
-                <div className="bg-amber-900/20 border border-amber-700/40 rounded-lg p-2">
-                  <div className="text-[11px] font-semibold text-amber-300 mb-1 flex items-center gap-1">
-                    <Shovel size={12} /> Asphalt rows
-                  </div>
-                  {selectedCartForModal.asphaltOwnedRows.map(row => (
-                    <div key={row.id} className="flex items-center justify-between text-[11px] text-gray-300 py-0.5">
-                      <span className="truncate">{assembleAddressFromPending(row)} · {formatAsphaltDollars(row.asphaltAmount)}</span>
-                      {row.assignedRcSessionId && (
-                        <button
-                          onClick={() => handleUnassignAsphalt(row.id, assembleAddressFromPending(row))}
-                          disabled={unassigningAsphaltId === row.id}
-                          className="ml-2 px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-[10px] flex items-center gap-1"
-                        >
-                          {unassigningAsphaltId === row.id ? <Loader size={10} className="animate-spin" /> : <Undo2 size={10} />}
-                          Unassign
-                        </button>
-                      )}
+        {/* CART DETAIL MODAL — WIDENED to max-w-3xl */}
+        {selectedCartForModal && (
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+            onClick={() => setSelectedCartForModal(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    {selectedCartForModal.isRcCart && (<Truck size={13} className="text-orange-400 flex-shrink-0" />)}
+                    <div className="text-white font-bold text-base truncate">
+                      {selectedCartForModal.members.length > 1
+                        ? selectedCartForModal.members.map(m => m.firstName).join(' & ')
+                        : `${selectedCartForModal.members[0]?.firstName} ${selectedCartForModal.members[0]?.lastName}`}
                     </div>
-                  ))}
-                  {unassignError && <div className="text-[10px] text-red-400 mt-1">{unassignError}</div>}
+                  </div>
+                  <div className="text-[11px] text-gray-400">
+                    {selectedCartForModal.stats.steps} steps • {selectedCartForModal.stats.eq.toFixed(1)} EQ • ${selectedCartForModal.stats.upsellGross.toFixed(0)} upsell
+                  </div>
                 </div>
-              )}
-
-              <div className="flex gap-2">
-                {cartCanNavigate(selectedCartForModal) && (
+                <div className="flex-shrink-0 flex items-center gap-1.5">
+                  {cartCanNavigate(selectedCartForModal) && (
+                    <button
+                      onClick={() => { const cart = selectedCartForModal; setSelectedCartForModal(null); handleNavigateToCart(cart); }}
+                      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors"
+                      title="Navigate to most recent transaction"
+                    ><Navigation2 size={12} />Navigate</button>
+                  )}
                   <button
-                    onClick={() => { handleNavigateToCart(selectedCartForModal); setSelectedCartForModal(null); }}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold"
-                  >
-                    <Navigation2 size={14} /> Navigate
-                  </button>
-                )}
-                <button
-                  onClick={() => handleViewLogsheet(selectedCartForModal.members[0], selectedCartForModal.members)}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold"
-                >
-                  <Eye size={14} /> Logsheet
-                </button>
+                    onClick={() => handleViewLogsheet(selectedCartForModal.members[0], selectedCartForModal.members)}
+                    className="px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md flex items-center gap-1.5"
+                    title="Open cart logsheet"
+                  ><FileText size={12} />Logsheet</button>
+                  <button
+                    onClick={() => setSelectedCartForModal(null)}
+                    className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                  ><X size={14} /></button>
+                </div>
               </div>
 
-              <ContractorJobs
-                bookings={selectedCartForModal.sharedBookings}
-                financialStore={selectedCartForModal.sharedFinancialStore}
-                seasonType={seasonType}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+              <div className="flex-1 overflow-y-auto p-3 min-h-0 space-y-3">
+                <div>
+                  <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Cart members</div>
+                  <div className="space-y-1.5">
+                    {selectedCartForModal.members.map(m => (
+                      <div key={m.contractorId} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
+                        <Users size={11} className="text-gray-400 flex-shrink-0" />
+                        <span className="text-white text-xs font-medium flex-1 min-w-0 truncate">{m.firstName} {m.lastName}</span>
+                        {isRcWorker(m.teamId) && (<span className="text-[9px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded font-bold">RC</span>)}
+                        {m.cellPhone && (<a href={`tel:${m.cellPhone}`} className="text-blue-400 hover:text-blue-300" title="Call"><Phone size={11} /></a>)}
+                      </div>
+                    ))}
+                  </div>
+                </div>
 
-      {/* ROUTE PREBOOKINGS POPUP */}
-      {selectedRouteForBookings && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSelectedRouteForBookings(null)}>
-          <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-md max-h-[85vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-3 border-b border-gray-700">
-              <span className="font-bold text-white">Route {selectedRouteForBookings}</span>
-              <button onClick={() => setSelectedRouteForBookings(null)} className="p-1 text-gray-400 hover:text-white"><X size={18} /></button>
-            </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-3">
-              <ContractorJobs
-                bookings={selectedRouteBookings}
-                financialStore={selectedRouteFinancialStore}
-                seasonType={seasonType}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* PENDING JOB MODAL */}
-      {pendingJobForModal && (
-        <PendingJobModal
-          booking={pendingJobForModal}
-          seasonType={seasonType}
-          onClose={() => setPendingJobForModal(null)}
-        />
-      )}
-
-      {/* ASSIGNMENT MODAL */}
-      {assignModalData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setAssignModalData(null)}>
-          <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-md max-h-[85vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-3 border-b border-gray-700">
-              <span className="font-bold text-white flex items-center gap-2">
-                <span className="inline-block w-3.5 h-3.5 rounded-full" style={{ background: assignModalData.routeColor }} />
-                Route {assignModalData.displayRouteCode}
-              </span>
-              <button onClick={() => setAssignModalData(null)} className="p-1 text-gray-400 hover:text-white"><X size={18} /></button>
-            </div>
-
-            <div className="p-3 border-b border-gray-700 flex items-center justify-between">
-              <div className="flex items-center gap-3 text-[11px] text-gray-400">
-                <span>{assignModalData.prebookCount} jobs</span>
-                <span>·</span>
-                <span>{assignModalData.prepayCount} prepay</span>
-                <span>·</span>
-                <span>EQ {assignModalData.totalEQ.toFixed(1)}</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                {assignModalData.canSplit && (
-                  <button
-                    onClick={handleOpenSplitModal}
-                    className="flex items-center gap-1 px-2 py-1 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-200 text-[11px] font-medium"
-                  >
-                    <Scissors size={12} /> Split
-                  </button>
-                )}
-                <button
-                  onClick={openTransferModal}
-                  className="flex items-center gap-1 px-2 py-1 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-200 text-[11px] font-medium"
-                >
-                  <ArrowRightLeft size={12} /> Transfer
-                </button>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
-              {assignModalData.currentWorkerIds.length > 0 && (
-                <button
-                  onClick={() => handleAssignRoute(null)}
-                  disabled={assignLoading}
-                  className="w-full flex items-center gap-2 p-2.5 rounded-lg bg-red-900/30 hover:bg-red-900/50 border border-red-700/40 text-red-300 text-sm font-medium"
-                >
-                  <UserMinus size={15} /> Unassign
-                </button>
-              )}
-
-              {!isTeamSeason && sortedAerationAssignList.map(worker => {
-                const badges = workerRouteBadges.get(worker.contractorId) || [];
-                const isCurrent = assignModalData.currentWorkerIds.includes(worker.contractorId);
-                return (
-                  <button
-                    key={worker.contractorId}
-                    onClick={() => handleAssignRoute(worker.contractorId)}
-                    disabled={assignLoading || isCurrent}
-                    className={`w-full flex items-center justify-between p-2.5 rounded-lg border text-sm transition-all ${
-                      isCurrent
-                        ? 'bg-green-900/30 border-green-700/40 text-green-300'
-                        : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-white'
-                    }`}
-                  >
-                    <span className="flex items-center gap-1.5">
-                      {isCurrent ? <Check size={14} /> : <UserPlus size={14} className="opacity-60" />}
-                      {worker.firstName} {worker.lastName}
-                    </span>
-                    {badges.length > 0 && (
-                      <span className="flex items-center gap-1">
-                        {badges.map(b => (
-                          <span key={b.code} className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: b.color }} title={b.code} />
-                        ))}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-
-              {isTeamSeason && sortedTeamAssignList.map(([sessionWorkerId, members]) => {
-                const repId = members[0]?.contractorId;
-                const badges = repId ? (workerRouteBadges.get(repId) || []) : [];
-                const isCurrent = members.some(m => assignModalData.currentWorkerIds.includes(m.contractorId));
-                return (
-                  <button
-                    key={sessionWorkerId}
-                    onClick={() => repId && handleAssignRoute(repId)}
-                    disabled={assignLoading || isCurrent}
-                    className={`w-full flex items-center justify-between p-2.5 rounded-lg border text-sm transition-all ${
-                      isCurrent
-                        ? 'bg-green-900/30 border-green-700/40 text-green-300'
-                        : 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-white'
-                    }`}
-                  >
-                    <span className="flex items-center gap-1.5">
-                      {isCurrent ? <Check size={14} /> : (members.length > 1 ? <Truck size={14} className="opacity-60" /> : <UserPlus size={14} className="opacity-60" />)}
-                      {members.map(m => m.firstName).join(' & ')}
-                    </span>
-                    {badges.length > 0 && (
-                      <span className="flex items-center gap-1">
-                        {badges.map(b => (
-                          <span key={b.code} className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: b.color }} title={b.code} />
-                        ))}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TRANSFER MODAL */}
-      {transferModalData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setTransferModalData(null)}>
-          <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-sm overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-3 border-b border-gray-700">
-              <span className="font-bold text-white">{transferModalData.title}</span>
-              <button onClick={() => setTransferModalData(null)} className="p-1 text-gray-400 hover:text-white"><X size={18} /></button>
-            </div>
-            <div className="p-2 space-y-1 max-h-[60vh] overflow-y-auto custom-scrollbar">
-              {availableManagers.length === 0 && (
-                <div className="text-center text-gray-500 text-xs py-6">No other managers available.</div>
-              )}
-              {availableManagers.map(mgr => (
-                <button
-                  key={mgr.userId}
-                  onClick={() => handleTransferConfirm(mgr.userId)}
-                  className="w-full flex items-center gap-2 p-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-white text-sm"
-                >
-                  <ArrowRight size={14} className="opacity-60" /> {mgr.name}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MANAGE TEAM MODAL */}
-      {showManageTeamModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onCloseManageTeamModal}>
-          <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-md max-h-[85vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-3 border-b border-gray-700">
-              <span className="font-bold text-white flex items-center gap-1.5"><Users size={16} /> Manage Team</span>
-              <button onClick={onCloseManageTeamModal} className="p-1 text-gray-400 hover:text-white"><X size={18} /></button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
-              {reassignSuccess && (
-                <div className="text-[11px] text-green-400 bg-green-900/20 border border-green-700/40 rounded-lg p-2">{reassignSuccess}</div>
-              )}
-              {reassignError && (
-                <div className="text-[11px] text-red-400 bg-red-900/20 border border-red-700/40 rounded-lg p-2">{reassignError}</div>
-              )}
-
-              {!selectedWorkerToMove && (
-                <>
-                  <div className="text-[10px] uppercase tracking-wider text-gray-500 font-bold px-1 py-1">Tap a worker to move them</div>
-                  {isTeamSeason && contractorsByCart
-                    ? Array.from(contractorsByCart.entries()).map(([sid, members]) => (
-                        <div key={sid} className="bg-gray-800 rounded-lg border border-gray-700 p-2">
-                          <div className="text-[10px] text-gray-500 mb-1 flex items-center gap-1">
-                            {members.length > 1 ? <Truck size={11} /> : null}
-                            {members.map(m => m.firstName).join(' & ')}
-                          </div>
-                          <div className="flex flex-wrap gap-1">
-                            {members.map(m => {
-                              const cartCard = cartCardData.find(c => c.members.some(mm => mm.contractorId === m.contractorId)) || null;
-                              return (
-                                <button
-                                  key={m.contractorId}
-                                  onClick={() => { setSelectedWorkerToMove(m); setSelectedWorkerSourceCart(cartCard); }}
-                                  className="px-2 py-1 rounded-md bg-gray-700 hover:bg-gray-600 text-white text-[11px]"
-                                >
-                                  {m.firstName} {m.lastName.charAt(0)}.
-                                </button>
-                              );
-                            })}
-                          </div>
+                {isSealing && selectedCartForModal.asphaltOwnedRows.length > 0 && (
+                  <div>
+                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Asphalt sold by this cart</div>
+                    <div className="space-y-1">
+                      {selectedCartForModal.asphaltOwnedRows.map(ps => (
+                        <div key={ps.id} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
+                          <Shovel size={11} className="text-amber-400 flex-shrink-0" />
+                          <span className="text-white text-xs flex-1 min-w-0 truncate">{assembleAddressFromPending(ps)}</span>
+                          <span className="text-amber-300 text-[10px] font-bold">{formatAsphaltDollars(ps.asphaltAmount)}</span>
+                          {ps.assignedRcSessionId && (
+                            <button
+                              onClick={() => handleUnassignAsphalt(ps.id, assembleAddressFromPending(ps))}
+                              disabled={unassigningAsphaltId === ps.id}
+                              className="text-[9px] bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white px-1.5 py-0.5 rounded font-bold transition-colors disabled:opacity-50"
+                              title="Unassign asphalt"
+                            >{unassigningAsphaltId === ps.id ? '...' : 'Unassign'}</button>
+                          )}
                         </div>
-                      ))
-                    : myTeamWorkers.map(w => (
+                      ))}
+                    </div>
+                    {unassignError && (<div className="text-[10px] text-red-400 mt-1">{unassignError}</div>)}
+                  </div>
+                )}
+
+                {isSealing && selectedCartForModal.asphaltIncomingRows.length > 0 && (
+                  <div>
+                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Asphalt assigned to this RC</div>
+                    <div className="space-y-1">
+                      {selectedCartForModal.asphaltIncomingRows.map(ps => (
+                        <div key={ps.id} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
+                          <Shovel size={11} className="text-amber-400 flex-shrink-0" />
+                          <span className="text-white text-xs flex-1 min-w-0 truncate">{assembleAddressFromPending(ps)}</span>
+                          <span className="text-amber-300 text-[10px] font-bold">{formatAsphaltDollars(ps.asphaltAmount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">
+                    Cart jobs ({selectedCartForModal.sharedBookings.length})
+                  </div>
+                  <ContractorJobs
+                    bookings={selectedCartForModal.sharedBookings}
+                    financialStore={selectedCartForModal.sharedFinancialStore}
+                    workerName={
+                      selectedCartForModal.members.length > 1
+                        ? selectedCartForModal.members.map(m => m.firstName).join(' & ')
+                        : `${selectedCartForModal.members[0]?.firstName || ''} ${selectedCartForModal.members[0]?.lastName || ''}`
+                    }
+                    isReadOnly
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ROUTE PREBOOKINGS POPUP — unchanged width (max-w-md) */}
+        {selectedRouteForBookings && (
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+            onClick={() => setSelectedRouteForBookings(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-md max-h-[90vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between">
+                <div className="text-white font-bold text-sm">Route {selectedRouteForBookings} • {selectedRouteBookings.length} jobs</div>
+                <button
+                  onClick={() => setSelectedRouteForBookings(null)}
+                  className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                ><X size={14} /></button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-3 min-h-0">
+                <ContractorJobs
+                  bookings={selectedRouteBookings}
+                  financialStore={selectedRouteFinancialStore}
+                  workerName={`Route ${selectedRouteForBookings}`}
+                  isReadOnly
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {pendingJobForModal && (
+          <PendingJobModal
+            booking={pendingJobForModal}
+            onClose={() => setPendingJobForModal(null)}
+            onRefresh={() => { setPendingJobForModal(null); onRefresh(); }}
+          />
+        )}
+
+        {/* ROUTE ASSIGNMENT MODAL — V2: max-w-3xl, route badges, fewest-routes sort,
+            Split button at the TOP (enabled when bucket has zero assigned workers). */}
+        {assignModalData && (
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+            onClick={() => setAssignModalData(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex-shrink-0 p-4 border-b border-gray-700 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div
+                    className="h-9 px-2.5 min-w-[48px] rounded-md flex items-center justify-center font-bold text-white text-xs flex-shrink-0 leading-none whitespace-nowrap"
+                    style={{ background: assignModalData.routeColor }}
+                  >
+                    {assignModalData.displayRouteCode}
+                  </div>
+                  <div>
+                    <div className="text-white font-bold text-sm">Assign Route</div>
+                    <div className="text-[10px] text-gray-400">
+                      {assignModalData.prebookCount} jobs • {assignModalData.prepayCount} prepaid • {assignModalData.totalEQ.toFixed(1)} EQ
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setAssignModalData(null)}
+                  className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                ><X size={14} /></button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-1.5 min-h-0">
+                {/* Split button at TOP — enabled iff this bucket/route has zero
+                    assigned workers. Title explains the disabled reason. */}
+                <button
+                  onClick={handleOpenSplitModal}
+                  disabled={!assignModalData.canSplit || assignLoading}
+                  title={assignModalData.canSplit
+                    ? 'Carve a new sub-bucket out of this route'
+                    : 'Unassign workers first before splitting'}
+                  className="w-full text-left px-3 py-2 bg-amber-600/20 hover:bg-amber-600 border border-amber-600/50 hover:border-amber-500 rounded-md text-amber-300 hover:text-white text-xs font-bold flex items-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-amber-600/20 disabled:hover:text-amber-300"
+                >
+                  <Scissors size={13} />
+                  Split this {assignModalData.letter ? `bucket (${assignModalData.displayRouteCode})` : 'route'}
+                </button>
+
+                {/* Divider */}
+                <div className="border-t border-gray-700 my-2"></div>
+
+                {/* Unassign — only shown if there's a current assignment */}
+                {assignModalData.currentWorkerIds.length > 0 && (
+                  <button
+                    onClick={() => handleAssignRoute(null)}
+                    disabled={assignLoading}
+                    className="w-full text-left px-3 py-2 bg-red-900/30 hover:bg-red-900/50 border border-red-700/50 rounded-md text-red-300 text-xs font-bold disabled:opacity-50"
+                  >
+                    {assignLoading ? <Loader size={12} className="inline animate-spin" /> : <X size={12} className="inline mr-1.5" />}
+                    Unassign {assignModalData.letter ? `bucket ${assignModalData.letter}` : 'route'}
+                  </button>
+                )}
+
+                {/* Worker / cart list — sorted by fewest current routes first */}
+                {isTeamSeason ? (
+                  sortedTeamAssignList.map(([sessionWorkerId, cartMembers]) => {
+                    const cart = teamCarts.find(c => c.workerIds.includes(cartMembers[0].contractorId));
+                    const sessionWorker = cartMembers[0];
+                    const label = cartMembers.length > 1
+                      ? cartMembers.map(m => m.firstName).join(' & ')
+                      : `${sessionWorker.firstName} ${sessionWorker.lastName}`;
+                    const isAssigned = cart?.workerIds.some(wid => assignModalData.currentWorkerIds.includes(wid));
+                    // Combine route badges across cart members (deduped by code).
+                    const badgeMap = new Map<string, string>();
+                    for (const m of cartMembers) {
+                      const badges = workerRouteBadges.get(m.contractorId) || [];
+                      for (const b of badges) badgeMap.set(b.code, b.color);
+                    }
+                    const badges = Array.from(badgeMap.entries()).map(([code, color]) => ({ code, color }));
+                    return (
+                      <button
+                        key={sessionWorkerId}
+                        onClick={() => handleAssignRoute(sessionWorker.contractorId)}
+                        disabled={assignLoading}
+                        className={`w-full text-left px-3 py-2.5 rounded-md text-xs font-medium border ${
+                          isAssigned ? 'bg-blue-900/40 border-blue-700 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700'
+                        } disabled:opacity-50`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-bold">{label}</span>
+                          {isAssigned && <Check size={12} className="text-blue-400 flex-shrink-0" />}
+                        </div>
+                        {badges.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                            {badges.map(b => (
+                              <span
+                                key={b.code}
+                                className="h-5 px-1.5 rounded text-[9px] font-bold text-white leading-none flex items-center"
+                                style={{ background: b.color }}
+                              >{b.code}</span>
+                            ))}
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })
+                ) : (
+                  sortedAerationAssignList.map(w => {
+                    const isAssigned = assignModalData.currentWorkerIds.includes(w.contractorId);
+                    const badges = workerRouteBadges.get(w.contractorId) || [];
+                    return (
+                      <button
+                        key={w.contractorId}
+                        onClick={() => handleAssignRoute(w.contractorId)}
+                        disabled={assignLoading}
+                        className={`w-full text-left px-3 py-2.5 rounded-md text-xs font-medium border ${
+                          isAssigned ? 'bg-blue-900/40 border-blue-700 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700'
+                        } disabled:opacity-50`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-bold">{w.firstName} {w.lastName}</span>
+                          {isAssigned && <Check size={12} className="text-blue-400 flex-shrink-0" />}
+                        </div>
+                        {badges.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                            {badges.map(b => (
+                              <span
+                                key={b.code}
+                                className="h-5 px-1.5 rounded text-[9px] font-bold text-white leading-none flex items-center"
+                                style={{ background: b.color }}
+                              >{b.code}</span>
+                            ))}
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
+
+                {/* Transfer to other manager — only on non-split (whole-route) assignment */}
+                {!assignModalData.letter && (
+                  <button
+                    onClick={openTransferModal}
+                    disabled={assignLoading}
+                    className="w-full text-left px-3 py-2 bg-purple-900/30 hover:bg-purple-900/50 border border-purple-700/50 rounded-md text-purple-300 text-xs font-bold mt-2 disabled:opacity-50"
+                  >
+                    <ArrowRightLeft size={12} className="inline mr-1.5" />
+                    Transfer to another manager…
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {transferModalData && (
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+            onClick={() => setTransferModalData(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md p-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-white font-bold text-sm">{transferModalData.title}</div>
+                <button
+                  onClick={() => setTransferModalData(null)}
+                  className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                ><X size={14} /></button>
+              </div>
+              <div className="space-y-1.5">
+                {availableManagers.map(mgr => (
+                  <button
+                    key={mgr.userId}
+                    onClick={() => handleTransferConfirm(mgr.userId)}
+                    className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700"
+                  ><ArrowRight size={12} className="inline mr-1.5 text-purple-400" />{mgr.name}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MANAGE TEAM MODAL — unchanged width (max-w-lg) */}
+        {showManageTeamModal && (
+          <div
+            className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+            onClick={onCloseManageTeamModal}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between">
+                <div className="text-white font-bold text-sm">
+                  <Shuffle size={14} className="inline mr-1.5 text-blue-400" />
+                  Manage Team
+                </div>
+                <button
+                  onClick={onCloseManageTeamModal}
+                  className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                ><X size={14} /></button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-3 min-h-0">
+                {reassignSuccess && (
+                  <div className="mb-3 px-3 py-2 bg-green-900/30 border border-green-700 rounded-md text-green-300 text-xs">
+                    <Check size={11} className="inline mr-1" />{reassignSuccess}
+                  </div>
+                )}
+                {reassignError && (
+                  <div className="mb-3 px-3 py-2 bg-red-900/30 border border-red-700 rounded-md text-red-300 text-xs">
+                    <AlertCircle size={11} className="inline mr-1" />{reassignError}
+                  </div>
+                )}
+
+                {!selectedWorkerToMove ? (
+                  <div className="space-y-1.5">
+                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1">Pick a worker to move</div>
+                    {isTeamSeason ? (
+                      cartCardData.map(cart =>
+                        cart.members.map(m => (
+                          <button
+                            key={m.contractorId}
+                            onClick={() => { setSelectedWorkerToMove(m); setSelectedWorkerSourceCart(cart); }}
+                            className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700 flex items-center gap-2"
+                          >
+                            <Users size={11} className="text-gray-400" />
+                            <span className="flex-1 truncate">{m.firstName} {m.lastName}</span>
+                            <span className="text-[9px] text-gray-500">
+                              {cart.members.length > 1 ? cart.members.map(x => x.firstName).join(' & ') : 'solo'}
+                            </span>
+                          </button>
+                        ))
+                      )
+                    ) : (
+                      myTeamWorkers.map(w => (
                         <button
                           key={w.contractorId}
                           onClick={() => { setSelectedWorkerToMove(w); setSelectedWorkerSourceCart(null); }}
-                          className="w-full text-left p-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-white text-sm"
+                          className={`w-full text-left px-3 py-2 rounded-md text-xs font-medium border flex items-center gap-2 ${
+                            isAerationWorkerModifiable(w) ? 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700' : 'bg-gray-800/40 text-gray-500 border-gray-800 cursor-not-allowed'
+                          }`}
+                          disabled={!isAerationWorkerModifiable(w)}
                         >
-                          {w.firstName} {w.lastName}
+                          <Users size={11} className="text-gray-400" />
+                          <span className="flex-1 truncate">{w.firstName} {w.lastName}</span>
+                          {!isAerationWorkerModifiable(w) && (<span className="text-[9px] text-amber-400">has txs — locked</span>)}
                         </button>
-                      ))}
-                </>
-              )}
-
-              {selectedWorkerToMove && (
-                <>
-                  <div className="flex items-center justify-between bg-gray-800 rounded-lg border border-gray-700 p-2">
-                    <span className="text-white text-sm font-semibold">{selectedWorkerToMove.firstName} {selectedWorkerToMove.lastName}</span>
-                    <button onClick={() => { setSelectedWorkerToMove(null); setSelectedWorkerSourceCart(null); }} className="text-[11px] text-gray-400 hover:text-white">Back</button>
+                      ))
+                    )}
                   </div>
-
-                  <div className="text-[10px] uppercase tracking-wider text-gray-500 font-bold px-1 py-1">Move to</div>
-
-                  {isTeamSeason && (
-                    <>
-                      {contractorsByCart && Array.from(contractorsByCart.entries())
-                        .filter(([sid]) => sid !== selectedWorkerSourceCart?.sessionId)
-                        .map(([sid, members]) => (
-                          <button
-                            key={sid}
-                            onClick={() => handleReassignWorker({ type: 'existing_cart', targetSessionId: sid, label: members.map(m => m.firstName).join(' & ') })}
-                            disabled={reassignLoading}
-                            className="w-full flex items-center gap-2 p-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-white text-sm"
-                          >
-                            <Truck size={14} className="opacity-60" /> {members.map(m => m.firstName).join(' & ')}
-                          </button>
-                        ))}
+                ) : (
+                  <div className="space-y-2.5">
+                    <div className="px-3 py-2 bg-blue-900/20 border border-blue-700/40 rounded-md flex items-center gap-2">
                       <button
-                        onClick={() => handleReassignWorker({ type: 'new_solo' })}
-                        disabled={reassignLoading}
-                        className="w-full flex items-center gap-2 p-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-white text-sm"
-                      >
-                        <Shuffle size={14} className="opacity-60" /> New solo cart
-                      </button>
-                    </>
-                  )}
+                        onClick={() => { setSelectedWorkerToMove(null); setSelectedWorkerSourceCart(null); }}
+                        className="text-blue-300 hover:text-white"
+                      ><Undo2 size={12} /></button>
+                      <div className="text-white text-xs font-bold flex-1 truncate">
+                        Move {selectedWorkerToMove.firstName} {selectedWorkerToMove.lastName}
+                      </div>
+                    </div>
 
-                  {availableManagers.map(mgr => (
+                    {isTeamSeason ? (
+                      <>
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">Move to another cart</div>
+                        {cartCardData
+                          .filter(c => c.sessionId !== selectedWorkerSourceCart?.sessionId)
+                          .map(c => {
+                            const label = c.members.length > 1 ? c.members.map(m => m.firstName).join(' & ') : c.members[0]?.firstName;
+                            return (
+                              <button
+                                key={c.sessionId}
+                                onClick={() => handleReassignWorker({ type: 'existing_cart', targetSessionId: c.sessionId, label: label || '' })}
+                                disabled={reassignLoading}
+                                className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700 disabled:opacity-50"
+                              ><UserPlus size={11} className="inline mr-1.5 text-green-400" />{label}</button>
+                            );
+                          })}
+                        {selectedWorkerSourceCart && selectedWorkerSourceCart.members.length > 1 && (
+                          <button
+                            onClick={() => handleReassignWorker({ type: 'new_solo' })}
+                            disabled={reassignLoading}
+                            className="w-full text-left px-3 py-2 bg-amber-900/30 hover:bg-amber-900/50 border border-amber-700/50 rounded-md text-amber-300 text-xs font-bold disabled:opacity-50"
+                          ><UserMinus size={11} className="inline mr-1.5" />Make solo cart</button>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">Transfer to another manager</div>
+                        {availableManagers.map(mgr => (
+                          <button
+                            key={mgr.userId}
+                            onClick={() => handleAerationTransfer(mgr.userId)}
+                            disabled={reassignLoading}
+                            className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-md text-white text-xs font-medium border border-gray-700 disabled:opacity-50"
+                          ><ArrowRight size={11} className="inline mr-1.5 text-purple-400" />{mgr.name}</button>
+                        ))}
+                      </>
+                    )}
+
+                    {isTeamSeason && availableManagers.length > 0 && (
+                      <>
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mt-2">Transfer to another manager</div>
+                        <div className="flex gap-1.5">
+                          <select
+                            value={reassignManagerId}
+                            onChange={e => setReassignManagerId(e.target.value)}
+                            className="flex-1 bg-gray-800 text-white text-xs rounded-md px-2 py-1.5 border border-gray-700"
+                          >
+                            <option value="">Pick a manager…</option>
+                            {availableManagers.map(m => (<option key={m.userId} value={m.userId}>{m.name}</option>))}
+                          </select>
+                          <button
+                            onClick={() => reassignManagerId && handleReassignWorker({ type: 'different_manager', targetManagerId: reassignManagerId })}
+                            disabled={!reassignManagerId || reassignLoading}
+                            className="px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white text-xs font-bold rounded-md disabled:opacity-50"
+                          >Move</button>
+                        </div>
+                      </>
+                    )}
+
                     <button
-                      key={mgr.userId}
-                      onClick={() => isTeamSeason
-                        ? handleReassignWorker({ type: 'different_manager', targetManagerId: mgr.userId })
-                        : handleAerationTransfer(mgr.userId)}
+                      onClick={handleRemoveWorkerNoShow}
                       disabled={reassignLoading}
-                      className="w-full flex items-center gap-2 p-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 border border-gray-700 text-white text-sm"
+                      className="w-full text-left px-3 py-2 bg-red-900/30 hover:bg-red-900/50 border border-red-700/50 rounded-md text-red-300 text-xs font-bold mt-3 disabled:opacity-50"
+                    ><Trash2 size={11} className="inline mr-1.5" />Remove worker (no-show)</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SWITCH-NAV CONFIRMATION POPUP */}
+        {switchNavConfirm && (
+          <div
+            className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4"
+            onClick={() => setSwitchNavConfirm(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <Navigation2 size={16} className="text-blue-400" />
+                <div className="text-white font-bold text-sm">Switch navigation?</div>
+              </div>
+              <div className="text-xs text-gray-300 mb-1">
+                You're currently navigating to <span className="text-white font-bold">{switchNavConfirm.currentLabel}</span>.
+              </div>
+              <div className="text-xs text-gray-300 mb-3">
+                Cancel current navigation and go to <span className="text-blue-300 font-bold">{switchNavConfirm.newLabel}</span>?
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setSwitchNavConfirm(null)}
+                  className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md"
+                >Cancel</button>
+                <button
+                  onClick={handleSwitchNavConfirm}
+                  className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md"
+                >Switch navigation</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ROUTE-NAV PROMPT */}
+        {routeNavPrompt && (
+          <div
+            className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4"
+            onClick={() => setRouteNavPrompt(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2 mb-3">
+                <div
+                  className="h-8 px-2 min-w-[44px] rounded-md flex items-center justify-center font-bold text-white text-[11px] flex-shrink-0 leading-none whitespace-nowrap"
+                  style={{ background: routeNavPrompt.routeColor }}
+                >{routeNavPrompt.routeCode}</div>
+                <div className="text-white font-bold text-sm">
+                  {routeNavPrompt.entries.length === 1 ? 'Navigate to…' : 'Pick who to navigate to'}
+                </div>
+                <button
+                  onClick={() => setRouteNavPrompt(null)}
+                  className="ml-auto w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                  title="Cancel"
+                ><X size={14} /></button>
+              </div>
+
+              {routeNavPrompt.entries.length === 1 ? (
+                <>
+                  <div className="text-sm text-gray-200 mb-3">
+                    Navigate to <span className="text-blue-300 font-bold">{routeNavPrompt.entries[0].label}</span>?
+                    {!routeNavPrompt.entries[0].hasGeocodableAddress && (
+                      <span className="block text-[11px] text-amber-400 mt-1">No recent transactions to navigate to.</span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setRouteNavPrompt(null)}
+                      className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md"
+                    >Cancel</button>
+                    <button
+                      onClick={() => handleRouteNavPromptSelect(routeNavPrompt.entries[0])}
+                      disabled={!routeNavPrompt.entries[0].hasGeocodableAddress}
+                      className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed text-white text-xs font-bold rounded-md flex items-center justify-center gap-1.5 transition-colors"
+                    ><Navigation2 size={12} />Navigate</button>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-1.5">
+                  {routeNavPrompt.entries.map((entry, i) => (
+                    <button
+                      key={i}
+                      onClick={() => handleRouteNavPromptSelect(entry)}
+                      disabled={!entry.hasGeocodableAddress}
+                      className="w-full text-left px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:bg-gray-800/40 disabled:cursor-not-allowed rounded-md border border-gray-700 text-xs flex items-center gap-2 transition-colors"
                     >
-                      <ArrowRight size={14} className="opacity-60" /> {mgr.name}
+                      <Navigation2 size={12} className={entry.hasGeocodableAddress ? 'text-blue-400' : 'text-gray-600'} />
+                      <span className={`flex-1 font-bold truncate ${entry.hasGeocodableAddress ? 'text-white' : 'text-gray-500'}`}>{entry.label}</span>
+                      {!entry.hasGeocodableAddress && (<span className="text-[10px] text-amber-400 flex-shrink-0">no recent location</span>)}
                     </button>
                   ))}
-
-                  <button
-                    onClick={handleRemoveWorkerNoShow}
-                    disabled={reassignLoading}
-                    className="w-full flex items-center gap-2 p-2.5 rounded-lg bg-red-900/30 hover:bg-red-900/50 border border-red-700/40 text-red-300 text-sm font-medium mt-2"
-                  >
-                    <Trash2 size={14} /> Remove (no-show)
-                  </button>
-                </>
+                </div>
               )}
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* SWITCH NAV CONFIRMATION */}
-      {switchNavConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setSwitchNavConfirm(null)}>
-          <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-xs p-4" onClick={e => e.stopPropagation()}>
-            <div className="text-white text-sm font-semibold mb-1">Switch navigation?</div>
-            <div className="text-gray-400 text-xs mb-3">
-              You're currently navigating to {switchNavConfirm.currentLabel}. Switch to {switchNavConfirm.newLabel}?
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => setSwitchNavConfirm(null)} className="flex-1 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium">Keep current</button>
-              <button onClick={handleSwitchNavConfirm} className="flex-1 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold">Switch</button>
-            </div>
-          </div>
-        </div>
-      )}
+        {/* ROUTE SPLIT MODAL — V2 RECURSIVE.
+            Opened from the Split button at the top of the assignment modal.
+            Hands segments, prebookings, current buckets, source letter, and
+            next available letter to RouteSplitModal. On Confirm, handleSplit-
+            Confirm persists the split and reopens the assignment modal for
+            the NEW LETTER. */}
+        {splitModalData && (
+          <RouteSplitModal
+            isOpen={!!splitModalData}
+            onClose={handleSplitCancel}
+            routeCode={splitModalData.routeCode}
+            baseRouteColor={splitModalData.baseRouteColor}
+            segments={splitModalData.segments}
+            prebookings={splitModalData.prebookings}
+            existingBuckets={splitModalData.existingBuckets}
+            splittingFromLetter={splitModalData.splittingFromLetter}
+            newLetter={splitModalData.newLetter}
+            mapboxToken={import.meta.env.VITE_MAPBOX_TOKEN as string}
+            onConfirm={handleSplitConfirm}
+          />
+        )}
 
-      {/* ROUTE NAV PROMPT (staff-mode route line tap) */}
-      {routeNavPrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setRouteNavPrompt(null)}>
-          <div className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-xs overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-3 border-b border-gray-700">
-              <span className="font-bold text-white flex items-center gap-2">
-                <span className="inline-block w-3 h-3 rounded-full" style={{ background: routeNavPrompt.routeColor }} />
-                Route {routeNavPrompt.routeCode}
-              </span>
-              <button onClick={() => setRouteNavPrompt(null)} className="p-1 text-gray-400 hover:text-white"><X size={16} /></button>
-            </div>
-            <div className="p-2 space-y-1">
-              {routeNavPrompt.entries.map((entry, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => handleRouteNavPromptSelect(entry)}
-                  disabled={!entry.hasGeocodableAddress}
-                  className={`w-full flex items-center justify-between p-2.5 rounded-lg border text-sm ${
-                    entry.hasGeocodableAddress
-                      ? 'bg-gray-800 hover:bg-gray-700 border-gray-700 text-white'
-                      : 'bg-gray-850 border-gray-800 text-gray-500 cursor-not-allowed'
-                  }`}
-                >
-                  <span className="flex items-center gap-1.5">
-                    {entry.type === 'cart' ? <Truck size={14} className="opacity-60" /> : <MapPin size={14} className="opacity-60" />}
-                    {entry.label}
-                  </span>
-                  {entry.hasGeocodableAddress
-                    ? <Navigation2 size={14} className="text-blue-400" />
-                    : <span className="text-[10px]">No location</span>}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ROUTE SPLIT MODAL */}
-      {splitModalData && (
-        <RouteSplitModal
-          routeCode={splitModalData.routeCode}
-          baseRouteColor={splitModalData.baseRouteColor}
-          segments={splitModalData.segments}
-          prebookings={splitModalData.prebookings}
-          existingBuckets={splitModalData.existingBuckets}
-          splittingFromLetter={splitModalData.splittingFromLetter}
-          newLetter={splitModalData.newLetter}
-          onConfirm={handleSplitConfirm}
-          onCancel={handleSplitCancel}
-        />
-      )}
-    </div>
+      </div>
+    </>
   );
 };
 
