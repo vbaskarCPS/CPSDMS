@@ -75,6 +75,12 @@ function interpretService(foVal: string): string {
   return 'FP';
 }
 
+// Sealing: the SERVICE column holds raw codes (SS, SSP, SSF, ...). Show them
+// verbatim — no FO/BO/FP interpretation. Blank stays blank (no placeholder).
+function interpretServiceSealing(serviceVal: string): string {
+  return (serviceVal || '').trim();
+}
+
 function formatPrice(raw: string): string {
   if (!raw) return '';
   const n = parseFloat(raw.replace(/[,$]/g, ''));
@@ -132,9 +138,42 @@ function resolveColumns(headers: any[]): ColumnIndices {
   return CI;
 }
 
+// Sealing column resolver. The sealing callbook (in the master bookings sheet)
+// is laid out differently from the aeration callbook:
+//   - Service lives in a column headed SERVICE (raw codes SS/SSP/SSF), not FO.
+//   - Price is the column headed exactly PRICE — NOT 'Sold Price',
+//     'Black Friday Price', or 'Spring-26 Renewal', which also exist here.
+// Everything else (ROUTE CODE, FIRST, LAST, HOUSE #, STREET, PHONE, CONTRACTOR,
+// YEAR) matches the same header names aeration uses. The FO field on the
+// returned ColumnIndices is repurposed to carry the SERVICE column index;
+// loadAndCachePCL reads it via interpretServiceSealing in sealing mode.
+function resolveColumnsSealing(headers: any[]): ColumnIndices {
+  const CI: ColumnIndices = {
+    ROUTE_CODE: -1, FIRST: -1, LAST: -1, HOUSE: -1, STREET: -1,
+    PHONE: -1, FO: -1, PRICE: -1, CONTRACTOR: -1, YEAR: -1,
+  };
+  for (let i = 0; i < headers.length; i++) {
+    const h = String(headers[i] ?? '').trim().toUpperCase();
+    if (!h) continue;
+    if (['ROUTE CODE', 'ROUTE_CODE', 'ROUTECODE'].includes(h) && CI.ROUTE_CODE < 0) CI.ROUTE_CODE = i;
+    else if (['FIRST NAME', 'FIRST_NAME', 'FIRSTNAME', 'FIRST'].includes(h) && CI.FIRST < 0) CI.FIRST = i;
+    else if (['LAST NAME', 'LAST_NAME', 'LASTNAME', 'LAST'].includes(h) && CI.LAST < 0) CI.LAST = i;
+    else if (['HOUSE #', 'HOUSE#', 'HOUSE NUM', 'HOUSE_NUM', 'PREFIX', 'HOUSE'].includes(h) && CI.HOUSE < 0) CI.HOUSE = i;
+    else if (['STREET NAME', 'STREET_NAME', 'STREETNAME', 'STREET'].includes(h) && CI.STREET < 0) CI.STREET = i;
+    else if (['PHONE', 'PHONE #', 'PHONE#'].includes(h) && CI.PHONE < 0) CI.PHONE = i;
+    // SERVICE column carried in the FO slot (sealing reads it verbatim).
+    else if (h === 'SERVICE' && CI.FO < 0) CI.FO = i;
+    // Price is ONLY the column headed exactly PRICE here.
+    else if (h === 'PRICE' && CI.PRICE < 0) CI.PRICE = i;
+    else if (['CONTRACTOR NAME', 'CONTRACTOR_NAME', 'CONTRACTORNAME', 'CONTRACTOR'].includes(h) && CI.CONTRACTOR < 0) CI.CONTRACTOR = i;
+    else if (h === 'YEAR' && CI.YEAR < 0) CI.YEAR = i;
+  }
+  return CI;
+}
+
 // ─── CLIENT GROUPING (same logic as dmbPclService) ───────────────────────────
 
-function groupClientsByAddress(rows: RawCallbookRow[]): PCLClientGroup[] {
+function groupClientsByAddress(rows: RawCallbookRow[], sealingMode: boolean = false): PCLClientGroup[] {
   const addrMap = new Map<string, RawCallbookRow[]>();
 
   for (const row of rows) {
@@ -190,7 +229,9 @@ function groupClientsByAddress(rows: RawCallbookRow[]): PCLClientGroup[] {
       history: addrRows.map(r => ({
         year: r.year,
         price: formatPrice(r.price),
-        serviceType: interpretService(r.fo),
+        // Sealing already stored the verbatim SERVICE code in r.fo; aeration
+        // still needs the FO→FO/BO/FP interpretation here.
+        serviceType: sealingMode ? r.fo : interpretService(r.fo),
         contractor: r.contractor,
       })),
     });
@@ -227,6 +268,7 @@ async function sheetsGetRaw(
 async function getCallbookTabNames(
   accessToken: string,
   spreadsheetId: string,
+  sealingMode: boolean = false,
 ): Promise<string[]> {
   const response = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties(title)`,
@@ -234,10 +276,18 @@ async function getCallbookTabNames(
   );
   if (!response.ok) return [];
   const data = await response.json();
+  const titles = (data.sheets || []).map((s: any) => s.properties.title as string);
+
+  // Sealing: PCL lives in the master bookings sheet, in tabs whose title ends
+  // in the literal "Callbooks" (e.g. "Hamilton Callbooks", "Ottawa Callbooks").
+  // Case-sensitive, exact suffix.
+  if (sealingMode) {
+    return titles.filter((name: string) => name.endsWith('Callbooks'));
+  }
+
+  // Non-sealing: every tab except the ccd/managers control tabs.
   const excludeNames = new Set(['ccd', 'managers']);
-  return (data.sheets || [])
-    .map((s: any) => s.properties.title as string)
-    .filter((name: string) => !excludeNames.has(name.toLowerCase()));
+  return titles.filter((name: string) => !excludeNames.has(name.toLowerCase()));
 }
 
 // ─── MAIN LOAD & CACHE ───────────────────────────────────────────────────────
@@ -255,6 +305,7 @@ export async function loadAndCachePCL(
   routeCodes: string[],
   accessToken: string,
   ccId: string,
+  sealingMode: boolean = false,
 ): Promise<void> {
   if (!callbookSheetId || !accessToken || routeCodes.length === 0) return;
 
@@ -264,7 +315,7 @@ export async function loadAndCachePCL(
   // Fetch tab names
   let tabs: string[];
   try {
-    tabs = await getCallbookTabNames(accessToken, callbookSheetId);
+    tabs = await getCallbookTabNames(accessToken, callbookSheetId, sealingMode);
   } catch (err) {
     console.warn('[PCL Cache] Could not fetch callbook tabs:', err);
     return;
@@ -283,7 +334,9 @@ export async function loadAndCachePCL(
     const headerIdx = findHeaderRow(rawData);
     if (headerIdx === null) continue;
 
-    const CI = resolveColumns(rawData[headerIdx]);
+    const CI = sealingMode
+      ? resolveColumnsSealing(rawData[headerIdx])
+      : resolveColumns(rawData[headerIdx]);
     if (CI.PHONE < 0 || CI.ROUTE_CODE < 0) continue;
 
     for (const row of rawData.slice(headerIdx + 1)) {
@@ -294,6 +347,12 @@ export async function loadAndCachePCL(
       const year = parseInt(cellVal(row, CI.YEAR), 10);
       if (isNaN(year) || year < 2000) continue;
 
+      // Sealing carries the raw SERVICE code in the FO slot and shows it
+      // verbatim; aeration runs the FO value through interpretService later.
+      const serviceRaw = sealingMode
+        ? interpretServiceSealing(cellVal(row, CI.FO))
+        : cellVal(row, CI.FO);
+
       const cbRow: RawCallbookRow = {
         routeCode: rc,
         firstName: cellVal(row, CI.FIRST),
@@ -301,7 +360,7 @@ export async function loadAndCachePCL(
         houseNum: cellVal(row, CI.HOUSE),
         streetName: cellVal(row, CI.STREET),
         phone: normalizePhone(cellVal(row, CI.PHONE)),
-        fo: cellVal(row, CI.FO),
+        fo: serviceRaw,
         price: cellVal(row, CI.PRICE),
         contractor: cellVal(row, CI.CONTRACTOR),
         year,
@@ -318,7 +377,7 @@ export async function loadAndCachePCL(
     return {
       command_center_id: ccId,
       route_code: rc,
-      clients: rows.length > 0 ? groupClientsByAddress(rows) : [],
+      clients: rows.length > 0 ? groupClientsByAddress(rows, sealingMode) : [],
       updated_at: new Date().toISOString(),
     };
   });

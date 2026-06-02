@@ -1571,8 +1571,13 @@ class SessionService {
       }
   
       const cc = commandCenterService.getCurrentCommandCenter();
-      if (cc?.digitalMappingEnabled && cc.callbookSheetId) {
-        const sheetId = cc.callbookSheetId;
+      // Sealing reads PCL from the MASTER BOOKINGS sheet (tabs ending "Callbooks").
+      // Every other season reads from the dedicated callbook sheet (all tabs
+      // except ccd/managers). Both paths require digital mapping to be on.
+      const isSealing = seasonType === 'sealing';
+      const pclSheetId = isSealing ? cc?.masterbookingsSheetId : cc?.callbookSheetId;
+      if (cc?.digitalMappingEnabled && pclSheetId) {
+        const sheetId = pclSheetId;
         const routeCodes = data.routes.map(r => r.routeCode);
         Promise.all([
           import('./googleSheetsService'),
@@ -1580,7 +1585,7 @@ class SessionService {
         ]).then(([{ googleSheetsService }, { loadAndCachePCL }]) => {
           const accessToken = googleSheetsService.getAccessToken();
           if (!accessToken) return;
-          loadAndCachePCL(sheetId, routeCodes, accessToken, ccId).catch(err =>
+          loadAndCachePCL(sheetId, routeCodes, accessToken, ccId, isSealing).catch(err =>
             console.warn('[PCL Cache] Non-blocking load failed:', err)
           );
         }).catch(err => console.warn('[PCL Cache] Module import failed:', err));
