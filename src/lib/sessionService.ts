@@ -1910,6 +1910,12 @@ class SessionService {
         phone: data.metadata?.phone || '', 
         role: 'RouteManager',
         commandCenterId: data.command_center_id,
+        // FLOATER: carry the floater config onto the logged-in user so the RM
+        // logbook/map (floatedManagerIds, shouldWriteLocation) and the asphalt
+        // modal's floater self-detect can read current_user.floatingFor. Without
+        // this, a floater logs in with no floatingFor and sees only their own
+        // staff/routes. Mirrors getDailySession's defensive Array.isArray mapping.
+        floatingFor: Array.isArray(data.metadata?.floatingFor) ? data.metadata.floatingFor : [],
       };
     }
   
