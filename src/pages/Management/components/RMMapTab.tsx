@@ -2634,7 +2634,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       onGeocodeProgress('phase2_completed_and_sales', 'pendingBookings', total, total, true);
     })();
     return () => { cancelled = true; };
-  }, [mapLoaded, geocodeCacheHydrated, geocodePhase, pendingBookingPinSource, routeColorMap, geocodeOne, updatePendingBookingPins, onGeocodeProgress]);
+    // NOTE: geocodePhase is deliberately NOT in this dependency array, and must
+    // stay out. The loop's FIRST progress report calls onGeocodeProgress with
+    // phase 'phase1_pending_bookings', which flips geocodePhase away from 'idle'.
+    // If geocodePhase were a dependency, that flip would re-run this effect and
+    // its cleanup would cancel the loop after ~1 geocode — the one-at-a-time
+    // creep. The guard above reads geocodePhase from the render where the effect
+    // first became eligible (it's 'idle' then), which is all it needs; the phase
+    // only ever moves forward, never back to 'idle', so this never needs to
+    // re-fire on a phase change. (Phases 2-4 don't have this problem: their
+    // in-loop progress phase EQUALS their guard phase, so they never self-flip.)
+  }, [mapLoaded, geocodeCacheHydrated, pendingBookingPinSource, routeColorMap, geocodeOne, updatePendingBookingPins, onGeocodeProgress]);
 
   // PHASE 2: Completed + new sales + pending sales
   useEffect(() => {
