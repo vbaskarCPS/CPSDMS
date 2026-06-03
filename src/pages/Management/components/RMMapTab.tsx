@@ -303,14 +303,32 @@ function colorForBucket(baseHex: string, letter: string | undefined): string {
 // and has no rectangles). For each non-'a' bucket B:
 //   if currentBucket == B.sourceLetter AND point inside any B.rectangle →
 //   currentBucket = B.letter
-function bucketForPoint(lng: number, lat: number, buckets: Array<{letter: string; sourceLetter: string | null; rectangles: Array<{west: number; east: number; south: number; north: number}>}>): string {
+// Ray-casting point-in-polygon over a rectangle's 4 geographic corners.
+// Mirrors RouteSplitModal's pointInPolygon so the master map renders the
+// same buckets the modal previewed — including rectangles drawn while the
+// map was rotated (which are NOT axis-aligned in lng/lat, so the old
+// west/east/south/north test silently matched nothing).
+function pointInCorners(lng: number, lat: number, corners: Array<{ lng: number; lat: number }>): boolean {
+  if (!corners || corners.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = corners.length - 1; i < corners.length; j = i++) {
+    const xi = corners[i].lng, yi = corners[i].lat;
+    const xj = corners[j].lng, yj = corners[j].lat;
+    const intersect = ((yi > lat) !== (yj > lat))
+      && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function bucketForPoint(lng: number, lat: number, buckets: Array<{letter: string; sourceLetter: string | null; rectangles: Array<{corners: Array<{lng: number; lat: number}>}>}>): string {
   let current = 'a';
   for (let i = 1; i < buckets.length; i++) {
     const b = buckets[i];
     if (b.sourceLetter !== current) continue;
     if (!b.rectangles || b.rectangles.length === 0) continue;
     for (const r of b.rectangles) {
-      if (lng >= r.west && lng <= r.east && lat >= r.south && lat <= r.north) {
+      if (pointInCorners(lng, lat, r.corners)) {
         current = b.letter;
         break;
       }
@@ -741,7 +759,7 @@ function lineMidCoord(a: [number, number], b: [number, number]): [number, number
 // Used for placing the route's letter label on the master map.
 function bucketCentroid(
   segments: Array<{ coordinates: [number, number][] }>,
-  buckets: Array<{ letter: string; sourceLetter: string | null; rectangles: Array<{west: number; east: number; south: number; north: number}> }>,
+  buckets: Array<{ letter: string; sourceLetter: string | null; rectangles: Array<{corners: Array<{lng: number; lat: number}>}> }>,
   targetLetter: string
 ): { lng: number; lat: number } | null {
   let sumLng = 0, sumLat = 0, count = 0;
@@ -3227,7 +3245,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [assignModalData, routeMapData, routeSplitsByCode, geocodedPins, bookings]);
 
   const handleSplitConfirm = useCallback(async (
-    rectangles: Array<{ west: number; east: number; south: number; north: number }>,
+    rectangles: Array<{ corners: Array<{ lng: number; lat: number }> }>,
     bookingsMovingToNew: string[]
   ) => {
     if (!splitModalData) return;
