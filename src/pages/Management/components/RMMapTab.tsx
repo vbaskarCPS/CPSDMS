@@ -53,6 +53,9 @@ interface GeocodedPendingSale {
   lat: number;
   lng: number;
   booking: MasterBooking;
+  routeCode: string;   // for split-bucket colouring of the marker
+  sessionId: string;   // for pulse: which cart this sale belongs to
+  createdAt: string;   // for pulse: recency vs the cart's latest completed tx
 }
 
 interface GeocodedPCLEntry {
@@ -119,6 +122,7 @@ interface CartCardData {
   members: Worker[];
   sharedBookings: MasterBooking[];
   sharedFinancialStore: any[];
+  navActivity: any[];   // tx + pending-sale stand-ins, newest wins for nav
   assignedRoutes: string[];
   lastActiveTimestamp: string | null;
   lastActiveAddress: string | null;
@@ -384,6 +388,10 @@ const convertPendingSaleToBooking = (ps: PendingSale): MasterBooking => {
     saleType: ps.saleType,
     sharedJobKey: ps.sharedJobKey,
     assignedRcSessionId: ps.assignedRcSessionId,
+    // Carried through so the geocoded pending-sale record can be tied back to
+    // its session and compared by recency against completed transactions.
+    sessionId: ps.sessionId,
+    createdAt: ps.createdAt,
   } as MasterBooking;
 };
 
@@ -663,7 +671,13 @@ function createPulsingRing(color: string): HTMLDivElement {
   return el;
 }
 
-function createDashedRotatingRing(): HTMLDivElement {
+// Pending-sale marker: a filled circle matching a pending-prebook pin (same
+// radius 3.33 / stroke 1.67 / black outline, fill = the sale's bucket colour),
+// wrapped in a black, thicker rotating dashed ring so it still reads as
+// "in progress". fillColor is the route or split-bucket colour, computed by
+// the caller via bucketForPoint so a pending sale picks up the same colour as
+// every other pin in its split.
+function createDashedRotatingRing(fillColor: string): HTMLDivElement {
   let spinStyle = document.getElementById('rm-spin-keyframes') as HTMLStyleElement | null;
   if (!spinStyle) {
     spinStyle = document.createElement('style');
@@ -673,12 +687,14 @@ function createDashedRotatingRing(): HTMLDivElement {
   spinStyle.textContent = `@keyframes rmDashedSpin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}`;
   const el = document.createElement('div');
   el.style.cssText = 'width:0;height:0;overflow:visible;pointer-events:auto;cursor:pointer;';
+  // Geometry: prebook pins are radius 3.33 with a 1.67 stroke → ~10px outer
+  // diameter. The dashed ring sits just outside that. SVG box 18px centred.
   el.innerHTML = `
-    <div style="position:relative;width:12px;height:12px;margin-left:-6px;margin-top:-6px;">
-      <svg width="12" height="12" viewBox="0 0 12 12" style="position:absolute;top:0;left:0;animation:rmDashedSpin 3s linear infinite;">
-        <circle cx="6" cy="6" r="5" fill="none" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="2.5,2" opacity="0.85"/>
+    <div style="position:relative;width:18px;height:18px;margin-left:-9px;margin-top:-9px;">
+      <svg width="18" height="18" viewBox="0 0 18 18" style="position:absolute;top:0;left:0;animation:rmDashedSpin 3s linear infinite;">
+        <circle cx="9" cy="9" r="7.5" fill="none" stroke="#000000" stroke-width="2.5" stroke-dasharray="3,2.5" opacity="0.9"/>
       </svg>
-      <div style="position:absolute;top:4px;left:4px;width:4px;height:4px;border-radius:50%;background:#6b7280;"></div>
+      <div style="position:absolute;top:50%;left:50%;width:6.67px;height:6.67px;margin-left:-3.33px;margin-top:-3.33px;border-radius:50%;background:${fillColor};border:1.67px solid #000000;box-sizing:content-box;"></div>
     </div>
   `;
   return el;
@@ -1239,12 +1255,40 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           lastTime = formatTimeShort(sorted[0].timestamp);
         }
 
+        // TORCH: a pending sale newer than the latest completed tx takes over
+        // as the cart's "most recent" — the in-progress job is where the cart
+        // actually is right now. Uses createdAt (the sale's own timestamp).
+        if (pendingSales.length > 0) {
+          const sortedPS = [...pendingSales].sort((a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          const newestPS = sortedPS[0];
+          if (newestPS?.createdAt && (!lastTimestamp || newestPS.createdAt > lastTimestamp)) {
+            lastAddr = assembleAddressFromPending(newestPS);
+            lastTimestamp = newestPS.createdAt;
+            lastTime = formatTimeShort(newestPS.createdAt);
+          }
+        }
+
+        // NAV TORCH: real transactions plus a stand-in per pending sale
+        // (timestamp = createdAt, address = house+street). resolveNavDestination
+        // walks this newest-first, so the Navigate button aims at the most
+        // recent activity — pending sale or completed job, whichever is later.
+        const navActivity: any[] = [
+          ...sharedFinancialStore,
+          ...pendingSales.map(ps => ({
+            timestamp: ps.createdAt || '',
+            address: `${ps.houseNumber || ''} ${ps.streetName || ''}`.trim(),
+          })),
+        ];
+
         return {
           sessionId: session.id,
           teamId: sessionWorkerIds[0] || session.workerId,
           members: teamWorkers,
           sharedBookings,
           sharedFinancialStore,
+          navActivity,
           assignedRoutes: uniqueRoutes,
           lastActiveTimestamp: lastTimestamp,
           lastActiveAddress: lastAddr,
@@ -1544,7 +1588,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return n?{lat:sLat/n,lng:sLng/n}:null;
   }, [routeMapData]);
 
-  const mostRecentCompletionPins = useMemo<GeocodedPin[]>(() => {
+  const mostRecentCompletionPins = useMemo<Array<{ lat: number; lng: number; routeColor: string }>>(() => {
+    // Newest completed/sale tx per owner (session id for team seasons, worker
+    // id for aeration).
     const latestByOwner = new Map<string, { jobId: string; timestamp: string }>();
     allSessions.forEach(s => {
       const ownerKey = isTeamSeason ? s.id : s.workerId;
@@ -1557,15 +1603,40 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     });
 
-    const result: GeocodedPin[] = [];
-    latestByOwner.forEach(({ jobId }) => {
-      const pin =
-        geocodedPins.find(p => p.id === jobId && (p.status === 'completed' || p.status === 'new_sale'))
-        ?? geocodedUpsellPins.find(p => p.id === jobId);
-      if (pin) result.push(pin);
+    // Newest pending sale per session id (team seasons only — the only place
+    // pending-sale dots exist). createdAt + sessionId now ride along on the
+    // geocoded record so we can compare recency directly.
+    const latestPSByKey = new Map<string, GeocodedPendingSale>();
+    if (isTeamSeason) {
+      geocodedPendingSales.forEach(ps => {
+        if (!ps.sessionId || !ps.createdAt) return;
+        const ex = latestPSByKey.get(ps.sessionId);
+        if (!ex || ps.createdAt > ex.createdAt) latestPSByKey.set(ps.sessionId, ps);
+      });
+    }
+
+    // For each owner, pulse whichever is newer: their latest completed tx, or
+    // their latest pending sale (the torch). A pending sale with no competing
+    // tx still earns the pulse.
+    const result: Array<{ lat: number; lng: number; routeColor: string }> = [];
+    const ownerKeys = new Set<string>([...latestByOwner.keys(), ...latestPSByKey.keys()]);
+    ownerKeys.forEach(ownerKey => {
+      const tx = latestByOwner.get(ownerKey);
+      const ps = latestPSByKey.get(ownerKey);
+      const psWins = ps && (!tx || ps.createdAt > tx.timestamp);
+      if (psWins && ps) {
+        result.push({ lat: ps.lat, lng: ps.lng, routeColor: routeColorMap.get(ps.routeCode) || '#22c55e' });
+        return;
+      }
+      if (tx) {
+        const pin =
+          geocodedPins.find(p => p.id === tx.jobId && (p.status === 'completed' || p.status === 'new_sale'))
+          ?? geocodedUpsellPins.find(p => p.id === tx.jobId);
+        if (pin) result.push({ lat: pin.lat, lng: pin.lng, routeColor: pin.routeColor });
+      }
     });
     return result;
-  }, [allSessions, geocodedPins, geocodedUpsellPins, isTeamSeason]);
+  }, [allSessions, geocodedPins, geocodedUpsellPins, geocodedPendingSales, isTeamSeason, routeColorMap]);
 
   const overlapInfo = useMemo(() => {
     const map = new Map<string, { upsellPin: GeocodedPin; basePin: GeocodedPin }>();
@@ -2161,7 +2232,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               type: 'cart',
               label: label || cart.teamId,
               card: cart,
-              hasGeocodableAddress: resolveNavDestination(cart.sharedFinancialStore) !== null,
+              hasGeocodableAddress: resolveNavDestination(cart.navActivity) !== null,
             });
           }
         } else {
@@ -2610,7 +2681,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           const addrKey = makeCacheKey(address);
           const cached = geocodeCache.get(addrKey);
           if (cached) {
-            pendingSalesCached.push({ id: booking['Booking ID'], lat: cached.lat, lng: cached.lng, booking });
+            pendingSalesCached.push({ id: booking['Booking ID'], lat: cached.lat, lng: cached.lng, booking, routeCode: booking['Route Number'] || '', sessionId: (booking as any).sessionId || '', createdAt: (booking as any).createdAt || '' });
           } else {
             pendingSalesNeedsGeocoding.push({ booking, address, id: booking['Booking ID'] });
           }
@@ -2645,7 +2716,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         if (cancelled || !mountedRef.current) return;
         const { booking, address, id } = pendingSalesNeedsGeocoding[i];
         const coord = await geocodeOne(address);
-        if (coord) newPSResults.push({ id, lat: coord.lat, lng: coord.lng, booking });
+        if (coord) newPSResults.push({ id, lat: coord.lat, lng: coord.lng, booking, routeCode: booking['Route Number'] || '', sessionId: (booking as any).sessionId || '', createdAt: (booking as any).createdAt || '' });
         if (cancelled || !mountedRef.current) return;
         progressDone++;
         onGeocodeProgress('phase2_completed_and_sales', 'pendingSalesAndCompleted', progressDone, totalToGeocode, false);
@@ -2777,7 +2848,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         const address = booking['Full Address'] || '';
         if (!address) continue;
         const coord = await geocodeOne(address);
-        if (coord) additions.push({ id: booking['Booking ID'], lat: coord.lat, lng: coord.lng, booking });
+        if (coord) additions.push({ id: booking['Booking ID'], lat: coord.lat, lng: coord.lng, booking, routeCode: booking['Route Number'] || '', sessionId: (booking as any).sessionId || '', createdAt: (booking as any).createdAt || '' });
         await new Promise(r => setTimeout(r, 80));
       }
       if (cancelled || !mountedRef.current) return;
@@ -2842,12 +2913,22 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       return;
     }
     geocodedPendingSales.forEach(ps => {
+      // Colour by bucket: base route colour, promoted to the split-bucket hue
+      // if the sale's coordinates fall inside a bucket's rectangles. Same
+      // cascade every other pin uses, so colours stay consistent.
+      const baseColor = routeColorMap.get(ps.routeCode) || '#888888';
+      const split = routeSplitsByCode.get(ps.routeCode);
+      let fillColor = baseColor;
+      if (split && split.buckets.length > 0) {
+        const letter = bucketForPoint(ps.lng, ps.lat, split.buckets);
+        fillColor = colorForBucket(baseColor, letter);
+      }
       const existing = pendingSaleMarkersRef.current.get(ps.id);
       if (existing) {
         existing.setLngLat([ps.lng, ps.lat]);
         existingIds.delete(ps.id);
       } else {
-        const el = createDashedRotatingRing();
+        const el = createDashedRotatingRing(fillColor);
         el.addEventListener('click', (e) => { e.stopPropagation(); setPendingJobForModal(ps.booking); });
         const marker = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([ps.lng, ps.lat]).addTo(map);
         pendingSaleMarkersRef.current.set(ps.id, marker);
@@ -2857,7 +2938,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       pendingSaleMarkersRef.current.get(id)?.remove();
       pendingSaleMarkersRef.current.delete(id);
     });
-  }, [geocodedPendingSales, mapLoaded, filterVisibility.pendingSalesAndCompleted]);
+  }, [geocodedPendingSales, mapLoaded, filterVisibility.pendingSalesAndCompleted, routeSplitsByCode, routeColorMap]);
 
   // Pulsing completion dots
   useEffect(() => {
@@ -3143,7 +3224,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [navState, startNavToDestination]);
 
   const handleNavigateToCart = useCallback((cart: CartCardData) => {
-    const resolved = resolveNavDestination(cart.sharedFinancialStore);
+    const resolved = resolveNavDestination(cart.navActivity);
     if (!resolved) { console.warn('[RMNav] No geocoded address for cart', cart.sessionId); return; }
     const label = cart.members.length > 1
       ? cart.members.map(m => m.firstName).join(' & ')
@@ -3156,7 +3237,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [navState, startNavToDestination]);
 
   const workerCanNavigate = useCallback((card: WorkerCardData): boolean => resolveNavDestination(card.financialStore) !== null, []);
-  const cartCanNavigate = useCallback((cart: CartCardData): boolean => resolveNavDestination(cart.sharedFinancialStore) !== null, []);
+  const cartCanNavigate = useCallback((cart: CartCardData): boolean => resolveNavDestination(cart.navActivity) !== null, []);
 
   const handleNavCancel = useCallback(() => { setNavState(null); }, []);
   const handleNavArrived = useCallback(() => { setNavState(null); }, []);
