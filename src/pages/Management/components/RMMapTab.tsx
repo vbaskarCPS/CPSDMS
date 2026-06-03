@@ -738,16 +738,38 @@ function createDashedRotatingRing(fillColor: string): HTMLDivElement {
   // its circle (r=5, stroke 2.5) puts the dashes right on the fill's 5px rim —
   // they ARE the border, so the fill carries no stroke. The animation spins the
   // whole SVG around its own centre.
+  // OUTER wrapper: this is the element Mapbox positions (it writes its own
+  // transform:translate(...) here to anchor the marker at the sale's lng/lat).
+  // We put NO transform of our own on it — that's the whole point. A 16px box
+  // with anchor:'center' means Mapbox offsets it by half its size, landing the
+  // box centre exactly on the coordinate.
   const el = document.createElement('div');
-  el.style.cssText = 'position:relative;width:16px;height:16px;pointer-events:auto;cursor:pointer;';
-  el.innerHTML = `
-    <svg width="16" height="16" viewBox="0 0 16 16" style="position:absolute;top:0;left:0;animation:rmDashedSpin 3s linear infinite;transform-origin:50% 50%;">
+  el.style.cssText = 'width:16px;height:16px;pointer-events:auto;cursor:pointer;';
+
+  // INNER spinner: fills the wrapper and owns the rotation. Because the spin
+  // transform lives here — NOT on the element Mapbox translates, and NOT on a
+  // child that shares the wrapper's positioning context — the two transforms
+  // never compose against each other. This is the same outer/inner split the
+  // GPS nav arrow uses to stop Mapbox's translate from clobbering a rotate;
+  // without it, the spinning SVG's rendered centre sat a hair off the anchor
+  // and that offset magnified in screen space as you zoomed out (the drift).
+  const inner = document.createElement('div');
+  inner.style.cssText = 'position:relative;width:100%;height:100%;animation:rmDashedSpin 3s linear infinite;transform-origin:50% 50%;';
+  inner.innerHTML = `
+    <svg width="16" height="16" viewBox="0 0 16 16" style="position:absolute;top:0;left:0;">
       <circle cx="8" cy="8" r="5" fill="none" stroke="#000000" stroke-width="2.5" stroke-dasharray="3,2.5" opacity="0.9"/>
     </svg>
-    <div style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;">
-      <div style="width:10px;height:10px;border-radius:50%;background:${fillColor};"></div>
-    </div>
   `;
+
+  // FILL: a static 10px dot, centred in the wrapper, OUTSIDE the spinner so it
+  // never moves. Sits on top of the ring; both share the wrapper's centre.
+  const fill = document.createElement('div');
+  fill.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;pointer-events:none;';
+  fill.innerHTML = `<div style="width:10px;height:10px;border-radius:50%;background:${fillColor};"></div>`;
+
+  el.style.position = 'relative';
+  el.appendChild(inner);
+  el.appendChild(fill);
   return el;
 }
 
