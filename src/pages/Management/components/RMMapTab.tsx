@@ -1499,11 +1499,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, [routes, coveredManagerIds, routeMapData, workers, bookings, calculateBookingEQ, routeSplitsByCode]);
 
-  // Split pins into pending-only and completed/new-sale-only — driven by the
-  // new filter system. Each set is also visibility-gated separately downstream.
-  const pendingBookingPinSource = useMemo<PinData[]>(() => {
-    const result: PinData[] = [];
-    const myRS = new Set(myRouteCodes);
+  // Stable signature of every completed jobId across all sessions (Upgrade /
+  // Add-On excluded — same filter as before). allSessions gets a fresh array
+  // identity on every realtime / 30s refresh even when its contents are
+  // unchanged; depending on it directly is what made pendingBookingPinSource
+  // churn and re-fire Phase 1's geocode loop on every refresh (the "geocodes
+  // one more each refresh" creep). This collapses allSessions down to a sorted,
+  // joined string of done jobIds — a primitive that only changes VALUE when the
+  // actual SET of completed jobs changes, so any memo depending on it stays
+  // stable across content-identical refreshes. Mirror of RMLogbook's
+  // pendingBookingsSignature, one level down.
+  const completedJobIdsKey = useMemo(() => {
     const done = new Set<string>();
     allSessions.forEach(s => {
       (s.financialStore || []).forEach((tx: any) => {
@@ -1511,6 +1517,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         if (tx.jobId) done.add(tx.jobId);
       });
     });
+    return Array.from(done).sort().join('|');
+  }, [allSessions]);
+
+  // Split pins into pending-only and completed/new-sale-only — driven by the
+  // new filter system. Each set is also visibility-gated separately downstream.
+  //
+  // Depends on completedJobIdsKey (a stable string), NOT allSessions directly,
+  // so this only produces a new array when the set of completed jobs, the
+  // bookings, or the route codes actually change — never on a content-identical
+  // refresh. That's what lets Phase 1 run to completion uninterrupted.
+  const pendingBookingPinSource = useMemo<PinData[]>(() => {
+    const result: PinData[] = [];
+    const myRS = new Set(myRouteCodes);
+    const done = new Set<string>(completedJobIdsKey ? completedJobIdsKey.split('|') : []);
     bookings.forEach(b => {
       const rn = b['Route Number'];
       if (!rn || !myRS.has(rn)) return;
@@ -1530,7 +1550,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       });
     });
     return result;
-  }, [bookings, allSessions, myRouteCodes]);
+  }, [bookings, completedJobIdsKey, myRouteCodes]);
 
   const completedAndNewSalePinSource = useMemo<PinData[]>(() => {
     const result: PinData[] = [];
