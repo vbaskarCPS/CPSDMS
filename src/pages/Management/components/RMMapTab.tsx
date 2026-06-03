@@ -3173,7 +3173,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           const cart = teamCarts.find(c => c.teamId === teamId);
           if (cart && cart.workerIds.length > 1) bucketWorkerIds = cart.workerIds;
         }
-        await sessionService.updateRouteSplitAssignment(routeCode, letter, bucketWorkerIds);
+        // OWNERSHIP TRANSFER (per-bucket). When a floater assigns this bucket to a
+        // worker who belongs to a DIFFERENT manager than the route's current owner,
+        // stamp that manager onto the bucket so it re-homes (and recolours via the
+        // casing) without moving the rest of the route. On unassign (workerId null)
+        // we pass no 4th arg, leaving the existing stamp as-is — once a bucket is
+        // given to a manager it stays theirs until reassigned to someone else's worker.
+        const assignedManagerId =
+          workerId === null
+            ? undefined
+            : myTeamWorkers.find(w => w.contractorId === workerId)?.assignedManagerId as string | undefined;
+        await sessionService.updateRouteSplitAssignment(routeCode, letter, bucketWorkerIds, assignedManagerId);
 
         // For team seasons, also push session_id onto this bucket's bookings
         // so the worker logsheet routes them correctly.
@@ -3223,9 +3233,25 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         if (sessionId && pendingBookingIds.length > 0) {
           await sessionService.assignBookingsToSession(pendingBookingIds, sessionId);
         }
+        // OWNERSHIP TRANSFER (whole route). If this worker belongs to a different
+        // manager than the route's current owner, move the route's manager_id so
+        // it re-homes to that manager (two-tone not applicable — unsplit route).
+        const newOwner = worker?.assignedManagerId as string | undefined;
+        const currentOwner = routes.find(r => r.routeCode === routeCode)?.managerId;
+        if (newOwner && newOwner !== currentOwner) {
+          await sessionService.transferRouteToManager(routeCode, newOwner);
+        }
       } else {
         await sessionService.assignRouteToWorkers(routeCode, [workerId]);
         await Promise.all(pendingItems.map(job => sessionService.assignBookingToWorker(job['Booking ID'], workerId)));
+        // OWNERSHIP TRANSFER (whole route, aeration). Same rule: assigning to a
+        // worker under another manager re-homes the route to that manager.
+        const aerWorker = myTeamWorkers.find(w => w.contractorId === workerId);
+        const newOwner = aerWorker?.assignedManagerId as string | undefined;
+        const currentOwner = routes.find(r => r.routeCode === routeCode)?.managerId;
+        if (newOwner && newOwner !== currentOwner) {
+          await sessionService.transferRouteToManager(routeCode, newOwner);
+        }
       }
       setAssignModalData(null);
       onRefresh();
