@@ -1003,6 +1003,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // Pending sales (geocoded for team seasons)
   const [geocodedPendingSales, setGeocodedPendingSales] = useState<GeocodedPendingSale[]>([]);
   const pendingSaleMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
+  // Current geocoded pending sales, mirrored into a ref so the once-registered
+  // layer click handler can resolve a clicked feature (carrying only psId) back
+  // to its full booking for the PendingJobModal.
+  const geocodedPendingSalesRef = useRef<GeocodedPendingSale[]>([]);
 
   // PCL reference circles
   const [pclByRoute, setPclByRoute] = useState<Map<string, PCLClientGroup[]>>(new Map());
@@ -2475,6 +2479,68 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     });
   }, []);
 
+  // Pending-sale pins as GPU LAYERS (not HTML markers) — same mechanism as the
+  // completed pins, so they re-project on zoom/pan exactly like every reliable
+  // pin and cannot drift. Bucket-coloured fill circle + static black dashed-ring
+  // icon on top. Click opens the PendingJobModal via the geocodedPendingSalesRef
+  // lookup (the feature only carries psId).
+  const updatePendingSalePins = useCallback((map: mapboxgl.Map, sales: GeocodedPendingSale[]) => {
+    const gj: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: sales.map(ps => {
+        const baseColor = routeColorMap.get(ps.routeCode) || '#888888';
+        const split = routeSplitsByCode.get(ps.routeCode);
+        let pinColor = baseColor;
+        if (split && split.buckets.length > 0) {
+          const letter = bucketForPoint(ps.lng, ps.lat, split.buckets);
+          pinColor = colorForBucket(baseColor, letter);
+        }
+        return {
+          type: 'Feature' as const,
+          properties: { psId: ps.id, pinColor },
+          geometry: { type: 'Point' as const, coordinates: [ps.lng, ps.lat] },
+        };
+      }),
+    };
+    const src = map.getSource('rm-pending-sale-src') as mapboxgl.GeoJSONSource;
+    if (src) { src.setData(gj); return; }
+    map.addSource('rm-pending-sale-src', { type: 'geojson', data: gj });
+    // Fill circle — matches the completed-pin fill radius for visual consistency.
+    map.addLayer({
+      id: 'rm-pending-sale-circles',
+      type: 'circle',
+      source: 'rm-pending-sale-src',
+      paint: {
+        'circle-color': ['get', 'pinColor'],
+        'circle-radius': 3.33,
+        'circle-opacity': 0.95,
+      },
+    });
+    // Dashed ring icon on top.
+    map.addLayer({
+      id: 'rm-pending-sale-ring',
+      type: 'symbol',
+      source: 'rm-pending-sale-src',
+      layout: {
+        'icon-image': 'rm-pending-dash-ring',
+        'icon-size': 1.0,
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      },
+      paint: { 'icon-opacity': 0.95 },
+    });
+    const openPs = (e: any) => {
+      const f = e.features?.[0]; if (!f) return;
+      const id = f.properties?.psId;
+      const ps = geocodedPendingSalesRef.current.find(g => g.id === id);
+      if (ps) setPendingJobForModal(ps.booking);
+    };
+    map.on('mouseenter', 'rm-pending-sale-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'rm-pending-sale-circles', () => { map.getCanvas().style.cursor = ''; });
+    map.on('click', 'rm-pending-sale-circles', openPs);
+    map.on('click', 'rm-pending-sale-ring', openPs);
+  }, [routeSplitsByCode, routeColorMap]);
+
   const updateUpsellOnlyPins = useCallback((map: mapboxgl.Map, geocoded: GeocodedPin[]) => {
     const gj: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
@@ -2631,6 +2697,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
     if (map.getLayer('rm-overlap-half-symbols')) {
       map.setPaintProperty('rm-overlap-half-symbols', 'icon-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
+    }
+    if (map.getLayer('rm-pending-sale-circles')) {
+      map.setPaintProperty('rm-pending-sale-circles', 'circle-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
+    }
+    if (map.getLayer('rm-pending-sale-ring')) {
+      map.setPaintProperty('rm-pending-sale-ring', 'icon-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
     }
     if (map.getLayer('rm-historical-symbols')) {
       map.setPaintProperty('rm-historical-symbols', 'icon-opacity', filterVisibility.historical ? 0.85 : 0);
@@ -2980,44 +3052,15 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     updateOverlapHalfPins(map, overlapPoints);
   }, [geocodedUpsellPins, overlapInfo, mapLoaded, updateUpsellOnlyPins, updateOverlapHalfPins]);
 
-  // Pending sales markers
+  // Pending sales — now driven as GPU layers (see updatePendingSalePins) rather
+  // than HTML markers. We always feed the data and gate VISIBILITY via opacity
+  // in the FILTER-DRIVEN VISIBILITY effect, exactly like the completed pins.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-    const existingIds = new Set(pendingSaleMarkersRef.current.keys());
-    const showThem = filterVisibility.pendingSalesAndCompleted;
-    if (!showThem) {
-      pendingSaleMarkersRef.current.forEach(m => m.remove());
-      pendingSaleMarkersRef.current.clear();
-      return;
-    }
-    geocodedPendingSales.forEach(ps => {
-      // Colour by bucket: base route colour, promoted to the split-bucket hue
-      // if the sale's coordinates fall inside a bucket's rectangles. Same
-      // cascade every other pin uses, so colours stay consistent.
-      const baseColor = routeColorMap.get(ps.routeCode) || '#888888';
-      const split = routeSplitsByCode.get(ps.routeCode);
-      let fillColor = baseColor;
-      if (split && split.buckets.length > 0) {
-        const letter = bucketForPoint(ps.lng, ps.lat, split.buckets);
-        fillColor = colorForBucket(baseColor, letter);
-      }
-      const existing = pendingSaleMarkersRef.current.get(ps.id);
-      if (existing) {
-        existing.setLngLat([ps.lng, ps.lat]);
-        existingIds.delete(ps.id);
-      } else {
-        const el = createDashedRotatingRing(fillColor);
-        el.addEventListener('click', (e) => { e.stopPropagation(); setPendingJobForModal(ps.booking); });
-        const marker = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([ps.lng, ps.lat]).addTo(map);
-        pendingSaleMarkersRef.current.set(ps.id, marker);
-      }
-    });
-    existingIds.forEach(id => {
-      pendingSaleMarkersRef.current.get(id)?.remove();
-      pendingSaleMarkersRef.current.delete(id);
-    });
-  }, [geocodedPendingSales, mapLoaded, filterVisibility.pendingSalesAndCompleted, routeSplitsByCode, routeColorMap]);
+    geocodedPendingSalesRef.current = geocodedPendingSales;
+    updatePendingSalePins(map, geocodedPendingSales);
+  }, [geocodedPendingSales, mapLoaded, updatePendingSalePins]);
 
   // Pulsing completion dots
   useEffect(() => {
@@ -3242,6 +3285,28 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         const upsellImgData = uctx.getImageData(0, 0, upsellCanvasSize, upsellCanvasSize);
         if (!map.hasImage('rm-upsell-half-blue')) map.addImage('rm-upsell-half-blue', upsellImgData, { pixelRatio: 2 });
       }
+
+      // Static dashed ring for pending-sale pins. Baked once into an icon so the
+      // pin can be a GPU layer (re-projected every frame, never drifts) instead
+      // of an HTML marker. No spin — the dashed border is the "in progress" cue.
+      // 20px canvas @ pixelRatio 2 → ~10px on screen, wrapping the 3.33-radius
+      // fill with a small gap. Tune radius/lineWidth here if the ring sits too
+      // tight or loose around the fill.
+      const dashCanvasSize = 20;
+      const dashCanvas = document.createElement('canvas');
+      dashCanvas.width = dashCanvasSize; dashCanvas.height = dashCanvasSize;
+      const dctx = dashCanvas.getContext('2d');
+      if (dctx) {
+        dctx.strokeStyle = '#000000';
+        dctx.lineWidth = 2.5;
+        dctx.setLineDash([3, 2.5]);
+        dctx.beginPath();
+        dctx.arc(dashCanvasSize / 2, dashCanvasSize / 2, 8, 0, Math.PI * 2);
+        dctx.stroke();
+        const dashImg = dctx.getImageData(0, 0, dashCanvasSize, dashCanvasSize);
+        if (!map.hasImage('rm-pending-dash-ring')) map.addImage('rm-pending-dash-ring', dashImg, { pixelRatio: 2 });
+      }
+
       setMapLoaded(true);
     });
     mapRef.current=map;
