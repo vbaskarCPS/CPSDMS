@@ -202,7 +202,13 @@ const RMLogbook: React.FC = () => {
             sessionService.getDailySession(),
             sessionService.getLogsheetSessions()
           ]);
-          setDailyData(session);
+          // Stabilise the pendingBookings array identity across refreshes using
+          // the reconciler defined above — reuse the previous array reference
+          // when its content signature is unchanged. Without this, every refresh
+          // hands the map a fresh bookings prop, which churns pendingBookingPin-
+          // Source and restarts Phase 1's geocode loop (the one-at-a-time creep).
+          // The functional updater gives us the previous dailyData to compare against.
+          setDailyData(prev => reconcilePendingBookings(prev, session));
           setAllSessions(sessions);
 
           if (session?.seasonType) {
