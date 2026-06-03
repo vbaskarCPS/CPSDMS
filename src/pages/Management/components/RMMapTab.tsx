@@ -1785,9 +1785,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           source:casingSrcId,
           minzoom:0,maxzoom:24,
           paint:{
+            // gap-width renders the casing as two thin strips flanking the main
+            // line's 7px footprint with an EMPTY centre — so the translucent fill
+            // above sits over the base map (not over the casing) and reads exactly
+            // as the non-floater view. The only visible casing is the 1px rim.
             'line-color': ['get', 'ownerColor'],
-            'line-width':9,
-            'line-opacity':0.9,
+            'line-gap-width':7,
+            'line-width':1,
+            'line-opacity':1,
           },
           layout:{'line-cap':'round','line-join':'round'},
         },before);
