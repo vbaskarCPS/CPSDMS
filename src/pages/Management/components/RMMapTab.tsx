@@ -1934,9 +1934,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const routeRow = routes.find(r => r.routeCode === route.route_code);
       const routeOwner = routeRow?.managerId || managerId;
 
-      // Build per-line-piece features. Each piece carries an ownerColor resolved
-      // from its bucket's owner (falling back to the route owner), so a cross-
-      // assigned bucket paints in that manager's hue — the two-tone route.
+      // Build per-line-piece features. Colour is purely the route's own colour
+      // (and its split-bucket hues) — floater mode shows routes exactly as a
+      // regular manager sees them, with no manager-owner casing.
       const features: GeoJSON.Feature[] = [];
       route.segments.forEach(seg => {
         const cs = seg.coordinates;
@@ -1946,18 +1946,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           const b = cs[i + 1];
           const mid = lineMidCoord(a, b);
           const bucketLetter = buckets.length > 0 ? bucketForPoint(mid[0], mid[1], buckets) : 'a';
-          let ownerColor = route.route_color;
-          if (floaterColouringActive) {
-            const bk = buckets.find(bb => bb.letter === bucketLetter);
-            const owner = ownerOf(routeOwner, bk?.managerId);
-            ownerColor = colorForOwner(owner, route.route_color);
-          }
           features.push({
             type: 'Feature',
             properties: {
               route_code: route.route_code,
               color: route.route_color,
-              ownerColor,
               bucket: bucketLetter,
               osmId: seg.osmId,
             },
@@ -1976,35 +1969,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         lineColorExpr.push(colorForBucket(route.route_color, L));
       }
       lineColorExpr.push(route.route_color); // default
-
-      // CASING (manager-hue outline). A Mapbox line has no native border, so we
-      // render a SECOND, slightly-wider line UNDER the main one, coloured by each
-      // piece's owning-manager hue (the ownerColor property). Width 9 vs the main
-      // line's 7 = ~1px rim each side. Only present when floater colouring is
-      // active; non-floaters get no casing layer at all (today's map unchanged).
-      // Added BEFORE the main line so it sits beneath it in the layer stack.
-      const casingSrcId=`rm-line-casing-src-${route.id}`, casingId=`rm-line-casing-${route.id}`;
-      if (floaterColouringActive) {
-        loadedIdsRef.current.push(`casing-${route.id}`);
-        map.addSource(casingSrcId,{type:'geojson',data:{type:'FeatureCollection',features}});
-        map.addLayer({
-          id:casingId,
-          type:'line',
-          source:casingSrcId,
-          minzoom:0,maxzoom:24,
-          paint:{
-            // gap-width renders the casing as two thin strips flanking the main
-            // line's 7px footprint with an EMPTY centre — so the translucent fill
-            // above sits over the base map (not over the casing) and reads exactly
-            // as the non-floater view. The only visible casing is the 1px rim.
-            'line-color': ['get', 'ownerColor'],
-            'line-gap-width':7,
-            'line-width':1,
-            'line-opacity':1,
-          },
-          layout:{'line-cap':'round','line-join':'round'},
-        },before);
-      }
 
       map.addSource(srcId,{type:'geojson',data:{type:'FeatureCollection',features}});
       map.addLayer({
@@ -2049,7 +2013,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       initialFitDoneRef.current=true;
       setTimeout(()=>{if(!mapRef.current) return; const b=allCoords.reduce((b,c)=>b.extend(c),new mapboxgl.LngLatBounds(allCoords[0],allCoords[0]));mapRef.current.fitBounds(b,{padding:80,maxZoom:15,duration:800});},300);
     }
-  }, [routeMapData, mapLoaded, routeSplitsByCode, routes, floaterColouringActive, ownerOf, colorForOwner, managerId]);
+  }, [routeMapData, mapLoaded, routeSplitsByCode, routes, managerId]);
 
   // Worker name overlay — V2 RECURSIVE-SPLIT-AWARE.
   // Unsplit routes get one label at the route centroid showing assigned workers.
