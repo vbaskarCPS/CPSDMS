@@ -1,11 +1,11 @@
 // src/pages/Logsheet/components/WorkerMapTab.tsx
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { Loader, Navigation } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { sessionService } from '../../../lib/sessionService';
-import { Worker } from '../../../types';
+import { Worker, RouteSplit } from '../../../types';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -15,6 +15,44 @@ interface SavedRoute {
   route_color: string;
   route_number: number;
   segments: Array<{ osmId: number; name: string; coordinates: [number, number][] }>;
+}
+
+// --- SPLIT BUCKET HELPERS (shared algorithm with RMMapTab) ---
+// pointInCorners + bucketForPoint are copied VERBATIM from RMMapTab.tsx so the
+// worker's clipped half is computed identically to the manager's coloured half.
+// If you ever change the cascade in one file, change it in BOTH — silent drift
+// here would put a street on the wrong worker's map.
+function pointInCorners(lng: number, lat: number, corners: Array<{ lng: number; lat: number }>): boolean {
+  if (!corners || corners.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = corners.length - 1; i < corners.length; j = i++) {
+    const xi = corners[i].lng, yi = corners[i].lat;
+    const xj = corners[j].lng, yj = corners[j].lat;
+    const intersect = ((yi > lat) !== (yj > lat))
+      && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function bucketForPoint(lng: number, lat: number, buckets: Array<{letter: string; sourceLetter: string | null; rectangles: Array<{corners: Array<{lng: number; lat: number}>}>}>): string {
+  let current = 'a';
+  for (let i = 1; i < buckets.length; i++) {
+    const b = buckets[i];
+    if (b.sourceLetter !== current) continue;
+    if (!b.rectangles || b.rectangles.length === 0) continue;
+    for (const r of b.rectangles) {
+      if (pointInCorners(lng, lat, r.corners)) {
+        current = b.letter;
+        break;
+      }
+    }
+  }
+  return current;
+}
+
+function lineMidCoord(a: [number, number], b: [number, number]): [number, number] {
+  return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 }
 
 function createNavArrow(): HTMLDivElement {
@@ -39,6 +77,16 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
   const [routeMapData, setRouteMapData] = useState<SavedRoute[]>([]);
   const [routesLoading, setRoutesLoading] = useState(true);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  // Route splits for THIS worker's routes. Used to clip drawn geometry to only
+  // the bucket(s) this worker is assigned to, so a split-route worker sees just
+  // their half. Fetched alongside the route load; refreshed on contractor change.
+  const [routeSplits, setRouteSplits] = useState<RouteSplit[]>([]);
+  const routeSplitsByCode = useMemo(() => {
+    const m = new Map<string, RouteSplit>();
+    for (const rs of routeSplits) m.set(rs.routeCode, rs);
+    return m;
+  }, [routeSplits]);
 
   const initialFitDoneRef = useRef(false);
   const mountedRef = useRef(true);
@@ -124,6 +172,21 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     return () => { cancelled = true; };
   }, [worker.contractorId]);
 
+  // Load route splits for this worker's routes (display-only; clips geometry to
+  // the worker's assigned bucket below). Refreshes when the contractor changes.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await sessionService.getRouteSplits();
+        if (!cancelled) setRouteSplits(rows);
+      } catch (e) {
+        console.warn('[WorkerMap] route splits load failed:', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [worker.contractorId]);
+
   // Draw routes once map and data are both ready
   useEffect(() => {
     const map = mapRef.current;
@@ -149,19 +212,61 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     routeMapData.forEach(route => {
       if (!route.segments?.length) return;
 
+      // Determine if this route is split and which bucket(s) belong to THIS
+      // worker. If split AND the worker owns a bucket, clip the drawn geometry
+      // to only that bucket's line-pieces (same cascade the master map uses to
+      // colour them). Otherwise draw the whole route as before.
+      const split = routeSplitsByCode.get(route.route_code);
+      const buckets = split ? split.buckets : [];
+      const myLetters = new Set<string>();
+      for (const b of buckets) {
+        if ((b.assignedWorkers || []).includes(worker.contractorId)) myLetters.add(b.letter);
+      }
+      const clipToBuckets = buckets.length > 0 && myLetters.size > 0;
+
       const srcId = `wm-src-${route.id}`;
       const lineId = `wm-line-${route.id}`;
+
+      // Build features. When clipping, each line-piece (a pair of consecutive
+      // coords) becomes its own LineString, kept only if its midpoint falls in
+      // one of the worker's buckets. labelCoords collects the kept coordinates
+      // so the number label and fit-bounds frame only the worker's half.
+      const features: GeoJSON.Feature[] = [];
+      const labelCoords: [number, number][] = [];
+      route.segments.forEach(seg => {
+        const cs = seg.coordinates;
+        if (!cs || cs.length === 0) return;
+        if (!clipToBuckets) {
+          features.push({
+            type: 'Feature',
+            properties: { route_code: route.route_code, color: route.route_color },
+            geometry: { type: 'LineString', coordinates: cs },
+          });
+          cs.forEach(c => labelCoords.push(c));
+          return;
+        }
+        if (cs.length < 2) return;
+        for (let i = 0; i < cs.length - 1; i++) {
+          const a = cs[i];
+          const b = cs[i + 1];
+          const mid = lineMidCoord(a, b);
+          const letter = bucketForPoint(mid[0], mid[1], buckets);
+          if (!myLetters.has(letter)) continue;
+          features.push({
+            type: 'Feature',
+            properties: { route_code: route.route_code, color: route.route_color },
+            geometry: { type: 'LineString', coordinates: [a, b] },
+          });
+          labelCoords.push(a, b);
+        }
+      });
+
+      // Nothing of this route belongs to the worker — skip it entirely.
+      if (features.length === 0) return;
+
       loadedIdsRef.current.push(route.id);
 
-      const features: GeoJSON.Feature[] = route.segments.map(seg => ({
-        type: 'Feature',
-        properties: { route_code: route.route_code, color: route.route_color },
-        geometry: { type: 'LineString', coordinates: seg.coordinates },
-      }));
-
-      features.forEach(f =>
-        allCoords.push(...((f.geometry as GeoJSON.LineString).coordinates as [number, number][]))
-      );
+      labelCoords.forEach(c => allCoords.push(c));
 
       map.addSource(srcId, { type: 'geojson', data: { type: 'FeatureCollection', features } });
       map.addLayer(
@@ -173,9 +278,8 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
         before
       );
 
-      // Route number label at centroid
-      const rc: [number, number][] = [];
-      route.segments.forEach(s => s.coordinates.forEach(c => rc.push(c)));
+      // Route number label at the centroid of the kept (worker's) geometry.
+      const rc: [number, number][] = labelCoords;
       if (!rc.length) return;
       const cLng = rc.reduce((s, c) => s + c[0], 0) / rc.length;
       const cLat = rc.reduce((s, c) => s + c[1], 0) / rc.length;
@@ -222,7 +326,7 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
         mapRef.current.fitBounds(b, { padding: 60, maxZoom: 15, duration: 800 });
       }, 300);
     }
-  }, [routeMapData, mapLoaded]);
+  }, [routeMapData, mapLoaded, routeSplitsByCode, worker.contractorId]);
 
   // GPS watch — stores position in lastPositionRef for DB uploads
   useEffect(() => {
