@@ -27,6 +27,10 @@ import { getStorageItem } from '../../../lib/localStorage';
 
 interface WorkerPCLTabProps {
   routeCodes: string[];
+  // Drives card colour: sealing PCL cards render in deep blue/indigo to
+  // distinguish driveway-sealing history from aeration's gray/green. Optional
+  // so any existing caller that omits it falls back to the aeration look.
+  seasonType?: import('../../../types').SeasonType;
 }
 
 // Pull whichever id the current_user object happens to expose.
@@ -38,12 +42,26 @@ function getCurrentWorkerId(): string {
   return user.contractorId || user.user_id || user.id || 'unknown';
 }
 
-const ClientCard: React.FC<{ client: PCLClientGroup }> = ({ client }) => {
+const ClientCard: React.FC<{ client: PCLClientGroup; sealing?: boolean }> = ({ client, sealing }) => {
   const [expanded, setExpanded] = useState(false);
   const mostRecent = client.history[0];
 
+  // Sealing → deep blue/indigo shell + indigo price/accents; aeration keeps the
+  // original gray shell + green price. Only the colour classes differ; layout
+  // and behaviour are identical between the two.
+  const shellClass = sealing
+    ? 'bg-indigo-950/40 border border-indigo-700/60 rounded-xl overflow-hidden'
+    : 'bg-gray-900 border border-gray-700 rounded-xl overflow-hidden';
+  const priceClass = sealing
+    ? 'text-indigo-300 font-mono font-bold text-sm'
+    : 'text-green-400 font-mono font-bold text-sm';
+  const tagClass = sealing
+    ? 'text-[10px] bg-indigo-900/60 border border-indigo-600 text-indigo-200 px-1 py-0.5 rounded'
+    : 'text-[10px] bg-gray-700 border border-gray-600 text-gray-300 px-1 py-0.5 rounded';
+  const rowPriceClass = sealing ? 'text-xs font-mono text-indigo-300' : 'text-xs font-mono text-green-400';
+
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded-xl overflow-hidden">
+    <div className={shellClass}>
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full p-3 flex items-start justify-between gap-3 text-left active:bg-gray-800 transition-colors"
@@ -68,8 +86,8 @@ const ClientCard: React.FC<{ client: PCLClientGroup }> = ({ client }) => {
           {mostRecent && (
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] text-gray-500">{mostRecent.year}</span>
-              <span className="text-green-400 font-mono font-bold text-sm">{mostRecent.price}</span>
-              <span className="text-[10px] bg-gray-700 border border-gray-600 text-gray-300 px-1 py-0.5 rounded">
+              <span className={priceClass}>{mostRecent.price}</span>
+              <span className={tagClass}>
                 {mostRecent.serviceType}
               </span>
             </div>
@@ -98,7 +116,7 @@ const ClientCard: React.FC<{ client: PCLClientGroup }> = ({ client }) => {
               }`}
             >
               <span className="text-xs font-mono text-gray-300">{h.year}</span>
-              <span className="text-xs font-mono text-green-400">{h.price}</span>
+              <span className={rowPriceClass}>{h.price}</span>
               <span className="text-xs text-gray-300">{h.serviceType}</span>
               <span className="text-xs text-gray-400 truncate">{h.contractor || '—'}</span>
             </div>
@@ -109,7 +127,8 @@ const ClientCard: React.FC<{ client: PCLClientGroup }> = ({ client }) => {
   );
 };
 
-const WorkerPCLTab: React.FC<WorkerPCLTabProps> = ({ routeCodes }) => {
+const WorkerPCLTab: React.FC<WorkerPCLTabProps> = ({ routeCodes, seasonType }) => {
+  const isSealing = seasonType === 'sealing';
   const [loading, setLoading] = useState(true);
   const [pclMap, setPclMap] = useState<Map<string, PCLClientGroup[]>>(new Map());
   const [error, setError] = useState<string | null>(null);
@@ -255,10 +274,11 @@ const WorkerPCLTab: React.FC<WorkerPCLTabProps> = ({ routeCodes }) => {
               </span>
             </div>
             <div className="space-y-2">
-              {clients.map((client, i) => (
+            {clients.map((client, i) => (
                 <ClientCard
                   key={`${client.houseNum}-${client.streetName.toLowerCase().replace(/\s+/g, '-')}-${i}`}
                   client={client}
+                  sealing={isSealing}
                 />
               ))}
             </div>

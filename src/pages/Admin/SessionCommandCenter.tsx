@@ -617,8 +617,15 @@ const SessionCommandCenter: React.FC = () => {
       // the now-fresh session data. Non-blocking by design — same shape as the
       // call inside sessionService.uploadDailySession. Lets the admin force a
       // PCL re-cache without closing the session.
-      if (currentCC?.digitalMappingEnabled && currentCC.callbookSheetId && currentCC.id) {
-        const sheetId = currentCC.callbookSheetId;
+      // PCL source differs by season — mirror uploadDailySession exactly:
+      //   sealing → master bookings sheet, sealing resolver (tabs ending "Callbooks")
+      //   everything else → dedicated callbook sheet, aeration resolver
+      // Using the wrong sheet/flag here was why Add Additional didn't refresh
+      // driveway-sealing PCLs mid-session.
+      const isSealingSession = (currentSession?.seasonType || selectedSeasonType) === 'sealing';
+      const pclSheetId = isSealingSession ? currentCC?.masterbookingsSheetId : currentCC?.callbookSheetId;
+      if (currentCC?.digitalMappingEnabled && pclSheetId && currentCC.id) {
+        const sheetId = pclSheetId;
         const ccId = currentCC.id;
         // Pull route codes from the freshly re-imported data (covers any new
         // routes the "Add Additional" pass just inserted) and merge with the
@@ -635,7 +642,7 @@ const SessionCommandCenter: React.FC = () => {
             console.warn('[PCL Refresh] No Google access token available — PCL refresh skipped.');
             return;
           }
-          loadAndCachePCL(sheetId, allRouteCodes, accessToken, ccId).catch(err =>
+          loadAndCachePCL(sheetId, allRouteCodes, accessToken, ccId, isSealingSession).catch(err =>
             console.warn('[PCL Refresh] Non-blocking load failed:', err)
           );
         }).catch(err => console.warn('[PCL Refresh] Module import failed:', err));

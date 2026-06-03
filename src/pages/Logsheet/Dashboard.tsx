@@ -869,7 +869,7 @@ const Dashboard: React.FC = () => {
       {/* ── PCL CONTENT ── */}
       {activeView === 'pcl' && (
         <div className="flex-1 overflow-y-auto custom-scrollbar">
-          <WorkerPCLTab routeCodes={assignedRouteCodes} />
+          <WorkerPCLTab routeCodes={assignedRouteCodes} seasonType={seasonType} />
         </div>
       )}
 
