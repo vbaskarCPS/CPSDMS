@@ -164,7 +164,7 @@ function getTeamThresholds(
   if (seasonType === 'sealing') {
     if (teamSize === 1) return { green: 40, gold: 60, silver: 80 };
     if (teamSize === 2) return { green: 60, gold: 80, silver: 120 };
-    return { green: 60, gold: 80, silver: teamSize * 60 };
+    return { green: 80, gold: 120, silver: teamSize * 60 };
   }
   // Rejuv (and any future team season — Rejuv numbers are the default)
   if (teamSize === 1) return { green: 30, gold: 40, silver: 60 };
