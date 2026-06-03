@@ -1367,12 +1367,9 @@ class SessionService {
       for (const b of newBuckets) for (const w of b.assignedWorkers) unionSet.add(w);
       const unionWorkers = Array.from(unionSet);
   
-      const { error: routeErr } = await supabase
-        .from('routes')
-        .update({ assigned_worker_ids: unionWorkers })
-        .eq('route_code', routeCode)
-        .eq('session_date', date)
-        .eq('command_center_id', ccId);
+      // DELIBERATELY DISABLED — see note below. Was: .update({ assigned_worker_ids: unionWorkers })
+      const routeErr = null as any;
+      void unionWorkers;
   
       if (routeErr) {
         console.error('[RouteSplit] updateRouteSplitAssignment (routes union) failed:', routeErr);
