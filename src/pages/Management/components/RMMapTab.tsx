@@ -1702,6 +1702,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     loadedIdsRef.current.forEach(id=>{
       if(id.startsWith('num-')){const rid=id.replace('num-','');if(map.getLayer(`rm-num-${rid}`))map.removeLayer(`rm-num-${rid}`);if(map.getSource(`rm-num-src-${rid}`))map.removeSource(`rm-num-src-${rid}`);}
+      else if(id.startsWith('casing-')){const rid=id.replace('casing-','');if(map.getLayer(`rm-line-casing-${rid}`))map.removeLayer(`rm-line-casing-${rid}`);if(map.getSource(`rm-line-casing-src-${rid}`))map.removeSource(`rm-line-casing-src-${rid}`);}
       else{if(map.getLayer(`rm-line-${id}`))map.removeLayer(`rm-line-${id}`);if(map.getSource(`rm-src-${id}`))map.removeSource(`rm-src-${id}`);}
     });
     loadedIdsRef.current=[];
@@ -1758,6 +1759,40 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
       });
 
+      // Build colour match expression from the palette letters (route FILL —
+      // unchanged from the original; manager hue lives on the casing below, NOT
+      // the fill, so routes stay distinguishable by their own colour).
+      const lineColorExpr: any = ['match', ['get', 'bucket']];
+      for (const L of PALETTE_LETTERS) {
+        lineColorExpr.push(L);
+        lineColorExpr.push(colorForBucket(route.route_color, L));
+      }
+      lineColorExpr.push(route.route_color); // default
+
+      // CASING (manager-hue outline). A Mapbox line has no native border, so we
+      // render a SECOND, slightly-wider line UNDER the main one, coloured by each
+      // piece's owning-manager hue (the ownerColor property). Width 9 vs the main
+      // line's 7 = ~1px rim each side. Only present when floater colouring is
+      // active; non-floaters get no casing layer at all (today's map unchanged).
+      // Added BEFORE the main line so it sits beneath it in the layer stack.
+      const casingSrcId=`rm-line-casing-src-${route.id}`, casingId=`rm-line-casing-${route.id}`;
+      if (floaterColouringActive) {
+        loadedIdsRef.current.push(`casing-${route.id}`);
+        map.addSource(casingSrcId,{type:'geojson',data:{type:'FeatureCollection',features}});
+        map.addLayer({
+          id:casingId,
+          type:'line',
+          source:casingSrcId,
+          minzoom:0,maxzoom:24,
+          paint:{
+            'line-color': ['get', 'ownerColor'],
+            'line-width':9,
+            'line-opacity':0.9,
+          },
+          layout:{'line-cap':'round','line-join':'round'},
+        },before);
+      }
+
       map.addSource(srcId,{type:'geojson',data:{type:'FeatureCollection',features}});
       map.addLayer({
         id:lineId,
@@ -1765,18 +1800,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         source:srcId,
         minzoom:0,maxzoom:24,
         paint:{
-          // When floater colouring is active, paint each piece by its owner's
-          // hue (data-driven via the ownerColor property set above). Otherwise
-          // fall back to the per-bucket split-colour match expression (the
-          // original behaviour for non-floaters).
-          'line-color': floaterColouringActive
-            ? ['get', 'ownerColor']
-            : (() => {
-                const expr: any = ['match', ['get', 'bucket']];
-                for (const L of PALETTE_LETTERS) { expr.push(L); expr.push(colorForBucket(route.route_color, L)); }
-                expr.push(route.route_color);
-                return expr;
-              })(),
+          'line-color': lineColorExpr,
           'line-width':7,
           'line-opacity':0.75,
         },
