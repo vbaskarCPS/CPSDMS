@@ -3429,6 +3429,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
 
         setAssignModalData(null);
+        // Reload the split/bucket data so the sidebar cards and the assignment
+        // modal reflect the just-written bucket.assignedWorkers. onRefresh()
+        // only reloads routes + sessions, not the route_splits state the bucket
+        // display reads from — without this the assignment persists to the DB
+        // but the screen keeps showing the bucket as unassigned.
+        await reloadRouteSplits();
         onRefresh();
         return;
       }
