@@ -4215,6 +4215,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                     <div className="text-[10px] text-gray-400">
                       {assignModalData.prebookCount} jobs • {assignModalData.prepayCount} prepaid • {assignModalData.totalEQ.toFixed(1)} EQ
                     </div>
+                    <div className="text-[10px] text-amber-400 font-mono">
+                      DIAG letter={String(assignModalData.letter)} | split buckets=[
+                      {(routeSplitsByCode.get(assignModalData.routeCode)?.buckets || []).map(b => `${b.letter}:${(b.assignedWorkers||[]).length}`).join(', ')}]
+                    </div>
                   </div>
                 </div>
                 <button
