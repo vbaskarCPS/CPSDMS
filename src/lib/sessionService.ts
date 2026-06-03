@@ -536,13 +536,39 @@ class SessionService {
       }));
     }
 
-    const routes = (routesRes.data || []).map((r) => ({
-      routeCode: r.route_code,
-      managerId: r.manager_id,
-      assignedWorkerIds: r.assigned_worker_ids || [],
-      streets: r.streets,
-      commandCenterId: r.command_center_id,
-    }));
+    // Split-aware route assignment (READ MODEL ONLY).
+    // For a carved route, worker assignment lives at the bucket level in
+    // route_splits — routes.assigned_worker_ids is deliberately left empty to
+    // avoid the "both halves" write bleed. So when assembling DailySessionData,
+    // fold each split's bucket assignedWorkers back up into the route's
+    // assignedWorkerIds, ONLY in memory. This lets on-route detection (worker
+    // dashboard's hasAssignedRoutes, WorkerMapTab's route drawing, PCL route
+    // codes) recognise a split-route worker, WITHOUT writing the union back to
+    // the DB (which is what caused the bleed). The per-booking job list stays
+    // correctly scoped to a single bucket via getWorkerAssignments' own
+    // bucket-aware filter, so this union never causes a worker to see the other
+    // half's jobs.
+    const splitsForRoutes = await this.getRouteSplits();
+    const bucketWorkersByRoute = new Map<string, string[]>();
+    for (const s of splitsForRoutes) {
+      const u = new Set<string>();
+      for (const b of s.buckets) for (const w of (b.assignedWorkers || [])) u.add(w);
+      if (u.size > 0) bucketWorkersByRoute.set(s.routeCode, Array.from(u));
+    }
+
+    const routes = (routesRes.data || []).map((r) => {
+      const baseWorkers: string[] = r.assigned_worker_ids || [];
+      const splitWorkers = bucketWorkersByRoute.get(r.route_code);
+      return {
+        routeCode: r.route_code,
+        managerId: r.manager_id,
+        assignedWorkerIds: splitWorkers
+          ? Array.from(new Set([...baseWorkers, ...splitWorkers]))
+          : baseWorkers,
+        streets: r.streets,
+        commandCenterId: r.command_center_id,
+      };
+    });
 
     const pendingBookings = (bookingsRes.data || []).map((b) => ({
       ...b.data,
@@ -1989,9 +2015,28 @@ class SessionService {
         .eq('session_date', date)
         .eq('command_center_id', ccId);
       
-      const myRouteCodes = (allRoutes || [])
+        const myRouteCodes = (allRoutes || [])
         .filter(r => r.assigned_worker_ids && r.assigned_worker_ids.includes(workerId))
         .map(r => r.route_code);
+
+      // Split-aware membership. For carved routes the worker's jobs are NOT
+      // found via routes.assigned_worker_ids (left empty by design) — they're
+      // the booking ids inside whichever bucket carries this worker. Build the
+      // set of this worker's bucket booking ids, and the set of route codes that
+      // are split at all, so the filters below route split bookings through
+      // bucket membership ONLY (never the whole-route fallback, which would leak
+      // the other half's bookings — the "both halves" bug, worker-side).
+      const splitsForAssign = await this.getRouteSplits();
+      const myBucketBookingIds = new Set<string>();
+      const splitRouteCodes = new Set<string>();
+      for (const s of splitsForAssign) {
+        splitRouteCodes.add(s.routeCode);
+        for (const b of s.buckets) {
+          if ((b.assignedWorkers || []).includes(workerId)) {
+            for (const bid of b.bookingIds) myBucketBookingIds.add(bid);
+          }
+        }
+      }
   
       const { data: allBookings } = await supabase
         .from('bookings')
@@ -2004,6 +2049,10 @@ class SessionService {
       
       if (isTeamSeason && sessionId) {
         myPending = (allBookings || []).filter((b) => {
+          // Split route → bucket membership is the ONLY truth for this worker.
+          if (splitRouteCodes.has(b.route_number)) {
+            return myBucketBookingIds.has(b.booking_id);
+          }
           if (b.session_id === sessionId) return true;
           const isMyRoute = myRouteCodes.includes(b.route_number);
           const isUnassigned = !b.session_id && !b.contractor_id;
@@ -2011,6 +2060,10 @@ class SessionService {
         });
       } else {
         myPending = (allBookings || []).filter((b) => {
+          // Split route → bucket membership is the ONLY truth for this worker.
+          if (splitRouteCodes.has(b.route_number)) {
+            return myBucketBookingIds.has(b.booking_id);
+          }
           const isMyRoute = myRouteCodes.includes(b.route_number);
           const isAssignedToMe = b.contractor_id === workerId;
           const isAssignedToOther = b.contractor_id && b.contractor_id !== workerId;
