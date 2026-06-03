@@ -241,7 +241,44 @@ type SortOption = 'recent' | 'alpha' | 'steps' | 'equiv' | 'upGross';
 
 const geocodeCache = new Map<string, { lat: number; lng: number }>();
 const jobIdCache = new Map<string, { address: string; lat: number; lng: number }>();
-const makeCacheKey = (a: string) => a.trim().toLowerCase().replace(/\s+/g, ' ');
+// Normalises an address into a stable cache key so the SAME house always
+// resolves to ONE cached coordinate — no matter which spelling asked for it.
+// This is what makes a pending-sale ring land exactly on its completed pin:
+// the booking's "275 Hodge Crt" and the transaction's "275 Hodge Court" now
+// collapse to the identical key, hit one cache entry, and plot at one point.
+//
+// Moderate strength on purpose:
+//   - lowercases, strips punctuation, collapses whitespace
+//   - folds common street-type abbreviations (crt→court, st→street, …)
+//   - PRESERVES any trailing city/province text, so "14 main st acton" and
+//     "14 main st georgetown" stay DISTINCT — we never merge two real houses
+//     in two different towns just because they share a street name.
+const STREET_TYPE_ALIASES: Record<string, string> = {
+  st: 'street', str: 'street',
+  rd: 'road',
+  ave: 'avenue', av: 'avenue',
+  dr: 'drive',
+  crt: 'court', ct: 'court',
+  cres: 'crescent', cr: 'crescent',
+  blvd: 'boulevard',
+  pl: 'place',
+  ln: 'lane',
+  ter: 'terrace',
+  pkwy: 'parkway',
+  hwy: 'highway',
+  sq: 'square',
+  trl: 'trail',
+  cir: 'circle',
+};
+const makeCacheKey = (a: string) =>
+  String(a || '')
+    .toLowerCase()
+    .replace(/[.,#]/g, ' ')          // punctuation that varies between spellings
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .map(tok => STREET_TYPE_ALIASES[tok] || tok)  // fold St→street, Crt→court, …
+    .join(' ');
 const esc = (s: string) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
 const RC_TEAM_PATTERN = /^RC\d*$/;
@@ -423,11 +460,20 @@ const mergePendingSalesForDisplay = (pendingSales: PendingSale[]): MasterBooking
   return result;
 };
 
-async function geocodeAddress(addr: string, pLat?: number, pLng?: number): Promise<{ lat: number; lng: number } | null> {
+async function geocodeAddress(
+  addr: string,
+  pLat?: number,
+  pLng?: number,
+  bbox?: { minLng: number; minLat: number; maxLng: number; maxLat: number },
+): Promise<{ lat: number; lng: number } | null> {
   const token = import.meta.env.VITE_MAPBOX_TOKEN as string;
   const q = encodeURIComponent([addr,'Ontario','Canada'].join(', '));
   let url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${token}&limit=1&country=ca&types=address`;
   if (pLat !== undefined && pLng !== undefined) url += `&proximity=${pLng},${pLat}`;
+  // bbox HARD-constrains results to the route area. proximity only biases;
+  // bbox actually rejects anything outside the box, so a garbled address can't
+  // fling a pin into another city. Mapbox expects minLng,minLat,maxLng,maxLat.
+  if (bbox) url += `&bbox=${bbox.minLng},${bbox.minLat},${bbox.maxLng},${bbox.maxLat}`;
   try {
     const res = await fetch(url, { cache: 'reload' });
     if (!res.ok) return null;
@@ -2579,7 +2625,19 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const addrKey = makeCacheKey(address);
     const cached = geocodeCache.get(addrKey);
     if (cached) return cached;
-    const coord = await geocodeAddress(address, routeCentroid?.lat, routeCentroid?.lng);
+    // Constrain the geocoder to a box around the route centroid. ~0.18° is
+    // roughly a 20km half-span at this latitude — wide enough to cover a CC's
+    // routes, tight enough to keep a bad address from resolving in another
+    // town. Falls back to proximity-only (no box) until the centroid exists.
+    const bbox = routeCentroid
+      ? {
+          minLng: routeCentroid.lng - 0.18,
+          minLat: routeCentroid.lat - 0.18,
+          maxLng: routeCentroid.lng + 0.18,
+          maxLat: routeCentroid.lat + 0.18,
+        }
+      : undefined;
+    const coord = await geocodeAddress(address, routeCentroid?.lat, routeCentroid?.lng, bbox);
     if (coord) {
       geocodeCache.set(addrKey, coord);
       sessionService.saveGeocode(address, coord.lat, coord.lng).catch(() => {});
