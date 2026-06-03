@@ -380,7 +380,16 @@ const RMLogbook: React.FC = () => {
   useEffect(() => {
     if (!dailyData || !allSessions || !currentUser) return;
 
-    const myTeam = dailyData.workers.filter(w => w.assignedManagerId === currentUser.userId);
+    // FLOATER: aggregate across the covered set (own id + floatingFor), not just
+    // own id. A floater owns no workers/routes of their own, so filtering by own
+    // id alone yields an empty set and the whole stat bar reads zero. The covered
+    // set mirrors refreshData's coveredIds and RMMapTab's coveredManagerIds.
+    const coveredManagerIds = new Set<string>([
+      currentUser.userId,
+      ...((currentUser.floatingFor as string[] | undefined) || []),
+    ]);
+
+    const myTeam = dailyData.workers.filter(w => coveredManagerIds.has(w.assignedManagerId as string));
     const myTeamIdsSet = new Set(myTeam.map(w => w.contractorId));
 
     const mySessions = allSessions.filter(s => {
@@ -391,7 +400,7 @@ const RMLogbook: React.FC = () => {
       return false;
     });
 
-    const myRoutes = dailyData.routes.filter(r => r.managerId === currentUser.userId);
+    const myRoutes = dailyData.routes.filter(r => coveredManagerIds.has(r.managerId));
     const myRouteCodes = new Set(myRoutes.map(r => r.routeCode));
 
     const workerCount = myTeam.length;
