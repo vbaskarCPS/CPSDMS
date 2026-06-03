@@ -685,19 +685,21 @@ function createDashedRotatingRing(fillColor: string): HTMLDivElement {
     document.head.appendChild(spinStyle);
   }
   spinStyle.textContent = `@keyframes rmDashedSpin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}`;
+  // A real, fixed 16px box. Mapbox anchors this marker on the box's centre, and
+  // BOTH children fill the box exactly (top/left/right/bottom = 0), so they
+  // share one centre with no translate math to drift. The fill is a 10px circle
+  // (matching a completed pin) centred by flexbox. The SVG is the full 16px box;
+  // its circle (r=5, stroke 2.5) puts the dashes right on the fill's 5px rim —
+  // they ARE the border, so the fill carries no stroke. The animation spins the
+  // whole SVG around its own centre.
   const el = document.createElement('div');
-  el.style.cssText = 'width:0;height:0;overflow:visible;pointer-events:auto;cursor:pointer;';
-  // Geometry: a completed pin is ~10px across (radius 3.33 + 1.67 stroke). The
-  // fill here is a 10px circle to match. The dashed ring's radius is set so the
-  // dashes land ON the fill's edge (no moat) — they ARE the border, so the fill
-  // carries no stroke of its own. Everything is centred on the same point via
-  // translate(-50%,-50%), so the fill no longer drifts off to one corner.
+  el.style.cssText = 'position:relative;width:16px;height:16px;pointer-events:auto;cursor:pointer;';
   el.innerHTML = `
-    <div style="position:relative;width:0;height:0;">
-      <svg width="14" height="14" viewBox="0 0 14 14" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);animation:rmDashedSpin 3s linear infinite;">
-        <circle cx="7" cy="7" r="5" fill="none" stroke="#000000" stroke-width="2.5" stroke-dasharray="3,2.5" opacity="0.9"/>
-      </svg>
-      <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:10px;height:10px;border-radius:50%;background:${fillColor};"></div>
+    <svg width="16" height="16" viewBox="0 0 16 16" style="position:absolute;top:0;left:0;animation:rmDashedSpin 3s linear infinite;transform-origin:50% 50%;">
+      <circle cx="8" cy="8" r="5" fill="none" stroke="#000000" stroke-width="2.5" stroke-dasharray="3,2.5" opacity="0.9"/>
+    </svg>
+    <div style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;">
+      <div style="width:10px;height:10px;border-radius:50%;background:${fillColor};"></div>
     </div>
   `;
   return el;
