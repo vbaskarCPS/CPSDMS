@@ -481,24 +481,40 @@ function createWorkerMarkerEl(initials: string, borderColor: string, label: stri
   return el;
 }
 
-// Manager-location dot (floater feature). A filled circle 2× the pin radius
-// (pins are circle-radius 3.33 → ~6.66px radius → ~13px diameter), palette-hued
-// so it matches the manager's route casing, with a thin dark stroke for contrast
-// on light map. No heading/arrow — a plain dot, per spec. The colour is passed
-// in (resolved by the caller via getManagerColor) so this helper stays dumb.
+// Manager-location dot (floater feature). A filled circle, palette-hued so it
+// matches the manager's route casing, with a thin dark stroke for contrast on
+// light map and the manager's initials centred in white. No heading/arrow — a
+// plain labelled dot, per spec. Colour + label are passed in (label drives both
+// the tooltip and the initials) so this helper stays dumb.
 function createManagerMarkerEl(fillColor: string, label: string): HTMLDivElement {
+  const initials = (label || '')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map(w => w.charAt(0))
+    .join('')
+    .toUpperCase();
   const el = document.createElement('div');
   el.style.cssText = [
-    'width:13px',
-    'height:13px',
+    'width:20px',
+    'height:20px',
     'border-radius:50%',
     `background:${fillColor}`,
     'border:1.5px solid rgba(0,0,0,0.55)',
     'box-shadow:0 1px 3px rgba(0,0,0,0.4)',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'font-size:9px',
+    'font-weight:700',
+    'color:#ffffff',
+    'font-family:system-ui,sans-serif',
+    'text-shadow:0 1px 1px rgba(0,0,0,0.5)',
     'cursor:default',
     'user-select:none',
     'pointer-events:none',
   ].join(';');
+  el.textContent = initials;
   el.title = label;
   return el;
 }
