@@ -22,7 +22,7 @@ import { setStorageItem } from '../../../lib/localStorage';
 import {
   RouteData, MasterBooking, LogsheetSession, Worker, ManagementUser,
   HistoricalProperty, SeasonType, TeamCart, PendingSale, SEASON_CONFIGS,
-  SessionTransaction, RouteSplit,
+  SessionTransaction, RouteSplit, ManagerLocation,
 } from '../../../types';
 import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
 import ContractorJobs from './ContractorJobs';
@@ -481,6 +481,28 @@ function createWorkerMarkerEl(initials: string, borderColor: string, label: stri
   return el;
 }
 
+// Manager-location dot (floater feature). A filled circle 2× the pin radius
+// (pins are circle-radius 3.33 → ~6.66px radius → ~13px diameter), palette-hued
+// so it matches the manager's route casing, with a thin dark stroke for contrast
+// on light map. No heading/arrow — a plain dot, per spec. The colour is passed
+// in (resolved by the caller via getManagerColor) so this helper stays dumb.
+function createManagerMarkerEl(fillColor: string, label: string): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.cssText = [
+    'width:13px',
+    'height:13px',
+    'border-radius:50%',
+    `background:${fillColor}`,
+    'border:1.5px solid rgba(0,0,0,0.55)',
+    'box-shadow:0 1px 3px rgba(0,0,0,0.4)',
+    'cursor:default',
+    'user-select:none',
+    'pointer-events:none',
+  ].join(';');
+  el.title = label;
+  return el;
+}
+
 function distToSegmentMeters(
   lat: number, lng: number,
   lat1: number, lng1: number,
@@ -831,6 +853,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   const [workerLocations, setWorkerLocations] = useState<WorkerLocation[]>([]);
   const workerLocationMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
+
+  // MANAGER LOCATIONS (floater feature). managerLocations holds every reporting
+  // manager's last position for the CC; the marker effect filters to the covered
+  // set (minus self) at render time. lastSelfPosRef caches our own last GPS fix so
+  // the 8s timer can re-push it (keeping a parked manager fresh on others' maps).
+  const [managerLocations, setManagerLocations] = useState<ManagerLocation[]>([]);
+  const managerLocationMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
+  const lastSelfPosRef = useRef<{ lat: number; lng: number } | null>(null);
 
   const [onRouteWorkerCard, setOnRouteWorkerCard] = useState<WorkerCardData | null>(null);
   const [onRouteCartCard, setOnRouteCartCard] = useState<CartCardData | null>(null);
@@ -1602,6 +1632,74 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       workerLocationMarkersRef.current.delete(id);
     });
   }, [workerLocations, mapLoaded, workers]);
+
+  // MANAGER LOCATION poll (floater only). Fetches every reporting manager's
+  // position every 8s; the marker effect filters to the covered set. Only runs
+  // when floater colouring is active — a non-floater never polls, so their map is
+  // unchanged. CC-wide fetch is fine; the filter happens at render.
+  useEffect(() => {
+    if (!mapLoaded || !floaterColouringActive) return;
+    let cancelled = false;
+    const fetchManagerLocations = async () => {
+      try {
+        const rows = await sessionService.getManagerLocations();
+        if (!cancelled && mountedRef.current) setManagerLocations(rows);
+      } catch (e) {
+        console.warn('[ManagerLoc] fetch failed:', e);
+      }
+    };
+    fetchManagerLocations();
+    const interval = setInterval(fetchManagerLocations, 8000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [mapLoaded, floaterColouringActive]);
+
+  // MANAGER LOCATION markers (floater only). Renders a palette-hued dot per
+  // covered manager (own id excluded — we're the red GPS arrow already). Hue via
+  // getManagerColor so the dot matches that manager's route casing. Reconciled
+  // like the worker-location markers: move existing, add new, remove gone.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+
+    // When floater colouring is inactive, ensure no stray manager dots linger.
+    if (!floaterColouringActive) {
+      managerLocationMarkersRef.current.forEach(m => m.remove());
+      managerLocationMarkersRef.current.clear();
+      return;
+    }
+
+    const existingIds = new Set(managerLocationMarkersRef.current.keys());
+
+    managerLocations.forEach(loc => {
+      // Only covered managers, and never our own dot (we're the red arrow).
+      if (loc.managerId === managerId) return;
+      if (!coveredManagerIds.has(loc.managerId)) return;
+
+      const mgr = allManagers.find(m => m.userId === loc.managerId);
+      const label = mgr?.name || loc.managerId;
+      const fill = colorForOwner(loc.managerId, '#9ca3af');
+
+      const existing = managerLocationMarkersRef.current.get(loc.managerId);
+      if (existing) {
+        existing.setLngLat([loc.lng, loc.lat]);
+        const el = existing.getElement();
+        el.style.background = fill;
+        el.title = label;
+        existingIds.delete(loc.managerId);
+      } else {
+        const el = createManagerMarkerEl(fill, label);
+        const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+          .setLngLat([loc.lng, loc.lat])
+          .addTo(map);
+        managerLocationMarkersRef.current.set(loc.managerId, marker);
+      }
+    });
+
+    existingIds.forEach(id => {
+      managerLocationMarkersRef.current.get(id)?.remove();
+      managerLocationMarkersRef.current.delete(id);
+    });
+  }, [managerLocations, mapLoaded, floaterColouringActive, coveredManagerIds, managerId, allManagers, colorForOwner]);
 
   // Geocode cache hydration
   useEffect(() => {
@@ -2758,6 +2856,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const handleDragStart = (e: any) => { if (!e.originalEvent) return; if (centerOnLocationRef.current) onFollowMeAutoDisable(); };
     map.on('dragstart', handleDragStart);
     map.on('rotate', applyArrowRotation);
+    // Re-push our last-known position every 8s so a parked manager (whose GPS
+    // watch isn't firing because they're stationary) stays fresh on others' maps
+    // rather than going stale. No-op until the first fix populates lastSelfPosRef.
+    const selfPushInterval = setInterval(() => {
+      const p = lastSelfPosRef.current;
+      if (p) sessionService.upsertManagerLocation(p.lat, p.lng).catch(() => {});
+    }, 8000);
     watchIdRef.current=navigator.geolocation.watchPosition(pos=>{
       if(!navMarkerRef.current||!mapRef.current) return;
       const{latitude:lat,longitude:lng,heading,speed}=pos.coords;
@@ -2775,6 +2880,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         gpsHeadingUpdatedAtRef.current = Date.now();
       }
       lastGpsPosRef.current = { lat, lng, ts: Date.now() };
+      // MANAGER LOCATION write (Option A — every RM with the map open reports its
+      // own position). Self-resolved in the service from current_user, so this only
+      // ever writes our own row. Heading omitted per spec (dots, not arrows).
+      lastSelfPosRef.current = { lat, lng };
+      sessionService.upsertManagerLocation(lat, lng).catch(() => {});
       applyArrowRotation();
       if (centerOnLocationRef.current) {
         mapRef.current.easeTo({ center: [lng, lat], duration: 300 });
@@ -2813,6 +2923,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return()=>{
       map.off('dragstart', handleDragStart);
       map.off('rotate', applyArrowRotation);
+      clearInterval(selfPushInterval);
       if(watchIdRef.current!==null){navigator.geolocation.clearWatch(watchIdRef.current);watchIdRef.current=null;}
       navMarkerRef.current?.remove();navMarkerRef.current=null;
     };
@@ -2950,6 +3061,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       pendingSaleMarkersRef.current.clear();
       workerLocationMarkersRef.current.forEach(m => m.remove());
       workerLocationMarkersRef.current.clear();
+      managerLocationMarkersRef.current.forEach(m => m.remove());
+      managerLocationMarkersRef.current.clear();
       map.remove();mapRef.current=null;setMapLoaded(false);
     };
   }, [suppressDuplicateLabels]);
