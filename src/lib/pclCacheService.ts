@@ -340,7 +340,7 @@ export async function loadAndCachePCL(
     if (CI.PHONE < 0 || CI.ROUTE_CODE < 0) continue;
 
     for (const row of rawData.slice(headerIdx + 1)) {
-      if (!row || !row[0]) continue;
+      if (!row) continue;
       const rc = cellVal(row, CI.ROUTE_CODE);
       if (!rc || !routeCodeSet.has(rc)) continue;
 
