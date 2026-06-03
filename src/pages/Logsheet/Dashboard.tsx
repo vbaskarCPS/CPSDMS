@@ -275,7 +275,7 @@ const Dashboard: React.FC = () => {
 
   // Show the digital tabs (PCL + Route Map) only for aeration, non-training,
   // non-RM-view sessions with digital mapping enabled for this command center.
-  const showMapTab = hasDigitalMapping && seasonType === 'aeration' && !isTrainingMode && !isRMViewMode;
+  const showMapTab = hasDigitalMapping && !isTrainingMode && !isRMViewMode;
 
   // Check if this is a team season with teammates.
   // seasonHasTeams() handles lawn_rejuv + sealing today (and future cleaning when added).
