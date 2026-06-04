@@ -2421,7 +2421,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       filter: ['==', ['get', 'confirmed'], true],
       layout: {
         'icon-image': 'rm-confirmed-check',
-        'icon-size': 1.0,
+        'icon-size': 1.5,
         'icon-offset': [2, -2],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
