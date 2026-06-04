@@ -44,6 +44,7 @@ interface PinData {
   id: string; address: string; routeCode: string; name: string;
   status: 'pending' | 'completed' | 'new_sale' | 'upsell';
   phone?: string; email?: string; price?: string; paymentMethod?: string;
+  confirmed?: boolean;   // notes contain "conf"/"Confirmed" → green check on the dot
 }
 interface GeocodedPin extends PinData { lat: number; lng: number; routeColor: string; }
 interface GeocodedHistorical extends HistoricalProperty { lat: number; lng: number; }
@@ -280,6 +281,21 @@ const makeCacheKey = (a: string) =>
     .map(tok => STREET_TYPE_ALIASES[tok] || tok)  // fold St→street, Crt→court, …
     .join(' ');
 const esc = (s: string) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+// A prebook is "confirmed" when its notes contain "conf"/"Confirmed". We scan
+// every property whose KEY contains "note" (case-insensitive) so this works
+// regardless of the exact notes column name on the office booking — this
+// reliably covers 'Log Sheet Notes'. If confirmed prebooks aren't getting a
+// check, their confirmation text lives in a field whose key lacks "note":
+// add that key to the loop below.
+const isConfirmedBooking = (b: any): boolean => {
+  if (!b) return false;
+  let text = '';
+  for (const k of Object.keys(b)) {
+    if (/note/i.test(k) && typeof b[k] === 'string') text += ' ' + b[k];
+  }
+  return /conf/i.test(text);
+};
 
 const RC_TEAM_PATTERN = /^RC\d*$/;
 const isRcWorker = (teamId: string | null | undefined): boolean => {
@@ -1619,6 +1635,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         email: (b['Email Address'] || '') as string,
         price: b.Price ? String(b.Price) : '',
         paymentMethod: '',
+        confirmed: isConfirmedBooking(b),
       });
     });
     return result;
@@ -2371,6 +2388,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             routeColor: pin.routeColor, pinColor,
             phone: pin.phone || '', email: pin.email || '',
             price: pin.price || '',
+            confirmed: !!pin.confirmed,
           },
           geometry: { type: 'Point' as const, coordinates: [pin.lng, pin.lat] },
         };
@@ -2391,6 +2409,24 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         'circle-opacity': 0.95,
         'circle-stroke-opacity': 0.95,
       },
+    });
+    // Green check on confirmed prebooks only (filter on the confirmed property).
+    // Shares the pending-pins source, so it tracks the dots exactly and updates
+    // whenever the source data refreshes. icon-offset nudges it up-right so the
+    // long stroke clears the dot edge — bump these two numbers to taste.
+    map.addLayer({
+      id: 'rm-pending-confirmed-check',
+      type: 'symbol',
+      source: 'rm-pending-pins-src',
+      filter: ['==', ['get', 'confirmed'], true],
+      layout: {
+        'icon-image': 'rm-confirmed-check',
+        'icon-size': 1.0,
+        'icon-offset': [2, -2],
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      },
+      paint: { 'icon-opacity': 0.95 },
     });
     map.on('mouseenter', 'rm-pending-pins-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'rm-pending-pins-circles', () => { map.getCanvas().style.cursor = ''; });
@@ -2686,6 +2722,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (map.getLayer('rm-pending-pins-circles')) {
       map.setPaintProperty('rm-pending-pins-circles', 'circle-opacity', filterVisibility.pendingBookings ? 0.95 : 0);
       map.setPaintProperty('rm-pending-pins-circles', 'circle-stroke-opacity', filterVisibility.pendingBookings ? 0.95 : 0);
+    }
+    if (map.getLayer('rm-pending-confirmed-check')) {
+      map.setPaintProperty('rm-pending-confirmed-check', 'icon-opacity', filterVisibility.pendingBookings ? 0.95 : 0);
     }
     if (map.getLayer('rm-completed-pins-circles')) {
       map.setPaintProperty('rm-completed-pins-circles', 'circle-opacity', filterVisibility.pendingSalesAndCompleted ? 0.95 : 0);
@@ -3305,6 +3344,34 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         dctx.stroke();
         const dashImg = dctx.getImageData(0, 0, dashCanvasSize, dashCanvasSize);
         if (!map.hasImage('rm-pending-dash-ring')) map.addImage('rm-pending-dash-ring', dashImg, { pixelRatio: 2 });
+      }
+
+      // Green confirmation check, baked once so it can ride the pending-pins
+      // source as a GPU symbol layer (no drift, same as every reliable pin). A
+      // thin white underlay keeps it legible on any bucket/route dot colour. The
+      // long up-right stroke runs near the canvas edge so it extends past the
+      // ~6.7px dot — the "tail outside the circle" look you asked for. Tune the
+      // on-screen size with icon-size, and the dot overlap with icon-offset, in
+      // the symbol layer (Block E); the stroke shape lives here.
+      const checkSize = 18;
+      const checkCanvas = document.createElement('canvas');
+      checkCanvas.width = checkSize; checkCanvas.height = checkSize;
+      const kctx = checkCanvas.getContext('2d');
+      if (kctx) {
+        kctx.lineCap = 'round';
+        kctx.lineJoin = 'round';
+        const drawCheck = (color: string, w: number) => {
+          kctx.strokeStyle = color; kctx.lineWidth = w;
+          kctx.beginPath();
+          kctx.moveTo(4, 9);
+          kctx.lineTo(7.5, 13);
+          kctx.lineTo(15, 3);
+          kctx.stroke();
+        };
+        drawCheck('#ffffff', 4);    // white halo underlay for contrast
+        drawCheck('#16a34a', 2.5);  // green check on top
+        const checkImg = kctx.getImageData(0, 0, checkSize, checkSize);
+        if (!map.hasImage('rm-confirmed-check')) map.addImage('rm-confirmed-check', checkImg, { pixelRatio: 2 });
       }
 
       setMapLoaded(true);
