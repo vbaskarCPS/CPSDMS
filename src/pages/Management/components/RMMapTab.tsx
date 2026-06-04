@@ -290,10 +290,23 @@ const esc = (s: string) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&
 // add that key to the loop below.
 const isConfirmedBooking = (b: any): boolean => {
   if (!b) return false;
+  // Collect notes text from every shape the data uses. The DB row carries notes
+  // in THREE places depending on how a booking was mapped into a MasterBooking:
+  //   - top-level column   log_notes        (snake_case, from the DB row)
+  //   - mapped field       logNotes         (camelCase, some mappers)
+  //   - inside data blob   "Log Sheet Notes" (the spreadsheet column name)
+  // We scan any key whose name contains "note" (catches all three), AND dig one
+  // level into a nested `data` object if present, since some code paths hand us
+  // the raw row (notes only inside data) rather than the flattened booking.
   let text = '';
-  for (const k of Object.keys(b)) {
-    if (/note/i.test(k) && typeof b[k] === 'string') text += ' ' + b[k];
-  }
+  const scan = (obj: any) => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const k of Object.keys(obj)) {
+      if (/note/i.test(k) && typeof obj[k] === 'string') text += ' ' + obj[k];
+    }
+  };
+  scan(b);
+  scan((b as any).data);
   // Match "conf" as a word or word-start: "conf", "Conf MBH", "CONFIRMED",
   // "confirmed- interested" all pass; an embedded "conf" inside another word
   // like "Confederation" or "conference" does NOT. \b is the word boundary.
