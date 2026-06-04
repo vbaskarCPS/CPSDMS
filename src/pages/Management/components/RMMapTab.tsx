@@ -2448,15 +2448,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     map.on('mouseleave', 'rm-pending-pins-circles', () => { map.getCanvas().style.cursor = ''; });
     map.on('click', 'rm-pending-pins-circles', (e: any) => {
       const f = e.features?.[0]; if (!f) return;
-      const { name, address, routeCode, routeColor, phone, email, price } = f.properties;
+      const { name, address, routeCode, routeColor, phone, email, price, confirmed } = f.properties;
       const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
       if (popupRef.current) popupRef.current.remove();
       const sn=esc(name),sa=esc(address),sp=esc(phone),se=esc(email),spr=esc(price),src2=esc(routeCode);
+      const confDiag = `<div style="color:${confirmed?'#16a34a':'#999'};font-size:11px;font-weight:700;margin-top:4px;">DIAG confirmed=${String(confirmed)}</div>`;
       const pRow=sp?`<div style="margin-top:5px;"><a href="tel:${sp}" style="color:#60a5fa;font-size:12px;text-decoration:none;">📞 ${sp}</a></div>`:'';
       const eRow=se?`<div style="color:#9ca3af;font-size:11px;margin-top:2px;">✉️ ${se}</div>`:'';
       const prTag=spr?`<span style="background:#16a34a22;color:#4ade80;border:1px solid #16a34a66;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${spr}</span>`:'';
       popupRef.current = new mapboxgl.Popup({ offset: 12, closeButton: true }).setLngLat(coords).setHTML(
-        `<div style="font-family:system-ui,sans-serif;font-size:13px;min-width:190px;line-height:1.4;"><div style="font-weight:700;margin-bottom:3px;">${sn}</div><div style="color:#555;font-size:11px;">${sa}</div>${pRow}${eRow}<div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;"><span style="background:${routeColor}22;color:${routeColor};border:1px solid ${routeColor}88;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${src2}</span><span style="color:#9ca3af;font-size:11px;font-weight:600;">⏳ Pending</span>${prTag}</div></div>`
+        `<div style="font-family:system-ui,sans-serif;font-size:13px;min-width:190px;line-height:1.4;"><div style="font-weight:700;margin-bottom:3px;">${sn}</div><div style="color:#555;font-size:11px;">${sa}</div>${pRow}${eRow}<div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;"><span style="background:${routeColor}22;color:${routeColor};border:1px solid ${routeColor}88;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;">${src2}</span><span style="color:#9ca3af;font-size:11px;font-weight:600;">⏳ Pending</span>${prTag}</div>${confDiag}</div>`
       ).addTo(map);
     });
   }, [routeSplitsByCode]);
