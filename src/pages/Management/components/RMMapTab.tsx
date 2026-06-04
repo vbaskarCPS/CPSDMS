@@ -294,7 +294,10 @@ const isConfirmedBooking = (b: any): boolean => {
   for (const k of Object.keys(b)) {
     if (/note/i.test(k) && typeof b[k] === 'string') text += ' ' + b[k];
   }
-  return /conf/i.test(text);
+  // Match "conf" as a word or word-start: "conf", "Conf MBH", "CONFIRMED",
+  // "confirmed- interested" all pass; an embedded "conf" inside another word
+  // like "Confederation" or "conference" does NOT. \b is the word boundary.
+  return /\bconf/i.test(text);
 };
 
 const RC_TEAM_PATTERN = /^RC\d*$/;
