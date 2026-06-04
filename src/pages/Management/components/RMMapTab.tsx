@@ -2424,7 +2424,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       filter: ['==', ['get', 'confirmed'], true],
       layout: {
         'icon-image': 'rm-confirmed-check',
-        'icon-size': 1.5,
+        'icon-size': 2.0,
         'icon-offset': [2, -2],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
@@ -3371,8 +3371,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           kctx.lineTo(15, 3);
           kctx.stroke();
         };
-        drawCheck('#ffffff', 4);    // white halo underlay for contrast
-        drawCheck('#16a34a', 2.5);  // green check on top
+        drawCheck('#ffffff', 4.5);  // white halo underlay for contrast
+        drawCheck('#15803d', 3);    // darker green check on top
         const checkImg = kctx.getImageData(0, 0, checkSize, checkSize);
         if (!map.hasImage('rm-confirmed-check')) map.addImage('rm-confirmed-check', checkImg, { pixelRatio: 2 });
       }
