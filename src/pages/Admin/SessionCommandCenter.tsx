@@ -191,6 +191,18 @@ const SessionCommandCenter: React.FC = () => {
     setProductCostPercent(SEASON_CONFIGS[selectedSeasonType].defaultProductCostPercent);
   }, [selectedSeasonType]);
 
+  // Sealing picker defaults: Live Cards ON, No Tax on Cash OFF.
+  // Setup-only (no active session) so this never stomps a loaded session's saved
+  // toggles — those come from importMeta in loadSession. Fires each time the
+  // selector lands on sealing, so it's sticky to the season, not to last touch.
+  useEffect(() => {
+    if (currentSession) return; // live session — respect saved values
+    if (selectedSeasonType === 'sealing') {
+      setLiveCardEnabled(true);
+      setNoTaxOnCash(false);
+    }
+  }, [selectedSeasonType, currentSession]);
+
   // --- GOOGLE SHEETS STATE ---
   const [showFileUpload, setShowFileUpload] = useState(false);
   const [dateTab, setDateTab] = useState('');
