@@ -960,6 +960,7 @@ class GoogleSheetsService {
       upsellSplitPercent?: number;
       teamSize?: number;
       productCostPercent?: number;
+      crackfillerCost?: number;
     }>
   ): Promise<void> {
     if (stats.length === 0) return;
@@ -1009,6 +1010,7 @@ class GoogleSheetsService {
         s.equivSplitPercent ?? '',
         s.upsellSplitPercent ?? '',
         s.productCostPercent ?? '',
+        s.crackfillerCost ?? '',
       ];
     });
 

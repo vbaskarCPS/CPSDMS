@@ -38,6 +38,7 @@ import {
   TeamSplitConfig,
   SERVICE_FLAG_KEYS,
   SERVICE_FLAG_LABELS,
+  CRACKFILLER_RATE_PER_LB,
 } from '../../types';
 import EditTransactionModal from '../../components/EditTransactionModal';
 
@@ -172,6 +173,9 @@ const PayoutContractor: React.FC = () => {
 
   // No Tax on Cash flag (Rejuv + Sealing)
   const [noTaxOnCash, setNoTaxOnCash] = useState(false);
+
+  // Crackfiller pounds (Sealing only — team-level material cost off the EQ pool)
+  const [crackfillerPounds, setCrackfillerPounds] = useState('');
 
   // Cash/Cheque form state
   const [cashBills, setCashBills] = useState('');
@@ -319,6 +323,10 @@ const PayoutContractor: React.FC = () => {
             if (!isTeamSeasonType) {
               setMachineRental(foundSession.validation.machineRental);
             }
+            // Restore crackfiller pounds (sealing only)
+            if (foundSession.validation.crackfillerPounds !== undefined) {
+              setCrackfillerPounds(foundSession.validation.crackfillerPounds.toString());
+            }
           }
         }
       } catch (err) {
@@ -407,7 +415,14 @@ const PayoutContractor: React.FC = () => {
     ? (prodCashDiff + (prodChequeDiff / taxDivisor)) * productCostMultiplier / EQ_DIVISOR
     : ((prodCashDiff + prodChequeDiff) / taxDivisor) * productCostMultiplier / EQ_DIVISOR;
   
-  const actualTotalEQ = stats.totalEQ + deltaEQ;
+  // Crackfiller (Sealing only): blunt material cost off the EQ pool before split.
+  // Cost = pounds × $4, converted to EQ by the divisor only — no tax, no product cost.
+  const crackfillerCost = seasonType === 'sealing'
+    ? (parseFloat(crackfillerPounds) || 0) * CRACKFILLER_RATE_PER_LB
+    : 0;
+  const crackfillerEQ = crackfillerCost / EQ_DIVISOR;
+
+  const actualTotalEQ = stats.totalEQ + deltaEQ - crackfillerEQ;
 
   // 3. Season-aware Payout Rate
   // CHANGED: teamSize now derives from isTeamSeason (Rejuv + Sealing), not Rejuv only.
@@ -609,6 +624,8 @@ const PayoutContractor: React.FC = () => {
       // CHANGED: was isLawnRejuv — now isTeamSeason (Rejuv + Sealing).
       workerMachineRentals: isTeamSeason ? workerMachineRentals : undefined,
       workerDeductions: isTeamSeason ? workerDeductions : undefined,
+      // Crackfiller pounds (Sealing only) — persisted for payslip itemization.
+      crackfillerPounds: seasonType === 'sealing' ? (parseFloat(crackfillerPounds) || 0) : undefined,
     };
 
     try {
@@ -1253,6 +1270,44 @@ const PayoutContractor: React.FC = () => {
                   </span>
                 )}
               </div>
+
+              {/* CRACKFILLER (Sealing only) — team-level material cost off the EQ pool */}
+              {seasonType === 'sealing' && (
+                <div className="mb-4 bg-slate-900/40 border border-slate-600 rounded-lg p-4">
+                  <div className="flex items-center justify-between gap-4 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <Shovel size={18} className="text-slate-300" />
+                      <div>
+                        <label className="text-sm font-bold text-white block">Crackfiller Used</label>
+                        <span className="text-[11px] text-slate-400">
+                          ${CRACKFILLER_RATE_PER_LB.toFixed(2)}/lb — comes off the team EQ pool before splitting
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          value={crackfillerPounds}
+                          onChange={(e) => { setCrackfillerPounds(e.target.value); setIsModified(true); }}
+                          className="w-20 bg-gray-800 border border-slate-600 rounded px-2 py-1.5 text-white text-center"
+                          placeholder="0"
+                          min="0"
+                        />
+                        <span className="text-sm text-slate-400">lbs</span>
+                      </div>
+                      <div className="text-right border-l border-slate-700 pl-3">
+                        <div className="text-[10px] text-slate-500 uppercase font-bold">Cost</div>
+                        <div className="font-mono text-red-400 font-bold">−${crackfillerCost.toFixed(2)}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[10px] text-slate-500 uppercase font-bold">EQ Removed</div>
+                        <div className="font-mono text-blue-300 font-bold">−{crackfillerEQ.toFixed(2)}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Grid Header */}
               <div className="grid grid-cols-12 gap-2 text-[10px] text-gray-500 uppercase font-bold mb-2 px-2">

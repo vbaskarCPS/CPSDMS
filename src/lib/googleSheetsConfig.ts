@@ -140,8 +140,8 @@ export const DATE_TAB_COLUMNS = {
 // --- PAYOUT STATS COLUMN MAPPINGS ---
 // Matches the actual spreadsheet header: A-AH (34 columns)
 export const PAYOUT_STATS_COLUMNS = {
-  range: 'A:AH',
-  columnCount: 34,
+  range: 'A:AI',
+  columnCount: 35,
   mapping: {
     date: 0,              // A
     contractorId: 1,      // B
@@ -177,6 +177,7 @@ export const PAYOUT_STATS_COLUMNS = {
     deductions: 31,       // AF
     bonuses: 32,          // AG
     finalPay: 33,         // AH
+    crackfillerCost: 34,  // AI
   },
 };
 

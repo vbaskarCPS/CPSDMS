@@ -4,7 +4,7 @@ import { supabase } from './supabase';
 import { commandCenterService, seasonHasTeams, getSeasonConfig, getPayoutRate, createEqualSplit, EQ_DIVISOR } from './commandCenterService';
 import { sessionService } from './sessionService';
 import { googleSheetsService } from './googleSheetsService';
-import { LogsheetSession, Worker, ManagementUser, SeasonType, ServiceFlags, SessionTransaction } from '../types';
+import { LogsheetSession, Worker, ManagementUser, SeasonType, ServiceFlags, SessionTransaction, CRACKFILLER_RATE_PER_LB } from '../types';
 
 // Helper to get CC ID with error handling
 const getCCId = (): string => {
@@ -939,6 +939,11 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
           // NEW: Rejuv-specific columns
           teamSize: teamWorkerIds.length, equivSplitPercent: payout.equivSplitPercent,
           upsellSplitPercent: payout.upsellSplitPercent, productCostPercent: productCostPercent,
+          // Crackfiller (Sealing only): full job cost sliced by this worker's equiv
+          // share, so the column sums to the real cost and each payslip itemizes its part.
+          crackfillerCost: (seasonType === 'sealing'
+            ? (session.validation?.crackfillerPounds || 0) * CRACKFILLER_RATE_PER_LB
+            : 0) * equivPercent,
         });
       }
     }

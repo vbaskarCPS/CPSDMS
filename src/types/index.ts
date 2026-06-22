@@ -39,6 +39,11 @@ export const SERVICE_FLAG_LABELS: Record<keyof ServiceFlags, { short: string; fu
 // This divisor NEVER changes regardless of season
 export const EQ_DIVISOR = 25;
 
+// --- CRACKFILLER (Sealing season only) ---
+// Crackfiller is charged back at $4 per pound. The dollar cost is converted to
+// EQ via the standard EQ_DIVISOR and removed from the team pool before splitting.
+export const CRACKFILLER_RATE_PER_LB = 4;
+
 export interface CommandCenter {
   id: string;
   username: string;
@@ -268,6 +273,11 @@ export interface SessionValidation {
     // NEW: Per-worker overrides (lawn_rejuv teams)
     workerMachineRentals?: Record<string, boolean>;  // workerId -> has rental ($10 each)
     workerDeductions?: Record<string, number>;       // workerId -> custom deduction amount
+
+    // Crackfiller (Sealing only) — pounds used on the job. Cost = pounds × $4,
+    // converted to EQ and removed from the team pool before splitting. Persisted
+    // so reopening a finalised payout restores it (and payslips can itemize it).
+    crackfillerPounds?: number;
 }
 
 // --- TEAM SPLIT CONFIGURATION ---
