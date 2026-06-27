@@ -1,7 +1,7 @@
 // src/pages/Logsheet/NewJob.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap, Info, Shovel, Bookmark } from 'lucide-react';
+import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap, Info, Shovel, Droplets, Bookmark } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import { commandCenterService, getTaxRateForRegion, Region, seasonHasTeams } from '../../lib/commandCenterService';
 import { supabase } from '../../lib/supabase';
@@ -68,12 +68,14 @@ function isRC(teamId: string | undefined | null): boolean {
 // override — never picked manually in the UI).
 function getPropertyTypesForSeason(seasonType: SeasonType): string[] {
   if (seasonType === 'sealing') return ['SS', 'SSP'];
+  if (seasonType === 'cleaning') return ['WW', 'WW+'];
   return ['FP', 'FO', 'BO'];
 }
 
 // --- HELPER: Get the default property type for a given season ---
 function getDefaultPropertyTypeForSeason(seasonType: SeasonType): string {
   if (seasonType === 'sealing') return 'SS';
+  if (seasonType === 'cleaning') return 'WW';
   return 'FP';
 }
 
@@ -81,6 +83,7 @@ function getDefaultPropertyTypeForSeason(seasonType: SeasonType): string {
 function getItemNameForSeason(seasonType: SeasonType): string {
   if (seasonType === 'lawn_rejuv') return 'Lawn Rejuvenation';
   if (seasonType === 'sealing') return 'Sealing';
+  if (seasonType === 'cleaning') return 'Cleaning';
   return 'Aeration';
 }
 
@@ -89,6 +92,7 @@ function buildSeasonId(region: Region, seasonType: SeasonType): string {
   const regionSlug = region.toLowerCase();
   if (seasonType === 'lawn_rejuv') return `${regionSlug}-lawn-rejuv`;
   if (seasonType === 'sealing') return `${regionSlug}-sealing`;
+  if (seasonType === 'cleaning') return `${regionSlug}-cleaning`;
   return `${regionSlug}-aeration`;
 }
 
@@ -301,7 +305,7 @@ const NewJob: React.FC = () => {
   // --- COMPUTED FLAGS ---
   const canShowUpgradeButton = region === 'West' && seasonType === 'aeration';
   const propertyTypeOptions = getPropertyTypesForSeason(seasonType);
-  const seasonUsesPricingOnlyLabel = seasonType === 'lawn_rejuv' || seasonType === 'sealing';
+  const seasonUsesPricingOnlyLabel = seasonType === 'lawn_rejuv' || seasonType === 'sealing' || seasonType === 'cleaning';
   const isTeamSeason = seasonHasTeams(seasonType) && !isTrainingMode;
   const isSealingSeason = seasonType === 'sealing' && !isTrainingMode;
 
@@ -444,7 +448,7 @@ const NewJob: React.FC = () => {
           const currentSeasonType = await sessionService.getSessionSeasonType();
           setSeasonType(currentSeasonType);
           setPropertyType(getDefaultPropertyTypeForSeason(currentSeasonType));
-          if (currentSeasonType === 'lawn_rejuv' || currentSeasonType === 'sealing') {
+          if (currentSeasonType === 'lawn_rejuv' || currentSeasonType === 'sealing' || currentSeasonType === 'cleaning') {
             setAmount('0');
           }
         } catch (err) {
@@ -1220,6 +1224,11 @@ const NewJob: React.FC = () => {
             {seasonType === 'sealing' && (
               <span className="bg-slate-800 text-slate-300 text-[10px] px-1.5 py-0.5 rounded border border-slate-600 flex items-center gap-1">
                 <Shovel size={10}/> SEALING
+              </span>
+            )}
+            {seasonType === 'cleaning' && (
+              <span className="bg-cyan-900/30 text-cyan-300 text-[10px] px-1.5 py-0.5 rounded border border-cyan-700 flex items-center gap-1">
+                <Droplets size={10}/> CLEANING
               </span>
             )}
             {/* RC pill — shows when worker is on a Ramp Crew cart (sealing only) */}

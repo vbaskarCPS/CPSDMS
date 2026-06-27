@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Phone, Mail, X, CheckCircle2, Ban, Lock,
-  Loader, CheckCircle, FileText, TrendingUp, DollarSign, GraduationCap, Info, Shovel
+  Loader, CheckCircle, FileText, TrendingUp, DollarSign, GraduationCap, Info, Shovel, Droplets
 } from 'lucide-react';
 import { sessionService, AsphaltCompletionContext } from '../../lib/sessionService';
 import { trainingService } from '../../lib/trainingService';
@@ -68,12 +68,14 @@ function isRC(teamId: string | undefined | null): boolean {
 // TODO: When Central 'cleaning' season ships, add its property types here.
 function getPropertyTypesForSeason(seasonType: SeasonType): string[] {
   if (seasonType === 'sealing') return ['SS', 'SSP'];
+  if (seasonType === 'cleaning') return ['WW', 'WW+'];
   return ['FP', 'FO', 'BO'];
 }
 
 // --- HELPER: Get the default property type for a given season ---
 function getDefaultPropertyTypeForSeason(seasonType: SeasonType): string {
   if (seasonType === 'sealing') return 'SS';
+  if (seasonType === 'cleaning') return 'WW';
   return 'FP';
 }
 
@@ -850,6 +852,11 @@ const JobDetail: React.FC = () => {
                       <Shovel size={10}/> SEALING
                     </span>
                   )}
+                  {seasonType === 'cleaning' && (
+                    <span className="bg-cyan-900/30 text-cyan-300 text-[10px] px-1.5 py-0.5 rounded border border-cyan-700 flex items-center gap-1">
+                      <Droplets size={10}/> CLEANING
+                    </span>
+                  )}
                   {/* RC pill — sealing only, non-training. Drives Upsold field + self-both mode. */}
                   {isRampCrew && isSealingSeason && (
                     <span className="bg-amber-900/30 text-amber-300 text-[10px] px-1.5 py-0.5 rounded border border-amber-700">
@@ -933,7 +940,7 @@ const JobDetail: React.FC = () => {
            <div className={`bg-gray-900/30 p-4 rounded-lg border border-gray-700/50 ${isReadOnly ? 'opacity-75' : ''}`}>
                <div className="flex justify-between items-center mb-3">
                    <h3 className="text-sm font-bold text-gray-300 uppercase">
-                     {(seasonType === 'lawn_rejuv' || seasonType === 'sealing') ? 'Pricing' : 'Services & Pricing'}
+                   {(seasonType === 'lawn_rejuv' || seasonType === 'sealing' || seasonType === 'cleaning') ? 'Pricing' : 'Services & Pricing'}
                    </h3>
                    {isReadOnly && <span className="text-xs text-blue-300 flex items-center gap-1"><Lock size={10}/> Locked</span>}
                </div>
