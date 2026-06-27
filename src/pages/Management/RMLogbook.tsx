@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock,
-  Lock, Unlock, Leaf, CreditCard, Shovel, Bookmark, Navigation, History,
+  Lock, Unlock, Leaf, CreditCard, Shovel, Droplets, Bookmark, Navigation, History,
   CheckCircle2, MapPin as MapPinIcon,
 } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
@@ -184,6 +184,7 @@ const RMLogbook: React.FC = () => {
   const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
   const isLawnRejuv = seasonType === 'lawn_rejuv';
   const isSealing = seasonType === 'sealing';
+  const isCleaning = seasonType === 'cleaning';
   const isTeamSeason = seasonHasTeams(seasonType);
 
   const [pendingSalesByManager, setPendingSalesByManager] = useState<PendingSale[]>([]);
@@ -562,6 +563,12 @@ const RMLogbook: React.FC = () => {
               <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-600">
                 <Shovel size={10} />
                 Sealing
+              </span>
+            )}
+            {isCleaning && (
+              <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-cyan-900/30 text-cyan-300 border border-cyan-700/50">
+                <Droplets size={10} />
+                Cleaning
               </span>
             )}
           </div>

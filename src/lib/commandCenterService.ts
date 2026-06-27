@@ -83,11 +83,9 @@ export const regionHasUpgrades = (region: Region, seasonType?: SeasonType): bool
 // --- CHECK IF REGION SUPPORTS SEASON SELECTION ---
 // West shows: Aeration + Lawn Rejuv
 // East shows: Aeration + Sealing
-// Central shows: nothing (defaults silently to Aeration, no picker UI)
-// TODO: When 'cleaning' season is added for Central, flip Central to return true here
-//       and the SessionCommandCenter picker will render Aeration + Cleaning for Central CCs.
+// Central shows: Aeration + Window Cleaning
 export const regionHasSeasonSelection = (region: Region): boolean => {
-  return region === 'West' || region === 'East';
+  return region === 'West' || region === 'East' || region === 'Central';
 };
 
 // --- GET SEASON CONFIG ---
@@ -136,11 +134,9 @@ export const getBilledWeight = (seasonType: SeasonType): number => {
 
 // --- CHECK IF SEASON HAS TEAMS ---
 // Team seasons share a cart/logsheet across multiple workers (teamId field).
-// Currently: lawn_rejuv (West) + sealing (East).
-// TODO: When 'cleaning' season is added for Central, include it here too:
-//       return seasonType === 'lawn_rejuv' || seasonType === 'sealing' || seasonType === 'cleaning';
+// Currently: lawn_rejuv (West) + sealing (East) + cleaning (Central).
 export const seasonHasTeams = (seasonType: SeasonType): boolean => {
-  return seasonType === 'lawn_rejuv' || seasonType === 'sealing';
+  return seasonType === 'lawn_rejuv' || seasonType === 'sealing' || seasonType === 'cleaning';
 };
 
 // ============================================================================

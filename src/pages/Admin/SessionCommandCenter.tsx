@@ -23,6 +23,7 @@ import {
   Leaf,
   Wind,
   Shovel,
+  Droplets,
   Package,
   UserPlus,
   GraduationCap,
@@ -236,7 +237,7 @@ const SessionCommandCenter: React.FC = () => {
   // Today: lawn_rejuv (Rejuv) + sealing (Sealing) share these features.
   // TODO: When 'cleaning' season is added, include it here too if Cleaning has product cost.
   const seasonUsesProductCost = selectedSeasonType === 'lawn_rejuv' || selectedSeasonType === 'sealing';
-  const seasonUsesNoTaxOnCash = selectedSeasonType === 'lawn_rejuv' || selectedSeasonType === 'sealing';
+  const seasonUsesNoTaxOnCash = selectedSeasonType === 'lawn_rejuv' || selectedSeasonType === 'sealing' || selectedSeasonType === 'cleaning';
 
   // Load session function (memoized to avoid recreation)
   const loadSession = useCallback(async () => {
@@ -793,12 +794,14 @@ const SessionCommandCenter: React.FC = () => {
   const getSeasonBadgeClasses = (seasonType?: SeasonType): string => {
     if (seasonType === 'lawn_rejuv') return 'bg-green-900/30 text-green-400 border-green-700/50';
     if (seasonType === 'sealing') return 'bg-slate-800 text-slate-300 border-slate-600';
+    if (seasonType === 'cleaning') return 'bg-cyan-900/30 text-cyan-300 border-cyan-700/50';
     return 'bg-blue-900/30 text-blue-400 border-blue-700/50';
   };
 
   const getSeasonBadgeIcon = (seasonType?: SeasonType) => {
     if (seasonType === 'lawn_rejuv') return <Leaf size={12} />;
     if (seasonType === 'sealing') return <Shovel size={12} />;
+    if (seasonType === 'cleaning') return <Droplets size={12} />;
     return <Wind size={12} />;
   };
 
@@ -1058,7 +1061,23 @@ const SessionCommandCenter: React.FC = () => {
                                 </button>
                               )}
 
-                              {/* TODO: Central region Cleaning button goes here once coded */}
+                              {/* Central region: Window Cleaning button */}
+                              {currentCC.region === 'Central' && (
+                                <button
+                                  onClick={() => setSelectedSeasonType('cleaning')}
+                                  className={`p-4 rounded-lg border-2 transition-all flex flex-col items-center gap-2 ${
+                                    selectedSeasonType === 'cleaning'
+                                      ? 'border-cyan-400 bg-cyan-700/30 text-cyan-200'
+                                      : 'border-gray-600 bg-gray-900 text-gray-400 hover:border-gray-500'
+                                  }`}
+                                >
+                                  <Droplets size={24} className={selectedSeasonType === 'cleaning' ? 'text-cyan-300' : 'text-gray-500'} />
+                                  <span className="font-bold">Window Cleaning</span>
+                                  <span className="text-[10px] text-gray-500">
+                                    Teams • $7-9/EQ • No Flats • 50% Prepaid
+                                  </span>
+                                </button>
+                              )}
                             </div>
                             
                             {/* PRODUCT COST INPUT (Rejuv + Sealing) */}
@@ -1088,12 +1107,14 @@ const SessionCommandCenter: React.FC = () => {
                               </div>
                             )}
                             
-                            {/* Season Info Banner — 3-way branch */}
+                            {/* Season Info Banner — 4-way branch */}
                             <div className={`mt-3 p-3 rounded-lg border text-xs ${
                               selectedSeasonType === 'lawn_rejuv'
                                 ? 'bg-green-900/10 border-green-700/50 text-green-300'
                                 : selectedSeasonType === 'sealing'
                                 ? 'bg-slate-800/40 border-slate-600 text-slate-200'
+                                : selectedSeasonType === 'cleaning'
+                                ? 'bg-cyan-900/10 border-cyan-700/50 text-cyan-300'
                                 : 'bg-blue-900/10 border-blue-700/50 text-blue-300'
                             }`}>
                               <div className="font-bold mb-1">{seasonConfig.displayName}</div>
@@ -1112,6 +1133,13 @@ const SessionCommandCenter: React.FC = () => {
                                   <>
                                     <div>• Product Cost: {productCostPercent}% deduction</div>
                                     <div>• Property Types: SS, SSP</div>
+                                    <div>• No upgrades, no add-ons</div>
+                                  </>
+                                )}
+                                {selectedSeasonType === 'cleaning' && (
+                                  <>
+                                    <div>• Property Types: WW, WW+</div>
+                                    <div>• No product cost, no flats</div>
                                     <div>• No upgrades, no add-ons</div>
                                   </>
                                 )}

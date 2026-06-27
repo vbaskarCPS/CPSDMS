@@ -22,6 +22,7 @@ import {
   Trash2,
   Users,
   Shovel, // NEW: Sealing header badge icon
+  Droplets, // NEW: Window Cleaning header badge icon
 } from 'lucide-react';
 import { sessionService } from '../../lib/sessionService';
 import { 
@@ -838,6 +839,12 @@ const PayoutContractor: React.FC = () => {
                   <span className="px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-300 border border-slate-600 flex items-center gap-1">
                     <Shovel size={12} />
                     Sealing
+                  </span>
+                )}
+                {seasonType === 'cleaning' && (
+                  <span className="px-2 py-0.5 rounded text-xs bg-cyan-900/30 text-cyan-300 border border-cyan-700/50 flex items-center gap-1">
+                    <Droplets size={12} />
+                    Cleaning
                   </span>
                 )}
                 {seasonType === 'aeration' && (

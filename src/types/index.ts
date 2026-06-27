@@ -9,7 +9,7 @@ export type Region = 'West' | 'Central' | 'East';
 // Central: aeration (today) | cleaning (FUTURE — see TODO markers across codebase)
 // TODO: Add 'cleaning' season type for Central region when ready.
 //       Search the codebase for "TODO.*cleaning" to find every spot that needs updating.
-export type SeasonType = 'aeration' | 'lawn_rejuv' | 'sealing';
+export type SeasonType = 'aeration' | 'lawn_rejuv' | 'sealing' | 'cleaning';
 
 // --- SERVICE FLAGS (Lawn Rejuvenation) ---
 export interface ServiceFlags {
@@ -947,7 +947,23 @@ export const SEASON_CONFIGS: Record<SeasonType, SeasonConfig> = {
     hasUpgrades: false,
     availableAddOns: [],
   },
-  // TODO: Add 'cleaning' season config for Central region when ready.
-  //       Will likely need teams=true, its own pricing, and own property types.
-  //       Search "TODO.*cleaning" across the codebase to find every spot to update.
+  // --- WINDOW CLEANING SEASON (Central region only) ---
+  // Same team mechanics as Rejuv and Sealing. No upgrades, no add-ons, no office
+  // flats, no product cost. No-tax-on-cash toggle is available at session start.
+  // Property types in UI: WW, WW+ (wired in the worker job flow, not here).
+  cleaning: {
+    seasonType: 'cleaning',
+    displayName: 'Window Cleaning Season',
+    prepaidWeight: 0.5,
+    billedWeight: 0.5,
+    // Payout rates for cleaning: $7/EQ solo, $9/EQ for teams of 2+
+    // Final rate = base + alumniRate + silverRate
+    payoutRateSolo: 7,
+    payoutRateTeam: 9,
+    // No product cost deduction for cleaning
+    defaultProductCostPercent: 0,
+    officeFlats: [],
+    hasUpgrades: false,
+    availableAddOns: [],
+  },
 };
