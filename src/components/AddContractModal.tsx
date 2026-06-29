@@ -80,13 +80,15 @@ const CONTRACT_RECIPES: ContractRecipe[] = [
   // Central Add-Ons
   { id: 'window_washing', name: 'Window Washing', type: 'Add-On', region: 'Central', propertyTypes: [], hasIOS: true, badge: 'WW' },
   
-  // East Add-Ons
-  // CHANGED: added `seasonOnly: 'aeration'` to both East add-ons. Per spec,
-  // Sealing has zero add-ons. Without these flags, these would still appear in
-  // the picker during Sealing season because the filter loop only checks
-  // `seasonOnly` when it's set. Aeration behavior is unchanged.
-  { id: 'driveway_sealing', name: 'Driveway Sealing', type: 'Add-On', region: 'East', propertyTypes: ['SS', 'SSP'], hasIOS: true, badge: 'DWS', seasonOnly: 'aeration' },
-  { id: 'hot_asphalt', name: 'Hot Asphalt', type: 'Add-On', region: 'East', propertyTypes: [], hasIOS: true, badge: 'RAMP', seasonOnly: 'aeration' },
+  // East Add-Ons (Sealing season only)
+  // These two are sold through the normal Add Contract picker as ordinary
+  // add-ons (NOT upgrades, NOT the Ramp Crew production-asphalt workflow).
+  // They commission the standard add-on way: 10% of payable when paid, or a
+  // flat $5 to the cart when taken as IOS (Invoice On Site / prebooked).
+  // `seasonOnly: 'sealing'` makes them appear during Sealing and stay hidden
+  // in Aeration. hasIOS:true on both is what surfaces the $5 IOS payment path.
+  { id: 'driveway_sealing', name: 'Driveway Sealing', type: 'Add-On', region: 'East', propertyTypes: ['SS', 'SSP'], hasIOS: true, badge: 'DWS', seasonOnly: 'sealing' },
+  { id: 'hot_asphalt', name: 'Hot Asphalt', type: 'Add-On', region: 'East', propertyTypes: [], hasIOS: true, badge: 'RAMP', seasonOnly: 'sealing' },
 ];
 
 // Direct upgrade client data (for NewJob - no existing booking)
@@ -1018,13 +1020,13 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
                 </div>
               )}
               
-              {/* NEW: Season info banner for sealing. Sealing has no add-ons and
-                  no upgrades — banner explains the empty picker. */}
+              {/* Season info banner for sealing. Sealing has two add-ons
+                  (Driveway Sealing, Hot Asphalt) and no upgrades. */}
               {isSealingSeason && (
                 <div className="bg-slate-800 border border-slate-600 rounded-lg p-3 text-sm text-slate-300 flex items-center gap-2">
                   <Shovel size={16} />
                   <span>
-                    <strong>Sealing Season:</strong> Add-ons and upgrades are not available in this season.
+                    <strong>Sealing Season:</strong> Driveway Sealing and Hot Asphalt add-ons are available. No upgrades.
                   </span>
                 </div>
               )}
