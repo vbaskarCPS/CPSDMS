@@ -14,6 +14,9 @@ import {
   PayslipDayRow,
   ExtraItem,
   HiddenFields,
+  PayslipSeason,
+  sealantCostFor,
+  crackfillCostFor,
 } from '../../lib/payslipExport';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -25,6 +28,7 @@ interface WorkerSettings {
   travelPkg: number;
   extraDeductions: ExtraItem[];
   additions: ExtraItem[];
+  crackfillPct: number;   // sealing road-trip deduction: % of earned commission
   batchId: string;   // empty string = unassigned
 }
 
@@ -70,7 +74,7 @@ function tierHint(days: number): string {
 }
 
 function defaultSettings(): WorkerSettings {
-  return { is120Program: false, hotels: 0, advances: 0, travelPkg: 0, extraDeductions: [], additions: [], batchId: '' };
+  return { is120Program: false, hotels: 0, advances: 0, travelPkg: 0, extraDeductions: [], additions: [], crackfillPct: 0, batchId: '' };
 }
 
 function makeBatchId(): string {
@@ -87,6 +91,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
   const cc = commandCenterService.getCurrentCommandCenter();
 
   const [step, setStep] = useState<'setup' | 'workers'>('setup');
+  const [season, setSeason] = useState<PayslipSeason>('aeration');
   const [isGoogleConnected, setIsGoogleConnected] = useState(() => googleSheetsService.isAuthenticated());
   const [sheetsLoading, setSheetsLoading] = useState(false);
   const [statsLoading, setStatsLoading] = useState(false);
@@ -215,7 +220,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
     setStatsLoading(true);
     setError(null);
     try {
-      const rows = await googleSheetsService.readWorkerbookRange("'Payout Stats'!A:AH");
+      const rows = await googleSheetsService.readWorkerbookRange("'Payout Stats'!A:AM");
       setAllRows(rows);
       const dates = new Set<string>();
       for (let i = 1; i < rows.length; i++) {
@@ -397,6 +402,7 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
           cc.displayName,
           daysInRange,
           hiddenFields,
+          season,
           batch.name,
         );
       }
@@ -484,7 +490,8 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
     const hotelsVal = hiddenFields.hotels ? 0 : s.hotels;
     const advancesVal = hiddenFields.advances ? 0 : s.advances;
     const travelVal = hiddenFields.travelPkg ? 0 : s.travelPkg;
-    const totalDeductions = hotelsVal + advancesVal + travelVal +
+    const crackfillDed = season === 'sealing' ? r2(earnedComm * ((s.crackfillPct || 0) / 100)) : 0;
+    const totalDeductions = hotelsVal + advancesVal + travelVal + crackfillDed +
       s.extraDeductions.reduce((sum, d) => sum + d.amount, 0);
     const totalAdditions = s.additions.reduce((sum, a) => sum + a.amount, 0);
     return Math.round((gi - totalDeductions + totalAdditions) * 100) / 100;
@@ -568,6 +575,17 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
               <div className="relative"><span className={$}>$</span><input type="number" min="0" placeholder="0" value={s.travelPkg||''} onChange={e=>updateSetting(w.contractorId,'travelPkg',parseFloat(e.target.value)||0)} className={iCls}/></div>
             </div>
           )}
+          {/* Crackfill % — sealing only; deduction as % of earned commission */}
+          {season === 'sealing' && (
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <span className="text-xs text-gray-500">Crackfill</span>
+              <div className="relative">
+                <input type="number" min="0" placeholder="0" value={s.crackfillPct||''} onChange={e=>updateSetting(w.contractorId,'crackfillPct',parseFloat(e.target.value)||0)}
+                  className="bg-gray-900 border border-gray-600 rounded py-0.5 pl-1.5 pr-4 text-xs text-white w-16 focus:ring-1 focus:ring-blue-500 focus:outline-none"/>
+                <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 text-xs pointer-events-none">%</span>
+              </div>
+            </div>
+          )}
 
           {/* Batch dropdown */}
           <div className="flex items-center gap-1 flex-shrink-0">
@@ -623,6 +641,8 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
                     <th className="text-right py-1 pr-3 font-medium">Rate</th>
                     <th className="text-right py-1 pr-3 font-medium">Comm</th>
                     <th className="text-right py-1 pr-3 font-medium">Mach</th>
+                    {season === 'sealing' && <th className="text-right py-1 pr-3 font-medium">Sealant</th>}
+                    {season === 'sealing' && <th className="text-right py-1 pr-3 font-medium">Crackfill</th>}
                     <th className="text-right py-1 pr-3 font-medium">Labor Cost</th>
                     <th className="text-right py-1 font-medium">Bonus</th>
                     <th className="text-right py-1 pl-3 font-medium text-white">Total</th>
@@ -658,6 +678,8 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
                         </td>
                         <td className="py-1 pr-3 text-right">${d.aerComm.toFixed(2)}</td>
                         <td className="py-1 pr-3 text-right">{d.machRent ? `$${d.machRent}` : '—'}</td>
+                        {season === 'sealing' && <td className="py-1 pr-3 text-right">${sealantCostFor(d).toFixed(2)}</td>}
+                        {season === 'sealing' && <td className="py-1 pr-3 text-right">${crackfillCostFor(d).toFixed(2)}</td>}
                         <td className="py-1 pr-3 text-right">{d.deductions ? `$${d.deductions}` : '—'}</td>
                         <td className="py-1 text-right">{d.dailyBonus ? `$${d.dailyBonus}` : '—'}</td>
                         <td className="py-1 pl-3 text-right font-bold text-white">${d.totalPayout.toFixed(2)}</td>
@@ -750,6 +772,22 @@ const PayslipGenerator: React.FC<Props> = ({ onBack }) => {
                 <span>Connected · {availableDates.size} dates loaded from Payout Stats</span>
               </div>
               {renderCalendar()}
+              <div className="flex items-center justify-center gap-2">
+                <span className="text-xs text-gray-400 font-medium">Season type:</span>
+                {(['aeration', 'cleaning', 'sealing'] as PayslipSeason[]).map(opt => (
+                  <button
+                    key={opt}
+                    onClick={() => setSeason(opt)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold capitalize transition-colors border ${
+                      season === opt
+                        ? 'bg-green-600 border-green-500 text-white'
+                        : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                    }`}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
               <div className="flex justify-center">
                 <button onClick={handleLoadWorkers} disabled={!startDate || !endDate}
                   className="bg-green-600 hover:bg-green-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-8 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors">

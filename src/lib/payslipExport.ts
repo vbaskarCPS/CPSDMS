@@ -3,6 +3,8 @@ import jsPDF from 'jspdf';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+export type PayslipSeason = 'aeration' | 'cleaning' | 'sealing';
+
 export interface PayslipDayRow {
   date: string;
   manager: string;
@@ -16,6 +18,8 @@ export interface PayslipDayRow {
   deductions: number;
   dailyBonus: number;
   totalPayout: number;
+  indivGross: number;     // Payout Stats col P — worker's individual gross (post-split)
+  crackfillBase: number;  // Payout Stats col AM — crackfill base (× 4 = crackfill cost)
 }
 
 export interface ExtraItem {
@@ -35,6 +39,7 @@ export interface WorkerPayslipData {
   travelPkg: number;
   extraDeductions: ExtraItem[];
   additions: ExtraItem[];
+  crackfillPct: number;   // sealing road-trip deduction: % of earned commission
 }
 
 export interface WorkerPayslipUI {
@@ -54,9 +59,9 @@ export interface HiddenFields {
 
 const PS = {
   date: 0, contractorId: 1, firstName: 2, lastName: 3, manager: 4,
-  stepCount: 5, totalEQ: 17, totalPrepay: 25, payoutRate: 26,
+  stepCount: 5, indivGross: 15, totalEQ: 17, totalPrepay: 25, payoutRate: 26,
   aerComm: 27, upsellComm: 28, machRent: 30, deductions: 31,
-  dailyBonus: 32, totalPayout: 33,
+  dailyBonus: 32, totalPayout: 33, crackfillBase: 38,
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -82,6 +87,22 @@ function curr(v: number): string {
 
 function num2(v: number): string {
   return v.toFixed(2);
+}
+
+// ─── Sealing product-cost helpers (display-only — never touch pay) ────────────
+// Sealant cost = (worker's individual gross ÷ tax divisor) × 20%.
+//   East is the only sealing region; its tax rate is 13%, so the divisor is 1.13.
+// Crackfill cost = crackfill base (col AM) × 4.
+const SEALING_TAX_DIVISOR = 1.13;
+const SEALANT_NET_PCT     = 0.20;
+const CRACKFILL_MULT      = 4;
+
+export function sealantCostFor(d: PayslipDayRow): number {
+  return r2((d.indivGross / SEALING_TAX_DIVISOR) * SEALANT_NET_PCT);
+}
+
+export function crackfillCostFor(d: PayslipDayRow): number {
+  return r2(d.crackfillBase * CRACKFILL_MULT);
 }
 
 // ─── Parse Payout Stats (unchanged) ──────────────────────────────────────────
@@ -120,6 +141,8 @@ export function parsePayoutStatsRows(
       deductions:  Number(row[PS.deductions]) || 0,
       dailyBonus:  Number(row[PS.dailyBonus]) || 0,
       totalPayout: Number(row[PS.totalPayout])|| 0,
+      indivGross:    Number(row[PS.indivGross])    || 0,
+      crackfillBase: Number(row[PS.crackfillBase]) || 0,
     });
   }
 
@@ -156,19 +179,45 @@ interface ColDef {
   align: 'left' | 'center' | 'right';
 }
 
-const COLS: ColDef[] = [
-  { label: 'DATE',           w: 45,  color: '#CC0000', align: 'left'   },
-  { label: 'ROUTE\nMANAGER', w: 75,  color: '#CC0000', align: 'center' },
-  { label: 'AER\nSTEPS',     w: 45,  color: '#B6D7A8', align: 'right'  },
-  { label: 'EQUIV',          w: 45,  color: '#666666', align: 'right'  },
-  { label: 'TOTAL\nPREPAY',  w: 55,  color: '#666666', align: 'center' },
-  { label: 'PAYOUT\nRATE',   w: 45,  color: '#666666', align: 'center' },
-  { label: 'AER\nCOMM',      w: 45,  color: '#666666', align: 'right'  },
-  { label: 'MACH\nRENT',     w: 50,  color: '#CC0000', align: 'right'  },
-  { label: 'LABOR\nCOST',    w: 45,  color: '#CC0000', align: 'right'  },
-  { label: 'DAILY\nBONUS',   w: 45,  color: '#CC0000', align: 'right'  },
-  { label: 'TOTAL\nPAYOUT',  w: 81,  color: '#660000', align: 'right'  },
-];
+function buildCols(season: PayslipSeason): ColDef[] {
+  const stepsLabel =
+    season === 'sealing'  ? 'SE\nSTEPS' :
+    season === 'cleaning' ? 'CL\nSTEPS' :
+                            'AER\nSTEPS';
+
+  if (season === 'sealing') {
+    // 11 cols — TOTAL PREPAY + LABOR COST dropped, SEALANT + CRACKFILL added.
+    // Widths sum to 576 (50pt each for the two new cost columns).
+    return [
+      { label: 'DATE',           w: 45,  color: '#CC0000', align: 'left'   },
+      { label: 'ROUTE\nMANAGER', w: 75,  color: '#CC0000', align: 'center' },
+      { label: stepsLabel,       w: 45,  color: '#B6D7A8', align: 'right'  },
+      { label: 'EQUIV',          w: 45,  color: '#666666', align: 'right'  },
+      { label: 'PAYOUT\nRATE',   w: 45,  color: '#666666', align: 'center' },
+      { label: 'AER\nCOMM',      w: 45,  color: '#666666', align: 'right'  },
+      { label: 'MACH\nRENT',     w: 50,  color: '#CC0000', align: 'right'  },
+      { label: 'SEALANT',        w: 50,  color: '#666666', align: 'right'  },
+      { label: 'CRACKFILL',      w: 50,  color: '#666666', align: 'right'  },
+      { label: 'DAILY\nBONUS',   w: 45,  color: '#CC0000', align: 'right'  },
+      { label: 'TOTAL\nPAYOUT',  w: 81,  color: '#660000', align: 'right'  },
+    ];
+  }
+
+  // Aeration + Cleaning — original 11 cols; only the steps header changes.
+  return [
+    { label: 'DATE',           w: 45,  color: '#CC0000', align: 'left'   },
+    { label: 'ROUTE\nMANAGER', w: 75,  color: '#CC0000', align: 'center' },
+    { label: stepsLabel,       w: 45,  color: '#B6D7A8', align: 'right'  },
+    { label: 'EQUIV',          w: 45,  color: '#666666', align: 'right'  },
+    { label: 'TOTAL\nPREPAY',  w: 55,  color: '#666666', align: 'center' },
+    { label: 'PAYOUT\nRATE',   w: 45,  color: '#666666', align: 'center' },
+    { label: 'AER\nCOMM',      w: 45,  color: '#666666', align: 'right'  },
+    { label: 'MACH\nRENT',     w: 50,  color: '#CC0000', align: 'right'  },
+    { label: 'LABOR\nCOST',    w: 45,  color: '#CC0000', align: 'right'  },
+    { label: 'DAILY\nBONUS',   w: 45,  color: '#CC0000', align: 'right'  },
+    { label: 'TOTAL\nPAYOUT',  w: 81,  color: '#660000', align: 'right'  },
+  ];
+}
 
 // ─── PDF drawing helpers ──────────────────────────────────────────────────────
 
@@ -246,6 +295,7 @@ function renderSignOutList(
   startDate: string,
   endDate: string,
   hiddenFields: HiddenFields,
+  season: PayslipSeason,
   batchName?: string,
   pageHeight: number = PH,
 ) {
@@ -324,8 +374,11 @@ function renderSignOutList(
       const hotelsVal = hiddenFields.hotels ? 0 : w.hotels;
       const advancesVal = hiddenFields.advances ? 0 : w.advances;
       const travelVal = hiddenFields.travelPkg ? 0 : w.travelPkg;
+      const crackfillDed = season === 'sealing'
+        ? r2(earnedComm * ((w.crackfillPct || 0) / 100))
+        : 0;
       const finalPay = r2(
-        gi - hotelsVal - advancesVal - travelVal
+        gi - hotelsVal - advancesVal - travelVal - crackfillDed
         - w.extraDeductions.reduce((s, d) => s + d.amount, 0)
         + w.additions.reduce((s, a) => s + a.amount, 0)
       );
@@ -370,8 +423,11 @@ function drawPayslip(
   y: number,
   maxData: number,
   hiddenFields: HiddenFields,
+  season: PayslipSeason,
 ) {
   const x = ML;
+  const COLS = buildCols(season);
+  const isSealing = season === 'sealing';
 
   // ── Compute financials ──
   const earnedComm   = r2(worker.days.reduce((s, d) => s + d.totalPayout, 0));
@@ -381,8 +437,11 @@ function drawPayslip(
   const hotelsVal    = hiddenFields.hotels ? 0 : worker.hotels;
   const advancesVal  = hiddenFields.advances ? 0 : worker.advances;
   const travelVal    = hiddenFields.travelPkg ? 0 : worker.travelPkg;
+  const crackfillDed = isSealing
+    ? r2(earnedComm * ((worker.crackfillPct || 0) / 100))
+    : 0;
   const finalPay     = r2(
-    gi - hotelsVal - advancesVal - travelVal
+    gi - hotelsVal - advancesVal - travelVal - crackfillDed
     - worker.extraDeductions.reduce((s, d) => s + d.amount, 0)
     + worker.additions.reduce((s, a) => s + a.amount, 0)
   );
@@ -427,19 +486,33 @@ function drawPayslip(
     }
 
     if (d) {
-      const vals: { text: string; align: 'left' | 'center' | 'right' }[] = [
-        { text: fmtDate(d.date),     align: 'left'   },
-        { text: d.manager,           align: 'left'   },
-        { text: String(d.steps),     align: 'center' },
-        { text: num2(d.equiv),       align: 'right'  },
-        { text: d.totalPrepay ? curr(r2(d.totalPrepay)) : '', align: 'right' },
-        { text: String(d.payoutRate),align: 'center' },
-        { text: curr(r2(d.aerComm)), align: 'right'  },
-        { text: d.machRent ? curr(d.machRent) : '',     align: 'right' },
-        { text: d.deductions ? curr(d.deductions) : '', align: 'right' },
-        { text: d.dailyBonus ? curr(d.dailyBonus) : '', align: 'right' },
-        { text: curr(r2(d.totalPayout)), align: 'right' },
-      ];
+      const vals: { text: string; align: 'left' | 'center' | 'right' }[] = isSealing
+        ? [
+            { text: fmtDate(d.date),      align: 'left'   },
+            { text: d.manager,            align: 'left'   },
+            { text: String(d.steps),      align: 'center' },
+            { text: num2(d.equiv),        align: 'right'  },
+            { text: String(d.payoutRate), align: 'center' },
+            { text: curr(r2(d.aerComm)),  align: 'right'  },
+            { text: d.machRent ? curr(d.machRent) : '', align: 'right' },
+            { text: curr(sealantCostFor(d)),   align: 'right' },
+            { text: curr(crackfillCostFor(d)), align: 'right' },
+            { text: d.dailyBonus ? curr(d.dailyBonus) : '', align: 'right' },
+            { text: curr(r2(d.totalPayout)), align: 'right' },
+          ]
+        : [
+            { text: fmtDate(d.date),     align: 'left'   },
+            { text: d.manager,           align: 'left'   },
+            { text: String(d.steps),     align: 'center' },
+            { text: num2(d.equiv),       align: 'right'  },
+            { text: d.totalPrepay ? curr(r2(d.totalPrepay)) : '', align: 'right' },
+            { text: String(d.payoutRate),align: 'center' },
+            { text: curr(r2(d.aerComm)), align: 'right'  },
+            { text: d.machRent ? curr(d.machRent) : '',     align: 'right' },
+            { text: d.deductions ? curr(d.deductions) : '', align: 'right' },
+            { text: d.dailyBonus ? curr(d.dailyBonus) : '', align: 'right' },
+            { text: curr(r2(d.totalPayout)), align: 'right' },
+          ];
 
       let dx = x;
       vals.forEach((v, ci) => {
@@ -466,6 +539,7 @@ function drawPayslip(
   if (!hiddenFields.hotels)   rightRows.push({ label: 'Hotels',     value: hotelsVal,    isFinal: false });
   if (!hiddenFields.advances) rightRows.push({ label: 'Advances',   value: advancesVal,  isFinal: false });
   if (!hiddenFields.travelPkg)rightRows.push({ label: 'Travel Pkg', value: travelVal,    isFinal: false });
+  if (isSealing)              rightRows.push({ label: 'Crackfill',  value: crackfillDed, isFinal: false });
   rightRows.push({ label: 'Final Pay:', value: finalPay, isFinal: true });
 
   // Build left-side items. `kind` drives the printed colour + sign:
@@ -607,6 +681,7 @@ export async function generatePayslipsPDF(
   ccDisplayName: string,
   totalDaysInRange: number,
   hiddenFields: HiddenFields,
+  season: PayslipSeason,
   batchName?: string,
 ): Promise<void> {
   // Count summary rows (drives both block height and the per-page math).
@@ -614,6 +689,7 @@ export async function generatePayslipsPDF(
   if (!hiddenFields.hotels)    nSummary++;
   if (!hiddenFields.advances)  nSummary++;
   if (!hiddenFields.travelPkg) nSummary++;
+  if (season === 'sealing')    nSummary++;  // Crackfill deduction row
 
   // Pick rows-per-slip + paper size from the date-range tier.
   const { maxData, format, pageHeight } = chooseLayout(totalDaysInRange, nSummary);
@@ -625,7 +701,7 @@ export async function generatePayslipsPDF(
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format });
 
   // ── Sign-out list (first pages) ──
-  renderSignOutList(doc, workers, startDate, endDate, hiddenFields, batchName, pageHeight);
+  renderSignOutList(doc, workers, startDate, endDate, hiddenFields, season, batchName, pageHeight);
 
   // ── Payslips ──
   let y = MT;
@@ -638,7 +714,7 @@ export async function generatePayslipsPDF(
       onPage = 0;
     }
 
-    drawPayslip(doc, worker, y, maxData, hiddenFields);
+    drawPayslip(doc, worker, y, maxData, hiddenFields, season);
     y += blockH;
     onPage++;
   });
