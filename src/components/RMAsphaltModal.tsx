@@ -30,8 +30,9 @@
 //       sold it), instead of getUnassignedAsphaltForManager(managerId).
 //     - offers ALL RC carts in the command center as assign targets, not just
 //       the RC carts under managerId.
-//   A non-floater RM sees exactly the original behaviour — own team's asphalt,
-//   own RC carts. The branch is a single isFloater flag; everything else is shared.
+//   UPDATE: CC-wide is now the behaviour for EVERY RM, floater or not — every
+//   manager sees every unassigned asphalt row in the command center and can
+//   assign it to any RC cart. isFloater survives only as a header label.
 //
 // Service contract:
 //   - sessionService.getUnassignedAsphaltForManager(managerId)
@@ -164,12 +165,11 @@ const RMAsphaltModal: React.FC<RMAsphaltModalProps> = ({
   // fires when something actually happened (avoids spurious refreshes).
   const [assignedThisSession, setAssignedThisSession] = useState(0);
 
-  // --- HELPER: fetch the unassigned-asphalt queue for the current viewer. ---
-  // Floater → CC-wide (no args). Non-floater → scoped to this manager.
+  // --- HELPER: fetch the unassigned-asphalt queue. ---
+  // Always CC-wide: every RM sees every unassigned asphalt row in the command
+  // center. (The "ForFloater" name is historical — it is simply the CC-wide query.)
   const fetchUnassignedQueue = (): Promise<PendingSale[]> =>
-    isFloater
-      ? sessionService.getUnassignedAsphaltForFloater()
-      : sessionService.getUnassignedAsphaltForManager(managerId);
+    sessionService.getUnassignedAsphaltForFloater();
 
   // --- INITIAL FETCH ---
   const refreshAll = async () => {
@@ -220,10 +220,9 @@ const RMAsphaltModal: React.FC<RMAsphaltModalProps> = ({
   // the command center, so we DROP the assignedManagerId filter and keep only
   // the isRC(teamId) test. A non-floater keeps the original "my team only" filter.
   const assignableRcSessions: AssignableRcSession[] = useMemo(() => {
-    // 1. Filter workers: RC-shaped teamId, AND (for non-floaters) this manager's team.
-    const rcWorkers = workers.filter(w =>
-      isRC(w.teamId) && (isFloater || w.assignedManagerId === managerId)
-    );
+    // 1. Filter workers: any RC-shaped teamId in the command center. Every RM
+    //    can assign to every RC cart, not just their own.
+    const rcWorkers = workers.filter(w => isRC(w.teamId));
 
     if (rcWorkers.length === 0) return [];
 
@@ -271,7 +270,7 @@ const RMAsphaltModal: React.FC<RMAsphaltModalProps> = ({
       return safeA - safeB;
     });
     return result;
-  }, [workers, sessions, managerId, isFloater]);
+  }, [workers, sessions]);
 
   // --- DERIVE: cart-attribution lookup (sessionId → worker first+last name) ---
   // The asphalt child's session_id points to the SELLING cart's session.
@@ -396,16 +395,13 @@ const RMAsphaltModal: React.FC<RMAsphaltModalProps> = ({
             <div className="p-3 bg-amber-900/20 text-amber-300 border border-amber-700/60 rounded-md text-sm flex items-start gap-2">
               <Users size={16} className="mt-0.5 shrink-0" />
               <div className="flex-1">
-                <p className="font-bold mb-0.5">
-                  {isFloater
-                    ? 'No Ramp Crew sessions in the command center.'
-                    : 'No Ramp Crew sessions under your authority.'}
+              <p className="font-bold mb-0.5">
+                  No Ramp Crew sessions in the command center.
                 </p>
                 <p className="text-[11px] opacity-90">
                   Asphalt rows cannot be assigned until at least one cart with a teamId matching
-                  &quot;RC&quot;, &quot;RC1&quot;, &quot;RC2&quot;, etc. is set up
-                  {isFloater ? ' in this command center' : ' under your management'}.
-                  Contact your CC admin if this is unexpected.
+                  &quot;RC&quot;, &quot;RC1&quot;, &quot;RC2&quot;, etc. is set up in this
+                  command center. Contact your CC admin if this is unexpected.
                 </p>
               </div>
             </div>

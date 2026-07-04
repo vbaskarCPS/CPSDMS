@@ -191,6 +191,12 @@ const RMLogbook: React.FC = () => {
 
   const [showAsphaltModal, setShowAsphaltModal] = useState(false);
 
+  // CC-wide unassigned asphalt count for the header badge. Fetched, not derived:
+  // pendingSalesByManager only covers this RM's own workers, but the asphalt
+  // queue is command-center-wide, so the badge must match the modal's scope.
+  // Kept fresh by refreshData (realtime + 30s poll + the modal's onAssignmentChange).
+  const [unassignedAsphaltCount, setUnassignedAsphaltCount] = useState(0);
+
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const refreshData = async (overrideUser?: ManagementUser) => {
@@ -243,6 +249,21 @@ const RMLogbook: React.FC = () => {
             }
           } else {
             setPendingSalesByManager([]);
+          }
+
+          // CC-wide asphalt badge (sealing only) — same query the modal uses,
+          // so badge and modal always agree. The query already filters to
+          // unassigned rows for today.
+          if (sessionSeasonType === 'sealing') {
+            try {
+              const ccAsphalt = await sessionService.getUnassignedAsphaltForFloater();
+              setUnassignedAsphaltCount(ccAsphalt.length);
+            } catch (asphaltErr) {
+              console.warn('Failed to fetch CC-wide asphalt count:', asphaltErr);
+              // Keep the previous count rather than flashing to zero.
+            }
+          } else {
+            setUnassignedAsphaltCount(0);
           }
         } catch (err) {
           console.error('Failed to refresh RM Logbook data', err);
@@ -361,12 +382,6 @@ const RMLogbook: React.FC = () => {
       .map(w => w.contractorId);
   }, [dailyData, currentUser]);
 
-  const unassignedAsphaltCount = useMemo(() => {
-    if (!isSealing) return 0;
-    return pendingSalesByManager.filter(
-      ps => ps.saleType === 'asphalt' && !ps.assignedRcSessionId
-    ).length;
-  }, [pendingSalesByManager, isSealing]);
 
   useEffect(() => {
     if (!dailyData?.date || !currentUser) return;
