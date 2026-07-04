@@ -115,6 +115,23 @@ const mergePendingSalesForDisplay = (pendingSales: PendingSale[]): MasterBooking
   return result;
 };
 
+// --- MERGED PENDING FETCH ---
+// The cart's own parked sales live on session_id; asphalt ASSIGNED to this
+// session by an RM lives on assigned_rc_session_id. The dashboard needs both,
+// or an RC never sees their incoming asphalt queue. Dedupe by id because an
+// RC who sold asphalt themselves is auto-assigned to their own session, so
+// the same row appears in both lists. Incoming assignments go FIRST so the
+// RC's marching orders sit at the top of the pending list.
+const fetchPendingSalesWithAssignments = async (sessionId: string): Promise<PendingSale[]> => {
+  const [own, assigned] = await Promise.all([
+    sessionService.getPendingSalesForSession(sessionId),
+    sessionService.getAsphaltAssignmentsForSession(sessionId),
+  ]);
+  const ownIds = new Set(own.map(ps => ps.id));
+  const incoming = assigned.filter(ps => !ownIds.has(ps.id));
+  return [...incoming, ...own];
+};
+
 // Simple Toast Component
 const Toast: React.FC<{ message: string; show: boolean }> = ({ message, show }) => {
   if (!show) return null;
@@ -405,7 +422,7 @@ const Dashboard: React.FC = () => {
           // display cards (LogsheetJobCard renders the three asphalt visual states).
           if (seasonHasTeams(currentSeasonType) && session.id) {
             try {
-              const sales = await sessionService.getPendingSalesForSession(session.id);
+              const sales = await fetchPendingSalesWithAssignments(session.id);
               setPendingSales(sales);
             } catch (err) {
               console.warn('[Dashboard] Failed to load pending sales:', err);
@@ -534,7 +551,7 @@ const Dashboard: React.FC = () => {
   const handlePendingSalesRefresh = async () => {
     if (!activeSessionId || !isTeamSeason) return;
     try {
-      const sales = await sessionService.getPendingSalesForSession(activeSessionId);
+      const sales = await fetchPendingSalesWithAssignments(activeSessionId);
       setPendingSales(sales);
     } catch (err) {
       console.warn('[Dashboard] Failed to refresh pending sales:', err);
