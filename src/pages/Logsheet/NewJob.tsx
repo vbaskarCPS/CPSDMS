@@ -1656,7 +1656,15 @@ const NewJob: React.FC = () => {
       {showCreditModal && (
         liveCardEnabled ? (
           <BamboraLiveModal
-            amount={isSplitPayment ? splitAmounts.creditCard : amount}
+            amount={
+              isSplitPayment
+                ? splitAmounts.creditCard
+                // Asphalt on → charge the full collected total (D + A + U, mode-aware),
+                // matching the transaction price. Raw `amount` is driveway-only.
+                : asphaltEnabled
+                  ? computeAsphaltTotalCollected().toFixed(2)
+                  : amount
+            }
             clientName={`${firstName} ${lastName}`}
             onClose={() => setShowCreditModal(false)}
             onProcess={(details) => {
@@ -1680,7 +1688,14 @@ const NewJob: React.FC = () => {
           />
         ) : (
           <CreditCardModal
-            amount={isSplitPayment ? splitAmounts.creditCard : amount}
+            amount={
+              isSplitPayment
+                ? splitAmounts.creditCard
+                // Same fix as BamboraLiveModal above — asphalt-aware total, not driveway-only.
+                : asphaltEnabled
+                  ? computeAsphaltTotalCollected().toFixed(2)
+                  : amount
+            }
             clientName={`${firstName} ${lastName}`}
             onClose={() => setShowCreditModal(false)}
             onProcess={(details) => {
