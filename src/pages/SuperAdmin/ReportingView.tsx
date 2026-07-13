@@ -44,6 +44,7 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
 
   const [showWorkbookModal, setShowWorkbookModal] = useState(false);
   const [editingWorkbook, setEditingWorkbook] = useState<WorkbookConfig | null>(null);
+  const [editingDataDays, setEditingDataDays] = useState<Set<string> | undefined>(undefined);
 
   useEffect(() => {
     load();
@@ -74,6 +75,7 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
     setEditingWorkbook(
       wb.config || { id: '', label: wb.label, sheetId: wb.sheetId, dateRanges: [] }
     );
+    setEditingDataDays(wb.dataDays);
     setShowWorkbookModal(true);
   };
 
@@ -209,7 +211,7 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
                       </div>
                     </div>
                     <button
-                      onClick={() => { setEditingWorkbook(null); setShowWorkbookModal(true); }}
+                      onClick={() => { setEditingWorkbook(null); setEditingDataDays(undefined); setShowWorkbookModal(true); }}
                       className="bg-blue-700 hover:bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 transition-colors"
                       title="Add a standalone workbook (e.g. the CEO book)"
                     >
@@ -300,8 +302,9 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
 
       {showWorkbookModal && (
         <WorkbookModal
-          workbook={editingWorkbook}
-          onClose={() => setShowWorkbookModal(false)}
+        workbook={editingWorkbook}
+        preloadedDataDays={editingDataDays}
+        onClose={() => setShowWorkbookModal(false)}
           onSaved={() => {
             setShowWorkbookModal(false);
             load();
