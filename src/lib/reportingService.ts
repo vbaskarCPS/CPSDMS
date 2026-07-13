@@ -32,6 +32,7 @@ export interface WorkbookDateRange {
   season: SeasonType;
   taxRate: number;           // percent, e.g. 13
   productCostPercent: number; // percent, e.g. 20
+  nickname?: string;         // optional label for this range, e.g. "Q2 Aeration"
 }
 
 export interface WorkbookConfig {

@@ -75,6 +75,7 @@ interface Draft {
   season: SeasonType | null;
   taxRate: string;
   productCostPercent: string;
+  nickname: string;
 }
 
 const WorkbookModal: React.FC<WorkbookModalProps> = ({ workbook, preloadedDataDays, onClose, onSaved }) => {
@@ -186,7 +187,9 @@ const WorkbookModal: React.FC<WorkbookModalProps> = ({ workbook, preloadedDataDa
   // --- Day click: bracket a range by clicking start, then end (both lit days) ---
   const handleDayClick = (month: number, day: number) => {
     if (draft) return;               // finish the open range first
+    const key = `${month}-${day}`;
     if (regionForDay(month, day)) return;   // already inside a saved range
+    if (!dataDays.has(key)) return;         // endpoints must be data days
 
     setSelError(null);
 
@@ -204,7 +207,7 @@ const WorkbookModal: React.FC<WorkbookModalProps> = ({ workbook, preloadedDataDa
       return;
     }
 
-    setDraft({ editIndex: null, start, end, region: null, season: null, taxRate: '', productCostPercent: '' });
+    setDraft({ editIndex: null, start, end, region: null, season: null, taxRate: '', productCostPercent: '', nickname: '' });
     setSelStart(null);
   };
 
@@ -223,6 +226,7 @@ const WorkbookModal: React.FC<WorkbookModalProps> = ({ workbook, preloadedDataDa
       season: draft.season,
       taxRate: tax,
       productCostPercent: product,
+      nickname: draft.nickname.trim() || undefined,
     };
 
     if (draft.editIndex === null) {
@@ -246,6 +250,7 @@ const WorkbookModal: React.FC<WorkbookModalProps> = ({ workbook, preloadedDataDa
       editIndex: i, start: s, end: e,
       region: r.region, season: r.season,
       taxRate: String(r.taxRate), productCostPercent: String(r.productCostPercent),
+      nickname: r.nickname || '',
     });
   };
 
@@ -302,7 +307,7 @@ const WorkbookModal: React.FC<WorkbookModalProps> = ({ workbook, preloadedDataDa
             else if (isSelStart) cls = 'bg-teal-400 text-gray-900 font-bold';
             else if (isData) cls = 'bg-teal-600/70 text-white font-semibold';
 
-            const clickable = !draft && !region;
+            const clickable = !draft && isData && !region;
 
             return (
               <div
@@ -423,6 +428,17 @@ const WorkbookModal: React.FC<WorkbookModalProps> = ({ workbook, preloadedDataDa
                   </div>
 
                   <div>
+                    <label className="block text-xs font-medium text-gray-400 mb-1">Nickname <span className="text-gray-600">(optional)</span></label>
+                    <input
+                      type="text"
+                      value={draft.nickname}
+                      onChange={(e) => setDraft({ ...draft, nickname: e.target.value })}
+                      placeholder="e.g. Q2 Aeration"
+                      className="w-full bg-gray-800 border border-gray-600 rounded-lg py-2 px-3 text-white focus:ring-2 focus:ring-teal-500 focus:outline-none text-sm"
+                    />
+                  </div>
+
+                  <div>
                     <label className="block text-xs font-medium text-gray-400 mb-1">Region</label>
                     <div className="grid grid-cols-3 gap-2">
                       {REGIONS.map((r) => (
@@ -497,6 +513,7 @@ const WorkbookModal: React.FC<WorkbookModalProps> = ({ workbook, preloadedDataDa
                       <div key={`${r.startTab}-${r.endTab}-${i}`} className="flex items-center gap-3 bg-gray-900 rounded-lg border border-gray-700 px-3 py-2 text-sm">
                         <span className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${REGION_STYLES[r.region].dot}`} />
                         <span className="font-medium text-gray-200 w-28">{r.startTab} – {r.endTab}</span>
+                        {r.nickname && <span className="text-xs text-teal-300 italic">{r.nickname}</span>}
                         <span className={`text-xs ${REGION_STYLES[r.region].text}`}>{r.region}</span>
                         <span className="text-xs text-gray-400">{seasonLabel(r.season)}</span>
                         <span className="text-xs text-gray-500 ml-auto">tax {r.taxRate}% · prod {r.productCostPercent}%</span>

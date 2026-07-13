@@ -46,7 +46,11 @@ export interface RegionSeasonSlice {
   season: SeasonType;
   own: number;       // from this city's own workers
   external: number;  // from other cities' workers
-  amount: number;    // own + external
+  amount: number;    // own + external (= payable)
+  gross: number;
+  afterTax: number;
+  taxRate: number | null;      // consistent rate across contributing ranges, or null if mixed
+  productRate: number | null;
 }
 
 export interface DayStack {
@@ -112,7 +116,7 @@ export function computePayableCitySales(
     total: number;
     gross: number;
     contributors: Map<string, number>;
-    regionSeason: Map<string, { own: number; external: number }>;
+    regionSeason: Map<string, { own: number; external: number; gross: number; afterTax: number; taxRate: number | null | undefined; productRate: number | null | undefined }>;
     days: Map<string, Map<string, number>>;
   }
   const acc = new Map<string, Acc>();
@@ -171,13 +175,18 @@ export function computePayableCitySales(
         if (pct <= 0) continue;
         const amt = payable * pct;
         const grossShare = gross * pct;
+        const afterTaxShare = afterTax * pct;
         const a = ensure(share.city);
         const isOwn = share.city === sellingCity.name;
         a.total += amt;
         a.gross += grossShare;
         a.contributors.set(sellingCity.name, (a.contributors.get(sellingCity.name) || 0) + amt);
-        const rs = a.regionSeason.get(rsKey) || { own: 0, external: 0 };
+        const rs = a.regionSeason.get(rsKey) || { own: 0, external: 0, gross: 0, afterTax: 0, taxRate: undefined, productRate: undefined };
         if (isOwn) rs.own += amt; else rs.external += amt;
+        rs.gross += grossShare;
+        rs.afterTax += afterTaxShare;
+        rs.taxRate = rs.taxRate === undefined ? taxRate : (rs.taxRate === taxRate ? rs.taxRate : null);
+        rs.productRate = rs.productRate === undefined ? productCostPercent : (rs.productRate === productCostPercent ? rs.productRate : null);
         a.regionSeason.set(rsKey, rs);
         let dayMap = a.days.get(row.date);
         if (!dayMap) { dayMap = new Map(); a.days.set(row.date, dayMap); }
@@ -200,7 +209,13 @@ export function computePayableCitySales(
       ? Array.from(a.regionSeason.entries())
           .map(([key, v]) => {
             const [region, season] = key.split('|') as [Region, SeasonType];
-            return { region, season, own: v.own, external: v.external, amount: v.own + v.external };
+            return {
+              region, season,
+              own: v.own, external: v.external, amount: v.own + v.external,
+              gross: v.gross, afterTax: v.afterTax,
+              taxRate: v.taxRate ?? null,
+              productRate: v.productRate ?? null,
+            };
           })
           .sort((x, y) => y.amount - x.amount)
       : [];

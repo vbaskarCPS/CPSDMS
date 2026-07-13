@@ -231,6 +231,19 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                             <span className="text-teal-300">Own workers {money(rs.own)}</span>
                             <span className="text-blue-300">External {money(rs.external)}</span>
                           </div>
+                          <div className="mt-2 pt-2 border-t border-gray-800 text-[11px] space-y-0.5 pl-4">
+                            <div className="flex justify-between text-gray-500"><span>Gross</span><span>{money(rs.gross)}</span></div>
+                            <div className="flex justify-between text-gray-500">
+                              <span>less {rs.taxRate != null ? `${rs.taxRate}% tax` : 'tax (rate varies)'}</span>
+                              <span>-{money(rs.gross - rs.afterTax)}</span>
+                            </div>
+                            <div className="flex justify-between text-gray-400"><span>after tax</span><span>{money(rs.afterTax)}</span></div>
+                            <div className="flex justify-between text-gray-500">
+                              <span>less {rs.productRate != null ? `${rs.productRate}% product cost` : 'product cost (rate varies)'}</span>
+                              <span>-{money(rs.afterTax - rs.amount)}</span>
+                            </div>
+                            <div className="flex justify-between text-teal-300 font-medium"><span>payable</span><span>{money(rs.amount)}</span></div>
+                          </div>
                         </div>
                       ))}
                     </div>
