@@ -14,13 +14,14 @@ import {
   Layers,
   Cloud,
 } from 'lucide-react';
-import { PayableCity, WorkbookConfig } from '../../lib/reportingService';
+import { reportingService, PayableCity, WorkbookConfig } from '../../lib/reportingService';
 import {
   loadReportData,
   LoadedWorkbook,
   GoogleAuthCancelledError,
 } from '../../lib/reportDataLoader';
 import WorkbookModal from './WorkbookModal';
+import CitiesModal from './CitiesModal';
 
 interface ReportingViewProps {
   onBack: () => void;
@@ -71,6 +72,16 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
   // Open the workbook editor. For a command-center book with no saved config yet,
   // hand the modal a synthetic config (no id) so it prefills the sheet + label and
   // saves as a new config on first use.
+  const [showCitiesModal, setShowCitiesModal] = useState(false);
+
+  const reloadCities = async () => {
+    try {
+      setCities(await reportingService.getPayableCities());
+    } catch {
+      // non-fatal; the card just keeps its current list
+    }
+  };
+
   const openWorkbook = (wb: LoadedWorkbook) => {
     setEditingWorkbook(
       wb.config || { id: '', label: wb.label, sheetId: wb.sheetId, dateRanges: [] }
@@ -267,14 +278,17 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
                         </p>
                       </div>
                     </div>
-                    <button
-                      disabled
-                      title="Wired in the next step"
-                      className="bg-gray-700 text-gray-500 px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 cursor-not-allowed"
-                    >
-                      <Plus size={14} />
-                      Manage
-                    </button>
+                    {showWorkbookModal && (
+        <WorkbookModal
+          workbook={editingWorkbook}
+          preloadedDataDays={editingDataDays}
+          onClose={() => setShowWorkbookModal(false)}
+          onSaved={() => {
+            setShowWorkbookModal(false);
+            load();
+          }}
+        />
+      )}
                   </div>
 
                   {cities.length === 0 ? (
