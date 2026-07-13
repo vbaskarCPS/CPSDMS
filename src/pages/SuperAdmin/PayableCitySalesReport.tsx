@@ -4,7 +4,7 @@ import { X, MapPin, TrendingUp, AlertTriangle, Check } from 'lucide-react';
 import { LoadedWorkbook } from '../../lib/reportDataLoader';
 import { PayableCity } from '../../lib/reportingService';
 import { computePayableCitySales, CitySales } from '../../lib/payableCitySales';
-import { SeasonType } from '../../types';
+import { SeasonType, Region } from '../../types';
 
 interface Props {
   workbooks: LoadedWorkbook[];
@@ -22,6 +22,16 @@ const SEASON_LABELS: Record<SeasonType, string> = {
 const PALETTE = ['#3b82f6', '#22c55e', '#f97316', '#a855f7', '#eab308', '#ec4899', '#14b8a6', '#ef4444', '#6366f1'];
 
 const money = (n: number) => '$' + Math.round(n).toLocaleString();
+
+const REGIONS: Region[] = ['West', 'Central', 'East'];
+const REGION_DOT: Record<Region, string> = { West: 'bg-blue-500', Central: 'bg-green-500', East: 'bg-orange-500' };
+
+// Sum a city's region+season slices down to a per-region total.
+const regionTotals = (city: CitySales): Record<Region, number> => {
+  const m: Record<Region, number> = { West: 0, Central: 0, East: 0 };
+  city.regionSeason.forEach((rs) => { m[rs.region] = (m[rs.region] || 0) + rs.amount; });
+  return m;
+};
 
 const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
   const result = useMemo(() => computePayableCitySales(workbooks, cities), [workbooks, cities]);
@@ -68,25 +78,44 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
         </div>
       )}
 
-      {/* CITY CARDS */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-        {result.cities.map((city) => (
-          <button
-            key={city.cityName}
-            onClick={() => setSelected(city)}
-            className="bg-gray-800 rounded-xl border border-gray-700 p-4 text-left hover:border-gray-600 transition-colors"
-          >
-            <div className="flex items-center gap-2 mb-1">
-              <MapPin size={14} className="text-purple-400 flex-shrink-0" />
-              <span className="font-bold text-white truncate">{city.cityName}</span>
-              {!city.isConfigured && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 flex-shrink-0" title="Referenced in a split but not a configured city">unlisted</span>
-              )}
-            </div>
-            <div className="text-2xl font-bold text-teal-300">{money(city.total)}</div>
-            <div className="text-[11px] text-gray-500 mt-1">tap for breakdown</div>
-          </button>
-        ))}
+      {/* CITY CARDS — wide, with region breakdown on the card face */}
+      <div className="space-y-3">
+        {result.cities.map((city) => {
+          const rt = regionTotals(city);
+          return (
+            <button
+              key={city.cityName}
+              onClick={() => setSelected(city)}
+              className="w-full bg-gray-800 rounded-xl border border-gray-700 p-5 text-left hover:border-gray-600 transition-colors flex flex-col sm:flex-row sm:items-center gap-5"
+            >
+              {/* Name + total */}
+              <div className="sm:w-56 flex-shrink-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <MapPin size={16} className="text-purple-400 flex-shrink-0" />
+                  <span className="font-bold text-white text-lg truncate">{city.cityName}</span>
+                  {!city.isConfigured && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 flex-shrink-0" title="Referenced in a split but not a configured city">unlisted</span>
+                  )}
+                </div>
+                <div className="text-3xl font-bold text-teal-300">{money(city.total)}</div>
+                <div className="text-[11px] text-gray-500 mt-1">tap for full breakdown</div>
+              </div>
+
+              {/* Region breakdown */}
+              <div className="flex-1 grid grid-cols-3 gap-3">
+                {REGIONS.map((r) => (
+                  <div key={r} className="bg-gray-900 rounded-lg border border-gray-700 p-3">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[r]}`} />
+                      <span className="text-xs text-gray-400">{r}</span>
+                    </div>
+                    <div className="text-lg font-semibold text-gray-200">{money(rt[r])}</div>
+                  </div>
+                ))}
+              </div>
+            </button>
+          );
+        })}
       </div>
 
       {/* BREAKDOWN MODAL */}
