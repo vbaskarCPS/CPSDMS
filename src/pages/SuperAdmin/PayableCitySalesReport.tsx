@@ -22,7 +22,7 @@ const REGIONS: Region[] = ['West', 'Central', 'East'];
 const REGION_DOT: Record<Region, string> = { West: 'bg-blue-500', Central: 'bg-green-500', East: 'bg-orange-500' };
 
 // Stable palette for chart segments.
-const PALETTE = ['#3b82f6', '#22c55e', '#f97316', '#a855f7', '#eab308', '#ec4899', '#14b8a6', '#ef4444', '#6366f1', '#f59e0b', '#10b981', '#8b5cf6'];
+const PALETTE = ['#3b82f6', '#f97316', '#22c55e', '#e11d48', '#a855f7', '#eab308', '#06b6d4', '#ec4899', '#84cc16', '#f43f5e', '#8b5cf6', '#14b8a6'];
 
 const money = (n: number) => '$' + Math.round(n).toLocaleString();
 
