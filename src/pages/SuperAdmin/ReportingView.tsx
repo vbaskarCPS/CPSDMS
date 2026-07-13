@@ -46,6 +46,7 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
   const [showWorkbookModal, setShowWorkbookModal] = useState(false);
   const [editingWorkbook, setEditingWorkbook] = useState<WorkbookConfig | null>(null);
   const [editingDataDays, setEditingDataDays] = useState<Set<string> | undefined>(undefined);
+  const [showCitiesModal, setShowCitiesModal] = useState(false);
 
   useEffect(() => {
     load();
@@ -69,11 +70,6 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
     }
   };
 
-  // Open the workbook editor. For a command-center book with no saved config yet,
-  // hand the modal a synthetic config (no id) so it prefills the sheet + label and
-  // saves as a new config on first use.
-  const [showCitiesModal, setShowCitiesModal] = useState(false);
-
   const reloadCities = async () => {
     try {
       setCities(await reportingService.getPayableCities());
@@ -82,6 +78,9 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
     }
   };
 
+  // Open the workbook editor. For a command-center book with no saved config yet,
+  // hand the modal a synthetic config (no id) so it prefills the sheet + label and
+  // saves as a new config on first use.
   const openWorkbook = (wb: LoadedWorkbook) => {
     setEditingWorkbook(
       wb.config || { id: '', label: wb.label, sheetId: wb.sheetId, dateRanges: [] }
@@ -278,17 +277,13 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
                         </p>
                       </div>
                     </div>
-                    {showWorkbookModal && (
-        <WorkbookModal
-          workbook={editingWorkbook}
-          preloadedDataDays={editingDataDays}
-          onClose={() => setShowWorkbookModal(false)}
-          onSaved={() => {
-            setShowWorkbookModal(false);
-            load();
-          }}
-        />
-      )}
+                    <button
+                      onClick={() => setShowCitiesModal(true)}
+                      className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 transition-colors"
+                    >
+                      <Plus size={14} />
+                      Manage
+                    </button>
                   </div>
 
                   {cities.length === 0 ? (
@@ -316,13 +311,20 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
 
       {showWorkbookModal && (
         <WorkbookModal
-        workbook={editingWorkbook}
-        preloadedDataDays={editingDataDays}
-        onClose={() => setShowWorkbookModal(false)}
+          workbook={editingWorkbook}
+          preloadedDataDays={editingDataDays}
+          onClose={() => setShowWorkbookModal(false)}
           onSaved={() => {
             setShowWorkbookModal(false);
             load();
           }}
+        />
+      )}
+
+      {showCitiesModal && (
+        <CitiesModal
+          onClose={() => setShowCitiesModal(false)}
+          onChanged={reloadCities}
         />
       )}
     </div>
