@@ -149,9 +149,9 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
 
   // --- READY ---
   return (
-    <div className="min-h-screen bg-gray-900 text-white flex flex-col">
+    <div className="h-screen overflow-y-auto bg-gray-900 text-white">
       {/* HEADER */}
-      <div className="bg-gray-800 border-b border-gray-700 px-6 py-4 flex-shrink-0">
+      <div className="bg-gray-800 border-b border-gray-700 px-6 py-4 sticky top-0 z-20">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors p-1" title="Back">
