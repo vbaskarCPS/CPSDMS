@@ -23,6 +23,7 @@ import {
 } from '../../lib/reportDataLoader';
 import WorkbookModal from './WorkbookModal';
 import CitiesModal from './CitiesModal';
+import PayableCitySalesReport from './PayableCitySalesReport';
 
 interface ReportingViewProps {
   onBack: () => void;
@@ -307,6 +308,8 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
                   )}
                 </div>
               </div>
+
+              <PayableCitySalesReport workbooks={workbooks} cities={cities} />
             </div>
           )}
         </div>
