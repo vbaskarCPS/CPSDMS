@@ -401,6 +401,18 @@ class GoogleSheetsService {
   }
 
   /**
+   * Read a range from an ARBITRARY spreadsheet by its ID — not tied to the
+   * current command center context. Used by the Reporting tools to read Payout
+   * Stats from workbooks configured independently of any CC. Requires an
+   * authenticated session (call authenticate() first).
+   * @param sheetId - the Google Sheet ID
+   * @param range - A1 notation, e.g. "'Payout Stats'!A:A"
+   */
+  public async readRangeById(sheetId: string, range: string): Promise<any[][]> {
+    return this.sheetsGet(sheetId, range);
+  }
+
+  /**
    * Get the numeric sheet ID for a named tab in the Masterbookings spreadsheet.
    */
   public async getMasterbookingsTabSheetId(tabName: string): Promise<number | null> {

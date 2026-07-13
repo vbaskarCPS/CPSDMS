@@ -26,6 +26,7 @@ import {
   CreditCard,
   BookOpen,
   Zap,
+  BarChart3,
 } from 'lucide-react';
 import {
   commandCenterService,
@@ -38,6 +39,7 @@ import { supabase } from '../../lib/supabase';
 import { removeStorageItem } from '../../lib/localStorage';
 import BamboraTestModal from './BamboraTestModal';
 import RouteFinderV2View from '../../components/RouteFinder/RouteFinderV2View';
+import ReportingView from './ReportingView';
 
 const REGIONS: Region[] = ['West', 'Central', 'East'];
 
@@ -54,6 +56,7 @@ const CommandCenterCreator: React.FC = () => {
 
   const [showBamboraTest, setShowBamboraTest] = useState(false);
   const [showRouteFinder, setShowRouteFinder] = useState(false);
+  const [showReporting, setShowReporting] = useState(false);
   
   const [formData, setFormData] = useState({
     displayName: '',
@@ -611,6 +614,14 @@ const CommandCenterCreator: React.FC = () => {
             <CreditCard size={20} />
             Live Card Testing
           </button>
+
+          <button
+            onClick={() => setShowReporting(true)}
+            className="bg-teal-700 hover:bg-teal-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
+          >
+            <BarChart3 size={20} />
+            Reporting
+          </button>
         </div>
 
         {loading ? (
@@ -997,9 +1008,15 @@ const CommandCenterCreator: React.FC = () => {
         <BamboraTestModal onClose={() => setShowBamboraTest(false)} />
       )}
 
-      {showRouteFinder && (
+{showRouteFinder && (
         <div className="fixed inset-0 z-50">
           <RouteFinderV2View onBack={() => setShowRouteFinder(false)} />
+        </div>
+      )}
+
+      {showReporting && (
+        <div className="fixed inset-0 z-50">
+          <ReportingView onBack={() => setShowReporting(false)} />
         </div>
       )}
     </div>
