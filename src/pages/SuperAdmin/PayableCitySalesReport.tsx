@@ -1,6 +1,6 @@
 // src/pages/SuperAdmin/PayableCitySalesReport.tsx
 import React, { useMemo, useState } from 'react';
-import { X, MapPin, TrendingUp, AlertTriangle, Check, Sheet } from 'lucide-react';
+import { X, MapPin, TrendingUp, AlertTriangle, Check, Tag } from 'lucide-react';
 import { LoadedWorkbook } from '../../lib/reportDataLoader';
 import { PayableCity } from '../../lib/reportingService';
 import { computePayableCitySales, CitySales } from '../../lib/payableCitySales';
@@ -18,31 +18,44 @@ const SEASON_LABELS: Record<SeasonType, string> = {
   cleaning: 'Window Cleaning',
 };
 
-// Stable palette for workbook segments in the chart.
-const PALETTE = ['#3b82f6', '#22c55e', '#f97316', '#a855f7', '#eab308', '#ec4899', '#14b8a6', '#ef4444', '#6366f1'];
-
-const money = (n: number) => '$' + Math.round(n).toLocaleString();
-
 const REGIONS: Region[] = ['West', 'Central', 'East'];
 const REGION_DOT: Record<Region, string> = { West: 'bg-blue-500', Central: 'bg-green-500', East: 'bg-orange-500' };
 
-// Sum a city's region+season slices down to a per-region total.
+// Stable palette for chart segments.
+const PALETTE = ['#3b82f6', '#22c55e', '#f97316', '#a855f7', '#eab308', '#ec4899', '#14b8a6', '#ef4444', '#6366f1', '#f59e0b', '#10b981', '#8b5cf6'];
+
+const money = (n: number) => '$' + Math.round(n).toLocaleString();
+
 const regionTotals = (city: CitySales): Record<Region, number> => {
   const m: Record<Region, number> = { West: 0, Central: 0, East: 0 };
   city.regionSeason.forEach((rs) => { m[rs.region] = (m[rs.region] || 0) + rs.amount; });
   return m;
 };
 
+// Display label for a nickname/range: the nickname, or "Region Season".
+const rangeLabel = (nickname: string | undefined, region: Region, season: SeasonType) =>
+  nickname || `${region} ${SEASON_LABELS[season] || season}`;
+
 const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
   const result = useMemo(() => computePayableCitySales(workbooks, cities), [workbooks, cities]);
   const [selected, setSelected] = useState<CitySales | null>(null);
 
-  // Stable workbook -> colour map so a workbook is the same colour across every city.
+  // Flatten every range across workbooks into one card each (nicknames are individual).
+  const nicknameCards = useMemo(() => {
+    const cards = result.workbookBreakdown.flatMap((wb) =>
+      wb.ranges.map((r) => ({ ...r, workbook: wb.label }))
+    );
+    return cards.sort((a, b) => b.payable - a.payable);
+  }, [result]);
+
+  // Stable colour per day-chart segment key (nickname / region-season), across all cities.
   const colorFor = useMemo(() => {
+    const keys = new Set<string>();
+    result.cities.forEach((c) => c.days.forEach((d) => d.segments.forEach((s) => keys.add(s.key))));
     const m = new Map<string, string>();
-    result.workbookLabels.forEach((label, i) => m.set(label, PALETTE[i % PALETTE.length]));
-    return (label: string) => m.get(label) || '#6b7280';
-  }, [result.workbookLabels]);
+    Array.from(keys).sort().forEach((k, i) => m.set(k, PALETTE[i % PALETTE.length]));
+    return (key: string) => m.get(key) || '#6b7280';
+  }, [result]);
 
   const un = result.unattributed;
 
@@ -56,58 +69,70 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
 
   return (
     <div className="mt-8">
-      {/* SUMMARY — total production across all in-range sales */}
-      <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Summary — total production</h3>
-      <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 mb-6">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
-          <div>
-            <div className="text-[11px] text-gray-500 uppercase tracking-wide">Payable</div>
-            <div className="text-2xl font-bold text-teal-300">{money(result.summary.totalPayable)}</div>
-          </div>
-          <div>
-            <div className="text-[11px] text-gray-500 uppercase tracking-wide">Gross</div>
-            <div className="text-2xl font-bold text-gray-200">{money(result.summary.totalGross)}</div>
-          </div>
-          <div>
-            <div className="text-[11px] text-gray-500 uppercase tracking-wide">Tax</div>
-            <div className="text-2xl font-bold text-gray-400">{money(result.summary.totalTax)}</div>
-          </div>
-          <div>
-            <div className="text-[11px] text-gray-500 uppercase tracking-wide">Product cost</div>
-            <div className="text-2xl font-bold text-gray-400">{money(result.summary.totalProduct)}</div>
-          </div>
+      {/* SLIM TOTALS */}
+      <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Total production</h3>
+      <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 mb-8 grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div>
+          <div className="text-[11px] text-gray-500 uppercase tracking-wide">Payable</div>
+          <div className="text-2xl font-bold text-teal-300">{money(result.summary.totalPayable)}</div>
         </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div>
-            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By region &amp; season</h4>
-            <div className="space-y-1">
-              {result.summary.regionSeason.map((rs) => (
-                <div key={`${rs.region}-${rs.season}`} className="flex items-center gap-2 text-sm">
-                  <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[rs.region]}`} />
-                  <span className="text-gray-200">{rs.region}</span>
-                  <span className="text-gray-500 text-xs">{SEASON_LABELS[rs.season] || rs.season}</span>
-                  <span className="ml-auto text-gray-300">{money(rs.payable)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div>
-            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By workbook</h4>
-            <div className="space-y-1">
-              {result.summary.byWorkbook.map((w) => (
-                <div key={w.label} className="flex items-center gap-2 text-sm">
-                  <span className="text-gray-200">{w.label}</span>
-                  <span className="ml-auto text-gray-300">{money(w.payable)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+        <div>
+          <div className="text-[11px] text-gray-500 uppercase tracking-wide">Gross</div>
+          <div className="text-2xl font-bold text-gray-200">{money(result.summary.totalGross)}</div>
         </div>
-        <p className="text-[11px] text-gray-600 mt-4">Covers every sale that fell inside a date range. The city cards below may total less by the unattributed amount.</p>
+        <div>
+          <div className="text-[11px] text-gray-500 uppercase tracking-wide">Tax</div>
+          <div className="text-2xl font-bold text-gray-400">{money(result.summary.totalTax)}</div>
+        </div>
+        <div>
+          <div className="text-[11px] text-gray-500 uppercase tracking-wide">Product cost</div>
+          <div className="text-2xl font-bold text-gray-400">{money(result.summary.totalProduct)}</div>
+        </div>
       </div>
 
-      <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Payable sales by city</h3>
+      {/* BREAKDOWN BY NICKNAME */}
+      <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Breakdown by nickname</h3>
+      <div className="space-y-4 mb-10">
+        {nicknameCards.map((card) => (
+          <div key={`${card.workbook}-${card.startTab}-${card.endTab}`} className="bg-gray-800 rounded-xl border border-gray-700 p-5">
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Tag size={16} className="text-teal-400 flex-shrink-0" />
+                <span className="font-bold text-white text-lg">{rangeLabel(card.nickname, card.region, card.season)}</span>
+                <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[card.region]}`} />
+                <span className="text-gray-400 text-sm">{card.region}</span>
+                <span className="text-gray-500 text-xs">{SEASON_LABELS[card.season] || card.season}</span>
+                <span className="text-gray-600 text-xs">{card.startTab}–{card.endTab}</span>
+                <span className="text-gray-600 text-xs">· {card.workbook}</span>
+              </div>
+              <div className="text-right">
+                <div className="text-xl font-bold text-teal-300">{money(card.payable)}</div>
+                <div className="text-[11px] text-gray-500">gross {money(card.gross)}</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {card.cities.map((c) => (
+                <div key={c.cityName} className="bg-gray-900 rounded-lg border border-gray-700 px-3 py-2 flex items-center gap-2">
+                  <MapPin size={12} className="text-purple-400 flex-shrink-0" />
+                  <span className="text-sm text-gray-200 truncate">{c.cityName}</span>
+                  <div className="ml-auto text-right">
+                    <div className="text-sm font-semibold text-teal-300">{money(c.payable)}</div>
+                    <div className="text-[10px] text-gray-500">gross {money(c.gross)}</div>
+                  </div>
+                </div>
+              ))}
+              {card.unattributed > 0.5 && (
+                <div className="bg-amber-950/20 rounded-lg border border-amber-900/40 px-3 py-2 flex items-center gap-2">
+                  <AlertTriangle size={12} className="text-amber-400 flex-shrink-0" />
+                  <span className="text-sm text-amber-300">unattributed</span>
+                  <span className="ml-auto text-sm font-semibold text-amber-300">{money(card.unattributed)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
 
       {/* UNATTRIBUTED */}
       {un.total > 0.5 ? (
@@ -129,7 +154,8 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
         </div>
       )}
 
-      {/* CITY CARDS — wide, with region breakdown on the card face */}
+      {/* CITY CARDS */}
+      <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Payable sales by city</h3>
       <div className="space-y-3">
         {result.cities.map((city) => {
           const rt = regionTotals(city);
@@ -139,7 +165,6 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
               onClick={() => setSelected(city)}
               className="w-full bg-gray-800 rounded-xl border border-gray-700 p-5 text-left hover:border-gray-600 transition-colors flex flex-col sm:flex-row sm:items-center gap-5"
             >
-              {/* Name + total */}
               <div className="sm:w-56 flex-shrink-0">
                 <div className="flex items-center gap-2 mb-1">
                   <MapPin size={16} className="text-purple-400 flex-shrink-0" />
@@ -152,7 +177,6 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                 <div className="text-[11px] text-gray-500 mt-1">tap for full breakdown</div>
               </div>
 
-              {/* Region breakdown */}
               <div className="flex-1 grid grid-cols-3 gap-3">
                 {REGIONS.map((r) => (
                   <div key={r} className="bg-gray-900 rounded-lg border border-gray-700 p-3">
@@ -169,70 +193,10 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
         })}
       </div>
 
-      {/* BY WORKBOOK — large breakdown: workbook → range → payable cities */}
-      {result.workbookBreakdown.length > 0 && (
-        <div className="mt-10">
-          <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Breakdown by workbook</h3>
-          <div className="space-y-4">
-            {result.workbookBreakdown.map((wb) => (
-              <div key={wb.label} className="bg-gray-800 rounded-xl border border-gray-700 p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-2">
-                    <Sheet size={18} className="text-blue-400" />
-                    <span className="font-bold text-white text-lg">{wb.label}</span>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xl font-bold text-teal-300">{money(wb.payable)}</div>
-                    <div className="text-[11px] text-gray-500">gross {money(wb.gross)}</div>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {wb.ranges.map((r) => (
-                    <div key={`${r.startTab}-${r.endTab}`} className="bg-gray-900 rounded-lg border border-gray-700 p-3">
-                      <div className="flex items-center gap-2 mb-2 flex-wrap">
-                        <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[r.region]}`} />
-                        <span className="text-gray-200 font-medium">{r.region}</span>
-                        <span className="text-gray-500 text-xs">{SEASON_LABELS[r.season] || r.season}</span>
-                        {r.nickname && <span className="text-teal-300 text-xs italic">{r.nickname}</span>}
-                        <span className="text-gray-600 text-[11px]">{r.startTab}–{r.endTab}</span>
-                        <div className="ml-auto text-right">
-                          <span className="font-semibold text-gray-200">{money(r.payable)}</span>
-                          <span className="text-[11px] text-gray-500 ml-2">gross {money(r.gross)}</span>
-                        </div>
-                      </div>
-
-                      <div className="space-y-1 pl-4">
-                        {r.cities.map((c) => (
-                          <div key={c.cityName} className="flex items-center gap-2 text-xs">
-                            <MapPin size={11} className="text-purple-400 flex-shrink-0" />
-                            <span className="text-gray-300">{c.cityName}</span>
-                            <span className="ml-auto text-gray-300">{money(c.payable)}</span>
-                            <span className="text-gray-600 w-28 text-right">gross {money(c.gross)}</span>
-                          </div>
-                        ))}
-                        {r.unattributed > 0.5 && (
-                          <div className="flex items-center gap-2 text-xs text-amber-400">
-                            <AlertTriangle size={11} className="flex-shrink-0" />
-                            <span>unattributed</span>
-                            <span className="ml-auto">{money(r.unattributed)}</span>
-                            <span className="w-28" />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* BREAKDOWN MODAL */}
       {selected && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-[60]">
-          <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-2xl max-h-[92vh] overflow-y-auto">
+          <div className="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-4xl max-h-[92vh] overflow-y-auto">
             <div className="p-4 border-b border-gray-700 flex items-center justify-between sticky top-0 bg-gray-800 z-10">
               <div className="flex items-center gap-2">
                 <MapPin size={18} className="text-purple-400" />
@@ -242,7 +206,6 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
             </div>
 
             <div className="p-6 space-y-5">
-              {/* TOTAL */}
               <div>
                 <div className="flex items-baseline gap-2">
                   <TrendingUp size={18} className="text-teal-400" />
@@ -275,7 +238,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                     </div>
                   </div>
 
-                  {/* REGION / SEASON */}
+                  {/* REGION / SEASON with step-by-step */}
                   <div>
                     <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By region &amp; season</h4>
                     <div className="space-y-1.5">
@@ -309,30 +272,29 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                     </div>
                   </div>
 
-                  {/* PER-DAY STACKED CHART */}
+                  {/* PER-DAY STACKED CHART — split by nickname */}
                   <div>
-                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By day, split by workbook</h4>
+                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By day, split by nickname</h4>
 
-                    {/* Legend */}
                     <div className="flex flex-wrap gap-x-3 gap-y-1 mb-2">
-                      {Array.from(new Set(selected.days.flatMap((d) => d.byWorkbook.map((w) => w.label)))).map((label) => (
-                        <span key={label} className="flex items-center gap-1 text-[11px] text-gray-400">
-                          <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: colorFor(label) }} />
-                          {label}
+                      {Array.from(new Map(selected.days.flatMap((d) => d.segments.map((s) => [s.key, s] as const))).values()).map((s) => (
+                        <span key={s.key} className="flex items-center gap-1 text-[11px] text-gray-400">
+                          <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: colorFor(s.key) }} />
+                          {rangeLabel(s.nickname, s.region, s.season)}
                         </span>
                       ))}
                     </div>
 
-                    <div className="max-h-80 overflow-y-auto space-y-1 pr-1">
+                    <div className="max-h-96 overflow-y-auto space-y-1 pr-1">
                       {selected.days.map((day) => (
                         <div key={day.date} className="flex items-center gap-2">
                           <span className="w-12 text-[11px] text-gray-500 flex-shrink-0">{day.date}</span>
                           <div className="flex-1 h-5 rounded overflow-hidden flex bg-gray-900">
-                            {day.byWorkbook.map((seg) => (
+                            {day.segments.map((seg) => (
                               <div
-                                key={seg.label}
-                                style={{ width: `${day.total ? (seg.amount / day.total) * 100 : 0}%`, backgroundColor: colorFor(seg.label) }}
-                                title={`${seg.label}: ${money(seg.amount)} (${day.total ? (seg.amount / day.total * 100).toFixed(0) : 0}%)`}
+                                key={seg.key}
+                                style={{ width: `${day.total ? (seg.amount / day.total) * 100 : 0}%`, backgroundColor: colorFor(seg.key) }}
+                                title={`${rangeLabel(seg.nickname, seg.region, seg.season)}: ${money(seg.amount)} (${day.total ? (seg.amount / day.total * 100).toFixed(0) : 0}%)`}
                               />
                             ))}
                           </div>

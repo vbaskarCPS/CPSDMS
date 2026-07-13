@@ -53,11 +53,19 @@ export interface RegionSeasonSlice {
   productRate: number | null;
 }
 
+export interface DaySegment {
+  key: string;            // nickname, or "region|season" when unnamed
+  nickname?: string;
+  region: Region;
+  season: SeasonType;
+  amount: number;
+}
+
 export interface DayStack {
   date: string;
   ord: number;
   total: number;
-  byWorkbook: { label: string; amount: number }[];
+  segments: DaySegment[];
 }
 
 export interface CitySales {
@@ -145,7 +153,7 @@ export function computePayableCitySales(
     gross: number;
     contributors: Map<string, number>;
     regionSeason: Map<string, { own: number; external: number; gross: number; afterTax: number; taxRate: number | null | undefined; productRate: number | null | undefined }>;
-    days: Map<string, Map<string, number>>;
+    days: Map<string, Map<string, { key: string; nickname?: string; region: Region; season: SeasonType; amount: number }>>;
   }
   const acc = new Map<string, Acc>();
   const ensure = (name: string): Acc => {
@@ -241,9 +249,12 @@ export function computePayableCitySales(
         rs.taxRate = rs.taxRate === undefined ? taxRate : (rs.taxRate === taxRate ? rs.taxRate : null);
         rs.productRate = rs.productRate === undefined ? productCostPercent : (rs.productRate === productCostPercent ? rs.productRate : null);
         a.regionSeason.set(rsKey, rs);
+        const segKey = match.r.nickname || `${region}|${season}`;
         let dayMap = a.days.get(row.date);
         if (!dayMap) { dayMap = new Map(); a.days.set(row.date, dayMap); }
-        dayMap.set(wb.label, (dayMap.get(wb.label) || 0) + amt);
+        const seg = dayMap.get(segKey) || { key: segKey, nickname: match.r.nickname, region, season, amount: 0 };
+        seg.amount += amt;
+        dayMap.set(segKey, seg);
 
         const rc = re.cities.get(share.city) || { payable: 0, gross: 0 };
         rc.payable += amt; rc.gross += grossShare; re.cities.set(share.city, rc);
@@ -277,12 +288,12 @@ export function computePayableCitySales(
       : [];
     const days: DayStack[] = a
       ? Array.from(a.days.entries())
-          .map(([date, wbMap]) => {
-            const byWorkbook = Array.from(wbMap.entries())
-              .map(([label, amount]) => ({ label, amount }))
+          .map(([date, segMap]) => {
+            const segments = Array.from(segMap.values())
+              .map((s) => ({ key: s.key, nickname: s.nickname, region: s.region, season: s.season, amount: s.amount }))
               .sort((x, y) => y.amount - x.amount);
-            const total = byWorkbook.reduce((s, w) => s + w.amount, 0);
-            return { date, ord: ordOf(date) ?? 0, total, byWorkbook };
+            const total = segments.reduce((acc2, seg) => acc2 + seg.amount, 0);
+            return { date, ord: ordOf(date) ?? 0, total, segments };
           })
           .sort((x, y) => x.ord - y.ord)
       : [];
