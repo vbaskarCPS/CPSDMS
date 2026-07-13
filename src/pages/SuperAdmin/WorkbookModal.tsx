@@ -31,7 +31,7 @@ function parseMmmDd(raw: any): { month: number; day: number } | null {
 }
 
 const WorkbookModal: React.FC<WorkbookModalProps> = ({ workbook, onClose, onSaved }) => {
-  const isEdit = !!workbook;
+    const isEdit = !!workbook?.id;
 
   const [label, setLabel] = useState(workbook?.label || '');
   const [sheetUrl, setSheetUrl] = useState(
@@ -49,7 +49,7 @@ const WorkbookModal: React.FC<WorkbookModalProps> = ({ workbook, onClose, onSave
 
   // Auto-load the calendar when editing an existing workbook.
   useEffect(() => {
-    if (isEdit) loadCalendar();
+    if (workbook?.sheetId) loadCalendar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
