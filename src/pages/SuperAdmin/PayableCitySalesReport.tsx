@@ -56,6 +56,57 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
 
   return (
     <div className="mt-8">
+      {/* SUMMARY — total production across all in-range sales */}
+      <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Summary — total production</h3>
+      <div className="bg-gray-800 rounded-xl border border-gray-700 p-5 mb-6">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
+          <div>
+            <div className="text-[11px] text-gray-500 uppercase tracking-wide">Payable</div>
+            <div className="text-2xl font-bold text-teal-300">{money(result.summary.totalPayable)}</div>
+          </div>
+          <div>
+            <div className="text-[11px] text-gray-500 uppercase tracking-wide">Gross</div>
+            <div className="text-2xl font-bold text-gray-200">{money(result.summary.totalGross)}</div>
+          </div>
+          <div>
+            <div className="text-[11px] text-gray-500 uppercase tracking-wide">Tax</div>
+            <div className="text-2xl font-bold text-gray-400">{money(result.summary.totalTax)}</div>
+          </div>
+          <div>
+            <div className="text-[11px] text-gray-500 uppercase tracking-wide">Product cost</div>
+            <div className="text-2xl font-bold text-gray-400">{money(result.summary.totalProduct)}</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div>
+            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By region &amp; season</h4>
+            <div className="space-y-1">
+              {result.summary.regionSeason.map((rs) => (
+                <div key={`${rs.region}-${rs.season}`} className="flex items-center gap-2 text-sm">
+                  <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[rs.region]}`} />
+                  <span className="text-gray-200">{rs.region}</span>
+                  <span className="text-gray-500 text-xs">{SEASON_LABELS[rs.season] || rs.season}</span>
+                  <span className="ml-auto text-gray-300">{money(rs.payable)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By workbook</h4>
+            <div className="space-y-1">
+              {result.summary.byWorkbook.map((w) => (
+                <div key={w.label} className="flex items-center gap-2 text-sm">
+                  <span className="text-gray-200">{w.label}</span>
+                  <span className="ml-auto text-gray-300">{money(w.payable)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <p className="text-[11px] text-gray-600 mt-4">Covers every sale that fell inside a date range. The city cards below may total less by the unattributed amount.</p>
+      </div>
+
       <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Payable sales by city</h3>
 
       {/* UNATTRIBUTED */}
@@ -132,10 +183,15 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
 
             <div className="p-6 space-y-5">
               {/* TOTAL */}
-              <div className="flex items-baseline gap-2">
-                <TrendingUp size={18} className="text-teal-400" />
-                <span className="text-3xl font-bold text-teal-300">{money(selected.total)}</span>
-                <span className="text-sm text-gray-500">payable sales</span>
+              <div>
+                <div className="flex items-baseline gap-2">
+                  <TrendingUp size={18} className="text-teal-400" />
+                  <span className="text-3xl font-bold text-teal-300">{money(selected.total)}</span>
+                  <span className="text-sm text-gray-500">payable sales</span>
+                </div>
+                <div className="text-xs text-gray-500 mt-1 pl-7">
+                  Gross {money(selected.gross)} · deductions {money(selected.gross - selected.total)} · payable {money(selected.total)}
+                </div>
               </div>
 
               {selected.total < 0.5 ? (
@@ -162,12 +218,19 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                   {/* REGION / SEASON */}
                   <div>
                     <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By region &amp; season</h4>
-                    <div className="space-y-1">
+                    <div className="space-y-1.5">
                       {selected.regionSeason.map((rs) => (
-                        <div key={`${rs.region}-${rs.season}`} className="flex items-center gap-2 text-sm">
-                          <span className="text-gray-200">{rs.region}</span>
-                          <span className="text-gray-500 text-xs">{SEASON_LABELS[rs.season] || rs.season}</span>
-                          <span className="ml-auto text-gray-400">{money(rs.amount)}</span>
+                        <div key={`${rs.region}-${rs.season}`} className="bg-gray-900 rounded-lg border border-gray-700 px-3 py-2">
+                          <div className="flex items-center gap-2 text-sm mb-1">
+                            <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[rs.region]}`} />
+                            <span className="text-gray-200 font-medium">{rs.region}</span>
+                            <span className="text-gray-500 text-xs">{SEASON_LABELS[rs.season] || rs.season}</span>
+                            <span className="ml-auto font-semibold text-gray-200">{money(rs.amount)}</span>
+                          </div>
+                          <div className="flex items-center gap-4 text-xs pl-4">
+                            <span className="text-teal-300">Own workers {money(rs.own)}</span>
+                            <span className="text-blue-300">External {money(rs.external)}</span>
+                          </div>
                         </div>
                       ))}
                     </div>

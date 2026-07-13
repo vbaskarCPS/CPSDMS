@@ -6,19 +6,25 @@ import { Region, SeasonType } from '../types';
 // ============================================================================
 // PAYABLE CITY SALES — computation
 // ----------------------------------------------------------------------------
-// Pure function. Reads the already-loaded workbook rows + payable-city configs
-// and produces per-city payable-sales totals with the breakdown data the report
-// UI needs (contributors, region/season split, per-day-by-workbook stacks), plus
-// an unattributed tally so no dollars silently vanish.
+// Pure function over the already-loaded workbook rows + payable-city configs.
 //
-// Payable formula (locked): payable = (prodGross / (1 + tax%)) * (1 - product%)
-//   divisor first, product cost on the post-tax figure.
+// Produces TWO things:
+//   1. A production SUMMARY — every sale that fell inside a date range, totalled
+//      by region/season and by workbook, with gross / tax / product / payable.
+//      This is business production and does NOT depend on city attribution.
+//   2. Per-CITY attribution — payable sales routed to cities via the selling
+//      city's region split, plus an unattributed tally.
+//
+// The two reconcile: summary payable = sum(city totals) + noCity + regionUnconfigured.
+// (noRange rows have no range, so no region/season/tax — excluded from the summary.)
+//
+// Payable formula (locked): afterTax = gross / (1 + tax%);  payable = afterTax * (1 - product%)
+//   tax  = gross - afterTax
+//   prod = afterTax - payable
 // ============================================================================
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-// "MmmDD" -> calendar ordinal (month*31 + day), or null. Season stays within one
-// year so month+day orders unambiguously; day maxes at 31, no cross-month clash.
 function ordOf(tab: string): number | null {
   if (!tab) return null;
   const t = tab.toString().trim();
@@ -30,41 +36,68 @@ function ordOf(tab: string): number | null {
 }
 
 export interface ContributorSlice {
-  fromCity: string;   // selling city that fed this receiving city
+  fromCity: string;
   amount: number;
-  isOwn: boolean;     // fromCity === the receiving city
+  isOwn: boolean;
 }
 
 export interface RegionSeasonSlice {
   region: Region;
   season: SeasonType;
-  amount: number;
+  own: number;       // from this city's own workers
+  external: number;  // from other cities' workers
+  amount: number;    // own + external
 }
 
 export interface DayStack {
-  date: string;                                  // "May09"
-  ord: number;                                   // for sorting
+  date: string;
+  ord: number;
   total: number;
   byWorkbook: { label: string; amount: number }[];
 }
 
 export interface CitySales {
   cityName: string;
-  isConfigured: boolean;   // false = a name only referenced in a split, not a real payable city
-  total: number;
+  isConfigured: boolean;
+  total: number;      // payable attributed to this city
+  gross: number;      // gross behind that payable
   contributors: ContributorSlice[];
   regionSeason: RegionSeasonSlice[];
   days: DayStack[];
 }
 
+// --- Production summary shapes (all in-range sales, pre-attribution) ---
+export interface RegionSeasonTotal {
+  region: Region;
+  season: SeasonType;
+  payable: number;
+  gross: number;
+}
+
+export interface WorkbookTotal {
+  label: string;
+  payable: number;
+  gross: number;
+}
+
+export interface ReportSummary {
+  totalPayable: number;
+  totalGross: number;
+  totalTax: number;
+  totalProduct: number;
+  regionSeason: RegionSeasonTotal[];
+  byWorkbook: WorkbookTotal[];
+}
+
 export interface PayableCitySalesResult {
-  cities: CitySales[];        // sorted by total desc
-  workbookLabels: string[];   // every workbook that contributed (for a stable chart legend)
+  summary: ReportSummary;
+  cities: CitySales[];
+  workbookLabels: string[];
   unattributed: {
-    noRange: number;          // date fell in no defined range (reported as GROSS — tax/cost unknown)
-    noCity: number;           // prefix matched no payable city (payable)
+    noRange: number;            // date fell in no defined range (GROSS — tax/cost unknown)
+    noCity: number;             // prefix matched no payable city (payable)
     regionUnconfigured: number; // selling city had no split for that region (payable)
-    total: number;            // sum of the three
+    total: number;
   };
 }
 
@@ -72,25 +105,30 @@ export function computePayableCitySales(
   workbooks: LoadedWorkbook[],
   cities: PayableCity[]
 ): PayableCitySalesResult {
-  // prefix (uppercase) -> selling city
   const prefixToCity = new Map<string, PayableCity>();
   cities.forEach((c) => c.prefixes.forEach((p) => prefixToCity.set(p.toUpperCase(), c)));
 
   interface Acc {
     total: number;
+    gross: number;
     contributors: Map<string, number>;
-    regionSeason: Map<string, number>;
+    regionSeason: Map<string, { own: number; external: number }>;
     days: Map<string, Map<string, number>>;
   }
   const acc = new Map<string, Acc>();
   const ensure = (name: string): Acc => {
     let a = acc.get(name);
-    if (!a) { a = { total: 0, contributors: new Map(), regionSeason: new Map(), days: new Map() }; acc.set(name, a); }
+    if (!a) { a = { total: 0, gross: 0, contributors: new Map(), regionSeason: new Map(), days: new Map() }; acc.set(name, a); }
     return a;
   };
 
+  // Production summary accumulators (per in-range row, once).
+  let prodPayable = 0, prodGross = 0, prodTax = 0, prodProduct = 0;
+  const prodRS = new Map<string, { payable: number; gross: number }>();
+  const prodWB = new Map<string, { payable: number; gross: number }>();
+
   let noRange = 0, noCity = 0, regionUnconfigured = 0;
-  const workbookLabels = new Set<string>();
+  const attributedWbLabels = new Set<string>();
 
   for (const wb of workbooks) {
     const ranges = (wb.config?.dateRanges || [])
@@ -105,8 +143,21 @@ export function computePayableCitySales(
       if (!match) { noRange += row.prodGross; continue; }
 
       const { region, season, taxRate, productCostPercent } = match.r;
-      const payable = (row.prodGross / (1 + taxRate / 100)) * (1 - productCostPercent / 100);
+      const gross = row.prodGross;
+      const afterTax = gross / (1 + taxRate / 100);
+      const payable = afterTax * (1 - productCostPercent / 100);
+      const taxAmt = gross - afterTax;
+      const productAmt = afterTax - payable;
+      const rsKey = `${region}|${season}`;
 
+      // --- Production summary (every in-range row, once) ---
+      prodPayable += payable; prodGross += gross; prodTax += taxAmt; prodProduct += productAmt;
+      const prs = prodRS.get(rsKey) || { payable: 0, gross: 0 };
+      prs.payable += payable; prs.gross += gross; prodRS.set(rsKey, prs);
+      const pwb = prodWB.get(wb.label) || { payable: 0, gross: 0 };
+      pwb.payable += payable; pwb.gross += gross; prodWB.set(wb.label, pwb);
+
+      // --- City attribution ---
       const prefix = extractContractorPrefix(row.contractorId).toUpperCase();
       const sellingCity = prefixToCity.get(prefix);
       if (!sellingCity) { noCity += payable; continue; }
@@ -114,15 +165,20 @@ export function computePayableCitySales(
       const split = sellingCity.regionSplits[region];
       if (!split || split.length === 0) { regionUnconfigured += payable; continue; }
 
-      workbookLabels.add(wb.label);
+      attributedWbLabels.add(wb.label);
       for (const share of split) {
-        const amt = payable * ((Number(share.percent) || 0) / 100);
-        if (!amt) continue;
+        const pct = (Number(share.percent) || 0) / 100;
+        if (pct <= 0) continue;
+        const amt = payable * pct;
+        const grossShare = gross * pct;
         const a = ensure(share.city);
+        const isOwn = share.city === sellingCity.name;
         a.total += amt;
+        a.gross += grossShare;
         a.contributors.set(sellingCity.name, (a.contributors.get(sellingCity.name) || 0) + amt);
-        const rsKey = `${region}|${season}`;
-        a.regionSeason.set(rsKey, (a.regionSeason.get(rsKey) || 0) + amt);
+        const rs = a.regionSeason.get(rsKey) || { own: 0, external: 0 };
+        if (isOwn) rs.own += amt; else rs.external += amt;
+        a.regionSeason.set(rsKey, rs);
         let dayMap = a.days.get(row.date);
         if (!dayMap) { dayMap = new Map(); a.days.set(row.date, dayMap); }
         dayMap.set(wb.label, (dayMap.get(wb.label) || 0) + amt);
@@ -130,7 +186,6 @@ export function computePayableCitySales(
     }
   }
 
-  // Union of configured cities + any names only referenced in splits.
   const configuredNames = new Set(cities.map((c) => c.name));
   const allNames = new Set<string>([...configuredNames, ...acc.keys()]);
 
@@ -143,9 +198,9 @@ export function computePayableCitySales(
       : [];
     const regionSeason: RegionSeasonSlice[] = a
       ? Array.from(a.regionSeason.entries())
-          .map(([key, amount]) => {
+          .map(([key, v]) => {
             const [region, season] = key.split('|') as [Region, SeasonType];
-            return { region, season, amount };
+            return { region, season, own: v.own, external: v.external, amount: v.own + v.external };
           })
           .sort((x, y) => y.amount - x.amount)
       : [];
@@ -165,15 +220,33 @@ export function computePayableCitySales(
       cityName: name,
       isConfigured: configuredNames.has(name),
       total: a?.total || 0,
+      gross: a?.gross || 0,
       contributors,
       regionSeason,
       days,
     };
   }).sort((x, y) => y.total - x.total);
 
+  const summary: ReportSummary = {
+    totalPayable: prodPayable,
+    totalGross: prodGross,
+    totalTax: prodTax,
+    totalProduct: prodProduct,
+    regionSeason: Array.from(prodRS.entries())
+      .map(([key, v]) => {
+        const [region, season] = key.split('|') as [Region, SeasonType];
+        return { region, season, payable: v.payable, gross: v.gross };
+      })
+      .sort((x, y) => y.payable - x.payable),
+    byWorkbook: Array.from(prodWB.entries())
+      .map(([label, v]) => ({ label, payable: v.payable, gross: v.gross }))
+      .sort((x, y) => y.payable - x.payable),
+  };
+
   return {
+    summary,
     cities: citySales,
-    workbookLabels: Array.from(workbookLabels).sort(),
+    workbookLabels: Array.from(attributedWbLabels).sort(),
     unattributed: {
       noRange,
       noCity,
