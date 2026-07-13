@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Layers,
   Cloud,
+  ChevronDown,
 } from 'lucide-react';
 import { reportingService, PayableCity, WorkbookConfig } from '../../lib/reportingService';
 import {
@@ -50,6 +51,7 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
   const [editingWorkbook, setEditingWorkbook] = useState<WorkbookConfig | null>(null);
   const [editingDataDays, setEditingDataDays] = useState<Set<string> | undefined>(undefined);
   const [showCitiesModal, setShowCitiesModal] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(true);
 
   useEffect(() => {
     load();
@@ -150,7 +152,7 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
     <div className="min-h-screen bg-gray-900 text-white flex flex-col">
       {/* HEADER */}
       <div className="bg-gray-800 border-b border-gray-700 px-6 py-4 flex-shrink-0">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors p-1" title="Back">
               <ArrowLeft size={20} />
@@ -174,7 +176,7 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
         </div>
       </div>
 
-      <div className="flex-1 max-w-6xl w-full mx-auto flex">
+      <div className="flex-1 max-w-7xl w-full mx-auto flex">
         {/* LEFT RAIL */}
         <div className="w-56 flex-shrink-0 border-r border-gray-800 p-4 space-y-1">
           {REPORT_TYPES.map((rt) => {
@@ -198,7 +200,7 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
         </div>
 
         {/* MAIN */}
-        <div className="flex-1 p-6">
+        <div className="flex-1 p-6 pb-48">
           {activeReport === 'payable_city_sales' && (
             <div>
               <div className="mb-6">
@@ -209,6 +211,16 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
                 </p>
               </div>
 
+              <div className="mb-3">
+                <button
+                  onClick={() => setSetupOpen((o) => !o)}
+                  className="flex items-center gap-2 text-sm font-medium text-gray-400 hover:text-white transition-colors"
+                >
+                  <ChevronDown size={16} className={`transition-transform ${setupOpen ? '' : '-rotate-90'}`} />
+                  Setup — workbooks &amp; cities
+                </button>
+              </div>
+              {setupOpen && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* WORKBOOKS CARD */}
                 <div className="bg-gray-800 rounded-xl border border-gray-700 p-5">
@@ -308,6 +320,7 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
                   )}
                 </div>
               </div>
+              )}
 
               <PayableCitySalesReport workbooks={workbooks} cities={cities} />
             </div>
