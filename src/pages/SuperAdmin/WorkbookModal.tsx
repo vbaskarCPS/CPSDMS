@@ -186,9 +186,7 @@ const WorkbookModal: React.FC<WorkbookModalProps> = ({ workbook, preloadedDataDa
   // --- Day click: bracket a range by clicking start, then end (both lit days) ---
   const handleDayClick = (month: number, day: number) => {
     if (draft) return;               // finish the open range first
-    const key = `${month}-${day}`;
     if (regionForDay(month, day)) return;   // already inside a saved range
-    if (!dataDays.has(key)) return;         // endpoints must be data days
 
     setSelError(null);
 
@@ -304,7 +302,7 @@ const WorkbookModal: React.FC<WorkbookModalProps> = ({ workbook, preloadedDataDa
             else if (isSelStart) cls = 'bg-teal-400 text-gray-900 font-bold';
             else if (isData) cls = 'bg-teal-600/70 text-white font-semibold';
 
-            const clickable = !draft && isData && !region;
+            const clickable = !draft && !region;
 
             return (
               <div
