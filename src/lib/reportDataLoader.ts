@@ -1,7 +1,7 @@
 // src/lib/reportDataLoader.ts
 import { commandCenterService } from './commandCenterService';
 import { googleSheetsService } from './googleSheetsService';
-import { reportingService, WorkbookConfig, PayableCity } from './reportingService';
+import { reportingService, WorkbookConfig, PayableCity, extractContractorPrefix } from './reportingService';
 
 // ============================================================================
 // REPORT DATA LOADER
@@ -53,9 +53,15 @@ export interface LoadedWorkbook {
   readError?: string;              // set if this book couldn't be read
 }
 
+export interface PrefixCount {
+  prefix: string;
+  count: number;
+}
+
 export interface ReportData {
   workbooks: LoadedWorkbook[];
   cities: PayableCity[];
+  prefixCounts: PrefixCount[];   // every distinct contractor prefix seen, with row counts, most-used first
 }
 
 // Thrown when the user cancels / fails the Google sign-in. ReportingView catches
@@ -159,5 +165,18 @@ export async function loadReportData(): Promise<ReportData> {
     })
   );
 
-  return { workbooks, cities };
+  // --- 4. Tally every distinct contractor prefix seen, with counts ---
+  const prefixMap = new Map<string, number>();
+  for (const wb of workbooks) {
+    for (const row of wb.rows) {
+      const p = extractContractorPrefix(row.contractorId);
+      if (!p) continue;
+      prefixMap.set(p, (prefixMap.get(p) || 0) + 1);
+    }
+  }
+  const prefixCounts: PrefixCount[] = Array.from(prefixMap.entries())
+    .map(([prefix, count]) => ({ prefix, count }))
+    .sort((a, b) => b.count - a.count);
+
+  return { workbooks, cities, prefixCounts };
 }

@@ -8,8 +8,10 @@ import {
   validateRegionSplitTotal,
 } from '../../lib/reportingService';
 import { Region } from '../../types';
+import { PrefixCount } from '../../lib/reportDataLoader';
 
 interface CitiesModalProps {
+  availablePrefixes: PrefixCount[];   // every prefix seen across the workbooks, with counts
   onClose: () => void;
   onChanged: () => void;   // tell ReportingView to refresh its city list
 }
@@ -26,7 +28,7 @@ type EditSplits = Record<Region, CitySplitShare[]>;
 
 const emptySplits = (): EditSplits => ({ West: [], Central: [], East: [] });
 
-const CitiesModal: React.FC<CitiesModalProps> = ({ onClose, onChanged }) => {
+const CitiesModal: React.FC<CitiesModalProps> = ({ availablePrefixes, onClose, onChanged }) => {
   const [cities, setCities] = useState<PayableCity[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -47,7 +49,13 @@ const CitiesModal: React.FC<CitiesModalProps> = ({ onClose, onChanged }) => {
     setLoading(true);
     setLoadError(null);
     try {
-      setCities(await reportingService.getPayableCities());
+      const result = await Promise.race([
+        reportingService.getPayableCities(),
+        new Promise<PayableCity[]>((_, reject) =>
+          setTimeout(() => reject(new Error('Timed out loading cities. Check your connection and try again.')), 15000)
+        ),
+      ]);
+      setCities(result);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Failed to load cities');
     } finally {
@@ -91,6 +99,25 @@ const CitiesModal: React.FC<CitiesModalProps> = ({ onClose, onChanged }) => {
   };
 
   const removePrefix = (p: string) => setEditPrefixes(editPrefixes.filter((x) => x !== p));
+
+  const isPrefixSelected = (prefix: string) =>
+    editPrefixes.some((p) => p.toUpperCase() === prefix.toUpperCase());
+
+  // Name of another city that already owns this prefix, or null if free.
+  const prefixOwnerName = (prefix: string): string | null => {
+    const up = prefix.toUpperCase();
+    for (const c of cities) {
+      if (c.id === editingId) continue;
+      if (c.prefixes.some((p) => p.toUpperCase() === up)) return c.name;
+    }
+    return null;
+  };
+
+  const assignPrefix = (prefix: string) => {
+    const up = prefix.trim().toUpperCase();
+    if (!up || isPrefixSelected(up)) return;
+    setEditPrefixes([...editPrefixes, up]);
+  };
 
   // --- Share row editing ---
   const addShareRow = (region: Region) => {
@@ -296,6 +323,39 @@ const CitiesModal: React.FC<CitiesModalProps> = ({ onClose, onChanged }) => {
                       />
                       <button onClick={addPrefix} className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded-lg text-sm flex items-center gap-1"><Plus size={14} /> Add</button>
                     </div>
+
+                    {availablePrefixes.length > 0 && (
+                      <div className="mt-3">
+                        <p className="text-[11px] text-gray-500 mb-1.5">Found in the workbooks — tap to assign:</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {availablePrefixes
+                            .filter((pc) => !isPrefixSelected(pc.prefix))
+                            .map((pc) => {
+                              const owner = prefixOwnerName(pc.prefix);
+                              if (owner) {
+                                return (
+                                  <span
+                                    key={pc.prefix}
+                                    title={`Already assigned to ${owner}`}
+                                    className="inline-flex items-center gap-1 bg-gray-800/60 text-gray-600 text-xs rounded px-2 py-1 cursor-not-allowed"
+                                  >
+                                    {pc.prefix} <span className="text-gray-700">· {owner}</span>
+                                  </span>
+                                );
+                              }
+                              return (
+                                <button
+                                  key={pc.prefix}
+                                  onClick={() => assignPrefix(pc.prefix)}
+                                  className="inline-flex items-center gap-1 bg-gray-700 hover:bg-purple-700 text-gray-200 text-xs rounded px-2 py-1 transition-colors"
+                                >
+                                  {pc.prefix} <span className="text-gray-400">({pc.count})</span>
+                                </button>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* REGION SHARES */}

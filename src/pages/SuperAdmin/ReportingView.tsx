@@ -18,6 +18,7 @@ import { reportingService, PayableCity, WorkbookConfig } from '../../lib/reporti
 import {
   loadReportData,
   LoadedWorkbook,
+  PrefixCount,
   GoogleAuthCancelledError,
 } from '../../lib/reportDataLoader';
 import WorkbookModal from './WorkbookModal';
@@ -42,6 +43,7 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [workbooks, setWorkbooks] = useState<LoadedWorkbook[]>([]);
   const [cities, setCities] = useState<PayableCity[]>([]);
+  const [prefixCounts, setPrefixCounts] = useState<PrefixCount[]>([]);
 
   const [showWorkbookModal, setShowWorkbookModal] = useState(false);
   const [editingWorkbook, setEditingWorkbook] = useState<WorkbookConfig | null>(null);
@@ -59,6 +61,7 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
       const data = await loadReportData();
       setWorkbooks(data.workbooks);
       setCities(data.cities);
+      setPrefixCounts(data.prefixCounts);
       setStatus('ready');
     } catch (err) {
       if (err instanceof GoogleAuthCancelledError) {
@@ -323,6 +326,7 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
 
       {showCitiesModal && (
         <CitiesModal
+          availablePrefixes={prefixCounts}
           onClose={() => setShowCitiesModal(false)}
           onChanged={reloadCities}
         />
