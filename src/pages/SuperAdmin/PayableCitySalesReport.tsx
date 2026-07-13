@@ -1,6 +1,6 @@
 // src/pages/SuperAdmin/PayableCitySalesReport.tsx
 import React, { useMemo, useState } from 'react';
-import { X, MapPin, TrendingUp, AlertTriangle, Check } from 'lucide-react';
+import { X, MapPin, TrendingUp, AlertTriangle, Check, Sheet } from 'lucide-react';
 import { LoadedWorkbook } from '../../lib/reportDataLoader';
 import { PayableCity } from '../../lib/reportingService';
 import { computePayableCitySales, CitySales } from '../../lib/payableCitySales';
@@ -168,6 +168,66 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
           );
         })}
       </div>
+
+      {/* BY WORKBOOK — large breakdown: workbook → range → payable cities */}
+      {result.workbookBreakdown.length > 0 && (
+        <div className="mt-10">
+          <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Breakdown by workbook</h3>
+          <div className="space-y-4">
+            {result.workbookBreakdown.map((wb) => (
+              <div key={wb.label} className="bg-gray-800 rounded-xl border border-gray-700 p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <Sheet size={18} className="text-blue-400" />
+                    <span className="font-bold text-white text-lg">{wb.label}</span>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xl font-bold text-teal-300">{money(wb.payable)}</div>
+                    <div className="text-[11px] text-gray-500">gross {money(wb.gross)}</div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {wb.ranges.map((r) => (
+                    <div key={`${r.startTab}-${r.endTab}`} className="bg-gray-900 rounded-lg border border-gray-700 p-3">
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[r.region]}`} />
+                        <span className="text-gray-200 font-medium">{r.region}</span>
+                        <span className="text-gray-500 text-xs">{SEASON_LABELS[r.season] || r.season}</span>
+                        {r.nickname && <span className="text-teal-300 text-xs italic">{r.nickname}</span>}
+                        <span className="text-gray-600 text-[11px]">{r.startTab}–{r.endTab}</span>
+                        <div className="ml-auto text-right">
+                          <span className="font-semibold text-gray-200">{money(r.payable)}</span>
+                          <span className="text-[11px] text-gray-500 ml-2">gross {money(r.gross)}</span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1 pl-4">
+                        {r.cities.map((c) => (
+                          <div key={c.cityName} className="flex items-center gap-2 text-xs">
+                            <MapPin size={11} className="text-purple-400 flex-shrink-0" />
+                            <span className="text-gray-300">{c.cityName}</span>
+                            <span className="ml-auto text-gray-300">{money(c.payable)}</span>
+                            <span className="text-gray-600 w-28 text-right">gross {money(c.gross)}</span>
+                          </div>
+                        ))}
+                        {r.unattributed > 0.5 && (
+                          <div className="flex items-center gap-2 text-xs text-amber-400">
+                            <AlertTriangle size={11} className="flex-shrink-0" />
+                            <span>unattributed</span>
+                            <span className="ml-auto">{money(r.unattributed)}</span>
+                            <span className="w-28" />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* BREAKDOWN MODAL */}
       {selected && (

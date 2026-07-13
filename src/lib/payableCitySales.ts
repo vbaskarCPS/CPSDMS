@@ -93,9 +93,37 @@ export interface ReportSummary {
   byWorkbook: WorkbookTotal[];
 }
 
+export interface WorkbookRangeCity {
+  cityName: string;
+  payable: number;
+  gross: number;
+}
+
+export interface WorkbookRangeBreakdown {
+  nickname?: string;
+  region: Region;
+  season: SeasonType;
+  startTab: string;
+  endTab: string;
+  taxRate: number;
+  productRate: number;
+  payable: number;
+  gross: number;
+  cities: WorkbookRangeCity[];   // attributed payable cities within this range
+  unattributed: number;          // payable that didn't attribute within this range
+}
+
+export interface WorkbookBreakdown {
+  label: string;
+  payable: number;
+  gross: number;
+  ranges: WorkbookRangeBreakdown[];
+}
+
 export interface PayableCitySalesResult {
   summary: ReportSummary;
   cities: CitySales[];
+  workbookBreakdown: WorkbookBreakdown[];
   workbookLabels: string[];
   unattributed: {
     noRange: number;            // date fell in no defined range (GROSS — tax/cost unknown)
@@ -131,6 +159,15 @@ export function computePayableCitySales(
   const prodRS = new Map<string, { payable: number; gross: number }>();
   const prodWB = new Map<string, { payable: number; gross: number }>();
 
+  type WbRangeAcc = {
+    nickname?: string; region: Region; season: SeasonType;
+    startTab: string; endTab: string; taxRate: number; productRate: number;
+    payable: number; gross: number;
+    cities: Map<string, { payable: number; gross: number }>;
+    unattributed: number;
+  };
+  const wbBreak = new Map<string, Map<string, WbRangeAcc>>();
+
   let noRange = 0, noCity = 0, regionUnconfigured = 0;
   const attributedWbLabels = new Set<string>();
 
@@ -161,13 +198,29 @@ export function computePayableCitySales(
       const pwb = prodWB.get(wb.label) || { payable: 0, gross: 0 };
       pwb.payable += payable; pwb.gross += gross; prodWB.set(wb.label, pwb);
 
+      // --- Workbook breakdown (per range) ---
+      let wbMap = wbBreak.get(wb.label);
+      if (!wbMap) { wbMap = new Map<string, WbRangeAcc>(); wbBreak.set(wb.label, wbMap); }
+      const rk = `${match.r.startTab}|${match.r.endTab}`;
+      let re = wbMap.get(rk);
+      if (!re) {
+        re = {
+          nickname: match.r.nickname, region, season,
+          startTab: match.r.startTab, endTab: match.r.endTab,
+          taxRate, productRate: productCostPercent,
+          payable: 0, gross: 0, cities: new Map(), unattributed: 0,
+        };
+        wbMap.set(rk, re);
+      }
+      re.payable += payable; re.gross += gross;
+
       // --- City attribution ---
       const prefix = extractContractorPrefix(row.contractorId).toUpperCase();
       const sellingCity = prefixToCity.get(prefix);
-      if (!sellingCity) { noCity += payable; continue; }
+      if (!sellingCity) { noCity += payable; re.unattributed += payable; continue; }
 
       const split = sellingCity.regionSplits[region];
-      if (!split || split.length === 0) { regionUnconfigured += payable; continue; }
+      if (!split || split.length === 0) { regionUnconfigured += payable; re.unattributed += payable; continue; }
 
       attributedWbLabels.add(wb.label);
       for (const share of split) {
@@ -191,6 +244,9 @@ export function computePayableCitySales(
         let dayMap = a.days.get(row.date);
         if (!dayMap) { dayMap = new Map(); a.days.set(row.date, dayMap); }
         dayMap.set(wb.label, (dayMap.get(wb.label) || 0) + amt);
+
+        const rc = re.cities.get(share.city) || { payable: 0, gross: 0 };
+        rc.payable += amt; rc.gross += grossShare; re.cities.set(share.city, rc);
       }
     }
   }
@@ -258,9 +314,33 @@ export function computePayableCitySales(
       .sort((x, y) => y.payable - x.payable),
   };
 
+  const workbookBreakdown: WorkbookBreakdown[] = Array.from(wbBreak.entries()).map(([label, rangeMap]) => {
+    const ranges: WorkbookRangeBreakdown[] = Array.from(rangeMap.values())
+      .map((re) => ({
+        nickname: re.nickname,
+        region: re.region,
+        season: re.season,
+        startTab: re.startTab,
+        endTab: re.endTab,
+        taxRate: re.taxRate,
+        productRate: re.productRate,
+        payable: re.payable,
+        gross: re.gross,
+        cities: Array.from(re.cities.entries())
+          .map(([cityName, v]) => ({ cityName, payable: v.payable, gross: v.gross }))
+          .sort((x, y) => y.payable - x.payable),
+        unattributed: re.unattributed,
+      }))
+      .sort((x, y) => (ordOf(x.startTab) ?? 0) - (ordOf(y.startTab) ?? 0));
+    const payable = ranges.reduce((s, r) => s + r.payable, 0);
+    const gross = ranges.reduce((s, r) => s + r.gross, 0);
+    return { label, payable, gross, ranges };
+  }).sort((x, y) => y.payable - x.payable);
+
   return {
     summary,
     cities: citySales,
+    workbookBreakdown,
     workbookLabels: Array.from(attributedWbLabels).sort(),
     unattributed: {
       noRange,
