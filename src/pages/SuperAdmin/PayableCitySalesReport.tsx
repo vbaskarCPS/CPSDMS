@@ -1,6 +1,6 @@
 // src/pages/SuperAdmin/PayableCitySalesReport.tsx
 import React, { useMemo, useState } from 'react';
-import { X, MapPin, TrendingUp, AlertTriangle, Check, Tag, Download } from 'lucide-react';
+import { X, MapPin, TrendingUp, AlertTriangle, Check, Tag, Download, Printer } from 'lucide-react';
 import { LoadedWorkbook } from '../../lib/reportDataLoader';
 import { PayableCity } from '../../lib/reportingService';
 import { computePayableCitySales, CitySales } from '../../lib/payableCitySales';
@@ -78,6 +78,141 @@ const downloadCityReport = (city: CitySales) => {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+};
+
+const printCityReport = (city: CitySales) => {
+  const fmtMoney = (n: number) =>
+    '$' + Math.round(n).toLocaleString('en-CA');
+  const share = (a: number) =>
+    city.total > 0 ? ((a / city.total) * 100).toFixed(0) + '%' : '0%';
+  const esc = (v: unknown) =>
+    String(v ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+  const contribRows = city.contributors
+    .slice()
+    .sort((a, b) => b.amount - a.amount)
+    .map(
+      (c) => `
+        <tr>
+          <td class="lbl">${esc(c.fromCity)}</td>
+          <td>${c.isOwn ? 'Own workers' : 'From other city'}</td>
+          <td class="num">${fmtMoney(c.amount)}</td>
+          <td class="num accent">${share(c.amount)}</td>
+        </tr>`
+    )
+    .join('');
+
+  const rsRows = city.regionSeason
+    .slice()
+    .sort((a, b) => b.amount - a.amount)
+    .map(
+      (rs) => `
+        <tr>
+          <td class="lbl">${esc(rs.region)}</td>
+          <td>${esc(SEASON_LABELS[rs.season] || rs.season)}</td>
+          <td class="num">${fmtMoney(rs.own)}</td>
+          <td class="num">${fmtMoney(rs.external)}</td>
+          <td class="num">${fmtMoney(rs.gross)}</td>
+          <td class="num">${fmtMoney(rs.afterTax)}</td>
+          <td class="num">${rs.taxRate != null ? rs.taxRate + '%' : 'varies'}</td>
+          <td class="num accent">${fmtMoney(rs.amount)}</td>
+        </tr>`
+    )
+    .join('');
+
+  const dayRows = city.days
+    .slice()
+    .sort((a, b) => a.ord - b.ord)
+    .map(
+      (d) => `
+        <tr>
+          <td class="lbl">${esc(d.date)}</td>
+          <td class="num">${fmtMoney(d.total)}</td>
+        </tr>`
+    )
+    .join('');
+
+  const generated = new Date().toLocaleString('en-CA', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8" />
+<title>Payable City Report – ${esc(city.cityName)}</title>
+<style>
+  @page { size: letter; margin: 0.6in; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Open Sans', 'Segoe UI', Helvetica, Arial, sans-serif;
+    color: #252525; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .head {
+    background: #252525; color: #fff; padding: 22px 26px;
+    border-radius: 12px; display: flex; align-items: center; justify-content: space-between;
+  }
+  .head img { height: 42px; }
+  .head .meta { text-align: right; font-size: 11px; color: #b8b8b8; }
+  .title { margin: 22px 0 4px; font-size: 30px; font-weight: 800; letter-spacing: -0.5px; }
+  .title .accent { color: #ff4f4f; }
+  .sub { color: #6b6b6b; font-size: 12px; margin-bottom: 18px; }
+  .cfg { display:inline-block; margin-left:8px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; background:#fdecec; color:#c0392b; vertical-align:middle; }
+  .kpis { display: flex; gap: 14px; margin-bottom: 26px; }
+  .kpi { flex: 1; border: 1px solid #e6e6e6; border-radius: 10px; padding: 14px 16px; }
+  .kpi .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: #8a8a8a; }
+  .kpi .v { font-size: 26px; font-weight: 800; margin-top: 4px; }
+  .kpi.payable { background: #fff5f5; border-color: #ffd0d0; }
+  .kpi.payable .v { color: #ff4f4f; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.8px; color: #252525;
+       border-left: 4px solid #ff4f4f; padding-left: 10px; margin: 24px 0 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; background: #f4f4f4; color: #555; font-size: 10px;
+       text-transform: uppercase; letter-spacing: 0.5px; padding: 7px 9px; }
+  th.num, td.num { text-align: right; }
+  td { padding: 7px 9px; border-bottom: 1px solid #eee; }
+  td.lbl { font-weight: 700; }
+  td.accent { color: #ff4f4f; font-weight: 700; }
+  tbody tr:nth-child(even) td { background: #fafafa; }
+  .foot { margin-top: 30px; padding-top: 12px; border-top: 1px solid #e6e6e6;
+          font-size: 10px; color: #9a9a9a; display: flex; justify-content: space-between; }
+  .empty { color:#9a9a9a; font-size:12px; font-style:italic; padding:6px 0; }
+</style></head>
+<body>
+  <div class="head">
+    <img src="https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png" alt="Canadian Property Stars" />
+    <div class="meta">Payable City Sales<br/>Generated ${esc(generated)}</div>
+  </div>
+  <div class="title">${esc(city.cityName)} <span class="accent">•</span> Payable Report${
+    city.isConfigured ? '' : '<span class="cfg">Referenced in a split</span>'
+  }</div>
+  <div class="sub">Payable dollars attributed to this city and where they came from.</div>
+  <div class="kpis">
+    <div class="kpi payable"><div class="k">Total payable</div><div class="v">${fmtMoney(city.total)}</div></div>
+    <div class="kpi"><div class="k">Gross behind it</div><div class="v">${fmtMoney(city.gross)}</div></div>
+    <div class="kpi"><div class="k">Contributing sources</div><div class="v">${city.contributors.length}</div></div>
+  </div>
+
+  <h2>Where it came from</h2>
+  ${contribRows ? `<table><thead><tr><th>Source city</th><th>Type</th><th class="num">Amount</th><th class="num">Share</th></tr></thead><tbody>${contribRows}</tbody></table>` : '<div class="empty">No contributing sources.</div>'}
+
+  <h2>By region / season</h2>
+  ${rsRows ? `<table><thead><tr><th>Region</th><th>Season</th><th class="num">Own</th><th class="num">External</th><th class="num">Gross</th><th class="num">After tax</th><th class="num">Tax</th><th class="num">Payable</th></tr></thead><tbody>${rsRows}</tbody></table>` : '<div class="empty">No region / season breakdown.</div>'}
+
+  <h2>Daily totals</h2>
+  ${dayRows ? `<table><thead><tr><th>Date</th><th class="num">Payable</th></tr></thead><tbody>${dayRows}</tbody></table>` : '<div class="empty">No daily data.</div>'}
+
+  <div class="foot"><span>Canadian Property Stars — confidential payable report</span><span>${esc(city.cityName)}</span></div>
+  <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 350); };<\/script>
+</body></html>`;
+
+  const w = window.open('', '_blank');
+  if (!w) return;
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
 };
 
 const regionTotals = (city: CitySales): Record<Region, number> => {
@@ -180,6 +315,13 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                 </div>
               </button>
               <button
+                onClick={(e) => { e.stopPropagation(); printCityReport(city); }}
+                title={`Print PDF report for ${city.cityName}`}
+                className="absolute top-3 right-12 p-2 rounded-lg text-gray-400 bg-gray-900/60 border border-gray-700 hover:text-white hover:border-rose-500 transition-colors"
+              >
+                <Printer size={15} />
+              </button>
+              <button
                 onClick={(e) => { e.stopPropagation(); downloadCityReport(city); }}
                 title={`Download report for ${city.cityName}`}
                 className="absolute top-3 right-3 p-2 rounded-lg text-gray-400 bg-gray-900/60 border border-gray-700 hover:text-white hover:border-gray-500 transition-colors"
@@ -203,8 +345,8 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                 <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[card.region]}`} />
                 <span className="text-gray-400 text-sm">{card.region}</span>
                 <span className="text-gray-500 text-xs">{SEASON_LABELS[card.season] || card.season}</span>
-                <span className="text-gray-600 text-xs">{card.startTab}â{card.endTab}</span>
-                <span className="text-gray-600 text-xs">Â· {card.workbook}</span>
+                <span className="text-gray-600 text-xs">{card.startTab}Ã¢ÂÂ{card.endTab}</span>
+                <span className="text-gray-600 text-xs">ÃÂ· {card.workbook}</span>
               </div>
               <div className="text-right">
                 <div className="text-xl font-bold text-teal-300">{money(card.payable)}</div>
@@ -275,7 +417,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                   <span className="text-sm text-gray-500">payable sales</span>
                 </div>
                 <div className="text-xs text-gray-500 mt-1 pl-7">
-                  Gross {money(selected.gross)} Â· deductions {money(selected.gross - selected.total)} Â· payable {money(selected.total)}
+                  Gross {money(selected.gross)} ÃÂ· deductions {money(selected.gross - selected.total)} ÃÂ· payable {money(selected.total)}
                 </div>
               </div>
 
@@ -334,7 +476,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                     </div>
                   </div>
 
-                  {/* PER-DAY STACKED CHART â split by nickname */}
+                  {/* PER-DAY STACKED CHART Ã¢ÂÂ split by nickname */}
                   <div>
                     <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By day, split by nickname</h4>
 
