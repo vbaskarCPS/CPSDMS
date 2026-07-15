@@ -95,8 +95,9 @@ const LeagueLeadersView: React.FC<Props> = ({ workbooks }) => {
     URL.revokeObjectURL(url);
   };
 
-  // Gamified, letter-size print/PDF export: one page per visible category,
-  // top 5 shown at gradually increasing size with red/black theming + logo.
+  // Gamified, letter-size print/PDF export: one page per visible category.
+  // Shows a variable number of entries (min 10, up to 30, capped by list size),
+  // top ranks largest and shrinking gradually, Canadian Property Stars branding.
   const printLeaderboard = () => {
     const visible = result.boards.filter((b) => !hidden.has(b.key));
     if (visible.length === 0) return;
@@ -107,41 +108,66 @@ const LeagueLeadersView: React.FC<Props> = ({ workbooks }) => {
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
 
-    const logoUrl = `${window.location.origin}/logo.svg`;
-    // Rank 1 is largest; each lower rank steps down in size.
-    const sizeFor = [3.4, 2.6, 2.1, 1.7, 1.45];
-    const medal = ['#e11d48', '#d4d4d8', '#b45309', '#3f3f46', '#3f3f46'];
+    // Canadian Property Stars brand assets + palette.
+    const logoUrl = 'https://canadianpropertystars.com/img-prime/logo-white.png';
+    const BRAND_BG = '#252525';
+    const BRAND_RED = '#ff4f4f';
+    const SERVICE_ICON: Record<string, string> = {
+      aeration: 'https://canadianpropertystars.com/img-prime/aeration.png',
+      sealing: 'https://canadianpropertystars.com/img-prime/sealing.png',
+      cleaning: 'https://canadianpropertystars.com/img-prime/washing.png',
+    };
+    // Top-3 medal accents; everyone else uses a neutral graphite.
+    const medal = ['#ff4f4f', '#d4d4d8', '#c8892f'];
+    const accentFor = (i: number) => medal[i] || '#52525b';
 
     const pages = visible
       .map((b) => {
-        const top = b.rows.slice(0, 5);
+        // Scale the shown count to the list size: at least 10, at most 30.
+        const count = Math.min(30, Math.max(10, b.rows.length));
+        const top = b.rows.slice(0, count);
+        const n = top.length;
+
+        // Size ramp: #1 is largest, shrinking to a floor by the last row.
+        // Ramp is compressed when there are more rows so everything fits a page.
+        const maxSz = n <= 12 ? 2.1 : n <= 20 ? 1.55 : 1.2;
+        const minSz = n <= 12 ? 1.2 : n <= 20 ? 0.95 : 0.8;
+        const sizeFor = (i: number) =>
+          n <= 1 ? maxSz : maxSz - ((maxSz - minSz) * i) / (n - 1);
+        const gap = n <= 12 ? 0.22 : n <= 20 ? 0.12 : 0.06;
+
         const rowsHtml = top
           .map((r, i) => {
-            const size = sizeFor[i] || 1.3;
-            const accent = medal[i] || '#3f3f46';
+            const size = sizeFor(i);
+            const accent = accentFor(i);
             const isTop = i === 0;
             return `
-              <div class="ll-row" style="--sz:${size}rem;--accent:${accent};">
+              <div class="ll-row" style="--sz:${size}rem;--accent:${accent};--gap:${gap}in;">
                 <div class="ll-rank" style="color:${accent};">${r.rank}</div>
                 <div class="ll-info">
                   <div class="ll-name">${esc(r.name)}</div>
                   ${r.detail ? `<div class="ll-detail">${esc(r.detail)}</div>` : ''}
                 </div>
-                <div class="ll-value" style="${isTop ? 'color:#e11d48;' : ''}">${esc(fmt(r.value, b.unit))}</div>
+                <div class="ll-value" style="${isTop ? `color:${BRAND_RED};` : ''}">${esc(fmt(r.value, b.unit))}</div>
               </div>`;
           })
           .join('');
+
+        const iconKey = Object.keys(SERVICE_ICON).find((k) => b.title.toLowerCase().includes(k));
+        const watermark = iconKey ? `<img class="ll-watermark" src="${SERVICE_ICON[iconKey]}" alt="" />` : '';
+
         return `
           <section class="ll-page">
+            ${watermark}
             <header class="ll-head">
-              <img class="ll-logo" src="${logoUrl}" alt="" />
+              <img class="ll-logo" src="${logoUrl}" alt="Canadian Property Stars" />
               <div class="ll-titles">
                 <div class="ll-cat">${esc(b.title)}</div>
                 <div class="ll-sub">League Leaders${filterLabel && filterLabel !== 'All' ? ' · ' + esc(filterLabel) : ''}</div>
               </div>
             </header>
-            <div class="ll-body">${rowsHtml}</div>
-            <footer class="ll-foot">Top ${top.length} · ${result.contractorCount} contractors in view</footer>
+            <div class="ll-body" style="gap:var(--bodygap,0.15in);">${rowsHtml}</div>
+            <footer class="ll-foot">Top ${n} · ${result.contractorCount} contractors in view</footer>
           </section>`;
       })
       .join('');
@@ -151,25 +177,26 @@ const LeagueLeadersView: React.FC<Props> = ({ workbooks }) => {
       <style>
         * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         @page { size: letter; margin: 0; }
-        html, body { margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; }
+        html, body { margin: 0; padding: 0; font-family: 'Open Sans', 'Segoe UI', Arial, sans-serif; }
         .ll-page {
-          width: 8.5in; height: 11in; padding: 0.7in 0.8in;
-          background: #0a0a0a; color: #fff; display: flex; flex-direction: column;
+          position: relative; width: 8.5in; height: 11in; padding: 0.6in 0.7in;
+          background: ${BRAND_BG}; color: #fff; display: flex; flex-direction: column;
           page-break-after: always; overflow: hidden;
         }
         .ll-page:last-child { page-break-after: auto; }
-        .ll-head { display: flex; align-items: center; gap: 18px; border-bottom: 4px solid #e11d48; padding-bottom: 18px; }
-        .ll-logo { height: 64px; width: auto; }
-        .ll-cat { font-size: 2.1rem; font-weight: 800; letter-spacing: -0.5px; text-transform: uppercase; }
-        .ll-sub { font-size: 0.9rem; color: #e11d48; text-transform: uppercase; letter-spacing: 2px; font-weight: 700; margin-top: 2px; }
-        .ll-body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 0.35in; }
-        .ll-row { display: flex; align-items: center; gap: 22px; border-left: 6px solid var(--accent); padding-left: 18px; }
-        .ll-rank { font-size: calc(var(--sz) * 1.15); font-weight: 900; min-width: 1.3em; text-align: center; line-height: 1; }
+        .ll-watermark { position: absolute; right: -0.6in; bottom: -0.6in; width: 4.2in; height: auto; opacity: 0.06; }
+        .ll-head { display: flex; align-items: center; gap: 20px; border-bottom: 4px solid ${BRAND_RED}; padding-bottom: 16px; position: relative; z-index: 1; }
+        .ll-logo { height: 58px; width: auto; }
+        .ll-cat { font-size: 1.9rem; font-weight: 800; letter-spacing: -0.5px; text-transform: uppercase; }
+        .ll-sub { font-size: 0.82rem; color: ${BRAND_RED}; text-transform: uppercase; letter-spacing: 2px; font-weight: 700; margin-top: 2px; }
+        .ll-body { flex: 1; display: flex; flex-direction: column; justify-content: center; position: relative; z-index: 1; }
+        .ll-row { display: flex; align-items: center; gap: 18px; border-left: 5px solid var(--accent); padding-left: 16px; margin-bottom: var(--gap); }
+        .ll-rank { font-size: calc(var(--sz) * 1.1); font-weight: 900; min-width: 1.6em; text-align: center; line-height: 1; }
         .ll-info { flex: 1; min-width: 0; }
         .ll-name { font-size: var(--sz); font-weight: 800; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .ll-detail { font-size: 0.8rem; color: #a1a1aa; margin-top: 4px; text-transform: uppercase; letter-spacing: 1px; }
-        .ll-value { font-size: calc(var(--sz) * 0.85); font-weight: 800; color: #fafafa; white-space: nowrap; }
-        .ll-foot { border-top: 1px solid #27272a; padding-top: 12px; margin-top: 18px; font-size: 0.75rem; color: #71717a; text-transform: uppercase; letter-spacing: 1.5px; text-align: center; }
+        .ll-detail { font-size: 0.72rem; color: #a1a1aa; margin-top: 2px; text-transform: uppercase; letter-spacing: 1px; }
+        .ll-value { font-size: calc(var(--sz) * 0.82); font-weight: 800; color: #fafafa; white-space: nowrap; }
+        .ll-foot { border-top: 1px solid #3f3f46; padding-top: 10px; margin-top: 14px; font-size: 0.72rem; color: #a1a1aa; text-transform: uppercase; letter-spacing: 1.5px; text-align: center; position: relative; z-index: 1; }
       </style></head><body>${pages}</body></html>`;
 
     const w = window.open('', '_blank');
@@ -177,8 +204,8 @@ const LeagueLeadersView: React.FC<Props> = ({ workbooks }) => {
     w.document.open();
     w.document.write(doc);
     w.document.close();
-    // Give the logo a moment to load before invoking the print dialog.
-    w.onload = () => { setTimeout(() => { w.focus(); w.print(); }, 300); };
+    // Give the logo/images a moment to load before invoking the print dialog.
+    w.onload = () => { setTimeout(() => { w.focus(); w.print(); }, 500); };
   };
 
   const detectionCount = result.detections.merges.length + result.detections.splits.length;
