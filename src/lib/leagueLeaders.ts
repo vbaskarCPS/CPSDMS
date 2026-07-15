@@ -72,8 +72,15 @@ interface Agg {
   ids: Set<string>;
   nameCounts: Map<string, number>;
   forcedName?: string;                    // canonical name from a merge override
-  days: Map<string, { eq: number; pay: number; bonus: number }>;
+  days: Map<string, { eq: number; pay: number; bonus: number; labels: Map<string, number> }>;
 }
+
+const SEASON_LABELS: Record<SeasonType, string> = {
+  aeration: 'Aeration', lawn_rejuv: 'Lawn Rejuv', sealing: 'Sealing', cleaning: 'Window Cleaning',
+};
+const seasonLabel = (s: SeasonType) => SEASON_LABELS[s] || s;
+// Where a day's work came from: its nickname, or "Region Season" when unnamed.
+const dayLabelOf = (r: RangeInfo) => r.nickname || `${r.region} ${seasonLabel(r.season)}`;
 
 const displayNameOf = (first: string, last: string) => `${first || ''} ${last || ''}`.trim();
 const normName = (first: string, last: string) => displayNameOf(first, last).toLowerCase().replace(/\s+/g, ' ');
@@ -166,8 +173,9 @@ export function computeLeagueLeaders(
       const disp = displayNameOf(row.firstName, row.lastName);
       if (disp) a.nameCounts.set(disp, (a.nameCounts.get(disp) || 0) + 1);
       if (mergeName.has(identity)) a.forcedName = mergeName.get(identity);
-      const d = a.days.get(row.date) || { eq: 0, pay: 0, bonus: 0 };
+      const d = a.days.get(row.date) || { eq: 0, pay: 0, bonus: 0, labels: new Map<string, number>() };
       d.eq += row.totalEQ; d.pay += row.finalPay; d.bonus += row.bonuses;
+      if (range) { const lbl = dayLabelOf(range); d.labels.set(lbl, (d.labels.get(lbl) || 0) + row.totalEQ); }
       a.days.set(row.date, d);
     }
   }
@@ -178,6 +186,7 @@ export function computeLeagueLeaders(
     daysWorked: number; totalEQ: number; totalPay: number; totalBonus: number;
     avgEQ3: number; avgPay3: number; days3: number;
     avgEQPerDay: number; bestDayEQ: number; bestDayPay: number;
+    bestDayEQLabel: string; bestDayPayLabel: string;
   }
   const stats: Stat[] = Array.from(aggs.values()).map((a) => {
     const name = a.forcedName
@@ -185,7 +194,10 @@ export function computeLeagueLeaders(
       || Array.from(a.ids)[0] || a.identity;
 
     const dayEntries = Array.from(a.days.entries())
-      .map(([date, v]) => ({ ord: ordOf(date) ?? 0, ...v }))
+      .map(([date, v]) => {
+        const label = Array.from(v.labels.entries()).sort((x, y) => y[1] - x[1])[0]?.[0] || '';
+        return { ord: ordOf(date) ?? 0, eq: v.eq, pay: v.pay, bonus: v.bonus, label };
+      })
       .sort((x, y) => x.ord - y.ord);
 
     const daysWorked = dayEntries.length;
@@ -199,10 +211,13 @@ export function computeLeagueLeaders(
     const avgPay3 = days3 ? last3.reduce((s, d) => s + d.pay, 0) / days3 : 0;
 
     const avgEQPerDay = daysWorked ? totalEQ / daysWorked : 0;
-    const bestDayEQ = dayEntries.reduce((m, d) => Math.max(m, d.eq), 0);
-    const bestDayPay = dayEntries.reduce((m, d) => Math.max(m, d.pay), 0);
+    let bestDayEQ = 0, bestDayEQLabel = '', bestDayPay = 0, bestDayPayLabel = '';
+    for (const d of dayEntries) {
+      if (d.eq > bestDayEQ) { bestDayEQ = d.eq; bestDayEQLabel = d.label; }
+      if (d.pay > bestDayPay) { bestDayPay = d.pay; bestDayPayLabel = d.label; }
+    }
 
-    return { identity: a.identity, name, ids: Array.from(a.ids), daysWorked, totalEQ, totalPay, totalBonus, avgEQ3, avgPay3, days3, avgEQPerDay, bestDayEQ, bestDayPay };
+    return { identity: a.identity, name, ids: Array.from(a.ids), daysWorked, totalEQ, totalPay, totalBonus, avgEQ3, avgPay3, days3, avgEQPerDay, bestDayEQ, bestDayPay, bestDayEQLabel, bestDayPayLabel };
   });
 
   const TOP = 25;
@@ -222,8 +237,8 @@ export function computeLeagueLeaders(
     board('totalPay', 'Highest total take-home', 'money', (s) => s.totalPay),
     board('totalBonus', 'Highest total bonuses', 'money', (s) => s.totalBonus),
     board('avgEQPerDay', 'Highest avg EQ per day', 'eq', (s) => s.avgEQPerDay, (s) => `${s.daysWorked} days`),
-    board('bestDayEQ', 'Best single day — EQ', 'eq', (s) => s.bestDayEQ),
-    board('bestDayPay', 'Best single day — take-home', 'money', (s) => s.bestDayPay),
+    board('bestDayEQ', 'Best single day — EQ', 'eq', (s) => s.bestDayEQ, (s) => s.bestDayEQLabel || undefined),
+    board('bestDayPay', 'Best single day — take-home', 'money', (s) => s.bestDayPay, (s) => s.bestDayPayLabel || undefined),
   ];
 
   // --- Detections ---
