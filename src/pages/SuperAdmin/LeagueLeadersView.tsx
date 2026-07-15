@@ -1,6 +1,6 @@
 // src/pages/SuperAdmin/LeagueLeadersView.tsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { Trophy, Filter, Wrench, X, Loader, Check, Users, UserX, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Trophy, Filter, Wrench, X, Loader, Check, Users, UserX, RotateCcw, AlertTriangle, EyeOff, Eye } from 'lucide-react';
 import { LoadedWorkbook } from '../../lib/reportDataLoader';
 import { reportingService, ContractorOverride, MergeOverridePayload, SplitOverridePayload } from '../../lib/reportingService';
 import { computeLeagueLeaders, LeagueFilter, BoardUnit } from '../../lib/leagueLeaders';
@@ -29,6 +29,14 @@ const LeagueLeadersView: React.FC<Props> = ({ workbooks }) => {
   const [overrides, setOverrides] = useState<ContractorOverride[]>([]);
   const [filter, setFilter] = useState<LeagueFilter>({ type: 'all' });
   const [showCleanup, setShowCleanup] = useState(false);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+
+  const toggleHidden = (key: string) =>
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
 
   const reloadOverrides = async () => {
     try { setOverrides(await reportingService.getContractorOverrides()); } catch { /* ignore */ }
@@ -95,11 +103,36 @@ const LeagueLeadersView: React.FC<Props> = ({ workbooks }) => {
         </div>
       </div>
 
+      {/* HIDDEN BOARDS — restore row */}
+      {result.boards.some((b) => hidden.has(b.key)) && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-gray-500 flex items-center gap-1"><Eye size={13} /> Hidden:</span>
+          {result.boards.filter((b) => hidden.has(b.key)).map((b) => (
+            <button
+              key={b.key}
+              onClick={() => toggleHidden(b.key)}
+              className="px-2.5 py-1 rounded-lg text-xs font-medium bg-gray-800 text-gray-400 border border-gray-700 hover:text-white hover:border-gray-600 transition-colors"
+            >
+              {b.title}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* BOARDS */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {result.boards.map((b) => (
+        {result.boards.filter((b) => !hidden.has(b.key)).map((b) => (
           <div key={b.key} className="bg-gray-800 rounded-xl border border-gray-700 p-4">
-            <h4 className="text-sm font-bold text-gray-200 mb-3">{b.title}</h4>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-bold text-gray-200">{b.title}</h4>
+              <button
+                onClick={() => toggleHidden(b.key)}
+                className="text-gray-600 hover:text-gray-300 transition-colors flex-shrink-0"
+                title="Hide this category"
+              >
+                <EyeOff size={14} />
+              </button>
+            </div>
             {b.rows.length === 0 ? (
               <p className="text-xs text-gray-600">No data in this filter.</p>
             ) : (

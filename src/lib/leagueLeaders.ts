@@ -218,8 +218,6 @@ export function computeLeagueLeaders(
 
   const boards: LeaderBoard[] = [
     board('daysWorked', 'Most days worked', 'count', (s) => s.daysWorked),
-    board('avgEQ3', 'Highest avg EQ — last 3 days', 'eq', (s) => s.avgEQ3, (s) => `over ${s.days3} day${s.days3 === 1 ? '' : 's'}`),
-    board('avgPay3', 'Highest avg take-home — last 3 days', 'money', (s) => s.avgPay3, (s) => `over ${s.days3} day${s.days3 === 1 ? '' : 's'}`),
     board('totalEQ', 'Highest total EQ', 'eq', (s) => s.totalEQ),
     board('totalPay', 'Highest total take-home', 'money', (s) => s.totalPay),
     board('totalBonus', 'Highest total bonuses', 'money', (s) => s.totalBonus),
