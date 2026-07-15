@@ -236,7 +236,7 @@ const printCityReport = (city: CitySales) => {
   .legendbox { margin:6px 0 14px; display:flex; flex-wrap:wrap; gap:8px 14px; }
   .leg { display:inline-flex; align-items:center; gap:6px; font-size:10.5px; }
   .dot { width:9px; height:9px; border-radius:2px; display:inline-block; flex-shrink:0; }
-  .daygrid { display:grid; grid-template-columns:repeat(2, 1fr); gap:10px; }
+  .daygrid { display:grid; grid-template-columns:repeat(2, 1fr); gap:10px; align-items:start; }
   .day { border:1px solid #ececec; border-radius:8px; overflow:hidden; page-break-inside:avoid; }
   .dayhdr { display:flex; justify-content:space-between; align-items:center; background:#252525;
             color:#fff; padding:6px 11px; font-size:11.5px; font-weight:700; }
