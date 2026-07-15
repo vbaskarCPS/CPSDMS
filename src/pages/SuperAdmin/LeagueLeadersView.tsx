@@ -1,6 +1,6 @@
 // src/pages/SuperAdmin/LeagueLeadersView.tsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { Trophy, Filter, Wrench, X, Loader, Check, Users, UserX, RotateCcw, AlertTriangle, EyeOff, Eye, Download } from 'lucide-react';
+import { Trophy, Filter, Wrench, X, Loader, Check, Users, UserX, RotateCcw, AlertTriangle, EyeOff, Eye, Download, Printer } from 'lucide-react';
 import { LoadedWorkbook } from '../../lib/reportDataLoader';
 import { reportingService, ContractorOverride, MergeOverridePayload, SplitOverridePayload } from '../../lib/reportingService';
 import { computeLeagueLeaders, LeagueFilter, BoardUnit } from '../../lib/leagueLeaders';
@@ -95,6 +95,92 @@ const LeagueLeadersView: React.FC<Props> = ({ workbooks }) => {
     URL.revokeObjectURL(url);
   };
 
+  // Gamified, letter-size print/PDF export: one page per visible category,
+  // top 5 shown at gradually increasing size with red/black theming + logo.
+  const printLeaderboard = () => {
+    const visible = result.boards.filter((b) => !hidden.has(b.key));
+    if (visible.length === 0) return;
+
+    const esc = (s: string) =>
+      String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    const logoUrl = `${window.location.origin}/logo.svg`;
+    // Rank 1 is largest; each lower rank steps down in size.
+    const sizeFor = [3.4, 2.6, 2.1, 1.7, 1.45];
+    const medal = ['#e11d48', '#d4d4d8', '#b45309', '#3f3f46', '#3f3f46'];
+
+    const pages = visible
+      .map((b) => {
+        const top = b.rows.slice(0, 5);
+        const rowsHtml = top
+          .map((r, i) => {
+            const size = sizeFor[i] || 1.3;
+            const accent = medal[i] || '#3f3f46';
+            const isTop = i === 0;
+            return `
+              <div class="ll-row" style="--sz:${size}rem;--accent:${accent};">
+                <div class="ll-rank" style="color:${accent};">${r.rank}</div>
+                <div class="ll-info">
+                  <div class="ll-name">${esc(r.name)}</div>
+                  ${r.detail ? `<div class="ll-detail">${esc(r.detail)}</div>` : ''}
+                </div>
+                <div class="ll-value" style="${isTop ? 'color:#e11d48;' : ''}">${esc(fmt(r.value, b.unit))}</div>
+              </div>`;
+          })
+          .join('');
+        return `
+          <section class="ll-page">
+            <header class="ll-head">
+              <img class="ll-logo" src="${logoUrl}" alt="" />
+              <div class="ll-titles">
+                <div class="ll-cat">${esc(b.title)}</div>
+                <div class="ll-sub">League Leaders${filterLabel && filterLabel !== 'All' ? ' · ' + esc(filterLabel) : ''}</div>
+              </div>
+            </header>
+            <div class="ll-body">${rowsHtml}</div>
+            <footer class="ll-foot">Top ${top.length} · ${result.contractorCount} contractors in view</footer>
+          </section>`;
+      })
+      .join('');
+
+    const doc = `<!doctype html><html><head><meta charset="utf-8" />
+      <title>League Leaders</title>
+      <style>
+        * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        @page { size: letter; margin: 0; }
+        html, body { margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; }
+        .ll-page {
+          width: 8.5in; height: 11in; padding: 0.7in 0.8in;
+          background: #0a0a0a; color: #fff; display: flex; flex-direction: column;
+          page-break-after: always; overflow: hidden;
+        }
+        .ll-page:last-child { page-break-after: auto; }
+        .ll-head { display: flex; align-items: center; gap: 18px; border-bottom: 4px solid #e11d48; padding-bottom: 18px; }
+        .ll-logo { height: 64px; width: auto; }
+        .ll-cat { font-size: 2.1rem; font-weight: 800; letter-spacing: -0.5px; text-transform: uppercase; }
+        .ll-sub { font-size: 0.9rem; color: #e11d48; text-transform: uppercase; letter-spacing: 2px; font-weight: 700; margin-top: 2px; }
+        .ll-body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 0.35in; }
+        .ll-row { display: flex; align-items: center; gap: 22px; border-left: 6px solid var(--accent); padding-left: 18px; }
+        .ll-rank { font-size: calc(var(--sz) * 1.15); font-weight: 900; min-width: 1.3em; text-align: center; line-height: 1; }
+        .ll-info { flex: 1; min-width: 0; }
+        .ll-name { font-size: var(--sz); font-weight: 800; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ll-detail { font-size: 0.8rem; color: #a1a1aa; margin-top: 4px; text-transform: uppercase; letter-spacing: 1px; }
+        .ll-value { font-size: calc(var(--sz) * 0.85); font-weight: 800; color: #fafafa; white-space: nowrap; }
+        .ll-foot { border-top: 1px solid #27272a; padding-top: 12px; margin-top: 18px; font-size: 0.75rem; color: #71717a; text-transform: uppercase; letter-spacing: 1.5px; text-align: center; }
+      </style></head><body>${pages}</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) return;
+    w.document.open();
+    w.document.write(doc);
+    w.document.close();
+    // Give the logo a moment to load before invoking the print dialog.
+    w.onload = () => { setTimeout(() => { w.focus(); w.print(); }, 300); };
+  };
+
   const detectionCount = result.detections.merges.length + result.detections.splits.length;
 
   const chip = (active: boolean, onClick: () => void, label: string, key: string) => (
@@ -127,6 +213,13 @@ const LeagueLeadersView: React.FC<Props> = ({ workbooks }) => {
         >
           <Download size={16} />
           Download report
+        </button>
+        <button
+          onClick={printLeaderboard}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-rose-600 border border-rose-600 text-white hover:bg-rose-500 hover:border-rose-500 transition-colors"
+        >
+          <Printer size={16} />
+          Print leaderboard
         </button>
         <button
           onClick={() => setShowCleanup(true)}
