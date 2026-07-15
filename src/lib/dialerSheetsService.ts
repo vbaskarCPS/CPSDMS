@@ -9,23 +9,21 @@
 // We track token age and silently refresh when within 5 minutes of expiry.
 // Every API method calls ensureFreshToken() before making requests.
 //
-import { GOOGLE_OAUTH_CONFIG } from './googleSheetsConfig';
+import { googleAuthService } from './googleAuthService';
 
 /** Refresh the token 5 minutes before it expires */
-const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 /** Default GIS token lifetime (Google returns this in the response too) */
 const DEFAULT_TOKEN_LIFETIME_MS = 3600 * 1000;
 
 class DialerSheetsService {
   private static instance: DialerSheetsService;
-  private accessToken: string | null = null;
-  private tokenIssuedAt: number = 0;
-  private tokenExpiresIn: number = DEFAULT_TOKEN_LIFETIME_MS;
-  private tokenClient: any = null;
   private gapiLoaded: boolean = false;
-  private gisLoaded: boolean = false;
-  private refreshPromise: Promise<boolean> | null = null; // dedup concurrent refreshes
+
+  // Token now lives in the shared googleAuthService (single app-wide token).
+  private get accessToken(): string | null {
+    return googleAuthService.getAccessToken();
+  }
 
   private constructor() {}
 
@@ -69,122 +67,36 @@ class DialerSheetsService {
    * Initialize the Google Identity Services token client.
    * Safe to call multiple times — will only init once.
    */
+  // --- Authentication (delegated to the shared googleAuthService) ---------
+
+  // Kept for backward compatibility; the GIS token client now lives in
+  // googleAuthService, so this is a no-op.
   public initTokenClient(): void {
-    if (this.gisLoaded) return;
-
-    if (!window.google?.accounts?.oauth2) {
-      throw new Error('Google Identity Services not loaded. Make sure the script is included in index.html');
-    }
-
-    this.tokenClient = window.google.accounts.oauth2.initTokenClient({
-      client_id: GOOGLE_OAUTH_CONFIG.clientId,
-      scope: GOOGLE_OAUTH_CONFIG.scopes,
-      callback: (response: any) => {
-        if (response.access_token) {
-          this.accessToken = response.access_token;
-          this.tokenIssuedAt = Date.now();
-          this.tokenExpiresIn = (response.expires_in || 3600) * 1000;
-        }
-      },
-    });
-
-    this.gisLoaded = true;
+    /* no-op */
   }
 
-  /**
-   * Check if we have a valid access token.
-   */
   public isAuthenticated(): boolean {
-    return !!this.accessToken;
+    return googleAuthService.isAuthenticated();
   }
 
   /**
-   * Check if the current token is expired or within the refresh buffer.
-   */
-  private isTokenExpiring(): boolean {
-    if (!this.accessToken || !this.tokenIssuedAt) return true;
-    const elapsed = Date.now() - this.tokenIssuedAt;
-    return elapsed >= (this.tokenExpiresIn - REFRESH_BUFFER_MS);
-  }
-
-  /**
-   * Silently refresh the token without showing a popup.
-   */
-  private async silentRefresh(): Promise<boolean> {
-    if (this.refreshPromise) return this.refreshPromise;
-
-    this.refreshPromise = new Promise<boolean>((resolve) => {
-      this.tokenClient.callback = (response: any) => {
-        if (response.access_token) {
-          this.accessToken = response.access_token;
-          this.tokenIssuedAt = Date.now();
-          this.tokenExpiresIn = (response.expires_in || 3600) * 1000;
-          this.refreshPromise = null;
-          resolve(true);
-        } else {
-          this.refreshPromise = null;
-          resolve(false);
-        }
-      };
-
-      this.tokenClient.requestAccessToken({ prompt: '' });
-    });
-
-    return this.refreshPromise;
-  }
-
-  /**
-   * Ensure we have a fresh token before making an API call.
+   * Ensure a valid, non-expired token before a Sheets call. The shared
+   * service handles the expiry buffer, silent refresh, and single-flight.
    */
   private async ensureFreshToken(): Promise<string> {
-    if (!this.accessToken) {
-      throw new Error('Not authenticated with Google. Please connect first.');
-    }
-
-    if (this.isTokenExpiring()) {
-      const refreshed = await this.silentRefresh();
-      if (!refreshed || !this.accessToken) {
-        throw new Error('Google session expired. Please reconnect.');
-      }
-    }
-
-    return this.accessToken;
+    return googleAuthService.getValidToken();
   }
 
-  /**
-   * Trigger OAuth flow. Returns true if successful.
-   */
+  /** Interactive sign-in (normally triggered once at command-center login). */
   public async authenticate(): Promise<boolean> {
-    await this.initGapi();
-    this.initTokenClient();
-
-    return new Promise((resolve) => {
-      this.tokenClient.callback = (response: any) => {
-        if (response.access_token) {
-          this.accessToken = response.access_token;
-          this.tokenIssuedAt = Date.now();
-          this.tokenExpiresIn = (response.expires_in || 3600) * 1000;
-          resolve(true);
-        } else {
-          resolve(false);
-        }
-      };
-
-      if (this.accessToken) {
-        this.tokenClient.requestAccessToken({ prompt: '' });
-      } else {
-        this.tokenClient.requestAccessToken({ prompt: 'consent' });
-      }
-    });
+    return googleAuthService.authenticate();
   }
 
   /**
    * Clear the access token.
    */
   public signOut(): void {
-    this.accessToken = null;
-    this.tokenIssuedAt = 0;
-    this.refreshPromise = null;
+    googleAuthService.signOut();
   }
 
   // --- CORE SHEETS OPERATIONS ---

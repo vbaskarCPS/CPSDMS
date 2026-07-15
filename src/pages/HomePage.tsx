@@ -9,6 +9,7 @@ import { contractorService } from '../lib/contractorService';
 import { setStorageItem } from '../lib/localStorage';
 import { isTrainingCredentials, TRAINING_WORKER } from '../lib/trainingData';
 import { trainingService } from '../lib/trainingService';
+import { googleAuthService } from '../lib/googleAuthService';
 
 // Logo URL (same as email templates)
 const LOGO_URL = 'https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png';
@@ -26,6 +27,10 @@ const HomePage: React.FC = () => {
     setError('');
     setIsSessionFinalized(false);
     setLoading(true);
+
+    // New login: clear any Google token from a previous command-center/user
+    // so the fresh identity re-establishes its own OAuth session.
+    googleAuthService.signOut();
 
     try {
       // 0. Check Training Mode (Training/training)
@@ -51,6 +56,14 @@ const HomePage: React.FC = () => {
         trainingService.disableTrainingMode();
         commandCenterService.setCurrentCommandCenter(cc);
         commandCenterService.setSuperAdminMode(false);
+        // Single Google OAuth consent for the whole session — prompt once here so
+        // the Sheets and Dialer integrations reuse this token without re-consenting.
+        try {
+          await googleAuthService.authenticate();
+        } catch (err) {
+          // Non-fatal: login proceeds; features will re-prompt only if truly needed.
+          console.warn('Google sign-in was not completed at login:', err);
+        }
         navigate('/admin');
         return;
       }
