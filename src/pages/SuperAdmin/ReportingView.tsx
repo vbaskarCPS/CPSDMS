@@ -14,6 +14,7 @@ import {
   Layers,
   Cloud,
   ChevronDown,
+  Trophy,
 } from 'lucide-react';
 import { reportingService, PayableCity, WorkbookConfig } from '../../lib/reportingService';
 import {
@@ -25,6 +26,7 @@ import {
 import WorkbookModal from './WorkbookModal';
 import CitiesModal from './CitiesModal';
 import PayableCitySalesReport from './PayableCitySalesReport';
+import LeagueLeadersView from './LeagueLeadersView';
 
 interface ReportingViewProps {
   onBack: () => void;
@@ -34,6 +36,7 @@ interface ReportingViewProps {
 // Reporting area grows.
 const REPORT_TYPES = [
   { id: 'payable_city_sales', label: 'Payable City Sales', icon: MapPin },
+  { id: 'league_leaders', label: 'League Leaders', icon: Trophy },
 ];
 
 type LoadStatus = 'loading' | 'ready' | 'auth_error' | 'error';
@@ -324,6 +327,10 @@ const ReportingView: React.FC<ReportingViewProps> = ({ onBack }) => {
 
               <PayableCitySalesReport workbooks={workbooks} cities={cities} />
             </div>
+          )}
+
+          {activeReport === 'league_leaders' && (
+            <LeagueLeadersView workbooks={workbooks} />
           )}
         </div>
       </div>

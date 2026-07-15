@@ -20,7 +20,12 @@ const PAYOUT_STATS_TAB = 'Payout Stats';
 // team-season books add columns AFTER Final Pay, so these early indices don't move.
 const COL_DATE = 0;          // "May09"
 const COL_CONTRACTOR_ID = 1; // "H1001"
+const COL_FIRST_NAME = 2;    // First Name
+const COL_LAST_NAME = 3;     // Last Name
 const COL_PROD_GROSS = 15;   // ProdGross (column P)
+const COL_TOTAL_EQ = 17;     // totalEQ
+const COL_BONUSES = 32;      // Bonuses
+const COL_FINAL_PAY = 33;    // Final Pay
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -35,11 +40,16 @@ function parseMmmDd(raw: any): { month: number; day: number } | null {
   return { month, day };
 }
 
-// A single Payout Stats row, trimmed to what the report needs.
+// A single Payout Stats row, trimmed to what the reports need.
 export interface PayoutStatRow {
   date: string;          // "May09"
   contractorId: string;  // "H1001"
+  firstName: string;
+  lastName: string;
   prodGross: number;
+  totalEQ: number;
+  bonuses: number;
+  finalPay: number;
 }
 
 // One workbook, fully loaded (or carrying a read error).
@@ -136,7 +146,7 @@ export async function loadReportData(): Promise<ReportData> {
       };
 
       try {
-        const rows = await googleSheetsService.readRangeById(e.sheetId, `'${PAYOUT_STATS_TAB}'!A:P`);
+        const rows = await googleSheetsService.readRangeById(e.sheetId, `'${PAYOUT_STATS_TAB}'!A:AH`);
         // Row 0 is the header; skip it.
         for (let i = 1; i < rows.length; i++) {
           const r = rows[i] || [];
@@ -144,8 +154,16 @@ export async function loadReportData(): Promise<ReportData> {
           const contractorId = (r[COL_CONTRACTOR_ID] ?? '').toString().trim();
           if (!date || !contractorId) continue;
 
-          const prodGross = parseFloat(r[COL_PROD_GROSS]) || 0;
-          wb.rows.push({ date, contractorId, prodGross });
+          wb.rows.push({
+            date,
+            contractorId,
+            firstName: (r[COL_FIRST_NAME] ?? '').toString().trim(),
+            lastName: (r[COL_LAST_NAME] ?? '').toString().trim(),
+            prodGross: parseFloat(r[COL_PROD_GROSS]) || 0,
+            totalEQ: parseFloat(r[COL_TOTAL_EQ]) || 0,
+            bonuses: parseFloat(r[COL_BONUSES]) || 0,
+            finalPay: parseFloat(r[COL_FINAL_PAY]) || 0,
+          });
 
           const p = parseMmmDd(date);
           if (p) wb.dataDays.add(`${p.month}-${p.day}`);

@@ -63,6 +63,28 @@ export interface CitySplitShare {
  */
 export type RegionSplits = Partial<Record<Region, CitySplitShare[]>>;
 
+// --- TYPES: CONTRACTOR OVERRIDES (data cleanup) ---
+
+/** Two contractor IDs (or split base-keys) that are the same person. */
+export interface MergeOverridePayload {
+  members: string[];       // identity base-keys merged into one person
+  canonicalName: string;   // display name for the merged person
+}
+
+/** One contractor ID that is actually several people; split by name. */
+export interface SplitOverridePayload {
+  id: string;              // contractor ID whose rows split apart by full name
+}
+
+export type ContractorOverrideKind = 'merge' | 'split';
+
+export interface ContractorOverride {
+  id: string;
+  kind: ContractorOverrideKind;
+  payload: MergeOverridePayload | SplitOverridePayload;
+  createdAt: string;
+}
+
 export interface PayableCity {
   id: string;
   name: string;              // e.g. "Hamilton"
@@ -232,6 +254,43 @@ class ReportingService {
   }
 
   // ==========================================================================
+  // CONTRACTOR OVERRIDES (data cleanup)
+  // ==========================================================================
+
+  public async getContractorOverrides(): Promise<ContractorOverride[]> {
+    const { data, error } = await supabase
+      .from('report_contractor_overrides')
+      .select('*')
+      .order('created_at', { ascending: true });
+
+    if (error || !data) return [];
+    return data.map(this.mapDbToOverride);
+  }
+
+  public async createContractorOverride(o: {
+    kind: ContractorOverrideKind;
+    payload: MergeOverridePayload | SplitOverridePayload;
+  }): Promise<ContractorOverride> {
+    const { data, error } = await supabase
+      .from('report_contractor_overrides')
+      .insert({ kind: o.kind, payload: o.payload })
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+    return this.mapDbToOverride(data);
+  }
+
+  public async deleteContractorOverride(id: string): Promise<void> {
+    const { error } = await supabase
+      .from('report_contractor_overrides')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw new Error(error.message);
+  }
+
+  // ==========================================================================
   // MAPPERS
   // ==========================================================================
 
@@ -256,6 +315,14 @@ class ReportingService {
         : {},
       createdAt: data.created_at,
       updatedAt: data.updated_at,
+    };
+  }
+  private mapDbToOverride(data: any): ContractorOverride {
+    return {
+      id: data.id,
+      kind: data.kind,
+      payload: (data.payload && typeof data.payload === 'object') ? data.payload : {},
+      createdAt: data.created_at,
     };
   }
 }
