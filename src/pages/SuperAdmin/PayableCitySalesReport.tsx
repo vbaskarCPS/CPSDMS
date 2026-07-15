@@ -126,35 +126,43 @@ const printCityReport = (city: CitySales) => {
     )
     .join('');
 
-  // ---- Region / season (full detail incl. product rate) ----
+  // ---- Region / season with the same step-by-step math as the on-screen page ----
   const rsSorted = city.regionSeason.slice().sort((a, b) => b.amount - a.amount);
   const rsRows = rsSorted
-    .map(
-      (rs) => `
+    .map((rs) => {
+      const taxDed = rs.gross - rs.afterTax;
+      const prodDed = rs.afterTax - rs.amount;
+      const taxPct = rs.taxRate != null ? rs.taxRate + '%' : 'varies';
+      const prodPct = rs.productRate != null ? rs.productRate + '%' : 'varies';
+      return `
         <tr>
           <td class="lbl">${esc(rs.region)}</td>
           <td>${esc(SEASON_LABELS[rs.season] || rs.season)}</td>
-          <td class="num">${fmtMoney(rs.own)}</td>
-          <td class="num">${fmtMoney(rs.external)}</td>
           <td class="num">${fmtMoney(rs.gross)}</td>
+          <td class="num muted">${taxPct}</td>
+          <td class="num ded">-${fmtMoney(taxDed)}</td>
           <td class="num">${fmtMoney(rs.afterTax)}</td>
-          <td class="num">${rs.taxRate != null ? rs.taxRate + '%' : 'varies'}</td>
-          <td class="num">${rs.productRate != null ? '$' + rs.productRate : 'varies'}</td>
+          <td class="num muted">${prodPct}</td>
+          <td class="num ded">-${fmtMoney(prodDed)}</td>
           <td class="num accent">${fmtMoney(rs.amount)}</td>
-        </tr>`
-    )
+        </tr>`;
+    })
     .join('');
   const rsTotals = rsSorted.reduce(
     (t, rs) => {
-      t.own += rs.own; t.external += rs.external; t.gross += rs.gross;
-      t.afterTax += rs.afterTax; t.amount += rs.amount; return t;
+      t.gross += rs.gross;
+      t.tax += rs.gross - rs.afterTax;
+      t.afterTax += rs.afterTax;
+      t.prod += rs.afterTax - rs.amount;
+      t.amount += rs.amount;
+      return t;
     },
-    { own: 0, external: 0, gross: 0, afterTax: 0, amount: 0 }
+    { gross: 0, tax: 0, afterTax: 0, prod: 0, amount: 0 }
   );
 
-  // ---- Daily breakdown: each day expanded into its segments ----
+  // ---- Daily breakdown: clean multi-column grid of day cards ----
   const daysSorted = city.days.slice().sort((a, b) => a.ord - b.ord);
-  const dayBlocks = daysSorted
+  const dayCards = daysSorted
     .map((d) => {
       const segs = d.segments.slice().sort((a, b) => b.amount - a.amount);
       const segRows = segs
@@ -162,24 +170,22 @@ const printCityReport = (city: CitySales) => {
           const col = segColor.get(s.key) || '#6b7280';
           const pct = d.total > 0 ? ((s.amount / d.total) * 100).toFixed(0) + '%' : '0%';
           return `
-            <tr>
-              <td class="seg"><span class="dot" style="background:${col}"></span>${esc(segLabel(s))}</td>
-              <td>${esc(s.region)}</td>
-              <td>${esc(SEASON_LABELS[s.season] || s.season)}</td>
-              <td class="num">${fmtMoney(s.amount)}</td>
-              <td class="num muted">${pct}</td>
-            </tr>`;
+            <div class="segrow">
+              <span class="dot" style="background:${col}"></span>
+              <span class="segname">${esc(segLabel(s))}</span>
+              <span class="segpct">${pct}</span>
+              <span class="segamt">${fmtMoney(s.amount)}</span>
+            </div>`;
         })
         .join('');
       return `
         <div class="day">
           <div class="dayhdr"><span>${esc(d.date)}</span><span class="daytot">${fmtMoney(d.total)}</span></div>
-          <table class="daytbl"><tbody>${segRows}</tbody></table>
+          <div class="daybody">${segRows}</div>
         </div>`;
     })
     .join('');
 
-  // ---- Segment colour legend ----
   const legend = segKeys
     .map((k) => {
       const col = segColor.get(k) || '#6b7280';
@@ -216,26 +222,32 @@ const printCityReport = (city: CitySales) => {
   .kpi.payable .v { color:#ff4f4f; }
   h2 { font-size:13px; text-transform:uppercase; letter-spacing:0.8px; color:#252525;
        border-left:4px solid #ff4f4f; padding-left:10px; margin:22px 0 9px; }
-  table { width:100%; border-collapse:collapse; font-size:11.5px; }
-  th { text-align:left; background:#f4f4f4; color:#555; font-size:9.5px; text-transform:uppercase;
-       letter-spacing:0.5px; padding:6px 8px; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th { text-align:left; background:#f4f4f4; color:#555; font-size:9px; text-transform:uppercase;
+       letter-spacing:0.4px; padding:6px 7px; }
   th.num, td.num { text-align:right; }
-  td { padding:6px 8px; border-bottom:1px solid #eee; }
+  td { padding:6px 7px; border-bottom:1px solid #eee; }
   td.lbl { font-weight:700; }
   td.accent { color:#ff4f4f; font-weight:700; }
+  td.ded { color:#c0392b; }
   td.muted, .muted { color:#9a9a9a; }
   tbody tr:nth-child(even) td { background:#fafafa; }
   tfoot td { font-weight:800; border-top:2px solid #252525; background:#fff; }
-  .legendbox { margin:6px 0 14px; display:flex; flex-wrap:wrap; gap:10px; }
-  .leg, .seg { display:flex; align-items:center; gap:6px; font-size:11px; }
-  .dot { width:10px; height:10px; border-radius:2px; display:inline-block; flex-shrink:0; }
-  .day { border:1px solid #ececec; border-radius:8px; margin-bottom:10px; overflow:hidden;
-         page-break-inside:avoid; }
+  .legendbox { margin:6px 0 14px; display:flex; flex-wrap:wrap; gap:8px 14px; }
+  .leg { display:inline-flex; align-items:center; gap:6px; font-size:10.5px; }
+  .dot { width:9px; height:9px; border-radius:2px; display:inline-block; flex-shrink:0; }
+  .daygrid { display:grid; grid-template-columns:repeat(2, 1fr); gap:10px; }
+  .day { border:1px solid #ececec; border-radius:8px; overflow:hidden; page-break-inside:avoid; }
   .dayhdr { display:flex; justify-content:space-between; align-items:center; background:#252525;
-            color:#fff; padding:7px 12px; font-size:12px; font-weight:700; }
+            color:#fff; padding:6px 11px; font-size:11.5px; font-weight:700; }
   .dayhdr .daytot { color:#ff4f4f; }
-  .daytbl td { border-bottom:1px solid #f0f0f0; }
-  .daytbl tr:last-child td { border-bottom:none; }
+  .daybody { padding:5px 11px; }
+  .segrow { display:flex; align-items:center; gap:6px; font-size:10.5px; padding:2.5px 0;
+            border-bottom:1px solid #f2f2f2; }
+  .segrow:last-child { border-bottom:none; }
+  .segrow .segname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .segrow .segpct { color:#9a9a9a; width:34px; text-align:right; }
+  .segrow .segamt { font-weight:700; width:64px; text-align:right; }
   .foot { margin-top:26px; padding-top:12px; border-top:1px solid #e6e6e6;
           font-size:10px; color:#9a9a9a; display:flex; justify-content:space-between; }
   .empty { color:#9a9a9a; font-size:12px; font-style:italic; padding:6px 0; }
@@ -248,7 +260,7 @@ const printCityReport = (city: CitySales) => {
   <div class="title">${esc(city.cityName)} <span class="accent">•</span> Payable Report${
     city.isConfigured ? '' : '<span class="cfg">Referenced in a split</span>'
   }</div>
-  <div class="sub">Full breakdown of payable dollars: where they came from, product rates, and daily sales by source.</div>
+  <div class="sub">Full breakdown of payable dollars: where they came from, tax and product-cost deductions, and daily sales by source.</div>
   <div class="kpis">
     <div class="kpi payable"><div class="k">Total payable</div><div class="v">${fmtMoney(city.total)}</div></div>
     <div class="kpi"><div class="k">Gross behind it</div><div class="v">${fmtMoney(city.gross)}</div></div>
@@ -260,11 +272,11 @@ const printCityReport = (city: CitySales) => {
   ${contribRows ? `<table><thead><tr><th>Source city</th><th>Type</th><th class="num">Amount</th><th class="num">Share</th></tr></thead><tbody>${contribRows}</tbody></table>` : '<div class="empty">No contributing sources.</div>'}
 
   <h2>By region / season</h2>
-  ${rsRows ? `<table><thead><tr><th>Region</th><th>Season</th><th class="num">Own</th><th class="num">External</th><th class="num">Gross</th><th class="num">After tax</th><th class="num">Tax</th><th class="num">Product rate</th><th class="num">Payable</th></tr></thead><tbody>${rsRows}</tbody><tfoot><tr><td>Total</td><td></td><td class="num">${fmtMoney(rsTotals.own)}</td><td class="num">${fmtMoney(rsTotals.external)}</td><td class="num">${fmtMoney(rsTotals.gross)}</td><td class="num">${fmtMoney(rsTotals.afterTax)}</td><td></td><td></td><td class="num">${fmtMoney(rsTotals.amount)}</td></tr></tfoot></table>` : '<div class="empty">No region / season breakdown.</div>'}
+  ${rsRows ? `<table><thead><tr><th>Region</th><th>Season</th><th class="num">Gross</th><th class="num">Tax %</th><th class="num">Tax</th><th class="num">After tax</th><th class="num">Product %</th><th class="num">Product cost</th><th class="num">Payable</th></tr></thead><tbody>${rsRows}</tbody><tfoot><tr><td>Total</td><td></td><td class="num">${fmtMoney(rsTotals.gross)}</td><td></td><td class="num ded">-${fmtMoney(rsTotals.tax)}</td><td class="num">${fmtMoney(rsTotals.afterTax)}</td><td></td><td class="num ded">-${fmtMoney(rsTotals.prod)}</td><td class="num">${fmtMoney(rsTotals.amount)}</td></tr></tfoot></table>` : '<div class="empty">No region / season breakdown.</div>'}
 
   <h2>Daily sales by source</h2>
   ${legend ? `<div class="legendbox">${legend}</div>` : ''}
-  ${dayBlocks || '<div class="empty">No daily data.</div>'}
+  ${dayCards ? `<div class="daygrid">${dayCards}</div>` : '<div class="empty">No daily data.</div>'}
 
   <div class="foot"><span>Canadian Property Stars — confidential payable report</span><span>${esc(city.cityName)} · ${esc(generated)}</span></div>
   <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
@@ -407,8 +419,8 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                 <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[card.region]}`} />
                 <span className="text-gray-400 text-sm">{card.region}</span>
                 <span className="text-gray-500 text-xs">{SEASON_LABELS[card.season] || card.season}</span>
-                <span className="text-gray-600 text-xs">{card.startTab}ÃÂ¢ÃÂÃÂ{card.endTab}</span>
-                <span className="text-gray-600 text-xs">ÃÂÃÂ· {card.workbook}</span>
+                <span className="text-gray-600 text-xs">{card.startTab}ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ{card.endTab}</span>
+                <span className="text-gray-600 text-xs">ÃÂÃÂÃÂÃÂ· {card.workbook}</span>
               </div>
               <div className="text-right">
                 <div className="text-xl font-bold text-teal-300">{money(card.payable)}</div>
@@ -479,7 +491,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                   <span className="text-sm text-gray-500">payable sales</span>
                 </div>
                 <div className="text-xs text-gray-500 mt-1 pl-7">
-                  Gross {money(selected.gross)} ÃÂÃÂ· deductions {money(selected.gross - selected.total)} ÃÂÃÂ· payable {money(selected.total)}
+                  Gross {money(selected.gross)} ÃÂÃÂÃÂÃÂ· deductions {money(selected.gross - selected.total)} ÃÂÃÂÃÂÃÂ· payable {money(selected.total)}
                 </div>
               </div>
 
@@ -538,7 +550,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                     </div>
                   </div>
 
-                  {/* PER-DAY STACKED CHART ÃÂ¢ÃÂÃÂ split by nickname */}
+                  {/* PER-DAY STACKED CHART ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ split by nickname */}
                   <div>
                     <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By day, split by nickname</h4>
 
