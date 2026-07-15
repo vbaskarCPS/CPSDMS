@@ -1,7 +1,6 @@
 // src/lib/googleSheetsService.ts
 import { 
   getGoogleSheetsConfig, 
-  GOOGLE_OAUTH_CONFIG, 
   SHEET_TABS, 
   isValidDateTab,
   getFeedColumnsConfig,
@@ -27,6 +26,7 @@ import {
   SEASON_CONFIGS
 } from '../types';
 import { formatPhoneNumber, normalizeEmail } from './validationUtils';
+import { googleAuthService } from './googleAuthService';
 
 // Type declarations for Google Identity Services
 declare global {
@@ -70,10 +70,12 @@ export interface ImportMeta {
 
 class GoogleSheetsService {
   private static instance: GoogleSheetsService;
-  private accessToken: string | null = null;
-  private tokenClient: any = null;
   private gapiLoaded: boolean = false;
-  private gisLoaded: boolean = false;
+
+  // Token now lives in the shared googleAuthService (single app-wide token).
+  private get accessToken(): string | null {
+    return googleAuthService.getAccessToken();
+  }
 
   private constructor() {}
 
@@ -121,59 +123,36 @@ class GoogleSheetsService {
     });
   }
 
+  // --- Authentication (delegated to the shared googleAuthService) ---------
+
+  // Kept for backward compatibility; token client now lives in googleAuthService.
   public initTokenClient(): void {
-    if (this.gisLoaded) return;
-
-    if (!window.google?.accounts?.oauth2) {
-      throw new Error('Google Identity Services not loaded. Make sure the script is included in index.html');
-    }
-
-    this.tokenClient = window.google.accounts.oauth2.initTokenClient({
-      client_id: GOOGLE_OAUTH_CONFIG.clientId,
-      scope: GOOGLE_OAUTH_CONFIG.scopes,
-      callback: (response: any) => {
-        if (response.access_token) {
-          this.accessToken = response.access_token;
-        }
-      },
-    });
-
-    this.gisLoaded = true;
+    // no-op: the shared googleAuthService owns the GIS token client.
   }
 
   public isAuthenticated(): boolean {
-    return !!this.accessToken;
+    return googleAuthService.isAuthenticated();
   }
 
-  // Returns the current OAuth access token, or null if not authenticated.
   public getAccessToken(): string | null {
-    return this.accessToken;
+    return googleAuthService.getAccessToken();
   }
 
+  // Interactive sign-in. Normally triggered once at command-center login,
+  // but kept here so existing callers continue to work.
   public async authenticate(): Promise<boolean> {
     await this.initGapi();
-    this.initTokenClient();
+    return googleAuthService.authenticate();
+  }
 
-    return new Promise((resolve) => {
-      this.tokenClient.callback = (response: any) => {
-        if (response.access_token) {
-          this.accessToken = response.access_token;
-          resolve(true);
-        } else {
-          resolve(false);
-        }
-      };
-
-      if (this.accessToken) {
-        this.tokenClient.requestAccessToken({ prompt: '' });
-      } else {
-        this.tokenClient.requestAccessToken({ prompt: 'consent' });
-      }
-    });
+  // Ensures a valid (silently-refreshed) token before a Sheets API call.
+  public async ensureToken(): Promise<string> {
+    await this.initGapi();
+    return googleAuthService.getValidToken();
   }
 
   public signOut(): void {
-    this.accessToken = null;
+    googleAuthService.signOut();
   }
 
   // --- PRIVATE HELPER METHODS ---
