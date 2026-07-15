@@ -81,16 +81,37 @@ const downloadCityReport = (city: CitySales) => {
 };
 
 const printCityReport = (city: CitySales) => {
-  const fmtMoney = (n: number) =>
-    '$' + Math.round(n).toLocaleString('en-CA');
+  const fmtMoney = (n: number) => '$' + Math.round(n).toLocaleString('en-CA');
   const share = (a: number) =>
-    city.total > 0 ? ((a / city.total) * 100).toFixed(0) + '%' : '0%';
+    city.total > 0 ? ((a / city.total) * 100).toFixed(1) + '%' : '0%';
   const esc = (v: unknown) =>
     String(v ?? '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
 
+  // Stable colour per segment key, matching the on-screen day chart.
+  const segPalette = [
+    '#3b82f6', '#f97316', '#22c55e', '#e11d48', '#a855f7', '#eab308',
+    '#06b6d4', '#ec4899', '#84cc16', '#f43f5e', '#0ea5e9', '#8b5cf6',
+  ];
+  const segKeys = Array.from(
+    new Set(city.days.flatMap((d) => d.segments.map((s) => s.key)))
+  ).sort();
+  const segColor = new Map<string, string>();
+  segKeys.forEach((k, i) => segColor.set(k, segPalette[i % segPalette.length]));
+  const segLabel = (s: { nickname?: string; region: string; season: SeasonType }) =>
+    s.nickname && s.nickname.trim()
+      ? s.nickname
+      : `${s.region} · ${SEASON_LABELS[s.season] || s.season}`;
+  const keyLabelMap = new Map<string, string>();
+  city.days.forEach((d) =>
+    d.segments.forEach((s) => {
+      if (!keyLabelMap.has(s.key)) keyLabelMap.set(s.key, segLabel(s));
+    })
+  );
+
+  // ---- Contributors ----
   const contribRows = city.contributors
     .slice()
     .sort((a, b) => b.amount - a.amount)
@@ -98,16 +119,16 @@ const printCityReport = (city: CitySales) => {
       (c) => `
         <tr>
           <td class="lbl">${esc(c.fromCity)}</td>
-          <td>${c.isOwn ? 'Own workers' : 'From other city'}</td>
+          <td>${c.isOwn ? 'Own workers' : 'From another city'}</td>
           <td class="num">${fmtMoney(c.amount)}</td>
           <td class="num accent">${share(c.amount)}</td>
         </tr>`
     )
     .join('');
 
-  const rsRows = city.regionSeason
-    .slice()
-    .sort((a, b) => b.amount - a.amount)
+  // ---- Region / season (full detail incl. product rate) ----
+  const rsSorted = city.regionSeason.slice().sort((a, b) => b.amount - a.amount);
+  const rsRows = rsSorted
     .map(
       (rs) => `
         <tr>
@@ -118,66 +139,105 @@ const printCityReport = (city: CitySales) => {
           <td class="num">${fmtMoney(rs.gross)}</td>
           <td class="num">${fmtMoney(rs.afterTax)}</td>
           <td class="num">${rs.taxRate != null ? rs.taxRate + '%' : 'varies'}</td>
+          <td class="num">${rs.productRate != null ? '$' + rs.productRate : 'varies'}</td>
           <td class="num accent">${fmtMoney(rs.amount)}</td>
         </tr>`
     )
     .join('');
+  const rsTotals = rsSorted.reduce(
+    (t, rs) => {
+      t.own += rs.own; t.external += rs.external; t.gross += rs.gross;
+      t.afterTax += rs.afterTax; t.amount += rs.amount; return t;
+    },
+    { own: 0, external: 0, gross: 0, afterTax: 0, amount: 0 }
+  );
 
-  const dayRows = city.days
-    .slice()
-    .sort((a, b) => a.ord - b.ord)
-    .map(
-      (d) => `
-        <tr>
-          <td class="lbl">${esc(d.date)}</td>
-          <td class="num">${fmtMoney(d.total)}</td>
-        </tr>`
-    )
+  // ---- Daily breakdown: each day expanded into its segments ----
+  const daysSorted = city.days.slice().sort((a, b) => a.ord - b.ord);
+  const dayBlocks = daysSorted
+    .map((d) => {
+      const segs = d.segments.slice().sort((a, b) => b.amount - a.amount);
+      const segRows = segs
+        .map((s) => {
+          const col = segColor.get(s.key) || '#6b7280';
+          const pct = d.total > 0 ? ((s.amount / d.total) * 100).toFixed(0) + '%' : '0%';
+          return `
+            <tr>
+              <td class="seg"><span class="dot" style="background:${col}"></span>${esc(segLabel(s))}</td>
+              <td>${esc(s.region)}</td>
+              <td>${esc(SEASON_LABELS[s.season] || s.season)}</td>
+              <td class="num">${fmtMoney(s.amount)}</td>
+              <td class="num muted">${pct}</td>
+            </tr>`;
+        })
+        .join('');
+      return `
+        <div class="day">
+          <div class="dayhdr"><span>${esc(d.date)}</span><span class="daytot">${fmtMoney(d.total)}</span></div>
+          <table class="daytbl"><tbody>${segRows}</tbody></table>
+        </div>`;
+    })
+    .join('');
+
+  // ---- Segment colour legend ----
+  const legend = segKeys
+    .map((k) => {
+      const col = segColor.get(k) || '#6b7280';
+      return `<span class="leg"><span class="dot" style="background:${col}"></span>${esc(keyLabelMap.get(k) || k)}</span>`;
+    })
     .join('');
 
   const generated = new Date().toLocaleString('en-CA', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
+    dateStyle: 'medium', timeStyle: 'short',
   });
 
   const html = `<!doctype html>
 <html><head><meta charset="utf-8" />
 <title>Payable City Report – ${esc(city.cityName)}</title>
 <style>
-  @page { size: letter; margin: 0.6in; }
+  @page { size: letter; margin: 0.55in; }
   * { box-sizing: border-box; }
-  body {
-    font-family: 'Open Sans', 'Segoe UI', Helvetica, Arial, sans-serif;
-    color: #252525; margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact;
-  }
-  .head {
-    background: #252525; color: #fff; padding: 22px 26px;
-    border-radius: 12px; display: flex; align-items: center; justify-content: space-between;
-  }
-  .head img { height: 42px; }
-  .head .meta { text-align: right; font-size: 11px; color: #b8b8b8; }
-  .title { margin: 22px 0 4px; font-size: 30px; font-weight: 800; letter-spacing: -0.5px; }
-  .title .accent { color: #ff4f4f; }
-  .sub { color: #6b6b6b; font-size: 12px; margin-bottom: 18px; }
-  .cfg { display:inline-block; margin-left:8px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; background:#fdecec; color:#c0392b; vertical-align:middle; }
-  .kpis { display: flex; gap: 14px; margin-bottom: 26px; }
-  .kpi { flex: 1; border: 1px solid #e6e6e6; border-radius: 10px; padding: 14px 16px; }
-  .kpi .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: #8a8a8a; }
-  .kpi .v { font-size: 26px; font-weight: 800; margin-top: 4px; }
-  .kpi.payable { background: #fff5f5; border-color: #ffd0d0; }
-  .kpi.payable .v { color: #ff4f4f; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.8px; color: #252525;
-       border-left: 4px solid #ff4f4f; padding-left: 10px; margin: 24px 0 10px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th { text-align: left; background: #f4f4f4; color: #555; font-size: 10px;
-       text-transform: uppercase; letter-spacing: 0.5px; padding: 7px 9px; }
-  th.num, td.num { text-align: right; }
-  td { padding: 7px 9px; border-bottom: 1px solid #eee; }
-  td.lbl { font-weight: 700; }
-  td.accent { color: #ff4f4f; font-weight: 700; }
-  tbody tr:nth-child(even) td { background: #fafafa; }
-  .foot { margin-top: 30px; padding-top: 12px; border-top: 1px solid #e6e6e6;
-          font-size: 10px; color: #9a9a9a; display: flex; justify-content: space-between; }
+  body { font-family: 'Open Sans','Segoe UI',Helvetica,Arial,sans-serif; color:#252525; margin:0;
+         -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .head { background:#252525; color:#fff; padding:20px 24px; border-radius:12px;
+          display:flex; align-items:center; justify-content:space-between; }
+  .head img { height:40px; }
+  .head .meta { text-align:right; font-size:11px; color:#b8b8b8; }
+  .title { margin:20px 0 3px; font-size:28px; font-weight:800; letter-spacing:-0.5px; }
+  .title .accent { color:#ff4f4f; }
+  .sub { color:#6b6b6b; font-size:12px; margin-bottom:16px; }
+  .cfg { display:inline-block; margin-left:8px; font-size:11px; font-weight:600; padding:2px 8px;
+         border-radius:999px; background:#fdecec; color:#c0392b; vertical-align:middle; }
+  .kpis { display:flex; gap:12px; margin-bottom:22px; }
+  .kpi { flex:1; border:1px solid #e6e6e6; border-radius:10px; padding:12px 14px; }
+  .kpi .k { font-size:10px; text-transform:uppercase; letter-spacing:0.6px; color:#8a8a8a; }
+  .kpi .v { font-size:23px; font-weight:800; margin-top:3px; }
+  .kpi.payable { background:#fff5f5; border-color:#ffd0d0; }
+  .kpi.payable .v { color:#ff4f4f; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:0.8px; color:#252525;
+       border-left:4px solid #ff4f4f; padding-left:10px; margin:22px 0 9px; }
+  table { width:100%; border-collapse:collapse; font-size:11.5px; }
+  th { text-align:left; background:#f4f4f4; color:#555; font-size:9.5px; text-transform:uppercase;
+       letter-spacing:0.5px; padding:6px 8px; }
+  th.num, td.num { text-align:right; }
+  td { padding:6px 8px; border-bottom:1px solid #eee; }
+  td.lbl { font-weight:700; }
+  td.accent { color:#ff4f4f; font-weight:700; }
+  td.muted, .muted { color:#9a9a9a; }
+  tbody tr:nth-child(even) td { background:#fafafa; }
+  tfoot td { font-weight:800; border-top:2px solid #252525; background:#fff; }
+  .legendbox { margin:6px 0 14px; display:flex; flex-wrap:wrap; gap:10px; }
+  .leg, .seg { display:flex; align-items:center; gap:6px; font-size:11px; }
+  .dot { width:10px; height:10px; border-radius:2px; display:inline-block; flex-shrink:0; }
+  .day { border:1px solid #ececec; border-radius:8px; margin-bottom:10px; overflow:hidden;
+         page-break-inside:avoid; }
+  .dayhdr { display:flex; justify-content:space-between; align-items:center; background:#252525;
+            color:#fff; padding:7px 12px; font-size:12px; font-weight:700; }
+  .dayhdr .daytot { color:#ff4f4f; }
+  .daytbl td { border-bottom:1px solid #f0f0f0; }
+  .daytbl tr:last-child td { border-bottom:none; }
+  .foot { margin-top:26px; padding-top:12px; border-top:1px solid #e6e6e6;
+          font-size:10px; color:#9a9a9a; display:flex; justify-content:space-between; }
   .empty { color:#9a9a9a; font-size:12px; font-style:italic; padding:6px 0; }
 </style></head>
 <body>
@@ -188,24 +248,26 @@ const printCityReport = (city: CitySales) => {
   <div class="title">${esc(city.cityName)} <span class="accent">•</span> Payable Report${
     city.isConfigured ? '' : '<span class="cfg">Referenced in a split</span>'
   }</div>
-  <div class="sub">Payable dollars attributed to this city and where they came from.</div>
+  <div class="sub">Full breakdown of payable dollars: where they came from, product rates, and daily sales by source.</div>
   <div class="kpis">
     <div class="kpi payable"><div class="k">Total payable</div><div class="v">${fmtMoney(city.total)}</div></div>
     <div class="kpi"><div class="k">Gross behind it</div><div class="v">${fmtMoney(city.gross)}</div></div>
     <div class="kpi"><div class="k">Contributing sources</div><div class="v">${city.contributors.length}</div></div>
+    <div class="kpi"><div class="k">Active days</div><div class="v">${city.days.length}</div></div>
   </div>
 
   <h2>Where it came from</h2>
   ${contribRows ? `<table><thead><tr><th>Source city</th><th>Type</th><th class="num">Amount</th><th class="num">Share</th></tr></thead><tbody>${contribRows}</tbody></table>` : '<div class="empty">No contributing sources.</div>'}
 
   <h2>By region / season</h2>
-  ${rsRows ? `<table><thead><tr><th>Region</th><th>Season</th><th class="num">Own</th><th class="num">External</th><th class="num">Gross</th><th class="num">After tax</th><th class="num">Tax</th><th class="num">Payable</th></tr></thead><tbody>${rsRows}</tbody></table>` : '<div class="empty">No region / season breakdown.</div>'}
+  ${rsRows ? `<table><thead><tr><th>Region</th><th>Season</th><th class="num">Own</th><th class="num">External</th><th class="num">Gross</th><th class="num">After tax</th><th class="num">Tax</th><th class="num">Product rate</th><th class="num">Payable</th></tr></thead><tbody>${rsRows}</tbody><tfoot><tr><td>Total</td><td></td><td class="num">${fmtMoney(rsTotals.own)}</td><td class="num">${fmtMoney(rsTotals.external)}</td><td class="num">${fmtMoney(rsTotals.gross)}</td><td class="num">${fmtMoney(rsTotals.afterTax)}</td><td></td><td></td><td class="num">${fmtMoney(rsTotals.amount)}</td></tr></tfoot></table>` : '<div class="empty">No region / season breakdown.</div>'}
 
-  <h2>Daily totals</h2>
-  ${dayRows ? `<table><thead><tr><th>Date</th><th class="num">Payable</th></tr></thead><tbody>${dayRows}</tbody></table>` : '<div class="empty">No daily data.</div>'}
+  <h2>Daily sales by source</h2>
+  ${legend ? `<div class="legendbox">${legend}</div>` : ''}
+  ${dayBlocks || '<div class="empty">No daily data.</div>'}
 
-  <div class="foot"><span>Canadian Property Stars — confidential payable report</span><span>${esc(city.cityName)}</span></div>
-  <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 350); };<\/script>
+  <div class="foot"><span>Canadian Property Stars — confidential payable report</span><span>${esc(city.cityName)} · ${esc(generated)}</span></div>
+  <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
 </body></html>`;
 
   const w = window.open('', '_blank');
@@ -345,8 +407,8 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                 <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[card.region]}`} />
                 <span className="text-gray-400 text-sm">{card.region}</span>
                 <span className="text-gray-500 text-xs">{SEASON_LABELS[card.season] || card.season}</span>
-                <span className="text-gray-600 text-xs">{card.startTab}Ã¢ÂÂ{card.endTab}</span>
-                <span className="text-gray-600 text-xs">ÃÂ· {card.workbook}</span>
+                <span className="text-gray-600 text-xs">{card.startTab}ÃÂ¢ÃÂÃÂ{card.endTab}</span>
+                <span className="text-gray-600 text-xs">ÃÂÃÂ· {card.workbook}</span>
               </div>
               <div className="text-right">
                 <div className="text-xl font-bold text-teal-300">{money(card.payable)}</div>
@@ -417,7 +479,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                   <span className="text-sm text-gray-500">payable sales</span>
                 </div>
                 <div className="text-xs text-gray-500 mt-1 pl-7">
-                  Gross {money(selected.gross)} ÃÂ· deductions {money(selected.gross - selected.total)} ÃÂ· payable {money(selected.total)}
+                  Gross {money(selected.gross)} ÃÂÃÂ· deductions {money(selected.gross - selected.total)} ÃÂÃÂ· payable {money(selected.total)}
                 </div>
               </div>
 
@@ -476,7 +538,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                     </div>
                   </div>
 
-                  {/* PER-DAY STACKED CHART Ã¢ÂÂ split by nickname */}
+                  {/* PER-DAY STACKED CHART ÃÂ¢ÃÂÃÂ split by nickname */}
                   <div>
                     <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By day, split by nickname</h4>
 
