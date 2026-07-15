@@ -1,6 +1,6 @@
 // src/pages/SuperAdmin/PayableCitySalesReport.tsx
 import React, { useMemo, useState } from 'react';
-import { X, MapPin, TrendingUp, AlertTriangle, Check, Tag } from 'lucide-react';
+import { X, MapPin, TrendingUp, AlertTriangle, Check, Tag, Download } from 'lucide-react';
 import { LoadedWorkbook } from '../../lib/reportDataLoader';
 import { PayableCity } from '../../lib/reportingService';
 import { computePayableCitySales, CitySales } from '../../lib/payableCitySales';
@@ -25,6 +25,60 @@ const REGION_DOT: Record<Region, string> = { West: 'bg-blue-500', Central: 'bg-g
 const PALETTE = ['#3b82f6', '#f97316', '#22c55e', '#e11d48', '#a855f7', '#eab308', '#06b6d4', '#ec4899', '#84cc16', '#f43f5e', '#8b5cf6', '#14b8a6'];
 
 const money = (n: number) => '$' + Math.round(n).toLocaleString();
+
+// Build & download a CSV report for a single payable city, respecting what
+// is currently shown for that city (its region/season + contributor breakdown).
+const downloadCityReport = (city: CitySales) => {
+  const esc = (v: string | number) => {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const rows: (string | number)[][] = [];
+  rows.push(['Payable City Report', city.cityName]);
+  rows.push(['Configured', city.isConfigured ? 'Yes' : 'No (referenced in a split)']);
+  rows.push(['Total payable', Math.round(city.total)]);
+  rows.push(['Gross', Math.round(city.gross)]);
+  rows.push([]);
+
+  rows.push(['Where it came from']);
+  rows.push(['Source city', 'Type', 'Amount', 'Share %']);
+  city.contributors.forEach((c) => {
+    rows.push([
+      c.fromCity,
+      c.isOwn ? 'Own workers' : 'From other city',
+      Math.round(c.amount),
+      city.total ? ((c.amount / city.total) * 100).toFixed(0) + '%' : '0%',
+    ]);
+  });
+  rows.push([]);
+
+  rows.push(['By region / season']);
+  rows.push(['Region', 'Season', 'Own', 'External', 'Gross', 'After tax', 'Tax rate', 'Product rate', 'Payable']);
+  city.regionSeason.forEach((rs) => {
+    rows.push([
+      rs.region,
+      SEASON_LABELS[rs.season] || rs.season,
+      Math.round(rs.own),
+      Math.round(rs.external),
+      Math.round(rs.gross),
+      Math.round(rs.afterTax),
+      rs.taxRate != null ? rs.taxRate + '%' : 'varies',
+      rs.productRate != null ? rs.productRate + '%' : 'varies',
+      Math.round(rs.amount),
+    ]);
+  });
+
+  const csv = rows.map((r) => r.map(esc).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `payable-city-${city.cityName.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
 
 const regionTotals = (city: CitySales): Record<Region, number> => {
   const m: Record<Region, number> = { West: 0, Central: 0, East: 0 };
@@ -90,6 +144,53 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
         </div>
       </div>
 
+      {/* CITY CARDS */}
+      <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Payable sales by city</h3>
+      <div className="space-y-3">
+        {result.cities.map((city) => {
+          const rt = regionTotals(city);
+          return (
+            <div key={city.cityName} className="relative">
+              <button
+                onClick={() => setSelected(city)}
+                className="w-full bg-gray-800 rounded-xl border border-gray-700 p-5 pr-14 text-left hover:border-gray-600 transition-colors flex flex-col sm:flex-row sm:items-center gap-5"
+              >
+                <div className="sm:w-56 flex-shrink-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <MapPin size={16} className="text-purple-400 flex-shrink-0" />
+                    <span className="font-bold text-white text-lg truncate">{city.cityName}</span>
+                    {!city.isConfigured && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 flex-shrink-0" title="Referenced in a split but not a configured city">unlisted</span>
+                    )}
+                  </div>
+                  <div className="text-3xl font-bold text-teal-300">{money(city.total)}</div>
+                  <div className="text-[11px] text-gray-500 mt-1">tap for full breakdown</div>
+                </div>
+
+                <div className="flex-1 grid grid-cols-3 gap-3">
+                  {REGIONS.map((r) => (
+                    <div key={r} className="bg-gray-900 rounded-lg border border-gray-700 p-3">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[r]}`} />
+                        <span className="text-xs text-gray-400">{r}</span>
+                      </div>
+                      <div className="text-lg font-semibold text-gray-200">{money(rt[r])}</div>
+                    </div>
+                  ))}
+                </div>
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); downloadCityReport(city); }}
+                title={`Download report for ${city.cityName}`}
+                className="absolute top-3 right-3 p-2 rounded-lg text-gray-400 bg-gray-900/60 border border-gray-700 hover:text-white hover:border-gray-500 transition-colors"
+              >
+                <Download size={15} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
       {/* BREAKDOWN BY NICKNAME */}
       <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Breakdown by nickname</h3>
       <div className="space-y-4 mb-10">
@@ -102,8 +203,8 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                 <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[card.region]}`} />
                 <span className="text-gray-400 text-sm">{card.region}</span>
                 <span className="text-gray-500 text-xs">{SEASON_LABELS[card.season] || card.season}</span>
-                <span className="text-gray-600 text-xs">{card.startTab}–{card.endTab}</span>
-                <span className="text-gray-600 text-xs">· {card.workbook}</span>
+                <span className="text-gray-600 text-xs">{card.startTab}â{card.endTab}</span>
+                <span className="text-gray-600 text-xs">Â· {card.workbook}</span>
               </div>
               <div className="text-right">
                 <div className="text-xl font-bold text-teal-300">{money(card.payable)}</div>
@@ -154,45 +255,6 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
         </div>
       )}
 
-      {/* CITY CARDS */}
-      <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Payable sales by city</h3>
-      <div className="space-y-3">
-        {result.cities.map((city) => {
-          const rt = regionTotals(city);
-          return (
-            <button
-              key={city.cityName}
-              onClick={() => setSelected(city)}
-              className="w-full bg-gray-800 rounded-xl border border-gray-700 p-5 text-left hover:border-gray-600 transition-colors flex flex-col sm:flex-row sm:items-center gap-5"
-            >
-              <div className="sm:w-56 flex-shrink-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <MapPin size={16} className="text-purple-400 flex-shrink-0" />
-                  <span className="font-bold text-white text-lg truncate">{city.cityName}</span>
-                  {!city.isConfigured && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 flex-shrink-0" title="Referenced in a split but not a configured city">unlisted</span>
-                  )}
-                </div>
-                <div className="text-3xl font-bold text-teal-300">{money(city.total)}</div>
-                <div className="text-[11px] text-gray-500 mt-1">tap for full breakdown</div>
-              </div>
-
-              <div className="flex-1 grid grid-cols-3 gap-3">
-                {REGIONS.map((r) => (
-                  <div key={r} className="bg-gray-900 rounded-lg border border-gray-700 p-3">
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[r]}`} />
-                      <span className="text-xs text-gray-400">{r}</span>
-                    </div>
-                    <div className="text-lg font-semibold text-gray-200">{money(rt[r])}</div>
-                  </div>
-                ))}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
       {/* BREAKDOWN MODAL */}
       {selected && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-[60]">
@@ -213,7 +275,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                   <span className="text-sm text-gray-500">payable sales</span>
                 </div>
                 <div className="text-xs text-gray-500 mt-1 pl-7">
-                  Gross {money(selected.gross)} · deductions {money(selected.gross - selected.total)} · payable {money(selected.total)}
+                  Gross {money(selected.gross)} Â· deductions {money(selected.gross - selected.total)} Â· payable {money(selected.total)}
                 </div>
               </div>
 
@@ -272,7 +334,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                     </div>
                   </div>
 
-                  {/* PER-DAY STACKED CHART — split by nickname */}
+                  {/* PER-DAY STACKED CHART â split by nickname */}
                   <div>
                     <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By day, split by nickname</h4>
 

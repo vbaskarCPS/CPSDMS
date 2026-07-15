@@ -1,6 +1,6 @@
 // src/pages/SuperAdmin/LeagueLeadersView.tsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { Trophy, Filter, Wrench, X, Loader, Check, Users, UserX, RotateCcw, AlertTriangle, EyeOff, Eye } from 'lucide-react';
+import { Trophy, Filter, Wrench, X, Loader, Check, Users, UserX, RotateCcw, AlertTriangle, EyeOff, Eye, Download } from 'lucide-react';
 import { LoadedWorkbook } from '../../lib/reportDataLoader';
 import { reportingService, ContractorOverride, MergeOverridePayload, SplitOverridePayload } from '../../lib/reportingService';
 import { computeLeagueLeaders, LeagueFilter, BoardUnit } from '../../lib/leagueLeaders';
@@ -48,6 +48,53 @@ const LeagueLeadersView: React.FC<Props> = ({ workbooks }) => {
     [workbooks, overrides, filter]
   );
 
+  // Human-readable label for the currently active visibility filter.
+  const filterLabel =
+    filter.type === 'regionSeason'
+      ? `${filter.region} - ${SEASON_LABELS[filter.season] || filter.season}`
+      : filter.type === 'nickname'
+        ? filter.nickname
+        : 'All';
+
+  // Download a CSV of the boards currently visible on screen (respecting the
+  // active filter and any boards the user has hidden).
+  const downloadReport = () => {
+    const esc = (v: string | number) => {
+      const s = String(v ?? '');
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const visible = result.boards.filter((b) => !hidden.has(b.key));
+    const rows: (string | number)[][] = [];
+    rows.push(['League Leaders report']);
+    rows.push(['Filter', filterLabel]);
+    rows.push(['Contractors in view', result.contractorCount]);
+    rows.push([]);
+    visible.forEach((b) => {
+      rows.push([b.title]);
+      rows.push(['Rank', 'Name', 'Merged IDs', 'Detail', 'Value']);
+      b.rows.forEach((r) => {
+        rows.push([
+          r.rank,
+          r.name,
+          r.ids.length > 1 ? r.ids.join(' / ') : '',
+          r.detail || '',
+          fmt(r.value, b.unit),
+        ]);
+      });
+      rows.push([]);
+    });
+    const csv = rows.map((r) => r.map(esc).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `league-leaders-${filterLabel.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const detectionCount = result.detections.merges.length + result.detections.splits.length;
 
   const chip = (active: boolean, onClick: () => void, label: string, key: string) => (
@@ -73,6 +120,14 @@ const LeagueLeadersView: React.FC<Props> = ({ workbooks }) => {
             Contractor leaderboards across every workbook. {result.contractorCount} contractors in view.
           </p>
         </div>
+        <div className="flex items-center gap-2">
+        <button
+          onClick={downloadReport}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-gray-800 border border-gray-700 text-gray-300 hover:text-white hover:border-gray-600 transition-colors"
+        >
+          <Download size={16} />
+          Download report
+        </button>
         <button
           onClick={() => setShowCleanup(true)}
           className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-gray-800 border border-gray-700 text-gray-300 hover:text-white hover:border-gray-600 transition-colors"
@@ -83,6 +138,7 @@ const LeagueLeadersView: React.FC<Props> = ({ workbooks }) => {
             <span className="ml-1 text-[11px] px-1.5 py-0.5 rounded-full bg-amber-900/50 text-amber-300">{detectionCount}</span>
           )}
         </button>
+        </div>
       </div>
 
       {/* FILTERS */}
@@ -103,7 +159,7 @@ const LeagueLeadersView: React.FC<Props> = ({ workbooks }) => {
         </div>
       </div>
 
-      {/* HIDDEN BOARDS — restore row */}
+      {/* HIDDEN BOARDS â restore row */}
       {result.boards.some((b) => hidden.has(b.key)) && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <span className="text-xs text-gray-500 flex items-center gap-1"><Eye size={13} /> Hidden:</span>
@@ -206,7 +262,7 @@ const CleanupModal: React.FC<CleanupProps> = ({ merges, splits, overrides, onCha
   const describe = (o: ContractorOverride) => {
     if (o.kind === 'merge') {
       const p = o.payload as MergeOverridePayload;
-      return `Merged ${(p.members || []).join(', ')} → ${p.canonicalName || '?'}`;
+      return `Merged ${(p.members || []).join(', ')} â ${p.canonicalName || '?'}`;
     }
     const p = o.payload as SplitOverridePayload;
     return `Split ${p.id} apart by name`;
@@ -252,7 +308,7 @@ const CleanupModal: React.FC<CleanupProps> = ({ merges, splits, overrides, onCha
                   <div key={m.ids.join('-')} className="bg-gray-900 rounded-lg border border-gray-700 p-3 flex items-center gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="text-sm text-gray-200 font-medium">{m.name}</div>
-                      <div className="text-xs text-gray-500 mt-0.5">{m.ids.join(' · ')}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">{m.ids.join(' Â· ')}</div>
                     </div>
                     <button
                       onClick={() => approveMerge(m.name, m.ids)}
@@ -281,7 +337,7 @@ const CleanupModal: React.FC<CleanupProps> = ({ merges, splits, overrides, onCha
                   <div key={s.id} className="bg-gray-900 rounded-lg border border-gray-700 p-3 flex items-center gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="text-sm text-gray-200 font-medium">{s.id}</div>
-                      <div className="text-xs text-gray-500 mt-0.5">{s.names.join(' · ')}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">{s.names.join(' Â· ')}</div>
                     </div>
                     <button
                       onClick={() => approveSplit(s.id)}
