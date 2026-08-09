@@ -584,30 +584,21 @@ const RMLogbook: React.FC = () => {
       <div className="bg-gray-800 border-b border-gray-700 shadow-md sticky top-0 z-10">
 
         <div className="flex items-center justify-between gap-2 p-2 px-3">
-          <div className="flex items-center gap-2 min-w-0">
-            <BookOpen className="text-cps-blue flex-shrink-0" size={18} />
-            <span className="text-sm font-bold text-white truncate">
-              {currentUser.name}
-            </span>
-            {isLawnRejuv && (
-              <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-green-900/30 text-green-400 border border-green-700/50">
-                <Leaf size={10} />
-                Rejuv
-              </span>
-            )}
-            {isSealing && (
-              <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-600">
-                <Shovel size={10} />
-                Sealing
-              </span>
-            )}
-            {isCleaning && (
-              <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-cyan-900/30 text-cyan-300 border border-cyan-700/50">
-                <Droplets size={10} />
-                Cleaning
-              </span>
-            )}
-          </div>
+          {/* ── COMPETITIVE TEAM CARDS ── replaces the name/season cluster so
+              the header gains no height. Own team excluded (the stats bar
+              below covers it). Colours carry the meaning: white steps ·
+              green pending prebooks + yellow pending sales · white gross
+              + yellow pending gross. Click a card → team overview modal. */}
+          <RMTeamBattleCards
+            managers={dailyData.managers}
+            workers={dailyData.workers}
+            routes={dailyData.routes}
+            pendingBookings={dailyData.pendingBookings}
+            allSessions={allSessions}
+            allPendingSales={allPendingSales}
+            currentManagerId={currentUser.userId}
+            seasonType={seasonType}
+          />
 
           <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
             {/* Manage Team — leftmost in the actions block per spec. Only renders
@@ -958,21 +949,7 @@ const RMLogbook: React.FC = () => {
           </div>
         )}
 
-        {/* ── COMPETITIVE TEAM CARDS ─────────────────────────────────────────
-            One card per manager with workers in the session, ranked by sales
-            (desc, ties by steps). Renders on BOTH mapping and non-mapping CCs.
-            Click a card → team overview modal (per-cart rows, no job detail). */}
-        <RMTeamBattleCards
-          managers={dailyData.managers}
-          workers={dailyData.workers}
-          routes={dailyData.routes}
-          pendingBookings={dailyData.pendingBookings}
-          allSessions={allSessions}
-          allPendingSales={allPendingSales}
-          currentManagerId={currentUser.userId}
-        />
-
-      </div>
+</div>
 
       <div className={`flex-1 overflow-hidden ${activeTab !== 'maps' ? 'p-4' : ''} relative`}>
         {activeTab !== 'maps' ? (

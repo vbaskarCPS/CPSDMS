@@ -1,32 +1,29 @@
 // src/pages/Management/components/RMTeamBattleCards.tsx
 //
-// COMPETITIVE TEAM CARDS — RM Logbook header strip.
+// COMPETITIVE TEAM CARDS — RM Logbook top-row strip (v2).
 //
-// One card per manager in the CC who has workers assigned in the session,
-// ranked by completed sales (descending, ties broken by steps). Renders on
-// BOTH digital-mapping and non-mapping CCs, every season.
+// Lives in the header's TOP ROW, replacing the manager-name/season cluster so
+// the header gains NO extra height. One compact card per OTHER manager in the
+// CC who has workers assigned (the logged-in manager's own team is excluded —
+// the stats bar below already covers it). Ranked by completed gross
+// (descending, ties broken by steps); the leader wears the trophy.
 //
-// Card stats (4-up, small type so four cards fit across):
-//   STEPS — team total stepCount
-//   PREBK — pending prebooks attributable to the manager (assigned to one of
-//           their workers, OR on one of their routes and unassigned — same
-//           logic as the header Pending stat)
-//   PEND  — parked pending_sales rows across the manager's carts (counts every
-//           row, including asphalt children — consistent with the header stat)
-//   SALES — completed jobs + pending, rendered "7+3". "Completed job" =
-//           Production or Sale transaction (upsell rows are NOT sales).
+// Card format — no labels, colours carry the meaning (mirrors the stats bar):
+//   white  = completed steps
+//   green  = pending prebooks
+//   yellow = pending (parked) sales
+//   white $ = completed gross · yellow +$ = pending gross
+//
+// Pending gross = office pending dollars + parked-sale dollars, using the same
+// flat-code-aware price parser as the header's Pending $ stat.
 //
 // Clicking a card opens a team overview modal: one row per cart (worker names,
 // steps, sales done+pending, gross $, EQ) with a totals footer. No job-level
 // detail by design.
-//
-// Data comes entirely from props the RM Logbook already holds (dailyData +
-// allSessions) plus the CC-wide pending sales list (getAllPendingSalesForToday).
-// Refresh cadence is therefore the logbook's own realtime/30s cycle.
 
 import React, { useMemo, useState } from 'react';
 import {
-  X, Trophy, Users, Activity, Clock, Bookmark, CheckCircle2, DollarSign,
+  X, Trophy, Users, Activity, CheckCircle2, DollarSign, Clock, Bookmark,
 } from 'lucide-react';
 import {
   ManagementUser,
@@ -35,7 +32,28 @@ import {
   MasterBooking,
   LogsheetSession,
   PendingSale,
+  SeasonType,
+  SEASON_CONFIGS,
 } from '../../../types';
+
+// Same parser the RM Logbook header uses for Pending $ — office flat codes
+// (SP/RJ/FSL...) resolve to their configured dollar value, anything else is
+// parsed numerically, blanks are $0.
+function pendingDollarValue(priceStr: string | undefined | null, seasonType: SeasonType): number {
+  if (!priceStr) return 0;
+  const trimmed = priceStr.trim();
+  if (!trimmed) return 0;
+
+  if (/^[A-Za-z]+$/.test(trimmed)) {
+    const upper = trimmed.toUpperCase();
+    const flat = SEASON_CONFIGS[seasonType].officeFlats.find(f => f.code === upper);
+    return flat ? flat.value : 0;
+  }
+
+  const numeric = trimmed.replace(/[^0-9.]/g, '');
+  const parsed = parseFloat(numeric);
+  return isNaN(parsed) ? 0 : parsed;
+}
 
 interface CartOverviewRow {
   sessionId: string;
@@ -56,8 +74,9 @@ interface TeamCardData {
   pendingPrebooks: number;
   pendingSales: number;
   salesDone: number;
+  completedGross: number;
+  pendingGross: number;
   carts: CartOverviewRow[];
-  totalGross: number;
   totalEQ: number;
 }
 
@@ -68,7 +87,9 @@ interface RMTeamBattleCardsProps {
   pendingBookings: MasterBooking[];
   allSessions: LogsheetSession[];
   allPendingSales: PendingSale[];
+  // The logged-in manager — their own team is EXCLUDED from the strip.
   currentManagerId: string;
+  seasonType: SeasonType;
 }
 
 const RMTeamBattleCards: React.FC<RMTeamBattleCardsProps> = ({
@@ -79,6 +100,7 @@ const RMTeamBattleCards: React.FC<RMTeamBattleCardsProps> = ({
   allSessions,
   allPendingSales,
   currentManagerId,
+  seasonType,
 }) => {
   // managerId of the team whose overview modal is open, or null.
   const [openId, setOpenId] = useState<string | null>(null);
@@ -87,15 +109,21 @@ const RMTeamBattleCards: React.FC<RMTeamBattleCardsProps> = ({
     const workerName = new Map(
       workers.map(w => [w.contractorId, `${w.firstName} ${w.lastName}`.trim()])
     );
-    // Pending sales indexed by owning session (cart).
-    const pendingBySession = new Map<string, number>();
+    // Pending sales indexed by owning session (cart): count + dollar value.
+    const pendingCountBySession = new Map<string, number>();
+    const pendingDollarsBySession = new Map<string, number>();
     allPendingSales.forEach(ps => {
-      pendingBySession.set(ps.sessionId, (pendingBySession.get(ps.sessionId) || 0) + 1);
+      pendingCountBySession.set(ps.sessionId, (pendingCountBySession.get(ps.sessionId) || 0) + 1);
+      pendingDollarsBySession.set(
+        ps.sessionId,
+        (pendingDollarsBySession.get(ps.sessionId) || 0) + pendingDollarValue(ps.price, seasonType)
+      );
     });
 
     const result: TeamCardData[] = [];
 
     for (const m of managers) {
+      if (m.userId === currentManagerId) continue; // own team excluded
       const teamWorkers = workers.filter(w => w.assignedManagerId === m.userId);
       if (teamWorkers.length === 0) continue; // only managers with workers get a card
 
@@ -114,6 +142,7 @@ const RMTeamBattleCards: React.FC<RMTeamBattleCardsProps> = ({
       let steps = 0;
       let salesDone = 0;
       let pendingSalesCount = 0;
+      let pendingSalesDollars = 0;
       let gross = 0;
       let eq = 0;
       const carts: CartOverviewRow[] = [];
@@ -132,13 +161,14 @@ const RMTeamBattleCards: React.FC<RMTeamBattleCardsProps> = ({
         const cartSalesDone = (s.financialStore || []).filter(
           tx => tx.type === 'Production' || tx.type === 'Sale'
         ).length;
-        const cartSalesPending = pendingBySession.get(s.id) || 0;
+        const cartSalesPending = pendingCountBySession.get(s.id) || 0;
         const cartGross = s.stats?.prodGross || 0;
         const cartEQ = s.stats?.totalEQ || 0;
 
         steps += cartSteps;
         salesDone += cartSalesDone;
         pendingSalesCount += cartSalesPending;
+        pendingSalesDollars += pendingDollarsBySession.get(s.id) || 0;
         gross += cartGross;
         eq += cartEQ;
 
@@ -155,17 +185,23 @@ const RMTeamBattleCards: React.FC<RMTeamBattleCardsProps> = ({
 
       // Pending prebooks attributable to this manager — mirrors the header
       // Pending stat: assigned to one of my workers, OR on one of my routes
-      // and unassigned.
-      const pendingPrebooks = pendingBookings.filter(b => {
-        if (b.Completed || (b.Status && b.Status !== 'pending')) return false;
+      // and unassigned. Dollar values feed pending gross alongside the
+      // parked-sale dollars.
+      let pendingPrebooks = 0;
+      let officePendingDollars = 0;
+      for (const b of pendingBookings) {
+        if (b.Completed || (b.Status && b.Status !== 'pending')) continue;
         const assignedToMine =
           b['Contractor Number'] && idSet.has(b['Contractor Number']);
         const onMyRouteUnassigned =
           b['Route Number'] && myRouteCodes.has(b['Route Number']) && !b['Contractor Number'];
-        return assignedToMine || onMyRouteUnassigned;
-      }).length;
+        if (assignedToMine || onMyRouteUnassigned) {
+          pendingPrebooks++;
+          officePendingDollars += pendingDollarValue(b.Price, seasonType);
+        }
+      }
 
-      carts.sort((a, b) => b.salesDone - a.salesDone);
+      carts.sort((a, b) => b.gross - a.gross);
 
       result.push({
         managerId: m.userId,
@@ -176,16 +212,17 @@ const RMTeamBattleCards: React.FC<RMTeamBattleCardsProps> = ({
         pendingPrebooks,
         pendingSales: pendingSalesCount,
         salesDone,
+        completedGross: gross,
+        pendingGross: officePendingDollars + pendingSalesDollars,
         carts,
-        totalGross: gross,
         totalEQ: eq,
       });
     }
 
-    // Competitive ranking: sales descending, ties broken by steps.
-    result.sort((a, b) => (b.salesDone - a.salesDone) || (b.steps - a.steps));
+    // Competitive ranking: completed gross descending, ties broken by steps.
+    result.sort((a, b) => (b.completedGross - a.completedGross) || (b.steps - a.steps));
     return result;
-  }, [managers, workers, routes, pendingBookings, allSessions, allPendingSales]);
+  }, [managers, workers, routes, pendingBookings, allSessions, allPendingSales, currentManagerId, seasonType]);
 
   // Resolve the open team from live data so the modal stays fresh across
   // the logbook's realtime refreshes.
@@ -195,51 +232,30 @@ const RMTeamBattleCards: React.FC<RMTeamBattleCardsProps> = ({
 
   return (
     <>
-      {/* ── CARD STRIP ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-1.5 px-2 pb-2 pt-1.5 border-t border-gray-700">
+      {/* ── CARD STRIP — single row, horizontally scrollable if crowded ── */}
+      <div className="flex items-center gap-1 min-w-0 flex-1 overflow-x-auto">
         {teams.map((t, idx) => (
           <button
             key={t.managerId}
             onClick={() => setOpenId(t.managerId)}
-            className={`text-left bg-gray-900/60 hover:bg-gray-700/60 border rounded-lg px-2 py-1.5 transition-colors ${
-              t.managerId === currentManagerId
-                ? 'border-blue-500/70'
-                : 'border-gray-700'
-            }`}
-            title={`${t.fullName} — ${t.workerCount} worker${t.workerCount === 1 ? '' : 's'} · tap for team overview`}
+            className="flex-shrink-0 text-left bg-gray-900/60 hover:bg-gray-700/60 border border-gray-700 rounded-lg px-2 py-0.5 transition-colors"
+            title={`${t.fullName} — ${t.workerCount} worker${t.workerCount === 1 ? '' : 's'} · steps / pending prebooks + pending sales / gross + pending $ · tap for overview`}
           >
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[11px] font-bold text-white truncate">
+            <div className="flex items-center gap-1 leading-tight">
+              <span className="text-[9px] font-bold text-gray-300 truncate max-w-[80px]">
                 Team {t.firstName}
               </span>
-              {idx === 0 ? (
-                <Trophy size={11} className="text-yellow-400 flex-shrink-0" />
-              ) : (
-                <span className="text-[9px] text-gray-500 font-bold flex-shrink-0">#{idx + 1}</span>
-              )}
+              {idx === 0 && <Trophy size={9} className="text-yellow-400 flex-shrink-0" />}
             </div>
-            <div className="grid grid-cols-4 gap-0.5 text-center">
-              <div>
-                <div className="text-[7px] uppercase tracking-wider text-gray-500 font-bold">Steps</div>
-                <div className="text-[11px] font-bold text-blue-300">{t.steps}</div>
-              </div>
-              <div>
-                <div className="text-[7px] uppercase tracking-wider text-gray-500 font-bold">Prebk</div>
-                <div className="text-[11px] font-bold text-yellow-400">{t.pendingPrebooks}</div>
-              </div>
-              <div>
-                <div className="text-[7px] uppercase tracking-wider text-gray-500 font-bold">Pend</div>
-                <div className="text-[11px] font-bold text-amber-400">{t.pendingSales}</div>
-              </div>
-              <div>
-                <div className="text-[7px] uppercase tracking-wider text-gray-500 font-bold">Sales</div>
-                <div className="text-[11px] font-bold text-green-400 whitespace-nowrap">
-                  {t.salesDone}
-                  {t.pendingSales > 0 && (
-                    <span className="text-amber-400">+{t.pendingSales}</span>
-                  )}
-                </div>
-              </div>
+            <div className="flex items-center gap-1 text-[11px] font-bold leading-tight whitespace-nowrap">
+              <span className="text-white">{t.steps}</span>
+              <span className="text-gray-600">·</span>
+              <span className="text-green-400">{t.pendingPrebooks}</span>
+              <span className="text-gray-500 text-[9px]">+</span>
+              <span className="text-yellow-400">{t.pendingSales}</span>
+              <span className="text-gray-600">·</span>
+              <span className="text-white">${t.completedGross.toFixed(0)}</span>
+              <span className="text-yellow-400 text-[10px]">+${t.pendingGross.toFixed(0)}</span>
             </div>
           </button>
         ))}
@@ -289,7 +305,7 @@ const RMTeamBattleCards: React.FC<RMTeamBattleCardsProps> = ({
                         <div className="text-[8px] uppercase tracking-wider text-gray-500 font-bold flex items-center justify-center gap-0.5">
                           <Activity size={8} /> Steps
                         </div>
-                        <div className="text-sm font-bold text-blue-300">{cart.steps}</div>
+                        <div className="text-sm font-bold text-white">{cart.steps}</div>
                       </div>
                       <div>
                         <div className="text-[8px] uppercase tracking-wider text-gray-500 font-bold flex items-center justify-center gap-0.5">
@@ -298,7 +314,7 @@ const RMTeamBattleCards: React.FC<RMTeamBattleCardsProps> = ({
                         <div className="text-sm font-bold text-green-400">
                           {cart.salesDone}
                           {cart.salesPending > 0 && (
-                            <span className="text-amber-400 text-xs">+{cart.salesPending}</span>
+                            <span className="text-yellow-400 text-xs">+{cart.salesPending}</span>
                           )}
                         </div>
                       </div>
@@ -321,33 +337,30 @@ const RMTeamBattleCards: React.FC<RMTeamBattleCardsProps> = ({
             <div className="p-3 border-t border-gray-700 bg-gray-900/40 rounded-b-lg">
               <div className="grid grid-cols-5 gap-1 text-center">
                 <div>
-                  <div className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Steps</div>
-                  <div className="text-sm font-bold text-blue-300">{openTeam.steps}</div>
+                  <div className="text-[8px] uppercase tracking-wider text-gray-500 font-bold flex items-center justify-center gap-0.5">
+                    <Activity size={8} /> Steps
+                  </div>
+                  <div className="text-sm font-bold text-white">{openTeam.steps}</div>
                 </div>
                 <div>
                   <div className="text-[8px] uppercase tracking-wider text-gray-500 font-bold flex items-center justify-center gap-0.5">
                     <Clock size={8} /> Prebk
                   </div>
-                  <div className="text-sm font-bold text-yellow-400">{openTeam.pendingPrebooks}</div>
+                  <div className="text-sm font-bold text-green-400">{openTeam.pendingPrebooks}</div>
                 </div>
                 <div>
                   <div className="text-[8px] uppercase tracking-wider text-gray-500 font-bold flex items-center justify-center gap-0.5">
                     <Bookmark size={8} /> Pend
                   </div>
-                  <div className="text-sm font-bold text-amber-400">{openTeam.pendingSales}</div>
-                </div>
-                <div>
-                  <div className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Sales</div>
-                  <div className="text-sm font-bold text-green-400">
-                    {openTeam.salesDone}
-                    {openTeam.pendingSales > 0 && (
-                      <span className="text-amber-400 text-xs">+{openTeam.pendingSales}</span>
-                    )}
-                  </div>
+                  <div className="text-sm font-bold text-yellow-400">{openTeam.pendingSales}</div>
                 </div>
                 <div>
                   <div className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Gross</div>
-                  <div className="text-sm font-bold text-white">${openTeam.totalGross.toFixed(0)}</div>
+                  <div className="text-sm font-bold text-white">${openTeam.completedGross.toFixed(0)}</div>
+                </div>
+                <div>
+                  <div className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Pend $</div>
+                  <div className="text-sm font-bold text-yellow-400">${openTeam.pendingGross.toFixed(0)}</div>
                 </div>
               </div>
             </div>
