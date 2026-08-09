@@ -251,11 +251,7 @@ const RMLogbook: React.FC = () => {
             } catch (err) {
               console.warn('Failed to fetch pending sales for manager:', err);
               setPendingSalesByManager([]);
-            })}
-
-            </div>
-      
-            <div className={`flex-1 overflow-hidden ${activeTab !== 'maps' ? 'p-4' : ''} relative`}>
+            }
           } else {
             setPendingSalesByManager([]);
           }
