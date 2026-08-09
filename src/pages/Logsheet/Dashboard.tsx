@@ -455,6 +455,13 @@ const Dashboard: React.FC = () => {
           if (storedWorker.assignedManagerId) {
             const managerData = await sessionService.getManagerById(storedWorker.assignedManagerId);
             setManager(managerData);
+            // PER-MANAGER DIGITAL MAPPING (Sealing, non-mapping CCs): if this
+            // worker's manager carries a mapping config, grant the mapped
+            // experience (Logsheet | PCL | Route Map tabs) even though the
+            // CC-level flag is off.
+            if (managerData?.digitalMapping) {
+              setHasDigitalMapping(true);
+            }
           }
 
           const upsellStatus = await sessionService.getWorkerUpsellsEnabled(storedWorker.contractorId);

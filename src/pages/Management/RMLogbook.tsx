@@ -350,7 +350,10 @@ const RMLogbook: React.FC = () => {
       }
       setCurrentUser(user);
 
-      const hasMapping = commandCenterService.currentHasDigitalMapping();
+      // CC-level mapping OR per-manager mapping (Sealing, non-mapping CCs):
+      // authenticateRM stamps users.metadata.digitalMapping onto current_user
+      // at login, so the check extends to "CC has mapping OR I do".
+      const hasMapping = commandCenterService.currentHasDigitalMapping() || !!user.digitalMapping;
       setDigitalMappingEnabled(hasMapping);
 
       if (hasMapping) {
