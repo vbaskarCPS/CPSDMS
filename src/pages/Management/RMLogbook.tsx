@@ -16,6 +16,7 @@ import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterSer
 import { subscribeAsRouteManager } from '../../lib/realtimeService';
 
 import RMTeamTab from './components/RMTeamTab';
+import RMTeamBattleCards from './components/RMTeamBattleCards';
 import RMRoutesTab from './components/RMRoutesTab';
 import RMMapTab from './components/RMMapTab';
 import BamboraTransactionsModal from '../../components/BamboraTransactionsModal';
@@ -189,6 +190,10 @@ const RMLogbook: React.FC = () => {
 
   const [pendingSalesByManager, setPendingSalesByManager] = useState<PendingSale[]>([]);
 
+  // CC-WIDE pending sales — feeds the competitive team cards (every manager's
+  // parked sales, not just this manager's own/floated set).
+  const [allPendingSales, setAllPendingSales] = useState<PendingSale[]>([]);
+
   const [showAsphaltModal, setShowAsphaltModal] = useState(false);
 
   // CC-wide unassigned asphalt count for the header badge. Fetched, not derived:
@@ -246,9 +251,26 @@ const RMLogbook: React.FC = () => {
             } catch (err) {
               console.warn('Failed to fetch pending sales for manager:', err);
               setPendingSalesByManager([]);
-            }
+            })}
+
+            </div>
+      
+            <div className={`flex-1 overflow-hidden ${activeTab !== 'maps' ? 'p-4' : ''} relative`}>
           } else {
             setPendingSalesByManager([]);
+          }
+
+          // CC-wide pending sales for the team cards (team seasons only —
+          // pending sales don't exist in aeration). One cheap query.
+          if (seasonHasTeams(sessionSeasonType)) {
+            try {
+              const ccWideSales = await sessionService.getAllPendingSalesForToday();
+              setAllPendingSales(ccWideSales);
+            } catch (err) {
+              console.warn('Failed to fetch CC-wide pending sales:', err);
+            }
+          } else {
+            setAllPendingSales([]);
           }
 
           // CC-wide asphalt badge (sealing only) — same query the modal uses,
@@ -939,6 +961,20 @@ const RMLogbook: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* ── COMPETITIVE TEAM CARDS ─────────────────────────────────────────
+            One card per manager with workers in the session, ranked by sales
+            (desc, ties by steps). Renders on BOTH mapping and non-mapping CCs.
+            Click a card → team overview modal (per-cart rows, no job detail). */}
+        <RMTeamBattleCards
+          managers={dailyData.managers}
+          workers={dailyData.workers}
+          routes={dailyData.routes}
+          pendingBookings={dailyData.pendingBookings}
+          allSessions={allSessions}
+          allPendingSales={allPendingSales}
+          currentManagerId={currentUser.userId}
+        />
 
       </div>
 

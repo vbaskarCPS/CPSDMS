@@ -4009,6 +4009,34 @@ class SessionService {
     }
   }
 
+  /**
+   * CC-WIDE pending sales for today's session — one cheap query, no ownership
+   * chain. Powers the RM Logbook's competitive team cards, which need EVERY
+   * manager's parked sales, not just the logged-in manager's own/floated set.
+   */
+  public async getAllPendingSalesForToday(): Promise<PendingSale[]> {
+    try {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) return [];
+
+      const { data, error } = await supabase
+        .from('pending_sales')
+        .select('*')
+        .eq('command_center_id', ccId)
+        .eq('session_date', date);
+
+      if (error) {
+        console.warn('[PendingSale] getAllPendingSalesForToday failed:', error);
+        return [];
+      }
+      return (data || []).map(row => this.mapDbPendingSale(row));
+    } catch (err) {
+      console.warn('[PendingSale] getAllPendingSalesForToday error:', err);
+      return [];
+    }
+  }
+
   public async getPendingSaleById(id: string): Promise<PendingSale | null> {
     try {
       const ccId = this.getCCId();
