@@ -502,6 +502,8 @@ class SessionService {
       commandCenterId: m.command_center_id,
       // Round-trip the floater config so the RM logbook can read who-floats-for-whom.
       floatingFor: Array.isArray(m.metadata?.floatingFor) ? m.metadata.floatingFor : [],
+      // Round-trip the per-manager digital mapping config (Sealing, non-mapping CCs).
+      digitalMapping: m.metadata?.digitalMapping || undefined,
     }));
 
     const workers: Worker[] = (workersRes.data || []).map((w) => ({
@@ -617,6 +619,10 @@ class SessionService {
       phone: data.metadata?.phone || '',
       role: 'RouteManager' as const,
       commandCenterId: data.command_center_id,
+      // Per-manager digital mapping (Sealing, non-mapping CCs). The worker
+      // dashboard reads this to decide whether its manager grants the mapped
+      // experience even though the CC-level flag is off.
+      digitalMapping: data.metadata?.digitalMapping || undefined,
     };
   }
 
@@ -1466,6 +1472,8 @@ class SessionService {
             phone: m.phone,
             // Persist preview-staged floater config on Initialize Session.
             floatingFor: m.floatingFor || [],
+            // Persist preview-staged per-manager digital mapping (if any).
+            digitalMapping: m.digitalMapping || undefined,
           },
           command_center_id: ccId,
         })),
@@ -1619,6 +1627,36 @@ class SessionService {
             console.warn('[PCL Cache] Non-blocking load failed:', err)
           );
         }).catch(err => console.warn('[PCL Cache] Module import failed:', err));
+      }
+
+      // --- PER-MANAGER DIGITAL MAPPING PCL (Sealing sessions on NON-mapping CCs) ---
+      // Managers carrying users.metadata.digitalMapping get their PCLs loaded
+      // via the prefix flow: read the masterbookings "…Callbooks" tabs, keep
+      // rows whose route code equals the manager's BARE prefix (e.g. "WASA"),
+      // geocode each address (bbox-constrained to the manager's routes), and
+      // bucket into the numbered routes by nearest map segment. Non-blocking,
+      // mirroring the CC-level block above. Skipped on CC-level mapping CCs —
+      // the block above already covers those routes with numbered PCL codes.
+      const mappedConfigs = data.managers.flatMap(m =>
+        (m.digitalMapping && m.digitalMapping.routeCodes.length > 0) ? [m.digitalMapping] : []
+      );
+      if (!cc?.digitalMappingEnabled && isSealing && cc?.masterbookingsSheetId && mappedConfigs.length > 0) {
+        const mbSheetId = cc.masterbookingsSheetId;
+        Promise.all([
+          import('./googleSheetsService'),
+          import('./pclCacheService'),
+        ]).then(([{ googleSheetsService }, { loadAndCachePCLByPrefix }]) => {
+          const accessToken = googleSheetsService.getAccessToken();
+          if (!accessToken) {
+            console.warn('[PCL Prefix] No Google access token — per-manager PCL load skipped.');
+            return;
+          }
+          mappedConfigs.forEach(cfg => {
+            loadAndCachePCLByPrefix(mbSheetId, cfg, accessToken, ccId, data.date).catch(err =>
+              console.warn(`[PCL Prefix] Non-blocking load failed for ${cfg.prefix}:`, err)
+            );
+          });
+        }).catch(err => console.warn('[PCL Prefix] Module import failed:', err));
       }
     }
   
@@ -1951,6 +1989,9 @@ class SessionService {
         // this, a floater logs in with no floatingFor and sees only their own
         // staff/routes. Mirrors getDailySession's defensive Array.isArray mapping.
         floatingFor: Array.isArray(data.metadata?.floatingFor) ? data.metadata.floatingFor : [],
+        // Per-manager digital mapping (Sealing, non-mapping CCs): stamped onto
+        // current_user so the RM logbook check becomes "CC has mapping OR I do".
+        digitalMapping: data.metadata?.digitalMapping || undefined,
       };
     }
   

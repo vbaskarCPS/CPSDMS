@@ -11,6 +11,14 @@
 //
 
 import { supabase } from './supabase';
+import { ManagerMappingConfig } from '../types';
+import {
+  ApprovedRouteMap,
+  getApprovedRouteMapsByCodes,
+  bboxForRouteMaps,
+  nearestRouteForPoint,
+  geocodeAddressInBbox,
+} from './managerMappingService';
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 
@@ -390,6 +398,196 @@ export async function loadAndCachePCL(
     console.warn('[PCL Cache] Failed to write to Supabase:', error.message);
   } else {
     console.log(`[PCL Cache] Cached PCL for ${upsertRows.length} routes`);
+  }
+}
+
+// ─── PER-MANAGER PREFIX LOAD (Sealing, non-mapping CCs) ──────────────────────
+
+/**
+ * PCL loader for a manager carrying a per-manager digital mapping config
+ * (users.metadata.digitalMapping — see ManagerMappingConfig).
+ *
+ * Differences from loadAndCachePCL:
+ *   - Callbook rows carry the BARE map prefix (e.g. "WASA") instead of a
+ *     numbered route code, so rows match on route code === config.prefix.
+ *   - Each matched row's address is geocoded (Mapbox, hard-constrained to the
+ *     bounding box of the manager's chosen routes) and bucketed into whichever
+ *     route has the nearest map segment.
+ *   - Rows whose address can't be geocoded are DROPPED, with a console count.
+ *   - Every geocode is saved to the session's geocode_cache so RMMapTab's PCL
+ *     phase hydrates from cache instead of re-paying for the same lookups.
+ *
+ * Reuses the sealing resolver and the "…Callbooks" tab filter as-is. Same
+ * non-blocking caller contract as loadAndCachePCL: callers catch + log.
+ */
+export async function loadAndCachePCLByPrefix(
+  masterbookingsSheetId: string,
+  config: ManagerMappingConfig,
+  accessToken: string,
+  ccId: string,
+  sessionDate: string,
+): Promise<void> {
+  if (!masterbookingsSheetId || !accessToken) return;
+  if (!config?.prefix || !config.routeCodes || config.routeCodes.length === 0) return;
+
+  // 1. Route geometry — needed for the geocode bbox AND the bucketing.
+  let routeMaps: ApprovedRouteMap[];
+  try {
+    routeMaps = await getApprovedRouteMapsByCodes(config.routeCodes);
+  } catch (err) {
+    console.warn('[PCL Prefix] Failed to load route geometry:', err);
+    return;
+  }
+  if (routeMaps.length === 0) {
+    console.warn(`[PCL Prefix] No approved route_maps rows for prefix "${config.prefix}" — skipping.`);
+    return;
+  }
+  const bbox = bboxForRouteMaps(routeMaps);
+
+  // 2. Read the sealing callbook tabs; keep rows whose route code is the bare prefix.
+  let tabs: string[];
+  try {
+    tabs = await getCallbookTabNames(accessToken, masterbookingsSheetId, true);
+  } catch (err) {
+    console.warn('[PCL Prefix] Could not fetch callbook tabs:', err);
+    return;
+  }
+
+  const matchedRows: RawCallbookRow[] = [];
+  for (const tabName of tabs) {
+    let rawData: any[][];
+    try {
+      rawData = await sheetsGetRaw(accessToken, masterbookingsSheetId, `'${tabName}'`);
+    } catch {
+      continue;
+    }
+    if (!rawData || rawData.length < 2) continue;
+
+    const headerIdx = findHeaderRow(rawData);
+    if (headerIdx === null) continue;
+
+    const CI = resolveColumnsSealing(rawData[headerIdx]);
+    if (CI.PHONE < 0 || CI.ROUTE_CODE < 0) continue;
+
+    for (const row of rawData.slice(headerIdx + 1)) {
+      if (!row) continue;
+      const rc = cellVal(row, CI.ROUTE_CODE);
+      if (rc !== config.prefix) continue;
+
+      const year = parseInt(cellVal(row, CI.YEAR), 10);
+      if (isNaN(year) || year < 2000) continue;
+
+      matchedRows.push({
+        routeCode: rc,
+        firstName: cellVal(row, CI.FIRST),
+        lastName: cellVal(row, CI.LAST),
+        houseNum: cellVal(row, CI.HOUSE),
+        streetName: cellVal(row, CI.STREET),
+        phone: normalizePhone(cellVal(row, CI.PHONE)),
+        fo: interpretServiceSealing(cellVal(row, CI.FO)),
+        price: cellVal(row, CI.PRICE),
+        contractor: cellVal(row, CI.CONTRACTOR),
+        year,
+      });
+    }
+  }
+
+  console.log(`[PCL Prefix] ${matchedRows.length} callbook rows carry prefix "${config.prefix}".`);
+
+  // 3. Geocode unique addresses. Hydrate from the session geocode_cache first
+  //    so re-runs (and addresses shared with other map layers) cost nothing.
+  //    Key normalization matches sessionService.normalizeAddressKey.
+  const normKey = (addr: string) => addr.toLowerCase().replace(/\s+/g, ' ').trim();
+  const geo = new Map<string, { lat: number; lng: number }>();
+  try {
+    const { data } = await supabase
+      .from('geocode_cache')
+      .select('address_key, lat, lng')
+      .eq('command_center_id', ccId)
+      .eq('session_date', sessionDate);
+    (data || []).forEach((r: any) => geo.set(r.address_key, { lat: r.lat, lng: r.lng }));
+  } catch {
+    // Cache hydration is best-effort — geocoding below still works without it.
+  }
+
+  const uniqueAddrs: string[] = [];
+  const seenAddr = new Set<string>();
+  for (const r of matchedRows) {
+    const addr = `${r.houseNum} ${r.streetName}`.trim();
+    if (!addr) continue;
+    const key = normKey(addr);
+    if (!seenAddr.has(key)) {
+      seenAddr.add(key);
+      uniqueAddrs.push(addr);
+    }
+  }
+
+  let processed = 0;
+  for (const addr of uniqueAddrs) {
+    const key = normKey(addr);
+    processed++;
+    if (geo.has(key)) continue;
+
+    const pos = await geocodeAddressInBbox(addr, bbox);
+    if (pos) {
+      geo.set(key, pos);
+      // Save for the map's cache hydration — best-effort, never fatal.
+      const { error: gcError } = await supabase
+        .from('geocode_cache')
+        .upsert({
+          address_key: key,
+          command_center_id: ccId,
+          session_date: sessionDate,
+          lat: pos.lat,
+          lng: pos.lng,
+        }, { onConflict: 'address_key,command_center_id,session_date' });
+      if (gcError) console.warn('[PCL Prefix] geocode_cache save failed:', gcError.message);
+    }
+    if (processed % 25 === 0) {
+      console.log(`[PCL Prefix] Geocoded ${processed}/${uniqueAddrs.length} addresses…`);
+    }
+    // Gentle pacing to stay under Mapbox's per-minute geocoding limit.
+    await new Promise(res => setTimeout(res, 120));
+  }
+
+  // 4. Bucket each row into the nearest route; drop rows with no geocode.
+  const rowsByRoute = new Map<string, RawCallbookRow[]>();
+  let dropped = 0;
+  for (const r of matchedRows) {
+    const addr = `${r.houseNum} ${r.streetName}`.trim();
+    const pos = addr ? geo.get(normKey(addr)) : undefined;
+    if (!pos) { dropped++; continue; }
+    const nearest = nearestRouteForPoint(pos.lat, pos.lng, routeMaps);
+    if (!nearest) { dropped++; continue; }
+    // Stamp the resolved numbered code onto the row for display consistency.
+    const resolved: RawCallbookRow = { ...r, routeCode: nearest.routeCode };
+    if (!rowsByRoute.has(nearest.routeCode)) rowsByRoute.set(nearest.routeCode, []);
+    rowsByRoute.get(nearest.routeCode)!.push(resolved);
+  }
+  if (dropped > 0) {
+    console.warn(`[PCL Prefix] Dropped ${dropped} of ${matchedRows.length} rows — address could not be geocoded.`);
+  }
+
+  // 5. One pcl_cache row per chosen route (empty allowed, so stale rows from a
+  //    previous session can't linger under these codes).
+  const upsertRows = config.routeCodes.map(rc => {
+    const rows = rowsByRoute.get(rc) || [];
+    return {
+      command_center_id: ccId,
+      route_code: rc,
+      clients: rows.length > 0 ? groupClientsByAddress(rows, true) : [],
+      updated_at: new Date().toISOString(),
+    };
+  });
+
+  const { error } = await supabase
+    .from('pcl_cache')
+    .upsert(upsertRows, { onConflict: 'command_center_id,route_code' });
+
+  if (error) {
+    console.warn('[PCL Prefix] Failed to write to Supabase:', error.message);
+  } else {
+    console.log(`[PCL Prefix] Cached ${matchedRows.length - dropped} clients across ${upsertRows.length} routes for "${config.prefix}"`);
   }
 }
 

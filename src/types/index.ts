@@ -126,6 +126,19 @@ export interface ApplicantFormData {
 
 // --- USER & AUTH ---
 
+// --- PER-MANAGER DIGITAL MAPPING (Sealing sessions in non-mapping CCs) ---
+// Stored in users.metadata.digitalMapping. Present = this manager (and their
+// workers) get the digital mapping experience for the session even though the
+// CC-level digitalMappingEnabled flag is off. routeCodes are resolved from the
+// approved route_maps rows at pick time — never assembled by string concat.
+export interface ManagerMappingConfig {
+  areaName: string;     // route_maps.area_name, e.g. "Wasaga"
+  prefix: string;       // bare route-code prefix, e.g. "WASA" — sealing callbook PCL rows carry this
+  routeStart: number;   // inclusive lower bound of the chosen route_number range
+  routeEnd: number;     // inclusive upper bound
+  routeCodes: string[]; // e.g. ["WASA1", ..., "WASA8"]
+}
+
 export interface ManagementUser {
   userId: string;
   username: string; // e.g. "basvi"
@@ -139,6 +152,10 @@ export interface ManagementUser {
   // sees all routes/bookings/workers/locations for everyone in this list, plus
   // their own. Stored in users.metadata.floatingFor. Absent/empty = not floating.
   floatingFor?: string[];
+  // --- PER-MANAGER DIGITAL MAPPING (Sealing, non-mapping CCs) ---
+  // Present = this manager is digitally mapped for the session. See
+  // ManagerMappingConfig. Stored in users.metadata.digitalMapping.
+  digitalMapping?: ManagerMappingConfig;
 }
 
 // --- BONUS STRUCTURE ---
