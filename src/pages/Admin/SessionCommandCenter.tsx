@@ -1,5 +1,5 @@
 // src/pages/Admin/SessionCommandCenter.tsx
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Upload,
@@ -45,7 +45,14 @@ import { googleSheetsService } from '../../lib/googleSheetsService';
 import { getDateTabError } from '../../lib/googleSheetsConfig';
 import { commandCenterService, regionHasSeasonSelection } from '../../lib/commandCenterService';
 import { removeStorageItem } from '../../lib/localStorage';
-import { DailySessionData, SortOption, LogsheetSession, SeasonType, SEASON_CONFIGS, EQ_DIVISOR } from '../../types';
+import { DailySessionData, RouteData, SortOption, LogsheetSession, SeasonType, SEASON_CONFIGS, EQ_DIVISOR, ManagerMappingConfig } from '../../types';
+import {
+  AreaSummary,
+  getApprovedAreaSummaries,
+  getApprovedRouteMapsByCodes,
+  buildMappingConfig,
+  streetsFromSegments,
+} from '../../lib/managerMappingService';
 import PayoutToday from '../Management/PayoutToday';
 import JobFairManager from './JobFairManager';
 import TrainingsTab from './TrainingsTab';
@@ -162,6 +169,27 @@ const SessionCommandCenter: React.FC = () => {
   const [floaterPickerFor, setFloaterPickerFor] = useState<string | null>(null);
   // Per-manager saving spinner on the live path.
   const [floaterSavingId, setFloaterSavingId] = useState<string | null>(null);
+
+  // --- PER-MANAGER DIGITAL MAPPING STATE (Sealing previews on non-mapping CCs) ---
+  // mappingDraft stages each manager's ManagerMappingConfig during PREVIEW,
+  // exactly like floaterDraft. Folded into previewData.managers at Initialize.
+  // For a LIVE session it's re-seeded from the loaded managers so the report
+  // can show a read-only badge (no live editing in round one).
+  const [mappingDraft, setMappingDraft] = useState<Record<string, ManagerMappingConfig>>({});
+  // Which manager's map picker is expanded (userId), or null.
+  const [mappingPickerFor, setMappingPickerFor] = useState<string | null>(null);
+  // Approved master-map areas — lazy-loaded the first time a picker opens.
+  const [areaSummaries, setAreaSummaries] = useState<AreaSummary[] | null>(null);
+  const [areaLoadError, setAreaLoadError] = useState<string | null>(null);
+  // Picker form fields (area name + from/to route numbers as input strings).
+  const [pickerArea, setPickerArea] = useState<string>('');
+  const [pickerFrom, setPickerFrom] = useState<string>('');
+  const [pickerTo, setPickerTo] = useState<string>('');
+  const [pickerError, setPickerError] = useState<string | null>(null);
+  // Spinner while Apply is injecting routes / refreshing bookings.
+  const [mappingApplyingFor, setMappingApplyingFor] = useState<string | null>(null);
+  // One-line result note after the bookings refresh (e.g. "3 bookings added").
+  const [mappingRefreshNote, setMappingRefreshNote] = useState<string | null>(null);
 
   // --- ADD ADDITIONAL STATE ---
   const [showAddAdditional, setShowAddAdditional] = useState(false);
@@ -288,6 +316,14 @@ const SessionCommandCenter: React.FC = () => {
         });
         setFloaterDraft(seeded);
 
+        // Seed the per-manager mapping draft from the live managers so the
+        // report's Digital Map column shows a read-only badge for the session.
+        const seededMapping: Record<string, ManagerMappingConfig> = {};
+        session.managers.forEach(m => {
+          if (m.digitalMapping) seededMapping[m.userId] = m.digitalMapping;
+        });
+        setMappingDraft(seededMapping);
+
         // Load logsheet sessions for validation check
         const sessions = await sessionService.getLogsheetSessions();
         setLogsheetSessions(sessions);
@@ -308,13 +344,24 @@ const SessionCommandCenter: React.FC = () => {
   // When a fresh preview is parsed, seed the floater draft from it (so toggles
   // have a place to live before the session is initialized). Managers from a
   // file/sheet import won't carry floatingFor yet, so default to empty arrays.
+  const seededManagersKeyRef = useRef<string>('');
   useEffect(() => {
-    if (!previewData) return;
+    if (!previewData) { seededManagersKeyRef.current = ''; return; }
+    // Only re-seed when the manager SET changes (i.e. a genuinely new preview).
+    // Route/booking updates from the mapping Apply also mint a new previewData
+    // object — re-seeding on those would wipe staged floater/mapping drafts.
+    const key = previewData.managers.map(m => m.userId).sort().join('|');
+    if (key === seededManagersKeyRef.current) return;
+    seededManagersKeyRef.current = key;
     const seeded: Record<string, string[]> = {};
     previewData.managers.forEach(m => {
       seeded[m.userId] = Array.isArray(m.floatingFor) ? m.floatingFor : [];
     });
     setFloaterDraft(seeded);
+    // A new preview also resets any staged per-manager mapping.
+    setMappingDraft({});
+    setMappingPickerFor(null);
+    setMappingRefreshNote(null);
   }, [previewData]);
 
   const handleTabChange = (tab: 'lifecycle' | 'payout' | 'onboarding') => {
@@ -513,6 +560,10 @@ const SessionCommandCenter: React.FC = () => {
         previewData.managers = previewData.managers.map(m => ({
           ...m,
           floatingFor: floaterDraft[m.userId] || [],
+          // PER-MANAGER DIGITAL MAPPING: fold the staged config in so
+          // uploadDailySession persists it into users.metadata.digitalMapping
+          // and kicks off the prefix PCL load.
+          digitalMapping: mappingDraft[m.userId] || undefined,
         }));
         
         await sessionService.uploadDailySession(previewData, emailEnabled, meta);
@@ -590,6 +641,9 @@ const SessionCommandCenter: React.FC = () => {
         setNoTaxOnCash(true); // Reset to default ON
         setFloaterDraft({});
         setFloaterPickerFor(null);
+        setMappingDraft({});
+        setMappingPickerFor(null);
+        setMappingRefreshNote(null);
       } catch (err) {
         alert('Error: ' + err);
       } finally {
@@ -764,6 +818,160 @@ const SessionCommandCenter: React.FC = () => {
   const clearFloater = useCallback((managerId: string) => {
     commitFloaterList(managerId, []);
   }, [commitFloaterList]);
+
+  // --- PER-MANAGER DIGITAL MAPPING (Sealing previews on non-mapping CCs) ---
+
+  // Feature gate: CC-level mapping OFF and the session/selection is Sealing.
+  const showManagerMapping = !hasDigitalMapping && selectedSeasonType === 'sealing';
+
+  // Route codes already claimed by managers' staged configs — a range that
+  // overlaps ANOTHER manager's claim is rejected (last-writer-wins in
+  // pcl_cache would otherwise make results order-dependent).
+  const mappingClaimedCodes = useMemo(() => {
+    const m = new Map<string, string>(); // routeCode -> managerId
+    for (const [mid, cfg] of Object.entries(mappingDraft)) {
+      (cfg?.routeCodes || []).forEach(rc => m.set(rc, mid));
+    }
+    return m;
+  }, [mappingDraft]);
+
+  // Lazy-load the approved areas the first time a picker opens.
+  useEffect(() => {
+    if (!mappingPickerFor || areaSummaries !== null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const areas = await getApprovedAreaSummaries();
+        if (!cancelled) { setAreaSummaries(areas); setAreaLoadError(null); }
+      } catch (err) {
+        if (!cancelled) {
+          setAreaLoadError(err instanceof Error ? err.message : 'Failed to load master maps.');
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [mappingPickerFor, areaSummaries]);
+
+  // Open the picker for a manager, prefilled from any staged config.
+  const openMappingPicker = useCallback((managerId: string) => {
+    const existing = mappingDraft[managerId];
+    setPickerArea(existing?.areaName || '');
+    setPickerFrom(existing ? String(existing.routeStart) : '');
+    setPickerTo(existing ? String(existing.routeEnd) : '');
+    setPickerError(null);
+    setMappingRefreshNote(null);
+    setMappingPickerFor(managerId);
+  }, [mappingDraft]);
+
+  // Re-read the feed tab and merge net-new bookings into the preview.
+  // Sheets-imported previews only (a file preview has no live source to
+  // re-read). Dedupe key matches addAdditionalSessionData: route + address.
+  // Returns the number of bookings added, or -1 if the refresh was skipped.
+  const refreshPreviewBookings = useCallback(async (): Promise<number> => {
+    const meta = (previewData as any)?._importMeta as ImportMeta | undefined;
+    if (meta?.source !== 'sheets' || !meta.dateTab || !isGoogleConnected) return -1;
+    const fresh = await googleSheetsService.importSessionData(meta.dateTab, selectedSeasonType);
+    let added = 0;
+    setPreviewData(prev => {
+      if (!prev) return prev;
+      const keyOf = (b: any) =>
+        `${b['Route Number']}::${(b['Full Address'] || '').toLowerCase().trim()}`;
+      const existingKeys = new Set(prev.pendingBookings.map(keyOf));
+      const newBookings = fresh.pendingBookings.filter(b => !existingKeys.has(keyOf(b)));
+      added = newBookings.length;
+      if (newBookings.length === 0) return prev;
+      return { ...prev, pendingBookings: [...prev.pendingBookings, ...newBookings] };
+    });
+    return added;
+  }, [previewData, isGoogleConnected, selectedSeasonType]);
+
+  // Apply a mapping to a manager: stage the config, inject the routes (streets
+  // from the master map's segments), then refresh bookings so numbered
+  // bookings for the new routes appear immediately.
+  const applyManagerMapping = useCallback(async (managerId: string) => {
+    if (!areaSummaries) return;
+    const area = areaSummaries.find(a => a.areaName === pickerArea);
+    if (!area) { setPickerError('Pick a map area first.'); return; }
+
+    const from = parseInt(pickerFrom, 10);
+    const to = parseInt(pickerTo, 10);
+    if (isNaN(from) || isNaN(to) || from > to) {
+      setPickerError('Enter a valid From–To route number range.');
+      return;
+    }
+
+    const config = buildMappingConfig(area, from, to);
+    if (config.routeCodes.length === 0) {
+      setPickerError(`No ${area.areaName} routes exist in that range.`);
+      return;
+    }
+
+    const clash = config.routeCodes.find(rc => {
+      const owner = mappingClaimedCodes.get(rc);
+      return owner !== undefined && owner !== managerId;
+    });
+    if (clash) {
+      setPickerError(`${clash} is already assigned to another manager in this preview.`);
+      return;
+    }
+
+    setPickerError(null);
+    setMappingApplyingFor(managerId);
+    try {
+      const maps = await getApprovedRouteMapsByCodes(config.routeCodes);
+      const injected: RouteData[] = maps.map(rm => ({
+        routeCode: rm.routeCode,
+        managerId,
+        assignedWorkerIds: [],
+        streets: streetsFromSegments(rm.segments),
+        commandCenterId: currentCC?.id,
+      }));
+
+      setPreviewData(prev => {
+        if (!prev) return prev;
+        // Remove this manager's previously injected routes (re-pick case),
+        // then add the fresh set.
+        const oldCodes = new Set(mappingDraft[managerId]?.routeCodes || []);
+        const kept = prev.routes.filter(r => !oldCodes.has(r.routeCode));
+        return { ...prev, routes: [...kept, ...injected] };
+      });
+      setMappingDraft(prev => ({ ...prev, [managerId]: config }));
+      setMappingPickerFor(null);
+
+      const added = await refreshPreviewBookings();
+      setMappingRefreshNote(
+        `${config.routeCodes.length} ${area.prefix} route${config.routeCodes.length === 1 ? '' : 's'} staged · ` +
+        (added < 0
+          ? 'bookings refresh skipped (not a Sheets import, or Google not connected)'
+          : added > 0
+            ? `${added} new booking${added === 1 ? '' : 's'} pulled in from the sheet`
+            : 'no new bookings found on the sheet')
+      );
+    } catch (err) {
+      console.error('Failed to apply manager mapping:', err);
+      setPickerError(err instanceof Error ? err.message : 'Failed to apply mapping.');
+    } finally {
+      setMappingApplyingFor(null);
+    }
+  }, [areaSummaries, pickerArea, pickerFrom, pickerTo, mappingClaimedCodes, mappingDraft, currentCC?.id, refreshPreviewBookings]);
+
+  // Remove a manager's staged mapping and its injected routes.
+  const clearManagerMapping = useCallback((managerId: string) => {
+    const oldCodes = new Set(mappingDraft[managerId]?.routeCodes || []);
+    if (oldCodes.size > 0) {
+      setPreviewData(prev => {
+        if (!prev) return prev;
+        return { ...prev, routes: prev.routes.filter(r => !oldCodes.has(r.routeCode)) };
+      });
+    }
+    setMappingDraft(prev => {
+      const next = { ...prev };
+      delete next[managerId];
+      return next;
+    });
+    setMappingPickerFor(null);
+    setMappingRefreshNote(null);
+  }, [mappingDraft]);
 
   // Get season config for display
   const seasonConfig = SEASON_CONFIGS[selectedSeasonType];
@@ -1308,12 +1516,18 @@ const SessionCommandCenter: React.FC = () => {
                                         {hasDigitalMapping && (
                                           <th className="py-3 font-medium text-center">Floater</th>
                                         )}
+                                        {/* DIGITAL MAP column — Sealing on NON-mapping CCs */}
+                                        {showManagerMapping && (
+                                          <th className="py-3 font-medium text-center">Digital Map</th>
+                                        )}
                                     </tr>
                                 </thead>
                                 <tbody className="text-gray-200">
                                     {activeReportData.map((manager, idx) => {
                                         const myFloat = floaterDraft[manager.userId] || [];
                                         const isFloating = myFloat.length > 0;
+                                        // Per-manager digital mapping staged config (undefined = none).
+                                        const mapCfg = mappingDraft[manager.userId];
                                         const pickerOpen = floaterPickerFor === manager.userId;
                                         const savingThis = floaterSavingId === manager.userId;
                                         // Candidates this manager may float for: every OTHER manager who
@@ -1368,6 +1582,42 @@ const SessionCommandCenter: React.FC = () => {
                                                 >
                                                   {savingThis ? <Loader size={12} className="animate-spin" /> : <Navigation2 size={12} />}
                                                   {isFloating ? `Floater (${myFloat.length})` : 'Floater'}
+                                                </button>
+                                              </td>
+                                            )}
+                                            {/* DIGITAL MAP cell — Sealing on NON-mapping CCs. Preview:
+                                                opens the area/range picker. Live: read-only badge. */}
+                                            {showManagerMapping && (
+                                              <td className="py-3 text-center">
+                                                <button
+                                                  onClick={() => {
+                                                    if (reportIsLive) return;
+                                                    if (mappingPickerFor === manager.userId) {
+                                                      setMappingPickerFor(null);
+                                                    } else {
+                                                      openMappingPicker(manager.userId);
+                                                    }
+                                                  }}
+                                                  disabled={reportIsLive || mappingApplyingFor !== null}
+                                                  title={
+                                                    reportIsLive
+                                                      ? (mapCfg
+                                                          ? `${mapCfg.areaName} routes ${mapCfg.routeStart}–${mapCfg.routeEnd} (set at initialize)`
+                                                          : 'Digital mapping is set during session initialization')
+                                                      : (mapCfg
+                                                          ? `${mapCfg.areaName} routes ${mapCfg.routeStart}–${mapCfg.routeEnd} — click to edit`
+                                                          : 'Set up digital mapping for this manager')
+                                                  }
+                                                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                                                    mapCfg
+                                                      ? 'bg-blue-600/20 text-blue-300 border-blue-600/50 hover:bg-blue-600/30'
+                                                      : 'bg-gray-700 text-gray-300 border-gray-600 hover:bg-gray-600 hover:text-white'
+                                                  }`}
+                                                >
+                                                  {mappingApplyingFor === manager.userId
+                                                    ? <Loader size={12} className="animate-spin" />
+                                                    : <MapIcon size={12} />}
+                                                  {mapCfg ? `${mapCfg.prefix} ${mapCfg.routeStart}–${mapCfg.routeEnd}` : 'Map'}
                                                 </button>
                                               </td>
                                             )}
@@ -1436,10 +1686,119 @@ const SessionCommandCenter: React.FC = () => {
                                                   </div>
                                                 )}
 
-                                                <div className="text-[10px] text-gray-500 mt-2">
+<div className="text-[10px] text-gray-500 mt-2">
                                                   {reportIsLive
                                                     ? 'Changes save immediately to the live session.'
                                                     : 'Changes are staged and saved when you Initialize the session.'}
+                                                </div>
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        )}
+                                        {/* MAPPING PICKER ROW — expands beneath the manager when open */}
+                                        {showManagerMapping && mappingPickerFor === manager.userId && !reportIsLive && (
+                                          <tr className="bg-gray-900/40">
+                                            <td colSpan={5} className="px-3 py-3">
+                                              <div className="bg-gray-900 border border-gray-700 rounded-lg p-3">
+                                                <div className="flex items-center justify-between mb-2">
+                                                  <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                                                    <MapIcon size={13} className="text-blue-400" />
+                                                    Digital mapping for {manager.name}
+                                                  </div>
+                                                  <div className="flex items-center gap-2">
+                                                    {mapCfg && (
+                                                      <button
+                                                        onClick={() => clearManagerMapping(manager.userId)}
+                                                        disabled={mappingApplyingFor !== null}
+                                                        className="text-[11px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 disabled:opacity-50"
+                                                      >
+                                                        Remove mapping
+                                                      </button>
+                                                    )}
+                                                    <button
+                                                      onClick={() => setMappingPickerFor(null)}
+                                                      className="w-6 h-6 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 flex items-center justify-center"
+                                                      title="Close"
+                                                    >
+                                                      <X size={12} />
+                                                    </button>
+                                                  </div>
+                                                </div>
+
+                                                {areaLoadError ? (
+                                                  <div className="text-[11px] text-red-400 py-2">{areaLoadError}</div>
+                                                ) : !areaSummaries ? (
+                                                  <div className="flex items-center gap-2 text-[11px] text-gray-400 py-2">
+                                                    <Loader size={12} className="animate-spin" /> Loading master maps…
+                                                  </div>
+                                                ) : areaSummaries.length === 0 ? (
+                                                  <div className="text-[11px] text-gray-500 py-2">
+                                                    No approved master maps found. Build and approve routes in Map Builder first.
+                                                  </div>
+                                                ) : (
+                                                  <div className="flex flex-wrap items-end gap-3">
+                                                    <div>
+                                                      <label className="block text-[10px] text-gray-500 font-bold uppercase mb-1">Map</label>
+                                                      <select
+                                                        value={pickerArea}
+                                                        onChange={(e) => {
+                                                          setPickerArea(e.target.value);
+                                                          setPickerError(null);
+                                                          const a = areaSummaries.find(x => x.areaName === e.target.value);
+                                                          if (a && a.routes.length > 0) {
+                                                            setPickerFrom(String(a.routes[0].routeNumber));
+                                                            setPickerTo(String(a.routes[a.routes.length - 1].routeNumber));
+                                                          }
+                                                        }}
+                                                        className="bg-gray-800 border border-gray-600 rounded-lg py-1.5 px-2 text-xs text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                                                      >
+                                                        <option value="">Select…</option>
+                                                        {areaSummaries.map(a => (
+                                                          <option key={a.areaName} value={a.areaName}>
+                                                            {a.areaName} ({a.prefix} · {a.routes.length} routes)
+                                                          </option>
+                                                        ))}
+                                                      </select>
+                                                    </div>
+                                                    <div>
+                                                      <label className="block text-[10px] text-gray-500 font-bold uppercase mb-1">From</label>
+                                                      <input
+                                                        type="number"
+                                                        value={pickerFrom}
+                                                        onChange={(e) => { setPickerFrom(e.target.value); setPickerError(null); }}
+                                                        className="w-20 bg-gray-800 border border-gray-600 rounded-lg py-1.5 px-2 text-xs text-white text-center focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                                                      />
+                                                    </div>
+                                                    <div>
+                                                      <label className="block text-[10px] text-gray-500 font-bold uppercase mb-1">To</label>
+                                                      <input
+                                                        type="number"
+                                                        value={pickerTo}
+                                                        onChange={(e) => { setPickerTo(e.target.value); setPickerError(null); }}
+                                                        className="w-20 bg-gray-800 border border-gray-600 rounded-lg py-1.5 px-2 text-xs text-white text-center focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                                                      />
+                                                    </div>
+                                                    <button
+                                                      onClick={() => applyManagerMapping(manager.userId)}
+                                                      disabled={mappingApplyingFor !== null || !pickerArea}
+                                                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                                    >
+                                                      {mappingApplyingFor === manager.userId
+                                                        ? <Loader size={12} className="animate-spin" />
+                                                        : <Check size={12} />}
+                                                      Apply
+                                                    </button>
+                                                  </div>
+                                                )}
+
+                                                {pickerError && (
+                                                  <div className="text-[11px] text-red-400 mt-2">{pickerError}</div>
+                                                )}
+
+                                                <div className="text-[10px] text-gray-500 mt-2">
+                                                  Applying stages the routes for this manager (streets from the master map)
+                                                  and re-reads the sheet for bookings on those route codes. PCLs load in the
+                                                  background when you Initialize the session.
                                                 </div>
                                               </div>
                                             </td>
@@ -1454,10 +1813,18 @@ const SessionCommandCenter: React.FC = () => {
                                         <td className="py-3 text-center text-white">{activeReportData.reduce((sum, m) => sum + m.routes, 0)}</td>
                                         <td className="py-3 text-center text-white">{activeReportData.reduce((sum, m) => sum + m.prebooks, 0)}</td>
                                         {hasDigitalMapping && <td className="py-3" />}
+                                        {showManagerMapping && <td className="py-3" />}
                                     </tr>
                                 </tbody>
                             </table>
                         </div>
+
+                        {/* MAPPING REFRESH NOTE — result of the last Apply's bookings pull */}
+                        {previewData && mappingRefreshNote && (
+                          <div className="mt-3 text-xs text-blue-300 bg-blue-900/20 border border-blue-800/50 rounded-lg px-3 py-2">
+                            {mappingRefreshNote}
+                          </div>
+                        )}
 
                         {/* ADD ADDITIONAL PANEL */}
                         {currentSession && !previewData && showAddAdditional && (
