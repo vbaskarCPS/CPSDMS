@@ -38,6 +38,7 @@ import {
   RouteSplitBucket,
   RouteSplitRectangle,
   ManagerLocation,
+  ManagerMappingConfig,
 } from '../types';
 
 // Import metadata type - re-export for other modules
@@ -739,6 +740,59 @@ class SessionService {
       .eq('command_center_id', ccId);
 
     if (updateError) throw updateError;
+  }
+
+  // --- PER-MANAGER DIGITAL MAPPING: LIVE-SESSION APPLY ---
+  // Writes the mapped routes into the live session and persists the config to
+  // users.metadata.digitalMapping. Caller (SCC) handles the bookings pull and
+  // the PCL prefix load. Refuses if any chosen route code already exists in
+  // the session — live mappings are add-only; editing is preview/next-session.
+  public async applyManagerMappingLive(
+    managerId: string,
+    config: ManagerMappingConfig,
+    mappedRoutes: { routeCode: string; streets: string[] }[]
+  ): Promise<void> {
+    const ccId = this.getCCId();
+    const date = await this.getDailySessionDate();
+    if (!date) throw new Error('No active session');
+
+    const { data: existing } = await supabase
+      .from('routes')
+      .select('route_code')
+      .eq('session_date', date)
+      .eq('command_center_id', ccId)
+      .in('route_code', config.routeCodes);
+    if (existing && existing.length > 0) {
+      throw new Error(`Route(s) already in this session: ${existing.map(r => r.route_code).join(', ')}`);
+    }
+
+    const routeRows = mappedRoutes.map(r => ({
+      route_code: r.routeCode,
+      manager_id: managerId,
+      assigned_worker_ids: [],
+      streets: r.streets,
+      session_date: date,
+      command_center_id: ccId,
+    }));
+    const { error: routeError } = await supabase.from('routes').insert(routeRows);
+    if (routeError) throw routeError;
+
+    const { data: user, error: fetchError } = await supabase
+      .from('users')
+      .select('metadata')
+      .eq('user_id', managerId)
+      .eq('role', 'RouteManager')
+      .eq('command_center_id', ccId)
+      .single();
+    if (fetchError || !user) throw new Error('Manager not found');
+
+    const newMeta = { ...(user.metadata || {}), digitalMapping: config };
+    const { error: metaError } = await supabase
+      .from('users')
+      .update({ metadata: newMeta })
+      .eq('user_id', managerId)
+      .eq('command_center_id', ccId);
+    if (metaError) throw metaError;
   }
 
   // --- 2d. WORKER SESSION STATUS (LOCKOUT) ---

@@ -919,6 +919,52 @@ const SessionCommandCenter: React.FC = () => {
     setMappingApplyingFor(managerId);
     try {
       const maps = await getApprovedRouteMapsByCodes(config.routeCodes);
+
+      // ── LIVE SESSION PATH ──
+      // Writes routes + metadata to the DB immediately, then runs the same
+      // net-new pull Add Additional performs, then kicks the PCL prefix load.
+      if (reportIsLive && currentSession) {
+        await sessionService.applyManagerMappingLive(
+          managerId,
+          config,
+          maps.map(rm => ({ routeCode: rm.routeCode, streets: streetsFromSegments(rm.segments) }))
+        );
+
+        // Pull new bookings for the fresh route codes (Sheets sessions only).
+        let bookingsNote = 'bookings pull skipped (not a Sheets session, or Google not connected)';
+        if (isFromSheets && importMeta?.dateTab && isGoogleConnected) {
+          const freshData = await googleSheetsService.importSessionData(importMeta.dateTab, selectedSeasonType);
+          const addResult = await sessionService.addAdditionalSessionData(freshData);
+          bookingsNote = `${addResult.bookingsAdded} new booking${addResult.bookingsAdded === 1 ? '' : 's'} pulled in`;
+        }
+
+        // Non-blocking PCL prefix load for this manager's routes.
+        if (currentCC?.masterbookingsSheetId) {
+          const mbSheetId = currentCC.masterbookingsSheetId;
+          const ccIdForPcl = currentCC.id;
+          const sessionDateForPcl = currentSession.date;
+          import('../../lib/pclCacheService').then(({ loadAndCachePCLByPrefix }) => {
+            const accessToken = googleSheetsService.getAccessToken();
+            if (!accessToken) {
+              console.warn('[PCL Prefix] No Google access token — live PCL load skipped.');
+              return;
+            }
+            loadAndCachePCLByPrefix(mbSheetId, config, accessToken, ccIdForPcl, sessionDateForPcl).catch(err =>
+              console.warn(`[PCL Prefix] Live load failed for ${config.prefix}:`, err)
+            );
+          }).catch(err => console.warn('[PCL Prefix] Module import failed:', err));
+        }
+
+        setMappingPickerFor(null);
+        await loadSession(); // re-seeds mappingDraft from the DB → badge appears
+        setMappingRefreshNote(
+          `${config.routeCodes.length} ${area.prefix} route${config.routeCodes.length === 1 ? '' : 's'} added to the LIVE session · ` +
+          bookingsNote + ' · PCL loading in background · manager must re-login to see the map'
+        );
+        return;
+      }
+
+      // ── PREVIEW PATH (unchanged) ──
       const injected: RouteData[] = maps.map(rm => ({
         routeCode: rm.routeCode,
         managerId,
@@ -953,7 +999,7 @@ const SessionCommandCenter: React.FC = () => {
     } finally {
       setMappingApplyingFor(null);
     }
-  }, [areaSummaries, pickerArea, pickerFrom, pickerTo, mappingClaimedCodes, mappingDraft, currentCC?.id, refreshPreviewBookings]);
+  }, [areaSummaries, pickerArea, pickerFrom, pickerTo, mappingClaimedCodes, mappingDraft, currentCC, refreshPreviewBookings, reportIsLive, currentSession, isFromSheets, importMeta, isGoogleConnected, selectedSeasonType, loadSession]);
 
   // Remove a manager's staged mapping and its injected routes.
   const clearManagerMapping = useCallback((managerId: string) => {
@@ -1591,19 +1637,21 @@ const SessionCommandCenter: React.FC = () => {
                                               <td className="py-3 text-center">
                                                 <button
                                                   onClick={() => {
-                                                    if (reportIsLive) return;
+                                                    // LIVE: allowed only for managers with NO mapping yet —
+                                                    // editing/removing an applied mapping is preview-only.
+                                                    if (reportIsLive && mapCfg) return;
                                                     if (mappingPickerFor === manager.userId) {
                                                       setMappingPickerFor(null);
                                                     } else {
                                                       openMappingPicker(manager.userId);
                                                     }
                                                   }}
-                                                  disabled={reportIsLive || mappingApplyingFor !== null}
+                                                  disabled={(reportIsLive && !!mapCfg) || mappingApplyingFor !== null}
                                                   title={
                                                     reportIsLive
                                                       ? (mapCfg
-                                                          ? `${mapCfg.areaName} routes ${mapCfg.routeStart}–${mapCfg.routeEnd} (set at initialize)`
-                                                          : 'Digital mapping is set during session initialization')
+                                                          ? `${mapCfg.areaName} routes ${mapCfg.routeStart}–${mapCfg.routeEnd} (applied — edit next session)`
+                                                          : 'Load a digital map for this manager (writes to the live session)')
                                                       : (mapCfg
                                                           ? `${mapCfg.areaName} routes ${mapCfg.routeStart}–${mapCfg.routeEnd} — click to edit`
                                                           : 'Set up digital mapping for this manager')
@@ -1696,7 +1744,7 @@ const SessionCommandCenter: React.FC = () => {
                                           </tr>
                                         )}
                                         {/* MAPPING PICKER ROW — expands beneath the manager when open */}
-                                        {showManagerMapping && mappingPickerFor === manager.userId && !reportIsLive && (
+                                        {showManagerMapping && mappingPickerFor === manager.userId && (
                                           <tr className="bg-gray-900/40">
                                             <td colSpan={5} className="px-3 py-3">
                                               <div className="bg-gray-900 border border-gray-700 rounded-lg p-3">
@@ -1795,10 +1843,10 @@ const SessionCommandCenter: React.FC = () => {
                                                   <div className="text-[11px] text-red-400 mt-2">{pickerError}</div>
                                                 )}
 
-                                                <div className="text-[10px] text-gray-500 mt-2">
-                                                  Applying stages the routes for this manager (streets from the master map)
-                                                  and re-reads the sheet for bookings on those route codes. PCLs load in the
-                                                  background when you Initialize the session.
+<div className="text-[10px] text-gray-500 mt-2">
+                                                  {reportIsLive
+                                                    ? 'Applying writes the routes to the LIVE session immediately, pulls new bookings from the sheet (same as Add Additional), and starts the PCL load in the background. The manager must log out and back in to see the map.'
+                                                    : 'Applying stages the routes for this manager (streets from the master map) and re-reads the sheet for bookings on those route codes. PCLs load in the background when you Initialize the session.'}
                                                 </div>
                                               </div>
                                             </td>
