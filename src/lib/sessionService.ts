@@ -600,6 +600,37 @@ class SessionService {
     };
   }
 
+  // Every manager on this command centre carrying a per-manager digital mapping
+  // config, read straight out of users.metadata. Deliberately does NOT require
+  // an active session: the PCL preload is meant to run weeks before one exists,
+  // which is the entire point of it. Typed structurally so this method adds no
+  // new import to the file.
+  public async getManagerMappingConfigs(): Promise<Array<{
+    userId: string;
+    name: string;
+    config: { areaName: string; prefix: string; routeStart: number; routeEnd: number; routeCodes: string[] };
+  }>> {
+    const ccId = this.getCCId();
+    const { data, error } = await supabase
+      .from('users')
+      .select('user_id, name, metadata')
+      .eq('role', 'RouteManager')
+      .eq('command_center_id', ccId);
+
+    if (error) {
+      console.warn('[Mapping] Failed to read manager mapping configs:', error.message);
+      return [];
+    }
+
+    return (data || [])
+      .filter((u: any) => u.metadata?.digitalMapping?.prefix)
+      .map((u: any) => ({
+        userId: u.user_id,
+        name: u.name,
+        config: u.metadata.digitalMapping,
+      }));
+  }
+
   public async getManagerById(managerId: string): Promise<ManagementUser | null> {
     const ccId = this.getCCId();
     const { data } = await supabase
