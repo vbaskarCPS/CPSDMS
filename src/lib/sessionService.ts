@@ -1453,9 +1453,20 @@ class SessionService {
       for (const b of newBuckets) for (const w of b.assignedWorkers) unionSet.add(w);
       const unionWorkers = Array.from(unionSet);
   
-      // DELIBERATELY DISABLED — see note below. Was: .update({ assigned_worker_ids: unionWorkers })
-      const routeErr = null as any;
+      // The union is still deliberately NOT written back — that was the "both
+      // halves" write bleed. But we now CLEAR the route-level list explicitly
+      // rather than merely leaving it alone. A split route is supposed to carry
+      // an empty list (getDailySession folds the buckets back up in memory for
+      // on-route detection), and the map's number-label click bug could stamp a
+      // whole-route assignment onto one. Clearing here quietly repairs any route
+      // already carrying that bad stamp, the next time a bucket is assigned.
       void unionWorkers;
+      const { error: routeErr } = await supabase
+        .from('routes')
+        .update({ assigned_worker_ids: [] })
+        .eq('route_code', routeCode)
+        .eq('session_date', date)
+        .eq('command_center_id', ccId);
   
       if (routeErr) {
         console.error('[RouteSplit] updateRouteSplitAssignment (routes union) failed:', routeErr);
@@ -1893,6 +1904,103 @@ class SessionService {
   
     // --- 3b. REASSIGN WORKER ---
   
+    // Resolve the teamId a cart is keyed by, given any one of its members.
+    // Workers imported without a teamId are keyed by their own contractor id —
+    // the same fallback getDailySession uses when it assembles teamCarts.
+    private async resolveTeamKey(anyMemberWorkerId: string): Promise<string> {
+      const ccId = this.getCCId();
+      const { data } = await supabase
+        .from('users')
+        .select('metadata')
+        .eq('user_id', anyMemberWorkerId)
+        .eq('command_center_id', ccId)
+        .maybeSingle();
+      return data?.metadata?.teamId || anyMemberWorkerId;
+    }
+
+    // Stamp a worker's teamId so teamCarts agrees with the session they
+    // actually sit in. Without this, reassigning a pair into two solos left
+    // both still keyed to the same teamId — so the app kept treating them as
+    // one cart, and assigning a route to either one stamped BOTH onto it.
+    private async setWorkerTeamKey(workerId: string, teamKey: string): Promise<void> {
+      const ccId = this.getCCId();
+      const { data, error: fetchError } = await supabase
+        .from('users')
+        .select('metadata')
+        .eq('user_id', workerId)
+        .eq('command_center_id', ccId)
+        .single();
+      if (fetchError || !data) throw new Error('Worker not found');
+      const { error } = await supabase
+        .from('users')
+        .update({ metadata: { ...data.metadata, teamId: teamKey } })
+        .eq('user_id', workerId)
+        .eq('command_center_id', ccId);
+      if (error) throw error;
+    }
+
+    // Rewrite every route — and every split bucket — that belonged to a cart so
+    // its worker list matches that cart's membership after a reassignment.
+    // These lists are the ONLY source for the labels drawn on route cards and
+    // on the map, which is why they went stale when a worker moved.
+    //
+    // `formerMembers` is the cart's membership BEFORE the move: a route whose
+    // worker list touches any of them is one of that cart's routes.
+    // `newOwners` is what the list becomes.
+    // `newManagerId`, when set, re-homes the route to another manager — the
+    // same thing transferWorker already does when a worker changes hands.
+    private async rewriteCartRouteOwnership(
+      date: string,
+      formerMembers: string[],
+      newOwners: string[],
+      newManagerId: string | null,
+    ): Promise<void> {
+      const ccId = this.getCCId();
+      const formerSet = new Set(formerMembers);
+
+      const { data: routes } = await supabase
+        .from('routes')
+        .select('route_code, assigned_worker_ids')
+        .eq('session_date', date)
+        .eq('command_center_id', ccId);
+
+      for (const route of routes || []) {
+        const ids: string[] = route.assigned_worker_ids || [];
+        if (!ids.some((id: string) => formerSet.has(id))) continue;
+        const patch: Record<string, any> = { assigned_worker_ids: newOwners };
+        if (newManagerId) patch.manager_id = newManagerId;
+        const { error } = await supabase
+          .from('routes')
+          .update(patch)
+          .eq('route_code', route.route_code)
+          .eq('session_date', date)
+          .eq('command_center_id', ccId);
+        if (error) console.error('[Reassign] Failed to rewrite route ownership:', route.route_code, error);
+      }
+
+      // Carved routes hold their assignment at the BUCKET level, so the route
+      // row above is deliberately empty for them and the buckets are the real
+      // record. Miss these and a split route keeps a departed worker's name.
+      const splits = await this.getRouteSplits();
+      for (const split of splits) {
+        let changed = false;
+        const newBuckets = split.buckets.map(b => {
+          const assigned = b.assignedWorkers || [];
+          if (!assigned.some((id: string) => formerSet.has(id))) return b;
+          changed = true;
+          return { ...b, assignedWorkers: [...newOwners] };
+        });
+        if (!changed) continue;
+        const { error } = await supabase
+          .from('route_splits')
+          .update({ buckets: newBuckets, updated_at: new Date().toISOString() })
+          .eq('command_center_id', ccId)
+          .eq('session_date', date)
+          .eq('route_code', split.routeCode);
+        if (error) console.error('[Reassign] Failed to rewrite split bucket ownership:', split.routeCode, error);
+      }
+    }
+
     public async reassignWorker(
       workerId: string,
       destination:
@@ -1911,7 +2019,11 @@ class SessionService {
         ? [...currentSession.teamWorkerIds]
         : [currentSession.workerId];
   
-      const updatedCurrentTeam = currentTeamIds.filter(id => id !== workerId);
+        const updatedCurrentTeam = currentTeamIds.filter(id => id !== workerId);
+        // A solo departure empties the old cart — its session row is deleted
+        // below, so its routes and its jobs have nowhere left to live and must
+        // travel across with the worker.
+        const oldCartEmptied = updatedCurrentTeam.length === 0;
   
       if (updatedCurrentTeam.length === 0) {
         await supabase
@@ -2007,6 +2119,49 @@ class SessionService {
           upsell_split: { [workerId]: 100 },
         });
         if (sessError) throw sessError;
+      }
+
+      // --- KEEP THE THREE MIRRORS HONEST ---
+      // Cart membership is now correct in logsheet_sessions, but three other
+      // places still describe the old arrangement. Re-read the worker's session
+      // so we're working from what actually landed in the database rather than
+      // from what we think we just wrote, then repair each mirror in turn.
+      const newSession = await this.getWorkerLogsheetSession(workerId);
+      const destSessionId = newSession?.id || null;
+      const destTeamIds: string[] = hasItems(newSession?.teamWorkerIds)
+        ? [...newSession!.teamWorkerIds!]
+        : [workerId];
+
+      // MIRROR 1 — users.metadata.teamId. getDailySession turns this into
+      // teamCarts, which feeds the contractor's "Your Team" list and the RM's
+      // cart expansion at route-assignment time. Key the worker to whatever
+      // their new cart-mates are keyed by; a solo is keyed to itself.
+      const otherMember = destTeamIds.find(id => id !== workerId);
+      const destTeamKey = otherMember ? await this.resolveTeamKey(otherMember) : workerId;
+      await this.setWorkerTeamKey(workerId, destTeamKey);
+
+      // MIRROR 2 — route and split-bucket worker lists, the source of every
+      // route label. A route belongs to the CART, not the worker: whoever
+      // remains keeps it. If the cart emptied out, the work travels with them.
+      await this.rewriteCartRouteOwnership(
+        date,
+        currentTeamIds,
+        oldCartEmptied ? destTeamIds : updatedCurrentTeam,
+        oldCartEmptied && destination.type === 'different_manager'
+          ? destination.targetManagerId
+          : null,
+      );
+
+      // MIRROR 3 — bookings.session_id. Only a problem when the old session was
+      // deleted: every job stamped with it now points at a row that no longer
+      // exists, and the moved worker would open their dashboard to nothing.
+      if (oldCartEmptied && destSessionId) {
+        const { error: bkErr } = await supabase
+          .from('bookings')
+          .update({ session_id: destSessionId })
+          .eq('session_id', currentSession.id)
+          .eq('command_center_id', ccId);
+        if (bkErr) console.error('[Reassign] Failed to repoint bookings to the new session:', bkErr);
       }
     }
   

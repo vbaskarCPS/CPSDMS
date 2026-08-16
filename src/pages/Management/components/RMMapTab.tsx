@@ -313,6 +313,25 @@ const isConfirmedBooking = (b: any): boolean => {
   return /\bconf/i.test(text);
 };
 
+// Crew label for a route: every assigned member rendered as "First L.", so a
+// two-man cart reads "John S. & Mike B." instead of the old bare-initials
+// "JS MB". Three or more extends the same pattern with commas and a final
+// ampersand. Used by BOTH the sidebar route cards and the text drawn on the map
+// lines — those carried separate copies of this rule and could drift apart.
+function formatCrewLabel(ids: string[], workers: Worker[]): string {
+  const names = ids
+    .map(id => workers.find(w => w.contractorId === id))
+    .filter(Boolean)
+    .map(w => {
+      const initial = (w!.lastName || '').charAt(0);
+      return initial ? `${w!.firstName} ${initial}.` : w!.firstName;
+    });
+  if (names.length === 0) return '';
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} & ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
+}
+
 const RC_TEAM_PATTERN = /^RC\d*$/;
 const isRcWorker = (teamId: string | null | undefined): boolean => {
   return !!teamId && RC_TEAM_PATTERN.test(teamId);
@@ -1534,17 +1553,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const routeCardData = useMemo<RouteCardData[]>(() => {
     const result: RouteCardData[] = [];
 
-    const buildLabel = (ids: string[]): string => {
-      if (ids.length === 0) return '';
-      if (ids.length === 1) {
-        const w = workers.find(wk => wk.contractorId === ids[0]);
-        return w ? `${w.firstName} ${w.lastName.charAt(0)}.` : '';
-      }
-      return ids.map(id => {
-        const w = workers.find(wk => wk.contractorId === id);
-        return w ? `${w.firstName.charAt(0)}${w.lastName.charAt(0)}` : '';
-      }).filter(Boolean).join(' ');
-    };
+    const buildLabel = (ids: string[]): string => formatCrewLabel(ids, workers);
 
     for (const r of routes) {
       if (!coveredManagerIds.has(r.managerId)) continue;
@@ -2150,19 +2159,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const myRS=new Set(myRouteCodes);
     const features:GeoJSON.Feature[]=[];
 
-    const labelForWorkerIds = (aids: string[]): string => {
-      if (aids.length === 1) {
-        const w = workers.find(wk => wk.contractorId === aids[0]);
-        return w ? `${w.firstName} ${w.lastName.charAt(0)}.` : '';
-      }
-      if (aids.length > 1) {
-        return aids.map(id => {
-          const w = workers.find(wk => wk.contractorId === id);
-          return w ? `${w.firstName.charAt(0)}${w.lastName.charAt(0)}` : '';
-        }).filter(Boolean).join(' ');
-      }
-      return '';
-    };
+    const labelForWorkerIds = (aids: string[]): string => formatCrewLabel(aids, workers);
 
     routeMapData.filter(r => myRS.has(r.route_code)).forEach(route => {
       const split = routeSplitsByCode.get(route.route_code);
@@ -2249,12 +2246,31 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         const rp = cr.find(r => r.routeCode === rc);
         const split = routeSplitsByCode.get(rc);
 
-        // Determine clicked bucket from the feature's `bucket` property.
+        // Determine the clicked bucket. THREE sources, in order of reliability,
+        // because this handler is registered on BOTH the route line and the big
+        // route-number label — and only the LINE's features carry `bucket`. The
+        // label's features carry the letter under `letter` instead, so reading
+        // `bucket` alone meant every tap on the obvious fat "01a"/"01b" label
+        // produced no letter, fell through to the whole-route branch below, and
+        // assigned BOTH buckets to one worker. That was the bug.
+        //   1. `bucket` — stamped on each line piece at draw time.
+        //   2. `letter` — stamped on the number-label feature at draw time.
+        //   3. geometry — work it out from where the finger actually landed.
         let clickedLetter: string | undefined = undefined;
-        if (split && split.buckets.length > 0 && e.features && e.features.length > 0) {
-          const fb = e.features[0].properties?.bucket;
-          if (typeof fb === 'string') clickedLetter = fb;
+        if (split && split.buckets.length > 0) {
+          const props = (e.features && e.features.length > 0) ? e.features[0].properties : null;
+          const fb = props?.bucket;
+          const fl = props?.letter;
+          if (typeof fb === 'string' && fb) clickedLetter = fb;
+          else if (typeof fl === 'string' && fl) clickedLetter = fl;
+          else if (e.lngLat) clickedLetter = bucketForPoint(e.lngLat.lng, e.lngLat.lat, split.buckets);
         }
+
+        // HARD GUARD: a split route must NEVER reach the whole-route assignment
+        // path, which writes one worker across every bucket at once. If all
+        // three attempts above came back empty, do nothing rather than silently
+        // handing over the lot.
+        if (split && split.buckets.length > 0 && !clickedLetter) return;
 
         if (mode === 'routes') {
           if (split && clickedLetter) {
@@ -3624,10 +3640,15 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         // still works. updateRouteSplitAssignment handles the union math.
         let bucketWorkerIds = workerIds;
         if (isTeamSeason && workerId !== null) {
-          const worker = myTeamWorkers.find(w => w.contractorId === workerId);
-          const teamId = worker?.teamId || workerId;
-          const cart = teamCarts.find(c => c.teamId === teamId);
-          if (cart && cart.workerIds.length > 1) bucketWorkerIds = cart.workerIds;
+          // Ask the worker's LIVE logsheet session who shares their cart rather
+          // than users.metadata.teamId. teamId is a stale mirror: splitting a
+          // pair into two solos never rewrote it, so both ex-partners still
+          // looked like one cart and assigning to either stamped BOTH.
+          const cartSession = await sessionService.getWorkerLogsheetSession(workerId);
+          const cartIds: string[] = (cartSession?.teamWorkerIds && cartSession.teamWorkerIds.length > 0)
+            ? cartSession.teamWorkerIds
+            : [workerId];
+          if (cartIds.length > 1) bucketWorkerIds = cartIds;
         }
         // OWNERSHIP TRANSFER (per-bucket). When a floater assigns this bucket to a
         // worker who belongs to a DIFFERENT manager than the route's current owner,
@@ -3682,16 +3703,15 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         }
       } else if (isTeamSeason) {
         const worker = myTeamWorkers.find(w => w.contractorId === workerId);
-        const teamId = worker?.teamId || workerId;
-        const cart = teamCarts.find(c => c.teamId === teamId);
         const session = await sessionService.getWorkerLogsheetSession(workerId);
         const sessionId = session?.id;
+        // Same correction as the bucket branch: cart membership comes from the
+        // live session, never from the teamId mirror.
+        const cartIds: string[] = (session?.teamWorkerIds && session.teamWorkerIds.length > 0)
+          ? session.teamWorkerIds
+          : [workerId];
 
-        if (cart && cart.workerIds.length > 1) {
-          await sessionService.assignRouteToWorkers(routeCode, cart.workerIds);
-        } else {
-          await sessionService.assignRouteToWorkers(routeCode, [workerId]);
-        }
+          await sessionService.assignRouteToWorkers(routeCode, cartIds.length > 1 ? cartIds : [workerId]);
         if (sessionId && pendingBookingIds.length > 0) {
           await sessionService.assignBookingsToSession(pendingBookingIds, sessionId);
         }
