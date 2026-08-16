@@ -2984,6 +2984,94 @@ class SessionService {
       await this.assignRouteToWorkers(routeCode, newAssignedWorkerIds);
     }
   
+    // --- DROPPED MAP PINS ---
+    // Shared across the command centre for the current session date. Failures
+    // are logged and swallowed on read (an unreachable pin table should never
+    // take the map down) but thrown on write, so the UI can tell the RM their
+    // pin didn't save rather than pretending it did.
+
+    private mapDbMapPin(row: any): MapPin {
+      return {
+        id: row.id,
+        label: row.label,
+        lat: Number(row.lat),
+        lng: Number(row.lng),
+        createdBy: row.created_by ?? null,
+        createdAt: row.created_at,
+      };
+    }
+
+    public async getMapPins(): Promise<MapPin[]> {
+      try {
+        const ccId = this.getCCId();
+        const date = await this.getDailySessionDate();
+        if (!date) return [];
+
+        const { data, error } = await supabase
+          .from('map_pins')
+          .select('*')
+          .eq('command_center_id', ccId)
+          .eq('session_date', date)
+          .order('created_at', { ascending: true });
+
+        if (error) {
+          console.warn('[MapPins] getMapPins failed:', error);
+          return [];
+        }
+        return (data || []).map((r: any) => this.mapDbMapPin(r));
+      } catch (err) {
+        console.warn('[MapPins] getMapPins error:', err);
+        return [];
+      }
+    }
+
+    public async createMapPin(
+      label: string,
+      lat: number,
+      lng: number,
+      createdBy: string,
+    ): Promise<MapPin | null> {
+      const ccId = this.getCCId();
+      const date = await this.getDailySessionDate();
+      if (!date) throw new Error('No active session');
+
+      const row = {
+        id: `pin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        command_center_id: ccId,
+        session_date: date,
+        label,
+        lat,
+        lng,
+        created_by: createdBy,
+      };
+
+      const { data, error } = await supabase
+        .from('map_pins')
+        .insert(row)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[MapPins] createMapPin failed:', error);
+        throw error;
+      }
+      return data ? this.mapDbMapPin(data) : null;
+    }
+
+    public async deleteMapPin(pinId: string): Promise<void> {
+      const ccId = this.getCCId();
+      const { error } = await supabase
+        .from('map_pins')
+        .delete()
+        .eq('id', pinId)
+        .eq('command_center_id', ccId);
+
+      if (error) {
+        console.error('[MapPins] deleteMapPin failed:', error);
+        throw error;
+      }
+    }
+
     public async assignRouteToWorkers(routeCode: string, workerIds: string[]): Promise<void> {
       const ccId = this.getCCId();
       const date = await this.getDailySessionDate();
@@ -4782,6 +4870,18 @@ class SessionService {
       return null;
     }
   }
+}
+
+// A pin an RM has dropped on the map: a coordinate, a name, and nothing else.
+// Scoped to the command centre and the session date, so every manager and
+// floater on that centre sees the same set and each new day starts clean.
+export interface MapPin {
+  id: string;
+  label: string;
+  lat: number;
+  lng: number;
+  createdBy: string | null;
+  createdAt: string;
 }
 
 export const sessionService = SessionService.getInstance();

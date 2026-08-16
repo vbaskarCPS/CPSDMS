@@ -31,6 +31,8 @@ import RMNavigation, { NavDestination } from './RMNavigation';
 import RouteSplitModal from '../../../components/RouteSplitModal';
 import { getManagerColor } from '../../../lib/managerPalette';
 import type { GeocodePhase, GeocodeProgress, FilterVisibility } from '../RMLogbook';
+// Aliased: this file already imports a lucide icon called MapPin.
+import type { MapPin as MapPinRecord } from '../../../lib/sessionService';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -103,6 +105,11 @@ interface RMMapTabProps {
   onForceFollowMeOn?: () => void;
   showManageTeamModal: boolean;
   onCloseManageTeamModal: () => void;
+  // NEW: drop-a-pin. The toggle lives in RMLogbook's header next to Follow Me;
+  // the pins themselves are owned here. onExitPinMode lets us switch the mode
+  // off from down here when it would otherwise get in the way.
+  pinMode: boolean;
+  onExitPinMode?: () => void;
 }
 
 interface WorkerCardData {
@@ -825,6 +832,30 @@ function createDashedRotatingRing(fillColor: string): HTMLDivElement {
 }
 
 const WORKER_LOCATION_POLL_MS = 5 * 60 * 1000;
+// Pins are shared across the command centre, so another manager's drop needs to
+// appear here without a page reload. Same polling approach as worker locations.
+const MAP_PIN_POLL_MS = 60 * 1000;
+
+// Dropped-pin marker: a violet teardrop, a colour nothing else on this map uses,
+// with the label sitting beside it so it reads without a tap.
+//
+// The wrapper is a FIXED 24x30 box and the label is absolutely positioned
+// outside it. That matters: with anchor:'bottom' Mapbox lands the bottom-centre
+// of the wrapper on the coordinate, so if the label were part of the box's flow
+// it would widen the box and shove the teardrop's point off the spot you tapped.
+function createDroppedPinEl(label: string): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.cssText = 'position:relative;width:24px;height:30px;cursor:pointer;';
+  el.innerHTML = `
+    <svg width="24" height="30" viewBox="0 0 24 30" xmlns="http://www.w3.org/2000/svg" style="position:absolute;top:0;left:0;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.45));">
+      <path d="M12 1 C6.5 1 2 5.4 2 10.8 C2 18 12 29 12 29 C12 29 22 18 22 10.8 C22 5.4 17.5 1 12 1 Z" fill="#a855f7" stroke="#ffffff" stroke-width="2"/>
+      <circle cx="12" cy="10.8" r="3.6" fill="#ffffff"/>
+    </svg>
+    <span style="position:absolute;left:27px;top:2px;background:rgba(17,24,39,0.88);color:#f3e8ff;border:1px solid #a855f7;border-radius:4px;padding:1px 5px;font-size:11px;font-weight:700;font-family:system-ui,sans-serif;white-space:nowrap;">${esc(label)}</span>
+  `;
+  el.title = label;
+  return el;
+}
 
 // --- NAV DESTINATION RESOLVER ---
 //
@@ -944,6 +975,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   onForceFollowMeOn,
   showManageTeamModal,
   onCloseManageTeamModal,
+  pinMode,
+  onExitPinMode,
 }) => {
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -1089,6 +1122,20 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   const [unassigningAsphaltId, setUnassigningAsphaltId] = useState<string | null>(null);
   const [unassignError, setUnassignError] = useState<string | null>(null);
+
+  // --- DROPPED PINS ---
+  const [mapPins, setMapPins] = useState<MapPinRecord[]>([]);
+  const mapPinMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
+  // A tap in pin mode captures coordinates here and waits for a label. Cancel
+  // throws the coordinates away; nothing is written until Save.
+  const [pendingPinDrop, setPendingPinDrop] = useState<{ lat: number; lng: number } | null>(null);
+  const [pinLabelDraft, setPinLabelDraft] = useState('');
+  const [pinSaving, setPinSaving] = useState(false);
+  const [selectedMapPin, setSelectedMapPin] = useState<MapPinRecord | null>(null);
+  // Mirrored into a ref because the map click handlers are registered once and
+  // would otherwise close over whatever pinMode was on first render, forever.
+  const pinModeRef = useRef(false);
+  useEffect(() => { pinModeRef.current = pinMode; }, [pinMode]);
 
   // --- NEW: NAV STATE ---
   const [navState, setNavState] = useState<NavState | null>(null);
@@ -2239,6 +2286,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const leave=()=>{ map.getCanvas().style.cursor=''; };
 
       const click=(e:any)=>{
+        // Pin mode owns every tap. Without this, tapping a route to place a pin
+        // would ALSO open the assignment modal underneath it.
+        if (pinModeRef.current) return;
         e.preventDefault();
         const mode = sidebarModeRef.current;
         const rc = route.route_code;
@@ -2463,6 +2513,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     map.on('mouseenter', 'rm-pending-pins-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'rm-pending-pins-circles', () => { map.getCanvas().style.cursor = ''; });
     map.on('click', 'rm-pending-pins-circles', (e: any) => {
+      if (pinModeRef.current) return;
       const f = e.features?.[0]; if (!f) return;
       const { name, address, routeCode, routeColor, phone, email, price, confirmed } = f.properties;
       const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
@@ -2510,6 +2561,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     map.on('mouseenter', 'rm-completed-pins-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'rm-completed-pins-circles', () => { map.getCanvas().style.cursor = ''; });
     map.on('click', 'rm-completed-pins-circles', (e: any) => {
+      if (pinModeRef.current) return;
       const f = e.features?.[0]; if (!f) return;
       const { name, address, routeCode, routeColor, status, phone, email, price, paymentMethod } = f.properties;
       const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
@@ -2599,6 +2651,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       paint: { 'icon-opacity': 0.95 },
     });
     const openPs = (e: any) => {
+      if (pinModeRef.current) return;
       const f = e.features?.[0]; if (!f) return;
       const id = f.properties?.psId;
       const ps = geocodedPendingSalesRef.current.find(g => g.id === id);
@@ -2642,6 +2695,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     map.on('mouseenter', 'rm-upsell-only-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'rm-upsell-only-circles', () => { map.getCanvas().style.cursor = ''; });
     map.on('click', 'rm-upsell-only-circles', (e: any) => {
+      if (pinModeRef.current) return;
       const f = e.features?.[0]; if (!f) return;
       const { name, address, routeCode, routeColor, phone, email, price } = f.properties;
       const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
@@ -3428,6 +3482,104 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   // --- ACTIONS ---
 
+  // --- DROPPED PIN: LOAD + POLL ---
+  const reloadMapPins = useCallback(async () => {
+    try {
+      const pins = await sessionService.getMapPins();
+      if (mountedRef.current) setMapPins(pins);
+    } catch (err) {
+      console.warn('[MapPins] Failed to load pins:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    reloadMapPins();
+    const id = setInterval(reloadMapPins, MAP_PIN_POLL_MS);
+    return () => clearInterval(id);
+  }, [reloadMapPins]);
+
+  // --- DROPPED PIN: TAP THE MAP TO DROP ---
+  // Registered on the map itself rather than on any layer, so it fires wherever
+  // the RM taps. Bails immediately when pin mode is off, which is almost always.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const onMapClick = (e: any) => {
+      if (!pinModeRef.current) return;
+      if (!e?.lngLat) return;
+      setPinLabelDraft('');
+      setPendingPinDrop({ lat: e.lngLat.lat, lng: e.lngLat.lng });
+    };
+    map.on('click', onMapClick);
+    return () => { map.off('click', onMapClick); };
+  }, [mapLoaded]);
+
+  // Crosshair cursor while pin mode is on, so it's obvious the map has changed
+  // behaviour even if the header button scrolls out of view.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    map.getCanvas().style.cursor = pinMode ? 'crosshair' : '';
+  }, [pinMode, mapLoaded]);
+
+  // --- DROPPED PIN: DRAW ---
+  // Adds markers for pins we haven't drawn yet and removes markers whose pin has
+  // gone (deleted here, or deleted by another manager and picked up by the poll).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const seen = new Set<string>();
+
+    mapPins.forEach(pin => {
+      seen.add(pin.id);
+      const existing = mapPinMarkersRef.current.get(pin.id);
+      if (existing) { existing.setLngLat([pin.lng, pin.lat]); return; }
+      const el = createDroppedPinEl(pin.label);
+      el.addEventListener('click', (ev) => { ev.stopPropagation(); setSelectedMapPin(pin); });
+      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
+        .setLngLat([pin.lng, pin.lat])
+        .addTo(map);
+      mapPinMarkersRef.current.set(pin.id, marker);
+    });
+
+    mapPinMarkersRef.current.forEach((marker, id) => {
+      if (seen.has(id)) return;
+      marker.remove();
+      mapPinMarkersRef.current.delete(id);
+    });
+  }, [mapPins, mapLoaded]);
+
+  // --- DROPPED PIN: ACTIONS ---
+  const handleSavePin = useCallback(async () => {
+    if (!pendingPinDrop) return;
+    const label = pinLabelDraft.trim() || `Pin ${mapPins.length + 1}`;
+    setPinSaving(true);
+    try {
+      const created = await sessionService.createMapPin(
+        label, pendingPinDrop.lat, pendingPinDrop.lng, currentUser.userId,
+      );
+      if (created) setMapPins(prev => [...prev, created]);
+      else await reloadMapPins();
+      setPendingPinDrop(null);
+      setPinLabelDraft('');
+    } catch (err) {
+      console.error('[MapPins] Failed to save pin:', err);
+    } finally {
+      setPinSaving(false);
+    }
+  }, [pendingPinDrop, pinLabelDraft, mapPins.length, currentUser.userId, reloadMapPins]);
+
+  const handleRemovePin = useCallback(async (pin: MapPinRecord) => {
+    setSelectedMapPin(null);
+    try {
+      await sessionService.deleteMapPin(pin.id);
+      setMapPins(prev => prev.filter(p => p.id !== pin.id));
+    } catch (err) {
+      console.error('[MapPins] Failed to remove pin:', err);
+      await reloadMapPins();
+    }
+  }, [reloadMapPins]);
+
   const handleViewLogsheet=(worker:Worker, cartMembers?:Worker[])=>{
     setStorageItem('rm_original_user',currentUser);setStorageItem('rm_view_mode',true);
     if (cartMembers && cartMembers.length > 1) {
@@ -3479,6 +3631,26 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (navState.targetKey === newKey) return;
     setSwitchNavConfirm({ newDestination: newDest, newTargetKey: newKey, currentLabel: navState.destination.label, newLabel: label });
   }, [navState, startNavToDestination]);
+
+  // A dropped pin is already a coordinate and a label, which is exactly what the
+  // navigator wants — so it hands straight over with no resolution step, unlike
+  // a worker or cart where we have to hunt for their most recent geocoded job.
+  // Pin mode switches itself off here: navigating with it still on would mean
+  // every tap during the drive dropped another pin.
+  const handleNavigateToPin = useCallback((pin: MapPinRecord) => {
+    setSelectedMapPin(null);
+    if (onExitPinMode) onExitPinMode();
+    const dest: NavDestination = { lat: pin.lat, lng: pin.lng, label: pin.label };
+    const key = `pin:${pin.id}`;
+    if (!navState) { startNavToDestination(dest, key); return; }
+    if (navState.targetKey === key) return;
+    setSwitchNavConfirm({
+      newDestination: dest,
+      newTargetKey: key,
+      currentLabel: navState.destination.label,
+      newLabel: pin.label,
+    });
+  }, [navState, startNavToDestination, onExitPinMode]);
 
   const workerCanNavigate = useCallback((card: WorkerCardData): boolean => resolveNavDestination(card.financialStore) !== null, []);
   const cartCanNavigate = useCallback((cart: CartCardData): boolean => resolveNavDestination(cart.navActivity) !== null, []);
@@ -4874,6 +5046,84 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* NAME A DROPPED PIN. Nothing is written to the database until Save —
+            Cancel simply discards the coordinates we captured on the tap. */}
+        {pendingPinDrop && (
+          <div
+            className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4"
+            onClick={() => { setPendingPinDrop(null); setPinLabelDraft(''); }}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2 mb-3">
+                <MapPin size={16} className="text-purple-400" />
+                <div className="text-white font-bold text-sm">Name this pin</div>
+              </div>
+              <input
+                autoFocus
+                type="text"
+                value={pinLabelDraft}
+                onChange={e => setPinLabelDraft(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !pinSaving) handleSavePin(); }}
+                placeholder="e.g. Lunch stop, Truck, Meet here"
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 mb-3"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setPendingPinDrop(null); setPinLabelDraft(''); }}
+                  disabled={pinSaving}
+                  className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white text-xs font-bold rounded-md"
+                >Cancel</button>
+                <button
+                  onClick={handleSavePin}
+                  disabled={pinSaving}
+                  className="flex-1 px-3 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-800 disabled:text-gray-500 text-white text-xs font-bold rounded-md flex items-center justify-center gap-1.5"
+                >
+                  {pinSaving ? <Loader size={12} className="animate-spin" /> : <Check size={12} />}
+                  Save pin
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAPPED AN EXISTING PIN — navigate to it or bin it. No confirmation on
+            Remove: you had to deliberately open this to reach the button, and
+            re-dropping a pin takes five seconds. */}
+        {selectedMapPin && (
+          <div
+            className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4"
+            onClick={() => setSelectedMapPin(null)}
+          >
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-sm p-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2 mb-3">
+                <MapPin size={16} className="text-purple-400 flex-shrink-0" />
+                <div className="text-white font-bold text-sm truncate">{selectedMapPin.label}</div>
+                <button
+                  onClick={() => setSelectedMapPin(null)}
+                  className="ml-auto w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center flex-shrink-0"
+                  title="Close"
+                ><X size={14} /></button>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleRemovePin(selectedMapPin)}
+                  className="flex-1 px-3 py-2 bg-red-900/40 hover:bg-red-900/60 border border-red-800 text-red-200 text-xs font-bold rounded-md flex items-center justify-center gap-1.5"
+                ><Trash2 size={12} />Remove pin</button>
+                <button
+                  onClick={() => handleNavigateToPin(selectedMapPin)}
+                  className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md flex items-center justify-center gap-1.5"
+                ><Navigation2 size={12} />Navigate</button>
+              </div>
             </div>
           </div>
         )}

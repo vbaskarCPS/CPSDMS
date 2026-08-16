@@ -161,6 +161,13 @@ const RMLogbook: React.FC = () => {
   const [geocodePhase, setGeocodePhase] = useState<GeocodePhase>('idle');
   const [geocodeProgress, setGeocodeProgress] = useState<GeocodeProgress>(initialGeocodeProgress);
 
+  // DROP-A-PIN MODE. Lives up here with the other header controls. While it's
+  // on, a tap on the map drops a pin instead of doing whatever that tap would
+  // normally have done. It stays on until switched off so several pins can be
+  // dropped in a row; RMMapTab can ask us to switch it off (it does when the RM
+  // starts navigating to a pin, so nav taps don't litter the map).
+  const [pinMode, setPinMode] = useState(false);
+
   const [stats, setStats] = useState<TabStats>({
     totalSteps: 0,
     totalPending: 0,
@@ -694,6 +701,20 @@ const RMLogbook: React.FC = () => {
                   label="Callbook Clients (PCL)"
                 />
 
+                {/* DROP A PIN — sits immediately left of Follow Me. Lit while
+                    active so it's obvious the map is in a different mode. */}
+                <button
+                  onClick={() => setPinMode(prev => !prev)}
+                  className={`flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-lg transition-all ${
+                    pinMode
+                      ? 'bg-purple-600 text-white ring-2 ring-purple-400'
+                      : 'bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white'
+                  }`}
+                  title={pinMode ? 'Pin mode on — tap the map to drop a pin' : 'Drop a pin on the map'}
+                >
+                  <MapPinIcon size={16} className={pinMode ? 'fill-current' : ''} />
+                </button>
+
                 {/* FOLLOW ME — rightmost in the header per spec. Decent size (w-10 h-10
                     on desktop, w-9 h-9 on mobile) per "decent size button" call. */}
                 <button
@@ -1001,6 +1022,8 @@ const RMLogbook: React.FC = () => {
             onForceFollowMeOn={handleForceFollowMeOn}
             showManageTeamModal={showManageTeamModal}
             onCloseManageTeamModal={() => setShowManageTeamModal(false)}
+            pinMode={pinMode}
+            onExitPinMode={() => setPinMode(false)}
           />
         )}
       </div>
