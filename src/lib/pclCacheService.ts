@@ -420,15 +420,90 @@ export async function loadAndCachePCL(
  * Reuses the sealing resolver and the "…Callbooks" tab filter as-is. Same
  * non-blocking caller contract as loadAndCachePCL: callers catch + log.
  */
+// ─── PERMANENT PCL GEOCODE CACHE ─────────────────────────────────────────────
+//
+// geocode_cache is keyed by address + command centre + SESSION DATE, so every
+// new session pays for the same few thousand Mapbox lookups all over again. At
+// the pacing this loader must keep, that is several minutes of work — and when
+// a run is interrupted, the rows it never reached are silently dropped and
+// those clients quietly detach from their routes.
+//
+// pcl_geocode_cache carries no date. Once an address is resolved for a command
+// centre it stays resolved, so a preload run in February still holds in April
+// and the bucketing lands the same clients on the same routes every time.
+
+export interface GeoPos { lat: number; lng: number }
+
+async function loadPermanentGeocodes(ccId: string): Promise<Map<string, GeoPos>> {
+  const out = new Map<string, GeoPos>();
+  // Batched: a busy command centre holds far more than Supabase's 1000-row
+  // default page, and a silent truncation here means re-paying for addresses
+  // we already own.
+  const BATCH = 1000;
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from('pcl_geocode_cache')
+      .select('address_key, lat, lng')
+      .eq('command_center_id', ccId)
+      .range(from, from + BATCH - 1);
+    if (error) {
+      console.warn('[PCL Geocode] Permanent cache read failed:', error.message);
+      break;
+    }
+    if (!data || data.length === 0) break;
+    data.forEach((r: any) => out.set(r.address_key, { lat: r.lat, lng: r.lng }));
+    if (data.length < BATCH) break;
+    from += BATCH;
+  }
+  return out;
+}
+
+async function savePermanentGeocodes(
+  ccId: string,
+  entries: Array<{ key: string; pos: GeoPos }>,
+): Promise<void> {
+  if (entries.length === 0) return;
+  const rows = entries.map(e => ({
+    command_center_id: ccId,
+    address_key: e.key,
+    lat: e.pos.lat,
+    lng: e.pos.lng,
+    updated_at: new Date().toISOString(),
+  }));
+  const { error } = await supabase
+    .from('pcl_geocode_cache')
+    .upsert(rows, { onConflict: 'command_center_id,address_key' });
+  if (error) console.warn('[PCL Geocode] Permanent cache write failed:', error.message);
+}
+
+// Progress reporting for the Session Command Center's preload panel. Geocoding
+// thousands of addresses at Mapbox's tolerated pace takes minutes and otherwise
+// looks exactly like a hang.
+export interface PCLPreloadProgress {
+  phase: 'reading_sheets' | 'geocoding' | 'bucketing' | 'done';
+  prefix: string;
+  current: number;
+  total: number;
+  message?: string;
+}
+export type PCLProgressFn = (p: PCLPreloadProgress) => void;
+
 export async function loadAndCachePCLByPrefix(
   masterbookingsSheetId: string,
   config: ManagerMappingConfig,
   accessToken: string,
   ccId: string,
-  sessionDate: string,
+  // NULL means "no live session" — a deliberate preload. The permanent geocode
+  // cache is written either way; the session-scoped one only when a date exists.
+  sessionDate: string | null,
+  onProgress?: PCLProgressFn,
 ): Promise<void> {
   if (!masterbookingsSheetId || !accessToken) return;
   if (!config?.prefix || !config.routeCodes || config.routeCodes.length === 0) return;
+  const report = (p: Omit<PCLPreloadProgress, 'prefix'>) =>
+    onProgress?.({ ...p, prefix: config.prefix });
+  report({ phase: 'reading_sheets', current: 0, total: 0 });
 
   // 1. Route geometry — needed for the geocode bbox AND the bucketing.
   let routeMaps: ApprovedRouteMap[];
@@ -498,16 +573,23 @@ export async function loadAndCachePCLByPrefix(
   //    so re-runs (and addresses shared with other map layers) cost nothing.
   //    Key normalization matches sessionService.normalizeAddressKey.
   const normKey = (addr: string) => addr.toLowerCase().replace(/\s+/g, ' ').trim();
-  const geo = new Map<string, { lat: number; lng: number }>();
-  try {
-    const { data } = await supabase
-      .from('geocode_cache')
-      .select('address_key, lat, lng')
-      .eq('command_center_id', ccId)
-      .eq('session_date', sessionDate);
-    (data || []).forEach((r: any) => geo.set(r.address_key, { lat: r.lat, lng: r.lng }));
-  } catch {
-    // Cache hydration is best-effort — geocoding below still works without it.
+  // PERMANENT cache first — this is the one that makes preloading worth doing.
+  const geo = await loadPermanentGeocodes(ccId);
+  // Then the session cache, if we're inside a live session: it may already hold
+  // addresses resolved today by other map layers that we haven't met yet.
+  if (sessionDate) {
+    try {
+      const { data } = await supabase
+        .from('geocode_cache')
+        .select('address_key, lat, lng')
+        .eq('command_center_id', ccId)
+        .eq('session_date', sessionDate);
+      (data || []).forEach((r: any) => {
+        if (!geo.has(r.address_key)) geo.set(r.address_key, { lat: r.lat, lng: r.lng });
+      });
+    } catch {
+      // Best-effort — geocoding below still works without it.
+    }
   }
 
   const uniqueAddrs: string[] = [];
@@ -523,32 +605,61 @@ export async function loadAndCachePCLByPrefix(
   }
 
   let processed = 0;
+  // New coordinates go to the permanent cache in batches rather than one row at
+  // a time. A round trip per address nearly doubles the wall-clock cost of the
+  // run and, worse, an interrupted run leaves the work half-saved.
+  let pendingSaves: Array<{ key: string; pos: GeoPos }> = [];
+  const SAVE_EVERY = 25;
+
+  report({ phase: 'geocoding', current: 0, total: uniqueAddrs.length });
+
   for (const addr of uniqueAddrs) {
     const key = normKey(addr);
     processed++;
-    if (geo.has(key)) continue;
+
+    if (geo.has(key)) {
+      // Already known — no lookup and no pause. This is what makes a second run
+      // over a warmed cache finish in seconds rather than minutes.
+      if (processed % 25 === 0) report({ phase: 'geocoding', current: processed, total: uniqueAddrs.length });
+      continue;
+    }
 
     const pos = await geocodeAddressInBbox(addr, bbox);
     if (pos) {
       geo.set(key, pos);
-      // Save for the map's cache hydration — best-effort, never fatal.
-      const { error: gcError } = await supabase
-        .from('geocode_cache')
-        .upsert({
-          address_key: key,
-          command_center_id: ccId,
-          session_date: sessionDate,
-          lat: pos.lat,
-          lng: pos.lng,
-        }, { onConflict: 'address_key,command_center_id,session_date' });
-      if (gcError) console.warn('[PCL Prefix] geocode_cache save failed:', gcError.message);
+      pendingSaves.push({ key, pos });
+      // The session-scoped cache still gets its copy when a session exists, so
+      // today's map hydrates without reaching for the permanent table.
+      if (sessionDate) {
+        const { error: gcError } = await supabase
+          .from('geocode_cache')
+          .upsert({
+            address_key: key,
+            command_center_id: ccId,
+            session_date: sessionDate,
+            lat: pos.lat,
+            lng: pos.lng,
+          }, { onConflict: 'address_key,command_center_id,session_date' });
+        if (gcError) console.warn('[PCL Prefix] geocode_cache save failed:', gcError.message);
+      }
     }
+
+    if (pendingSaves.length >= SAVE_EVERY) {
+      await savePermanentGeocodes(ccId, pendingSaves);
+      pendingSaves = [];
+    }
+
     if (processed % 25 === 0) {
       console.log(`[PCL Prefix] Geocoded ${processed}/${uniqueAddrs.length} addresses…`);
+      report({ phase: 'geocoding', current: processed, total: uniqueAddrs.length });
     }
     // Gentle pacing to stay under Mapbox's per-minute geocoding limit.
     await new Promise(res => setTimeout(res, 120));
   }
+
+  // Flush whatever's left in the batch before we move on.
+  await savePermanentGeocodes(ccId, pendingSaves);
+  report({ phase: 'bucketing', current: uniqueAddrs.length, total: uniqueAddrs.length });
 
   // 4. Bucket each row into the nearest route; drop rows with no geocode.
   const rowsByRoute = new Map<string, RawCallbookRow[]>();
@@ -584,12 +695,20 @@ export async function loadAndCachePCLByPrefix(
     .from('pcl_cache')
     .upsert(upsertRows, { onConflict: 'command_center_id,route_code' });
 
-  if (error) {
-    console.warn('[PCL Prefix] Failed to write to Supabase:', error.message);
-  } else {
-    console.log(`[PCL Prefix] Cached ${matchedRows.length - dropped} clients across ${upsertRows.length} routes for "${config.prefix}"`);
+    if (error) {
+      console.warn('[PCL Prefix] Failed to write to Supabase:', error.message);
+      report({ phase: 'done', current: 0, total: 0, message: `failed to save — ${error.message}` });
+    } else {
+      console.log(`[PCL Prefix] Cached ${matchedRows.length - dropped} clients across ${upsertRows.length} routes for "${config.prefix}"`);
+      report({
+        phase: 'done',
+        current: matchedRows.length - dropped,
+        total: matchedRows.length,
+        message: `${matchedRows.length - dropped} clients across ${upsertRows.length} routes`
+          + (dropped > 0 ? ` · ${dropped} dropped, no geocode` : ''),
+      });
+    }
   }
-}
 
 // ─── READ FOR WORKER ─────────────────────────────────────────────────────────
 

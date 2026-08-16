@@ -1006,6 +1006,39 @@ class SessionService {
       (data || []).forEach((row: any) => {
         result.set(row.address_key, { lat: row.lat, lng: row.lng });
       });
+
+      // PERMANENT PCL GEOCODES. The table above is empty again on every new
+      // session date; pcl_geocode_cache is not. Merging it in here is what lets
+      // a preload run weeks ahead pay off on the day — the map's PCL phase finds
+      // its coordinates already resolved instead of grinding through several
+      // thousand lookups one at a time. Session rows win where both exist,
+      // since those were resolved against today's data.
+      try {
+        const BATCH = 1000;
+        let from = 0;
+        while (true) {
+          const { data: permData, error: permErr } = await supabase
+            .from('pcl_geocode_cache')
+            .select('address_key, lat, lng')
+            .eq('command_center_id', ccId)
+            .range(from, from + BATCH - 1);
+          if (permErr) {
+            console.warn('[Geocode] Permanent PCL cache read failed:', permErr.message);
+            break;
+          }
+          if (!permData || permData.length === 0) break;
+          permData.forEach((row: any) => {
+            if (!result.has(row.address_key)) {
+              result.set(row.address_key, { lat: row.lat, lng: row.lng });
+            }
+          });
+          if (permData.length < BATCH) break;
+          from += BATCH;
+        }
+      } catch (permCatch) {
+        console.warn('[Geocode] Permanent PCL cache merge skipped:', permCatch);
+      }
+
       return result;
     } catch (err) {
       console.warn('[Geocode] getAllGeocodeCache error:', err);
