@@ -33,6 +33,19 @@ const HomePage: React.FC = () => {
     googleAuthService.signOut();
 
     try {
+      // 0a. Digital Maps viewer (digimaps/viewer). Hardcoded like Training and
+      // Super Admin, and checked first because it carries NO command centre —
+      // the maps and their PCLs are global, so we clear any centre left over
+      // from a previous login rather than inheriting one.
+      if (username.trim().toLowerCase() === 'digimaps' && password === 'viewer') {
+        trainingService.disableTrainingMode();
+        commandCenterService.clearCurrentCommandCenter();
+        commandCenterService.setSuperAdminMode(false);
+        setStorageItem('digimaps_viewer', true);
+        navigate('/digimaps');
+        return;
+      }
+
       // 0. Check Training Mode (Training/training)
       if (isTrainingCredentials(username, password)) {
         trainingService.enableTrainingMode();

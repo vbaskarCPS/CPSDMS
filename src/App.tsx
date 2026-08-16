@@ -37,6 +37,8 @@ const TrainingModulePage = React.lazy(() => import('./pages/Training/TrainingMod
 // Map pages
 const MapBuilder = React.lazy(() => import('./pages/SuperAdmin/MapBuilder'));
 const MapViewer = React.lazy(() => import('./pages/SuperAdmin/MapViewer'));
+// Read-only planning view of every built map + its callbook PCLs (digimaps login).
+const DigiMaps = React.lazy(() => import('./pages/DigiMaps'));
 
 // Loading fallback
 const LoadingFallback = () => (
@@ -55,6 +57,11 @@ function App() {
 
         {/* Shift confirmation landing page — must be before /:slug catch-all */}
         <Route path="/shift-confirmed" element={<ShiftConfirmed />} />
+
+        {/* Digital Maps viewer (digimaps / viewer). Safe alongside the /:slug
+            catch-all below: React Router ranks a static segment above a dynamic
+            one, so /digimaps resolves here rather than being read as a slug. */}
+        <Route path="/digimaps" element={<DigiMaps />} />
 
         {/* Public catch-all: handles both job fair forms AND shuttle pages */}
         <Route path="/:slug" element={<SlugRouter />} />
