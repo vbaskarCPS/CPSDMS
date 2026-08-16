@@ -2095,7 +2095,18 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       else{if(map.getLayer(`rm-line-${id}`))map.removeLayer(`rm-line-${id}`);if(map.getSource(`rm-src-${id}`))map.removeSource(`rm-src-${id}`);}
     });
     loadedIdsRef.current=[];
-    const before=(map.getLayer('road-label')?'road-label':map.getStyle().layers?.find((l:any)=>l.type==='symbol')?.id)??undefined;
+    // Reference layer: route lines are inserted BENEATH this so text sits above
+    // them. Two hardenings over the original lookup. First, we ignore our OWN
+    // symbol layers when hunting for a fallback — picking one of those as the
+    // anchor would stack lines above other route labels. Second, we accept any
+    // text-bearing layer, not only one whose type happens to read 'symbol', so a
+    // partially-loaded style is less likely to leave us with nothing.
+    const styleLayersNow: any[] = (map.getStyle()?.layers as any[]) || [];
+    const before =
+      (map.getLayer('road-label') ? 'road-label' : undefined) ??
+      styleLayersNow.find(l => l.type === 'symbol' && !String(l.id).startsWith('rm-'))?.id ??
+      styleLayersNow.find(l => /label|place|poi/i.test(String(l.id)) && !String(l.id).startsWith('rm-'))?.id ??
+      undefined;
     const allCoords:[number,number][]=[];
 
     // Letters we'll honour in the match expression. Up to 'f' is the
@@ -2189,6 +2200,36 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         map.addLayer({id:nLbl,type:'symbol',source:nSrc,layout:{'text-field':['get','num'],'text-font':['DIN Pro Bold','Arial Unicode MS Bold'],'text-size':28,'text-allow-overlap':true,'text-ignore-placement':true},paint:{'text-color':['get','color'],'text-halo-color':'rgba(255,255,255,0.85)','text-halo-width':2}});
       }
     });
+
+    // --- LAYER ORDER: make it deterministic instead of a race. ---
+    //
+    // Everything above still leans on `before`, which is resolved by asking the
+    // style what it currently contains. On a slow device — Android tablets
+    // especially — the style may not have finished loading when this runs. The
+    // lookup comes back empty, `before` is undefined, and every route line gets
+    // stacked on TOP instead of underneath. The result is fat coloured strokes
+    // painted straight through the route numbers, which reads as digits that
+    // have been sheared or clipped. Same code, slower device, different picture.
+    //
+    // So we finish by explicitly lifting everything that ISN'T a route line to
+    // the top of the stack. moveLayer with no second argument sends a layer to
+    // the very top, so iterating in the order the style already holds them keeps
+    // the pins, rings and text correctly stacked AMONG themselves while
+    // guaranteeing every one of them clears the lines.
+    //
+    // This also repairs a quieter version of the same problem: this effect
+    // re-runs on every data refresh and re-adds the route lines, which would
+    // otherwise bury the booking pins added by the other effects until those
+    // happened to run again.
+    try {
+      const finalLayers: any[] = (map.getStyle()?.layers as any[]) || [];
+      finalLayers
+        .map(l => String(l.id))
+        .filter(id => id.startsWith('rm-') && !id.startsWith('rm-line-'))
+        .forEach(id => { if (map.getLayer(id)) map.moveLayer(id); });
+    } catch (err) {
+      console.warn('[RouteRender] Could not reorder map layers:', err);
+    }
 
     if(allCoords.length&&!initialFitDoneRef.current){
       initialFitDoneRef.current=true;
