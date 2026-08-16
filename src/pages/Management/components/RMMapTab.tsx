@@ -2107,7 +2107,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       styleLayersNow.find(l => l.type === 'symbol' && !String(l.id).startsWith('rm-'))?.id ??
       styleLayersNow.find(l => /label|place|poi/i.test(String(l.id)) && !String(l.id).startsWith('rm-'))?.id ??
       undefined;
-    const allCoords:[number,number][]=[];
+      const allCoords:[number,number][]=[];
+      // Every route's number labels accumulate here and go into ONE layer below,
+      // instead of each route minting its own source and layer.
+      const allLabelFeatures: GeoJSON.Feature[] = [];
 
     // Letters we'll honour in the match expression. Up to 'f' is the
     // documented palette (60° rotations covering the full 360° wheel).
@@ -2176,30 +2179,61 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         layout:{'line-cap':'round','line-join':'round'},
       },before);
 
-      // Centroid labels.
-      const nSrc=`rm-num-src-${route.id}`, nLbl=`rm-num-${route.id}`;
-      loadedIdsRef.current.push(`num-${route.id}`);
-
-      const labelFeatures: GeoJSON.Feature[] = [];
+      // Centroid labels — features only. They are added to the shared layer
+      // after this loop; nothing per-route is created or destroyed here.
       if (!split || buckets.length === 0) {
         const rc:[number,number][]=[];route.segments.forEach(s=>s.coordinates.forEach(c=>rc.push(c)));
         if (rc.length) {
           const cLng=rc.reduce((s,c)=>s+c[0],0)/rc.length, cLat=rc.reduce((s,c)=>s+c[1],0)/rc.length;
-          labelFeatures.push({type:'Feature',properties:{num:String(route.route_number),color:route.route_color,route_code:route.route_code,letter:''},geometry:{type:'Point',coordinates:[cLng,cLat]}});
+          allLabelFeatures.push({type:'Feature',properties:{num:String(route.route_number),color:route.route_color,route_code:route.route_code,letter:''},geometry:{type:'Point',coordinates:[cLng,cLat]}});
         }
       } else {
         for (const bucket of buckets) {
           const c = bucketCentroid(route.segments, buckets, bucket.letter);
           if (!c) continue;
           const bucketColor = colorForBucket(route.route_color, bucket.letter);
-          labelFeatures.push({type:'Feature',properties:{num:`${route.route_number}${bucket.letter}`,color:bucketColor,route_code:route.route_code,letter:bucket.letter},geometry:{type:'Point',coordinates:[c.lng,c.lat]}});
+          allLabelFeatures.push({type:'Feature',properties:{num:`${route.route_number}${bucket.letter}`,color:bucketColor,route_code:route.route_code,letter:bucket.letter},geometry:{type:'Point',coordinates:[c.lng,c.lat]}});
         }
       }
-      if (labelFeatures.length > 0) {
-        map.addSource(nSrc,{type:'geojson',data:{type:'FeatureCollection',features:labelFeatures}});
-        map.addLayer({id:nLbl,type:'symbol',source:nSrc,layout:{'text-field':['get','num'],'text-font':['DIN Pro Bold','Arial Unicode MS Bold'],'text-size':28,'text-allow-overlap':true,'text-ignore-placement':true},paint:{'text-color':['get','color'],'text-halo-color':'rgba(255,255,255,0.85)','text-halo-width':2}});
-      }
     });
+
+    // --- ROUTE NUMBER LABELS: ONE LAYER, NOT THIRTY ---
+    //
+    // These used to be a separate source and symbol layer per route, the whole
+    // set torn down and rebuilt on every data refresh — roughly thirty text
+    // layers churning every thirty seconds. Desktop survives it. The Android
+    // tablet does not: the map's glyph buffers are left half-written and the
+    // numbers render as clipped fragments.
+    //
+    // The tell was that the worker-name overlay, the one text layer that is
+    // created ONCE and thereafter only fed new data, rendered perfectly on the
+    // same screen at the same moment. So the numbers now follow that same
+    // proven pattern: one source, one layer, setData from then on. Nothing is
+    // ever removed, so there is no churn left to go wrong.
+    const labelGj: GeoJSON.FeatureCollection = { type:'FeatureCollection', features: allLabelFeatures };
+    const existingNumSrc = map.getSource('rm-num-labels-src') as mapboxgl.GeoJSONSource | undefined;
+    if (existingNumSrc) {
+      existingNumSrc.setData(labelGj);
+    } else {
+      map.addSource('rm-num-labels-src',{type:'geojson',data:labelGj});
+      map.addLayer({
+        id:'rm-num-labels',
+        type:'symbol',
+        source:'rm-num-labels-src',
+        layout:{
+          'text-field':['get','num'],
+          'text-font':['DIN Pro Bold','Arial Unicode MS Bold'],
+          'text-size':28,
+          'text-allow-overlap':true,
+          'text-ignore-placement':true,
+        },
+        paint:{
+          'text-color':['get','color'],
+          'text-halo-color':'rgba(255,255,255,0.85)',
+          'text-halo-width':2,
+        },
+      });
+    }
 
     // --- LAYER ORDER: make it deterministic instead of a race. ---
     //
@@ -2320,13 +2354,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   useEffect(() => {
     const map=mapRef.current; if(!map||!mapLoaded||!routeMapData.length) return;
     const cleanups:Array<()=>void>=[];
-    routeMapData.forEach(route=>{
-      if(!myRouteCodes.includes(route.route_code)) return;
-
-      const enter=()=>{ map.getCanvas().style.cursor='pointer'; };
-      const leave=()=>{ map.getCanvas().style.cursor=''; };
-
-      const click=(e:any)=>{
+    // The number labels now share ONE layer, so a handler bound to that layer
+    // can no longer close over "its" route — a tap could be any route's number.
+    // The handler is therefore hoisted into a factory: line layers still get a
+    // route-bound copy, and the shared label layer gets one that works out the
+    // route from whichever label was actually tapped. The body below is
+    // unchanged; only how it is created and attached has moved.
+    const makeRouteClick = (route: SavedRoute) => (e:any) => {
         // Pin mode owns every tap. Without this, tapping a route to place a pin
         // would ALSO open the assignment modal underneath it.
         if (pinModeRef.current) return;
@@ -2462,13 +2496,38 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         });
       };
 
-      [`rm-line-${route.id}`,`rm-num-${route.id}`].forEach(lid=>{
+      const enter=()=>{ map.getCanvas().style.cursor='pointer'; };
+      const leave=()=>{ map.getCanvas().style.cursor=''; };
+  
+      // One handler per route LINE, exactly as before.
+      routeMapData.forEach(route=>{
+        if(!myRouteCodes.includes(route.route_code)) return;
+        const lid = `rm-line-${route.id}`;
         if(!map.getLayer(lid)) return;
+        const click = makeRouteClick(route);
         map.on('mouseenter',lid,enter);map.on('mouseleave',lid,leave);map.on('click',lid,click);
         cleanups.push(()=>{if(!map.getLayer(lid)) return;map.off('mouseenter',lid,enter);map.off('mouseleave',lid,leave);map.off('click',lid,click);});
       });
-    });
-    return()=>cleanups.forEach(fn=>fn());
+  
+      // ONE handler for the shared number-label layer. Work out which route's
+      // number was tapped from the label feature itself, ignore routes this
+      // manager doesn't cover, then hand off to that route's handler — which
+      // already reads the bucket letter off the same feature, so tapping a split
+      // route's "01a" still opens that bucket and only that bucket.
+      const labelLid = 'rm-num-labels';
+      if (map.getLayer(labelLid)) {
+        const labelClick = (e:any) => {
+          const rc = e.features?.[0]?.properties?.route_code as string | undefined;
+          if (!rc || !myRouteCodes.includes(rc)) return;
+          const route = routeMapData.find(r => r.route_code === rc);
+          if (!route) return;
+          makeRouteClick(route)(e);
+        };
+        map.on('mouseenter',labelLid,enter);map.on('mouseleave',labelLid,leave);map.on('click',labelLid,labelClick);
+        cleanups.push(()=>{if(!map.getLayer(labelLid)) return;map.off('mouseenter',labelLid,enter);map.off('mouseleave',labelLid,leave);map.off('click',labelLid,labelClick);});
+      }
+  
+      return()=>cleanups.forEach(fn=>fn());
   }, [routeMapData, mapLoaded, myRouteCodes, calculateBookingEQ, isTeamSeason, routeSplitsByCode]);
 
   // --- LAYER RENDERERS ---
