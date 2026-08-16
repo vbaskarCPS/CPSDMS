@@ -724,21 +724,25 @@ export async function loadAndCachePCLByPrefix(
 
 // ─── MAP-SCOPED PCL LOAD (Map Builder) ───────────────────────────────────────
 //
-// The Session Command Center loader is scoped to a command centre and a single
-// manager's slice of routes. This one is scoped to the MAP: it walks every area
-// in a region, matches callbook rows on each area's bare prefix, geocodes inside
-// that area's bounding box, buckets onto the nearest route, and writes to
-// map_pcl_cache — which is keyed by route code alone and carries no command
-// centre. PCLs belong to the map, so any centre that later runs that map
-// inherits them without re-uploading anything.
+// Scoped to the MAP, not to a command centre: writes to map_pcl_cache, keyed by
+// route code alone, so any centre that later runs the map inherits the PCLs.
+//
+// IMPORTANT — work is grouped by PREFIX, not by area. Several areas legitimately
+// share one prefix (AJAX NORTH #1 and #2 are both "AN"). Processing them
+// separately would geocode every AN address once per area, and because each
+// area's bounding box carries a 2 km pad the two boxes overlap — so a house near
+// the boundary would resolve in BOTH and end up cached on a route in each.
+// Instead we pool every route belonging to the prefix, geocode each address once
+// against the combined box, and let nearest-route decide which area it lands in.
+// One address, one route, no duplicates, half the lookups.
 //
 // Coordinates are stored on each client. A re-run rehydrates from what's already
-// cached, so a second pass over a loaded area costs no geocoding at all — which
-// matters when the sheet holds twenty thousand rows and Mapbox must be paced.
+// cached, so a second pass costs no geocoding at all — which matters when the
+// sheet holds twenty thousand rows and Mapbox must be paced.
 
 export interface MapPCLProgress {
   phase: 'reading_sheet' | 'area' | 'geocoding' | 'saving' | 'done';
-  areaName: string;
+  areaName: string;      // the prefix group's label, e.g. "AN · Ajax North #1, #2"
   areaIndex: number;
   areaTotal: number;
   current: number;
@@ -801,9 +805,20 @@ export async function loadAndCacheMapPCL(
     return { areasProcessed: 0, clientsCached: 0, dropped: 0 };
   }
 
+  // Group areas by PREFIX — this, not the area, is the unit of work. Pooling the
+  // group's routes and letting nearest-route arbitrate is what keeps AJAX NORTH
+  // #1 and #2 from both claiming the same boundary houses.
+  const groups = new Map<string, MapAreaRow[]>();
+  for (const a of areas) {
+    if (!a.prefix) continue;
+    if (!groups.has(a.prefix)) groups.set(a.prefix, []);
+    groups.get(a.prefix)!.push(a);
+  }
+  const prefixes = Array.from(groups.keys());
+
   // --- read the sheet once, bucket rows by prefix ---
   report({ phase: 'reading_sheet', message: 'Reading callbook tabs…' });
-  const wantedPrefixes = new Set(areas.map(a => a.prefix).filter(Boolean));
+  const wantedPrefixes = new Set(prefixes);
   const rowsByPrefix = new Map<string, RawCallbookRow[]>();
   const cityByAddrKey = new Map<string, string>();
   const normKey = (addr: string) => addr.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -872,26 +887,36 @@ export async function loadAndCacheMapPCL(
   let droppedTotal = 0;
   let areasProcessed = 0;
 
-  // --- one area at a time ---
-  for (let ai = 0; ai < areas.length; ai++) {
-    const area = areas[ai];
-    const matchedRows = rowsByPrefix.get(area.prefix) || [];
+  // --- one PREFIX GROUP at a time ---
+  for (let gi = 0; gi < prefixes.length; gi++) {
+    const prefix = prefixes[gi];
+    const groupAreas = groups.get(prefix)!;
+    const label = `${prefix} · ${groupAreas.map(a => a.area_name).join(', ')}`;
+    const matchedRows = rowsByPrefix.get(prefix) || [];
     report({
-      phase: 'area', areaName: area.area_name, areaIndex: ai + 1, areaTotal: areas.length,
-      message: `${matchedRows.length} callbook rows`,
+      phase: 'area', areaName: label, areaIndex: gi + 1, areaTotal: prefixes.length,
+      message: `${matchedRows.length} callbook rows across ${groupAreas.length} area${groupAreas.length === 1 ? '' : 's'}`,
     });
     if (matchedRows.length === 0) continue;
 
-    const routeMaps = await approvedMapsForArea(area.area_name);
+    // Pool every approved route across every area sharing this prefix, and keep
+    // note of which area each route came from so the cache row is stamped right.
+    const routeMaps: ApprovedRouteMap[] = [];
+    const areaByRouteCode = new Map<string, MapAreaRow>();
+    for (const a of groupAreas) {
+      const maps = await approvedMapsForArea(a.area_name);
+      maps.forEach(m => { routeMaps.push(m); areaByRouteCode.set(m.routeCode, a); });
+    }
     if (routeMaps.length === 0) {
       report({
-        phase: 'area', areaName: area.area_name, areaIndex: ai + 1, areaTotal: areas.length,
+        phase: 'area', areaName: label, areaIndex: gi + 1, areaTotal: prefixes.length,
         message: 'skipped — no approved routes drawn yet',
       });
       continue;
     }
+    // Combined box over the whole group. Wider than a single area's, but the
+    // nearest-route step below is what actually decides the assignment.
     const bbox = bboxForRouteMaps(routeMaps);
-    const areaCodes = routeMaps.map(rm => rm.routeCode);
 
     // Rehydrate coordinates from what this area already has cached, so a second
     // run costs nothing. This is why the coordinates live on the client rows.
@@ -900,7 +925,7 @@ export async function loadAndCacheMapPCL(
       const { data: cached } = await supabase
         .from('map_pcl_cache')
         .select('clients')
-        .eq('area_name', area.area_name);
+        .eq('prefix', prefix);
       (cached || []).forEach((r: any) => {
         (r.clients || []).forEach((c: any) => {
           if (typeof c.lat === 'number' && typeof c.lng === 'number') {
@@ -928,7 +953,7 @@ export async function loadAndCacheMapPCL(
       processed++;
       if (geo.has(key)) {
         if (processed % 25 === 0) {
-          report({ phase: 'geocoding', areaName: area.area_name, areaIndex: ai + 1, areaTotal: areas.length, current: processed, total: uniqueAddrs.length });
+          report({ phase: 'geocoding', areaName: label, areaIndex: gi + 1, areaTotal: prefixes.length, current: processed, total: uniqueAddrs.length });
         }
         continue;
       }
@@ -936,7 +961,7 @@ export async function loadAndCacheMapPCL(
       const pos = await geocodeAddressInBbox(city ? `${addr}, ${city}` : addr, bbox);
       if (pos) geo.set(key, pos);
       if (processed % 25 === 0) {
-        report({ phase: 'geocoding', areaName: area.area_name, areaIndex: ai + 1, areaTotal: areas.length, current: processed, total: uniqueAddrs.length });
+        report({ phase: 'geocoding', areaName: label, areaIndex: gi + 1, areaTotal: prefixes.length, current: processed, total: uniqueAddrs.length });
       }
       // Pacing to stay inside Mapbox's per-minute geocoding limit.
       await new Promise(res => setTimeout(res, 120));
@@ -959,28 +984,32 @@ export async function loadAndCacheMapPCL(
     }
     droppedTotal += dropped;
 
-    report({ phase: 'saving', areaName: area.area_name, areaIndex: ai + 1, areaTotal: areas.length });
+    report({ phase: 'saving', areaName: label, areaIndex: gi + 1, areaTotal: prefixes.length });
 
-    // One row per approved route in the area — empty ones included, so a route
-    // that lost all its clients can't keep showing yesterday's list.
-    const upsertRows = areaCodes.map(rc => {
-      const rows = rowsByRoute.get(rc) || [];
-      const groups = rows.length > 0 ? groupClientsByAddress(rows, true) : [];
-      // Stamp each group with the coordinate that placed it here.
-      groups.forEach(g => {
-        const p = posByAddrKey.get(normKey(`${g.houseNum} ${g.streetName}`.trim()));
+    // One row per approved route in the GROUP — empty ones included, so a route
+    // that lost all its clients can't keep showing an old list. Each row is
+    // stamped with the area that actually owns that route, so two areas sharing
+    // a prefix still report their own counts on their own cards.
+    const upsertRows = routeMaps.map(rm => {
+      const rows = rowsByRoute.get(rm.routeCode) || [];
+      const groupsForRoute = rows.length > 0 ? groupClientsByAddress(rows, true) : [];
+      // Stamp each client with the coordinate that placed it here.
+      groupsForRoute.forEach(g => {
+        const k = normKey(`${g.houseNum} ${g.streetName}`.trim());
+        const p = posByAddrKey.get(k);
         if (p) { g.lat = p.lat; g.lng = p.lng; }
-        const c = cityByAddrKey.get(normKey(`${g.houseNum} ${g.streetName}`.trim()));
+        const c = cityByAddrKey.get(k);
         if (c) g.city = c;
       });
-      clientsCached += groups.length;
+      clientsCached += groupsForRoute.length;
+      const owningArea = areaByRouteCode.get(rm.routeCode);
       return {
-        route_code: rc,
-        area_name: area.area_name,
-        region: area.region,
-        prefix: area.prefix,
-        clients: groups,
-        client_count: groups.length,
+        route_code: rm.routeCode,
+        area_name: owningArea?.area_name || rm.areaName,
+        region: owningArea?.region || region,
+        prefix,
+        clients: groupsForRoute,
+        client_count: groupsForRoute.length,
         updated_at: new Date().toISOString(),
       };
     });
@@ -988,11 +1017,11 @@ export async function loadAndCacheMapPCL(
     const { error: upErr } = await supabase
       .from('map_pcl_cache')
       .upsert(upsertRows, { onConflict: 'route_code' });
-    if (upErr) console.warn('[Map PCL] Save failed for', area.area_name, upErr.message);
-    else areasProcessed++;
+    if (upErr) console.warn('[Map PCL] Save failed for', label, upErr.message);
+    else areasProcessed += groupAreas.length;
   }
 
-  report({ phase: 'done', areaIndex: areas.length, areaTotal: areas.length, message: 'complete' });
+  report({ phase: 'done', areaIndex: prefixes.length, areaTotal: prefixes.length, message: 'complete' });
   return { areasProcessed, clientsCached, dropped: droppedTotal };
 }
 
