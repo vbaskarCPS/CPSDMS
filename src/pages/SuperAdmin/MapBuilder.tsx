@@ -6,8 +6,11 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import {
   ArrowLeft, Loader, Check, X, AlertCircle,
   Plus, Map as MapIcon, Scissors, RefreshCw, Pencil, Eye, EyeOff, Edit2,
+  BookOpen, Users,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { googleAuthService } from '../../lib/googleAuthService';
+import { loadAndCacheMapPCL, getMapPCLCounts } from '../../lib/pclCacheService';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -236,6 +239,22 @@ const MapBuilder: React.FC = () => {
   const [view, setView] = useState<'grid' | 'map'>('grid');
   const [areas, setAreas] = useState<AreaPrefix[]>([]);
   const [savedCounts, setSavedCounts] = useState<Map<string, number>>(new Map());
+
+  // --- PCL UPLOAD STATE ---
+  // The spreadsheet id is remembered between visits; it rarely changes and
+  // re-typing a 44-character id is nobody's idea of a good afternoon.
+  const [pclCounts, setPclCounts] = useState<Map<string, number>>(new Map());
+  const [pclModalOpen, setPclModalOpen] = useState(false);
+  const [pclSheetId, setPclSheetId] = useState<string>(() => {
+    try { return localStorage.getItem('cps.mapbuilder.pclSheetId') || ''; } catch { return ''; }
+  });
+  const [pclRegion, setPclRegion] = useState<Region>('East');
+  const [pclConnected, setPclConnected] = useState(() => googleAuthService.isAuthenticated());
+  const [pclConnecting, setPclConnecting] = useState(false);
+  const [pclRunning, setPclRunning] = useState(false);
+  const [pclStatus, setPclStatus] = useState<string | null>(null);
+  const [pclResult, setPclResult] = useState<string | null>(null);
+  const [pclError, setPclError] = useState<string | null>(null);
   const [loadingAreas, setLoadingAreas] = useState(true);
   const [currentArea, setCurrentArea] = useState<AreaPrefix | null>(null);
   const [modal, setModal] = useState<AreaModalState>(EMPTY_MODAL);
@@ -287,6 +306,68 @@ const MapBuilder: React.FC = () => {
   }, [allWays, wayOverrides, wayNameOverrides]);
 
   const activeRoute = routes.find(r => r.num === activeRouteNum);
+  // --- PCL UPLOAD ---
+  //
+  // Its own Google connect: Map Builder is a Super Admin page and never went
+  // through the command-centre login that normally establishes the token. The
+  // shared auth service still holds it, so consenting here also satisfies
+  // anything else in this browser that needs Sheets.
+  const loadPclCounts = useCallback(async () => {
+    try { setPclCounts(await getMapPCLCounts()); }
+    catch (err) { console.warn('[Map PCL] Count load failed:', err); }
+  }, []);
+
+  useEffect(() => { loadPclCounts(); }, [loadPclCounts]);
+
+  const handlePclConnect = async () => {
+    setPclConnecting(true);
+    setPclError(null);
+    try {
+      const ok = await googleAuthService.authenticate();
+      setPclConnected(ok);
+      if (!ok) setPclError('Google sign-in was cancelled.');
+    } catch (err) {
+      setPclError(err instanceof Error ? err.message : 'Google sign-in failed.');
+    } finally {
+      setPclConnecting(false);
+    }
+  };
+
+  const handleRunPclLoad = async () => {
+    const sheetId = pclSheetId.trim();
+    if (!sheetId) { setPclError('Paste the spreadsheet ID first.'); return; }
+
+    setPclRunning(true);
+    setPclError(null);
+    setPclResult(null);
+    setPclStatus('Starting…');
+    try {
+      localStorage.setItem('cps.mapbuilder.pclSheetId', sheetId);
+    } catch { /* storage optional */ }
+
+    try {
+      const token = await googleAuthService.getValidToken();
+      const res = await loadAndCacheMapPCL(sheetId, token, pclRegion, (p) => {
+        if (p.phase === 'reading_sheet') setPclStatus(p.message || 'Reading the spreadsheet…');
+        else if (p.phase === 'area') setPclStatus(`Area ${p.areaIndex}/${p.areaTotal} · ${p.areaName} — ${p.message || ''}`);
+        else if (p.phase === 'geocoding') setPclStatus(`Area ${p.areaIndex}/${p.areaTotal} · ${p.areaName} — geocoding ${p.current}/${p.total}`);
+        else if (p.phase === 'saving') setPclStatus(`Area ${p.areaIndex}/${p.areaTotal} · ${p.areaName} — saving…`);
+      });
+      setPclStatus(null);
+      setPclResult(
+        `${res.clientsCached} clients cached across ${res.areasProcessed} areas in ${pclRegion}`
+        + (res.dropped > 0 ? ` · ${res.dropped} rows dropped (no geocode)` : '')
+      );
+      await loadPclCounts();
+    } catch (err) {
+      console.error('[Map PCL] Load failed:', err);
+      setPclError(err instanceof Error ? err.message : 'PCL load failed.');
+      setPclStatus(null);
+    } finally {
+      setPclRunning(false);
+    }
+  };
+
   const approvedCount = routes.filter(r => r.status === 'approved').length;
   const flaggedCount = routes.filter(r => r.status === 'flagged').length;
   const pendingCount = routes.filter(r => r.status === 'pending').length;
@@ -955,6 +1036,11 @@ const MapBuilder: React.FC = () => {
             </>
           )}
           {view === 'grid' && (
+            <button onClick={() => { setPclError(null); setPclResult(null); setPclModalOpen(true); }} className="bg-amber-700 hover:bg-amber-600 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-2">
+              <BookOpen size={14} />Load PCL
+            </button>
+          )}
+          {view === 'grid' && (
             <button onClick={openNewAreaModal} className="bg-purple-700 hover:bg-purple-600 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-2">
               <Plus size={14} />New Area
             </button>
@@ -1002,11 +1088,119 @@ const MapBuilder: React.FC = () => {
                     <div className={`inline-block text-[9px] font-medium px-1.5 py-0.5 rounded border mb-2 ${regionStyle(area.region)}`}>{area.region}</div>
                     <div className="text-[10px] text-gray-500 font-mono">{formatRouteCode(area.prefix, start)}–{formatRouteCode(area.prefix, end)}</div>
                     <div className="text-[9px] text-gray-600 mt-0.5">{area.route_count} routes · <span className="text-green-600">{savedCounts.get(area.area_name) ?? 0} saved</span></div>
+                    <div className="text-[9px] mt-0.5 flex items-center gap-1">
+                      <Users size={9} className={(pclCounts.get(area.area_name) ?? 0) > 0 ? 'text-amber-500' : 'text-gray-700'} />
+                      <span className={(pclCounts.get(area.area_name) ?? 0) > 0 ? 'text-amber-500' : 'text-gray-700'}>
+                        {(pclCounts.get(area.area_name) ?? 0) > 0 ? `${pclCounts.get(area.area_name)} PCL` : 'no PCL'}
+                      </span>
+                    </div>
                   </div>
                 );
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* PCL LOAD MODAL — connect, spreadsheet id, region, go. Region is confirmed
+          explicitly rather than inferred, because the run touches every area in
+          it and picking the wrong one is forty minutes you don't get back. */}
+      {pclModalOpen && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={() => !pclRunning && setPclModalOpen(false)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-4">
+              <BookOpen size={18} className="text-amber-400" />
+              <h3 className="text-white font-bold">Load Callbook PCLs</h3>
+              {!pclRunning && (
+                <button onClick={() => setPclModalOpen(false)} className="ml-auto text-gray-500 hover:text-white"><X size={16} /></button>
+              )}
+            </div>
+
+            {/* 1. Google */}
+            <div className="mb-4">
+              <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">1 · Google Account</label>
+              {pclConnected ? (
+                <div className="text-xs text-green-400 flex items-center gap-1.5 bg-green-900/20 border border-green-800 rounded px-3 py-2">
+                  <Check size={13} /> Connected
+                  <button onClick={handlePclConnect} className="ml-auto text-gray-500 hover:text-gray-300 text-[10px] underline">switch account</button>
+                </div>
+              ) : (
+                <button onClick={handlePclConnect} disabled={pclConnecting} className="w-full bg-white hover:bg-gray-100 disabled:opacity-50 text-gray-800 py-2 rounded text-sm font-medium flex items-center justify-center gap-2">
+                  {pclConnecting ? <Loader size={14} className="animate-spin" /> : null}
+                  Connect to Google
+                </button>
+              )}
+            </div>
+
+            {/* 2. Spreadsheet */}
+            <div className="mb-4">
+              <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">2 · Spreadsheet ID</label>
+              <input
+                type="text"
+                value={pclSheetId}
+                onChange={e => setPclSheetId(e.target.value)}
+                disabled={pclRunning}
+                placeholder="1AbCdEf… (the long id from the sheet's URL)"
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-xs font-mono placeholder-gray-600 focus:outline-none focus:border-amber-500"
+              />
+              <p className="text-[10px] text-gray-600 mt-1">Reads any tab whose name ends in "Callbooks". Remembered for next time.</p>
+            </div>
+
+            {/* 3. Region */}
+            <div className="mb-4">
+              <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">3 · Confirm Region</label>
+              <div className="grid grid-cols-3 gap-2">
+                {(['West', 'Central', 'East'] as Region[]).map(r => (
+                  <button
+                    key={r}
+                    onClick={() => setPclRegion(r)}
+                    disabled={pclRunning}
+                    className={`py-2 rounded border text-sm font-medium transition-colors disabled:opacity-50 ${
+                      pclRegion === r
+                        ? r === 'West' ? 'bg-blue-900/50 border-blue-500 text-blue-300'
+                          : r === 'Central' ? 'bg-green-900/50 border-green-500 text-green-300'
+                          : 'bg-orange-900/50 border-orange-500 text-orange-300'
+                        : 'bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-500'
+                    }`}
+                  >{r}</button>
+                ))}
+              </div>
+              <p className="text-[10px] text-gray-600 mt-1">
+                Every area in {pclRegion} will be processed. Areas with no approved routes drawn yet are skipped.
+              </p>
+            </div>
+
+            <button
+              onClick={handleRunPclLoad}
+              disabled={pclRunning || !pclConnected || !pclSheetId.trim()}
+              className="w-full bg-amber-600 hover:bg-amber-500 disabled:bg-gray-800 disabled:text-gray-500 text-white py-2.5 rounded font-bold text-sm flex items-center justify-center gap-2"
+            >
+              {pclRunning ? <Loader size={15} className="animate-spin" /> : <BookOpen size={15} />}
+              {pclRunning ? 'Loading…' : `Load PCLs for ${pclRegion}`}
+            </button>
+
+            {pclStatus && (
+              <div className="mt-3 text-xs text-amber-200 bg-amber-900/20 border border-amber-800/50 rounded px-3 py-2 flex items-center gap-2">
+                <Loader className="animate-spin flex-shrink-0" size={13} />
+                <span className="truncate">{pclStatus}</span>
+              </div>
+            )}
+            {pclRunning && (
+              <p className="mt-2 text-[10px] text-gray-500">
+                Geocoding is paced to stay inside Mapbox's limits, so a first run over a full region takes a while. Leave this tab open — anything already resolved is kept, so a re-run resumes rather than starting over.
+              </p>
+            )}
+            {pclResult && (
+              <div className="mt-3 text-xs text-green-300 bg-green-900/20 border border-green-800/50 rounded px-3 py-2 flex items-center gap-2">
+                <Check size={13} className="flex-shrink-0" /><span>{pclResult}</span>
+              </div>
+            )}
+            {pclError && (
+              <div className="mt-3 text-xs text-red-300 bg-red-900/20 border border-red-800/50 rounded px-3 py-2 flex items-center gap-2">
+                <AlertCircle size={13} className="flex-shrink-0" /><span>{pclError}</span>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

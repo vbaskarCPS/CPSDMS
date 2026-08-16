@@ -20,6 +20,10 @@ import {
   geocodeAddressInBbox,
 } from './managerMappingService';
 
+// Re-declared here rather than imported so the map loader below doesn't depend
+// on the Session Command Center path continuing to exist.
+export interface MapGeoPos { lat: number; lng: number }
+
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 
 export interface PCLHistoryEntry {
@@ -36,6 +40,14 @@ export interface PCLClientGroup {
   streetName: string;
   phone: string;
   history: PCLHistoryEntry[];
+  // Resolved once at load time and stored WITH the client. This is what makes
+  // the attachment permanent: the map no longer has to geocode a PCL address at
+  // all, and a client cannot drift onto a different route between sessions
+  // because the coordinate that placed it there travels with it.
+  // Optional so rows cached before this existed still parse.
+  lat?: number;
+  lng?: number;
+  city?: string;
 }
 
 // ─── INTERNAL RAW ROW TYPE ────────────────────────────────────────────────────
@@ -709,6 +721,299 @@ export async function loadAndCachePCLByPrefix(
       });
     }
   }
+
+// ─── MAP-SCOPED PCL LOAD (Map Builder) ───────────────────────────────────────
+//
+// The Session Command Center loader is scoped to a command centre and a single
+// manager's slice of routes. This one is scoped to the MAP: it walks every area
+// in a region, matches callbook rows on each area's bare prefix, geocodes inside
+// that area's bounding box, buckets onto the nearest route, and writes to
+// map_pcl_cache — which is keyed by route code alone and carries no command
+// centre. PCLs belong to the map, so any centre that later runs that map
+// inherits them without re-uploading anything.
+//
+// Coordinates are stored on each client. A re-run rehydrates from what's already
+// cached, so a second pass over a loaded area costs no geocoding at all — which
+// matters when the sheet holds twenty thousand rows and Mapbox must be paced.
+
+export interface MapPCLProgress {
+  phase: 'reading_sheet' | 'area' | 'geocoding' | 'saving' | 'done';
+  areaName: string;
+  areaIndex: number;
+  areaTotal: number;
+  current: number;
+  total: number;
+  message?: string;
+}
+export type MapPCLProgressFn = (p: MapPCLProgress) => void;
+
+interface MapAreaRow { area_name: string; prefix: string; region: string }
+
+// route_maps rows shaped for the geometry helpers. Queried by area rather than
+// by code list, because the Map Builder thinks in areas.
+async function approvedMapsForArea(areaName: string): Promise<ApprovedRouteMap[]> {
+  const { data, error } = await supabase
+    .from('route_maps')
+    .select('*')
+    .eq('area_name', areaName)
+    .eq('status', 'approved');
+  if (error) {
+    console.warn('[Map PCL] route_maps read failed for', areaName, error.message);
+    return [];
+  }
+  return (data || []).map((r: any) => ({
+    id: r.id,
+    areaName: r.area_name,
+    routeNumber: r.route_number,
+    routeCode: r.route_code,
+    routeColor: r.route_color,
+    segments: Array.isArray(r.segments) ? r.segments : [],
+  }));
+}
+
+/**
+ * Load callbook PCLs for every area in a region from one spreadsheet.
+ *
+ * The sheet is read ONCE and bucketed by prefix in memory — re-reading twenty
+ * thousand rows per area would be the slowest part of the job by a wide margin.
+ */
+export async function loadAndCacheMapPCL(
+  spreadsheetId: string,
+  accessToken: string,
+  region: string,
+  onProgress?: MapPCLProgressFn,
+): Promise<{ areasProcessed: number; clientsCached: number; dropped: number }> {
+  const report = (p: Partial<MapPCLProgress> & { phase: MapPCLProgress['phase'] }) =>
+    onProgress?.({
+      areaName: '', areaIndex: 0, areaTotal: 0, current: 0, total: 0, ...p,
+    } as MapPCLProgress);
+
+  report({ phase: 'reading_sheet', message: 'Loading areas…' });
+
+  const { data: areaData, error: areaErr } = await supabase
+    .from('area_prefixes')
+    .select('area_name, prefix, region')
+    .eq('region', region)
+    .order('area_name');
+  if (areaErr) throw new Error(`Could not read areas: ${areaErr.message}`);
+  const areas = (areaData || []) as MapAreaRow[];
+  if (areas.length === 0) {
+    return { areasProcessed: 0, clientsCached: 0, dropped: 0 };
+  }
+
+  // --- read the sheet once, bucket rows by prefix ---
+  report({ phase: 'reading_sheet', message: 'Reading callbook tabs…' });
+  const wantedPrefixes = new Set(areas.map(a => a.prefix).filter(Boolean));
+  const rowsByPrefix = new Map<string, RawCallbookRow[]>();
+  const cityByAddrKey = new Map<string, string>();
+  const normKey = (addr: string) => addr.toLowerCase().replace(/\s+/g, ' ').trim();
+
+  const tabs = await getCallbookTabNames(accessToken, spreadsheetId, true);
+  if (tabs.length === 0) {
+    throw new Error('No tab whose name ends in "Callbooks" was found in that spreadsheet.');
+  }
+
+  for (const tabName of tabs) {
+    let rawData: any[][];
+    try {
+      rawData = await sheetsGetRaw(accessToken, spreadsheetId, `'${tabName}'`);
+    } catch (err) {
+      console.warn('[Map PCL] Could not read tab', tabName, err);
+      continue;
+    }
+    if (!rawData || rawData.length < 2) continue;
+
+    const headerIdx = findHeaderRow(rawData);
+    if (headerIdx === null) continue;
+    const CI = resolveColumnsSealing(rawData[headerIdx]);
+    if (CI.PHONE < 0 || CI.ROUTE_CODE < 0) continue;
+
+    // CITY isn't part of the shared resolver, but this sheet carries one and it
+    // materially improves geocoding — "49 Addley Cr, Ajax" beats "49 Addley Cr".
+    let cityIdx = -1;
+    const headers = rawData[headerIdx];
+    for (let i = 0; i < headers.length; i++) {
+      if (String(headers[i] ?? '').trim().toUpperCase() === 'CITY') { cityIdx = i; break; }
+    }
+
+    for (const row of rawData.slice(headerIdx + 1)) {
+      if (!row) continue;
+      const rc = cellVal(row, CI.ROUTE_CODE);
+      if (!rc || !wantedPrefixes.has(rc)) continue;
+
+      const year = parseInt(cellVal(row, CI.YEAR), 10);
+      if (isNaN(year) || year < 2000) continue;
+
+      const houseNum = cellVal(row, CI.HOUSE);
+      const streetName = cellVal(row, CI.STREET);
+      const cbRow: RawCallbookRow = {
+        routeCode: rc,
+        firstName: cellVal(row, CI.FIRST),
+        lastName: cellVal(row, CI.LAST),
+        houseNum,
+        streetName,
+        phone: normalizePhone(cellVal(row, CI.PHONE)),
+        fo: interpretServiceSealing(cellVal(row, CI.FO)),
+        price: cellVal(row, CI.PRICE),
+        contractor: cellVal(row, CI.CONTRACTOR),
+        year,
+      };
+      if (cityIdx >= 0) {
+        const addr = `${houseNum} ${streetName}`.trim();
+        const city = cellVal(row, cityIdx);
+        if (addr && city) cityByAddrKey.set(normKey(addr), city);
+      }
+      if (!rowsByPrefix.has(rc)) rowsByPrefix.set(rc, []);
+      rowsByPrefix.get(rc)!.push(cbRow);
+    }
+  }
+
+  let clientsCached = 0;
+  let droppedTotal = 0;
+  let areasProcessed = 0;
+
+  // --- one area at a time ---
+  for (let ai = 0; ai < areas.length; ai++) {
+    const area = areas[ai];
+    const matchedRows = rowsByPrefix.get(area.prefix) || [];
+    report({
+      phase: 'area', areaName: area.area_name, areaIndex: ai + 1, areaTotal: areas.length,
+      message: `${matchedRows.length} callbook rows`,
+    });
+    if (matchedRows.length === 0) continue;
+
+    const routeMaps = await approvedMapsForArea(area.area_name);
+    if (routeMaps.length === 0) {
+      report({
+        phase: 'area', areaName: area.area_name, areaIndex: ai + 1, areaTotal: areas.length,
+        message: 'skipped — no approved routes drawn yet',
+      });
+      continue;
+    }
+    const bbox = bboxForRouteMaps(routeMaps);
+    const areaCodes = routeMaps.map(rm => rm.routeCode);
+
+    // Rehydrate coordinates from what this area already has cached, so a second
+    // run costs nothing. This is why the coordinates live on the client rows.
+    const geo = new Map<string, GeoPos>();
+    try {
+      const { data: cached } = await supabase
+        .from('map_pcl_cache')
+        .select('clients')
+        .eq('area_name', area.area_name);
+      (cached || []).forEach((r: any) => {
+        (r.clients || []).forEach((c: any) => {
+          if (typeof c.lat === 'number' && typeof c.lng === 'number') {
+            geo.set(normKey(`${c.houseNum} ${c.streetName}`.trim()), { lat: c.lat, lng: c.lng });
+          }
+        });
+      });
+    } catch {
+      // Best-effort; we simply re-geocode without it.
+    }
+
+    // Unique addresses for this area.
+    const uniqueAddrs: string[] = [];
+    const seenAddr = new Set<string>();
+    for (const r of matchedRows) {
+      const addr = `${r.houseNum} ${r.streetName}`.trim();
+      if (!addr) continue;
+      const k = normKey(addr);
+      if (!seenAddr.has(k)) { seenAddr.add(k); uniqueAddrs.push(addr); }
+    }
+
+    let processed = 0;
+    for (const addr of uniqueAddrs) {
+      const key = normKey(addr);
+      processed++;
+      if (geo.has(key)) {
+        if (processed % 25 === 0) {
+          report({ phase: 'geocoding', areaName: area.area_name, areaIndex: ai + 1, areaTotal: areas.length, current: processed, total: uniqueAddrs.length });
+        }
+        continue;
+      }
+      const city = cityByAddrKey.get(key);
+      const pos = await geocodeAddressInBbox(city ? `${addr}, ${city}` : addr, bbox);
+      if (pos) geo.set(key, pos);
+      if (processed % 25 === 0) {
+        report({ phase: 'geocoding', areaName: area.area_name, areaIndex: ai + 1, areaTotal: areas.length, current: processed, total: uniqueAddrs.length });
+      }
+      // Pacing to stay inside Mapbox's per-minute geocoding limit.
+      await new Promise(res => setTimeout(res, 120));
+    }
+
+    // Bucket onto the nearest route; rows with no coordinate are dropped.
+    const rowsByRoute = new Map<string, RawCallbookRow[]>();
+    const posByAddrKey = new Map<string, GeoPos>();
+    let dropped = 0;
+    for (const r of matchedRows) {
+      const addr = `${r.houseNum} ${r.streetName}`.trim();
+      const pos = addr ? geo.get(normKey(addr)) : undefined;
+      if (!pos) { dropped++; continue; }
+      const nearest = nearestRouteForPoint(pos.lat, pos.lng, routeMaps);
+      if (!nearest) { dropped++; continue; }
+      posByAddrKey.set(normKey(addr), pos);
+      const resolved: RawCallbookRow = { ...r, routeCode: nearest.routeCode };
+      if (!rowsByRoute.has(nearest.routeCode)) rowsByRoute.set(nearest.routeCode, []);
+      rowsByRoute.get(nearest.routeCode)!.push(resolved);
+    }
+    droppedTotal += dropped;
+
+    report({ phase: 'saving', areaName: area.area_name, areaIndex: ai + 1, areaTotal: areas.length });
+
+    // One row per approved route in the area — empty ones included, so a route
+    // that lost all its clients can't keep showing yesterday's list.
+    const upsertRows = areaCodes.map(rc => {
+      const rows = rowsByRoute.get(rc) || [];
+      const groups = rows.length > 0 ? groupClientsByAddress(rows, true) : [];
+      // Stamp each group with the coordinate that placed it here.
+      groups.forEach(g => {
+        const p = posByAddrKey.get(normKey(`${g.houseNum} ${g.streetName}`.trim()));
+        if (p) { g.lat = p.lat; g.lng = p.lng; }
+        const c = cityByAddrKey.get(normKey(`${g.houseNum} ${g.streetName}`.trim()));
+        if (c) g.city = c;
+      });
+      clientsCached += groups.length;
+      return {
+        route_code: rc,
+        area_name: area.area_name,
+        region: area.region,
+        prefix: area.prefix,
+        clients: groups,
+        client_count: groups.length,
+        updated_at: new Date().toISOString(),
+      };
+    });
+
+    const { error: upErr } = await supabase
+      .from('map_pcl_cache')
+      .upsert(upsertRows, { onConflict: 'route_code' });
+    if (upErr) console.warn('[Map PCL] Save failed for', area.area_name, upErr.message);
+    else areasProcessed++;
+  }
+
+  report({ phase: 'done', areaIndex: areas.length, areaTotal: areas.length, message: 'complete' });
+  return { areasProcessed, clientsCached, dropped: droppedTotal };
+}
+
+/** Client counts per AREA, for the Map Builder cards. */
+export async function getMapPCLCounts(): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const BATCH = 1000;
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from('map_pcl_cache')
+      .select('area_name, client_count')
+      .range(from, from + BATCH - 1);
+    if (error) { console.warn('[Map PCL] Count read failed:', error.message); break; }
+    if (!data || data.length === 0) break;
+    data.forEach((r: any) => out.set(r.area_name, (out.get(r.area_name) || 0) + (r.client_count || 0)));
+    if (data.length < BATCH) break;
+    from += BATCH;
+  }
+  return out;
+}
 
 // ─── READ FOR WORKER ─────────────────────────────────────────────────────────
 
