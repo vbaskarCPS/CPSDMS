@@ -191,23 +191,6 @@ const SessionCommandCenter: React.FC = () => {
   // One-line result note after the bookings refresh (e.g. "3 bookings added").
   const [mappingRefreshNote, setMappingRefreshNote] = useState<string | null>(null);
 
-  // --- PCL PRELOAD STATE (per-manager digital mapping) ---
-  // Deliberately slow work — Mapbox pacing — so the panel shows a live ticker
-  // rather than leaving the admin staring at a dead button for six minutes.
-  const [pclPreloadRunning, setPclPreloadRunning] = useState(false);
-  const [pclPreloadStatus, setPclPreloadStatus] = useState<string | null>(null);
-  const [pclPreloadDone, setPclPreloadDone] = useState<string[]>([]);
-  const [pclPreloadError, setPclPreloadError] = useState<string | null>(null);
-  // Managers carrying a per-manager map config, read from the users table rather
-  // than from the session. The preload must work with no session at all, so it
-  // can't lean on mappingDraft — that only exists once a preview or a live
-  // session has filled it in.
-  const [mappedManagers, setMappedManagers] = useState<Array<{
-    userId: string;
-    name: string;
-    config: { areaName: string; prefix: string; routeStart: number; routeEnd: number; routeCodes: string[] };
-  }>>([]);
-
   // --- ADD ADDITIONAL STATE ---
   const [showAddAdditional, setShowAddAdditional] = useState(false);
   const [addAdditionalLoading, setAddAdditionalLoading] = useState(false);
@@ -350,17 +333,6 @@ const SessionCommandCenter: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Failed to load session');
     }
   }, [currentCC]);
-
-  // Load the per-manager map configs on mount. Independent of the session on
-  // purpose — the preload panel has to appear before a session exists.
-  useEffect(() => {
-    if (!currentCC?.id) return;
-    let cancelled = false;
-    sessionService.getManagerMappingConfigs()
-      .then(rows => { if (!cancelled) setMappedManagers(rows); })
-      .catch(err => console.warn('[Mapping] Config load failed:', err));
-    return () => { cancelled = true; };
-  }, [currentCC?.id]);
 
   // Load active session on mount and when CC changes
   useEffect(() => {
@@ -748,75 +720,6 @@ const SessionCommandCenter: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Failed to add additional data.');
     } finally {
       setAddAdditionalLoading(false);
-    }
-  };
-
-  // --- PRELOAD CALLBOOK PCLs FOR PER-MANAGER DIGITAL MAPPING ---
-  //
-  // Runs the prefix PCL loader for every manager on this command centre who
-  // carries a map config, reading the same Callbooks tabs the live loader uses.
-  // Two things separate it from the load that fires on Apply:
-  //
-  //   1. It needs no live session. Coordinates land in the permanent geocode
-  //      cache, so a run today still holds whenever the session finally opens.
-  //   2. It reports progress, because otherwise it is indistinguishable from a
-  //      hung browser tab.
-  //
-  // Safe to run repeatedly — already-resolved addresses are skipped without a
-  // lookup or a pause, so a second pass over a warm cache is nearly instant.
-  const handlePreloadMappedPCL = async () => {
-    const configs = mappedManagers.filter(m => m.config?.prefix && (m.config.routeCodes?.length || 0) > 0);
-
-    if (configs.length === 0) {
-      setPclPreloadError('No manager on this command center has a digital map configured yet.');
-      return;
-    }
-    const mbSheetId = currentCC?.masterbookingsSheetId;
-    const ccId = currentCC?.id;
-    if (!mbSheetId || !ccId) {
-      setPclPreloadError('This command center has no master bookings sheet configured.');
-      return;
-    }
-    const accessToken = googleSheetsService.getAccessToken();
-    if (!accessToken) {
-      setPclPreloadError('Connect to Google first — the callbook tabs are read with your Google account.');
-      return;
-    }
-
-    setPclPreloadRunning(true);
-    setPclPreloadError(null);
-    setPclPreloadDone([]);
-    setPclPreloadStatus('Starting…');
-
-    try {
-      const { loadAndCachePCLByPrefix } = await import('../../lib/pclCacheService');
-      // A live session date is passed when one exists, purely so today's map
-      // hydrates from the session cache too. The preload does not require it.
-      const sessionDate = currentSession?.date || null;
-
-      for (let i = 0; i < configs.length; i++) {
-        const cfg = configs[i].config;
-        await loadAndCachePCLByPrefix(
-          mbSheetId, cfg, accessToken, ccId, sessionDate,
-          (p) => {
-            const which = `Map ${i + 1} of ${configs.length} · ${p.prefix}`;
-            if (p.phase === 'reading_sheets') setPclPreloadStatus(`${which} — reading callbook tabs…`);
-            else if (p.phase === 'geocoding') setPclPreloadStatus(`${which} — geocoding ${p.current}/${p.total} addresses…`);
-            else if (p.phase === 'bucketing') setPclPreloadStatus(`${which} — matching clients to routes…`);
-            else if (p.phase === 'done') {
-              setPclPreloadStatus(null);
-              setPclPreloadDone(prev => [...prev, `${p.prefix} — ${p.message || 'complete'}`]);
-            }
-          },
-        );
-      }
-      setPclPreloadStatus(null);
-    } catch (err) {
-      console.error('[PCL Preload] Failed:', err);
-      setPclPreloadError(err instanceof Error ? err.message : 'PCL preload failed.');
-      setPclPreloadStatus(null);
-    } finally {
-      setPclPreloadRunning(false);
     }
   };
 
@@ -1340,80 +1243,6 @@ const SessionCommandCenter: React.FC = () => {
                     Generate Payslips
                   </button>
                 </div>
-
-            {/* PCL PRELOAD — sits above everything because it deliberately does
-                NOT belong to a session. Callbook PCLs can be geocoded and pinned
-                to their routes weeks before anyone initializes anything, and the
-                permanent geocode cache means it only has to be slow once. Shown
-                whenever any manager on this command centre carries a map config,
-                session or no session. */}
-            {mappedManagers.length > 0 && (
-              <div className="mb-6 p-5 bg-gray-800 rounded-xl border border-amber-800/50 shadow-lg">
-                <div className="flex items-start gap-3 mb-4">
-                  <BookOpen size={18} className="text-amber-400 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <h4 className="text-white font-bold text-sm">Preload Callbook PCLs for Digital Maps</h4>
-                    <p className="text-gray-400 text-xs mt-0.5">
-                      Reads the <span className="text-amber-300">Callbooks</span> tabs from the master bookings sheet, geocodes every client address, and permanently attaches each client to its nearest route.
-                    </p>
-                    <p className="text-amber-300/80 text-[11px] mt-1.5">
-                      No session required. Coordinates are cached permanently, so this only has to be slow once — run it again any time and known addresses are skipped.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {mappedManagers.map(m => (
-                    <span key={m.userId} className="text-[10px] bg-gray-900 border border-gray-700 text-gray-300 rounded px-2 py-1">
-                      <span className="text-white font-bold">{m.name}</span>
-                      <span className="text-gray-500"> · </span>
-                      <span className="font-mono text-amber-300">{m.config.prefix} {m.config.routeStart}–{m.config.routeEnd}</span>
-                      <span className="text-gray-500"> · {m.config.routeCodes?.length || 0} routes</span>
-                    </span>
-                  ))}
-                </div>
-
-                {!isGoogleConnected && (
-                  <p className="text-xs text-amber-400 mb-3 flex items-center gap-1.5">
-                    <AlertCircle size={13} /> Connect to Google first — the callbooks live in your sheet.
-                  </p>
-                )}
-
-                <button
-                  onClick={handlePreloadMappedPCL}
-                  disabled={pclPreloadRunning || !isGoogleConnected}
-                  className="w-full bg-amber-600 hover:bg-amber-500 disabled:bg-gray-800 disabled:text-gray-500 text-white py-2.5 px-4 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-colors"
-                >
-                  {pclPreloadRunning ? <Loader className="animate-spin" size={16} /> : <BookOpen size={16} />}
-                  {pclPreloadRunning ? 'Preloading…' : 'Preload PCLs'}
-                </button>
-
-                {pclPreloadStatus && (
-                  <div className="mt-3 text-xs text-amber-200 bg-amber-900/20 border border-amber-800/50 rounded-lg px-3 py-2 flex items-center gap-2">
-                    <Loader className="animate-spin flex-shrink-0" size={13} />
-                    <span>{pclPreloadStatus}</span>
-                  </div>
-                )}
-
-                {pclPreloadDone.length > 0 && (
-                  <div className="mt-3 space-y-1">
-                    {pclPreloadDone.map((line, i) => (
-                      <div key={i} className="text-xs text-green-300 bg-green-900/20 border border-green-800/50 rounded-lg px-3 py-2 flex items-center gap-2">
-                        <Check size={13} className="flex-shrink-0" />
-                        <span>{line}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {pclPreloadError && (
-                  <div className="mt-3 text-xs text-red-300 bg-red-900/20 border border-red-800/50 rounded-lg px-3 py-2 flex items-center gap-2">
-                    <AlertCircle size={13} className="flex-shrink-0" />
-                    <span>{pclPreloadError}</span>
-                  </div>
-                )}
-              </div>
-            )}
 
             {/* 1. UPLOAD SECTION (Only if no session) */}
             {!currentSession && (
