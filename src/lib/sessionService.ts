@@ -3109,10 +3109,21 @@ class SessionService {
         lng: Number(row.lng),
         createdBy: row.created_by ?? null,
         createdAt: row.created_at,
+        visibility: (row.visibility as MapPinVisibility) || 'private',
+        targetManagerId: row.target_manager_id ?? null,
       };
     }
 
-    public async getMapPins(): Promise<MapPin[]> {
+    /**
+     * Pins this viewer is entitled to see. Filtering is done in memory rather
+     * than in the query: a day's pins number in the tens, and an OR across three
+     * conditions in PostgREST syntax is far easier to get subtly wrong than a
+     * plain predicate you can read.
+     *
+     * viewerIds should be the manager's own id plus anyone they float for — a
+     * floater standing in for another manager needs to see pins aimed at them.
+     */
+    public async getMapPins(viewerIds: string[]): Promise<MapPin[]> {
       try {
         const ccId = this.getCCId();
         const date = await this.getDailySessionDate();
@@ -3129,7 +3140,15 @@ class SessionService {
           console.warn('[MapPins] getMapPins failed:', error);
           return [];
         }
-        return (data || []).map((r: any) => this.mapDbMapPin(r));
+
+        const mine = new Set(viewerIds.filter(Boolean));
+        return (data || [])
+          .map((r: any) => this.mapDbMapPin(r))
+          .filter(p =>
+            p.visibility === 'all'
+            || (p.createdBy != null && mine.has(p.createdBy))
+            || (p.visibility === 'manager' && p.targetManagerId != null && mine.has(p.targetManagerId))
+          );
       } catch (err) {
         console.warn('[MapPins] getMapPins error:', err);
         return [];
@@ -3141,6 +3160,8 @@ class SessionService {
       lat: number,
       lng: number,
       createdBy: string,
+      visibility: MapPinVisibility = 'private',
+      targetManagerId?: string | null,
     ): Promise<MapPin | null> {
       const ccId = this.getCCId();
       const date = await this.getDailySessionDate();
@@ -3154,6 +3175,10 @@ class SessionService {
         lat,
         lng,
         created_by: createdBy,
+        visibility,
+        // Only meaningful for 'manager'; nulled otherwise so a stale target can't
+        // linger on a pin that's since been made private or public.
+        target_manager_id: visibility === 'manager' ? (targetManagerId || null) : null,
       };
 
       const { data, error } = await supabase
@@ -5019,6 +5044,12 @@ class SessionService {
 // A pin an RM has dropped on the map: a coordinate, a name, and nothing else.
 // Scoped to the command centre and the session date, so every manager and
 // floater on that centre sees the same set and each new day starts clean.
+// Who a dropped pin is for.
+//   'private' — only whoever dropped it.
+//   'all'     — every manager on the command centre.
+//   'manager' — one named manager (targetManagerId), plus the author.
+export type MapPinVisibility = 'private' | 'all' | 'manager';
+
 export interface MapPin {
   id: string;
   label: string;
@@ -5026,6 +5057,8 @@ export interface MapPin {
   lng: number;
   createdBy: string | null;
   createdAt: string;
+  visibility: MapPinVisibility;
+  targetManagerId: string | null;
 }
 
 export const sessionService = SessionService.getInstance();

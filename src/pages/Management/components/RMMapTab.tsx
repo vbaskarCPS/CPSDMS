@@ -843,7 +843,7 @@ const MAP_PIN_POLL_MS = 60 * 1000;
 // outside it. That matters: with anchor:'bottom' Mapbox lands the bottom-centre
 // of the wrapper on the coordinate, so if the label were part of the box's flow
 // it would widen the box and shove the teardrop's point off the spot you tapped.
-function createDroppedPinEl(label: string): HTMLDivElement {
+function createDroppedPinEl(label: string, kind: 'private' | 'all' | 'manager' = 'private'): HTMLDivElement {
   // OUTER — Mapbox's. It owns this element's position and writes a transform to
   // it on every render. We must NOT set `position` here: Mapbox's stylesheet
   // makes markers position:absolute, an inline style beats a stylesheet rule,
@@ -855,6 +855,10 @@ function createDroppedPinEl(label: string): HTMLDivElement {
   // against this box, putting the teardrop's point on the coordinate.
   const el = document.createElement('div');
   el.style.cssText = 'width:24px;height:30px;cursor:pointer;';
+  // Colour carries the audience: violet = just me, green = everyone, amber =
+  // aimed at one manager. Readable at a glance without tapping anything.
+  const fill = kind === 'all' ? '#22c55e' : kind === 'manager' ? '#f59e0b' : '#a855f7';
+  const chip = kind === 'all' ? '#bbf7d0' : kind === 'manager' ? '#fde68a' : '#f3e8ff';
 
   // INNER — ours. Same size, zero offset, and free to be a positioning context
   // so the label can hang off the side without widening the box Mapbox anchors
@@ -863,10 +867,10 @@ function createDroppedPinEl(label: string): HTMLDivElement {
   inner.style.cssText = 'position:relative;width:100%;height:100%;';
   inner.innerHTML = `
     <svg width="24" height="30" viewBox="0 0 24 30" xmlns="http://www.w3.org/2000/svg" style="position:absolute;top:0;left:0;display:block;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.45));">
-      <path d="M12 1 C6.5 1 2 5.4 2 10.8 C2 18 12 29 12 29 C12 29 22 18 22 10.8 C22 5.4 17.5 1 12 1 Z" fill="#a855f7" stroke="#ffffff" stroke-width="2"/>
+    <path d="M12 1 C6.5 1 2 5.4 2 10.8 C2 18 12 29 12 29 C12 29 22 18 22 10.8 C22 5.4 17.5 1 12 1 Z" fill="${fill}" stroke="#ffffff" stroke-width="2"/>
       <circle cx="12" cy="10.8" r="3.6" fill="#ffffff"/>
     </svg>
-    <span style="position:absolute;left:27px;top:2px;background:rgba(17,24,39,0.88);color:#f3e8ff;border:1px solid #a855f7;border-radius:4px;padding:1px 5px;font-size:11px;font-weight:700;font-family:system-ui,sans-serif;white-space:nowrap;">${esc(label)}</span>
+    <span style="position:absolute;left:27px;top:2px;background:rgba(17,24,39,0.88);color:${chip};border:1px solid ${fill};border-radius:4px;padding:1px 5px;font-size:11px;font-weight:700;font-family:system-ui,sans-serif;white-space:nowrap;">${esc(label)}</span>
   `;
 
   el.appendChild(inner);
@@ -1148,6 +1152,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [pendingPinDrop, setPendingPinDrop] = useState<{ lat: number; lng: number } | null>(null);
   const [pinLabelDraft, setPinLabelDraft] = useState('');
   const [pinSaving, setPinSaving] = useState(false);
+  const [pinVisibility, setPinVisibility] = useState<'private' | 'all' | 'manager'>('private');
+  const [pinTargetManagerId, setPinTargetManagerId] = useState<string>('');
   const [selectedMapPin, setSelectedMapPin] = useState<MapPinRecord | null>(null);
   // Mirrored into a ref because the map click handlers are registered once and
   // would otherwise close over whatever pinMode was on first render, forever.
@@ -3630,7 +3636,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // --- DROPPED PIN: LOAD + POLL ---
   const reloadMapPins = useCallback(async () => {
     try {
-      const pins = await sessionService.getMapPins();
+      // Own id plus anyone floated for — a floater standing in for a manager
+      // should see the pins aimed at that manager.
+      const viewerIds = [currentUser.userId, ...(((currentUser as any).floatingFor as string[]) || [])];
+      const pins = await sessionService.getMapPins(viewerIds);
       if (mountedRef.current) setMapPins(pins);
     } catch (err) {
       console.warn('[MapPins] Failed to load pins:', err);
@@ -3679,7 +3688,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       seen.add(pin.id);
       const existing = mapPinMarkersRef.current.get(pin.id);
       if (existing) { existing.setLngLat([pin.lng, pin.lat]); return; }
-      const el = createDroppedPinEl(pin.label);
+      const targetName = pin.visibility === 'manager' && pin.targetManagerId
+        ? (allManagers.find(m => m.userId === pin.targetManagerId)?.name || 'manager')
+        : null;
+      const el = createDroppedPinEl(
+        targetName ? `${pin.label} → ${targetName.split(' ')[0]}` : pin.label,
+        pin.visibility,
+      );
       el.addEventListener('click', (ev) => { ev.stopPropagation(); setSelectedMapPin(pin); });
       const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
         .setLngLat([pin.lng, pin.lat])
@@ -3702,6 +3717,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     try {
       const created = await sessionService.createMapPin(
         label, pendingPinDrop.lat, pendingPinDrop.lng, currentUser.userId,
+        pinVisibility,
+        pinVisibility === 'manager' ? pinTargetManagerId : null,
       );
       if (created) setMapPins(prev => [...prev, created]);
       else await reloadMapPins();
@@ -5219,6 +5236,50 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 placeholder="e.g. Lunch stop, Truck, Meet here"
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 mb-3"
               />
+              {/* WHO SEES IT. Defaults to private — the safest of the three, and
+                  the one that doesn't put anything on a colleague's map by
+                  accident. */}
+              <div className="mb-3">
+                <label className="block text-[10px] text-gray-500 font-bold uppercase mb-1.5">Who can see it</label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {([
+                    { key: 'private' as const, label: 'Just me', dot: '#a855f7' },
+                    { key: 'all' as const, label: 'Everyone', dot: '#22c55e' },
+                    { key: 'manager' as const, label: 'One manager', dot: '#f59e0b' },
+                  ]).map(opt => (
+                    <button
+                      key={opt.key}
+                      onClick={() => setPinVisibility(opt.key)}
+                      disabled={pinSaving}
+                      className={`flex items-center justify-center gap-1.5 py-2 rounded-md text-[11px] font-bold border transition-colors disabled:opacity-50 ${
+                        pinVisibility === opt.key
+                          ? 'bg-gray-700 border-gray-500 text-white'
+                          : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: opt.dot }} />
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {pinVisibility === 'manager' && (
+                <div className="mb-3">
+                  <select
+                    value={pinTargetManagerId}
+                    onChange={e => setPinTargetManagerId(e.target.value)}
+                    disabled={pinSaving}
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white text-sm focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="">Choose a manager…</option>
+                    {allManagers
+                      .filter(m => m.userId !== currentUser.userId)
+                      .map(m => <option key={m.userId} value={m.userId}>{m.name}</option>)}
+                  </select>
+                </div>
+              )}
+
               <div className="flex gap-2">
                 <button
                   onClick={() => { setPendingPinDrop(null); setPinLabelDraft(''); }}
@@ -5227,7 +5288,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 >Cancel</button>
                 <button
                   onClick={handleSavePin}
-                  disabled={pinSaving}
+                  disabled={pinSaving || (pinVisibility === 'manager' && !pinTargetManagerId)}
                   className="flex-1 px-3 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-800 disabled:text-gray-500 text-white text-xs font-bold rounded-md flex items-center justify-center gap-1.5"
                 >
                   {pinSaving ? <Loader size={12} className="animate-spin" /> : <Check size={12} />}
@@ -5259,11 +5320,21 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                   title="Close"
                 ><X size={14} /></button>
               </div>
+              {selectedMapPin.visibility !== 'private' && (
+                <div className="text-[10px] text-gray-500 mb-2">
+                  {selectedMapPin.visibility === 'all'
+                    ? 'Visible to every manager on this command center.'
+                    : `Sent to ${allManagers.find(m => m.userId === selectedMapPin.targetManagerId)?.name || 'another manager'}.`}
+                  {selectedMapPin.createdBy !== currentUser.userId && ' Dropped by someone else — only they can remove it.'}
+                </div>
+              )}
               <div className="flex gap-2">
-                <button
-                  onClick={() => handleRemovePin(selectedMapPin)}
-                  className="flex-1 px-3 py-2 bg-red-900/40 hover:bg-red-900/60 border border-red-800 text-red-200 text-xs font-bold rounded-md flex items-center justify-center gap-1.5"
-                ><Trash2 size={12} />Remove pin</button>
+                {selectedMapPin.createdBy === currentUser.userId && (
+                  <button
+                    onClick={() => handleRemovePin(selectedMapPin)}
+                    className="flex-1 px-3 py-2 bg-red-900/40 hover:bg-red-900/60 border border-red-800 text-red-200 text-xs font-bold rounded-md flex items-center justify-center gap-1.5"
+                  ><Trash2 size={12} />Remove pin</button>
+                )}
                 <button
                   onClick={() => handleNavigateToPin(selectedMapPin)}
                   className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md flex items-center justify-center gap-1.5"
