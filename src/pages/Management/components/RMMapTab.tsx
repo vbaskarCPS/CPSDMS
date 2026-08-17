@@ -844,15 +844,32 @@ const MAP_PIN_POLL_MS = 60 * 1000;
 // of the wrapper on the coordinate, so if the label were part of the box's flow
 // it would widen the box and shove the teardrop's point off the spot you tapped.
 function createDroppedPinEl(label: string): HTMLDivElement {
+  // OUTER — Mapbox's. It owns this element's position and writes a transform to
+  // it on every render. We must NOT set `position` here: Mapbox's stylesheet
+  // makes markers position:absolute, an inline style beats a stylesheet rule,
+  // and `position:relative` therefore drops the element back into normal flow.
+  // The transform still applies, but on top of a flow position that moves as the
+  // map re-renders — which is exactly the pin drifting about as you zoom.
+  //
+  // Size is set here because anchor:'bottom' resolves its -50%/-100% offset
+  // against this box, putting the teardrop's point on the coordinate.
   const el = document.createElement('div');
-  el.style.cssText = 'position:relative;width:24px;height:30px;cursor:pointer;';
-  el.innerHTML = `
-    <svg width="24" height="30" viewBox="0 0 24 30" xmlns="http://www.w3.org/2000/svg" style="position:absolute;top:0;left:0;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.45));">
+  el.style.cssText = 'width:24px;height:30px;cursor:pointer;';
+
+  // INNER — ours. Same size, zero offset, and free to be a positioning context
+  // so the label can hang off the side without widening the box Mapbox anchors
+  // against. Same outer/inner split the GPS arrow and the pending-sale ring use.
+  const inner = document.createElement('div');
+  inner.style.cssText = 'position:relative;width:100%;height:100%;';
+  inner.innerHTML = `
+    <svg width="24" height="30" viewBox="0 0 24 30" xmlns="http://www.w3.org/2000/svg" style="position:absolute;top:0;left:0;display:block;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.45));">
       <path d="M12 1 C6.5 1 2 5.4 2 10.8 C2 18 12 29 12 29 C12 29 22 18 22 10.8 C22 5.4 17.5 1 12 1 Z" fill="#a855f7" stroke="#ffffff" stroke-width="2"/>
       <circle cx="12" cy="10.8" r="3.6" fill="#ffffff"/>
     </svg>
     <span style="position:absolute;left:27px;top:2px;background:rgba(17,24,39,0.88);color:#f3e8ff;border:1px solid #a855f7;border-radius:4px;padding:1px 5px;font-size:11px;font-weight:700;font-family:system-ui,sans-serif;white-space:nowrap;">${esc(label)}</span>
   `;
+
+  el.appendChild(inner);
   el.title = label;
   return el;
 }
