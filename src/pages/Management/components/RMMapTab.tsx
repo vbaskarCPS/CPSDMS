@@ -3167,12 +3167,37 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     (async () => {
       const known = new Map<string, GeocodedPCLEntry>();
       const needsGeocoding: Array<{ key: string; address: string }> = [];
+      let fromStored = 0;
       pclByRoute.forEach((clients, routeCode) => {
         clients.forEach(c => {
           const address = `${c.houseNum} ${c.streetName}`.trim();
           if (!address) return;
           const addrKey = makeCacheKey(address);
           const uniqueKey = `${routeCode}::${addrKey}`;
+
+          // 1. COORDINATE STORED ON THE CLIENT.
+          // Map Builder resolves every callbook address once and saves the
+          // coordinate next to the client, so there is nothing left to look up.
+          // This is the entire point of the permanent cache: a route with three
+          // hundred past clients used to cost three hundred Mapbox calls on
+          // every map load. Now it costs none. It also sidesteps the key
+          // mismatch — this file folds street abbreviations when building a
+          // cache key and the database does not, so the session cache seldom
+          // hit for PCL addresses even when it held them.
+          // Seeded into the shared in-memory cache too, so any other layer
+          // asking for the same address gets it free.
+          const lat = (c as any).lat;
+          const lng = (c as any).lng;
+          if (typeof lat === 'number' && typeof lng === 'number') {
+            known.set(uniqueKey, { key: uniqueKey, lat, lng });
+            if (!geocodeCache.has(addrKey)) geocodeCache.set(addrKey, { lat, lng });
+            fromStored++;
+            return;
+          }
+
+          // 2. Otherwise the old path: session cache, then geocode. Clients
+          //    cached by the per-session callbook load carry no coordinate, so
+          //    this still has to work.
           const cached = geocodeCache.get(addrKey);
           if (cached) {
             known.set(uniqueKey, { key: uniqueKey, lat: cached.lat, lng: cached.lng });
@@ -3181,6 +3206,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           }
         });
       });
+      if (fromStored > 0) {
+        console.log(`[PCL] ${fromStored} clients plotted from stored coordinates, ${needsGeocoding.length} still need geocoding.`);
+      }
       const total = needsGeocoding.length;
       onGeocodeProgress('phase4_pcl', 'pcl', 0, total, false);
       const snap = Array.from(known.values());
