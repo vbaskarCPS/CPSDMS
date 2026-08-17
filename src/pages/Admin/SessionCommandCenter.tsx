@@ -1673,30 +1673,27 @@ const SessionCommandCenter: React.FC = () => {
                                               <td className="py-3 text-center">
                                                 <button
                                                   onClick={() => {
-                                                    // The old rule refused to open on a LIVE session once a
-                                                    // mapping existed, because editing an applied map was
-                                                    // preview-only. A manager can now hold several maps, and
-                                                    // adding one to a live session is supported — the service
-                                                    // skips routes the manager already owns rather than
-                                                    // rejecting the whole apply. So the gate is gone. Removing
-                                                    // an individual map is still preview-only; on a live
-                                                    // session the ✕ on each chip is hidden.
+                                                    // LIVE: allowed only for managers with NO mapping yet —
+                                                    // editing/removing an applied mapping is preview-only.
+                                                    if (reportIsLive && mapCfg) return;
                                                     if (mappingPickerFor === manager.userId) {
                                                       setMappingPickerFor(null);
                                                     } else {
                                                       openMappingPicker(manager.userId);
                                                     }
                                                   }}
-                                                  disabled={mappingApplyingFor !== null}
+                                                  disabled={(reportIsLive && !!mapCfg) || mappingApplyingFor !== null}
                                                   title={
-                                                    mapCfgs.length === 0
-                                                      ? (reportIsLive
-                                                          ? 'Load a digital map for this manager (writes to the live session)'
+                                                    reportIsLive
+                                                      ? (mapCfg
+                                                          ? `${mapCfg.areaName} routes ${mapCfg.routeStart}–${mapCfg.routeEnd} (applied — edit next session)`
+                                                          : 'Load a digital map for this manager (writes to the live session)')
+                                                      : (mapCfg
+                                                          ? `${mapCfg.areaName} routes ${mapCfg.routeStart}–${mapCfg.routeEnd} — click to edit`
                                                           : 'Set up digital mapping for this manager')
-                                                      : `${mapCfgs.map(c => `${c.areaName} ${c.routeStart}–${c.routeEnd}`).join(' · ')} — click to add another`
                                                   }
                                                   className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
-                                                    mapCfgs.length > 0
+                                                    mapCfg
                                                       ? 'bg-blue-600/20 text-blue-300 border-blue-600/50 hover:bg-blue-600/30'
                                                       : 'bg-gray-700 text-gray-300 border-gray-600 hover:bg-gray-600 hover:text-white'
                                                   }`}
