@@ -1044,6 +1044,251 @@ export async function getMapPCLCounts(): Promise<Map<string, number>> {
   return out;
 }
 
+// ─── RECALIBRATE (re-bucket cached PCLs against every route in a region) ─────
+//
+// Why this exists. The loader trusts the callbook's ROUTE CODE prefix: rows
+// marked AUR are geocoded inside Aurora's bounding box and bucketed onto the
+// nearest AURORA route. But that box carries a 2 km pad and reaches into
+// neighbouring towns, and nearest-route has no distance ceiling — so a Copper
+// Hills address labelled AUR resolves fine, finds no Aurora route anywhere near
+// it, and gets pinned to whichever Aurora route is least far away. On the map it
+// sits miles off any Aurora line, in the middle of Newmarket's routes.
+//
+// The prefix in the sheet is not authoritative. The geography is.
+//
+// Recalibrate throws the prefix away and re-decides purely on position: for
+// every cached client, the nearest route across EVERY area in the region wins.
+// It reads no spreadsheet and calls no geocoder — the coordinates are already
+// stored on the clients — so it costs a minute rather than an hour, and it's
+// worth re-running every time another area gets drawn.
+
+export interface RecalibrateProgress {
+  phase: 'loading_routes' | 'loading_clients' | 'matching' | 'saving' | 'done';
+  current: number;
+  total: number;
+  message?: string;
+}
+export type RecalibrateProgressFn = (p: RecalibrateProgress) => void;
+
+// A ~1.1 km grid over the region's route coordinates. Without it, matching each
+// client against every segment of every route in East is billions of distance
+// calculations and the tab dies. With it we test a handful of nearby routes.
+const RECAL_CELL = 0.01;
+const recalCell = (lat: number, lng: number) =>
+  `${Math.floor(lat / RECAL_CELL)}:${Math.floor(lng / RECAL_CELL)}`;
+
+export async function recalibrateMapPCL(
+  region: string,
+  onProgress?: RecalibrateProgressFn,
+): Promise<{ moved: number; unchanged: number; far: number; routesWritten: number; clients: number }> {
+  const report = (p: Partial<RecalibrateProgress> & { phase: RecalibrateProgress['phase'] }) =>
+    onProgress?.({ current: 0, total: 0, ...p } as RecalibrateProgress);
+
+  // 1. Areas in this region.
+  report({ phase: 'loading_routes', message: 'Loading areas…' });
+  const { data: areaData, error: areaErr } = await supabase
+    .from('area_prefixes')
+    .select('area_name, prefix, region')
+    .eq('region', region);
+  if (areaErr) throw new Error(`Could not read areas: ${areaErr.message}`);
+  const areaRows = (areaData || []) as Array<{ area_name: string; prefix: string; region: string }>;
+  if (areaRows.length === 0) throw new Error(`No areas found in ${region}.`);
+  const areaMeta = new Map(areaRows.map(a => [a.area_name, a]));
+  const areaNames = areaRows.map(a => a.area_name);
+
+  // 2. Every approved route in the region. We keep ONLY the coordinates —
+  //    the rest of each row is discarded as we go, because holding the full
+  //    jsonb for a whole region is what would run the tab out of memory.
+  const routeCodes: string[] = [];
+  const routeAreas: string[] = [];
+  const routeSegs: Array<Array<[number, number][]>> = [];
+
+  const CHUNK = 40;   // area names per query — a 180-name IN list is asking for trouble
+  for (let i = 0; i < areaNames.length; i += CHUNK) {
+    const slice = areaNames.slice(i, i + CHUNK);
+    const { data, error } = await supabase
+      .from('route_maps')
+      .select('area_name, route_code, segments')
+      .in('area_name', slice)
+      .eq('status', 'approved');
+    if (error) { console.warn('[Recalibrate] route_maps read failed:', error.message); continue; }
+    (data || []).forEach((r: any) => {
+      const segs: Array<[number, number][]> = (Array.isArray(r.segments) ? r.segments : [])
+        .map((s: any) => (Array.isArray(s.coordinates) ? s.coordinates : []))
+        .filter((c: any[]) => c.length > 0);
+      if (segs.length === 0) return;
+      routeCodes.push(r.route_code);
+      routeAreas.push(r.area_name);
+      routeSegs.push(segs);
+    });
+    report({
+      phase: 'loading_routes',
+      current: Math.min(i + CHUNK, areaNames.length),
+      total: areaNames.length,
+      message: `${routeCodes.length} routes loaded`,
+    });
+  }
+  if (routeCodes.length === 0) throw new Error(`No approved routes drawn in ${region} yet.`);
+
+  // 3. Grid index: cell → the routes that pass through it.
+  const grid = new Map<string, Set<number>>();
+  for (let ri = 0; ri < routeSegs.length; ri++) {
+    for (const seg of routeSegs[ri]) {
+      for (const c of seg) {
+        const k = recalCell(c[1], c[0]);
+        let s = grid.get(k);
+        if (!s) { s = new Set<number>(); grid.set(k, s); }
+        s.add(ri);
+      }
+    }
+  }
+
+  // 4. Every cached client in the region.
+  report({ phase: 'loading_clients', message: 'Loading cached PCLs…' });
+  interface Held { client: any; oldRoute: string }
+  const held: Held[] = [];
+  let withoutCoords = 0;
+  {
+    const BATCH = 500;
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from('map_pcl_cache')
+        .select('route_code, clients')
+        .eq('region', region)
+        .range(from, from + BATCH - 1);
+      if (error) throw new Error(`Could not read cached PCLs: ${error.message}`);
+      if (!data || data.length === 0) break;
+      data.forEach((row: any) => {
+        (row.clients || []).forEach((c: any) => {
+          if (typeof c.lat === 'number' && typeof c.lng === 'number') {
+            held.push({ client: c, oldRoute: row.route_code });
+          } else {
+            withoutCoords++;
+          }
+        });
+      });
+      report({ phase: 'loading_clients', current: held.length, total: held.length, message: `${held.length} clients` });
+      if (data.length < BATCH) break;
+      from += BATCH;
+    }
+  }
+  if (withoutCoords > 0) {
+    console.warn(`[Recalibrate] ${withoutCoords} clients have no stored coordinate and cannot be moved.`);
+  }
+  if (held.length === 0) {
+    return { moved: 0, unchanged: 0, far: 0, routesWritten: 0, clients: 0 };
+  }
+
+  // 5. Re-decide each client on position alone.
+  const byRoute = new Map<string, any[]>();
+  let moved = 0, unchanged = 0, far = 0;
+
+  for (let ci = 0; ci < held.length; ci++) {
+    const { client, oldRoute } = held[ci];
+    const lat = client.lat as number;
+    const lng = client.lng as number;
+
+    // Candidates from the grid, widening until something turns up.
+    let candidates = new Set<number>();
+    for (const radius of [1, 3, 8, 20]) {
+      const baseLat = Math.floor(lat / RECAL_CELL);
+      const baseLng = Math.floor(lng / RECAL_CELL);
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          const s = grid.get(`${baseLat + dy}:${baseLng + dx}`);
+          if (s) s.forEach(v => candidates.add(v));
+        }
+      }
+      if (candidates.size > 0) break;
+    }
+    // Nothing within ~22 km — fall back to the whole region rather than drop it.
+    if (candidates.size === 0) {
+      candidates = new Set(routeSegs.map((_, i) => i));
+    }
+
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    candidates.forEach(ri => {
+      for (const seg of routeSegs[ri]) {
+        if (seg.length === 1) {
+          const d = distToSegmentMetersLocal(lat, lng, seg[0][1], seg[0][0], seg[0][1], seg[0][0]);
+          if (d < bestDist) { bestDist = d; bestIdx = ri; }
+          continue;
+        }
+        for (let i = 0; i < seg.length - 1; i++) {
+          const d = distToSegmentMetersLocal(lat, lng, seg[i][1], seg[i][0], seg[i + 1][1], seg[i + 1][0]);
+          if (d < bestDist) { bestDist = d; bestIdx = ri; }
+        }
+      }
+    });
+
+    if (bestIdx < 0) { unchanged++; continue; }
+    const newRoute = routeCodes[bestIdx];
+    if (bestDist > 500) far++;
+    if (newRoute === oldRoute) unchanged++; else moved++;
+
+    if (!byRoute.has(newRoute)) byRoute.set(newRoute, []);
+    byRoute.get(newRoute)!.push(client);
+
+    if (ci % 200 === 0) {
+      report({ phase: 'matching', current: ci, total: held.length, message: `${moved} moved so far` });
+    }
+  }
+
+  // 6. Write every route in the region — including the ones that emptied out,
+  //    or a client that moved away would still be listed on its old route.
+  report({ phase: 'saving', current: 0, total: routeCodes.length });
+  const rows = routeCodes.map((code, i) => {
+    const list = byRoute.get(code) || [];
+    const meta = areaMeta.get(routeAreas[i]);
+    return {
+      route_code: code,
+      area_name: routeAreas[i],
+      region,
+      prefix: meta?.prefix || null,
+      clients: list,
+      client_count: list.length,
+      updated_at: new Date().toISOString(),
+    };
+  });
+
+  const WRITE = 200;
+  for (let i = 0; i < rows.length; i += WRITE) {
+    const { error } = await supabase
+      .from('map_pcl_cache')
+      .upsert(rows.slice(i, i + WRITE), { onConflict: 'route_code' });
+    if (error) console.warn('[Recalibrate] Save failed:', error.message);
+    report({ phase: 'saving', current: Math.min(i + WRITE, rows.length), total: rows.length });
+  }
+
+  report({ phase: 'done', current: held.length, total: held.length, message: 'complete' });
+  return { moved, unchanged, far, routesWritten: rows.length, clients: held.length };
+}
+
+// Local copy of the point-to-segment distance. managerMappingService keeps its
+// version private, and duplicating twelve lines beats exporting internals just
+// so this file can borrow them.
+function distToSegmentMetersLocal(
+  lat: number, lng: number,
+  lat1: number, lng1: number,
+  lat2: number, lng2: number,
+): number {
+  const cosLat = Math.cos((lat * Math.PI) / 180);
+  const mPerDegLat = 111320;
+  const mPerDegLng = 111320 * cosLat;
+  const px = (lng - lng1) * mPerDegLng;
+  const py = (lat - lat1) * mPerDegLat;
+  const bx = (lng2 - lng1) * mPerDegLng;
+  const by = (lat2 - lat1) * mPerDegLat;
+  const lenSq = bx * bx + by * by;
+  if (lenSq === 0) return Math.sqrt(px * px + py * py);
+  const t = Math.max(0, Math.min(1, (px * bx + py * by) / lenSq));
+  const cx = t * bx;
+  const cy = t * by;
+  return Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
+}
+
 // ─── READ FOR WORKER ─────────────────────────────────────────────────────────
 
 /**

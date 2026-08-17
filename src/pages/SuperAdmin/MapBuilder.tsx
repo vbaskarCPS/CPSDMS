@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { googleAuthService } from '../../lib/googleAuthService';
-import { loadAndCacheMapPCL, getMapPCLCounts } from '../../lib/pclCacheService';
+import { loadAndCacheMapPCL, getMapPCLCounts, recalibrateMapPCL } from '../../lib/pclCacheService';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -245,6 +245,10 @@ const MapBuilder: React.FC = () => {
   // re-typing a 44-character id is nobody's idea of a good afternoon.
   const [pclCounts, setPclCounts] = useState<Map<string, number>>(new Map());
   const [pclModalOpen, setPclModalOpen] = useState(false);
+  // The same modal serves both jobs. Recalibrate needs no Google and no
+  // spreadsheet — it works entirely from what's already cached — so those two
+  // steps are hidden in that mode.
+  const [pclMode, setPclMode] = useState<'load' | 'recalibrate'>('load');
   const [pclSheetId, setPclSheetId] = useState<string>(() => {
     try { return localStorage.getItem('cps.mapbuilder.pclSheetId') || ''; } catch { return ''; }
   });
@@ -362,6 +366,36 @@ const MapBuilder: React.FC = () => {
     } catch (err) {
       console.error('[Map PCL] Load failed:', err);
       setPclError(err instanceof Error ? err.message : 'PCL load failed.');
+      setPclStatus(null);
+    } finally {
+      setPclRunning(false);
+    }
+  };
+
+  // --- RECALIBRATE ---
+  // Re-decides every cached client on position alone, against every route in the
+  // region. No spreadsheet, no geocoding — minutes, not hours.
+  const handleRunRecalibrate = async () => {
+    setPclRunning(true);
+    setPclError(null);
+    setPclResult(null);
+    setPclStatus('Starting…');
+    try {
+      const res = await recalibrateMapPCL(pclRegion, (p) => {
+        if (p.phase === 'loading_routes') setPclStatus(`Loading routes — ${p.message || ''}`);
+        else if (p.phase === 'loading_clients') setPclStatus(`Loading cached PCLs — ${p.message || ''}`);
+        else if (p.phase === 'matching') setPclStatus(`Matching ${p.current}/${p.total} — ${p.message || ''}`);
+        else if (p.phase === 'saving') setPclStatus(`Saving ${p.current}/${p.total} routes…`);
+      });
+      setPclStatus(null);
+      setPclResult(
+        `${res.moved} clients moved, ${res.unchanged} unchanged, across ${res.routesWritten} routes`
+        + (res.far > 0 ? ` · ${res.far} are still over 500 m from any drawn route` : '')
+      );
+      await loadPclCounts();
+    } catch (err) {
+      console.error('[Recalibrate] Failed:', err);
+      setPclError(err instanceof Error ? err.message : 'Recalibrate failed.');
       setPclStatus(null);
     } finally {
       setPclRunning(false);
@@ -1036,8 +1070,13 @@ const MapBuilder: React.FC = () => {
             </>
           )}
           {view === 'grid' && (
-            <button onClick={() => { setPclError(null); setPclResult(null); setPclModalOpen(true); }} className="bg-amber-700 hover:bg-amber-600 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-2">
+            <button onClick={() => { setPclMode('load'); setPclError(null); setPclResult(null); setPclModalOpen(true); }} className="bg-amber-700 hover:bg-amber-600 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-2">
               <BookOpen size={14} />Load PCL
+            </button>
+          )}
+          {view === 'grid' && (
+            <button onClick={() => { setPclMode('recalibrate'); setPclError(null); setPclResult(null); setPclModalOpen(true); }} className="bg-teal-700 hover:bg-teal-600 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-2" title="Re-match cached PCLs to the nearest route across every area">
+              <RefreshCw size={14} />Recalibrate PCL
             </button>
           )}
           {view === 'grid' && (
@@ -1108,15 +1147,26 @@ const MapBuilder: React.FC = () => {
       {pclModalOpen && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={() => !pclRunning && setPclModalOpen(false)}>
           <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-5" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-2 mb-4">
-              <BookOpen size={18} className="text-amber-400" />
-              <h3 className="text-white font-bold">Load Callbook PCLs</h3>
+          <div className="flex items-center gap-2 mb-4">
+              {pclMode === 'load'
+                ? <BookOpen size={18} className="text-amber-400" />
+                : <RefreshCw size={18} className="text-teal-400" />}
+              <h3 className="text-white font-bold">
+                {pclMode === 'load' ? 'Load Callbook PCLs' : 'Recalibrate PCLs'}
+              </h3>
               {!pclRunning && (
                 <button onClick={() => setPclModalOpen(false)} className="ml-auto text-gray-500 hover:text-white"><X size={16} /></button>
               )}
             </div>
 
+            {pclMode === 'recalibrate' && (
+              <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+                Re-matches every PCL already cached in this region to the nearest route across <span className="text-teal-300">all</span> areas, using the coordinates stored when they were loaded. The callbook's route-code prefix is ignored — position decides. No spreadsheet, no Google, no geocoding. Run it whenever a new area gets drawn.
+              </p>
+            )}
+
             {/* 1. Google */}
+            {pclMode === 'load' && (
             <div className="mb-4">
               <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">1 · Google Account</label>
               {pclConnected ? (
@@ -1132,8 +1182,11 @@ const MapBuilder: React.FC = () => {
               )}
             </div>
 
-            {/* 2. Spreadsheet */}
-            <div className="mb-4">
+)}
+
+{/* 2. Spreadsheet */}
+{pclMode === 'load' && (
+<div className="mb-4">
               <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">2 · Spreadsheet ID</label>
               <input
                 type="text"
@@ -1145,10 +1198,13 @@ const MapBuilder: React.FC = () => {
               />
               <p className="text-[10px] text-gray-600 mt-1">Reads any tab whose name ends in "Callbooks". Remembered for next time.</p>
             </div>
+            )}
 
             {/* 3. Region */}
             <div className="mb-4">
-              <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">3 · Confirm Region</label>
+              <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">
+                {pclMode === 'load' ? '3 · Confirm Region' : 'Confirm Region'}
+              </label>
               <div className="grid grid-cols-3 gap-2">
                 {(['West', 'Central', 'East'] as Region[]).map(r => (
                   <button
@@ -1170,14 +1226,25 @@ const MapBuilder: React.FC = () => {
               </p>
             </div>
 
-            <button
-              onClick={handleRunPclLoad}
-              disabled={pclRunning || !pclConnected || !pclSheetId.trim()}
-              className="w-full bg-amber-600 hover:bg-amber-500 disabled:bg-gray-800 disabled:text-gray-500 text-white py-2.5 rounded font-bold text-sm flex items-center justify-center gap-2"
-            >
-              {pclRunning ? <Loader size={15} className="animate-spin" /> : <BookOpen size={15} />}
-              {pclRunning ? 'Loading…' : `Load PCLs for ${pclRegion}`}
-            </button>
+            {pclMode === 'load' ? (
+              <button
+                onClick={handleRunPclLoad}
+                disabled={pclRunning || !pclConnected || !pclSheetId.trim()}
+                className="w-full bg-amber-600 hover:bg-amber-500 disabled:bg-gray-800 disabled:text-gray-500 text-white py-2.5 rounded font-bold text-sm flex items-center justify-center gap-2"
+              >
+                {pclRunning ? <Loader size={15} className="animate-spin" /> : <BookOpen size={15} />}
+                {pclRunning ? 'Loading…' : `Load PCLs for ${pclRegion}`}
+              </button>
+            ) : (
+              <button
+                onClick={handleRunRecalibrate}
+                disabled={pclRunning}
+                className="w-full bg-teal-600 hover:bg-teal-500 disabled:bg-gray-800 disabled:text-gray-500 text-white py-2.5 rounded font-bold text-sm flex items-center justify-center gap-2"
+              >
+                {pclRunning ? <Loader size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                {pclRunning ? 'Recalibrating…' : `Recalibrate ${pclRegion}`}
+              </button>
+            )}
 
             {pclStatus && (
               <div className="mt-3 text-xs text-amber-200 bg-amber-900/20 border border-amber-800/50 rounded px-3 py-2 flex items-center gap-2">
