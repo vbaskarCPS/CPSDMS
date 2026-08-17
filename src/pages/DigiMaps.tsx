@@ -90,7 +90,10 @@ const DigiMaps: React.FC = () => {
   const [loadingAreas, setLoadingAreas] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [currentArea, setCurrentArea] = useState<AreaCard | null>(null);
+  // Multi-select. The grid stages a set of areas; the map opens all of them at
+  // once, which is the whole point for planning across a boundary.
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [openAreas, setOpenAreas] = useState<AreaCard[]>([]);
   const [drawnRoutes, setDrawnRoutes] = useState<DrawnRoute[]>([]);
   const [pclDots, setPclDots] = useState<PclDot[]>([]);
   const [loadingMap, setLoadingMap] = useState(false);
@@ -197,46 +200,64 @@ const DigiMaps: React.FC = () => {
     return out;
   }, [areas]);
 
-  // --- OPEN AN AREA ---
-  const handleOpenArea = async (area: AreaCard) => {
-    if (area.routesDrawn === 0) return;   // nothing to show
-    setCurrentArea(area);
+  // --- SELECTION ---
+  const toggleSelect = (area: AreaCard) => {
+    if (area.routesDrawn === 0) return;   // nothing to show, nothing to select
+    setSelectedKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(area.areaName)) next.delete(area.areaName);
+      else next.add(area.areaName);
+      return next;
+    });
+  };
+
+  // --- OPEN ONE OR MANY AREAS ---
+  const handleOpenAreas = async (areasToOpen: AreaCard[]) => {
+    const list = areasToOpen.filter(a => a.routesDrawn > 0);
+    if (list.length === 0) return;
+    setOpenAreas(list);
     setView('map');
     setLoadingMap(true);
     setDrawnRoutes([]);
     setPclDots([]);
     fitDoneRef.current = false;
 
-    try {
-      const { data: routeRows, error: rErr } = await supabase
-        .from('route_maps')
-        .select('*')
-        .eq('area_name', area.areaName)
-        .eq('status', 'approved');
-      if (rErr) throw new Error(rErr.message);
+    const names = list.map(a => a.areaName);
 
-      const routes: DrawnRoute[] = (routeRows || []).map((r: any) => ({
-        id: r.id,
-        areaName: r.area_name,
-        routeNumber: r.route_number,
-        routeCode: r.route_code,
-        routeColor: r.route_color,
-        segments: Array.isArray(r.segments) ? r.segments : [],
-      }));
+    try {
+      // Chunked: opening a whole region's worth of areas would otherwise build
+      // an IN list long enough to upset the query.
+      const CHUNK = 40;
+      const routes: DrawnRoute[] = [];
+      for (let i = 0; i < names.length; i += CHUNK) {
+        const { data: routeRows, error: rErr } = await supabase
+          .from('route_maps')
+          .select('*')
+          .in('area_name', names.slice(i, i + CHUNK))
+          .eq('status', 'approved');
+        if (rErr) throw new Error(rErr.message);
+        (routeRows || []).forEach((r: any) => routes.push({
+          id: r.id,
+          areaName: r.area_name,
+          routeNumber: r.route_number,
+          routeCode: r.route_code,
+          routeColor: r.route_color,
+          segments: Array.isArray(r.segments) ? r.segments : [],
+        }));
+      }
       setDrawnRoutes(routes);
 
       // PCL dots. Coordinates were resolved and stored at load time, so there is
       // no geocoding here at all — the dots plot instantly however many there
       // are. Clients cached before coordinates were stored simply have none and
       // are skipped rather than guessed at.
-      const { data: pclRows, error: pErr } = await supabase
-        .from('map_pcl_cache')
-        .select('route_code, clients')
-        .eq('area_name', area.areaName);
-      if (pErr) {
-        console.warn('[DigiMaps] PCL load failed:', pErr.message);
-      } else {
-        const dots: PclDot[] = [];
+      const dots: PclDot[] = [];
+      for (let i = 0; i < names.length; i += CHUNK) {
+        const { data: pclRows, error: pErr } = await supabase
+          .from('map_pcl_cache')
+          .select('route_code, clients')
+          .in('area_name', names.slice(i, i + CHUNK));
+        if (pErr) { console.warn('[DigiMaps] PCL load failed:', pErr.message); break; }
         (pclRows || []).forEach((row: any) => {
           (row.clients || []).forEach((c: any) => {
             if (typeof c.lat === 'number' && typeof c.lng === 'number') {
@@ -244,11 +265,11 @@ const DigiMaps: React.FC = () => {
             }
           });
         });
-        setPclDots(dots);
       }
+      setPclDots(dots);
     } catch (err) {
       console.error('[DigiMaps] Map load failed:', err);
-      setError(err instanceof Error ? err.message : 'Could not load that map.');
+      setError(err instanceof Error ? err.message : 'Could not load those maps.');
     } finally {
       setLoadingMap(false);
     }
@@ -256,9 +277,11 @@ const DigiMaps: React.FC = () => {
 
   const handleBackToGrid = () => {
     setView('grid');
-    setCurrentArea(null);
+    setOpenAreas([]);
     setDrawnRoutes([]);
     setPclDots([]);
+    // Selection is deliberately kept, so you can come back, add one more area
+    // and open the pair without re-picking everything.
   };
 
   // --- MAP LIFECYCLE ---
@@ -305,6 +328,11 @@ const DigiMaps: React.FC = () => {
     addedIdsRef.current = [];
 
     if (drawnRoutes.length === 0) return;
+
+    // With more than one area on screen the bare numbers collide — Newmarket and
+    // Aurora both have a 64 and a 67 — so the overlay shows the full route code
+    // instead. A single area behaves exactly as before.
+    const multiArea = new Set(drawnRoutes.map(r => r.areaName)).size > 1;
 
     // Reference layer so the coloured lines sit UNDER the map's own text. We
     // ignore our own layers when hunting for one, and lift everything back above
@@ -358,7 +386,10 @@ const DigiMaps: React.FC = () => {
       const cLat = routeCoords.reduce((s, c) => s + c[1], 0) / routeCoords.length;
       labelFeatures.push({
         type: 'Feature',
-        properties: { num: String(route.routeNumber), color: route.routeColor || '#6b7280' },
+        properties: {
+          num: multiArea ? route.routeCode : String(route.routeNumber),
+          color: route.routeColor || '#6b7280',
+        },
         geometry: { type: 'Point', coordinates: [cLng, cLat] },
       });
     });
@@ -378,7 +409,7 @@ const DigiMaps: React.FC = () => {
         layout: {
           'text-field': ['get', 'num'],
           'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-          'text-size': 28,
+          'text-size': multiArea ? 18 : 28,
           'text-allow-overlap': true,
           'text-ignore-placement': true,
         },
@@ -485,12 +516,22 @@ const DigiMaps: React.FC = () => {
           </div>
         )}
 
-        {view === 'map' && currentArea && (
+{view === 'map' && openAreas.length === 1 && (
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-white font-bold text-sm truncate">{currentArea.areaName}</span>
-            <span className="font-mono text-purple-300 text-xs">{currentArea.prefix}</span>
-            <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded border ${regionStyle(currentArea.region)}`}>
-              {currentArea.region}
+            <span className="text-white font-bold text-sm truncate">{openAreas[0].areaName}</span>
+            <span className="font-mono text-purple-300 text-xs">{openAreas[0].prefix}</span>
+            <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded border ${regionStyle(openAreas[0].region)}`}>
+              {openAreas[0].region}
+            </span>
+          </div>
+        )}
+
+        {view === 'map' && openAreas.length > 1 && (
+          <div className="flex items-center gap-1.5 min-w-0 overflow-hidden">
+            <span className="text-white font-bold text-sm flex-shrink-0">{openAreas.length} maps</span>
+            <span className="text-gray-500 flex-shrink-0">·</span>
+            <span className="font-mono text-purple-300 text-xs truncate">
+              {openAreas.map(a => a.prefix).join(' · ')}
             </span>
           </div>
         )}
@@ -560,14 +601,22 @@ const DigiMaps: React.FC = () => {
                       return (
                         <div
                           key={area.areaName}
-                          onClick={() => handleOpenArea(area)}
-                          className={`bg-gray-800 border rounded-xl p-4 transition-all ${
+                          onClick={() => toggleSelect(area)}
+                          onDoubleClick={() => handleOpenAreas([area])}
+                          className={`relative bg-gray-800 border rounded-xl p-4 transition-all ${
                             built
-                              ? 'border-gray-700 cursor-pointer hover:border-purple-500 hover:bg-gray-750'
+                              ? selectedKeys.has(area.areaName)
+                                ? 'border-purple-500 ring-2 ring-purple-500/40 cursor-pointer bg-purple-900/10'
+                                : 'border-gray-700 cursor-pointer hover:border-purple-500 hover:bg-gray-750'
                               : 'border-gray-800 opacity-40 cursor-not-allowed'
                           }`}
-                          title={built ? 'Open map' : 'No approved routes drawn yet'}
+                          title={built ? 'Click to select · double-click to open on its own' : 'No approved routes drawn yet'}
                         >
+                          {built && selectedKeys.has(area.areaName) && (
+                            <div className="absolute top-2 right-2 w-4 h-4 rounded-full bg-purple-500 flex items-center justify-center">
+                              <span className="text-white text-[9px] font-bold leading-none">✓</span>
+                            </div>
+                          )}
                           <div className="text-xl font-bold font-mono text-white mb-1">{area.prefix}</div>
                           <div className="text-xs text-gray-300 mb-2 leading-tight">{area.areaName}</div>
                           <div className="text-[10px] text-gray-500">
@@ -590,6 +639,32 @@ const DigiMaps: React.FC = () => {
               );
             })
           )}
+        </div>
+      )}
+
+      {/* SELECTION BAR — only while picking. Fixed to the bottom so it stays put
+          however far down the region list you've scrolled. */}
+      {view === 'grid' && selectedKeys.size > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 bg-gray-800 border-t border-purple-700 px-6 py-3 flex items-center gap-3 z-20 shadow-2xl">
+          <span className="text-sm text-white font-bold">
+            {selectedKeys.size} map{selectedKeys.size === 1 ? '' : 's'} selected
+          </span>
+          <span className="text-xs text-gray-500 truncate hidden sm:inline">
+            {areas.filter(a => selectedKeys.has(a.areaName)).map(a => a.prefix).join(' · ')}
+          </span>
+          <button
+            onClick={() => setSelectedKeys(new Set())}
+            className="ml-auto px-3 py-1.5 text-xs text-gray-400 hover:text-white"
+          >
+            Clear
+          </button>
+          <button
+            onClick={() => handleOpenAreas(areas.filter(a => selectedKeys.has(a.areaName)))}
+            className="px-4 py-1.5 bg-purple-700 hover:bg-purple-600 text-white rounded text-sm font-bold flex items-center gap-2"
+          >
+            <MapIcon size={14} />
+            View {selectedKeys.size === 1 ? 'map' : `${selectedKeys.size} maps`}
+          </button>
         </div>
       )}
 
