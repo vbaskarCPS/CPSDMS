@@ -1316,41 +1316,60 @@ export async function getWorkerPCL(
     throw new Error(`[PCL Cache] Supabase read failed: ${error.message}`);
   }
 
+  // The command centre's own rows, held aside rather than used immediately.
+  const ccByRoute = new Map<string, PCLClientGroup[]>();
   for (const row of data || []) {
     const list = (row.clients || []) as PCLClientGroup[];
-    if (list.length > 0) result.set(row.route_code, list);
+    if (list.length > 0) ccByRoute.set(row.route_code, list);
   }
 
-  // FALLBACK TO THE MAP'S OWN PCLs.
-  // pcl_cache is filled by the per-session callbook load and is keyed to a
-  // command centre. map_pcl_cache is filled in Map Builder, is keyed to the
-  // route code alone, and carries the coordinates too — so any centre that runs
-  // a map inherits its callbooks without re-uploading anything.
+  // THE MAP'S PCLs WIN.
   //
-  // The command centre's own rows win where they exist and are non-empty. An
-  // empty list carries no information, so it does not block the fallback: a
-  // route the session load found nothing for still gets the map's clients.
-  const missing = routeCodes.filter(rc => !result.has(rc));
-  if (missing.length > 0) {
-    // Chunked — a worker on a large split area can easily ask for more codes
-    // than is comfortable in a single IN list.
+  // Two tables hold callbook clients. pcl_cache is filled by the per-session
+  // callbook load and keyed to a command centre; its clients carry names and
+  // history but NO coordinates, because only the Map Builder loader ever stored
+  // them. map_pcl_cache is filled in Map Builder, keyed by route code alone, and
+  // every client carries the coordinate that placed it on its route.
+  //
+  // This used to prefer the command centre's rows, which meant a mapped centre
+  // that also had its own callbook load never saw the geocoded set — and the RM
+  // map re-geocoded every client, one at a time, on every load. The map's rows
+  // are the maintained ones: resolved once, permanently attached, re-bucketed by
+  // recalibrate. They take precedence, and the centre's own rows fill the gaps
+  // for centres with no map loaded.
+  const mapByRoute = new Map<string, PCLClientGroup[]>();
+  {
+    // Chunked — a worker on a large split area can ask for more codes than is
+    // comfortable in a single IN list.
     const CHUNK = 100;
-    for (let i = 0; i < missing.length; i += CHUNK) {
-      const slice = missing.slice(i, i + CHUNK);
+    for (let i = 0; i < routeCodes.length; i += CHUNK) {
+      const slice = routeCodes.slice(i, i + CHUNK);
       const { data: mapRows, error: mapErr } = await supabase
         .from('map_pcl_cache')
         .select('route_code, clients')
         .in('route_code', slice);
       if (mapErr) {
-        // Non-fatal: the command centre's own PCLs are already in hand.
-        console.warn('[PCL Cache] map_pcl_cache fallback failed:', mapErr.message);
+        // Non-fatal — the centre's own rows are already in hand.
+        console.warn('[PCL Cache] map_pcl_cache read failed:', mapErr.message);
         break;
       }
       for (const row of mapRows || []) {
         const list = (row.clients || []) as PCLClientGroup[];
-        if (list.length > 0) result.set(row.route_code, list);
+        if (list.length > 0) mapByRoute.set(row.route_code, list);
       }
     }
+  }
+
+  let fromMap = 0;
+  let fromCC = 0;
+  for (const rc of routeCodes) {
+    const fromMapList = mapByRoute.get(rc);
+    if (fromMapList) { result.set(rc, fromMapList); fromMap++; continue; }
+    const fromCcList = ccByRoute.get(rc);
+    if (fromCcList) { result.set(rc, fromCcList); fromCC++; }
+  }
+  if (fromMap > 0 || fromCC > 0) {
+    console.log(`[PCL Cache] ${fromMap} routes from the map cache (with coordinates), ${fromCC} from this command center (no coordinates — these will geocode).`);
   }
 
   return result;
