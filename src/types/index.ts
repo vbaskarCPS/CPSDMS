@@ -155,7 +155,14 @@ export interface ManagementUser {
   // --- PER-MANAGER DIGITAL MAPPING (Sealing, non-mapping CCs) ---
   // Present = this manager is digitally mapped for the session. See
   // ManagerMappingConfig. Stored in users.metadata.digitalMapping.
+  //
+  // digitalMapping is the FIRST map and stays the yes/no flag every consumer
+  // already reads — RM Logbook and the worker Dashboard only ever ask "is this
+  // manager mapped?", so they need no changes. digitalMappings is the full list.
+  // Readers that need every route use the array, falling back to wrapping the
+  // singular when only a legacy config exists. Nothing to migrate.
   digitalMapping?: ManagerMappingConfig;
+  digitalMappings?: ManagerMappingConfig[];
 }
 
 // --- BONUS STRUCTURE ---

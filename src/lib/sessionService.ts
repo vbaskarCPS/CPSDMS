@@ -505,6 +505,10 @@ class SessionService {
       floatingFor: Array.isArray(m.metadata?.floatingFor) ? m.metadata.floatingFor : [],
       // Round-trip the per-manager digital mapping config (Sealing, non-mapping CCs).
       digitalMapping: m.metadata?.digitalMapping || undefined,
+      // Legacy single configs are wrapped so downstream code only deals in lists.
+      digitalMappings: Array.isArray(m.metadata?.digitalMappings)
+        ? m.metadata.digitalMappings
+        : (m.metadata?.digitalMapping ? [m.metadata.digitalMapping] : []),
     }));
 
     const workers: Worker[] = (workersRes.data || []).map((w) => ({
@@ -622,13 +626,15 @@ class SessionService {
       return [];
     }
 
-    return (data || [])
-      .filter((u: any) => u.metadata?.digitalMapping?.prefix)
-      .map((u: any) => ({
-        userId: u.user_id,
-        name: u.name,
-        config: u.metadata.digitalMapping,
-      }));
+    // One entry PER MAP, not per manager — a manager holding two maps appears twice.
+    return (data || []).flatMap((u: any) => {
+      const list = Array.isArray(u.metadata?.digitalMappings)
+        ? u.metadata.digitalMappings
+        : (u.metadata?.digitalMapping ? [u.metadata.digitalMapping] : []);
+      return list
+        .filter((c: any) => c?.prefix)
+        .map((c: any) => ({ userId: u.user_id, name: u.name, config: c }));
+    });
   }
 
   public async getManagerById(managerId: string): Promise<ManagementUser | null> {
@@ -655,6 +661,9 @@ class SessionService {
       // dashboard reads this to decide whether its manager grants the mapped
       // experience even though the CC-level flag is off.
       digitalMapping: data.metadata?.digitalMapping || undefined,
+      digitalMappings: Array.isArray(data.metadata?.digitalMappings)
+        ? data.metadata.digitalMappings
+        : (data.metadata?.digitalMapping ? [data.metadata.digitalMapping] : []),
     };
   }
 
@@ -793,11 +802,28 @@ class SessionService {
       .eq('session_date', date)
       .eq('command_center_id', ccId)
       .in('route_code', config.routeCodes);
-    if (existing && existing.length > 0) {
-      throw new Error(`Route(s) already in this session: ${existing.map(r => r.route_code).join(', ')}`);
+    // Only a clash with ANOTHER manager is a problem. This manager's own routes
+    // are already here because they're adding a second map to what they hold —
+    // the previous check rejected that outright.
+    let clashing = existing || [];
+    if (clashing.length > 0) {
+      const { data: owned } = await supabase
+        .from('routes')
+        .select('route_code')
+        .eq('session_date', date)
+        .eq('command_center_id', ccId)
+        .eq('manager_id', managerId)
+        .in('route_code', clashing.map(r => r.route_code));
+      const ownedSet = new Set((owned || []).map(r => r.route_code));
+      clashing = clashing.filter(r => !ownedSet.has(r.route_code));
     }
+    if (clashing.length > 0) {
+      throw new Error(`Route(s) already assigned to another manager: ${clashing.map(r => r.route_code).join(', ')}`);
+    }
+    // Skip inserting rows this manager already owns.
+    const alreadyOwned = new Set((existing || []).map(r => r.route_code));
 
-    const routeRows = mappedRoutes.map(r => ({
+    const routeRows = mappedRoutes.filter(r => !alreadyOwned.has(r.routeCode)).map(r => ({
       route_code: r.routeCode,
       manager_id: managerId,
       assigned_worker_ids: [],
@@ -817,7 +843,18 @@ class SessionService {
       .single();
     if (fetchError || !user) throw new Error('Manager not found');
 
-    const newMeta = { ...(user.metadata || {}), digitalMapping: config };
+    // Append rather than replace. digitalMapping stays as the first map so every
+    // existing yes/no consumer is untouched; digitalMappings carries the set.
+    // Re-applying the same area and range replaces that entry rather than
+    // duplicating it.
+    const meta = user.metadata || {};
+    const prevList: ManagerMappingConfig[] = Array.isArray(meta.digitalMappings)
+      ? meta.digitalMappings
+      : (meta.digitalMapping ? [meta.digitalMapping] : []);
+    const sameKey = (a: ManagerMappingConfig, b: ManagerMappingConfig) =>
+      a.areaName === b.areaName && a.routeStart === b.routeStart && a.routeEnd === b.routeEnd;
+    const nextList = [...prevList.filter(c => !sameKey(c, config)), config];
+    const newMeta = { ...meta, digitalMapping: nextList[0], digitalMappings: nextList };
     const { error: metaError } = await supabase
       .from('users')
       .update({ metadata: newMeta })
@@ -1602,7 +1639,11 @@ class SessionService {
             // Persist preview-staged floater config on Initialize Session.
             floatingFor: m.floatingFor || [],
             // Persist preview-staged per-manager digital mapping (if any).
-            digitalMapping: m.digitalMapping || undefined,
+            // Both shapes written: the singular keeps the yes/no consumers happy.
+            digitalMapping: (m.digitalMappings && m.digitalMappings[0]) || m.digitalMapping || undefined,
+            digitalMappings: m.digitalMappings && m.digitalMappings.length > 0
+              ? m.digitalMappings
+              : (m.digitalMapping ? [m.digitalMapping] : []),
           },
           command_center_id: ccId,
         })),
@@ -1766,9 +1807,12 @@ class SessionService {
       // bucket into the numbered routes by nearest map segment. Non-blocking,
       // mirroring the CC-level block above. Skipped on CC-level mapping CCs —
       // the block above already covers those routes with numbered PCL codes.
-      const mappedConfigs = data.managers.flatMap(m =>
-        (m.digitalMapping && m.digitalMapping.routeCodes.length > 0) ? [m.digitalMapping] : []
-      );
+      const mappedConfigs = data.managers.flatMap(m => {
+        const list = (m.digitalMappings && m.digitalMappings.length > 0)
+          ? m.digitalMappings
+          : (m.digitalMapping ? [m.digitalMapping] : []);
+        return list.filter(c => c && c.routeCodes.length > 0);
+      });
       if (!cc?.digitalMappingEnabled && isSealing && cc?.masterbookingsSheetId && mappedConfigs.length > 0) {
         const mbSheetId = cc.masterbookingsSheetId;
         Promise.all([
@@ -2265,6 +2309,9 @@ class SessionService {
         // Per-manager digital mapping (Sealing, non-mapping CCs): stamped onto
         // current_user so the RM logbook check becomes "CC has mapping OR I do".
         digitalMapping: data.metadata?.digitalMapping || undefined,
+        digitalMappings: Array.isArray(data.metadata?.digitalMappings)
+          ? data.metadata.digitalMappings
+          : (data.metadata?.digitalMapping ? [data.metadata.digitalMapping] : []),
       };
     }
   

@@ -175,7 +175,8 @@ const SessionCommandCenter: React.FC = () => {
   // exactly like floaterDraft. Folded into previewData.managers at Initialize.
   // For a LIVE session it's re-seeded from the loaded managers so the report
   // can show a read-only badge (no live editing in round one).
-  const [mappingDraft, setMappingDraft] = useState<Record<string, ManagerMappingConfig>>({});
+  // One manager can now hold several maps — e.g. Aurora 52–60 AND Newmarket 64–70.
+  const [mappingDraft, setMappingDraft] = useState<Record<string, ManagerMappingConfig[]>>({});
   // Which manager's map picker is expanded (userId), or null.
   const [mappingPickerFor, setMappingPickerFor] = useState<string | null>(null);
   // Approved master-map areas — lazy-loaded the first time a picker opens.
@@ -318,9 +319,12 @@ const SessionCommandCenter: React.FC = () => {
 
         // Seed the per-manager mapping draft from the live managers so the
         // report's Digital Map column shows a read-only badge for the session.
-        const seededMapping: Record<string, ManagerMappingConfig> = {};
+        const seededMapping: Record<string, ManagerMappingConfig[]> = {};
         session.managers.forEach(m => {
-          if (m.digitalMapping) seededMapping[m.userId] = m.digitalMapping;
+          const list = (m.digitalMappings && m.digitalMappings.length > 0)
+            ? m.digitalMappings
+            : (m.digitalMapping ? [m.digitalMapping] : []);
+          if (list.length > 0) seededMapping[m.userId] = list;
         });
         setMappingDraft(seededMapping);
 
@@ -563,7 +567,8 @@ const SessionCommandCenter: React.FC = () => {
           // PER-MANAGER DIGITAL MAPPING: fold the staged config in so
           // uploadDailySession persists it into users.metadata.digitalMapping
           // and kicks off the prefix PCL load.
-          digitalMapping: mappingDraft[m.userId] || undefined,
+          digitalMapping: (mappingDraft[m.userId] || [])[0] || undefined,
+          digitalMappings: mappingDraft[m.userId] || undefined,
         }));
         
         await sessionService.uploadDailySession(previewData, emailEnabled, meta);
@@ -829,8 +834,8 @@ const SessionCommandCenter: React.FC = () => {
   // pcl_cache would otherwise make results order-dependent).
   const mappingClaimedCodes = useMemo(() => {
     const m = new Map<string, string>(); // routeCode -> managerId
-    for (const [mid, cfg] of Object.entries(mappingDraft)) {
-      (cfg?.routeCodes || []).forEach(rc => m.set(rc, mid));
+    for (const [mid, cfgs] of Object.entries(mappingDraft)) {
+      (cfgs || []).forEach(cfg => (cfg?.routeCodes || []).forEach(rc => m.set(rc, mid)));
     }
     return m;
   }, [mappingDraft]);
@@ -853,15 +858,17 @@ const SessionCommandCenter: React.FC = () => {
   }, [mappingPickerFor, areaSummaries]);
 
   // Open the picker for a manager, prefilled from any staged config.
+  // Opens blank now rather than prefilled: the picker ADDS a map to whatever the
+  // manager already holds, so prefilling with an existing range would invite you
+  // to re-add the same one.
   const openMappingPicker = useCallback((managerId: string) => {
-    const existing = mappingDraft[managerId];
-    setPickerArea(existing?.areaName || '');
-    setPickerFrom(existing ? String(existing.routeStart) : '');
-    setPickerTo(existing ? String(existing.routeEnd) : '');
+    setPickerArea('');
+    setPickerFrom('');
+    setPickerTo('');
     setPickerError(null);
     setMappingRefreshNote(null);
     setMappingPickerFor(managerId);
-  }, [mappingDraft]);
+  }, []);
 
   // Re-read the feed tab and merge net-new bookings into the preview.
   // Sheets-imported previews only (a file preview has no live source to
@@ -977,11 +984,23 @@ const SessionCommandCenter: React.FC = () => {
         if (!prev) return prev;
         // Remove this manager's previously injected routes (re-pick case),
         // then add the fresh set.
-        const oldCodes = new Set(mappingDraft[managerId]?.routeCodes || []);
-        const kept = prev.routes.filter(r => !oldCodes.has(r.routeCode));
+        // Drop only this exact area+range if it's being re-applied; every other
+        // map this manager holds stays where it is.
+        const replacedCodes = new Set(
+          (mappingDraft[managerId] || [])
+            .filter(c => c.areaName === config.areaName && c.routeStart === config.routeStart && c.routeEnd === config.routeEnd)
+            .flatMap(c => c.routeCodes)
+        );
+        const kept = prev.routes.filter(r => !replacedCodes.has(r.routeCode));
         return { ...prev, routes: [...kept, ...injected] };
       });
-      setMappingDraft(prev => ({ ...prev, [managerId]: config }));
+      setMappingDraft(prev => {
+        const existing = prev[managerId] || [];
+        const withoutSame = existing.filter(
+          c => !(c.areaName === config.areaName && c.routeStart === config.routeStart && c.routeEnd === config.routeEnd)
+        );
+        return { ...prev, [managerId]: [...withoutSame, config] };
+      });
       setMappingPickerFor(null);
 
       const added = await refreshPreviewBookings();
@@ -1002,8 +1021,25 @@ const SessionCommandCenter: React.FC = () => {
   }, [areaSummaries, pickerArea, pickerFrom, pickerTo, mappingClaimedCodes, mappingDraft, currentCC, refreshPreviewBookings, reportIsLive, currentSession, isFromSheets, importMeta, isGoogleConnected, selectedSeasonType, loadSession]);
 
   // Remove a manager's staged mapping and its injected routes.
+  // Remove ONE map from a manager, leaving the rest. Preview path only — on a
+  // live session the routes are already in the database.
+  const removeOneMapping = useCallback((managerId: string, index: number) => {
+    const list = mappingDraft[managerId] || [];
+    const target = list[index];
+    if (!target) return;
+    const codes = new Set(target.routeCodes || []);
+    setPreviewData(prev => prev ? { ...prev, routes: prev.routes.filter(r => !codes.has(r.routeCode)) } : prev);
+    setMappingDraft(prev => {
+      const next = { ...prev };
+      const remaining = (next[managerId] || []).filter((_, i) => i !== index);
+      if (remaining.length === 0) delete next[managerId]; else next[managerId] = remaining;
+      return next;
+    });
+    setMappingRefreshNote(null);
+  }, [mappingDraft]);
+
   const clearManagerMapping = useCallback((managerId: string) => {
-    const oldCodes = new Set(mappingDraft[managerId]?.routeCodes || []);
+    const oldCodes = new Set((mappingDraft[managerId] || []).flatMap(c => c.routeCodes || []));
     if (oldCodes.size > 0) {
       setPreviewData(prev => {
         if (!prev) return prev;
@@ -1573,7 +1609,7 @@ const SessionCommandCenter: React.FC = () => {
                                         const myFloat = floaterDraft[manager.userId] || [];
                                         const isFloating = myFloat.length > 0;
                                         // Per-manager digital mapping staged config (undefined = none).
-                                        const mapCfg = mappingDraft[manager.userId];
+                                        const mapCfgs = mappingDraft[manager.userId] || [];
                                         const pickerOpen = floaterPickerFor === manager.userId;
                                         const savingThis = floaterSavingId === manager.userId;
                                         // Candidates this manager may float for: every OTHER manager who
@@ -1665,7 +1701,11 @@ const SessionCommandCenter: React.FC = () => {
                                                   {mappingApplyingFor === manager.userId
                                                     ? <Loader size={12} className="animate-spin" />
                                                     : <MapIcon size={12} />}
-                                                  {mapCfg ? `${mapCfg.prefix} ${mapCfg.routeStart}–${mapCfg.routeEnd}` : 'Map'}
+                                                  {mapCfgs.length === 0
+                                                    ? 'Map'
+                                                    : mapCfgs.length <= 2
+                                                      ? mapCfgs.map(c => `${c.prefix} ${c.routeStart}–${c.routeEnd}`).join(' · ')
+                                                      : `${mapCfgs.length} maps`}
                                                 </button>
                                               </td>
                                             )}
@@ -1754,13 +1794,13 @@ const SessionCommandCenter: React.FC = () => {
                                                     Digital mapping for {manager.name}
                                                   </div>
                                                   <div className="flex items-center gap-2">
-                                                    {mapCfg && (
+                                                  {mapCfgs.length > 0 && (
                                                       <button
                                                         onClick={() => clearManagerMapping(manager.userId)}
                                                         disabled={mappingApplyingFor !== null}
                                                         className="text-[11px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 disabled:opacity-50"
                                                       >
-                                                        Remove mapping
+                                                        Remove all
                                                       </button>
                                                     )}
                                                     <button
@@ -1772,6 +1812,27 @@ const SessionCommandCenter: React.FC = () => {
                                                     </button>
                                                   </div>
                                                 </div>
+
+                                                {/* Maps this manager already holds. Each can be
+                                                    dropped individually; the picker below adds more. */}
+                                                {mapCfgs.length > 0 && (
+                                                  <div className="flex flex-wrap gap-1.5 mb-3">
+                                                    {mapCfgs.map((c, i) => (
+                                                      <span key={`${c.areaName}-${c.routeStart}-${c.routeEnd}`} className="flex items-center gap-1.5 text-[10px] bg-gray-800 border border-blue-800/60 text-blue-200 rounded px-2 py-1">
+                                                        <span className="font-mono font-bold">{c.prefix} {c.routeStart}–{c.routeEnd}</span>
+                                                        <span className="text-gray-500">{c.routeCodes?.length || 0} routes</span>
+                                                        {!reportIsLive && (
+                                                          <button
+                                                            onClick={() => removeOneMapping(manager.userId, i)}
+                                                            disabled={mappingApplyingFor !== null}
+                                                            className="text-gray-500 hover:text-red-400 disabled:opacity-50"
+                                                            title="Remove this map"
+                                                          ><X size={10} /></button>
+                                                        )}
+                                                      </span>
+                                                    ))}
+                                                  </div>
+                                                )}
 
                                                 {areaLoadError ? (
                                                   <div className="text-[11px] text-red-400 py-2">{areaLoadError}</div>
@@ -1834,7 +1895,7 @@ const SessionCommandCenter: React.FC = () => {
                                                       {mappingApplyingFor === manager.userId
                                                         ? <Loader size={12} className="animate-spin" />
                                                         : <Check size={12} />}
-                                                      Apply
+                                                      {mapCfgs.length > 0 ? 'Add map' : 'Apply'}
                                                     </button>
                                                   </div>
                                                 )}
