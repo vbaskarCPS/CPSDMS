@@ -577,6 +577,10 @@ const NewJob: React.FC = () => {
             if (ps.houseNumber) setHouseNumber(ps.houseNumber);
             if (ps.streetName) { setStreetName(ps.streetName); setIsCustomStreetMode(true); }
             if (ps.propertyType) setPropertyType(ps.propertyType);
+            if (ps.firstName) setFirstName(ps.firstName);
+            if (ps.lastName) setLastName(ps.lastName);
+            if (ps.phone) setPhone(ps.phone);
+            if (ps.email) setEmail(ps.email);
             setAmount('0');
           }
           return;
@@ -592,6 +596,11 @@ const NewJob: React.FC = () => {
         if (ps.price) setAmount(ps.price);
         if (ps.propertyType) setPropertyType(ps.propertyType);
         if (ps.services) setServices(ps.services);
+        // --- CUSTOMER DETAILS ---
+        if (ps.firstName) setFirstName(ps.firstName);
+        if (ps.lastName) setLastName(ps.lastName);
+        if (ps.phone) setPhone(ps.phone);
+        if (ps.email) setEmail(ps.email);
         setResumedDrivewayParentId(ps.id);
         setResumedParentSessionId(ps.sessionId);
 
@@ -675,6 +684,10 @@ const NewJob: React.FC = () => {
   const gatherPendingPayload = (): {
     forCreate: PendingSaleInput;
     forUpdate: PendingSaleUpdate;
+    forChildUpdate: PendingSaleUpdate;
+    asphaltAmt: number;
+    upsoldAmt: number;
+    hasAsphalt: boolean;
   } | null => {
     if (!worker) return null;
 
@@ -685,7 +698,17 @@ const NewJob: React.FC = () => {
       price: amount.trim() || undefined,
       propertyType: propertyType || undefined,
       services: seasonType === 'lawn_rejuv' ? services : undefined,
+      // notes stays undefined — this form has no notes field, and undefined means
+      // "leave alone", which preserves notes written elsewhere (QuickPendingModal,
+      // the RM's PendingJobModal). Do not change it to '' or they'd be wiped.
       notes: undefined as string | undefined,
+      // --- CUSTOMER DETAILS ---
+      // Sent as '' rather than undefined when blank, so clearing a name actually
+      // clears it on a resume instead of silently keeping the old one.
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      phone: phone.trim(),
+      email: email.trim(),
     };
 
     const asphaltAmt = asphaltEnabled ? (parseFloat(asphaltAmount) || 0) : 0;
@@ -702,15 +725,26 @@ const NewJob: React.FC = () => {
       } : {}),
     };
 
-    const updatePayload: PendingSaleUpdate = {
+    // DRIVEWAY-ONLY update. The asphalt figures deliberately no longer ride
+    // along: on a resume they belong on the asphalt CHILD row, and writing them
+    // to the parent instead is precisely what left the queue empty.
+    const updatePayload: PendingSaleUpdate = { ...base };
+
+    // The same fields plus asphalt, for when the row being updated IS the child.
+    const childUpdatePayload: PendingSaleUpdate = {
       ...base,
-      ...(asphaltEnabled ? {
-        asphaltAmount: asphaltAmt,
-        upsoldAsphaltAmount: upsoldAmt > 0 ? upsoldAmt : undefined,
-      } : {}),
+      asphaltAmount: asphaltAmt,
+      upsoldAsphaltAmount: upsoldAmt > 0 ? upsoldAmt : undefined,
     };
 
-    return { forCreate: createPayload, forUpdate: updatePayload };
+    return {
+      forCreate: createPayload,
+      forUpdate: updatePayload,
+      forChildUpdate: childUpdatePayload,
+      asphaltAmt,
+      upsoldAmt,
+      hasAsphalt: includeAsphaltFields,
+    };
   };
 
   // --- SAVE PENDING (team seasons only) ---
@@ -750,13 +784,67 @@ const NewJob: React.FC = () => {
 
     try {
       if (pendingSaleId) {
-        // RESUMING — update the existing row in place.
-        // If we're resuming an asphalt child directly (no driveway parent in scope),
-        // update IT. Otherwise update the parent (which is pendingSaleId).
-        const idToUpdate = (resumedAsphaltChildId && !resumedDrivewayParentId)
-          ? resumedAsphaltChildId
-          : pendingSaleId;
-        await sessionService.updatePendingSale(idToUpdate, payload.forUpdate);
+        // RESUMING.
+        //
+        // Which row did we actually open? If pendingSaleId IS the asphalt child,
+        // everything goes on it. Otherwise we opened the driveway PARENT, and the
+        // asphalt lives on a separate child row that must be created, updated or
+        // removed to match the toggle.
+        //
+        // The old line did neither. It wrote asphalt onto whichever row it picked
+        // and never minted a child, so a sale that gained asphalt on a re-edit
+        // never reached the queue. Worse, when a parent already had a child it
+        // chose the CHILD as the row to update — sending the driveway address,
+        // price and route edits to the asphalt row and leaving the parent alone.
+        const openedRowIsAsphaltChild =
+          resumedAsphaltChildId !== null && resumedAsphaltChildId === pendingSaleId;
+
+        if (openedRowIsAsphaltChild) {
+          await sessionService.updatePendingSale(pendingSaleId, payload.forChildUpdate);
+        } else {
+          // Driveway parent — asphalt figures excluded.
+          await sessionService.updatePendingSale(pendingSaleId, payload.forUpdate);
+
+          if (payload.hasAsphalt) {
+            if (resumedAsphaltChildId) {
+              // Child exists — keep its address in step with the parent's.
+              await sessionService.updatePendingSale(resumedAsphaltChildId, {
+                routeCode: payload.forUpdate.routeCode,
+                houseNumber: payload.forUpdate.houseNumber,
+                streetName: payload.forUpdate.streetName,
+                propertyType: payload.forUpdate.propertyType,
+                price: String(payload.asphaltAmt),
+                asphaltAmount: payload.asphaltAmt,
+                upsoldAsphaltAmount: payload.upsoldAmt > 0 ? payload.upsoldAmt : undefined,
+              });
+            } else {
+              // No child yet — mint one. THIS is the step that was missing.
+              // createPendingSale handles the ramp-crew auto-assignment.
+              const sess = await sessionService.getActiveLogsheetSession(worker.contractorId);
+              if (!sess?.id) {
+                setError('Could not find your active session. Please reload and try again.');
+                setSavingPending(false);
+                return;
+              }
+              await sessionService.createPendingSale({
+                sessionId: sess.id,
+                workerId: worker.contractorId,
+                saleType: 'asphalt',
+                parentId: pendingSaleId,
+                routeCode: payload.forUpdate.routeCode,
+                houseNumber: payload.forUpdate.houseNumber,
+                streetName: payload.forUpdate.streetName,
+                propertyType: payload.forUpdate.propertyType,
+                asphaltAmount: payload.asphaltAmt,
+                upsoldAsphaltAmount: payload.upsoldAmt > 0 ? payload.upsoldAmt : undefined,
+              });
+            }
+          } else if (resumedAsphaltChildId) {
+            // Asphalt switched off — remove the child rather than leave it in the
+            // queue with nothing behind it.
+            await sessionService.deletePendingSale(resumedAsphaltChildId);
+          }
+        }
       } else {
         // NEW — need the active session id to scope the new row.
         const activeSession = await sessionService.getActiveLogsheetSession(worker.contractorId);

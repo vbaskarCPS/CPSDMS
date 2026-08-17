@@ -574,6 +574,15 @@ export interface PendingSale {
   propertyType?: string;       // 'FP' | 'FO' | 'BO' | 'SS' | 'SSP'
   services?: ServiceFlags;     // Rejuv-only (A/D/F/S/L). Sealing leaves this undefined.
   notes?: string;
+  // --- CUSTOMER DETAILS ---
+  // A parked sale is often half-collected: the worker has the customer's name and
+  // number but not their money. These previously had nowhere to live, so anything
+  // typed into NewJob was silently discarded on save. Payment fields stay out —
+  // a pending sale is pre-payment by definition.
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  email?: string;
   createdAt?: string;
   updatedAt?: string;
 
@@ -616,6 +625,11 @@ export interface PendingSaleInput {
   propertyType?: string;
   services?: ServiceFlags;
   notes?: string;
+  // --- CUSTOMER DETAILS ---
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  email?: string;
 
   // --- ASPHALT FIELDS ---
   saleType?: 'asphalt';
@@ -644,6 +658,11 @@ export interface PendingSaleUpdate {
   propertyType?: string;
   services?: ServiceFlags;
   notes?: string;
+  // --- CUSTOMER DETAILS ---
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  email?: string;
 
   // --- ASPHALT FIELDS ---
   assignedRcSessionId?: string | null;

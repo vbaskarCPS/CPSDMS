@@ -4285,6 +4285,11 @@ class SessionService {
       propertyType: row.property_type || undefined,
       services: row.services || undefined,
       notes: row.notes || undefined,
+      // --- CUSTOMER DETAILS ---
+      firstName: row.first_name || undefined,
+      lastName: row.last_name || undefined,
+      phone: row.phone || undefined,
+      email: row.email || undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       // --- ASPHALT FIELDS ---
@@ -4446,7 +4451,12 @@ class SessionService {
 
     const hasAsphaltAmount = (input.asphaltAmount != null && input.asphaltAmount > 0)
       || (input.upsoldAsphaltAmount != null && input.upsoldAsphaltAmount > 0);
-    const isAsphaltOnly = input.saleType === 'asphalt' && !input.parentId;
+    // Any row explicitly typed as asphalt takes this path, WITH or WITHOUT a
+    // parent. This previously demanded !parentId, so a child created for an
+    // existing parent fell through to the default path at the bottom — and that
+    // path writes no sale_type, no parent_id and no asphalt_amount. The result
+    // was a silent duplicate driveway row and an empty asphalt queue.
+    const isAsphaltOnly = input.saleType === 'asphalt';
     const isParentWithAsphaltChild = !input.saleType && hasAsphaltAmount;
 
     // Resolve whether the calling session is an RC (drives auto-assignment).
@@ -4492,8 +4502,12 @@ class SessionService {
         property_type: input.propertyType || null,
         services: input.services || null,
         notes: input.notes || null,
+        first_name: input.firstName || null,
+        last_name: input.lastName || null,
+        phone: input.phone || null,
+        email: input.email || null,
         sale_type: 'asphalt',
-        parent_id: null,
+        parent_id: input.parentId || null,
         assigned_rc_session_id: input.assignedRcSessionId || (callerIsRC ? input.sessionId : null),
         asphalt_amount: input.asphaltAmount ?? 0,
         upsold_asphalt_amount: input.upsoldAsphaltAmount ?? null,
@@ -4531,6 +4545,10 @@ class SessionService {
         property_type: input.propertyType || null,
         services: input.services || null,
         notes: input.notes || null,
+        first_name: input.firstName || null,
+        last_name: input.lastName || null,
+        phone: input.phone || null,
+        email: input.email || null,
         sale_type: null,
         parent_id: null,
         assigned_rc_session_id: null,
@@ -4554,6 +4572,12 @@ class SessionService {
         property_type: input.propertyType || null,
         services: null,  // service flags don't apply to the asphalt portion
         notes: null,
+        // Mirrored from the parent so the RM's asphalt queue shows a customer
+        // rather than a bare address.
+        first_name: input.firstName || null,
+        last_name: input.lastName || null,
+        phone: input.phone || null,
+        email: input.email || null,
         sale_type: 'asphalt',
         parent_id: parentId,
         // RC sellers auto-assign to themselves; regular carts leave it null for RM assignment.
@@ -4609,6 +4633,10 @@ class SessionService {
       property_type: input.propertyType || null,
       services: input.services || null,
       notes: input.notes || null,
+      first_name: input.firstName || null,
+      last_name: input.lastName || null,
+      phone: input.phone || null,
+      email: input.email || null,
     };
 
     const { data, error } = await supabase
@@ -4646,6 +4674,11 @@ class SessionService {
     if (updates.propertyType !== undefined) dbPayload.property_type = updates.propertyType || null;
     if (updates.services !== undefined) dbPayload.services = updates.services || null;
     if (updates.notes !== undefined) dbPayload.notes = updates.notes || null;
+    // --- CUSTOMER DETAILS --- undefined = leave alone, '' = clear.
+    if (updates.firstName !== undefined) dbPayload.first_name = updates.firstName || null;
+    if (updates.lastName !== undefined) dbPayload.last_name = updates.lastName || null;
+    if (updates.phone !== undefined) dbPayload.phone = updates.phone || null;
+    if (updates.email !== undefined) dbPayload.email = updates.email || null;
     // Asphalt fields. `null` is meaningful for assignedRcSessionId (= unassign).
     if (updates.assignedRcSessionId !== undefined) {
       dbPayload.assigned_rc_session_id = updates.assignedRcSessionId;
