@@ -1317,7 +1317,40 @@ export async function getWorkerPCL(
   }
 
   for (const row of data || []) {
-    result.set(row.route_code, row.clients as PCLClientGroup[]);
+    const list = (row.clients || []) as PCLClientGroup[];
+    if (list.length > 0) result.set(row.route_code, list);
+  }
+
+  // FALLBACK TO THE MAP'S OWN PCLs.
+  // pcl_cache is filled by the per-session callbook load and is keyed to a
+  // command centre. map_pcl_cache is filled in Map Builder, is keyed to the
+  // route code alone, and carries the coordinates too — so any centre that runs
+  // a map inherits its callbooks without re-uploading anything.
+  //
+  // The command centre's own rows win where they exist and are non-empty. An
+  // empty list carries no information, so it does not block the fallback: a
+  // route the session load found nothing for still gets the map's clients.
+  const missing = routeCodes.filter(rc => !result.has(rc));
+  if (missing.length > 0) {
+    // Chunked — a worker on a large split area can easily ask for more codes
+    // than is comfortable in a single IN list.
+    const CHUNK = 100;
+    for (let i = 0; i < missing.length; i += CHUNK) {
+      const slice = missing.slice(i, i + CHUNK);
+      const { data: mapRows, error: mapErr } = await supabase
+        .from('map_pcl_cache')
+        .select('route_code, clients')
+        .in('route_code', slice);
+      if (mapErr) {
+        // Non-fatal: the command centre's own PCLs are already in hand.
+        console.warn('[PCL Cache] map_pcl_cache fallback failed:', mapErr.message);
+        break;
+      }
+      for (const row of mapRows || []) {
+        const list = (row.clients || []) as PCLClientGroup[];
+        if (list.length > 0) result.set(row.route_code, list);
+      }
+    }
   }
 
   return result;
