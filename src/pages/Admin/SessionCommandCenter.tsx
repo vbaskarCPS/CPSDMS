@@ -1675,25 +1675,23 @@ const SessionCommandCenter: React.FC = () => {
                                                   onClick={() => {
                                                     // LIVE: allowed only for managers with NO mapping yet —
                                                     // editing/removing an applied mapping is preview-only.
-                                                    if (reportIsLive && mapCfg) return;
+                                                    // Live-session gate removed: a manager can hold several maps now.
                                                     if (mappingPickerFor === manager.userId) {
                                                       setMappingPickerFor(null);
                                                     } else {
                                                       openMappingPicker(manager.userId);
                                                     }
                                                   }}
-                                                  disabled={(reportIsLive && !!mapCfg) || mappingApplyingFor !== null}
+                                                  disabled={mappingApplyingFor !== null}
                                                   title={
-                                                    reportIsLive
-                                                      ? (mapCfg
-                                                          ? `${mapCfg.areaName} routes ${mapCfg.routeStart}–${mapCfg.routeEnd} (applied — edit next session)`
-                                                          : 'Load a digital map for this manager (writes to the live session)')
-                                                      : (mapCfg
-                                                          ? `${mapCfg.areaName} routes ${mapCfg.routeStart}–${mapCfg.routeEnd} — click to edit`
+                                                    mapCfgs.length === 0
+                                                      ? (reportIsLive
+                                                          ? 'Load a digital map for this manager (writes to the live session)'
                                                           : 'Set up digital mapping for this manager')
+                                                      : `${mapCfgs.map(c => `${c.areaName} ${c.routeStart}–${c.routeEnd}`).join(' · ')} — click to add another`
                                                   }
                                                   className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
-                                                    mapCfg
+                                                    mapCfgs.length > 0
                                                       ? 'bg-blue-600/20 text-blue-300 border-blue-600/50 hover:bg-blue-600/30'
                                                       : 'bg-gray-700 text-gray-300 border-gray-600 hover:bg-gray-600 hover:text-white'
                                                   }`}
