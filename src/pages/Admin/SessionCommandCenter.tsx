@@ -37,6 +37,7 @@ import {
   Navigation2,
   X,
   Check,
+  MessageSquare,
 } from 'lucide-react';
 import { parseDailySessionXLSX } from '../../lib/feedParser';
 import { sessionService, ImportMeta } from '../../lib/sessionService';
@@ -60,6 +61,7 @@ import PayslipGenerator from './PayslipGenerator';
 import RouteFinderView from '../../components/RouteFinder/RouteFinderView';
 import DigitalMasterBookings from './DigitalMasterBookings';
 import DigitalWorkerbook from './DigitalWorkerbook';
+import Outreach from './Outreach';
 import RouteFinderUpdater from './RouteFinderUpdater';
 
 // --- FLOATER PALETTE (Digital mapping CCs only) ---
@@ -103,6 +105,9 @@ const SessionCommandCenter: React.FC = () => {
 
   // Digital Workerbook visibility
   const [showDigitalWorkerbook, setShowDigitalWorkerbook] = useState(false);
+
+  // Outreach visibility
+  const [showOutreach, setShowOutreach] = useState(false);
 
   // Route Finder Updater visibility
   const [showRouteFinderUpdater, setShowRouteFinderUpdater] = useState(false);
@@ -1075,6 +1080,10 @@ const SessionCommandCenter: React.FC = () => {
     return <DigitalWorkerbook onBack={() => setShowDigitalWorkerbook(false)} />;
   }
 
+  if (showOutreach) {
+    return <Outreach onBack={() => setShowOutreach(false)} />;
+  }
+
   if (showRouteFinderUpdater) {
     return <RouteFinderUpdater onBack={() => setShowRouteFinderUpdater(false)} />;
   }
@@ -1254,6 +1263,14 @@ const SessionCommandCenter: React.FC = () => {
                   >
                     <BookOpen size={16} className="text-purple-400" />
                     Digital Workerbook
+                  </button>
+                  {/* Outreach */}
+                  <button
+                    onClick={() => setShowOutreach(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-700 transition-colors text-sm font-medium"
+                  >
+                    <MessageSquare size={16} className="text-emerald-400" />
+                    Outreach
                   </button>
                   <button
                     onClick={() => setShowRouteFinder(true)}

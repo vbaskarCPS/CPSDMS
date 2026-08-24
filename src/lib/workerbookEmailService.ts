@@ -57,7 +57,10 @@ export type StatusTextTemplateType =
   | 'workerbook_text_ns'
   | 'workerbook_text_wdr'
   | 'workerbook_text_snow'
-  | 'workerbook_text_tnb';
+  | 'workerbook_text_tnb'
+  // Outreach: texts to PAST CUSTOMERS from the cached callbook PCLs, not to
+  // contractors. Different placeholders entirely — see buildOutreachTextMessage.
+  | 'outreach_text';
 
 // ─── DATE FORMATTING ──────────────────────────────────────────────────────────
 
@@ -156,6 +159,14 @@ export const DEFAULT_TNB_TEXT_TEMPLATE: WorkerbookTextTemplate = {
   bodyText:
     "Hi {{firstName}}, touching base to see if you're ready to jump back on the schedule. " +
     'Reply with a day that works for you. - Property Stars',
+};
+
+// Outreach — past customers, from the callbook PCLs cached against the maps.
+export const DEFAULT_OUTREACH_TEXT_TEMPLATE: WorkerbookTextTemplate = {
+  bodyText:
+    'Hi {{firstName}}, this is Property Stars. We looked after {{address}} back in {{year}} ' +
+    'at {{price}}. We are booking the area again shortly — would you like us to put you down? ' +
+    'Reply YES and we will be in touch.',
 };
 
 // ─── TEMPLATE PERSISTENCE ─────────────────────────────────────────────────────
@@ -371,6 +382,7 @@ export async function saveStatusTextTemplate(
     workerbook_text_wdr:  'Workerbook WDR Callback Text',
     workerbook_text_snow: 'Workerbook SNOW Callback Text',
     workerbook_text_tnb:  'Workerbook TNB Callback Text',
+    outreach_text:        'Outreach Text (past customers)',
   };
 
   const payload = {
@@ -826,6 +838,89 @@ export function buildTextMessage(
 export function buildSmsLink(phoneNumber: string, body: string): string {
   const cleanPhone = phoneNumber.replace(/[^\d+]/g, '');
   return `sms:${cleanPhone}?body=${encodeURIComponent(body)}`;
+}
+
+// ─── OUTREACH (past customers, from the map PCL cache) ───────────────────────
+//
+// Deliberately separate from buildTextMessage. That one is shaped around
+// contractors — dates, shuttles, days worked — and cannot render an address or
+// a last price. Bending it to serve both would put the workerbook's own messages
+// at risk for no gain, so Outreach gets its own builder and its own placeholders.
+
+export async function loadOutreachTextTemplate(): Promise<WorkerbookTextTemplate> {
+  return loadStatusTextTemplateByType('outreach_text', DEFAULT_OUTREACH_TEXT_TEMPLATE);
+}
+
+export interface OutreachTextData {
+  firstName: string;
+  lastName: string;
+  houseNum: string;
+  streetName: string;
+  city?: string;
+  /** Most recent year on record — history is stored newest-first. */
+  year?: number;
+  /** Most recent price, already formatted (e.g. "$179.00"). */
+  price?: string;
+  serviceType?: string;
+}
+
+export function buildOutreachTextMessage(
+  template: WorkerbookTextTemplate,
+  data: OutreachTextData,
+): string {
+  const address = `${data.houseNum || ''} ${data.streetName || ''}`.trim();
+  const vars: Record<string, string> = {
+    firstName:   data.firstName || 'there',
+    lastName:    data.lastName || '',
+    fullName:    `${data.firstName || ''} ${data.lastName || ''}`.trim(),
+    address,
+    city:        data.city || '',
+    year:        data.year != null ? String(data.year) : '',
+    price:       data.price || '',
+    service:     data.serviceType || '',
+  };
+  return replaceVars(template.bodyText, vars);
+}
+
+/**
+ * Outreach texts are tracked WITHOUT a date window, unlike the workerbook's.
+ * A day-of reminder is worth repeating tomorrow; telling the same homeowner
+ * twice that you serviced their driveway in 2021 is not.
+ *
+ * The key is `${routeCode}|${normalised address}` stored in recipient_email —
+ * the same column the workerbook reuses as a general-purpose key.
+ */
+export function outreachClientKey(routeCode: string, houseNum: string, streetName: string): string {
+  const addr = `${houseNum || ''} ${streetName || ''}`.toLowerCase().replace(/\s+/g, ' ').trim();
+  return `${routeCode}|${addr}`;
+}
+
+export async function getOutreachTextedSet(): Promise<Set<string>> {
+  const set = new Set<string>();
+  const BATCH = 1000;
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from('email_logs')
+      .select('recipient_email')
+      .eq('email_type', 'outreach_text')
+      .range(from, from + BATCH - 1);
+    if (error) { console.warn('[Outreach] texted-set read failed:', error.message); break; }
+    if (!data || data.length === 0) break;
+    data.forEach((r: any) => set.add(r.recipient_email));
+    if (data.length < BATCH) break;
+    from += BATCH;
+  }
+  return set;
+}
+
+export async function logOutreachText(clientKey: string): Promise<void> {
+  const { error } = await supabase.from('email_logs').insert({
+    recipient_email: clientKey,
+    email_type:      'outreach_text',
+    status:          'sent',
+  });
+  if (error) console.warn('[Outreach] Failed to log text:', error.message);
 }
 
 // ─── SEND ─────────────────────────────────────────────────────────────────────
