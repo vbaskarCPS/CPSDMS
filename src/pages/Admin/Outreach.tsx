@@ -22,6 +22,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ArrowLeft, Loader, Search, MessageSquare, Check, AlertCircle,
   Map as MapIcon, Settings, Save, Eye, EyeOff, Smartphone, Users, X,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { commandCenterService } from '../../lib/commandCenterService';
@@ -59,10 +60,25 @@ interface OutreachClient {
   streetName: string;
   city?: string;
   phone: string;
-  year?: number;
-  price?: string;
+  year?: number;           // most recent year  (what the text message shows)
+  price?: string;          // most recent price (what the text message shows)
   serviceType?: string;
   contractor?: string;
+  // --- filter facts, derived once at load ---
+  maxPrice?: number;       // highest price EVER, not the most recent one
+  maxPriceYear?: number;   // the year that highest price was charged
+  repeatCount: number;     // distinct years on record
+}
+
+// Callbook prices arrive as strings: "$199.00", "199", "1,250.00", sometimes junk.
+// Returns undefined when there's no number in there at all, so an unpriced record
+// is excluded from a minimum-price filter rather than counting as zero.
+function parsePrice(raw: any): number | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  const cleaned = String(raw).replace(/[^0-9.]/g, '');
+  if (!cleaned) return undefined;
+  const n = parseFloat(cleaned);
+  return isFinite(n) ? n : undefined;
 }
 
 const REGION_ORDER: Region[] = ['West', 'Central', 'East'];
@@ -104,6 +120,13 @@ const Outreach: React.FC<Props> = ({ onBack }) => {
   const [texted, setTexted] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [hideTexted, setHideTexted] = useState(true);
+
+  // --- FILTERS --- empty string means "not filtering on this"
+  const [yearFrom, setYearFrom] = useState('');
+  const [yearTo, setYearTo] = useState('');
+  const [minPrice, setMinPrice] = useState('');
+  const [minRepeats, setMinRepeats] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
 
   const [template, setTemplate] = useState<WorkerbookTextTemplate>({ ...DEFAULT_OUTREACH_TEXT_TEMPLATE });
   const [showTemplate, setShowTemplate] = useState(false);
@@ -180,6 +203,9 @@ const Outreach: React.FC<Props> = ({ onBack }) => {
     setLoadingClients(true);
     setClients([]);
     setSearch('');
+    // Filters are per-map: the year list and price range differ between areas,
+    // so carrying them across would silently show an empty list on the next map.
+    setYearFrom(''); setYearTo(''); setMinPrice(''); setMinRepeats('');
     try {
       const { data, error: e } = await supabase
         .from('map_pcl_cache')
@@ -194,7 +220,28 @@ const Outreach: React.FC<Props> = ({ onBack }) => {
           if (!phone) return;                    // no number, no outreach
           // history is stored newest-first by the grouping, so [0] is the most
           // recent year, price and service.
-          const recent = Array.isArray(c.history) && c.history.length > 0 ? c.history[0] : null;
+          const history: any[] = Array.isArray(c.history) ? c.history : [];
+          const recent = history.length > 0 ? history[0] : null;
+
+          // Highest price ever — Vijay's call: a homeowner who paid $300 in 2019
+          // and $90 last year should surface on a "$150+" list, even though the
+          // row and the text message still show the most recent figure.
+          let maxPrice: number | undefined;
+          let maxPriceYear: number | undefined;
+          history.forEach(h => {
+            const p = parsePrice(h?.price);
+            if (p !== undefined && (maxPrice === undefined || p > maxPrice)) {
+              maxPrice = p;
+              maxPriceYear = h?.year;
+            }
+          });
+
+          // Repeats counted as DISTINCT YEARS, so a spring and a fall job in the
+          // same season reads as one year on the books, not two.
+          const distinctYears = new Set(
+            history.map(h => h?.year).filter(y => y !== null && y !== undefined),
+          );
+
           list.push({
             key: outreachClientKey(row.route_code, c.houseNum, c.streetName),
             routeCode: row.route_code,
@@ -208,6 +255,9 @@ const Outreach: React.FC<Props> = ({ onBack }) => {
             price: recent?.price,
             serviceType: recent?.serviceType,
             contractor: recent?.contractor,
+            maxPrice,
+            maxPriceYear,
+            repeatCount: distinctYears.size,
           });
         });
       });
@@ -222,9 +272,41 @@ const Outreach: React.FC<Props> = ({ onBack }) => {
     }
   };
 
+  // Year dropdowns only offer years this map actually has, newest first.
+  const yearOptions = useMemo(() => {
+    const set = new Set<number>();
+    clients.forEach(c => { if (c.year) set.add(c.year); });
+    return Array.from(set).sort((a, b) => b - a);
+  }, [clients]);
+
+  const clearFilters = useCallback(() => {
+    setYearFrom(''); setYearTo(''); setMinPrice(''); setMinRepeats('');
+  }, []);
+
+  const activeFilterCount =
+    (yearFrom ? 1 : 0) + (yearTo ? 1 : 0) + (minPrice ? 1 : 0) + (minRepeats ? 1 : 0);
+
   const visibleClients = useMemo(() => {
     let list = clients;
     if (hideTexted) list = list.filter(c => !texted.has(c.key));
+
+    // --- YEAR: filters on the MOST RECENT year, i.e. "last done between X and Y".
+    const from = yearFrom ? parseInt(yearFrom, 10) : null;
+    const to = yearTo ? parseInt(yearTo, 10) : null;
+    if (from !== null) list = list.filter(c => (c.year || 0) >= from);
+    if (to !== null) list = list.filter(c => (c.year || 0) <= to);
+
+    // --- PRICE: highest ever paid. No parseable price anywhere = excluded,
+    // rather than treated as $0 and quietly padding the list.
+    const floor = minPrice ? parseFloat(minPrice.replace(/[^0-9.]/g, '')) : null;
+    if (floor !== null && isFinite(floor)) {
+      list = list.filter(c => c.maxPrice !== undefined && c.maxPrice >= floor);
+    }
+
+    // --- REPEATS: distinct years on the books.
+    const reps = minRepeats ? parseInt(minRepeats, 10) : null;
+    if (reps !== null && isFinite(reps)) list = list.filter(c => c.repeatCount >= reps);
+
     const q = search.trim().toLowerCase();
     if (q) {
       const qDigits = q.replace(/\D/g, '');
@@ -239,7 +321,7 @@ const Outreach: React.FC<Props> = ({ onBack }) => {
       );
     }
     return list;
-  }, [clients, texted, hideTexted, search]);
+  }, [clients, texted, hideTexted, search, yearFrom, yearTo, minPrice, minRepeats]);
 
   // --- SEND ---
   const handleText = (c: OutreachClient) => {
@@ -483,6 +565,22 @@ const Outreach: React.FC<Props> = ({ onBack }) => {
               />
             </div>
             <button
+              onClick={() => setShowFilters(v => !v)}
+              className={`px-3 py-2 rounded-lg text-xs font-bold border transition-colors flex items-center gap-1.5 ${
+                activeFilterCount > 0
+                  ? 'bg-teal-600 border-teal-500 text-white'
+                  : showFilters
+                    ? 'bg-gray-700 border-gray-600 text-white'
+                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              <SlidersHorizontal size={13} />
+              Filters
+              {activeFilterCount > 0 && (
+                <span className="bg-white/25 rounded-full px-1.5 text-[10px]">{activeFilterCount}</span>
+              )}
+            </button>
+            <button
               onClick={() => setHideTexted(v => !v)}
               className={`px-3 py-2 rounded-lg text-xs font-bold border transition-colors ${
                 hideTexted
@@ -494,6 +592,92 @@ const Outreach: React.FC<Props> = ({ onBack }) => {
             </button>
           </div>
 
+          {/* FILTER BAR */}
+          {showFilters && (
+            <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 mb-3">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+
+                {/* Last done between */}
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold uppercase tracking-wide text-gray-500 mb-1.5">
+                    Last done between
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={yearFrom}
+                      onChange={e => setYearFrom(e.target.value)}
+                      className="flex-1 bg-gray-900 border border-gray-600 rounded-md px-2 py-1.5 text-white text-xs focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                    >
+                      <option value="">Any</option>
+                      {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                    <span className="text-gray-600 text-xs">to</span>
+                    <select
+                      value={yearTo}
+                      onChange={e => setYearTo(e.target.value)}
+                      className="flex-1 bg-gray-900 border border-gray-600 rounded-md px-2 py-1.5 text-white text-xs focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                    >
+                      <option value="">Any</option>
+                      {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Minimum price ever */}
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wide text-gray-500 mb-1.5">
+                    Best price at least
+                  </label>
+                  <div className="flex items-center bg-gray-900 border border-gray-600 rounded-md px-2 focus-within:ring-2 focus-within:ring-teal-500">
+                    <span className="text-gray-500 text-xs">$</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      value={minPrice}
+                      onChange={e => setMinPrice(e.target.value)}
+                      placeholder="any"
+                      className="w-full bg-transparent py-1.5 px-1 text-white text-xs placeholder-gray-600 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Minimum repeats */}
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wide text-gray-500 mb-1.5">
+                    Repeat years
+                  </label>
+                  <select
+                    value={minRepeats}
+                    onChange={e => setMinRepeats(e.target.value)}
+                    className="w-full bg-gray-900 border border-gray-600 rounded-md px-2 py-1.5 text-white text-xs focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                  >
+                    <option value="">Any</option>
+                    <option value="2">2 or more</option>
+                    <option value="3">3 or more</option>
+                    <option value="4">4 or more</option>
+                    <option value="5">5 or more</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 mt-3 pt-3 border-t border-gray-700">
+                <span className="text-xs text-gray-400">
+                  <span className="font-bold text-white">{visibleClients.length}</span>
+                  <span className="text-gray-500"> of {clients.length} shown</span>
+                </span>
+                {activeFilterCount > 0 && (
+                  <button
+                    onClick={clearFilters}
+                    className="ml-auto text-xs text-gray-400 hover:text-white flex items-center gap-1"
+                  >
+                    <X size={12} /> Clear filters
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {loadingClients ? (
             <div className="flex items-center justify-center h-40">
               <Loader size={22} className="animate-spin text-teal-400" />
@@ -502,9 +686,11 @@ const Outreach: React.FC<Props> = ({ onBack }) => {
             <div className="text-center text-gray-500 text-sm py-12">
               {clients.length === 0
                 ? 'No clients on this map have a phone number on record.'
-                : hideTexted
-                  ? 'Everyone on this map has been texted. Switch to "Showing all" to see them.'
-                  : 'Nothing matches that search.'}
+                : activeFilterCount > 0
+                  ? 'No clients match those filters. Try widening the year range or lowering the price.'
+                  : hideTexted
+                    ? 'Everyone on this map has been texted. Switch to "Showing all" to see them.'
+                    : 'Nothing matches that search.'}
             </div>
           ) : (
             <div className="space-y-1.5">
@@ -539,6 +725,21 @@ const Outreach: React.FC<Props> = ({ onBack }) => {
                         {c.year && <><span className="text-gray-700">·</span><span>{c.year}</span></>}
                         {c.price && <><span className="text-gray-700">·</span><span className="text-green-500">{c.price}</span></>}
                         {c.serviceType && <><span className="text-gray-700">·</span><span>{c.serviceType}</span></>}
+                        {c.repeatCount > 1 && (
+                          <>
+                            <span className="text-gray-700">·</span>
+                            <span className="text-amber-500">{c.repeatCount}x</span>
+                          </>
+                        )}
+                        {/* Only worth showing when their best year isn't the latest one. */}
+                        {c.maxPrice !== undefined && c.maxPriceYear !== undefined && c.maxPriceYear !== c.year && (
+                          <>
+                            <span className="text-gray-700">·</span>
+                            <span className="text-gray-500">
+                              best ${c.maxPrice.toFixed(2)} in {c.maxPriceYear}
+                            </span>
+                          </>
+                        )}
                       </div>
                     </div>
                     <button
