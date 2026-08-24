@@ -216,7 +216,7 @@ const Outreach: React.FC<Props> = ({ onBack }) => {
       list.sort((a, b) => (b.year || 0) - (a.year || 0));
       setClients(list);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load that map's clients.');
+      setError(err instanceof Error ? err.message : "Could not load that map's clients.");
     } finally {
       setLoadingClients(false);
     }
