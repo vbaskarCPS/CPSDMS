@@ -53,6 +53,14 @@ const slug = (s: string) => s.replace(/[^a-z0-9]+/gi, '-').toLowerCase().replace
 const segLabelOf = (s: { nickname?: string; region: Region; season: SeasonType }) =>
   s.nickname && s.nickname.trim() ? s.nickname : `${s.region} ${SEASON_LABELS[s.season] || s.season}`;
 
+// Consistent colour per segment key within one exported document.
+const segColorsFor = (city: CitySales) => {
+  const keys = Array.from(new Set(city.days.flatMap((d) => d.segments.map((s) => s.key)))).sort();
+  const m = new Map<string, string>();
+  keys.forEach((k, i) => m.set(k, PALETTE[i % PALETTE.length]));
+  return m;
+};
+
 // Push a blob at the browser as a download.
 const saveBlob = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
@@ -102,6 +110,7 @@ const exportCityPdf = async (city: CitySales) => {
 
   const now = new Date();
   const generated = now.toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
+  const segColor = segColorsFor(city);
 
   // ---- Header banner ----
   doc.setFillColor(...C_DARK);
@@ -359,18 +368,31 @@ const exportCityPdf = async (city: CitySales) => {
   }
 
   // ---- Daily sales by source ----
-  y = heading('Day by day - own vs import', y + 30);
+  y = heading('Day by day, by nickname - own vs import', y + 30);
   const days = city.days.slice().sort((a, b) => a.ord - b.ord);
   if (days.length) {
-    const rows: RowInput[] = days.map((d) => [
-      d.date,
-      fmtMoney(d.grossOwn),
-      fmtMoney(d.grossExternal),
-      fmtMoney(d.gross),
-      fmtMoney(d.own),
-      fmtMoney(d.external),
-      fmtMoney(d.total),
-    ]);
+    const rows: RowInput[] = [];
+    const dots: (string | null)[] = [];   // null marks a day-subtotal row
+    days.forEach((d) => {
+      const segs = d.segments.slice().sort((a, b) => b.amount - a.amount);
+      segs.forEach((sg, i) => {
+        rows.push([
+          i === 0 ? d.date : '',
+          segLabelOf(sg),
+          fmtMoney(sg.grossOwn), fmtMoney(sg.grossExternal), fmtMoney(sg.gross),
+          fmtMoney(sg.own), fmtMoney(sg.external), fmtMoney(sg.amount),
+        ]);
+        dots.push(segColor.get(sg.key) || '#6b7280');
+      });
+      if (segs.length > 1) {
+        rows.push([
+          '', 'Day total',
+          fmtMoney(d.grossOwn), fmtMoney(d.grossExternal), fmtMoney(d.gross),
+          fmtMoney(d.own), fmtMoney(d.external), fmtMoney(d.total),
+        ]);
+        dots.push(null);
+      }
+    });
     const dTot = days.reduce(
       (t, d) => {
         t.grossOwn += d.grossOwn; t.grossExternal += d.grossExternal; t.gross += d.gross;
@@ -382,36 +404,50 @@ const exportCityPdf = async (city: CitySales) => {
 
     autoTable(doc, {
       startY: y,
-      head: [['Date', 'Own gross', 'Import gross', 'Gross', 'Own payable', 'Import payable', 'Payable']],
+      head: [['Date', 'Source', 'Own gross', 'Import gross', 'Gross', 'Own pay', 'Import pay', 'Payable']],
       body: rows,
       foot: [[
-        'Total',
+        'Total', '',
         fmtMoney(dTot.grossOwn), fmtMoney(dTot.grossExternal), fmtMoney(dTot.gross),
         fmtMoney(dTot.own), fmtMoney(dTot.external), fmtMoney(dTot.total),
       ]],
       theme: 'grid',
-      styles: { ...baseStyles, fontSize: 6.8, cellPadding: 3 },
-      headStyles: { ...baseHead, fontSize: 6.2 },
+      styles: { ...baseStyles, fontSize: 6.2, cellPadding: 2.5 },
+      headStyles: { ...baseHead, fontSize: 5.8 },
       footStyles: {
         fillColor: [255, 255, 255],
         textColor: C_DARK,
         fontStyle: 'bold',
-        fontSize: 6.8,
+        fontSize: 6.2,
         lineColor: C_DARK,
         lineWidth: { top: 1.2, right: 0.4, bottom: 0.4, left: 0.4 },
       },
-      alternateRowStyles: { fillColor: C_ZEBRA },
       columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 46, halign: 'left' },
-        1: { halign: 'right', cellWidth: 81 },
-        2: { halign: 'right', cellWidth: 81, textColor: [59, 130, 246] },
-        3: { halign: 'right', cellWidth: 81, fontStyle: 'bold' },
-        4: { halign: 'right', cellWidth: 81 },
-        5: { halign: 'right', cellWidth: 81, textColor: [59, 130, 246] },
-        6: { halign: 'right', cellWidth: 81, fontStyle: 'bold', textColor: C_RED },
+        0: { fontStyle: 'bold', cellWidth: 40, halign: 'left' },
+        1: { cellWidth: 96, cellPadding: { top: 2.5, right: 2.5, bottom: 2.5, left: 11 } },
+        2: { halign: 'right', cellWidth: 66 },
+        3: { halign: 'right', cellWidth: 66, textColor: [59, 130, 246] },
+        4: { halign: 'right', cellWidth: 66, fontStyle: 'bold' },
+        5: { halign: 'right', cellWidth: 66 },
+        6: { halign: 'right', cellWidth: 66, textColor: [59, 130, 246] },
+        7: { halign: 'right', cellWidth: 66, fontStyle: 'bold', textColor: C_RED },
       },
       rowPageBreak: 'avoid',
       margin,
+      didParseCell: (data) => {
+        if (data.section !== 'body') return;
+        if (dots[data.row.index] === null) {
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.fillColor = [238, 238, 238];
+        }
+      },
+      didDrawCell: (data) => {
+        if (data.section !== 'body' || data.column.index !== 1) return;
+        const colour = dots[data.row.index];
+        if (!colour) return;
+        doc.setFillColor(colour);
+        doc.rect(data.cell.x + 3, data.cell.y + data.cell.height / 2 - 2, 4.5, 4.5, 'F');
+      },
     });
   } else {
     doc.setFont('helvetica', 'italic');
@@ -1008,29 +1044,52 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                     </div>
                   </div>
 
-                  {/* PER-DAY OWN VS IMPORT */}
+                  {/* PER-DAY, PER-NICKNAME, OWN VS IMPORT */}
                   <div>
-                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By day, own vs import</h4>
-                    <div className="grid grid-cols-7 gap-2 px-2 pb-1 text-[10px] uppercase tracking-wide text-gray-500 border-b border-gray-800">
+                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By day and nickname, own vs import</h4>
+                    <div className="grid grid-cols-8 gap-1 px-2 pb-1 text-[9px] uppercase tracking-wide text-gray-500 border-b border-gray-800">
                       <span>Date</span>
+                      <span>Source</span>
                       <span className="text-right">Own gross</span>
-                      <span className="text-right">Import gross</span>
+                      <span className="text-right">Imp gross</span>
                       <span className="text-right">Gross</span>
                       <span className="text-right">Own pay</span>
-                      <span className="text-right">Import pay</span>
+                      <span className="text-right">Imp pay</span>
                       <span className="text-right">Payable</span>
                     </div>
                     <div className="max-h-96 overflow-y-auto pr-1">
                       {selected.days.map((day) => (
-                        <div key={day.date} className="grid grid-cols-7 gap-2 px-2 py-1 text-[11px] border-b border-gray-800/60">
-                          <span className="text-gray-400">{day.date}</span>
-                          <span className="text-right text-gray-400">{money(day.grossOwn)}</span>
-                          <span className="text-right text-blue-300/80">{money(day.grossExternal)}</span>
-                          <span className="text-right text-gray-300">{money(day.gross)}</span>
-                          <span className="text-right text-gray-400">{money(day.own)}</span>
-                          <span className="text-right text-blue-300/80">{money(day.external)}</span>
-                          <span className="text-right text-teal-300 font-medium">{money(day.total)}</span>
-                        </div>
+                        <React.Fragment key={day.date}>
+                          {day.segments.map((seg, i) => (
+                            <div key={`${day.date}-${seg.key}`} className="grid grid-cols-8 gap-1 px-2 py-1 text-[10px] border-b border-gray-800/40">
+                              <span className="text-gray-400">{i === 0 ? day.date : ''}</span>
+                              <span className="flex items-center gap-1 min-w-0">
+                                <span className="inline-block w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: colorFor(seg.key) }} />
+                                <span className="truncate text-gray-300" title={rangeLabel(seg.nickname, seg.region, seg.season)}>
+                                  {rangeLabel(seg.nickname, seg.region, seg.season)}
+                                </span>
+                              </span>
+                              <span className="text-right text-gray-400">{money(seg.grossOwn)}</span>
+                              <span className="text-right text-blue-300/80">{money(seg.grossExternal)}</span>
+                              <span className="text-right text-gray-300">{money(seg.gross)}</span>
+                              <span className="text-right text-gray-400">{money(seg.own)}</span>
+                              <span className="text-right text-blue-300/80">{money(seg.external)}</span>
+                              <span className="text-right text-teal-300 font-medium">{money(seg.amount)}</span>
+                            </div>
+                          ))}
+                          {day.segments.length > 1 && (
+                            <div className="grid grid-cols-8 gap-1 px-2 py-1 text-[10px] bg-gray-950/60 border-b border-gray-800 font-semibold">
+                              <span />
+                              <span className="text-gray-400">Day total</span>
+                              <span className="text-right text-gray-300">{money(day.grossOwn)}</span>
+                              <span className="text-right text-blue-300">{money(day.grossExternal)}</span>
+                              <span className="text-right text-gray-200">{money(day.gross)}</span>
+                              <span className="text-right text-gray-300">{money(day.own)}</span>
+                              <span className="text-right text-blue-300">{money(day.external)}</span>
+                              <span className="text-right text-teal-300">{money(day.total)}</span>
+                            </div>
+                          )}
+                        </React.Fragment>
                       ))}
                     </div>
                   </div>
