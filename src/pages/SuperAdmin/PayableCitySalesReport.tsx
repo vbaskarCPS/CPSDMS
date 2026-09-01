@@ -53,14 +53,6 @@ const slug = (s: string) => s.replace(/[^a-z0-9]+/gi, '-').toLowerCase().replace
 const segLabelOf = (s: { nickname?: string; region: Region; season: SeasonType }) =>
   s.nickname && s.nickname.trim() ? s.nickname : `${s.region} ${SEASON_LABELS[s.season] || s.season}`;
 
-// Consistent colour per segment key within one exported document.
-const segColorsFor = (city: CitySales) => {
-  const keys = Array.from(new Set(city.days.flatMap((d) => d.segments.map((s) => s.key)))).sort();
-  const m = new Map<string, string>();
-  keys.forEach((k, i) => m.set(k, PALETTE[i % PALETTE.length]));
-  return m;
-};
-
 // Push a blob at the browser as a download.
 const saveBlob = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
@@ -110,7 +102,6 @@ const exportCityPdf = async (city: CitySales) => {
 
   const now = new Date();
   const generated = now.toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
-  const segColor = segColorsFor(city);
 
   // ---- Header banner ----
   doc.setFillColor(...C_DARK);
@@ -156,7 +147,7 @@ const exportCityPdf = async (city: CitySales) => {
   doc.setFontSize(8.5);
   doc.setTextColor(107, 107, 107);
   doc.text(
-    'Full breakdown of payable dollars: where they came from, tax and product-cost deductions, and daily sales by source.',
+    'Own vs import revenue, tax and product-cost deductions, and a day-by-day breakdown of gross and payable.',
     M, y + 16
   );
 
@@ -164,9 +155,9 @@ const exportCityPdf = async (city: CitySales) => {
   y += 32;
   const tiles: { k: string; v: string; accent?: boolean }[] = [
     { k: 'TOTAL PAYABLE', v: fmtMoney(city.total), accent: true },
+    { k: 'OWN PAYABLE', v: fmtMoney(city.own) },
+    { k: 'IMPORT PAYABLE', v: fmtMoney(city.external) },
     { k: 'GROSS BEHIND IT', v: fmtMoney(city.gross) },
-    { k: 'CONTRIBUTING SOURCES', v: String(city.contributors.length) },
-    { k: 'ACTIVE DAYS', v: String(city.days.length) },
   ];
   const gap = 10;
   const tw = (W - gap * 3) / 4;
@@ -191,6 +182,15 @@ const exportCityPdf = async (city: CitySales) => {
     doc.text(t.v, x + 10, y + 38);
   });
   y += 50;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(...C_GREY);
+  doc.text(
+    `${city.contributors.length} contributing source${city.contributors.length === 1 ? '' : 's'}   |   ${city.days.length} active day${city.days.length === 1 ? '' : 's'}`,
+    M, y + 14
+  );
+  y += 6;
 
   // ---- Section heading helper ----
   const heading = (label: string, atY: number) => {
@@ -219,6 +219,40 @@ const exportCityPdf = async (city: CitySales) => {
   };
   const margin = { left: M, right: M, bottom: 54 };
 
+  // ---- Own vs import ----
+  const pctOf = (part: number, whole: number) => (whole > 0 ? ((part / whole) * 100).toFixed(1) + '%' : '0%');
+  y = heading('Own vs import revenue', y + 30);
+  autoTable(doc, {
+    startY: y,
+    head: [['', 'Gross', 'Share of gross', 'Payable', 'Share of payable']],
+    body: [
+      ['Own workers', fmtMoney(city.grossOwn), pctOf(city.grossOwn, city.gross), fmtMoney(city.own), pctOf(city.own, city.total)],
+      ['Imported', fmtMoney(city.grossExternal), pctOf(city.grossExternal, city.gross), fmtMoney(city.external), pctOf(city.external, city.total)],
+    ],
+    foot: [['Total', fmtMoney(city.gross), '100%', fmtMoney(city.total), '100%']],
+    theme: 'grid',
+    styles: baseStyles,
+    headStyles: baseHead,
+    footStyles: {
+      fillColor: [255, 255, 255],
+      textColor: C_DARK,
+      fontStyle: 'bold',
+      fontSize: 7.5,
+      lineColor: C_DARK,
+      lineWidth: { top: 1.2, right: 0.4, bottom: 0.4, left: 0.4 },
+    },
+    alternateRowStyles: { fillColor: C_ZEBRA },
+    columnStyles: {
+      0: { fontStyle: 'bold' },
+      1: { halign: 'right' },
+      2: { halign: 'right', textColor: C_GREY },
+      3: { halign: 'right', fontStyle: 'bold' },
+      4: { halign: 'right', textColor: C_RED, fontStyle: 'bold' },
+    },
+    margin,
+  });
+  y = (doc as any).lastAutoTable.finalY;
+
   // ---- Where it came from ----
   y = heading('Where it came from', y + 30);
   if (city.contributors.length) {
@@ -230,7 +264,7 @@ const exportCityPdf = async (city: CitySales) => {
         .sort((a, b) => b.amount - a.amount)
         .map((c) => [
           c.fromCity,
-          c.isOwn ? 'Own workers' : 'From another city',
+          c.isOwn ? 'Own workers' : 'Import',
           fmtMoney(c.amount),
           city.total > 0 ? ((c.amount / city.total) * 100).toFixed(1) + '%' : '0%',
         ]),
@@ -325,48 +359,59 @@ const exportCityPdf = async (city: CitySales) => {
   }
 
   // ---- Daily sales by source ----
-  y = heading('Daily sales by source', y + 30);
+  y = heading('Day by day - own vs import', y + 30);
   const days = city.days.slice().sort((a, b) => a.ord - b.ord);
   if (days.length) {
-    const rows: RowInput[] = [];
-    const dots: string[] = [];
-    days.forEach((d) => {
-      const segs = d.segments.slice().sort((a, b) => b.amount - a.amount);
-      segs.forEach((s, i) => {
-        rows.push([
-          i === 0 ? d.date : '',
-          segLabelOf(s),
-          d.total > 0 ? ((s.amount / d.total) * 100).toFixed(0) + '%' : '0%',
-          fmtMoney(s.amount),
-          i === 0 ? fmtMoney(d.total) : '',
-        ]);
-        dots.push(segColor.get(s.key) || '#6b7280');
-      });
-    });
+    const rows: RowInput[] = days.map((d) => [
+      d.date,
+      fmtMoney(d.grossOwn),
+      fmtMoney(d.grossExternal),
+      fmtMoney(d.gross),
+      fmtMoney(d.own),
+      fmtMoney(d.external),
+      fmtMoney(d.total),
+    ]);
+    const dTot = days.reduce(
+      (t, d) => {
+        t.grossOwn += d.grossOwn; t.grossExternal += d.grossExternal; t.gross += d.gross;
+        t.own += d.own; t.external += d.external; t.total += d.total;
+        return t;
+      },
+      { grossOwn: 0, grossExternal: 0, gross: 0, own: 0, external: 0, total: 0 }
+    );
 
     autoTable(doc, {
       startY: y,
-      head: [['Date', 'Source', 'Share', 'Amount', 'Day total']],
+      head: [['Date', 'Own gross', 'Import gross', 'Gross', 'Own payable', 'Import payable', 'Payable']],
       body: rows,
+      foot: [[
+        'Total',
+        fmtMoney(dTot.grossOwn), fmtMoney(dTot.grossExternal), fmtMoney(dTot.gross),
+        fmtMoney(dTot.own), fmtMoney(dTot.external), fmtMoney(dTot.total),
+      ]],
       theme: 'grid',
-      styles: baseStyles,
-      headStyles: baseHead,
+      styles: { ...baseStyles, fontSize: 6.8, cellPadding: 3 },
+      headStyles: { ...baseHead, fontSize: 6.2 },
+      footStyles: {
+        fillColor: [255, 255, 255],
+        textColor: C_DARK,
+        fontStyle: 'bold',
+        fontSize: 6.8,
+        lineColor: C_DARK,
+        lineWidth: { top: 1.2, right: 0.4, bottom: 0.4, left: 0.4 },
+      },
+      alternateRowStyles: { fillColor: C_ZEBRA },
       columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 52 },
-        1: { cellPadding: { top: 4, right: 4, bottom: 4, left: 15 } },
-        2: { halign: 'right', textColor: C_GREY, cellWidth: 42 },
-        3: { halign: 'right', cellWidth: 70 },
-        4: { halign: 'right', fontStyle: 'bold', textColor: C_RED, cellWidth: 70 },
+        0: { fontStyle: 'bold', cellWidth: 46, halign: 'left' },
+        1: { halign: 'right', cellWidth: 81 },
+        2: { halign: 'right', cellWidth: 81, textColor: [59, 130, 246] },
+        3: { halign: 'right', cellWidth: 81, fontStyle: 'bold' },
+        4: { halign: 'right', cellWidth: 81 },
+        5: { halign: 'right', cellWidth: 81, textColor: [59, 130, 246] },
+        6: { halign: 'right', cellWidth: 81, fontStyle: 'bold', textColor: C_RED },
       },
       rowPageBreak: 'avoid',
       margin,
-      didDrawCell: (data) => {
-        if (data.section !== 'body' || data.column.index !== 1) return;
-        const colour = dots[data.row.index];
-        if (!colour) return;
-        doc.setFillColor(colour);
-        doc.rect(data.cell.x + 5, data.cell.y + data.cell.height / 2 - 2.5, 5, 5, 'F');
-      },
     });
   } else {
     doc.setFont('helvetica', 'italic');
@@ -430,11 +475,16 @@ const exportCityXlsx = async (city: CitySales) => {
   s1.addRow({ k: 'Generated', v: generated });
   s1.addRow({ k: '', v: '' });
   const rTotal = s1.addRow({ k: 'Total payable', v: city.total });
+  const rOwnPay = s1.addRow({ k: 'Own payable', v: city.own });
+  const rImpPay = s1.addRow({ k: 'Import payable', v: city.external });
   const rGross = s1.addRow({ k: 'Gross behind it', v: city.gross });
+  const rOwnGross = s1.addRow({ k: 'Own gross', v: city.grossOwn });
+  const rImpGross = s1.addRow({ k: 'Import gross', v: city.grossExternal });
   s1.addRow({ k: 'Contributing sources', v: city.contributors.length });
   s1.addRow({ k: 'Active days', v: city.days.length });
-  [rTotal, rGross].forEach((r) => { r.getCell('v').numFmt = MONEY; });
+  [rTotal, rOwnPay, rImpPay, rGross, rOwnGross, rImpGross].forEach((r) => { r.getCell('v').numFmt = MONEY; });
   rTotal.font = { bold: true };
+  rGross.font = { bold: true };
 
   // ---- Where it came from ----
   const s2 = wb.addWorksheet('Where it came from');
@@ -451,7 +501,7 @@ const exportCityXlsx = async (city: CitySales) => {
     .forEach((c) => {
       s2.addRow({
         city: c.fromCity,
-        type: c.isOwn ? 'Own workers' : 'From another city',
+        type: c.isOwn ? 'Own workers' : 'Import',
         amt: c.amount,
         share: city.total > 0 ? (c.amount / city.total) * 100 : 0,
       });
@@ -468,8 +518,10 @@ const exportCityXlsx = async (city: CitySales) => {
     { header: 'After tax', key: 'after', width: 16, style: { numFmt: MONEY } },
     { header: 'Product %', key: 'prodpct', width: 11 },
     { header: 'Product cost', key: 'prod', width: 16, style: { numFmt: MONEY } },
-    { header: 'Own workers', key: 'own', width: 16, style: { numFmt: MONEY } },
-    { header: 'External', key: 'ext', width: 16, style: { numFmt: MONEY } },
+    { header: 'Own gross', key: 'grossown', width: 16, style: { numFmt: MONEY } },
+    { header: 'Import gross', key: 'grossext', width: 16, style: { numFmt: MONEY } },
+    { header: 'Own payable', key: 'own', width: 16, style: { numFmt: MONEY } },
+    { header: 'Import payable', key: 'ext', width: 16, style: { numFmt: MONEY } },
     { header: 'Payable', key: 'payable', width: 16, style: { numFmt: MONEY } },
   ];
   dressHeader(s3);
@@ -484,6 +536,8 @@ const exportCityXlsx = async (city: CitySales) => {
       after: r.afterTax,
       prodpct: r.productRate != null ? r.productRate / 100 : 'varies',
       prod: r.afterTax - r.amount,
+      grossown: r.grossOwn,
+      grossext: r.grossExternal,
       own: r.own,
       ext: r.external,
       payable: r.amount,
@@ -501,17 +555,21 @@ const exportCityXlsx = async (city: CitySales) => {
         acc.tax += r.gross - r.afterTax;
         acc.after += r.afterTax;
         acc.prod += r.afterTax - r.amount;
+        acc.grossown += r.grossOwn;
+        acc.grossext += r.grossExternal;
         acc.own += r.own;
         acc.ext += r.external;
         acc.payable += r.amount;
         return acc;
       },
-      { gross: 0, tax: 0, after: 0, prod: 0, own: 0, ext: 0, payable: 0 }
+      { gross: 0, tax: 0, after: 0, prod: 0, grossown: 0, grossext: 0, own: 0, ext: 0, payable: 0 }
     );
     const tot = s3.addRow({
       region: 'Total', season: '',
       gross: t.gross, taxpct: '', tax: t.tax, after: t.after,
-      prodpct: '', prod: t.prod, own: t.own, ext: t.ext, payable: t.payable,
+      prodpct: '', prod: t.prod,
+      grossown: t.grossown, grossext: t.grossext,
+      own: t.own, ext: t.ext, payable: t.payable,
     });
     tot.font = { bold: true };
     tot.border = { top: { style: 'medium', color: { argb: 'FF252525' } } };
@@ -525,8 +583,13 @@ const exportCityXlsx = async (city: CitySales) => {
     { header: 'Region', key: 'region', width: 12 },
     { header: 'Season', key: 'season', width: 18 },
     { header: 'Share %', key: 'share', width: 11, style: { numFmt: PCT } },
-    { header: 'Amount', key: 'amt', width: 16, style: { numFmt: MONEY } },
-    { header: 'Day total', key: 'daytotal', width: 16, style: { numFmt: MONEY } },
+    { header: 'Own gross', key: 'grossown', width: 15, style: { numFmt: MONEY } },
+    { header: 'Import gross', key: 'grossext', width: 15, style: { numFmt: MONEY } },
+    { header: 'Gross', key: 'gross', width: 15, style: { numFmt: MONEY } },
+    { header: 'Own payable', key: 'own', width: 15, style: { numFmt: MONEY } },
+    { header: 'Import payable', key: 'ext', width: 15, style: { numFmt: MONEY } },
+    { header: 'Payable', key: 'amt', width: 15, style: { numFmt: MONEY } },
+    { header: 'Day payable', key: 'daytotal', width: 15, style: { numFmt: MONEY } },
   ];
   dressHeader(s4);
   city.days
@@ -543,12 +606,17 @@ const exportCityXlsx = async (city: CitySales) => {
             region: seg.region,
             season: SEASON_LABELS[seg.season] || seg.season,
             share: d.total > 0 ? (seg.amount / d.total) * 100 : 0,
+            grossown: seg.grossOwn,
+            grossext: seg.grossExternal,
+            gross: seg.gross,
+            own: seg.own,
+            ext: seg.external,
             amt: seg.amount,
             daytotal: i === 0 ? d.total : null,
           });
         });
     });
-  s4.autoFilter = { from: 'A1', to: 'G1' };
+  s4.autoFilter = { from: 'A1', to: 'L1' };
 
   const buf = await wb.xlsx.writeBuffer();
   saveBlob(
@@ -674,7 +742,12 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                     )}
                   </div>
                   <div className="text-3xl font-bold text-teal-300">{money(city.total)}</div>
-                  <div className="text-[11px] text-gray-500 mt-1">tap for full breakdown</div>
+                  <div className="text-[11px] mt-1">
+                    <span className="text-gray-400">own {money(city.own)}</span>
+                    <span className="text-gray-600"> / </span>
+                    <span className="text-blue-300/80">import {money(city.external)}</span>
+                  </div>
+                  <div className="text-[11px] text-gray-500 mt-0.5">tap for full breakdown</div>
                 </div>
 
                 <div className="flex-1 grid grid-cols-3 gap-3">
@@ -821,6 +894,37 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                 <p className="text-sm text-gray-500">No sales attributed to this city yet.</p>
               ) : (
                 <>
+                  {/* OWN VS IMPORT */}
+                  <div>
+                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Own vs import revenue</h4>
+                    <div className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
+                      <div className="grid grid-cols-4 gap-2 px-3 py-1.5 text-[10px] uppercase tracking-wide text-gray-500 border-b border-gray-800">
+                        <span />
+                        <span className="text-right">Gross</span>
+                        <span className="text-right">Payable</span>
+                        <span className="text-right">Share</span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-2 px-3 py-1.5 text-sm">
+                        <span className="text-teal-300">Own workers</span>
+                        <span className="text-right text-gray-300">{money(selected.grossOwn)}</span>
+                        <span className="text-right text-gray-200 font-medium">{money(selected.own)}</span>
+                        <span className="text-right text-gray-500 text-xs">{(selected.own / selected.total * 100).toFixed(1)}%</span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-2 px-3 py-1.5 text-sm border-t border-gray-800">
+                        <span className="text-blue-300">Imported</span>
+                        <span className="text-right text-gray-300">{money(selected.grossExternal)}</span>
+                        <span className="text-right text-gray-200 font-medium">{money(selected.external)}</span>
+                        <span className="text-right text-gray-500 text-xs">{(selected.external / selected.total * 100).toFixed(1)}%</span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-2 px-3 py-1.5 text-sm border-t-2 border-gray-700 bg-gray-950/40">
+                        <span className="text-gray-300 font-semibold">Total</span>
+                        <span className="text-right text-gray-200 font-semibold">{money(selected.gross)}</span>
+                        <span className="text-right text-teal-300 font-bold">{money(selected.total)}</span>
+                        <span className="text-right text-gray-500 text-xs">100%</span>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* CONTRIBUTORS */}
                   <div>
                     <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Where it came from</h4>
@@ -830,7 +934,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                           <span className="text-gray-200">{c.fromCity}</span>
                           {c.isOwn
                             ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-900/40 text-teal-300">own workers</span>
-                            : <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-300">from other city</span>}
+                            : <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-300">import</span>}
                           <span className="ml-auto text-gray-400">{money(c.amount)}</span>
                           <span className="text-gray-600 text-xs w-12 text-right">{(c.amount / selected.total * 100).toFixed(0)}%</span>
                         </div>
@@ -852,7 +956,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                           </div>
                           <div className="flex items-center gap-4 text-xs pl-4">
                             <span className="text-teal-300">Own workers {money(rs.own)}</span>
-                            <span className="text-blue-300">External {money(rs.external)}</span>
+                            <span className="text-blue-300">Import {money(rs.external)}</span>
                           </div>
                           <div className="mt-2 pt-2 border-t border-gray-800 text-[11px] space-y-0.5 pl-4">
                             <div className="flex justify-between text-gray-500"><span>Gross</span><span>{money(rs.gross)}</span></div>
@@ -899,6 +1003,33 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                             ))}
                           </div>
                           <span className="w-16 text-right text-[11px] text-gray-500 flex-shrink-0">{money(day.total)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* PER-DAY OWN VS IMPORT */}
+                  <div>
+                    <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By day, own vs import</h4>
+                    <div className="grid grid-cols-7 gap-2 px-2 pb-1 text-[10px] uppercase tracking-wide text-gray-500 border-b border-gray-800">
+                      <span>Date</span>
+                      <span className="text-right">Own gross</span>
+                      <span className="text-right">Import gross</span>
+                      <span className="text-right">Gross</span>
+                      <span className="text-right">Own pay</span>
+                      <span className="text-right">Import pay</span>
+                      <span className="text-right">Payable</span>
+                    </div>
+                    <div className="max-h-96 overflow-y-auto pr-1">
+                      {selected.days.map((day) => (
+                        <div key={day.date} className="grid grid-cols-7 gap-2 px-2 py-1 text-[11px] border-b border-gray-800/60">
+                          <span className="text-gray-400">{day.date}</span>
+                          <span className="text-right text-gray-400">{money(day.grossOwn)}</span>
+                          <span className="text-right text-blue-300/80">{money(day.grossExternal)}</span>
+                          <span className="text-right text-gray-300">{money(day.gross)}</span>
+                          <span className="text-right text-gray-400">{money(day.own)}</span>
+                          <span className="text-right text-blue-300/80">{money(day.external)}</span>
+                          <span className="text-right text-teal-300 font-medium">{money(day.total)}</span>
                         </div>
                       ))}
                     </div>
