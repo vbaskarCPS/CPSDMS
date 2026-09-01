@@ -1,6 +1,9 @@
 // src/pages/SuperAdmin/PayableCitySalesReport.tsx
 import React, { useMemo, useState } from 'react';
-import { X, MapPin, TrendingUp, AlertTriangle, Check, Tag, Download, Printer } from 'lucide-react';
+import { X, MapPin, TrendingUp, AlertTriangle, Check, Tag, FileText, FileSpreadsheet, Loader } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import autoTable, { RowInput } from 'jspdf-autotable';
+import ExcelJS from 'exceljs';
 import { LoadedWorkbook } from '../../lib/reportDataLoader';
 import { PayableCity } from '../../lib/reportingService';
 import { computePayableCitySales, CitySales } from '../../lib/payableCitySales';
@@ -26,268 +29,535 @@ const PALETTE = ['#3b82f6', '#f97316', '#22c55e', '#e11d48', '#a855f7', '#eab308
 
 const money = (n: number) => '$' + Math.round(n).toLocaleString();
 
-// Build & download a CSV report for a single payable city, respecting what
-// is currently shown for that city (its region/season + contributor breakdown).
-const downloadCityReport = (city: CitySales) => {
-  const esc = (v: string | number) => {
-    const s = String(v ?? '');
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  };
-  const rows: (string | number)[][] = [];
-  rows.push(['Payable City Report', city.cityName]);
-  rows.push(['Configured', city.isConfigured ? 'Yes' : 'No (referenced in a split)']);
-  rows.push(['Total payable', Math.round(city.total)]);
-  rows.push(['Gross', Math.round(city.gross)]);
-  rows.push([]);
+// ============================================================================
+// EXPORT HELPERS - shared by the PDF and XLSX builders
+// ============================================================================
 
-  rows.push(['Where it came from']);
-  rows.push(['Source city', 'Type', 'Amount', 'Share %']);
-  city.contributors.forEach((c) => {
-    rows.push([
-      c.fromCity,
-      c.isOwn ? 'Own workers' : 'From other city',
-      Math.round(c.amount),
-      city.total ? ((c.amount / city.total) * 100).toFixed(0) + '%' : '0%',
-    ]);
-  });
-  rows.push([]);
+const LOGO_URL = 'https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png';
 
-  rows.push(['By region / season']);
-  rows.push(['Region', 'Season', 'Own', 'External', 'Gross', 'After tax', 'Tax rate', 'Product rate', 'Payable']);
-  city.regionSeason.forEach((rs) => {
-    rows.push([
-      rs.region,
-      SEASON_LABELS[rs.season] || rs.season,
-      Math.round(rs.own),
-      Math.round(rs.external),
-      Math.round(rs.gross),
-      Math.round(rs.afterTax),
-      rs.taxRate != null ? rs.taxRate + '%' : 'varies',
-      rs.productRate != null ? rs.productRate + '%' : 'varies',
-      Math.round(rs.amount),
-    ]);
-  });
+// Brand colours as RGB triples for jsPDF.
+const C_DARK: [number, number, number] = [37, 37, 37];
+const C_RED: [number, number, number] = [255, 79, 79];
+const C_GREY: [number, number, number] = [154, 154, 154];
+const C_BORDER: [number, number, number] = [230, 230, 230];
+const C_HEADFILL: [number, number, number] = [244, 244, 244];
+const C_ZEBRA: [number, number, number] = [250, 250, 250];
 
-  const csv = rows.map((r) => r.map(esc).join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+const fmtMoney = (n: number) => '$' + Math.round(n).toLocaleString('en-CA');
+
+const fileStamp = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+const slug = (s: string) => s.replace(/[^a-z0-9]+/gi, '-').toLowerCase().replace(/^-|-$/g, '');
+
+const segLabelOf = (s: { nickname?: string; region: Region; season: SeasonType }) =>
+  s.nickname && s.nickname.trim() ? s.nickname : `${s.region} ${SEASON_LABELS[s.season] || s.season}`;
+
+// Consistent colour per segment key within one exported document.
+const segColorsFor = (city: CitySales) => {
+  const keys = Array.from(new Set(city.days.flatMap((d) => d.segments.map((s) => s.key)))).sort();
+  const m = new Map<string, string>();
+  keys.forEach((k, i) => m.set(k, PALETTE[i % PALETTE.length]));
+  return m;
+};
+
+// Push a blob at the browser as a download.
+const saveBlob = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `payable-city-${city.cityName.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.csv`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 };
 
-const printCityReport = (city: CitySales) => {
-  const fmtMoney = (n: number) => '$' + Math.round(n).toLocaleString('en-CA');
-  const share = (a: number) =>
-    city.total > 0 ? ((a / city.total) * 100).toFixed(1) + '%' : '0%';
-  const esc = (v: unknown) =>
-    String(v ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+// Fetch the brand logo and hand back a data URL plus its natural size.
+// Returns null on any failure - the PDF then falls back to a typeset wordmark.
+const loadLogo = async (): Promise<{ dataUrl: string; w: number; h: number } | null> => {
+  try {
+    const res = await fetch(LOGO_URL, { mode: 'cors' });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result));
+      fr.onerror = () => reject(new Error('read failed'));
+      fr.readAsDataURL(blob);
+    });
+    const dims = await new Promise<{ w: number; h: number }>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+      img.onerror = () => reject(new Error('decode failed'));
+      img.src = dataUrl;
+    });
+    return { dataUrl, ...dims };
+  } catch {
+    return null;
+  }
+};
 
-  // Stable colour per segment key, matching the on-screen day chart.
-  const segPalette = [
-    '#3b82f6', '#f97316', '#22c55e', '#e11d48', '#a855f7', '#eab308',
-    '#06b6d4', '#ec4899', '#84cc16', '#f43f5e', '#0ea5e9', '#8b5cf6',
-  ];
-  const segKeys = Array.from(
-    new Set(city.days.flatMap((d) => d.segments.map((s) => s.key)))
-  ).sort();
-  const segColor = new Map<string, string>();
-  segKeys.forEach((k, i) => segColor.set(k, segPalette[i % segPalette.length]));
-  const segLabel = (s: { nickname?: string; region: string; season: SeasonType }) =>
-    s.nickname && s.nickname.trim()
-      ? s.nickname
-      : `${s.region} \u00b7 ${SEASON_LABELS[s.season] || s.season}`;
-  const keyLabelMap = new Map<string, string>();
-  city.days.forEach((d) =>
-    d.segments.forEach((s) => {
-      if (!keyLabelMap.has(s.key)) keyLabelMap.set(s.key, segLabel(s));
-    })
+// ============================================================================
+// PDF EXPORT
+// ============================================================================
+
+const exportCityPdf = async (city: CitySales) => {
+  const doc = new jsPDF({ unit: 'pt', format: 'letter', orientation: 'portrait' });
+  const M = 40;                       // page margin
+  const PW = doc.internal.pageSize.getWidth();
+  const W = PW - M * 2;               // content width
+
+  const now = new Date();
+  const generated = now.toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
+  const segColor = segColorsFor(city);
+
+  // ---- Header banner ----
+  doc.setFillColor(...C_DARK);
+  doc.roundedRect(M, 36, W, 58, 8, 8, 'F');
+
+  const logo = await loadLogo();
+  if (logo) {
+    const h = 26;
+    const w = (logo.w / logo.h) * h;
+    doc.addImage(logo.dataUrl, 'PNG', M + 16, 52, w, h);
+  } else {
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text('CANADIAN PROPERTY STARS', M + 16, 70);
+  }
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(184, 184, 184);
+  doc.text('Payable City Sales', PW - M - 16, 60, { align: 'right' });
+  doc.text(`Generated ${generated}`, PW - M - 16, 74, { align: 'right' });
+
+  // ---- Title ----
+  let y = 128;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(20);
+  doc.setTextColor(...C_DARK);
+  doc.text(city.cityName, M, y);
+  const nameW = doc.getTextWidth(city.cityName);
+  doc.setFillColor(...C_RED);
+  doc.circle(M + nameW + 12, y - 6, 3.5, 'F');
+  doc.text('Payable Report', M + nameW + 24, y);
+
+  if (!city.isConfigured) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(192, 57, 43);
+    doc.text('REFERENCED IN A SPLIT', M + nameW + 24 + doc.getTextWidth('Payable Report') * 0.62 + 12, y - 8);
+  }
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(107, 107, 107);
+  doc.text(
+    'Full breakdown of payable dollars: where they came from, tax and product-cost deductions, and daily sales by source.',
+    M, y + 16
   );
 
-  // ---- Contributors ----
-  const contribRows = city.contributors
+  // ---- KPI tiles ----
+  y += 32;
+  const tiles: { k: string; v: string; accent?: boolean }[] = [
+    { k: 'TOTAL PAYABLE', v: fmtMoney(city.total), accent: true },
+    { k: 'GROSS BEHIND IT', v: fmtMoney(city.gross) },
+    { k: 'CONTRIBUTING SOURCES', v: String(city.contributors.length) },
+    { k: 'ACTIVE DAYS', v: String(city.days.length) },
+  ];
+  const gap = 10;
+  const tw = (W - gap * 3) / 4;
+  tiles.forEach((t, i) => {
+    const x = M + i * (tw + gap);
+    if (t.accent) {
+      doc.setFillColor(255, 245, 245);
+      doc.setDrawColor(255, 208, 208);
+    } else {
+      doc.setFillColor(255, 255, 255);
+      doc.setDrawColor(...C_BORDER);
+    }
+    doc.setLineWidth(0.7);
+    doc.roundedRect(x, y, tw, 50, 6, 6, 'FD');
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.2);
+    doc.setTextColor(138, 138, 138);
+    doc.text(t.k, x + 10, y + 16);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    if (t.accent) doc.setTextColor(...C_RED); else doc.setTextColor(...C_DARK);
+    doc.text(t.v, x + 10, y + 38);
+  });
+  y += 50;
+
+  // ---- Section heading helper ----
+  const heading = (label: string, atY: number) => {
+    doc.setFillColor(...C_RED);
+    doc.rect(M, atY - 8, 3, 11, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(...C_DARK);
+    doc.text(label.toUpperCase(), M + 9, atY);
+    return atY + 8;
+  };
+
+  const baseStyles = {
+    font: 'helvetica' as const,
+    fontSize: 7.5,
+    cellPadding: 4,
+    lineColor: C_BORDER,
+    lineWidth: 0.4,
+    textColor: C_DARK,
+  };
+  const baseHead = {
+    fillColor: C_HEADFILL,
+    textColor: [85, 85, 85] as [number, number, number],
+    fontStyle: 'bold' as const,
+    fontSize: 6.6,
+  };
+  const margin = { left: M, right: M, bottom: 54 };
+
+  // ---- Where it came from ----
+  y = heading('Where it came from', y + 30);
+  if (city.contributors.length) {
+    autoTable(doc, {
+      startY: y,
+      head: [['Source city', 'Type', 'Amount', 'Share']],
+      body: city.contributors
+        .slice()
+        .sort((a, b) => b.amount - a.amount)
+        .map((c) => [
+          c.fromCity,
+          c.isOwn ? 'Own workers' : 'From another city',
+          fmtMoney(c.amount),
+          city.total > 0 ? ((c.amount / city.total) * 100).toFixed(1) + '%' : '0%',
+        ]),
+      theme: 'grid',
+      styles: baseStyles,
+      headStyles: baseHead,
+      alternateRowStyles: { fillColor: C_ZEBRA },
+      columnStyles: {
+        0: { fontStyle: 'bold' },
+        2: { halign: 'right' },
+        3: { halign: 'right', textColor: C_RED, fontStyle: 'bold' },
+      },
+      margin,
+    });
+    y = (doc as any).lastAutoTable.finalY;
+  } else {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(8);
+    doc.setTextColor(...C_GREY);
+    doc.text('No contributing sources.', M, y + 12);
+    y += 16;
+  }
+
+  // ---- By region / season ----
+  const rs = city.regionSeason.slice().sort((a, b) => b.amount - a.amount);
+  y = heading('By region / season', y + 30);
+  if (rs.length) {
+    const totals = rs.reduce(
+      (t, r) => {
+        t.gross += r.gross;
+        t.tax += r.gross - r.afterTax;
+        t.afterTax += r.afterTax;
+        t.prod += r.afterTax - r.amount;
+        t.amount += r.amount;
+        return t;
+      },
+      { gross: 0, tax: 0, afterTax: 0, prod: 0, amount: 0 }
+    );
+    autoTable(doc, {
+      startY: y,
+      head: [['Region', 'Season', 'Gross', 'Tax %', 'Tax', 'After tax', 'Prod %', 'Product cost', 'Payable']],
+      body: rs.map((r) => [
+        r.region,
+        SEASON_LABELS[r.season] || r.season,
+        fmtMoney(r.gross),
+        r.taxRate != null ? r.taxRate + '%' : 'varies',
+        '-' + fmtMoney(r.gross - r.afterTax),
+        fmtMoney(r.afterTax),
+        r.productRate != null ? r.productRate + '%' : 'varies',
+        '-' + fmtMoney(r.afterTax - r.amount),
+        fmtMoney(r.amount),
+      ]),
+      foot: [[
+        'Total', '',
+        fmtMoney(totals.gross), '',
+        '-' + fmtMoney(totals.tax),
+        fmtMoney(totals.afterTax), '',
+        '-' + fmtMoney(totals.prod),
+        fmtMoney(totals.amount),
+      ]],
+      theme: 'grid',
+      styles: baseStyles,
+      headStyles: baseHead,
+      footStyles: {
+        fillColor: [255, 255, 255],
+        textColor: C_DARK,
+        fontStyle: 'bold',
+        fontSize: 7.5,
+        lineColor: C_DARK,
+        lineWidth: { top: 1.2, right: 0.4, bottom: 0.4, left: 0.4 },
+      },
+      alternateRowStyles: { fillColor: C_ZEBRA },
+      columnStyles: {
+        0: { fontStyle: 'bold' },
+        2: { halign: 'right' },
+        3: { halign: 'right', textColor: C_GREY },
+        4: { halign: 'right', textColor: [192, 57, 43] },
+        5: { halign: 'right' },
+        6: { halign: 'right', textColor: C_GREY },
+        7: { halign: 'right', textColor: [192, 57, 43] },
+        8: { halign: 'right', textColor: C_RED, fontStyle: 'bold' },
+      },
+      margin,
+    });
+    y = (doc as any).lastAutoTable.finalY;
+  } else {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(8);
+    doc.setTextColor(...C_GREY);
+    doc.text('No region / season breakdown.', M, y + 12);
+    y += 16;
+  }
+
+  // ---- Daily sales by source ----
+  y = heading('Daily sales by source', y + 30);
+  const days = city.days.slice().sort((a, b) => a.ord - b.ord);
+  if (days.length) {
+    const rows: RowInput[] = [];
+    const dots: string[] = [];
+    days.forEach((d) => {
+      const segs = d.segments.slice().sort((a, b) => b.amount - a.amount);
+      segs.forEach((s, i) => {
+        rows.push([
+          i === 0 ? d.date : '',
+          segLabelOf(s),
+          d.total > 0 ? ((s.amount / d.total) * 100).toFixed(0) + '%' : '0%',
+          fmtMoney(s.amount),
+          i === 0 ? fmtMoney(d.total) : '',
+        ]);
+        dots.push(segColor.get(s.key) || '#6b7280');
+      });
+    });
+
+    autoTable(doc, {
+      startY: y,
+      head: [['Date', 'Source', 'Share', 'Amount', 'Day total']],
+      body: rows,
+      theme: 'grid',
+      styles: baseStyles,
+      headStyles: baseHead,
+      columnStyles: {
+        0: { fontStyle: 'bold', cellWidth: 52 },
+        1: { cellPadding: { top: 4, right: 4, bottom: 4, left: 15 } },
+        2: { halign: 'right', textColor: C_GREY, cellWidth: 42 },
+        3: { halign: 'right', cellWidth: 70 },
+        4: { halign: 'right', fontStyle: 'bold', textColor: C_RED, cellWidth: 70 },
+      },
+      rowPageBreak: 'avoid',
+      margin,
+      didDrawCell: (data) => {
+        if (data.section !== 'body' || data.column.index !== 1) return;
+        const colour = dots[data.row.index];
+        if (!colour) return;
+        doc.setFillColor(colour);
+        doc.rect(data.cell.x + 5, data.cell.y + data.cell.height / 2 - 2.5, 5, 5, 'F');
+      },
+    });
+  } else {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(8);
+    doc.setTextColor(...C_GREY);
+    doc.text('No daily data.', M, y + 12);
+  }
+
+  // ---- Footers on every page ----
+  const pages = doc.getNumberOfPages();
+  const PH = doc.internal.pageSize.getHeight();
+  for (let p = 1; p <= pages; p++) {
+    doc.setPage(p);
+    doc.setDrawColor(...C_BORDER);
+    doc.setLineWidth(0.5);
+    doc.line(M, PH - 40, PW - M, PH - 40);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(...C_GREY);
+    doc.text(`Canadian Property Stars - confidential payable report - ${city.cityName}`, M, PH - 28);
+    doc.text(`${generated}    Page ${p} of ${pages}`, PW - M, PH - 28, { align: 'right' });
+  }
+
+  doc.save(`payable-city-${slug(city.cityName)}-${fileStamp(now)}.pdf`);
+};
+
+// ============================================================================
+// XLSX EXPORT
+// ============================================================================
+
+const exportCityXlsx = async (city: CitySales) => {
+  const now = new Date();
+  const generated = now.toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Canadian Property Stars';
+  wb.created = now;
+
+  const MONEY = '"$"#,##0.00';
+  const PCT = '0.0"%"';
+
+  // Style the first row of a sheet as a header and freeze it.
+  const dressHeader = (ws: ExcelJS.Worksheet) => {
+    const row = ws.getRow(1);
+    row.font = { bold: true, color: { argb: 'FF555555' } };
+    row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4F4F4' } };
+    row.alignment = { vertical: 'middle' };
+    row.height = 18;
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+  };
+
+  // ---- Summary ----
+  const s1 = wb.addWorksheet('Summary');
+  s1.columns = [
+    { header: 'Item', key: 'k', width: 28 },
+    { header: 'Value', key: 'v', width: 26 },
+  ];
+  dressHeader(s1);
+  s1.addRow({ k: 'City', v: city.cityName });
+  s1.addRow({ k: 'Configured', v: city.isConfigured ? 'Yes' : 'No (referenced in a split)' });
+  s1.addRow({ k: 'Generated', v: generated });
+  s1.addRow({ k: '', v: '' });
+  const rTotal = s1.addRow({ k: 'Total payable', v: city.total });
+  const rGross = s1.addRow({ k: 'Gross behind it', v: city.gross });
+  s1.addRow({ k: 'Contributing sources', v: city.contributors.length });
+  s1.addRow({ k: 'Active days', v: city.days.length });
+  [rTotal, rGross].forEach((r) => { r.getCell('v').numFmt = MONEY; });
+  rTotal.font = { bold: true };
+
+  // ---- Where it came from ----
+  const s2 = wb.addWorksheet('Where it came from');
+  s2.columns = [
+    { header: 'Source city', key: 'city', width: 26 },
+    { header: 'Type', key: 'type', width: 20 },
+    { header: 'Amount', key: 'amt', width: 16, style: { numFmt: MONEY } },
+    { header: 'Share %', key: 'share', width: 12, style: { numFmt: PCT } },
+  ];
+  dressHeader(s2);
+  city.contributors
     .slice()
     .sort((a, b) => b.amount - a.amount)
-    .map(
-      (c) => `
-        <tr>
-          <td class="lbl">${esc(c.fromCity)}</td>
-          <td>${c.isOwn ? 'Own workers' : 'From another city'}</td>
-          <td class="num">${fmtMoney(c.amount)}</td>
-          <td class="num accent">${share(c.amount)}</td>
-        </tr>`
-    )
-    .join('');
+    .forEach((c) => {
+      s2.addRow({
+        city: c.fromCity,
+        type: c.isOwn ? 'Own workers' : 'From another city',
+        amt: c.amount,
+        share: city.total > 0 ? (c.amount / city.total) * 100 : 0,
+      });
+    });
 
-  // ---- Region / season with the same step-by-step math as the on-screen page ----
+  // ---- Region & season ----
+  const s3 = wb.addWorksheet('Region & Season');
+  s3.columns = [
+    { header: 'Region', key: 'region', width: 12 },
+    { header: 'Season', key: 'season', width: 18 },
+    { header: 'Gross', key: 'gross', width: 16, style: { numFmt: MONEY } },
+    { header: 'Tax %', key: 'taxpct', width: 10 },
+    { header: 'Tax', key: 'tax', width: 16, style: { numFmt: MONEY } },
+    { header: 'After tax', key: 'after', width: 16, style: { numFmt: MONEY } },
+    { header: 'Product %', key: 'prodpct', width: 11 },
+    { header: 'Product cost', key: 'prod', width: 16, style: { numFmt: MONEY } },
+    { header: 'Own workers', key: 'own', width: 16, style: { numFmt: MONEY } },
+    { header: 'External', key: 'ext', width: 16, style: { numFmt: MONEY } },
+    { header: 'Payable', key: 'payable', width: 16, style: { numFmt: MONEY } },
+  ];
+  dressHeader(s3);
   const rsSorted = city.regionSeason.slice().sort((a, b) => b.amount - a.amount);
-  const rsRows = rsSorted
-    .map((rs) => {
-      const taxDed = rs.gross - rs.afterTax;
-      const prodDed = rs.afterTax - rs.amount;
-      const taxPct = rs.taxRate != null ? rs.taxRate + '%' : 'varies';
-      const prodPct = rs.productRate != null ? rs.productRate + '%' : 'varies';
-      return `
-        <tr>
-          <td class="lbl">${esc(rs.region)}</td>
-          <td>${esc(SEASON_LABELS[rs.season] || rs.season)}</td>
-          <td class="num">${fmtMoney(rs.gross)}</td>
-          <td class="num muted">${taxPct}</td>
-          <td class="num ded">-${fmtMoney(taxDed)}</td>
-          <td class="num">${fmtMoney(rs.afterTax)}</td>
-          <td class="num muted">${prodPct}</td>
-          <td class="num ded">-${fmtMoney(prodDed)}</td>
-          <td class="num accent">${fmtMoney(rs.amount)}</td>
-        </tr>`;
-    })
-    .join('');
-  const rsTotals = rsSorted.reduce(
-    (t, rs) => {
-      t.gross += rs.gross;
-      t.tax += rs.gross - rs.afterTax;
-      t.afterTax += rs.afterTax;
-      t.prod += rs.afterTax - rs.amount;
-      t.amount += rs.amount;
-      return t;
-    },
-    { gross: 0, tax: 0, afterTax: 0, prod: 0, amount: 0 }
-  );
-
-  // ---- Daily breakdown: clean multi-column grid of day cards ----
-  const daysSorted = city.days.slice().sort((a, b) => a.ord - b.ord);
-  const dayCards = daysSorted
-    .map((d) => {
-      const segs = d.segments.slice().sort((a, b) => b.amount - a.amount);
-      const segRows = segs
-        .map((s) => {
-          const col = segColor.get(s.key) || '#6b7280';
-          const pct = d.total > 0 ? ((s.amount / d.total) * 100).toFixed(0) + '%' : '0%';
-          return `
-            <div class="segrow">
-              <span class="dot" style="background:${col}"></span>
-              <span class="segname">${esc(segLabel(s))}</span>
-              <span class="segpct">${pct}</span>
-              <span class="segamt">${fmtMoney(s.amount)}</span>
-            </div>`;
-        })
-        .join('');
-      return `
-        <div class="day">
-          <div class="dayhdr"><span>${esc(d.date)}</span><span class="daytot">${fmtMoney(d.total)}</span></div>
-          <div class="daybody">${segRows}</div>
-        </div>`;
-    })
-    .join('');
-
-  const legend = segKeys
-    .map((k) => {
-      const col = segColor.get(k) || '#6b7280';
-      return `<span class="leg"><span class="dot" style="background:${col}"></span>${esc(keyLabelMap.get(k) || k)}</span>`;
-    })
-    .join('');
-
-  const generated = new Date().toLocaleString('en-CA', {
-    dateStyle: 'medium', timeStyle: 'short',
+  rsSorted.forEach((r) => {
+    s3.addRow({
+      region: r.region,
+      season: SEASON_LABELS[r.season] || r.season,
+      gross: r.gross,
+      taxpct: r.taxRate != null ? r.taxRate / 100 : 'varies',
+      tax: r.gross - r.afterTax,
+      after: r.afterTax,
+      prodpct: r.productRate != null ? r.productRate / 100 : 'varies',
+      prod: r.afterTax - r.amount,
+      own: r.own,
+      ext: r.external,
+      payable: r.amount,
+    });
   });
+  rsSorted.forEach((r, i) => {
+    const row = s3.getRow(i + 2);
+    if (r.taxRate != null) row.getCell('taxpct').numFmt = '0%';
+    if (r.productRate != null) row.getCell('prodpct').numFmt = '0%';
+  });
+  if (rsSorted.length) {
+    const t = rsSorted.reduce(
+      (acc, r) => {
+        acc.gross += r.gross;
+        acc.tax += r.gross - r.afterTax;
+        acc.after += r.afterTax;
+        acc.prod += r.afterTax - r.amount;
+        acc.own += r.own;
+        acc.ext += r.external;
+        acc.payable += r.amount;
+        return acc;
+      },
+      { gross: 0, tax: 0, after: 0, prod: 0, own: 0, ext: 0, payable: 0 }
+    );
+    const tot = s3.addRow({
+      region: 'Total', season: '',
+      gross: t.gross, taxpct: '', tax: t.tax, after: t.after,
+      prodpct: '', prod: t.prod, own: t.own, ext: t.ext, payable: t.payable,
+    });
+    tot.font = { bold: true };
+    tot.border = { top: { style: 'medium', color: { argb: 'FF252525' } } };
+  }
 
-  const html = `<!doctype html>
-<html><head><meta charset="utf-8" />
-<title>Payable City Report \u2013 ${esc(city.cityName)}</title>
-<style>
-  @page { size: letter; margin: 0.55in; }
-  * { box-sizing: border-box; }
-  body { font-family: 'Open Sans','Segoe UI',Helvetica,Arial,sans-serif; color:#252525; margin:0;
-         -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  .head { background:#252525; color:#fff; padding:20px 24px; border-radius:12px;
-          display:flex; align-items:center; justify-content:space-between; }
-  .head img { height:40px; }
-  .head .meta { text-align:right; font-size:11px; color:#b8b8b8; }
-  .title { margin:20px 0 3px; font-size:28px; font-weight:800; letter-spacing:-0.5px; }
-  .title .accent { color:#ff4f4f; }
-  .sub { color:#6b6b6b; font-size:12px; margin-bottom:16px; }
-  .cfg { display:inline-block; margin-left:8px; font-size:11px; font-weight:600; padding:2px 8px;
-         border-radius:999px; background:#fdecec; color:#c0392b; vertical-align:middle; }
-  .kpis { display:flex; gap:12px; margin-bottom:22px; }
-  .kpi { flex:1; border:1px solid #e6e6e6; border-radius:10px; padding:12px 14px; }
-  .kpi .k { font-size:10px; text-transform:uppercase; letter-spacing:0.6px; color:#8a8a8a; }
-  .kpi .v { font-size:23px; font-weight:800; margin-top:3px; }
-  .kpi.payable { background:#fff5f5; border-color:#ffd0d0; }
-  .kpi.payable .v { color:#ff4f4f; }
-  h2 { font-size:13px; text-transform:uppercase; letter-spacing:0.8px; color:#252525;
-       border-left:4px solid #ff4f4f; padding-left:10px; margin:22px 0 9px; }
-  table { width:100%; border-collapse:collapse; font-size:11px; }
-  th { text-align:left; background:#f4f4f4; color:#555; font-size:9px; text-transform:uppercase;
-       letter-spacing:0.4px; padding:6px 7px; }
-  th.num, td.num { text-align:right; }
-  td { padding:6px 7px; border-bottom:1px solid #eee; }
-  td.lbl { font-weight:700; }
-  td.accent { color:#ff4f4f; font-weight:700; }
-  td.ded { color:#c0392b; }
-  td.muted, .muted { color:#9a9a9a; }
-  tbody tr:nth-child(even) td { background:#fafafa; }
-  tfoot td { font-weight:800; border-top:2px solid #252525; background:#fff; }
-  .legendbox { margin:6px 0 14px; display:flex; flex-wrap:wrap; gap:8px 14px; }
-  .leg { display:inline-flex; align-items:center; gap:6px; font-size:10.5px; }
-  .dot { width:9px; height:9px; border-radius:2px; display:inline-block; flex-shrink:0; }
-  .daygrid { display:grid; grid-template-columns:repeat(2, 1fr); gap:10px; align-items:start; }
-  .day { border:1px solid #ececec; border-radius:8px; overflow:hidden; page-break-inside:avoid; }
-  .dayhdr { display:flex; justify-content:space-between; align-items:center; background:#252525;
-            color:#fff; padding:6px 11px; font-size:11.5px; font-weight:700; }
-  .dayhdr .daytot { color:#ff4f4f; }
-  .daybody { padding:5px 11px; }
-  .segrow { display:flex; align-items:center; gap:6px; font-size:10.5px; padding:2.5px 0;
-            border-bottom:1px solid #f2f2f2; }
-  .segrow:last-child { border-bottom:none; }
-  .segrow .segname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .segrow .segpct { color:#9a9a9a; width:34px; text-align:right; }
-  .segrow .segamt { font-weight:700; width:64px; text-align:right; }
-  .foot { margin-top:26px; padding-top:12px; border-top:1px solid #e6e6e6;
-          font-size:10px; color:#9a9a9a; display:flex; justify-content:space-between; }
-  .empty { color:#9a9a9a; font-size:12px; font-style:italic; padding:6px 0; }
-</style></head>
-<body>
-  <div class="head">
-    <img src="https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png" alt="Canadian Property Stars" />
-    <div class="meta">Payable City Sales<br/>Generated ${esc(generated)}</div>
-  </div>
-  <div class="title">${esc(city.cityName)} <span class="accent">\u2022</span> Payable Report${
-    city.isConfigured ? '' : '<span class="cfg">Referenced in a split</span>'
-  }</div>
-  <div class="sub">Full breakdown of payable dollars: where they came from, tax and product-cost deductions, and daily sales by source.</div>
-  <div class="kpis">
-    <div class="kpi payable"><div class="k">Total payable</div><div class="v">${fmtMoney(city.total)}</div></div>
-    <div class="kpi"><div class="k">Gross behind it</div><div class="v">${fmtMoney(city.gross)}</div></div>
-    <div class="kpi"><div class="k">Contributing sources</div><div class="v">${city.contributors.length}</div></div>
-    <div class="kpi"><div class="k">Active days</div><div class="v">${city.days.length}</div></div>
-  </div>
+  // ---- Daily ----
+  const s4 = wb.addWorksheet('Daily');
+  s4.columns = [
+    { header: 'Date', key: 'date', width: 12 },
+    { header: 'Source', key: 'source', width: 30 },
+    { header: 'Region', key: 'region', width: 12 },
+    { header: 'Season', key: 'season', width: 18 },
+    { header: 'Share %', key: 'share', width: 11, style: { numFmt: PCT } },
+    { header: 'Amount', key: 'amt', width: 16, style: { numFmt: MONEY } },
+    { header: 'Day total', key: 'daytotal', width: 16, style: { numFmt: MONEY } },
+  ];
+  dressHeader(s4);
+  city.days
+    .slice()
+    .sort((a, b) => a.ord - b.ord)
+    .forEach((d) => {
+      d.segments
+        .slice()
+        .sort((a, b) => b.amount - a.amount)
+        .forEach((seg, i) => {
+          s4.addRow({
+            date: d.date,
+            source: segLabelOf(seg),
+            region: seg.region,
+            season: SEASON_LABELS[seg.season] || seg.season,
+            share: d.total > 0 ? (seg.amount / d.total) * 100 : 0,
+            amt: seg.amount,
+            daytotal: i === 0 ? d.total : null,
+          });
+        });
+    });
+  s4.autoFilter = { from: 'A1', to: 'G1' };
 
-  <h2>Where it came from</h2>
-  ${contribRows ? `<table><thead><tr><th>Source city</th><th>Type</th><th class="num">Amount</th><th class="num">Share</th></tr></thead><tbody>${contribRows}</tbody></table>` : '<div class="empty">No contributing sources.</div>'}
-
-  <h2>By region / season</h2>
-  ${rsRows ? `<table><thead><tr><th>Region</th><th>Season</th><th class="num">Gross</th><th class="num">Tax %</th><th class="num">Tax</th><th class="num">After tax</th><th class="num">Product %</th><th class="num">Product cost</th><th class="num">Payable</th></tr></thead><tbody>${rsRows}</tbody><tfoot><tr><td>Total</td><td></td><td class="num">${fmtMoney(rsTotals.gross)}</td><td></td><td class="num ded">-${fmtMoney(rsTotals.tax)}</td><td class="num">${fmtMoney(rsTotals.afterTax)}</td><td></td><td class="num ded">-${fmtMoney(rsTotals.prod)}</td><td class="num">${fmtMoney(rsTotals.amount)}</td></tr></tfoot></table>` : '<div class="empty">No region / season breakdown.</div>'}
-
-  <h2>Daily sales by source</h2>
-  ${legend ? `<div class="legendbox">${legend}</div>` : ''}
-  ${dayCards ? `<div class="daygrid">${dayCards}</div>` : '<div class="empty">No daily data.</div>'}
-
-  <div class="foot"><span>Canadian Property Stars \u2014 confidential payable report</span><span>${esc(city.cityName)} \u00b7 ${esc(generated)}</span></div>
-  <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
-</body></html>`;
-
-  const w = window.open('', '_blank');
-  if (!w) return;
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
+  const buf = await wb.xlsx.writeBuffer();
+  saveBlob(
+    new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    `payable-city-${slug(city.cityName)}-${fileStamp(now)}.xlsx`
+  );
 };
+
+// ============================================================================
 
 const regionTotals = (city: CitySales): Record<Region, number> => {
   const m: Record<Region, number> = { West: 0, Central: 0, East: 0 };
@@ -302,6 +572,27 @@ const rangeLabel = (nickname: string | undefined, region: Region, season: Season
 const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
   const result = useMemo(() => computePayableCitySales(workbooks, cities), [workbooks, cities]);
   const [selected, setSelected] = useState<CitySales | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  // Run one export, guarding against double-clicks and surfacing failures.
+  const runExport = async (city: CitySales, kind: 'pdf' | 'xlsx') => {
+    const tag = `${city.cityName}|${kind}`;
+    if (busy) return;
+    setBusy(tag);
+    setExportError(null);
+    try {
+      if (kind === 'pdf') await exportCityPdf(city);
+      else await exportCityXlsx(city);
+    } catch (err) {
+      setExportError(
+        `Couldn't build the ${kind.toUpperCase()} for ${city.cityName}: ` +
+        (err instanceof Error ? err.message : String(err))
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
 
   // Flatten every range across workbooks into one card each (nicknames are individual).
   const nicknameCards = useMemo(() => {
@@ -353,11 +644,21 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
         </div>
       </div>
 
+      {exportError && (
+        <div className="mb-4 bg-red-950/40 border border-red-900/60 rounded-lg p-3 text-sm text-red-300 flex items-center gap-2">
+          <AlertTriangle size={15} className="flex-shrink-0" />
+          <span className="flex-1">{exportError}</span>
+          <button onClick={() => setExportError(null)} className="text-red-400 hover:text-red-200"><X size={15} /></button>
+        </div>
+      )}
+
       {/* CITY CARDS */}
       <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wide mb-3">Payable sales by city</h3>
       <div className="space-y-3">
         {result.cities.map((city) => {
           const rt = regionTotals(city);
+          const pdfBusy = busy === `${city.cityName}|pdf`;
+          const xlsBusy = busy === `${city.cityName}|xlsx`;
           return (
             <div key={city.cityName} className="relative">
               <button
@@ -388,19 +689,22 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                   ))}
                 </div>
               </button>
+
               <button
-                onClick={(e) => { e.stopPropagation(); printCityReport(city); }}
-                title={`Print PDF report for ${city.cityName}`}
-                className="absolute top-3 right-12 p-2 rounded-lg text-gray-400 bg-gray-900/60 border border-gray-700 hover:text-white hover:border-rose-500 transition-colors"
+                onClick={(e) => { e.stopPropagation(); runExport(city, 'pdf'); }}
+                disabled={busy !== null}
+                title={`Download PDF report for ${city.cityName}`}
+                className="absolute top-3 right-12 p-2 rounded-lg text-gray-400 bg-gray-900/60 border border-gray-700 hover:text-white hover:border-rose-500 transition-colors disabled:opacity-40"
               >
-                <Printer size={15} />
+                {pdfBusy ? <Loader size={15} className="animate-spin" /> : <FileText size={15} />}
               </button>
               <button
-                onClick={(e) => { e.stopPropagation(); downloadCityReport(city); }}
-                title={`Download report for ${city.cityName}`}
-                className="absolute top-3 right-3 p-2 rounded-lg text-gray-400 bg-gray-900/60 border border-gray-700 hover:text-white hover:border-gray-500 transition-colors"
+                onClick={(e) => { e.stopPropagation(); runExport(city, 'xlsx'); }}
+                disabled={busy !== null}
+                title={`Download Excel workbook for ${city.cityName}`}
+                className="absolute top-3 right-3 p-2 rounded-lg text-gray-400 bg-gray-900/60 border border-gray-700 hover:text-white hover:border-emerald-500 transition-colors disabled:opacity-40"
               >
-                <Download size={15} />
+                {xlsBusy ? <Loader size={15} className="animate-spin" /> : <FileSpreadsheet size={15} />}
               </button>
             </div>
           );
@@ -480,7 +784,25 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                 <MapPin size={18} className="text-purple-400" />
                 <h2 className="text-lg font-bold text-white">{selected.cityName}</h2>
               </div>
-              <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-white"><X size={20} /></button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => runExport(selected, 'pdf')}
+                  disabled={busy !== null}
+                  title="Download PDF report"
+                  className="p-2 rounded-lg text-gray-400 border border-gray-700 hover:text-white hover:border-rose-500 transition-colors disabled:opacity-40"
+                >
+                  {busy === `${selected.cityName}|pdf` ? <Loader size={16} className="animate-spin" /> : <FileText size={16} />}
+                </button>
+                <button
+                  onClick={() => runExport(selected, 'xlsx')}
+                  disabled={busy !== null}
+                  title="Download Excel workbook"
+                  className="p-2 rounded-lg text-gray-400 border border-gray-700 hover:text-white hover:border-emerald-500 transition-colors disabled:opacity-40"
+                >
+                  {busy === `${selected.cityName}|xlsx` ? <Loader size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
+                </button>
+                <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-white ml-1"><X size={20} /></button>
+              </div>
             </div>
 
             <div className="p-6 space-y-5">
