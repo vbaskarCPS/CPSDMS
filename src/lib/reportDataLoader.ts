@@ -22,6 +22,7 @@ const COL_DATE = 0;          // "May09"
 const COL_CONTRACTOR_ID = 1; // "H1001"
 const COL_FIRST_NAME = 2;    // First Name
 const COL_LAST_NAME = 3;     // Last Name
+const COL_PROD_FLATS = 12;   // ProdFlats (column M) - office flats
 const COL_PROD_GROSS = 15;   // ProdGross (column P)
 const COL_TOTAL_EQ = 17;     // totalEQ
 const COL_BONUSES = 32;      // Bonuses
@@ -47,6 +48,7 @@ export interface PayoutStatRow {
   firstName: string;
   lastName: string;
   prodGross: number;
+  prodFlats: number;     // office flats - already inside prodGross, netted off in payable city sales
   totalEQ: number;
   bonuses: number;
   finalPay: number;
@@ -160,6 +162,7 @@ export async function loadReportData(): Promise<ReportData> {
             firstName: (r[COL_FIRST_NAME] ?? '').toString().trim(),
             lastName: (r[COL_LAST_NAME] ?? '').toString().trim(),
             prodGross: parseFloat(r[COL_PROD_GROSS]) || 0,
+            prodFlats: parseFloat(r[COL_PROD_FLATS]) || 0,
             totalEQ: parseFloat(r[COL_TOTAL_EQ]) || 0,
             bonuses: parseFloat(r[COL_BONUSES]) || 0,
             finalPay: parseFloat(r[COL_FINAL_PAY]) || 0,
