@@ -103,7 +103,7 @@ const printCityReport = (city: CitySales) => {
   const segLabel = (s: { nickname?: string; region: string; season: SeasonType }) =>
     s.nickname && s.nickname.trim()
       ? s.nickname
-      : `${s.region} · ${SEASON_LABELS[s.season] || s.season}`;
+      : `${s.region} \u00b7 ${SEASON_LABELS[s.season] || s.season}`;
   const keyLabelMap = new Map<string, string>();
   city.days.forEach((d) =>
     d.segments.forEach((s) => {
@@ -199,7 +199,7 @@ const printCityReport = (city: CitySales) => {
 
   const html = `<!doctype html>
 <html><head><meta charset="utf-8" />
-<title>Payable City Report – ${esc(city.cityName)}</title>
+<title>Payable City Report \u2013 ${esc(city.cityName)}</title>
 <style>
   @page { size: letter; margin: 0.55in; }
   * { box-sizing: border-box; }
@@ -257,7 +257,7 @@ const printCityReport = (city: CitySales) => {
     <img src="https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png" alt="Canadian Property Stars" />
     <div class="meta">Payable City Sales<br/>Generated ${esc(generated)}</div>
   </div>
-  <div class="title">${esc(city.cityName)} <span class="accent">•</span> Payable Report${
+  <div class="title">${esc(city.cityName)} <span class="accent">\u2022</span> Payable Report${
     city.isConfigured ? '' : '<span class="cfg">Referenced in a split</span>'
   }</div>
   <div class="sub">Full breakdown of payable dollars: where they came from, tax and product-cost deductions, and daily sales by source.</div>
@@ -278,7 +278,7 @@ const printCityReport = (city: CitySales) => {
   ${legend ? `<div class="legendbox">${legend}</div>` : ''}
   ${dayCards ? `<div class="daygrid">${dayCards}</div>` : '<div class="empty">No daily data.</div>'}
 
-  <div class="foot"><span>Canadian Property Stars — confidential payable report</span><span>${esc(city.cityName)} · ${esc(generated)}</span></div>
+  <div class="foot"><span>Canadian Property Stars \u2014 confidential payable report</span><span>${esc(city.cityName)} \u00b7 ${esc(generated)}</span></div>
   <script>window.onload = function(){ setTimeout(function(){ window.print(); }, 400); };<\/script>
 </body></html>`;
 
@@ -419,8 +419,8 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                 <span className={`inline-block w-2.5 h-2.5 rounded-full ${REGION_DOT[card.region]}`} />
                 <span className="text-gray-400 text-sm">{card.region}</span>
                 <span className="text-gray-500 text-xs">{SEASON_LABELS[card.season] || card.season}</span>
-                <span className="text-gray-600 text-xs">{card.startTab}ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ{card.endTab}</span>
-                <span className="text-gray-600 text-xs">ÃÂÃÂÃÂÃÂ· {card.workbook}</span>
+                <span className="text-gray-600 text-xs">{card.startTab}{'\u2013'}{card.endTab}</span>
+                <span className="text-gray-600 text-xs">{'\u00b7'} {card.workbook}</span>
               </div>
               <div className="text-right">
                 <div className="text-xl font-bold text-teal-300">{money(card.payable)}</div>
@@ -491,7 +491,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                   <span className="text-sm text-gray-500">payable sales</span>
                 </div>
                 <div className="text-xs text-gray-500 mt-1 pl-7">
-                  Gross {money(selected.gross)} ÃÂÃÂÃÂÃÂ· deductions {money(selected.gross - selected.total)} ÃÂÃÂÃÂÃÂ· payable {money(selected.total)}
+                  Gross {money(selected.gross)} {'\u00b7'} deductions {money(selected.gross - selected.total)} {'\u00b7'} payable {money(selected.total)}
                 </div>
               </div>
 
@@ -550,7 +550,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                     </div>
                   </div>
 
-                  {/* PER-DAY STACKED CHART ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ split by nickname */}
+                  {/* PER-DAY STACKED CHART - split by nickname */}
                   <div>
                     <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">By day, split by nickname</h4>
 

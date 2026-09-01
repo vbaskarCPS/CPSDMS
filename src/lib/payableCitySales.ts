@@ -18,7 +18,11 @@ import { Region, SeasonType } from '../types';
 // The two reconcile: summary payable = sum(city totals) + noCity + regionUnconfigured.
 // (noRange rows have no range, so no region/season/tax — excluded from the summary.)
 //
-// Payable formula (locked): afterTax = gross / (1 + tax%);  payable = afterTax * (1 - product%)
+// Office flats (ProdFlats) come out of gross BEFORE tax, so they carry neither
+// tax nor product cost. Excluded here only - League Leaders is unaffected.
+//
+// Payable formula (locked): gross = ProdGross - ProdFlats
+//   afterTax = gross / (1 + tax%);  payable = afterTax * (1 - product%)
 //   tax  = gross - afterTax
 //   prod = afterTax - payable
 // ============================================================================
@@ -189,10 +193,16 @@ export function computePayableCitySales(
       if (dOrd == null) continue;
 
       const match = ranges.find((x) => dOrd >= x.lo && dOrd <= x.hi);
-      if (!match) { noRange += row.prodGross; continue; }
+
+      // Office flats leave the equation entirely: taken out of gross BEFORE tax,
+      // so they carry no tax and no product cost. Applies to this report only -
+      // League Leaders still ranks on the raw sheet figures.
+      const grossExFlats = Math.max(0, row.prodGross - row.prodFlats);
+
+      if (!match) { noRange += grossExFlats; continue; }
 
       const { region, season, taxRate, productCostPercent } = match.r;
-      const gross = row.prodGross;
+      const gross = grossExFlats;
       const afterTax = gross / (1 + taxRate / 100);
       const payable = afterTax * (1 - productCostPercent / 100);
       const taxAmt = gross - afterTax;
