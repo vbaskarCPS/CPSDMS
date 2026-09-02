@@ -1021,6 +1021,7 @@ class SessionService {
         teamWorkerIds: teamSession.team_worker_ids,
         equivSplit: teamSession.equiv_split,
         upsellSplit: teamSession.upsell_split,
+        crackfillerBottles: teamSession.crackfiller_bottles ?? 0,
       };
     }
 
@@ -1048,6 +1049,7 @@ class SessionService {
       teamWorkerIds: data.team_worker_ids,
       equivSplit: data.equiv_split,
       upsellSplit: data.upsell_split,
+      crackfillerBottles: data.crackfiller_bottles ?? 0,
     };
   }
 
@@ -2685,6 +2687,7 @@ class SessionService {
           teamWorkerIds: d.team_worker_ids,
           equivSplit: d.equiv_split,
           upsellSplit: d.upsell_split,
+          crackfillerBottles: d.crackfiller_bottles ?? 0,
         };
       });
     }
@@ -2763,6 +2766,7 @@ class SessionService {
         teamWorkerIds: sessionData.team_worker_ids,
         equivSplit: sessionData.equiv_split,
         upsellSplit: sessionData.upsell_split,
+        crackfillerBottles: sessionData.crackfiller_bottles ?? 0,
       };
     }
   
@@ -2954,12 +2958,19 @@ class SessionService {
       if (updates.status) safeUpdates.status = updates.status;
       if (updates.equivSplit) safeUpdates.equiv_split = updates.equivSplit;
       if (updates.upsellSplit) safeUpdates.upsell_split = updates.upsellSplit;
+      // Crackfiller bottles (sealing). Clamped to a whole number ≥ 0 here as
+      // well as in the UI, so nothing can write a negative count.
+      if (updates.crackfillerBottles !== undefined) {
+        safeUpdates.crackfiller_bottles = Math.max(0, Math.floor(updates.crackfillerBottles));
+      }
       
-      await supabase
+      const { error } = await supabase
         .from('logsheet_sessions')
         .update(safeUpdates)
         .eq('id', sessionId)
         .eq('command_center_id', ccId);
+
+      if (error) throw error;
     }
   
     public async updateTeamSplits(

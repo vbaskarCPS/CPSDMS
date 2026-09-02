@@ -44,6 +44,10 @@ export const EQ_DIVISOR = 25;
 // EQ via the standard EQ_DIVISOR and removed from the team pool before splitting.
 export const CRACKFILLER_RATE_PER_LB = 4;
 
+// One bottle of crackfiller = 10 lbs. The RM logs bottles on the cart card;
+// payout pre-fills pounds as bottles × this figure.
+export const CRACKFILLER_LBS_PER_BOTTLE = 10;
+
 export interface CommandCenter {
   id: string;
   username: string;
@@ -335,6 +339,11 @@ export interface LogsheetSession {
   teamWorkerIds?: string[]; // All worker IDs in this team/cart (includes primary workerId)
   equivSplit?: TeamSplitConfig; // How to split EQ among team members
   upsellSplit?: TeamSplitConfig; // How to split upsell commission among team members
+
+  // --- CRACKFILLER BOTTLES (Sealing only) ---
+  // Whole bottles logged by the RM on the cart card during the day. Stored in
+  // logsheet_sessions.crackfiller_bottles. Payout reads it to pre-fill lbs.
+  crackfillerBottles?: number;
 }
 
 export interface SessionStats {

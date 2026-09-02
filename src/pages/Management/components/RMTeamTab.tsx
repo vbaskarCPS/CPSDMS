@@ -24,6 +24,9 @@ import {
   UserMinus,
   Bookmark,
   Undo2,
+  FlaskConical,
+  Plus,
+  Minus,
 } from 'lucide-react';
 import { sessionService } from '../../../lib/sessionService';
 import { seasonHasTeams } from '../../../lib/commandCenterService';
@@ -37,6 +40,7 @@ import {
   SessionStats,
   SEASON_CONFIGS,
   PendingSale,
+  CRACKFILLER_LBS_PER_BOTTLE,
 } from '../../../types';
 import ContractorJobs from './ContractorJobs';
 
@@ -93,6 +97,11 @@ interface CartDisplay {
   asphaltOwnedRows: PendingSale[];
   asphaltIncomingRows: PendingSale[];
   isRcCart: boolean;
+  // CRACKFILLER (sealing only). Bottle count lives on the session row so it
+  // survives refreshes and reaches payout. sessionStatus lets the card lock
+  // the counter once the office has finalised (PAID).
+  crackfillerBottles: number;
+  sessionStatus: LogsheetSession['status'];
 }
 
 type TeamSortOption = 'recent' | 'alpha' | 'steps' | 'equiv' | 'upGross';
@@ -243,6 +252,9 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
   // ASPHALT UNASSIGN STATE — per-row in-flight tracking + error surface.
   const [unassigningAsphaltId, setUnassigningAsphaltId] = useState<string | null>(null);
   const [unassignError, setUnassignError] = useState<string | null>(null);
+
+  // CRACKFILLER BOTTLES — which cart (session id) has a save in flight.
+  const [bottleSavingId, setBottleSavingId] = useState<string | null>(null);
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -442,6 +454,8 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
         asphaltOwnedRows,
         asphaltIncomingRows,
         isRcCart,
+        crackfillerBottles: session.crackfillerBottles ?? 0,
+        sessionStatus: session.status,
         aggregatedStats: {
           steps: stats.stepCount,
           gross: stats.upsellGross,
@@ -622,6 +636,36 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
       setUnassignError(err?.message || 'Failed to unassign asphalt. Please try again.');
     } finally {
       setUnassigningAsphaltId(null);
+    }
+  };
+
+  // CRACKFILLER BOTTLES (sealing only) — RM taps +/- on the cart card. Each
+  // tap writes straight to logsheet_sessions.crackfiller_bottles, updating the
+  // card immediately and reverting if the save fails. Never goes below zero.
+  // Payout reads the count back and pre-fills lbs as bottles × 10.
+  const handleAdjustBottles = async (cart: CartDisplay, delta: number) => {
+    if (bottleSavingId) return;
+    if (cart.sessionStatus === 'PAID') return;
+
+    const previous = cart.crackfillerBottles;
+    const next = Math.max(0, previous + delta);
+    if (next === previous) return;
+
+    setBottleSavingId(cart.sessionId);
+    setCarts(prev => prev.map(c =>
+      c.sessionId === cart.sessionId ? { ...c, crackfillerBottles: next } : c
+    ));
+
+    try {
+      await sessionService.updateLogsheetSession(cart.sessionId, { crackfillerBottles: next });
+    } catch (err) {
+      console.error('Failed to save crackfiller bottles:', err);
+      setCarts(prev => prev.map(c =>
+        c.sessionId === cart.sessionId ? { ...c, crackfillerBottles: previous } : c
+      ));
+      alert('Could not save the bottle count. Please try again.');
+    } finally {
+      setBottleSavingId(null);
     }
   };
 
@@ -969,6 +1013,10 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
     // Asphalt counts — both arrays are empty outside sealing.
     const incomingCount = cart.asphaltIncomingRows.length;
     const showAsphaltBadge = isSealing && incomingCount > 0;
+    // Crackfiller counter state for this card.
+    const bottlesLocked = cart.sessionStatus === 'PAID';
+    const isSavingBottles = bottleSavingId === cart.sessionId;
+    const bottleLbs = cart.crackfillerBottles * CRACKFILLER_LBS_PER_BOTTLE;
 
     return (
       <div
@@ -1028,6 +1076,47 @@ const RMTeamTab: React.FC<RMTeamTabProps> = ({
                   >
                     <Shovel size={9} />
                     {incomingCount}
+                  </span>
+                )}
+                {/* CRACKFILLER COUNTER — sealing only. −/+ never drops below 0.
+                    Locked (read-only) once the session is PAID. Taps here must
+                    not expand/collapse the card, hence the stopPropagation. */}
+                {isSealing && (
+                  <span
+                    onClick={(e) => e.stopPropagation()}
+                    className={`inline-flex items-center rounded text-[10px] font-bold border overflow-hidden ${
+                      bottlesLocked
+                        ? 'bg-gray-800 text-gray-500 border-gray-700'
+                        : 'bg-slate-800 text-slate-200 border-slate-600'
+                    }`}
+                    title={
+                      bottlesLocked
+                        ? `${cart.crackfillerBottles} crackfiller bottle(s) — locked, payout finalised`
+                        : `${cart.crackfillerBottles} crackfiller bottle(s) = ${bottleLbs} lbs`
+                    }
+                  >
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleAdjustBottles(cart, -1); }}
+                      disabled={bottlesLocked || isSavingBottles || cart.crackfillerBottles === 0}
+                      className="px-2 py-1 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      aria-label="Remove one crackfiller bottle"
+                    >
+                      <Minus size={10} />
+                    </button>
+                    <span className="flex items-center gap-1 px-1 min-w-[28px] justify-center">
+                      {isSavingBottles
+                        ? <Loader size={10} className="animate-spin text-slate-400" />
+                        : <FlaskConical size={10} className="text-slate-400" />}
+                      {cart.crackfillerBottles}
+                    </span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleAdjustBottles(cart, 1); }}
+                      disabled={bottlesLocked || isSavingBottles}
+                      className="px-2 py-1 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      aria-label="Add one crackfiller bottle"
+                    >
+                      <Plus size={10} />
+                    </button>
                   </span>
                 )}
               </div>

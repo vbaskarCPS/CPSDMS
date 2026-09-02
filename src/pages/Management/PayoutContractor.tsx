@@ -40,6 +40,7 @@ import {
   SERVICE_FLAG_KEYS,
   SERVICE_FLAG_LABELS,
   CRACKFILLER_RATE_PER_LB,
+  CRACKFILLER_LBS_PER_BOTTLE,
 } from '../../types';
 import EditTransactionModal from '../../components/EditTransactionModal';
 
@@ -324,9 +325,18 @@ const PayoutContractor: React.FC = () => {
             if (!isTeamSeasonType) {
               setMachineRental(foundSession.validation.machineRental);
             }
-            // Restore crackfiller pounds (sealing only)
-            if (foundSession.validation.crackfillerPounds !== undefined) {
-              setCrackfillerPounds(foundSession.validation.crackfillerPounds.toString());
+          }
+
+          // Crackfiller pounds (sealing only). A finalised figure saved on
+          // validation always wins. Otherwise pre-fill from the RM's bottle
+          // count: bottles × 10 lbs. Zero bottles leaves the box blank.
+          if (season === 'sealing') {
+            const savedPounds = foundSession.validation?.crackfillerPounds;
+            const bottles = foundSession.crackfillerBottles ?? 0;
+            if (savedPounds !== undefined) {
+              setCrackfillerPounds(savedPounds.toString());
+            } else if (bottles > 0) {
+              setCrackfillerPounds((bottles * CRACKFILLER_LBS_PER_BOTTLE).toString());
             }
           }
         }
@@ -1303,6 +1313,17 @@ const PayoutContractor: React.FC = () => {
                         />
                         <span className="text-sm text-slate-400">lbs</span>
                       </div>
+                      {(session.crackfillerBottles ?? 0) > 0 && (
+                        <div className="text-right border-l border-slate-700 pl-3">
+                          <div className="text-[10px] text-slate-500 uppercase font-bold">RM Logged</div>
+                          <div className="font-mono text-slate-300 font-bold">
+                            {session.crackfillerBottles} {session.crackfillerBottles === 1 ? 'bottle' : 'bottles'}
+                            <span className="text-slate-500 font-normal">
+                              {' '}= {(session.crackfillerBottles ?? 0) * CRACKFILLER_LBS_PER_BOTTLE} lbs
+                            </span>
+                          </div>
+                        </div>
+                      )}
                       <div className="text-right border-l border-slate-700 pl-3">
                         <div className="text-[10px] text-slate-500 uppercase font-bold">Cost</div>
                         <div className="font-mono text-red-400 font-bold">−${crackfillerCost.toFixed(2)}</div>
