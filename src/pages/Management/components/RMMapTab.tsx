@@ -8,6 +8,7 @@ import {
   AlertCircle, LayoutList, AlertTriangle, Truck, Bookmark, Shovel, Leaf,
   FileText, Check, ArrowRight, ArrowRightLeft, Shuffle, Trash2, UserPlus,
   UserMinus, Undo2, Navigation2, Compass, Scissors,
+  FlaskConical, Plus, Minus,
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { sessionService } from '../../../lib/sessionService';
@@ -23,6 +24,7 @@ import {
   RouteData, MasterBooking, LogsheetSession, Worker, ManagementUser,
   HistoricalProperty, SeasonType, TeamCart, PendingSale, SEASON_CONFIGS,
   SessionTransaction, RouteSplit, ManagerLocation,
+  CRACKFILLER_LBS_PER_BOTTLE,
 } from '../../../types';
 import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
 import ContractorJobs from './ContractorJobs';
@@ -138,6 +140,10 @@ interface CartCardData {
   asphaltOwnedRows: PendingSale[];
   asphaltIncomingRows: PendingSale[];
   isRcCart: boolean;
+  // CRACKFILLER (sealing only) — bottle count from the session row, plus the
+  // session status so the counter locks once the office has finalised (PAID).
+  crackfillerBottles: number;
+  sessionStatus: LogsheetSession['status'];
   stats: {
     steps: number;
     pending: number;
@@ -1119,6 +1125,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   // Team-season cart data
   const [cartCardData, setCartCardData] = useState<CartCardData[]>([]);
+  // CRACKFILLER BOTTLES — which cart (session id) has a save in flight.
+  const [bottleSavingId, setBottleSavingId] = useState<string | null>(null);
 
   // EQ math fix
   const [taxRate, setTaxRate] = useState<number>(5);
@@ -1494,6 +1502,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           asphaltOwnedRows,
           asphaltIncomingRows,
           isRcCart,
+          crackfillerBottles: session.crackfillerBottles ?? 0,
+          sessionStatus: session.status,
           stats: {
             steps: stats.stepCount,
             pending: pending.length,
@@ -3754,6 +3764,36 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     navigate('/logsheet');
   };
 
+  // CRACKFILLER BOTTLES (sealing only) — +/- in the cart detail modal. Writes
+  // straight to logsheet_sessions.crackfiller_bottles; cartCardData is updated
+  // optimistically (the modal-sync effect carries it into the open modal) and
+  // reverted if the save fails. Never below zero; no-op once PAID.
+  const handleAdjustBottles = async (cart: CartCardData, delta: number) => {
+    if (bottleSavingId) return;
+    if (cart.sessionStatus === 'PAID') return;
+
+    const previous = cart.crackfillerBottles;
+    const next = Math.max(0, previous + delta);
+    if (next === previous) return;
+
+    setBottleSavingId(cart.sessionId);
+    setCartCardData(prev => prev.map(c =>
+      c.sessionId === cart.sessionId ? { ...c, crackfillerBottles: next } : c
+    ));
+
+    try {
+      await sessionService.updateLogsheetSession(cart.sessionId, { crackfillerBottles: next });
+    } catch (err) {
+      console.error('Failed to save crackfiller bottles:', err);
+      setCartCardData(prev => prev.map(c =>
+        c.sessionId === cart.sessionId ? { ...c, crackfillerBottles: previous } : c
+      ));
+      alert('Could not save the bottle count. Please try again.');
+    } finally {
+      setBottleSavingId(null);
+    }
+  };
+
   const handleToggleUpsells = async (contractorId: string, currentValue: boolean) => {
     try {
       await sessionService.toggleWorkerUpsells(contractorId, !currentValue);
@@ -4656,6 +4696,45 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                     className="px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md flex items-center gap-1.5"
                     title="Open cart logsheet"
                   ><FileText size={12} />Logsheet</button>
+                  {/* CRACKFILLER COUNTER — sealing only. Locked once PAID. */}
+                  {isSealing && (() => {
+                    const cart = selectedCartForModal;
+                    const locked = cart.sessionStatus === 'PAID';
+                    const saving = bottleSavingId === cart.sessionId;
+                    return (
+                      <span
+                        className={`inline-flex items-center rounded-md text-xs font-bold border overflow-hidden ${
+                          locked
+                            ? 'bg-gray-800 text-gray-500 border-gray-700'
+                            : 'bg-slate-800 text-slate-200 border-slate-600'
+                        }`}
+                        title={
+                          locked
+                            ? `${cart.crackfillerBottles} crackfiller bottle(s) — locked, payout finalised`
+                            : `${cart.crackfillerBottles} crackfiller bottle(s) = ${cart.crackfillerBottles * CRACKFILLER_LBS_PER_BOTTLE} lbs`
+                        }
+                      >
+                        <button
+                          onClick={() => handleAdjustBottles(cart, -1)}
+                          disabled={locked || saving || cart.crackfillerBottles === 0}
+                          className="px-2 py-1.5 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                          aria-label="Remove one crackfiller bottle"
+                        ><Minus size={12} /></button>
+                        <span className="flex items-center gap-1 px-1 min-w-[32px] justify-center">
+                          {saving
+                            ? <Loader size={12} className="animate-spin text-slate-400" />
+                            : <FlaskConical size={12} className="text-slate-400" />}
+                          {cart.crackfillerBottles}
+                        </span>
+                        <button
+                          onClick={() => handleAdjustBottles(cart, 1)}
+                          disabled={locked || saving}
+                          className="px-2 py-1.5 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                          aria-label="Add one crackfiller bottle"
+                        ><Plus size={12} /></button>
+                      </span>
+                    );
+                  })()}
                   <button
                     onClick={() => setSelectedCartForModal(null)}
                     className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
