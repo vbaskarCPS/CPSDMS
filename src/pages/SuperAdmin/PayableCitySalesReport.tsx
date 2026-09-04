@@ -1,6 +1,6 @@
 // src/pages/SuperAdmin/PayableCitySalesReport.tsx
 import React, { useMemo, useState } from 'react';
-import { X, MapPin, TrendingUp, AlertTriangle, Check, Tag, FileText, FileSpreadsheet, Loader } from 'lucide-react';
+import { X, MapPin, TrendingUp, AlertTriangle, Check, Tag, FileText, FileSpreadsheet, Wallet, Loader } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable, { RowInput } from 'jspdf-autotable';
 import ExcelJS from 'exceljs';
@@ -661,6 +661,455 @@ const exportCityXlsx = async (city: CitySales) => {
   );
 };
 
+
+// ============================================================================
+// PAYOUT EXPORT - manager payout workbook (Rates / Daily Sales / Manager Payout)
+// ----------------------------------------------------------------------------
+// The payout sheet shows the full gross -> payable ladder for every region and
+// season, then a commission block that sits on whichever of the two the
+// "Commission basis" cell names.
+// ============================================================================
+
+const PAYOUT_REGIONS: Region[] = ['West', 'Central', 'East'];
+const PAYOUT_SEASONS: SeasonType[] = ['aeration', 'lawn_rejuv', 'sealing', 'cleaning'];
+
+const exportCityPayout = async (city: CitySales) => {
+  const now = new Date();
+  const generated = now.toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Canadian Property Stars';
+  wb.created = now;
+
+  const MONEY = '"$"#,##0.00;("$"#,##0.00);-';
+  const PCT = '0.0%';
+  const ARGB_DARK = 'FF252525';
+  const ARGB_YELLOW = 'FFFFFF00';
+  const ARGB_GREY = 'FFF4F4F4';
+  const BLUE = { argb: 'FF0000FF' };
+  const GREEN = { argb: 'FF008000' };
+  const RED = { argb: 'FFFF4F4F' };
+  const GREYTXT = { argb: 'FF808080' };
+  const DEDRED = { argb: 'FFC0392B' };
+
+  const headerRow = (ws: ExcelJS.Worksheet, rowNo: number, labels: string[]) => {
+    const row = ws.getRow(rowNo);
+    labels.forEach((l, i) => {
+      const c = row.getCell(i + 1);
+      c.value = l;
+      c.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ARGB_DARK } };
+    });
+    row.height = 18;
+  };
+  const asInput = (c: ExcelJS.Cell, fmt?: string) => {
+    c.font = { name: 'Arial', size: 10, color: BLUE };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ARGB_YELLOW } };
+    if (fmt) c.numFmt = fmt;
+  };
+  const asCalc = (c: ExcelJS.Cell, fmt?: string, bold = false) => {
+    c.font = { name: 'Arial', size: 10, bold };
+    if (fmt) c.numFmt = fmt;
+  };
+  const asLink = (c: ExcelJS.Cell, fmt?: string) => {
+    c.font = { name: 'Arial', size: 10, color: GREEN };
+    if (fmt) c.numFmt = fmt;
+  };
+  const asDed = (c: ExcelJS.Cell) => {
+    c.font = { name: 'Arial', size: 10, color: DEDRED };
+    c.numFmt = MONEY;
+  };
+  const noteCell = (ws: ExcelJS.Worksheet, addr: string, text: string) => {
+    const c = ws.getCell(addr);
+    c.value = text;
+    c.font = { name: 'Arial', size: 9, italic: true, color: GREYTXT };
+  };
+  const topRule = { top: { style: 'medium' as const, color: { argb: ARGB_DARK } } };
+
+  const pairs: { region: Region; season: SeasonType }[] = [];
+  PAYOUT_REGIONS.forEach((region) => PAYOUT_SEASONS.forEach((season) => pairs.push({ region, season })));
+
+  // ------------------------------------------------------------ RATES
+  const rates = wb.addWorksheet('Rates');
+  rates.columns = [
+    { width: 14 }, { width: 20 }, { width: 11 }, { width: 14 },
+    { width: 16 }, { width: 11 }, { width: 26 },
+  ];
+  headerRow(rates, 1, [
+    'Region', 'Season', 'Tax %', 'Product cost %', 'Commission rate', 'Payable?', 'Key (do not edit)',
+  ]);
+  rates.views = [{ state: 'frozen', ySplit: 1 }];
+  pairs.forEach((p, i) => {
+    const r = i + 2;
+    const row = rates.getRow(r);
+    const found = city.regionSeason.find((x) => x.region === p.region && x.season === p.season);
+    row.getCell(1).value = p.region;
+    row.getCell(2).value = SEASON_LABELS[p.season] || p.season;
+    const tax = row.getCell(3);
+    tax.value = found && found.taxRate != null ? found.taxRate / 100 : 0;
+    asInput(tax, PCT);
+    const prod = row.getCell(4);
+    prod.value = found && found.productRate != null ? found.productRate / 100 : 0;
+    asInput(prod, PCT);
+    const comm = row.getCell(5);
+    comm.value = 0.035;
+    asInput(comm, PCT);
+    const pay = row.getCell(6);
+    pay.value = 'Yes';
+    asInput(pay);
+    pay.dataValidation = { type: 'list', allowBlank: false, formulae: ['"Yes,No"'] };
+    const key = row.getCell(7);
+    key.value = { formula: `A${r}&"|"&B${r}` } as ExcelJS.CellFormulaValue;
+    key.font = { name: 'Arial', size: 9, italic: true, color: GREYTXT };
+  });
+  const rFirst = 2;
+  const rLast = pairs.length + 1;
+  noteCell(rates, `A${rLast + 2}`,
+    'Tax and product-cost rates were read from the report where the city had sales in that combination; blank ones default to zero. Commission rate starts at 3.5% everywhere - change it per row. Payable? No zeroes a row out without deleting it.');
+
+  // ------------------------------------------------------------ DAILY SALES
+  const daily = wb.addWorksheet('Daily Sales');
+  daily.columns = [
+    { width: 12 }, { width: 12 }, { width: 18 }, { width: 28 },
+    { width: 15 }, { width: 15 }, { width: 15 }, { width: 15 },
+  ];
+  headerRow(daily, 1, [
+    'Date', 'Region', 'Season', 'Source / nickname',
+    'Own gross', 'Import gross', 'Own payable', 'Import payable',
+  ]);
+  daily.views = [{ state: 'frozen', ySplit: 1 }];
+  let dr = 2;
+  city.days
+    .slice()
+    .sort((a, b) => a.ord - b.ord)
+    .forEach((d) => {
+      d.segments
+        .slice()
+        .sort((a, b) => b.amount - a.amount)
+        .forEach((seg) => {
+          const row = daily.getRow(dr);
+          row.getCell(1).value = d.date;
+          row.getCell(2).value = seg.region;
+          row.getCell(3).value = SEASON_LABELS[seg.season] || seg.season;
+          row.getCell(4).value = segLabelOf(seg);
+          ([[5, seg.grossOwn], [6, seg.grossExternal], [7, seg.own], [8, seg.external]] as [number, number][])
+            .forEach(([col, val]) => {
+              const c = row.getCell(col);
+              c.value = val;
+              asCalc(c, MONEY);
+            });
+          dr += 1;
+        });
+    });
+  const dFirst = 2;
+  const dLast = Math.max(dr - 1, dFirst);
+  const dTot = daily.getRow(dLast + 1);
+  dTot.getCell(4).value = 'TOTAL';
+  dTot.getCell(4).font = { name: 'Arial', size: 10, bold: true };
+  (['E', 'F', 'G', 'H'] as const).forEach((col, i) => {
+    const c = dTot.getCell(5 + i);
+    c.value = { formula: `SUM(${col}${dFirst}:${col}${dLast})` } as ExcelJS.CellFormulaValue;
+    asCalc(c, MONEY, true);
+    c.border = topRule;
+  });
+  daily.autoFilter = { from: 'A1', to: 'H1' };
+
+  const DR = (col: string) => `'Daily Sales'!$${col}$${dFirst}:$${col}$${dLast}`;
+  const RT = (col: string) => `Rates!$${col}$${rFirst}:$${col}$${rLast}`;
+  const lookup = (col: string, r: number) =>
+    `IFERROR(INDEX(${RT(col)},MATCH($B${r}&"|"&$C${r},${RT('G')},0)),0)`;
+
+  // ------------------------------------------------------------ MANAGER PAYOUT
+  const ws = wb.addWorksheet('Manager Payout');
+  ws.columns = [
+    { width: 3 }, { width: 14 }, { width: 18 }, { width: 14 }, { width: 14 },
+    { width: 14 }, { width: 9 }, { width: 13 }, { width: 14 }, { width: 10 },
+    { width: 14 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 52 },
+  ];
+
+  const LASTCOL = 14;
+  const section = (r: number, text: string) => {
+    const row = ws.getRow(r);
+    for (let c = 2; c <= LASTCOL; c++) {
+      row.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ARGB_DARK } };
+    }
+    const c = row.getCell(2);
+    c.value = text;
+    c.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    return r + 1;
+  };
+  const label = (r: number, text: string, bold = false) => {
+    const c = ws.getRow(r).getCell(2);
+    c.value = text;
+    c.font = { name: 'Arial', size: 10, bold };
+  };
+  const colHeads = (r: number, labels: string[]) => {
+    const row = ws.getRow(r);
+    labels.forEach((h, i) => {
+      const c = row.getCell(2 + i);
+      c.value = h;
+      c.font = { name: 'Arial', size: 9, bold: true };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ARGB_GREY } };
+      c.alignment = { horizontal: 'center', wrapText: true };
+    });
+  };
+
+  ws.getCell('B1').value = 'MANAGEMENT PAYOUT';
+  ws.getCell('B1').font = { name: 'Arial', size: 16, bold: true, color: { argb: ARGB_DARK } };
+  noteCell(ws, 'B2', 'Yellow = type here.  Green = pulled from another tab.  Black = calculated, do not overtype.');
+
+  let r = 4;
+  label(r, 'City');
+  ws.getRow(r).getCell(3).value = city.cityName;
+  asCalc(ws.getRow(r).getCell(3)); r += 1;
+  label(r, 'Team'); asInput(ws.getRow(r).getCell(3)); r += 1;
+  label(r, 'Manager'); asInput(ws.getRow(r).getCell(3)); r += 1;
+  label(r, 'Generated'); ws.getRow(r).getCell(3).value = generated; r += 2;
+
+  r = section(r, 'BASIS');
+  const basisRow = r;
+  label(r, 'Commission basis');
+  const bc = ws.getRow(r).getCell(3);
+  bc.value = 'Gross';
+  asInput(bc);
+  bc.dataValidation = { type: 'list', allowBlank: false, formulae: ['"Gross,Payable"'] };
+  noteCell(ws, `O${r}`, 'Gross or Payable. The commission block below sits on whichever you name here.');
+  r += 1;
+  label(r, 'City deduction rate');
+  asInput(ws.getRow(r).getCell(3), PCT);
+  ws.getRow(r).getCell(3).value = 0;
+  const RC = `$C$${r}`;
+  noteCell(ws, `O${r}`, 'Applied to the city deductions total at the bottom of this sheet.');
+  r += 2;
+
+  // ---- LADDER: gross -> payable, per region / season ----
+  r = section(r, 'GROSS TO PAYABLE BY REGION / SEASON');
+  colHeads(r, [
+    'Region', 'Season', 'Own gross', 'Import gross', 'Gross',
+    'Tax %', 'less tax', 'After tax', 'Product %', 'less product cost',
+    'Payable', 'Payable (from daily)', 'Difference',
+  ]);
+  r += 1;
+  const lFirst = r;
+  const ladderRowOf = new Map<string, number>();
+  pairs.forEach((p) => {
+    const row = ws.getRow(r);
+    ladderRowOf.set(`${p.region}|${p.season}`, r);
+    row.getCell(2).value = p.region;
+    row.getCell(3).value = SEASON_LABELS[p.season] || p.season;
+    asCalc(row.getCell(2));
+    asCalc(row.getCell(3));
+
+    const ownG = row.getCell(4);
+    ownG.value = { formula: `SUMIFS(${DR('E')},${DR('B')},$B${r},${DR('C')},$C${r})` } as ExcelJS.CellFormulaValue;
+    asLink(ownG, MONEY);
+    const impG = row.getCell(5);
+    impG.value = { formula: `SUMIFS(${DR('F')},${DR('B')},$B${r},${DR('C')},$C${r})` } as ExcelJS.CellFormulaValue;
+    asLink(impG, MONEY);
+
+    const gross = row.getCell(6);
+    gross.value = { formula: `D${r}+E${r}` } as ExcelJS.CellFormulaValue;
+    asCalc(gross, MONEY, true);
+
+    const taxPct = row.getCell(7);
+    taxPct.value = { formula: lookup('C', r) } as ExcelJS.CellFormulaValue;
+    asLink(taxPct, PCT);
+
+    const tax = row.getCell(8);
+    tax.value = { formula: `-(F${r}-F${r}/(1+G${r}))` } as ExcelJS.CellFormulaValue;
+    asDed(tax);
+
+    const afterTax = row.getCell(9);
+    afterTax.value = { formula: `F${r}/(1+G${r})` } as ExcelJS.CellFormulaValue;
+    asCalc(afterTax, MONEY);
+
+    const prodPct = row.getCell(10);
+    prodPct.value = { formula: lookup('D', r) } as ExcelJS.CellFormulaValue;
+    asLink(prodPct, PCT);
+
+    const prodCost = row.getCell(11);
+    prodCost.value = { formula: `-(I${r}*J${r})` } as ExcelJS.CellFormulaValue;
+    asDed(prodCost);
+
+    const payable = row.getCell(12);
+    payable.value = { formula: `I${r}+K${r}` } as ExcelJS.CellFormulaValue;
+    payable.font = { name: 'Arial', size: 10, bold: true, color: RED };
+    payable.numFmt = MONEY;
+
+    const fromDaily = row.getCell(13);
+    fromDaily.value = {
+      formula:
+        `SUMIFS(${DR('G')},${DR('B')},$B${r},${DR('C')},$C${r})+` +
+        `SUMIFS(${DR('H')},${DR('B')},$B${r},${DR('C')},$C${r})`,
+    } as ExcelJS.CellFormulaValue;
+    asLink(fromDaily, MONEY);
+
+    const diff = row.getCell(14);
+    diff.value = { formula: `L${r}-M${r}` } as ExcelJS.CellFormulaValue;
+    asCalc(diff, MONEY);
+    r += 1;
+  });
+  const lLast = r - 1;
+  const lTot = ws.getRow(r);
+  lTot.getCell(3).value = 'TOTAL';
+  lTot.getCell(3).font = { name: 'Arial', size: 10, bold: true };
+  lTot.getCell(3).border = topRule;
+  (['D', 'E', 'F', 'H', 'I', 'K', 'L', 'M', 'N'] as const).forEach((col) => {
+    const cn = col.charCodeAt(0) - 64;
+    const c = lTot.getCell(cn);
+    c.value = { formula: `SUM(${col}${lFirst}:${col}${lLast})` } as ExcelJS.CellFormulaValue;
+    asCalc(c, MONEY, true);
+    c.border = topRule;
+  });
+  (['G', 'J'] as const).forEach((col) => {
+    lTot.getCell(col.charCodeAt(0) - 64).border = topRule;
+  });
+  noteCell(ws, `O${r}`,
+    'Difference should be zero on every row. Anything else means the tax or product rate on the Rates tab does not match what the report used.');
+  r += 2;
+
+  // ---- COMMISSION ----
+  r = section(r, 'COMMISSION BY REGION / SEASON');
+  colHeads(r, [
+    'Region', 'Season', 'Basis amount', 'Imports (lump)', 'Removals', 'Base', 'Rate', 'Commission',
+  ]);
+  r += 1;
+  const cFirst = r;
+  pairs.forEach((p) => {
+    const row = ws.getRow(r);
+    const lr = ladderRowOf.get(`${p.region}|${p.season}`) as number;
+    row.getCell(2).value = p.region;
+    row.getCell(3).value = SEASON_LABELS[p.season] || p.season;
+    asCalc(row.getCell(2));
+    asCalc(row.getCell(3));
+
+    const basis = row.getCell(4);
+    basis.value = { formula: `IF($C$${basisRow}="Gross",F${lr},L${lr})` } as ExcelJS.CellFormulaValue;
+    asLink(basis, MONEY);
+
+    const lump = row.getCell(5); lump.value = 0; asInput(lump, MONEY);
+    const rem = row.getCell(6); rem.value = 0; asInput(rem, MONEY);
+
+    const base = row.getCell(7);
+    base.value = { formula: `D${r}+E${r}-F${r}` } as ExcelJS.CellFormulaValue;
+    asCalc(base, MONEY, true);
+
+    const rate = row.getCell(8);
+    rate.value = {
+      formula: `IF(${lookup('F', r)}="Yes",${lookup('E', r)},0)`,
+    } as ExcelJS.CellFormulaValue;
+    asLink(rate, PCT);
+
+    const comm = row.getCell(9);
+    comm.value = { formula: `G${r}*H${r}` } as ExcelJS.CellFormulaValue;
+    asCalc(comm, MONEY, true);
+    r += 1;
+  });
+  const cLast = r - 1;
+  const cTot = ws.getRow(r);
+  cTot.getCell(3).value = 'TOTAL';
+  cTot.getCell(3).font = { name: 'Arial', size: 10, bold: true };
+  cTot.getCell(3).border = topRule;
+  (['D', 'E', 'F', 'G', 'I'] as const).forEach((col) => {
+    const cn = col.charCodeAt(0) - 64;
+    const c = cTot.getCell(cn);
+    c.value = { formula: `SUM(${col}${cFirst}:${col}${cLast})` } as ExcelJS.CellFormulaValue;
+    asCalc(c, MONEY, true);
+    c.border = topRule;
+  });
+  cTot.getCell(8).border = topRule;
+  const COMM_SALES = `I${r}`;
+  r += 2;
+
+  r = section(r, 'COMMISSION EARNED');
+  label(r, 'Commission from sales');
+  const cs = ws.getRow(r).getCell(4);
+  cs.value = { formula: COMM_SALES } as ExcelJS.CellFormulaValue;
+  asLink(cs, MONEY);
+  const CSALES = `D${r}`; r += 1;
+  const bonusCells: string[] = [];
+  (['Bonus - individual', 'Bonus - team', 'Bonus - phone'] as const).forEach((lbl) => {
+    label(r, lbl);
+    const c = ws.getRow(r).getCell(4); c.value = 0; asInput(c, MONEY);
+    bonusCells.push(`D${r}`); r += 1;
+  });
+  label(r, 'TOTAL COMMISSION', true);
+  const tc = ws.getRow(r).getCell(4);
+  tc.value = { formula: `${CSALES}+${bonusCells.join('+')}` } as ExcelJS.CellFormulaValue;
+  asCalc(tc, MONEY, true);
+  tc.border = topRule;
+  const TC = `D${r}`; r += 2;
+
+  r = section(r, 'ALREADY PAID AND DEDUCTIONS');
+  const paidCells: string[] = [];
+  (['Season payroll already received', 'Advance', 'Personal deductions', 'Pre-paid benefits'] as const)
+    .forEach((lbl) => {
+      label(r, lbl);
+      const c = ws.getRow(r).getCell(4); c.value = 0; asInput(c, MONEY);
+      paidCells.push(`D${r}`); r += 1;
+    });
+  const cityRow = r;
+  label(r, 'City deductions'); r += 1;
+  label(r, 'Total already paid and deducted', true);
+  const to = ws.getRow(r).getCell(4);
+  to.value = { formula: `${paidCells.join('+')}+D${cityRow}` } as ExcelJS.CellFormulaValue;
+  asCalc(to, MONEY, true);
+  to.border = topRule;
+  const TO = `D${r}`; r += 2;
+
+  r = section(r, 'RESULT');
+  label(r, 'COMMISSION OWING', true);
+  const owing = ws.getRow(r).getCell(4);
+  owing.value = { formula: `${TC}-${TO}` } as ExcelJS.CellFormulaValue;
+  owing.numFmt = MONEY;
+  owing.font = { name: 'Arial', size: 14, bold: true, color: RED };
+  noteCell(ws, `O${r}`, 'Negative means the manager has already been paid more than the commission earned.');
+  r += 2;
+
+  r = section(r, 'PAYROLL REFERENCE (not part of the commission maths)');
+  (['Salary', 'RRSP contribution', 'RESP contribution', 'Payroll cash', 'Pre-paid benefits paid'] as const)
+    .forEach((lbl) => {
+      label(r, lbl);
+      asInput(ws.getRow(r).getCell(4), MONEY); r += 1;
+    });
+  r += 1;
+
+  r = section(r, 'CITY DEDUCTIONS');
+  const cdFirst = r;
+  ([
+    'Spring billed', 'Summer billed', "Redo's (not done)", 'NSF cheques', 'DNB',
+    'Refunds', 'Damages', 'Bank fees', 'Unprocessed CCD', 'E-transfers not received',
+  ] as const).forEach((lbl) => {
+    label(r, lbl);
+    asInput(ws.getRow(r).getCell(4), MONEY); r += 1;
+  });
+  const cdLast = r - 1;
+  label(r, 'TOTAL', true);
+  const cdt = ws.getRow(r).getCell(4);
+  cdt.value = { formula: `SUM(D${cdFirst}:D${cdLast})` } as ExcelJS.CellFormulaValue;
+  asCalc(cdt, MONEY, true);
+  cdt.border = topRule;
+  const CDT = `D${r}`; r += 1;
+  label(r, 'Charged at the city deduction rate', true);
+  const cdc = ws.getRow(r).getCell(4);
+  cdc.value = { formula: `${CDT}*${RC}` } as ExcelJS.CellFormulaValue;
+  asCalc(cdc, MONEY, true);
+  const CDC = `D${r}`;
+
+  const cityDed = ws.getRow(cityRow).getCell(4);
+  cityDed.value = { formula: CDC } as ExcelJS.CellFormulaValue;
+  asLink(cityDed, MONEY);
+  noteCell(ws, `O${cityRow}`, 'Pulled from the City Deductions block below.');
+
+  ws.views = [{ state: 'frozen', ySplit: 3 }];
+
+  const buf = await wb.xlsx.writeBuffer();
+  saveBlob(
+    new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    `payout-${slug(city.cityName)}-${fileStamp(now)}.xlsx`
+  );
+};
+
 // ============================================================================
 
 const regionTotals = (city: CitySales): Record<Region, number> => {
@@ -680,17 +1129,18 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
   const [exportError, setExportError] = useState<string | null>(null);
 
   // Run one export, guarding against double-clicks and surfacing failures.
-  const runExport = async (city: CitySales, kind: 'pdf' | 'xlsx') => {
+  const runExport = async (city: CitySales, kind: 'pdf' | 'xlsx' | 'payout') => {
     const tag = `${city.cityName}|${kind}`;
     if (busy) return;
     setBusy(tag);
     setExportError(null);
     try {
       if (kind === 'pdf') await exportCityPdf(city);
+      else if (kind === 'payout') await exportCityPayout(city);
       else await exportCityXlsx(city);
     } catch (err) {
       setExportError(
-        `Couldn't build the ${kind.toUpperCase()} for ${city.cityName}: ` +
+        `Couldn't build the ${kind === 'payout' ? 'payout workbook' : kind.toUpperCase()} for ${city.cityName}: ` +
         (err instanceof Error ? err.message : String(err))
       );
     } finally {
@@ -763,11 +1213,12 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
           const rt = regionTotals(city);
           const pdfBusy = busy === `${city.cityName}|pdf`;
           const xlsBusy = busy === `${city.cityName}|xlsx`;
+          const payBusy = busy === `${city.cityName}|payout`;
           return (
             <div key={city.cityName} className="relative">
               <button
                 onClick={() => setSelected(city)}
-                className="w-full bg-gray-800 rounded-xl border border-gray-700 p-5 pr-14 text-left hover:border-gray-600 transition-colors flex flex-col sm:flex-row sm:items-center gap-5"
+                className="w-full bg-gray-800 rounded-xl border border-gray-700 p-5 pr-28 text-left hover:border-gray-600 transition-colors flex flex-col sm:flex-row sm:items-center gap-5"
               >
                 <div className="sm:w-56 flex-shrink-0">
                   <div className="flex items-center gap-2 mb-1">
@@ -803,7 +1254,7 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                 onClick={(e) => { e.stopPropagation(); runExport(city, 'pdf'); }}
                 disabled={busy !== null}
                 title={`Download PDF report for ${city.cityName}`}
-                className="absolute top-3 right-12 p-2 rounded-lg text-gray-400 bg-gray-900/60 border border-gray-700 hover:text-white hover:border-rose-500 transition-colors disabled:opacity-40"
+                className="absolute top-3 right-[5.25rem] p-2 rounded-lg text-gray-400 bg-gray-900/60 border border-gray-700 hover:text-white hover:border-rose-500 transition-colors disabled:opacity-40"
               >
                 {pdfBusy ? <Loader size={15} className="animate-spin" /> : <FileText size={15} />}
               </button>
@@ -811,9 +1262,17 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                 onClick={(e) => { e.stopPropagation(); runExport(city, 'xlsx'); }}
                 disabled={busy !== null}
                 title={`Download Excel workbook for ${city.cityName}`}
-                className="absolute top-3 right-3 p-2 rounded-lg text-gray-400 bg-gray-900/60 border border-gray-700 hover:text-white hover:border-emerald-500 transition-colors disabled:opacity-40"
+                className="absolute top-3 right-12 p-2 rounded-lg text-gray-400 bg-gray-900/60 border border-gray-700 hover:text-white hover:border-emerald-500 transition-colors disabled:opacity-40"
               >
                 {xlsBusy ? <Loader size={15} className="animate-spin" /> : <FileSpreadsheet size={15} />}
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); runExport(city, 'payout'); }}
+                disabled={busy !== null}
+                title={`Download payout workbook for ${city.cityName}`}
+                className="absolute top-3 right-3 p-2 rounded-lg text-gray-400 bg-gray-900/60 border border-gray-700 hover:text-white hover:border-amber-500 transition-colors disabled:opacity-40"
+              >
+                {payBusy ? <Loader size={15} className="animate-spin" /> : <Wallet size={15} />}
               </button>
             </div>
           );
@@ -909,6 +1368,14 @@ const PayableCitySalesReport: React.FC<Props> = ({ workbooks, cities }) => {
                   className="p-2 rounded-lg text-gray-400 border border-gray-700 hover:text-white hover:border-emerald-500 transition-colors disabled:opacity-40"
                 >
                   {busy === `${selected.cityName}|xlsx` ? <Loader size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />}
+                </button>
+                <button
+                  onClick={() => runExport(selected, 'payout')}
+                  disabled={busy !== null}
+                  title="Download payout workbook"
+                  className="p-2 rounded-lg text-gray-400 border border-gray-700 hover:text-white hover:border-amber-500 transition-colors disabled:opacity-40"
+                >
+                  {busy === `${selected.cityName}|payout` ? <Loader size={16} className="animate-spin" /> : <Wallet size={16} />}
                 </button>
                 <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-white ml-1"><X size={20} /></button>
               </div>
