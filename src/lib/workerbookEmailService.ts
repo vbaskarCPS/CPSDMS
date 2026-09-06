@@ -862,6 +862,8 @@ export interface OutreachTextData {
   /** Most recent price, already formatted (e.g. "$179.00"). */
   price?: string;
   serviceType?: string;
+  /** Route code, rendered pre-wrapped in square brackets, e.g. "[AJ-12]". */
+  routeCode?: string;
 }
 
 export function buildOutreachTextMessage(
@@ -878,6 +880,8 @@ export function buildOutreachTextMessage(
     year:        data.year != null ? String(data.year) : '',
     price:       data.price || '',
     service:     data.serviceType || '',
+    // Pre-wrapped per Vijay — blank stays blank rather than printing "[]".
+    routeCode:   data.routeCode ? `[${data.routeCode}]` : '',
   };
   return replaceVars(template.bodyText, vars);
 }

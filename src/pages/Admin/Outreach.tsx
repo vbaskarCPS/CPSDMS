@@ -98,12 +98,14 @@ const PLACEHOLDERS = [
   { p: '{{year}}',      d: 'Most recent year on record' },
   { p: '{{price}}',     d: 'Most recent price, e.g. $179.00' },
   { p: '{{service}}',   d: 'Most recent service code, e.g. SS' },
+  { p: '{{routeCode}}', d: 'Route code in square brackets, e.g. [AJ-12]' },
 ];
 
 const SAMPLE: any = {
   firstName: 'Mark', lastName: 'Baxter',
   houseNum: '49', streetName: 'Addley Cr', city: 'Ajax',
   year: 2022, price: '$199.00', serviceType: 'SSP',
+  routeCode: 'AJ-12',
 };
 
 const Outreach: React.FC<Props> = ({ onBack }) => {
@@ -334,6 +336,7 @@ const Outreach: React.FC<Props> = ({ onBack }) => {
       year: c.year,
       price: c.price,
       serviceType: c.serviceType,
+      routeCode: c.routeCode,
     });
     // Mark before navigating — once the SMS app takes over we get no callback.
     setTexted(prev => new Set([...prev, c.key]));
