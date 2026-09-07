@@ -726,6 +726,58 @@ function findNearestAssignedRoute(
   return best ? { routeCode: best.routeCode, workerId: best.workerId } : null;
 }
 
+// --- ROUTE CORRECTION HELPERS (office prebooks filed under the wrong route) ---
+
+// A prebook is only ever moved onto a route whose segment OF THE SAME STREET
+// passes within this many metres of the geocoded point. Distance alone
+// misfires on corner lots; the street-name match is what makes this safe.
+const ROUTE_FIX_MAX_METERS = 40;
+
+// Street name of a prebook address: everything after the leading house number
+// (and any "12A" / "12-3" style suffix), normalised the same way the geocode
+// cache key is so "Addley Cr" and "Addley Crescent" compare equal.
+function streetKeyOfAddress(address: string): string {
+  const key = makeCacheKey(address);
+  return key.replace(/^[0-9]+[a-z]?(?:[-\/][0-9a-z]+)?\s+/, '').trim();
+}
+
+// For each route, the nearest distance from the point to any of that route's
+// segments whose street name matches the address. Routes with no segment of
+// that street are simply absent from the result.
+function matchingStreetDistances(
+  lat: number, lng: number, address: string,
+  routeMapData: SavedRoute[],
+): Map<string, number> {
+  const out = new Map<string, number>();
+  const streetKey = streetKeyOfAddress(address);
+  if (!streetKey) return out;
+  for (const rmd of routeMapData) {
+    for (const seg of rmd.segments || []) {
+      const segKey = makeCacheKey(seg.name);
+      if (!segKey) continue;
+      // Full addresses often carry a town after the street ("… crescent ajax"),
+      // so accept the segment name as a whole-word prefix of the address street.
+      if (!(streetKey === segKey || streetKey.startsWith(segKey + ' '))) continue;
+      const coords = seg.coordinates || [];
+      let dist = Infinity;
+      if (coords.length === 1) {
+        const [cLng, cLat] = coords[0];
+        dist = distToSegmentMeters(lat, lng, cLat, cLng, cLat, cLng);
+      } else {
+        for (let i = 0; i < coords.length - 1; i++) {
+          const [lng1, lat1] = coords[i];
+          const [lng2, lat2] = coords[i + 1];
+          const d = distToSegmentMeters(lat, lng, lat1, lng1, lat2, lng2);
+          if (d < dist) dist = d;
+        }
+      }
+      const prev = out.get(rmd.route_code);
+      if (prev === undefined || dist < prev) out.set(rmd.route_code, dist);
+    }
+  }
+  return out;
+}
+
 function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: string[] } {
   const flags: string[] = [];
   const sales = financialStore.filter((tx: any) => tx.type === 'Sale');
@@ -1013,6 +1065,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const popupRef = useRef<mapboxgl.Popup | null>(null);
   const pinClickHandlerRef = useRef<((e: any) => void) | null>(null);
   const [routeMapData, setRouteMapData] = useState<SavedRoute[]>([]);
+  // Route correction: "bookingId|routeCode" pairs already examined. Keyed on
+  // the route too, so a moved prebook is re-checked under its new route once
+  // (where it passes) and never loops.
+  const routeFixCheckedRef = useRef<Set<string>>(new Set());
   const [routesLoading, setRoutesLoading] = useState(true);
   const prevRouteCodesKeyRef = useRef('');
   const routeDataLoadedRef = useRef(false);
@@ -3056,6 +3112,99 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     // re-fire on a phase change. (Phases 2-4 don't have this problem: their
     // in-loop progress phase EQUALS their guard phase, so they never self-flip.)
   }, [mapLoaded, geocodeCacheHydrated, pendingBookingPinSource, routeColorMap, geocodeOne, updatePendingBookingPins, onGeocodeProgress]);
+
+  // --- ROUTE CORRECTION: office prebooks filed under the wrong route ---
+  //
+  // Runs once Phase 1 has handed over its pins (fresh geocodes and cached
+  // ones alike — the check is pure arithmetic, so there's no reason to limit
+  // it to addresses that hit the geocoder). A prebook stays put if its own
+  // route has a segment of its street within ROUTE_FIX_MAX_METERS. Otherwise,
+  // if exactly such a segment exists on another of the loaded routes, the
+  // booking is moved there and handed to whoever holds that route — or that
+  // bucket, when the route is split. Only routes with geometry on this map
+  // (yours, plus anyone you float for) can be detected as the right one.
+  useEffect(() => {
+    if (!mapLoaded || routesLoading || routeMapData.length === 0) return;
+    if (geocodePhase === 'idle' || geocodePhase === 'phase1_pending_bookings') return;
+    const pins = geocodedPins.filter(p => p.status === 'pending');
+    if (pins.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      let movedCount = 0;
+      for (const pin of pins) {
+        if (cancelled || !mountedRef.current) break;
+        const checkKey = `${pin.id}|${pin.routeCode}`;
+        if (routeFixCheckedRef.current.has(checkKey)) continue;
+        routeFixCheckedRef.current.add(checkKey);
+
+        const dists = matchingStreetDistances(pin.lat, pin.lng, pin.address, routeMapData);
+        const currentDist = dists.get(pin.routeCode);
+        if (currentDist !== undefined && currentDist <= ROUTE_FIX_MAX_METERS) continue; // right where it is
+
+        let best: { routeCode: string; dist: number } | null = null;
+        for (const [rc, dist] of dists) {
+          if (rc === pin.routeCode || dist > ROUTE_FIX_MAX_METERS) continue;
+          if (!best || dist < best.dist) best = { routeCode: rc, dist };
+        }
+        if (!best) continue;
+
+        // Who holds the destination — bucket holders if split, route holders if not.
+        const split = routeSplitsByCode.get(best.routeCode);
+        let bucketLetter: string | undefined;
+        let holders: string[] = [];
+        if (split) {
+          bucketLetter = bucketForPoint(pin.lng, pin.lat, split.buckets);
+          holders = split.buckets.find(b => b.letter === bucketLetter)?.assignedWorkers || [];
+        } else {
+          holders = routes.find(r => r.routeCode === best.routeCode)?.assignedWorkerIds || [];
+        }
+        const holder = holders[0] || null;
+        let contractorId: string | null = null;
+        let sessionId: string | null = null;
+        if (holder) {
+          if (isTeamSeason) {
+            const holderSession = allSessions.find(s => {
+              const ids = (s.teamWorkerIds && s.teamWorkerIds.length > 0) ? s.teamWorkerIds : [s.workerId];
+              return ids.includes(holder);
+            });
+            sessionId = holderSession?.id || null;
+          } else {
+            contractorId = holder;
+          }
+        }
+
+        try {
+          await sessionService.relocateBookingToRoute({
+            bookingId: pin.id,
+            newRouteCode: best.routeCode,
+            contractorId,
+            sessionId,
+            bucketLetter,
+          });
+          movedCount++;
+          console.log(`[RouteFix] ${pin.address}: ${pin.routeCode} → ${best.routeCode}${bucketLetter || ''} (${Math.round(best.dist)}m; ${holder ? 'to ' + holder : 'unassigned'})`);
+          // Recolour the dot now rather than waiting for a remount — the
+          // pin store isn't rebuilt from bookings after Phase 1.
+          knownPinsRef.current.set(pin.id, {
+            ...pin,
+            routeCode: best.routeCode,
+            routeColor: routeColorMap.get(best.routeCode) || '#888888',
+          });
+        } catch (err) {
+          console.warn('[RouteFix] move failed for', pin.address, err);
+        }
+      }
+      if (movedCount === 0 || !mountedRef.current) return;
+      const map = mapRef.current;
+      if (map) {
+        updatePendingBookingPins(map, Array.from(knownPinsRef.current.values()).filter(p => p.status === 'pending'));
+      }
+      setGeocodedPins(Array.from(knownPinsRef.current.values()));
+      await reloadRouteSplits();
+      onRefresh();
+    })();
+    return () => { cancelled = true; };
+  }, [mapLoaded, routesLoading, routeMapData, geocodePhase, geocodedPins, routes, routeSplitsByCode, allSessions, isTeamSeason, routeColorMap, updatePendingBookingPins, reloadRouteSplits, onRefresh]);
 
   // PHASE 2: Completed + new sales + pending sales
   useEffect(() => {

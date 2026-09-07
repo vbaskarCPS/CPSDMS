@@ -3278,6 +3278,92 @@ class SessionService {
       }
     }
   
+    // --- RELOCATE A PREBOOK TO THE ROUTE IT PHYSICALLY SITS ON ---
+    //
+    // Used by the RM map once a prebook has coordinates and those coordinates
+    // land on a different route's street than the office had it filed under.
+    // One write moves the route number AND the assignment together: the job
+    // goes to whoever holds the destination route (aeration → contractor_id,
+    // team seasons → session_id), or becomes unassigned when nobody does yet.
+    // Split-bucket membership is kept honest on both sides: pulled out of any
+    // bucket on the old route, dropped into the given bucket on the new one.
+    public async relocateBookingToRoute(input: {
+      bookingId: string;
+      newRouteCode: string;
+      contractorId: string | null;
+      sessionId: string | null;
+      bucketLetter?: string;
+    }): Promise<void> {
+      const ccId = this.getCCId();
+
+      const { data: booking, error: readErr } = await supabase
+        .from('bookings')
+        .select('route_number')
+        .eq('booking_id', input.bookingId)
+        .eq('command_center_id', ccId)
+        .maybeSingle();
+      if (readErr) throw readErr;
+      if (!booking) return;
+
+      const oldRouteCode: string | null = booking.route_number || null;
+      if (oldRouteCode === input.newRouteCode) return;
+
+      const { error } = await supabase
+        .from('bookings')
+        .update({
+          route_number: input.newRouteCode,
+          contractor_id: input.contractorId,
+          session_id: input.sessionId,
+        })
+        .eq('booking_id', input.bookingId)
+        .eq('command_center_id', ccId);
+      if (error) {
+        console.error('[RouteFix] relocateBookingToRoute failed:', error);
+        throw error;
+      }
+
+      const date = await this.getDailySessionDate();
+      if (!date) return;
+
+      // Leave the old route's buckets, if it was split.
+      if (oldRouteCode) {
+        const oldSplit = await this.getRouteSplitForRoute(oldRouteCode);
+        if (oldSplit && oldSplit.buckets.some(b => b.bookingIds.includes(input.bookingId))) {
+          const buckets = oldSplit.buckets.map(b => ({
+            ...b,
+            bookingIds: b.bookingIds.filter(id => id !== input.bookingId),
+          }));
+          const { error: oldErr } = await supabase
+            .from('route_splits')
+            .update({ buckets, updated_at: new Date().toISOString() })
+            .eq('command_center_id', ccId)
+            .eq('session_date', date)
+            .eq('route_code', oldRouteCode);
+          if (oldErr) console.warn('[RouteFix] could not leave old bucket:', oldErr.message);
+        }
+      }
+
+      // Join the right bucket on the new route, if it is split.
+      if (input.bucketLetter) {
+        const newSplit = await this.getRouteSplitForRoute(input.newRouteCode);
+        if (newSplit) {
+          const buckets = newSplit.buckets.map(b => {
+            const without = b.bookingIds.filter(id => id !== input.bookingId);
+            return b.letter === input.bucketLetter
+              ? { ...b, bookingIds: [...without, input.bookingId] }
+              : { ...b, bookingIds: without };
+          });
+          const { error: newErr } = await supabase
+            .from('route_splits')
+            .update({ buckets, updated_at: new Date().toISOString() })
+            .eq('command_center_id', ccId)
+            .eq('session_date', date)
+            .eq('route_code', input.newRouteCode);
+          if (newErr) console.warn('[RouteFix] could not join new bucket:', newErr.message);
+        }
+      }
+    }
+
     public async deleteTransactionByJobId(jobId: string): Promise<void> {
       const ccId = this.getCCId();
       await supabase.from('transactions').delete().eq('job_id', jobId).eq('command_center_id', ccId);
