@@ -35,6 +35,7 @@ import { getManagerColor } from '../../../lib/managerPalette';
 import type { GeocodePhase, GeocodeProgress, FilterVisibility } from '../RMLogbook';
 // Aliased: this file already imports a lucide icon called MapPin.
 import type { MapPin as MapPinRecord } from '../../../lib/sessionService';
+import RoutePCLModal from './RoutePCLModal';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -1109,6 +1110,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [selectedWorkerForModal, setSelectedWorkerForModal] = useState<WorkerCardData | null>(null);
   const [selectedCartForModal, setSelectedCartForModal] = useState<CartCardData | null>(null);
   const [selectedRouteForBookings, setSelectedRouteForBookings] = useState<string | null>(null);
+  // "View PCL" from the assign modal. Floats on top of it; follows it closed.
+  const [pclModalOpen, setPclModalOpen] = useState(false);
   const [assignModalData, setAssignModalData] = useState<AssignModalData | null>(null);
   const [assignLoading, setAssignLoading] = useState(false);
   const sidebarModeRef = useRef<SidebarMode>('staff');
@@ -4372,6 +4375,25 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   };
 
   const selectedRouteBookings=useMemo(()=>selectedRouteForBookings?bookings.filter(b=>b['Route Number']===selectedRouteForBookings):[], [selectedRouteForBookings,bookings]);
+
+  // Pending jobs listed at the top of the assign modal. Bucket-scoped when a
+  // split bucket was opened (same membership rule the route cards use), the
+  // whole route otherwise.
+  const assignModalBookings = useMemo<MasterBooking[]>(() => {
+    if (!assignModalData) return [];
+    let list = bookings.filter(b =>
+      b['Route Number'] === assignModalData.routeCode &&
+      b.Status !== 'completed' && b.Completed !== 'x'
+    );
+    if (assignModalData.letter) {
+      const bucket = routeSplitsByCode.get(assignModalData.routeCode)?.buckets.find(b => b.letter === assignModalData.letter);
+      const ids = new Set(bucket?.bookingIds || []);
+      list = list.filter(b => ids.has(b['Booking ID']));
+    }
+    return list;
+  }, [assignModalData, bookings, routeSplitsByCode]);
+
+  useEffect(() => { if (!assignModalData) setPclModalOpen(false); }, [assignModalData]);
   const selectedRouteFinancialStore=useMemo(()=>selectedRouteForBookings?allSessions.flatMap(s=>(s.financialStore||[]).filter((tx:any)=>tx.routeCode===selectedRouteForBookings)):[], [selectedRouteForBookings,allSessions]);
 
   const handleCopyPhone = (phone: string, id: string) => { navigator.clipboard.writeText(phone); };
@@ -5039,19 +5061,61 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               </div>
 
               <div className="flex-1 overflow-y-auto p-4 space-y-1.5 min-h-0">
-                {/* Split button at TOP — enabled iff this bucket/route has zero
-                    assigned workers. Title explains the disabled reason. */}
-                <button
-                  onClick={handleOpenSplitModal}
-                  disabled={!assignModalData.canSplit || assignLoading}
-                  title={assignModalData.canSplit
-                    ? 'Carve a new sub-bucket out of this route'
-                    : 'Unassign workers first before splitting'}
-                  className="w-full text-left px-3 py-2 bg-amber-600/20 hover:bg-amber-600 border border-amber-600/50 hover:border-amber-500 rounded-md text-amber-300 hover:text-white text-xs font-bold flex items-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-amber-600/20 disabled:hover:text-amber-300"
-                >
-                  <Scissors size={13} />
-                  Split this {assignModalData.letter ? `bucket (${assignModalData.displayRouteCode})` : 'route'}
-                </button>
+                {/* Pending jobs on this route / bucket — read-only reference
+                    so the RM can see what they're handing over. */}
+                {assignModalBookings.length > 0 && (
+                  <div className="mb-2 bg-gray-800/60 border border-gray-700 rounded-md divide-y divide-gray-700/70">
+                    {assignModalBookings.map(b => {
+                      const name = `${b['First Name'] || ''} ${b['Last Name'] || ''}`.trim() || '(no name)';
+                      const phone = String(b['Cell Phone'] || b['Home Phone'] || '').trim();
+                      const service = String(b['FO/BO/FP'] || '').trim();
+                      return (
+                        <div key={b['Booking ID']} className="px-3 py-2 flex items-center gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-white truncate">{name}</span>
+                              {phone && <span className="text-[11px] font-mono text-gray-400 flex-shrink-0">{phone}</span>}
+                            </div>
+                            <div className="text-[11px] text-gray-400 truncate">{b['Full Address'] || ''}</div>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            {b.Price && <span className="text-xs font-mono font-bold text-green-400">{String(b.Price).startsWith('$') ? b.Price : `$${b.Price}`}</span>}
+                            {service && (
+                              <span className="text-[10px] bg-gray-700 border border-gray-600 text-gray-300 px-1 py-0.5 rounded">{service}</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Split + View PCL side by side. Split enabled iff this
+                    bucket/route has zero assigned workers; title explains why not. */}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={handleOpenSplitModal}
+                    disabled={!assignModalData.canSplit || assignLoading}
+                    title={assignModalData.canSplit
+                      ? 'Carve a new sub-bucket out of this route'
+                      : 'Unassign workers first before splitting'}
+                    className="w-full text-left px-3 py-2 bg-amber-600/20 hover:bg-amber-600 border border-amber-600/50 hover:border-amber-500 rounded-md text-amber-300 hover:text-white text-xs font-bold flex items-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-amber-600/20 disabled:hover:text-amber-300"
+                  >
+                    <Scissors size={13} />
+                    Split this {assignModalData.letter ? `bucket (${assignModalData.displayRouteCode})` : 'route'}
+                  </button>
+                  <button
+                    onClick={() => setPclModalOpen(true)}
+                    disabled={assignLoading}
+                    title="Previous clients on this route"
+                    className="w-full text-left px-3 py-2 bg-teal-600/20 hover:bg-teal-600 border border-teal-600/50 hover:border-teal-500 rounded-md text-teal-300 hover:text-white text-xs font-bold flex items-center gap-2 transition-colors disabled:opacity-40"
+                  >
+                    View PCL
+                    <span className="ml-auto text-[10px] font-normal opacity-80">
+                      {(pclByRoute.get(assignModalData.routeCode) || []).length}
+                    </span>
+                  </button>
+                </div>
 
                 {/* Divider */}
                 <div className="border-t border-gray-700 my-2"></div>
@@ -5158,6 +5222,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               </div>
             </div>
           </div>
+        )}
+
+{assignModalData && pclModalOpen && (
+          <RoutePCLModal
+            routeCode={assignModalData.routeCode}
+            displayRouteCode={assignModalData.displayRouteCode}
+            routeColor={assignModalData.routeColor}
+            clients={pclByRoute.get(assignModalData.routeCode) || []}
+            seasonType={seasonType}
+            onClose={() => setPclModalOpen(false)}
+          />
         )}
 
         {transferModalData && (
