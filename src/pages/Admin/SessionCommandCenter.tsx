@@ -63,6 +63,7 @@ import DigitalMasterBookings from './DigitalMasterBookings';
 import DigitalWorkerbook from './DigitalWorkerbook';
 import Outreach from './Outreach';
 import RouteFinderUpdater from './RouteFinderUpdater';
+import RouteCodeRewriter from './RouteCodeRewriter';
 
 // --- FLOATER PALETTE (Digital mapping CCs only) ---
 // The palette + colour-assignment helper now live in a shared module so
@@ -111,6 +112,9 @@ const SessionCommandCenter: React.FC = () => {
 
   // Route Finder Updater visibility
   const [showRouteFinderUpdater, setShowRouteFinderUpdater] = useState(false);
+
+  // Route Code Rewriter visibility
+  const [showRouteCodeRewriter, setShowRouteCodeRewriter] = useState(false);
 
   // --- COMMAND CENTER CONTEXT (stored in state to avoid infinite loops) ---
   const [currentCC, setCurrentCC] = useState(() => commandCenterService.getCurrentCommandCenter());
@@ -1088,6 +1092,10 @@ const SessionCommandCenter: React.FC = () => {
     return <RouteFinderUpdater onBack={() => setShowRouteFinderUpdater(false)} />;
   }
 
+  if (showRouteCodeRewriter) {
+    return <RouteCodeRewriter onBack={() => setShowRouteCodeRewriter(false)} />;
+  }
+
   // Helper for active-session header badge styling
   // TODO: When 'cleaning' season ships, add a 4th branch here for cleaning badges.
   const getSeasonBadgeClasses = (seasonType?: SeasonType): string => {
@@ -1286,6 +1294,15 @@ const SessionCommandCenter: React.FC = () => {
                     >
                       <Navigation2 size={16} className="text-amber-400" />
                       Route Finder Updater
+                    </button>
+                  )}
+                  {hasDigitalMapping && (
+                    <button
+                      onClick={() => setShowRouteCodeRewriter(true)}
+                      className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-700 transition-colors text-sm font-medium"
+                    >
+                      <MapPin size={16} className="text-amber-400" />
+                      Route Code Rewriter
                     </button>
                   )}
                   <button

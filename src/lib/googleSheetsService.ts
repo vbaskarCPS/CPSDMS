@@ -380,6 +380,37 @@ class GoogleSheetsService {
   }
 
   /**
+   * Read rows fromRow..toRow (inclusive, sheet numbering) of a Masterbookings
+   * tab, columns A:P. Used by the Route Code Rewriter. Trailing empty rows
+   * are not returned by the API, so the caller must index by offset.
+   */
+  public async readBookingsRows(tabName: string, fromRow: number, toRow: number): Promise<any[][]> {
+    const config = this.getConfig();
+    return this.sheetsGet(
+      config.spreadsheets.masterbookings,
+      `'${tabName}'!A${fromRow}:P${toRow}`
+    );
+  }
+
+  /**
+   * Overwrite ONLY column D (Route #) and column P (Notes) on one row of a
+   * Masterbookings tab. Two separate ranges in one batch so the columns in
+   * between are never touched.
+   */
+  public async writeBookingRouteAndNotes(
+    tabName: string,
+    rowNumber: number,
+    routeCode: string,
+    notes: string
+  ): Promise<void> {
+    const config = this.getConfig();
+    await this.sheetsBatchUpdate(config.spreadsheets.masterbookings, [
+      { range: `'${tabName}'!D${rowNumber}`, values: [[routeCode]] },
+      { range: `'${tabName}'!P${rowNumber}`, values: [[notes]] },
+    ]);
+  }
+
+  /**
    * Read a range from an ARBITRARY spreadsheet by its ID — not tied to the
    * current command center context. Used by the Reporting tools to read Payout
    * Stats from workbooks configured independently of any CC. Requires an
