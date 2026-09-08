@@ -47,18 +47,25 @@ type RowStatus =
   | 'nogeo'       // address would not geocode
   | 'error';      // sheet write failed
 
-interface RowState {
-  rowNumber: number;      // sheet row, as Google shows it
-  currentCode: string;
-  name: string;
-  address: string;        // "236 Jamieson St"
-  city: string;
-  notes: string;
-  status: RowStatus;
-  newCode?: string;
-  distance?: number;
-  detail?: string;
-}
+  interface RowState {
+    rowNumber: number;      // sheet row, as Google shows it
+    currentCode: string;
+    name: string;
+    house: string;
+    street: string;
+    address: string;        // "236 Jamieson St" — house + street, for display
+    city: string;
+    notes: string;
+    status: RowStatus;
+    newCode?: string;
+    distance?: number;
+    detail?: string;
+    // Manual fix for a failed row: the fields being edited, and whether a retry
+    // is in flight. Cleared once the retry has run.
+    editing?: boolean;
+    draft?: { house: string; street: string; city: string };
+    retrying?: boolean;
+  }
 
 interface RouteGeom {
   routeCode: string;
@@ -258,14 +265,16 @@ const RouteCodeRewriter: React.FC<Props> = ({ onBack }) => {
         const street = cell(7);
         const address = `${house} ${street}`.trim();
         list.push({
-          rowNumber: from + i,
-          currentCode: cell(3),
-          name: `${cell(4)} ${cell(5)}`.trim(),
-          address,
-          city: cell(14),
-          notes: cell(15),
-          status: house && street ? 'pending' : 'skipped',
-        });
+            rowNumber: from + i,
+            currentCode: cell(3),
+            name: `${cell(4)} ${cell(5)}`.trim(),
+            house,
+            street,
+            address,
+            city: cell(14),
+            notes: cell(15),
+            status: house && street ? 'pending' : 'skipped',
+          });
       }
       setRows(list);
     } catch (err) {
@@ -297,46 +306,92 @@ const RouteCodeRewriter: React.FC<Props> = ({ onBack }) => {
     }
 
     for (let i = 0; i < work.length; i++) {
-      if (stopRef.current || !mountedRef.current) break;
-      const row = work[i];
-      const street = row.address.replace(/^[0-9]+[a-z]?(?:[-/][0-9a-z]+)?\s+/i, '');
-
+        if (stopRef.current || !mountedRef.current) break;
+        await processRow(work[i]);
+        if (mountedRef.current) setProgress({ done: i + 1, total: work.length });
+        if (i < work.length - 1) await new Promise(r => setTimeout(r, 80));
+      }
+  
+      if (mountedRef.current) setRunning(false);
+    };
+  
+    // Geocode one row, decide, and write if it moved. Used by the run loop and
+    // by a manual retry. Returns true when the address geocoded at all, so the
+    // retry knows whether a corrected address is worth writing back.
+    const processRow = async (row: RowState): Promise<boolean> => {
       const coord = await geocode(row.address, row.city);
       if (!coord) {
         patchRow(row.rowNumber, { status: 'nogeo' });
-      } else {
-        const dists = matchingStreetDistances(coord.lat, coord.lng, street, geoms);
-        const currentDist = dists.get(row.currentCode);
-        if (currentDist !== undefined && currentDist <= MAX_METERS) {
-          patchRow(row.rowNumber, { status: 'ok', distance: currentDist });
-        } else {
-          let best: { routeCode: string; dist: number } | null = null;
-          for (const [rc, dist] of dists) {
-            if (rc === row.currentCode || dist > MAX_METERS) continue;
-            if (!best || dist < best.dist) best = { routeCode: rc, dist };
-          }
-          if (!best) {
-            patchRow(row.rowNumber, { status: 'nomatch', detail: currentDist !== undefined ? `own route ${Math.round(currentDist)}m away` : undefined });
-          } else {
-            // Write straight away — Vijay's call. The old code goes to Notes.
-            const oldLabel = row.currentCode || '(blank)';
-            const newNotes = row.notes ? `${row.notes} | was ${oldLabel}` : `was ${oldLabel}`;
-            try {
-              await googleSheetsService.writeBookingRouteAndNotes(BOOKINGS_TAB, row.rowNumber, best.routeCode, newNotes);
-              patchRow(row.rowNumber, { status: 'changed', newCode: best.routeCode, distance: best.dist, notes: newNotes });
-            } catch (err) {
-              patchRow(row.rowNumber, { status: 'error', newCode: best.routeCode, detail: err instanceof Error ? err.message : 'write failed' });
-            }
+        return false;
+      }
+      const dists = matchingStreetDistances(coord.lat, coord.lng, row.street, geoms);
+      const currentDist = dists.get(row.currentCode);
+      if (currentDist !== undefined && currentDist <= MAX_METERS) {
+        patchRow(row.rowNumber, { status: 'ok', distance: currentDist, detail: undefined });
+        return true;
+      }
+      let best: { routeCode: string; dist: number } | null = null;
+      for (const [rc, dist] of dists) {
+        if (rc === row.currentCode || dist > MAX_METERS) continue;
+        if (!best || dist < best.dist) best = { routeCode: rc, dist };
+      }
+      if (!best) {
+        patchRow(row.rowNumber, { status: 'nomatch', detail: currentDist !== undefined ? `own route ${Math.round(currentDist)}m away` : undefined });
+        return true;
+      }
+      // Write straight away — Vijay's call. The old code goes to Notes.
+      const oldLabel = row.currentCode || '(blank)';
+      const newNotes = row.notes ? `${row.notes} | was ${oldLabel}` : `was ${oldLabel}`;
+      try {
+        await googleSheetsService.writeBookingRouteAndNotes(BOOKINGS_TAB, row.rowNumber, best.routeCode, newNotes);
+        patchRow(row.rowNumber, { status: 'changed', newCode: best.routeCode, distance: best.dist, notes: newNotes, detail: undefined });
+      } catch (err) {
+        patchRow(row.rowNumber, { status: 'error', newCode: best.routeCode, detail: err instanceof Error ? err.message : 'write failed' });
+      }
+      return true;
+    };
+  
+    // --- MANUAL FIX: edit a failed row's address and retry it alone ---
+  
+    const startEdit = (row: RowState) =>
+      patchRow(row.rowNumber, { editing: true, draft: { house: row.house, street: row.street, city: row.city } });
+  
+    const cancelEdit = (row: RowState) =>
+      patchRow(row.rowNumber, { editing: false, draft: undefined });
+  
+    const updateDraft = (row: RowState, patch: Partial<{ house: string; street: string; city: string }>) =>
+      patchRow(row.rowNumber, { draft: { ...(row.draft || { house: row.house, street: row.street, city: row.city }), ...patch } });
+  
+    const handleRetry = async (row: RowState) => {
+      if (!row.draft || row.retrying) return;
+      const house = row.draft.house.trim();
+      const street = row.draft.street.trim();
+      const city = row.draft.city.trim();
+      if (!house || !street) { setError('A house number and street are needed to retry.'); return; }
+      setError(null);
+  
+      const changedAddress = house !== row.house || street !== row.street || city !== row.city;
+      const corrected: RowState = { ...row, house, street, city, address: `${house} ${street}`, retrying: true, editing: false, draft: undefined };
+      patchRow(row.rowNumber, { house, street, city, address: corrected.address, retrying: true, editing: false, draft: undefined });
+  
+      try {
+        await googleSheetsService.ensureToken();
+        const geocoded = await processRow(corrected);
+        // The corrected spelling goes back to the sheet once it has proven
+        // itself by geocoding — not before, so a typo can't land in the sheet.
+        if (geocoded && changedAddress) {
+          try {
+            await googleSheetsService.writeBookingAddress(BOOKINGS_TAB, row.rowNumber, house, street, city);
+          } catch (err) {
+            patchRow(row.rowNumber, { status: 'error', detail: `address write failed: ${err instanceof Error ? err.message : 'unknown'}` });
           }
         }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Retry failed.');
+      } finally {
+        patchRow(row.rowNumber, { retrying: false });
       }
-
-      if (mountedRef.current) setProgress({ done: i + 1, total: work.length });
-      if (i < work.length - 1) await new Promise(r => setTimeout(r, 80));
-    }
-
-    if (mountedRef.current) setRunning(false);
-  };
+    };
 
   const counts = useMemo(() => {
     const c: Record<RowStatus, number> = { pending: 0, skipped: 0, ok: 0, changed: 0, nomatch: 0, nogeo: 0, error: 0 };
@@ -473,7 +528,53 @@ const RouteCodeRewriter: React.FC<Props> = ({ onBack }) => {
                   <span className="font-mono text-gray-500">{r.rowNumber}</span>
                   <div className="min-w-0">
                     <div className="font-bold text-white truncate">{r.name || '(no name)'}</div>
-                    <div className="text-gray-400 truncate">{r.address}{r.city ? `, ${r.city}` : ''}</div>
+                    {r.editing && r.draft ? (
+                      <div className="mt-1 space-y-1">
+                        <div className="flex gap-1">
+                          <input
+                            value={r.draft.house}
+                            onChange={e => updateDraft(r, { house: e.target.value })}
+                            placeholder="No."
+                            className="w-16 bg-gray-900 border border-gray-600 rounded px-1.5 py-1 text-white text-xs focus:ring-1 focus:ring-amber-500 focus:outline-none"
+                          />
+                          <input
+                            value={r.draft.street}
+                            onChange={e => updateDraft(r, { street: e.target.value })}
+                            placeholder="Street name"
+                            className="flex-1 min-w-0 bg-gray-900 border border-gray-600 rounded px-1.5 py-1 text-white text-xs focus:ring-1 focus:ring-amber-500 focus:outline-none"
+                          />
+                        </div>
+                        <div className="flex gap-1">
+                          <input
+                            value={r.draft.city}
+                            onChange={e => updateDraft(r, { city: e.target.value })}
+                            placeholder="City"
+                            className="flex-1 min-w-0 bg-gray-900 border border-gray-600 rounded px-1.5 py-1 text-white text-xs focus:ring-1 focus:ring-amber-500 focus:outline-none"
+                          />
+                          <button
+                            onClick={() => handleRetry(r)}
+                            disabled={running}
+                            className="px-2 py-1 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-[11px] font-bold"
+                          >Retry</button>
+                          <button
+                            onClick={() => cancelEdit(r)}
+                            className="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-[11px]"
+                          >Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-gray-400 truncate flex items-center gap-2">
+                        <span className="truncate">{r.address}{r.city ? `, ${r.city}` : ''}</span>
+                        {r.retrying ? (
+                          <Loader size={11} className="animate-spin text-amber-400 flex-shrink-0" />
+                        ) : (r.status === 'nogeo' || r.status === 'nomatch' || r.status === 'error') && !running ? (
+                          <button
+                            onClick={() => startEdit(r)}
+                            className="text-[10px] text-amber-400 hover:text-amber-300 underline flex-shrink-0"
+                          >fix &amp; retry</button>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
                   <div className="text-gray-400 truncate" title={r.notes}>{r.notes}</div>
                   <span className="font-mono text-gray-300">{r.currentCode || '—'}</span>

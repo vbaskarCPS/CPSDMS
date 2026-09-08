@@ -411,6 +411,24 @@ class GoogleSheetsService {
   }
 
   /**
+   * Overwrite ONLY House # (G), Street Name (H) and City (O) on one row of a
+   * Masterbookings tab — the Route Code Rewriter's corrected-address write.
+   */
+  public async writeBookingAddress(
+    tabName: string,
+    rowNumber: number,
+    houseNumber: string,
+    streetName: string,
+    city: string
+  ): Promise<void> {
+    const config = this.getConfig();
+    await this.sheetsBatchUpdate(config.spreadsheets.masterbookings, [
+      { range: `'${tabName}'!G${rowNumber}:H${rowNumber}`, values: [[houseNumber, streetName]] },
+      { range: `'${tabName}'!O${rowNumber}`, values: [[city]] },
+    ]);
+  }
+
+  /**
    * Read a range from an ARBITRARY spreadsheet by its ID — not tied to the
    * current command center context. Used by the Reporting tools to read Payout
    * Stats from workbooks configured independently of any CC. Requires an
