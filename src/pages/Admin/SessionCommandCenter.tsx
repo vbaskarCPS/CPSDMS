@@ -1296,15 +1296,13 @@ const SessionCommandCenter: React.FC = () => {
                       Route Finder Updater
                     </button>
                   )}
-                  {hasDigitalMapping && (
-                    <button
-                      onClick={() => setShowRouteCodeRewriter(true)}
-                      className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-700 transition-colors text-sm font-medium"
-                    >
-                      <MapPin size={16} className="text-amber-400" />
-                      Route Code Rewriter
-                    </button>
-                  )}
+                  <button
+                    onClick={() => setShowRouteCodeRewriter(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-700 transition-colors text-sm font-medium"
+                  >
+                    <MapPin size={16} className="text-amber-400" />
+                    Route Code Rewriter
+                  </button>
                   <button
                     onClick={() => setShowPayslipGenerator(true)}
                     className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-lg border border-gray-700 transition-colors text-sm font-medium"
