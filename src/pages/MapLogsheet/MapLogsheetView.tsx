@@ -393,10 +393,24 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     });
   }, []);
 
+  // Keep the canvas the same size as its box. Mapbox only re-measures on a
+  // window resize, so a container that settles after the map starts (phone
+  // browser chrome, the stats strip) leaves a stale canvas with black bands.
   useEffect(() => {
-    if (!mapLoaded) return;
+    if (!mapLoaded || !containerRef.current) return;
+    const el = containerRef.current;
     const t = setTimeout(() => mapRef.current?.resize(), 150);
-    return () => clearTimeout(t);
+    const ro = new ResizeObserver(() => mapRef.current?.resize());
+    ro.observe(el);
+    const onVis = () => mapRef.current?.resize();
+    window.addEventListener('orientationchange', onVis);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearTimeout(t);
+      ro.disconnect();
+      window.removeEventListener('orientationchange', onVis);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, [mapLoaded]);
 
   // Keep house layers above route lines if the style reorders anything.
