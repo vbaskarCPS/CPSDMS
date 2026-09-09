@@ -1,0 +1,26 @@
+
+{
+  "name": "Canadian Property Stars - Digital Logsheet",
+  "short_name": "CPS Logsheet",
+  "description": "Digital Logsheet for Canadian Property Stars aeration services",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#800020",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
