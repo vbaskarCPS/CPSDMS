@@ -16,7 +16,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   LogOut, Loader, Plus, FileText, ListChecks, Home, X, CheckCircle2, AlertCircle, Shovel, Droplets, Leaf,
-  Menu, BarChart3, ChevronUp, Clock, MapPinned, RotateCcw,
+  Menu, BarChart3, ChevronUp, Clock, MapPinned, RotateCcw, MessageSquare,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
@@ -32,6 +32,8 @@ import AddContractModal from '../../components/AddContractModal';
 import QuickPendingModal from '../../components/QuickPendingModal';
 import MapLogsheetView from './MapLogsheetView';
 import HouseSheet, { AddHouseSheet } from './HouseSheet';
+import PclOutreachSheet, { pclOutreachClients } from './PclOutreachSheet';
+import { getPclTextedSet } from '../../lib/pclOutreachService';
 import {
   MAP_LOGSHEET_PATH, isH01,
   SavedRouteMap, RouteHouse, HouseDisposition, HouseDispositionStatus, HouseView,
@@ -155,6 +157,8 @@ const MapLogsheetPage: React.FC = () => {
   const [showMenu, setShowMenu] = useState(false);
   const [jobsFilter, setJobsFilter] = useState<'pending' | 'completed'>('pending');
   const [showContract, setShowContract] = useState(false);
+  const [showPclOutreach, setShowPclOutreach] = useState(false);
+  const [pclTexted, setPclTexted] = useState<Set<string>>(new Set());
   const [quickPending, setQuickPending] = useState<null | { prefill?: { routeCode: string; houseNumber: string; streetName: string } }>(null);
   const [placing, setPlacing] = useState(false);
   const [placeAt, setPlaceAt] = useState<null | { lng: number; lat: number; routeCode: string; streets: string[] }>(null);
@@ -348,6 +352,16 @@ const MapLogsheetPage: React.FC = () => {
     const pcl = indexPcl(pclByRoute);
     return buildHouseViews(houses, dispositions, ps, pending, completed, pcl);
   }, [houses, dispositions, pendingSales, jobs, pclByRoute]);
+
+  // PCL Outreach: who's textable on these routes, and how many are still to do.
+  const pclClients = useMemo(() => pclOutreachClients(houseViews), [houseViews]);
+  const pclToText = useMemo(() => pclClients.filter(c => !pclTexted.has(c.key)).length, [pclClients, pclTexted]);
+  useEffect(() => {
+    if (!worker) return;
+    let cancelled = false;
+    getPclTextedSet().then(s => { if (!cancelled) setPclTexted(s); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [worker]);
 
   const selectedView = useMemo(
     () => (selectedId ? houseViews.find(v => routeHouseId(v.house.routeCode, v.house.houseKey) === selectedId) || null : null),
@@ -651,7 +665,7 @@ const MapLogsheetPage: React.FC = () => {
   }
 
   const pct = (x: number) => `${Math.round(x * 100)}%`;
-  const anySheetOpen = !!selectedView || !!placeAt || showJobs || showStats || showMenu;
+  const anySheetOpen = !!selectedView || !!placeAt || showJobs || showStats || showMenu || showPclOutreach;
 
   return (
     // Fixed to the viewport edges: the most reliable "fill the phone screen"
@@ -754,6 +768,15 @@ const MapLogsheetPage: React.FC = () => {
                 <ListChecks size={18} className="text-blue-300" /> Jobs
                 {counts.pending > 0 && <span className="ml-auto bg-yellow-500 text-black rounded-full px-2 text-[11px]">{counts.pending} pending</span>}
               </button>
+              {pclClients.length > 0 && (
+                <button
+                  onClick={() => { setShowMenu(false); setShowPclOutreach(true); }}
+                  className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
+                >
+                  <MessageSquare size={18} className="text-teal-300" /> PCL Outreach
+                  {pclToText > 0 && <span className="ml-auto bg-teal-600 text-white rounded-full px-2 text-[11px]">{pclToText} to text</span>}
+                </button>
+              )}
               {upsellsEnabled && (
                 <button
                   onClick={() => { setShowMenu(false); setShowContract(true); }}
@@ -991,6 +1014,18 @@ const MapLogsheetPage: React.FC = () => {
             saving={saving}
             onSave={handleAddHouse}
             onCancel={() => setPlaceAt(null)}
+          />
+        )}
+
+        {/* PCL Outreach sheet */}
+        {showPclOutreach && worker && (
+          <PclOutreachSheet
+            worker={worker}
+            commandCenterId={cc?.id ?? null}
+            clients={pclClients}
+            texted={pclTexted}
+            onTexted={key => setPclTexted(prev => new Set([...prev, key]))}
+            onClose={() => setShowPclOutreach(false)}
           />
         )}
 
