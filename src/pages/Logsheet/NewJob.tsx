@@ -182,6 +182,9 @@ const ServiceToggles: React.FC<{
 const NewJob: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  // Where to go when done/cancelled. The map logsheet passes ?returnTo=/map-logsheet;
+  // everyone else keeps landing on the ordinary logsheet.
+  const returnPath = searchParams.get('returnTo') || '/logsheet';
 
   // --- Training mode state ---
   const [isTrainingMode, setIsTrainingMode] = useState(false);
@@ -486,7 +489,7 @@ const NewJob: React.FC = () => {
 
           if (myRoutes.length === 0) {
             alert('You have no assigned routes. Please contact your manager to create sales.');
-            navigate('/logsheet');
+            navigate(returnPath);
             return;
           }
 
@@ -497,7 +500,7 @@ const NewJob: React.FC = () => {
         } catch (err) {
           console.warn("Offline/No session found", err);
           alert('Unable to load route assignments. Please try again.');
-          navigate('/logsheet');
+          navigate(returnPath);
         }
       }
     };
@@ -859,7 +862,7 @@ const NewJob: React.FC = () => {
         });
       }
 
-      navigate('/logsheet');
+      navigate(returnPath);
     } catch (err: any) {
       console.error('[NewJob] handleSavePending failed:', err);
       setError(err?.message || 'Failed to save pending sale. Please try again.');
@@ -1266,7 +1269,7 @@ const NewJob: React.FC = () => {
         await service.updateLogsheetSession(session.id, { stats: newStats });
       }
 
-      navigate('/logsheet');
+      navigate(returnPath);
     } catch (err: any) {
       console.error(err);
       setError("Failed to save sale: " + err.message);
@@ -1338,7 +1341,7 @@ const NewJob: React.FC = () => {
               </span>
             )}
           </div>
-          <button onClick={() => navigate('/logsheet')} className="text-gray-400 hover:text-white" disabled={saving || savingPending}><X size={24} /></button>
+          <button onClick={() => navigate(returnPath)} className="text-gray-400 hover:text-white" disabled={saving || savingPending}><X size={24} /></button>
         </div>
 
         {error && <div className="m-4 p-3 bg-red-900/30 text-red-300 border border-red-700 rounded-md text-sm flex items-center gap-2"><AlertCircle size={16} /> {error}</div>}
@@ -1699,7 +1702,7 @@ const NewJob: React.FC = () => {
           {/* FOOTER ACTIONS — 3 buttons in team seasons (Cancel | Save Pending | Save & Complete),
               2 buttons in Aeration (Cancel | Save & Complete) */}
           <div className="p-4 border-t border-gray-700 bg-gray-900/50 rounded-b-lg flex justify-end gap-3 flex-shrink-0">
-            <button type="button" onClick={() => navigate('/logsheet')} className="px-4 py-3 text-gray-400 hover:text-white font-medium" disabled={saving || savingPending}>Cancel</button>
+            <button type="button" onClick={() => navigate(returnPath)} className="px-4 py-3 text-gray-400 hover:text-white font-medium" disabled={saving || savingPending}>Cancel</button>
 
             {/* SAVE PENDING BUTTON — team seasons only */}
             {isTeamSeason && (
@@ -1813,7 +1816,7 @@ const NewJob: React.FC = () => {
         <AddContractModal
           onClose={() => setShowUpgradeModal(false)}
           directUpgradeClient={getUpgradeClientData()}
-          onSuccess={() => navigate('/logsheet')}
+          onSuccess={() => navigate(returnPath)}
         />
       )}
 
