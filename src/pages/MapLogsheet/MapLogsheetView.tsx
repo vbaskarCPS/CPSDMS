@@ -478,18 +478,29 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
       if (!map || !el) return;
       const r = el.getBoundingClientRect();
       const cv = map.getCanvas();
+      const c = cv.getBoundingClientRect();
       const gl = (map as any).painter?.context?.gl;
-      const vv = window.visualViewport;
+      const vp = gl ? Array.from(gl.getParameter(gl.VIEWPORT) as Int32Array) : [];
+      const sc = gl ? Array.from(gl.getParameter(gl.SCISSOR_BOX) as Int32Array) : [];
+      const scOn = gl ? gl.isEnabled(gl.SCISSOR_TEST) : false;
+      // Any transform on the canvas or an ancestor would shift/scale the picture.
+      const tfs: string[] = [];
+      let n: HTMLElement | null = cv;
+      while (n) {
+        const t = getComputedStyle(n).transform;
+        if (t && t !== 'none') tfs.push(`${n.tagName.toLowerCase()}:${t}`);
+        n = n.parentElement;
+      }
       setDebugText([
-        `dpr ${window.devicePixelRatio}`,
-        `win ${window.innerWidth}x${window.innerHeight}  scr ${window.screen.width}x${window.screen.height}`,
-        `vv ${vv ? `${Math.round(vv.width)}x${Math.round(vv.height)} s${vv.scale}` : 'n/a'}`,
-        `box ${Math.round(r.width)}x${Math.round(r.height)}`,
-        `css ${cv.style.width}x${cv.style.height}  client ${cv.clientWidth}x${cv.clientHeight}`,
-        `px ${cv.width}x${cv.height}`,
-        `gl ${gl ? `${gl.drawingBufferWidth}x${gl.drawingBufferHeight}` : 'n/a'}`,
-        `max ${gl ? `${gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)}/${gl.getParameter(gl.MAX_TEXTURE_SIZE)}` : 'n/a'}`,
-        `tf ${map.transform.width}x${map.transform.height}`,
+        `dpr ${window.devicePixelRatio}  win ${window.innerWidth}x${window.innerHeight}`,
+        `box ${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`,
+        `cvs ${Math.round(c.left)},${Math.round(c.top)} ${Math.round(c.width)}x${Math.round(c.height)}`,
+        `px ${cv.width}x${cv.height}  gl ${gl ? `${gl.drawingBufferWidth}x${gl.drawingBufferHeight}` : 'n/a'}`,
+        `viewport ${vp.join(',')}`,
+        `scissor ${scOn ? 'on' : 'off'} ${sc.join(',')}`,
+        `tf ${Math.round(map.transform.width)}x${Math.round(map.transform.height)}`,
+        `xform ${tfs.length ? tfs.join(' | ') : 'none'}`,
+        `ua ${navigator.userAgent.match(/Chrome\/[\d.]+/)?.[0] || '?'}  ${navigator.userAgent.match(/Android [\d.]+/)?.[0] || ''}`,
       ].join('\n'));
     };
     sample();
