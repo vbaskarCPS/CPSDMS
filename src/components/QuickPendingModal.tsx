@@ -136,13 +136,15 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
   assignedRoutes,
   onClose,
   onSaved,
+  prefill,
+  returnTo,
 }) => {
   const navigate = useNavigate();
 
   // --- FORM STATE ---
-  const [routeCode, setRouteCode] = useState<string>(assignedRoutes[0] || '');
-  const [houseNumber, setHouseNumber] = useState('');
-  const [streetName, setStreetName] = useState('');
+  const [routeCode, setRouteCode] = useState<string>(prefill?.routeCode || assignedRoutes[0] || '');
+  const [houseNumber, setHouseNumber] = useState(prefill?.houseNumber || '');
+  const [streetName, setStreetName] = useState(prefill?.streetName || '');
   const [price, setPrice] = useState('');
   const [propertyType, setPropertyType] = useState<string>(getDefaultPropertyTypeForSeason(seasonType));
   const [notes, setNotes] = useState('');
@@ -169,7 +171,7 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
   // Same pattern as NewJob.tsx: fetch streets from the route, fall back to
   // free-entry if the route has no street list (or worker chooses "Other").
   const [suggestedStreets, setSuggestedStreets] = useState<string[]>([]);
-  const [isCustomStreetMode, setIsCustomStreetMode] = useState(false);
+  const [isCustomStreetMode, setIsCustomStreetMode] = useState(!!prefill?.streetName);
 
   // --- UI STATE ---
   const [saving, setSaving] = useState(false);
@@ -197,6 +199,11 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
       return;
     }
     sessionService.getStreetsForRoute(routeCode).then(streets => {
+      if (prefill?.streetName && routeCode === prefill.routeCode) {
+        // Prefilled from the map: keep the address, just remember the list.
+        setSuggestedStreets(streets || []);
+        return;
+      }
       if (streets && streets.length > 0) {
         setSuggestedStreets(streets);
         setIsCustomStreetMode(false);
@@ -295,7 +302,7 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
       // For asphalt parent+child pairs, sessionService.createPendingSale returns
       // the PARENT id; NewJob is responsible for detecting the linked child and
       // loading both together in the merged completion view.
-      navigate(`/logsheet/new?pendingSaleId=${encodeURIComponent(id)}`);
+      navigate(`/logsheet/new?pendingSaleId=${encodeURIComponent(id)}${returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : ''}`);
     }
   };
 

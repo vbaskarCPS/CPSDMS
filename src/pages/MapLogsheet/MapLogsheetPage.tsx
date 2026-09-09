@@ -16,6 +16,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   LogOut, Loader, Plus, FileText, ListChecks, Home, X, CheckCircle2, AlertCircle, Shovel, Droplets, Leaf,
+  Menu, BarChart3, ChevronUp,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
@@ -146,6 +147,8 @@ const MapLogsheetPage: React.FC = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [showJobs, setShowJobs] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
   const [jobsFilter, setJobsFilter] = useState<'pending' | 'completed'>('pending');
   const [showContract, setShowContract] = useState(false);
   const [quickPending, setQuickPending] = useState<null | { prefill?: { routeCode: string; houseNumber: string; streetName: string } }>(null);
@@ -357,7 +360,16 @@ const MapLogsheetPage: React.FC = () => {
     });
     const pending = houseViews.filter(v => v.state === 'pending').length;
     const completed = houseViews.filter(v => v.state === 'completed').length;
-    return { no, notHome, goBack, pending, completed, knocks: no + notHome + goBack + pending + completed };
+    // Knocks    = No + Not Home + Go Back + Pending + Done
+    // Answered  = Knocks − Not Home          (a door that opened; Go Back counts)
+    // Answer %  = Answered ÷ Knocks
+    // Closing % = (Pending + Done) ÷ Answered
+    const knocks = no + notHome + goBack + pending + completed;
+    const answered = knocks - notHome;
+    const sales = pending + completed;
+    const answerRate = knocks > 0 ? answered / knocks : 0;
+    const closingRate = answered > 0 ? sales / answered : 0;
+    return { no, notHome, goBack, pending, completed, knocks, answered, sales, answerRate, closingRate };
   }, [dispositions, houseViews]);
 
   const drawerJobs = useMemo(() => {
@@ -373,7 +385,7 @@ const MapLogsheetPage: React.FC = () => {
   // ---------------------------------------------------------------------
   const handleSelectHouse = useCallback((id: string | null) => {
     setSelectedId(id);
-    if (id) { setPlacing(false); setPlaceAt(null); setShowJobs(false); }
+    if (id) { setPlacing(false); setPlaceAt(null); setShowJobs(false); setShowMenu(false); setShowStats(false); }
   }, []);
 
   const handleDispose = async (status: HouseDispositionStatus, note: string) => {
@@ -515,43 +527,35 @@ const MapLogsheetPage: React.FC = () => {
     );
   }
 
-  const Stat: React.FC<{ label: string; value: string | number; color: string }> = ({ label, value, color }) => (
-    <div className="flex flex-col items-center justify-center min-w-0 px-1">
-      <span className="text-[8px] uppercase font-bold text-gray-500 leading-none">{label}</span>
-      <span className="text-sm font-bold leading-tight" style={{ color }}>{value}</span>
-    </div>
-  );
+  const pct = (x: number) => `${Math.round(x * 100)}%`;
+  const anySheetOpen = !!selectedView || !!placeAt || showJobs || showStats || showMenu;
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-black flex flex-col">
-      {/* ── TOP STRIP ── */}
-      <div className="shrink-0 bg-black/95 border-b border-gray-800 px-2 pt-2 pb-1.5 space-y-1.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0 flex items-center gap-2 text-white">
-            <span className="font-bold text-sm">{format(new Date(), 'EEE, MMM d')}</span>
-            <SeasonPill seasonType={seasonType} />
-            <span className="text-[10px] text-gray-400 truncate">
-              {worker?.firstName} <span className="font-mono bg-gray-800 border border-gray-700 px-1 rounded">#{worker?.contractorId}</span>
-              {routeCodes.length > 0 && <span className="ml-1 font-mono text-gray-500">{routeCodes.join(' ')}</span>}
-            </span>
-          </div>
-          <div className="flex gap-1.5 shrink-0">
-            {upsellsEnabled && (
-              <button onClick={() => setShowContract(true)} className="p-2 bg-purple-600 text-white rounded-lg" title="Contract / upsell"><FileText size={16} /></button>
-            )}
-            <button onClick={handleLogout} className="p-2 bg-gray-800 text-red-400 rounded-lg border border-gray-700"><LogOut size={16} /></button>
-          </div>
+    // Fixed to the viewport edges: the most reliable "fill the phone screen"
+    // on mobile browsers, whose 100vh wanders as the address bar shows/hides.
+    <div className="fixed inset-0 bg-black flex flex-col overflow-hidden">
+      {/* ── HEADER BAR (tap for expanded stats) ── */}
+      <button
+        type="button"
+        onClick={() => { setShowStats(s => !s); setShowMenu(false); setSelectedId(null); }}
+        className="shrink-0 w-full bg-black/95 border-b border-gray-800 px-3 py-2 flex items-center justify-between gap-3 text-left active:bg-gray-900"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-white font-bold text-base whitespace-nowrap">{format(new Date(), 'EEE, MMM d')}</span>
+          <SeasonPill seasonType={seasonType} />
         </div>
-        <div className="grid grid-cols-7 bg-gray-900 rounded-lg border border-gray-800 py-1">
-          <Stat label="Knocks" value={counts.knocks} color="#e5e7eb" />
-          <Stat label="No" value={counts.no} color={HOUSE_COLORS.no} />
-          <Stat label="N/H" value={counts.notHome} color="#c4c8d0" />
-          <Stat label="Go bk" value={counts.goBack} color={HOUSE_COLORS.go_back} />
-          <Stat label="Pend" value={counts.pending} color="#facc15" />
-          <Stat label="Done" value={counts.completed} color="#4ade80" />
-          <Stat label="EQ" value={stats.totalEQ.toFixed(1)} color="#ffffff" />
+        <div className="flex items-center gap-4 shrink-0">
+          <div className="flex flex-col items-center leading-none">
+            <span className="text-[9px] uppercase font-bold text-gray-500">Done</span>
+            <span className="text-lg font-bold" style={{ color: '#4ade80' }}>{counts.completed}</span>
+          </div>
+          <div className="flex flex-col items-center leading-none">
+            <span className="text-[9px] uppercase font-bold text-gray-500">Equiv</span>
+            <span className="text-lg font-bold text-white">{stats.totalEQ.toFixed(1)}</span>
+          </div>
+          <ChevronUp size={16} className={`text-gray-500 transition-transform ${showStats ? 'rotate-180' : ''}`} />
         </div>
-      </div>
+      </button>
 
       {/* ── MAP ── */}
       <div className="flex-1 relative min-h-0">
@@ -568,31 +572,135 @@ const MapLogsheetPage: React.FC = () => {
           />
         )}
 
-        {/* Floating action buttons (right edge, above the sheet zone) */}
-        {!selectedView && !placeAt && !showJobs && (
-          <div className="absolute right-3 bottom-4 z-20 flex flex-col gap-2 items-end">
-            <button
-              onClick={() => { setPlacing(p => !p); setSelectedId(null); }}
-              className={`px-3 py-2 rounded-full shadow-lg text-xs font-bold flex items-center gap-1.5 ${placing ? 'bg-yellow-500 text-black' : 'bg-white text-gray-800 border border-gray-300'}`}
-            >
-              <Home size={14} /> {placing ? 'Cancel' : 'Add house'}
-            </button>
-            {sessionId && routeCodes.length > 0 && (
-              <button
-                onClick={() => setQuickPending({})}
-                className="px-3 py-2 rounded-full shadow-lg text-xs font-bold flex items-center gap-1.5 bg-cps-blue text-white"
-                title="Walk-up sale (not on the map)"
-              >
-                <Plus size={14} /> Sale
-              </button>
+        {/* Hamburger (bottom-right) — hidden while any sheet is open */}
+        {!anySheetOpen && !placing && (
+          <button
+            onClick={() => setShowMenu(true)}
+            className="absolute right-4 bottom-5 z-20 w-14 h-14 rounded-full shadow-xl bg-gray-900 text-white border border-gray-700 flex items-center justify-center active:bg-gray-800"
+            aria-label="Menu"
+          >
+            <Menu size={24} />
+            {counts.pending > 0 && (
+              <span className="absolute -top-1 -right-1 bg-yellow-500 text-black rounded-full px-1.5 text-[10px] font-bold">{counts.pending}</span>
             )}
-            <button
-              onClick={() => setShowJobs(true)}
-              className="px-3 py-2 rounded-full shadow-lg text-xs font-bold flex items-center gap-1.5 bg-gray-900 text-white border border-gray-700"
+          </button>
+        )}
+        {placing && (
+          <button
+            onClick={() => setPlacing(false)}
+            className="absolute right-4 bottom-5 z-20 px-4 h-12 rounded-full shadow-xl bg-yellow-500 text-black font-bold text-sm flex items-center gap-2"
+          >
+            <X size={16} /> Cancel
+          </button>
+        )}
+
+        {/* Menu sheet */}
+        {showMenu && (
+          <div className="absolute inset-0 z-30" onClick={() => setShowMenu(false)}>
+            <div className="absolute inset-0 bg-black/40" />
+            <div
+              className="absolute inset-x-0 bottom-0 bg-gray-900 border-t border-gray-700 rounded-t-2xl shadow-2xl p-3 pb-5 space-y-2"
+              onClick={e => e.stopPropagation()}
             >
-              <ListChecks size={14} /> Jobs
-              {(counts.pending > 0) && <span className="ml-0.5 bg-yellow-500 text-black rounded-full px-1.5 text-[10px]">{counts.pending}</span>}
-            </button>
+              <div className="flex items-center justify-between px-1 pb-1">
+                <span className="text-xs text-gray-400">
+                  {worker?.firstName} <span className="font-mono bg-gray-800 border border-gray-700 px-1 rounded">#{worker?.contractorId}</span>
+                  {routeCodes.length > 0 && <span className="ml-2 font-mono text-gray-500">{routeCodes.join(' ')}</span>}
+                </span>
+                <button onClick={() => setShowMenu(false)} className="p-1 text-gray-400"><X size={20} /></button>
+              </div>
+              <button
+                onClick={() => { setShowMenu(false); setPlacing(true); setSelectedId(null); }}
+                className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
+              >
+                <Home size={18} className="text-yellow-400" /> Add missing house
+              </button>
+              {sessionId && routeCodes.length > 0 && (
+                <button
+                  onClick={() => { setShowMenu(false); setQuickPending({}); }}
+                  className="w-full py-3.5 rounded-xl bg-cps-blue text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-blue-600"
+                >
+                  <Plus size={18} /> Add sale (not on the map)
+                </button>
+              )}
+              <button
+                onClick={() => { setShowMenu(false); setShowJobs(true); }}
+                className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
+              >
+                <ListChecks size={18} className="text-blue-300" /> Jobs
+                {counts.pending > 0 && <span className="ml-auto bg-yellow-500 text-black rounded-full px-2 text-[11px]">{counts.pending} pending</span>}
+              </button>
+              {upsellsEnabled && (
+                <button
+                  onClick={() => { setShowMenu(false); setShowContract(true); }}
+                  className="w-full py-3.5 rounded-xl bg-purple-700 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-purple-600"
+                >
+                  <FileText size={18} /> Contract / upsell
+                </button>
+              )}
+              <button
+                onClick={() => { setShowMenu(false); setShowStats(true); }}
+                className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
+              >
+                <BarChart3 size={18} className="text-green-300" /> Today's stats
+              </button>
+              <button
+                onClick={handleLogout}
+                className="w-full py-3.5 rounded-xl bg-gray-800 text-red-400 font-bold text-sm flex items-center gap-3 px-4 border border-gray-700 active:bg-gray-700"
+              >
+                <LogOut size={18} /> Log out
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Stats sheet */}
+        {showStats && (
+          <div className="absolute inset-0 z-30" onClick={() => setShowStats(false)}>
+            <div className="absolute inset-0 bg-black/40" />
+            <div
+              className="absolute inset-x-0 top-0 bg-gray-900 border-b border-gray-700 rounded-b-2xl shadow-2xl p-4 space-y-3"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="text-white font-bold flex items-center gap-2"><BarChart3 size={16} className="text-green-300" /> Today</h3>
+                <button onClick={() => setShowStats(false)} className="p-1 text-gray-400"><X size={20} /></button>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { label: 'Knocks', value: counts.knocks, color: '#e5e7eb' },
+                  { label: 'No', value: counts.no, color: HOUSE_COLORS.no },
+                  { label: 'Not home', value: counts.notHome, color: '#c4c8d0' },
+                  { label: 'Go back', value: counts.goBack, color: HOUSE_COLORS.go_back },
+                  { label: 'Pending', value: counts.pending, color: '#facc15' },
+                  { label: 'Done', value: counts.completed, color: '#4ade80' },
+                  { label: 'Answered', value: counts.answered, color: '#93c5fd' },
+                  { label: 'Equiv', value: stats.totalEQ.toFixed(1), color: '#ffffff' },
+                ].map(t => (
+                  <div key={t.label} className="bg-gray-800 rounded-lg py-2 flex flex-col items-center">
+                    <span className="text-[9px] uppercase font-bold text-gray-500">{t.label}</span>
+                    <span className="text-lg font-bold" style={{ color: t.color }}>{t.value}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-gray-800 rounded-lg py-2 px-3">
+                  <div className="text-[9px] uppercase font-bold text-gray-500">Answer rate</div>
+                  <div className="text-2xl font-bold text-blue-300">{pct(counts.answerRate)}</div>
+                  <div className="text-[10px] text-gray-500">{counts.answered} answered ÷ {counts.knocks} knocks</div>
+                </div>
+                <div className="bg-gray-800 rounded-lg py-2 px-3">
+                  <div className="text-[9px] uppercase font-bold text-gray-500">Closing rate</div>
+                  <div className="text-2xl font-bold text-green-300">{pct(counts.closingRate)}</div>
+                  <div className="text-[10px] text-gray-500">{counts.sales} sales ÷ {counts.answered} answered</div>
+                </div>
+              </div>
+              <div className="text-[10px] text-gray-500 flex flex-wrap gap-x-3">
+                <span>Up gross ${stats.upsellGross.toFixed(0)}</span>
+                <span>Upsells {stats.upsellCount}</span>
+                <span>Steps {stats.stepCount}</span>
+              </div>
+            </div>
           </div>
         )}
 
