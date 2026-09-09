@@ -133,8 +133,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
       zoom: 13,
       attributionControl: false,
     });
-    map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
-    map.touchZoomRotate.disableRotation();
+    map.addControl(new mapboxgl.NavigationControl({ showCompass: true }), 'top-right');
 
     map.on('load', () => {
       map.resize();
