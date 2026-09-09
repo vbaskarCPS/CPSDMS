@@ -101,9 +101,6 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
-  // TEMPORARY diagnostic readout for the black-band fault. Remove once fixed.
-  const [debugText, setDebugText] = useState<string>('');
-  const [debugHidden, setDebugHidden] = useState(false);
   const routeLayerIdsRef = useRef<string[]>([]);
   const initialFitDoneRef = useRef(false);
   const mountedRef = useRef(true);
@@ -174,6 +171,11 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     mountedRef.current = true;
     if (!containerRef.current || mapRef.current) return;
 
+    // index.css shrinks the whole page (html { zoom }) on screens 360px wide
+    // and under, for the small Orbic handsets. A zoomed page is fine for
+    // forms, but the map canvas ends up drawn at 92% of its box and leaves a
+    // black band on two sides. Opt this page out for as long as the map is up.
+    document.documentElement.classList.add('map-fullbleed');
     const restorePixelRatio = installPixelRatioCap();
     const map = new mapboxgl.Map({
       container: containerRef.current,
@@ -304,6 +306,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
       map.remove();
       mapRef.current = null;
       restorePixelRatio();
+      document.documentElement.classList.remove('map-fullbleed');
       setMapLoaded(false);
     };
   }, []);
@@ -468,46 +471,6 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     };
   }, [mapLoaded]);
 
-  // TEMPORARY diagnostic: sample every second what each layer of the stack
-  // believes the map's size to be.
-  useEffect(() => {
-    if (!mapLoaded) return;
-    const sample = () => {
-      const map = mapRef.current;
-      const el = containerRef.current;
-      if (!map || !el) return;
-      const r = el.getBoundingClientRect();
-      const cv = map.getCanvas();
-      const c = cv.getBoundingClientRect();
-      const gl = (map as any).painter?.context?.gl;
-      const vp = gl ? Array.from(gl.getParameter(gl.VIEWPORT) as Int32Array) : [];
-      const sc = gl ? Array.from(gl.getParameter(gl.SCISSOR_BOX) as Int32Array) : [];
-      const scOn = gl ? gl.isEnabled(gl.SCISSOR_TEST) : false;
-      // Any transform on the canvas or an ancestor would shift/scale the picture.
-      const tfs: string[] = [];
-      let n: HTMLElement | null = cv;
-      while (n) {
-        const t = getComputedStyle(n).transform;
-        if (t && t !== 'none') tfs.push(`${n.tagName.toLowerCase()}:${t}`);
-        n = n.parentElement;
-      }
-      setDebugText([
-        `dpr ${window.devicePixelRatio}  win ${window.innerWidth}x${window.innerHeight}`,
-        `box ${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`,
-        `cvs ${Math.round(c.left)},${Math.round(c.top)} ${Math.round(c.width)}x${Math.round(c.height)}`,
-        `px ${cv.width}x${cv.height}  gl ${gl ? `${gl.drawingBufferWidth}x${gl.drawingBufferHeight}` : 'n/a'}`,
-        `viewport ${vp.join(',')}`,
-        `scissor ${scOn ? 'on' : 'off'} ${sc.join(',')}`,
-        `tf ${Math.round(map.transform.width)}x${Math.round(map.transform.height)}`,
-        `xform ${tfs.length ? tfs.join(' | ') : 'none'}`,
-        `ua ${navigator.userAgent.match(/Chrome\/[\d.]+/)?.[0] || '?'}  ${navigator.userAgent.match(/Android [\d.]+/)?.[0] || ''}`,
-      ].join('\n'));
-    };
-    sample();
-    const id = window.setInterval(sample, 1000);
-    return () => clearInterval(id);
-  }, [mapLoaded]);
-
   // Keep house layers above route lines if the style reorders anything.
   useEffect(() => {
     const map = mapRef.current;
@@ -519,14 +482,6 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     <div className="relative w-full h-full">
       <style>{`.mapboxgl-ctrl-logo { transform: scale(0.7); transform-origin: bottom left; }`}</style>
       <div ref={containerRef} className="absolute inset-0" />
-
-      {/* TEMPORARY diagnostic readout — tap to hide. Remove once the band fault is fixed. */}
-      {mapLoaded && !debugHidden && debugText && (
-        <pre
-          onClick={() => setDebugHidden(true)}
-          className="absolute top-16 left-3 z-30 bg-black/80 text-green-300 text-[11px] leading-tight p-2 rounded font-mono whitespace-pre"
-        >{debugText}</pre>
-      )}
 
       <button
         onClick={toggleFollow}
