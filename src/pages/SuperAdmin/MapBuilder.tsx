@@ -359,7 +359,7 @@ const MapBuilder: React.FC = () => {
       });
       setPclStatus(null);
       setPclResult(
-        `${res.clientsCached} clients cached across ${res.areasProcessed} areas in ${pclRegion}`
+        `${res.added} new · ${res.updated} updated · ${res.clientsCached} now on touched routes across ${res.areasProcessed} areas in ${pclRegion}`
         + (res.dropped > 0 ? ` · ${res.dropped} rows dropped (no geocode)` : '')
       );
       await loadPclCounts();

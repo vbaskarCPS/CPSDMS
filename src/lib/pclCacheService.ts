@@ -266,6 +266,79 @@ function groupClientsByAddress(rows: RawCallbookRow[], sealingMode: boolean = fa
   return groups;
 }
 
+function clientAddrKey(c: { houseNum: string; streetName: string }): string {
+  return `${String(c.houseNum || '').toLowerCase()}|${normalizeStreet(String(c.streetName || ''))}`;
+}
+
+/**
+ * Fold freshly-loaded client groups into a route's existing cached list.
+ * A load only ever ADDS: nothing already cached is removed. For an address
+ * already present, the new history rows are appended (exact duplicates
+ * skipped), a newer name or phone replaces the old one, and a coordinate is
+ * kept if we already had one. Returns the merged list plus how many addresses
+ * were brand new versus updated.
+ */
+function mergeClientGroups(
+  existing: PCLClientGroup[],
+  incoming: PCLClientGroup[],
+): { merged: PCLClientGroup[]; added: number; updated: number } {
+  const byKey = new Map<string, PCLClientGroup>();
+  for (const c of existing) {
+    byKey.set(clientAddrKey(c), {
+      ...c,
+      history: Array.isArray(c.history) ? [...c.history] : [],
+    });
+  }
+  let added = 0;
+  let updated = 0;
+  const newestYear = (h: PCLHistoryEntry[]) => h.reduce((m, e) => Math.max(m, e.year || 0), 0);
+
+  for (const inc of incoming) {
+    const key = clientAddrKey(inc);
+    const cur = byKey.get(key);
+    if (!cur) {
+      byKey.set(key, inc);
+      added++;
+      continue;
+    }
+    const seen = new Set(cur.history.map(h => `${h.year}|${h.serviceType}|${h.price}|${h.contractor}`));
+    let changed = false;
+    for (const h of inc.history) {
+      const sig = `${h.year}|${h.serviceType}|${h.price}|${h.contractor}`;
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      cur.history.push(h);
+      changed = true;
+    }
+    cur.history.sort((a, b) => b.year - a.year);
+
+    // A newer sheet may carry a newer name or number; a blank never wins.
+    if (newestYear(inc.history) >= newestYear(cur.history)) {
+      if (inc.firstName || inc.lastName) {
+        if (inc.firstName !== cur.firstName || inc.lastName !== cur.lastName) changed = true;
+        cur.firstName = inc.firstName;
+        cur.lastName = inc.lastName;
+      }
+      if (inc.phone && inc.phone !== cur.phone) { cur.phone = inc.phone; changed = true; }
+    }
+    if (typeof cur.lat !== 'number' || typeof cur.lng !== 'number') {
+      if (typeof inc.lat === 'number' && typeof inc.lng === 'number') {
+        cur.lat = inc.lat; cur.lng = inc.lng; changed = true;
+      }
+    }
+    if (!cur.city && inc.city) { cur.city = inc.city; changed = true; }
+    if (changed) updated++;
+  }
+
+  const merged = Array.from(byKey.values());
+  merged.sort((a, b) => {
+    const stCmp = normalizeStreet(a.streetName).localeCompare(normalizeStreet(b.streetName));
+    if (stCmp !== 0) return stCmp;
+    return parseHouseNum(a.houseNum) - parseHouseNum(b.houseNum);
+  });
+  return { merged, added, updated };
+}
+
 // ─── SHEETS API (direct fetch using the passed-in token) ─────────────────────
 
 async function sheetsGetRaw(
@@ -786,7 +859,7 @@ export async function loadAndCacheMapPCL(
   accessToken: string,
   region: string,
   onProgress?: MapPCLProgressFn,
-): Promise<{ areasProcessed: number; clientsCached: number; dropped: number }> {
+): Promise<{ areasProcessed: number; clientsCached: number; added: number; updated: number; dropped: number }> {
   const report = (p: Partial<MapPCLProgress> & { phase: MapPCLProgress['phase'] }) =>
     onProgress?.({
       areaName: '', areaIndex: 0, areaTotal: 0, current: 0, total: 0, ...p,
@@ -802,7 +875,7 @@ export async function loadAndCacheMapPCL(
   if (areaErr) throw new Error(`Could not read areas: ${areaErr.message}`);
   const areas = (areaData || []) as MapAreaRow[];
   if (areas.length === 0) {
-    return { areasProcessed: 0, clientsCached: 0, dropped: 0 };
+    return { areasProcessed: 0, clientsCached: 0, added: 0, updated: 0, dropped: 0 };
   }
 
   // Group areas by PREFIX — this, not the area, is the unit of work. Pooling the
@@ -884,6 +957,8 @@ export async function loadAndCacheMapPCL(
   }
 
   let clientsCached = 0;
+  let addedTotal = 0;
+  let updatedTotal = 0;
   let droppedTotal = 0;
   let areasProcessed = 0;
 
@@ -918,23 +993,43 @@ export async function loadAndCacheMapPCL(
     // nearest-route step below is what actually decides the assignment.
     const bbox = bboxForRouteMaps(routeMaps);
 
-    // Rehydrate coordinates from what this area already has cached, so a second
-    // run costs nothing. This is why the coordinates live on the client rows.
+    // Read what this prefix already has cached. Three things come out of it:
+    // coordinates (so a second run costs no geocoding), the full existing list
+    // per route (a load only ever ADDS to it), and which route each cached
+    // address already sits on — the cached placement wins over a fresh
+    // nearest-route guess, so a client never moves because of a load. Moving
+    // clients is Recalibrate's job.
     const geo = new Map<string, GeoPos>();
-    try {
-      const { data: cached } = await supabase
-        .from('map_pcl_cache')
-        .select('clients')
-        .eq('prefix', prefix);
-      (cached || []).forEach((r: any) => {
-        (r.clients || []).forEach((c: any) => {
-          if (typeof c.lat === 'number' && typeof c.lng === 'number') {
-            geo.set(normKey(`${c.houseNum} ${c.streetName}`.trim()), { lat: c.lat, lng: c.lng });
-          }
+    interface ExistingRow { area_name: string; region: string; clients: PCLClientGroup[] }
+    const existingByRoute = new Map<string, ExistingRow>();
+    const cachedRouteByAddrKey = new Map<string, string>();
+    {
+      const BATCH = 500;
+      let from = 0;
+      while (true) {
+        const { data: cached, error: cacheErr } = await supabase
+          .from('map_pcl_cache')
+          .select('route_code, area_name, region, clients')
+          .eq('prefix', prefix)
+          .range(from, from + BATCH - 1);
+        // If the existing cache can't be read we must NOT carry on — writing
+        // without it would replace every touched route with only the new rows.
+        if (cacheErr) throw new Error(`Could not read cached PCLs for ${label}: ${cacheErr.message}`);
+        if (!cached || cached.length === 0) break;
+        cached.forEach((r: any) => {
+          const list: PCLClientGroup[] = Array.isArray(r.clients) ? r.clients : [];
+          existingByRoute.set(r.route_code, { area_name: r.area_name, region: r.region, clients: list });
+          list.forEach((c: any) => {
+            const k = normKey(`${c.houseNum} ${c.streetName}`.trim());
+            if (!cachedRouteByAddrKey.has(k)) cachedRouteByAddrKey.set(k, r.route_code);
+            if (typeof c.lat === 'number' && typeof c.lng === 'number') {
+              geo.set(k, { lat: c.lat, lng: c.lng });
+            }
+          });
         });
-      });
-    } catch {
-      // Best-effort; we simply re-geocode without it.
+        if (cached.length < BATCH) break;
+        from += BATCH;
+      }
     }
 
     // Unique addresses for this area.
@@ -967,62 +1062,90 @@ export async function loadAndCacheMapPCL(
       await new Promise(res => setTimeout(res, 120));
     }
 
-    // Bucket onto the nearest route; rows with no coordinate are dropped.
+    // Bucket each row onto a route. An address already in the cache stays on
+    // the route it's cached on, coordinate or not. A new address goes to the
+    // nearest route, and is dropped only if it couldn't be geocoded at all.
     const rowsByRoute = new Map<string, RawCallbookRow[]>();
     const posByAddrKey = new Map<string, GeoPos>();
     let dropped = 0;
     for (const r of matchedRows) {
       const addr = `${r.houseNum} ${r.streetName}`.trim();
-      const pos = addr ? geo.get(normKey(addr)) : undefined;
-      if (!pos) { dropped++; continue; }
-      const nearest = nearestRouteForPoint(pos.lat, pos.lng, routeMaps);
-      if (!nearest) { dropped++; continue; }
-      posByAddrKey.set(normKey(addr), pos);
-      const resolved: RawCallbookRow = { ...r, routeCode: nearest.routeCode };
-      if (!rowsByRoute.has(nearest.routeCode)) rowsByRoute.set(nearest.routeCode, []);
-      rowsByRoute.get(nearest.routeCode)!.push(resolved);
+      if (!addr) { dropped++; continue; }
+      const key = normKey(addr);
+      const pos = geo.get(key);
+      if (pos) posByAddrKey.set(key, pos);
+
+      let routeCode = cachedRouteByAddrKey.get(key);
+      if (!routeCode) {
+        if (!pos) { dropped++; continue; }
+        const nearest = nearestRouteForPoint(pos.lat, pos.lng, routeMaps);
+        if (!nearest) { dropped++; continue; }
+        routeCode = nearest.routeCode;
+        // Later rows for this same new address land on the same route.
+        cachedRouteByAddrKey.set(key, routeCode);
+      }
+      const resolved: RawCallbookRow = { ...r, routeCode };
+      if (!rowsByRoute.has(routeCode)) rowsByRoute.set(routeCode, []);
+      rowsByRoute.get(routeCode)!.push(resolved);
     }
     droppedTotal += dropped;
 
     report({ phase: 'saving', areaName: label, areaIndex: gi + 1, areaTotal: prefixes.length });
 
-    // One row per approved route in the GROUP — empty ones included, so a route
-    // that lost all its clients can't keep showing an old list. Each row is
-    // stamped with the area that actually owns that route, so two areas sharing
-    // a prefix still report their own counts on their own cards.
-    const upsertRows = routeMaps.map(rm => {
-      const rows = rowsByRoute.get(rm.routeCode) || [];
-      const groupsForRoute = rows.length > 0 ? groupClientsByAddress(rows, true) : [];
+    // Only the routes this sheet actually touched get written, and each one is
+    // its existing cached list with the new clients folded in. A route the
+    // sheet says nothing about is left exactly as it was — a partial sheet
+    // must never empty a route. Each row is stamped with the area that owns
+    // the route, so two areas sharing a prefix still report their own counts.
+    const rmByCode = new Map(routeMaps.map(rm => [rm.routeCode, rm]));
+    const upsertRows: any[] = [];
+    for (const [routeCode, rows] of rowsByRoute) {
+      const fresh = groupClientsByAddress(rows, true);
       // Stamp each client with the coordinate that placed it here.
-      groupsForRoute.forEach(g => {
+      fresh.forEach(g => {
         const k = normKey(`${g.houseNum} ${g.streetName}`.trim());
         const p = posByAddrKey.get(k);
         if (p) { g.lat = p.lat; g.lng = p.lng; }
         const c = cityByAddrKey.get(k);
         if (c) g.city = c;
       });
-      clientsCached += groupsForRoute.length;
-      const owningArea = areaByRouteCode.get(rm.routeCode);
-      return {
-        route_code: rm.routeCode,
-        area_name: owningArea?.area_name || rm.areaName,
-        region: owningArea?.region || region,
-        prefix,
-        clients: groupsForRoute,
-        client_count: groupsForRoute.length,
-        updated_at: new Date().toISOString(),
-      };
-    });
+      const existing = existingByRoute.get(routeCode);
+      const { merged, added, updated } = mergeClientGroups(existing?.clients || [], fresh);
+      clientsCached += merged.length;
+      addedTotal += added;
+      updatedTotal += updated;
 
-    const { error: upErr } = await supabase
-      .from('map_pcl_cache')
-      .upsert(upsertRows, { onConflict: 'route_code' });
-    if (upErr) console.warn('[Map PCL] Save failed for', label, upErr.message);
-    else areasProcessed += groupAreas.length;
+      const rm = rmByCode.get(routeCode);
+      const owningArea = rm ? areaByRouteCode.get(routeCode) : undefined;
+      upsertRows.push({
+        route_code: routeCode,
+        area_name: owningArea?.area_name || rm?.areaName || existing?.area_name || groupAreas[0].area_name,
+        region: owningArea?.region || existing?.region || region,
+        prefix,
+        clients: merged,
+        client_count: merged.length,
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    if (upsertRows.length === 0) {
+      areasProcessed += groupAreas.length;
+      continue;
+    }
+
+    let saveFailed = false;
+    const WRITE = 200;
+    for (let i = 0; i < upsertRows.length; i += WRITE) {
+      const { error: upErr } = await supabase
+        .from('map_pcl_cache')
+        .upsert(upsertRows.slice(i, i + WRITE), { onConflict: 'route_code' });
+      if (upErr) { saveFailed = true; console.warn('[Map PCL] Save failed for', label, upErr.message); }
+    }
+    if (!saveFailed) areasProcessed += groupAreas.length;
   }
 
   report({ phase: 'done', areaIndex: prefixes.length, areaTotal: prefixes.length, message: 'complete' });
-  return { areasProcessed, clientsCached, dropped: droppedTotal };
+  return { areasProcessed, clientsCached, added: addedTotal, updated: updatedTotal, dropped: droppedTotal };
 }
 
 /** Client counts per AREA, for the Map Builder cards. */
