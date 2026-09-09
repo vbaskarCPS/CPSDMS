@@ -6,8 +6,8 @@
 // Also exports AddHouseSheet — the tiny form used when the worker places a
 // missing house by hand.
 
-import React, { useState, useEffect } from 'react';
-import { X, Ban, DoorClosed, RotateCcw, DollarSign, Clock, Phone, StickyNote, Trash2, Loader, CheckCircle2, MapPin, Plus } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Ban, DoorClosed, RotateCcw, DollarSign, Clock, Phone, StickyNote, Trash2, Loader, CheckCircle2, MapPin, Plus, Pencil } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { HouseView, HouseDispositionStatus, HOUSE_COLORS } from '../../lib/mapLogsheetService';
 
@@ -31,6 +31,9 @@ const STATE_LABEL: Record<HouseView['state'], string> = {
   completed: 'Completed',
 };
 
+// Seconds before an untouched, un-dispositioned house is marked Not Home.
+const AUTO_NOT_HOME_SECONDS = 5;
+
 const HouseSheet: React.FC<HouseSheetProps> = ({
   view, saving, onDispose, onClearDisposition, onSale, onOpenPending, onOpenBooking, onClose,
 }) => {
@@ -38,13 +41,59 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
   const [note, setNote] = useState(disposition?.note || '');
   const [showNote, setShowNote] = useState(!!disposition?.note);
   const [showHistory, setShowHistory] = useState(false);
+  // Once a disposition exists the four buttons collapse to a summary row;
+  // "Change" expands them again.
+  const [expanded, setExpanded] = useState(false);
 
-  // Reset local edits when the selected house changes.
+  // --- AUTO NOT-HOME COUNTDOWN ---
+  // A fresh house (no disposition, not pending/completed) starts a countdown
+  // on open; if nothing is tapped before it hits zero, it's marked Not Home.
+  // Any tap on a button, the note, or closing the sheet cancels it.
+  const houseId = `${house.routeCode}::${house.houseKey}`;
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const timerRef = useRef<number | null>(null);
+  const onDisposeRef = useRef(onDispose);
+  useEffect(() => { onDisposeRef.current = onDispose; }, [onDispose]);
+
+  const cancelCountdown = () => {
+    if (timerRef.current !== null) { clearInterval(timerRef.current); timerRef.current = null; }
+    setCountdown(null);
+  };
+
   useEffect(() => {
+    // Reset local edits when the selected house changes.
     setNote(disposition?.note || '');
     setShowNote(!!disposition?.note);
     setShowHistory(false);
-  }, [house.routeCode, house.houseKey, disposition?.note]);
+    setExpanded(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [houseId, disposition?.note]);
+
+  useEffect(() => {
+    cancelCountdown();
+    const fresh = !disposition && state === 'none';
+    if (!fresh) return;
+    let remaining = AUTO_NOT_HOME_SECONDS;
+    setCountdown(remaining);
+    timerRef.current = window.setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        cancelCountdown();
+        onDisposeRef.current('not_home', '');
+      } else {
+        setCountdown(remaining);
+      }
+    }, 1000);
+    return cancelCountdown;
+    // Only re-arm when the house changes — not on every disposition/state tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [houseId]);
+
+  // Disposition arrived (from a tap or the timer) → stop counting, collapse.
+  useEffect(() => {
+    if (disposition) { cancelCountdown(); setExpanded(false); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [disposition?.status, disposition?.updatedAt]);
 
   const address = `${house.civicNo}${(house.civicSuffix || '').toUpperCase()} ${house.streetName}`;
   const stateColor =
@@ -55,22 +104,29 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
     state === 'not_home' ? (isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home) :
     isPcl ? HOUSE_COLORS.pcl : '#e5e7eb';
 
-  const dispoBtn = (status: HouseDispositionStatus, label: string, Icon: LucideIcon, color: string) => {
-    const active = disposition?.status === status && state !== 'pending' && state !== 'completed';
-    return (
-      <button
-        type="button"
-        disabled={saving}
-        onClick={() => onDispose(status, note)}
+    const dispoBtn = (status: HouseDispositionStatus, label: string, Icon: LucideIcon, color: string) => {
+      const active = disposition?.status === status && state !== 'pending' && state !== 'completed';
+      const showCount = status === 'not_home' && countdown !== null && !disposition;
+      return (
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => { cancelCountdown(); onDispose(status, note); }}
         className={`flex-1 min-w-0 py-3 rounded-lg border-2 font-bold text-xs flex flex-col items-center gap-1 transition-colors disabled:opacity-50 ${
           active ? 'text-white' : 'bg-gray-800 text-gray-200 border-gray-700 active:bg-gray-700'
         }`}
         style={active ? { backgroundColor: color, borderColor: color } : undefined}
       >
         <Icon size={18} />
-        {label}
+        {showCount ? `${label} ${countdown}` : label}
       </button>
     );
+  };
+
+  const STATUS_META: Record<HouseDispositionStatus, { label: string; color: string; Icon: LucideIcon }> = {
+    not_home: { label: 'Not home', color: isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home, Icon: DoorClosed },
+    no: { label: 'No', color: HOUSE_COLORS.no, Icon: Ban },
+    go_back: { label: 'Go back', color: HOUSE_COLORS.go_back, Icon: RotateCcw },
   };
 
   return (
@@ -89,7 +145,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
             {house.source === 'manual' && <span className="text-yellow-500">· added by hand</span>}
           </div>
         </div>
-        <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-white shrink-0"><X size={20} /></button>
+        <button onClick={() => { cancelCountdown(); onClose(); }} className="p-1.5 text-gray-400 hover:text-white shrink-0"><X size={20} /></button>
       </div>
 
       <div className="px-4 pb-4 overflow-y-auto custom-scrollbar space-y-3">
@@ -151,20 +207,55 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
         {/* Dispositions + Sale */}
         {state !== 'completed' && state !== 'pending' && (
           <>
-            <div className="flex gap-2">
-              {dispoBtn('no', 'No', Ban, HOUSE_COLORS.no)}
-              {dispoBtn('not_home', 'Not home', DoorClosed, HOUSE_COLORS.not_home)}
-              {dispoBtn('go_back', 'Go back', RotateCcw, HOUSE_COLORS.go_back)}
-              <button
-                type="button"
-                disabled={saving}
-                onClick={onSale}
-                className="flex-1 min-w-0 py-3 rounded-lg border-2 border-yellow-500 bg-yellow-600 text-black font-bold text-xs flex flex-col items-center gap-1 active:bg-yellow-500 disabled:opacity-50"
-              >
-                <DollarSign size={18} />
-                Sale
-              </button>
-            </div>
+            {disposition && !expanded ? (
+              // Collapsed: what it's marked as, a Change button, and Sale.
+              <div className="flex gap-2 items-stretch">
+                {(() => {
+                  const m = STATUS_META[disposition.status];
+                  return (
+                    <div
+                      className="flex-1 min-w-0 rounded-lg border-2 px-3 py-2 flex items-center gap-2 text-white font-bold text-sm"
+                      style={{ backgroundColor: m.color, borderColor: m.color }}
+                    >
+                      <m.Icon size={18} /> {m.label}
+                    </div>
+                  );
+                })()}
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => setExpanded(true)}
+                  className="px-3 rounded-lg border-2 border-gray-700 bg-gray-800 text-gray-200 font-bold text-xs flex flex-col items-center justify-center gap-1 active:bg-gray-700 disabled:opacity-50"
+                >
+                  <Pencil size={16} />
+                  Change
+                </button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => { cancelCountdown(); onSale(); }}
+                  className="px-4 rounded-lg border-2 border-yellow-500 bg-yellow-600 text-black font-bold text-xs flex flex-col items-center justify-center gap-1 active:bg-yellow-500 disabled:opacity-50"
+                >
+                  <DollarSign size={18} />
+                  Sale
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                {dispoBtn('not_home', 'Not home', DoorClosed, isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home)}
+                {dispoBtn('no', 'No', Ban, HOUSE_COLORS.no)}
+                {dispoBtn('go_back', 'Go back', RotateCcw, HOUSE_COLORS.go_back)}
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => { cancelCountdown(); onSale(); }}
+                  className="flex-1 min-w-0 py-3 rounded-lg border-2 border-yellow-500 bg-yellow-600 text-black font-bold text-xs flex flex-col items-center gap-1 active:bg-yellow-500 disabled:opacity-50"
+                >
+                  <DollarSign size={18} />
+                  Sale
+                </button>
+              </div>
+            )}
 
             {/* Note */}
             {showNote ? (
@@ -188,7 +279,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
                 )}
               </div>
             ) : (
-              <button type="button" onClick={() => setShowNote(true)} className="text-[11px] text-gray-400 flex items-center gap-1">
+              <button type="button" onClick={() => { cancelCountdown(); setShowNote(true); }} className="text-[11px] text-gray-400 flex items-center gap-1">
                 <StickyNote size={12} /> Add a note
               </button>
             )}

@@ -141,6 +141,10 @@ export interface HouseView {
   pclName: string | null;
   /** Map label under the number: "John M" + newline + "(24, 25)" (years of service). */
   pclLabel: string | null;
+  /** What the map actually prints under the number: the sale's customer name
+   *  for pending/completed houses (falling back to the PCL name), plus the
+   *  PCL years line when there is history. Null when there's nothing to show. */
+  mapLabel: string | null;
   pcl: PCLClientGroup | null;
   disposition: HouseDisposition | null;
   pendingSale: PendingSale | null;
@@ -665,18 +669,35 @@ export function indexPcl(pclByRoute: Map<string, PCLClientGroup[]>): Map<string,
   return m;
 }
 
-/** "John M" on one line, "(24, 25)" on the next — first name, last initial,
- *  two-digit years of service oldest→newest. Either line is dropped if empty. */
-export function pclMapLabel(p: PCLClientGroup): string | null {
-  const first = (p.firstName || '').trim();
-  const lastInitial = (p.lastName || '').trim().charAt(0).toUpperCase();
-  const name = [first, lastInitial].filter(Boolean).join(' ');
+/** "John M" — first name plus last initial. Empty string when there's no name. */
+export function shortName(first: string | undefined | null, last: string | undefined | null): string {
+  const f = (first || '').trim();
+  const l = (last || '').trim().charAt(0).toUpperCase();
+  return [f, l].filter(Boolean).join(' ');
+}
+
+/** "(24, 25)" — two-digit years of service oldest→newest. Empty when none. */
+export function pclYearsLine(p: PCLClientGroup): string {
   const years = Array.from(new Set(
     (p.history || []).map(h => Number(h.year)).filter(y => Number.isFinite(y) && y > 0)
   )).sort((a, b) => a - b).map(y => String(y).slice(-2));
-  const yearsLine = years.length ? `(${years.join(', ')})` : '';
-  const lines = [name, yearsLine].filter(Boolean);
+  return years.length ? `(${years.join(', ')})` : '';
+}
+
+/** "John M" on one line, "(24, 25)" on the next. Either line is dropped if empty. */
+export function pclMapLabel(p: PCLClientGroup): string | null {
+  const lines = [shortName(p.firstName, p.lastName), pclYearsLine(p)].filter(Boolean);
   return lines.length ? lines.join('\n') : null;
+}
+
+/** Customer name attached to a sale at this house, if any. Pending sales
+ *  carry first/last; bookings and completed transactions carry the sheet-shaped
+ *  'First Name' / 'Last Name' keys. */
+function saleShortName(ps: PendingSale | null, ob: MasterBooking | null, done: MasterBooking | null): string {
+  if (done) { const n = shortName(done['First Name'], done['Last Name']); if (n) return n; }
+  if (ps) { const n = shortName(ps.firstName, ps.lastName); if (n) return n; }
+  if (ob) { const n = shortName(ob['First Name'], ob['Last Name']); if (n) return n; }
+  return '';
 }
 
 /** Combine everything into the per-house view the map renders. */
@@ -700,12 +721,20 @@ export function buildHouseViews(
     else if (ps || ob) state = 'pending';
     else if (d) state = d.status;
     const pclName = p ? `${p.firstName || ''} ${p.lastName || ''}`.trim() || null : null;
+    // Name line: the sale's customer for pending/completed houses, else the PCL
+    // name. Years line: from PCL history when present.
+    const nameLine = (state === 'pending' || state === 'completed')
+      ? (saleShortName(ps, ob, done) || (p ? shortName(p.firstName, p.lastName) : ''))
+      : (p ? shortName(p.firstName, p.lastName) : '');
+    const yearsLine = p ? pclYearsLine(p) : '';
+    const mapLines = [nameLine, yearsLine].filter(Boolean);
     return {
       house: h,
       state,
       isPcl: !!p,
       pclName,
       pclLabel: p ? pclMapLabel(p) : null,
+      mapLabel: mapLines.length ? mapLines.join('\n') : null,
       pcl: p,
       disposition: d,
       pendingSale: ps,
