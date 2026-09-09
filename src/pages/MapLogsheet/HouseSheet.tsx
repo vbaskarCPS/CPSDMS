@@ -7,7 +7,7 @@
 // missing house by hand.
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Ban, DoorClosed, RotateCcw, DollarSign, Clock, Phone, StickyNote, Trash2, Loader, CheckCircle2, MapPin, Plus, Pencil } from 'lucide-react';
+import { X, Ban, DoorClosed, RotateCcw, DollarSign, Clock, Phone, StickyNote, Trash2, Loader, CheckCircle2, MapPin, Plus, Pencil, CircleSlash } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { HouseView, HouseDispositionStatus, HOUSE_COLORS } from '../../lib/mapLogsheetService';
 
@@ -27,6 +27,7 @@ const STATE_LABEL: Record<HouseView['state'], string> = {
   not_home: 'Not home',
   no: 'No',
   go_back: 'Go back',
+  invalid: 'Invalid',
   pending: 'Pending sale',
   completed: 'Completed',
 };
@@ -101,6 +102,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
     state === 'pending' ? HOUSE_COLORS.pending :
     state === 'no' ? HOUSE_COLORS.no :
     state === 'go_back' ? HOUSE_COLORS.go_back :
+    state === 'invalid' ? HOUSE_COLORS.invalid :
     state === 'not_home' ? (isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home) :
     isPcl ? HOUSE_COLORS.pcl : '#e5e7eb';
 
@@ -127,6 +129,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
     not_home: { label: 'Not home', color: isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home, Icon: DoorClosed },
     no: { label: 'No', color: HOUSE_COLORS.no, Icon: Ban },
     go_back: { label: 'Go back', color: HOUSE_COLORS.go_back, Icon: RotateCcw },
+    invalid: { label: 'Invalid', color: HOUSE_COLORS.invalid, Icon: CircleSlash },
   };
 
   return (
@@ -245,6 +248,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
                 {dispoBtn('not_home', 'Not home', DoorClosed, isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home)}
                 {dispoBtn('no', 'No', Ban, HOUSE_COLORS.no)}
                 {dispoBtn('go_back', 'Go back', RotateCcw, HOUSE_COLORS.go_back)}
+                {dispoBtn('invalid', 'Invalid', CircleSlash, HOUSE_COLORS.invalid)}
                 <button
                   type="button"
                   disabled={saving}

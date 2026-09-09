@@ -355,32 +355,33 @@ const MapLogsheetPage: React.FC = () => {
   );
 
   const counts = useMemo(() => {
-    let no = 0, notHome = 0, goBack = 0;
+    let no = 0, notHome = 0, goBack = 0, invalid = 0;
     dispositions.forEach(d => {
       if (!isToday(d.updatedAt)) return;
       if (d.status === 'no') no++;
       else if (d.status === 'not_home') notHome++;
+      else if (d.status === 'invalid') invalid++;
       else goBack++;
     });
     const pending = houseViews.filter(v => v.state === 'pending').length;
     const completed = houseViews.filter(v => v.state === 'completed').length;
-    // Knocks    = No + Not Home + Go Back + Pending + Done
-    // Answered  = Knocks − Not Home          (a door that opened; Go Back counts)
+    // Knocks    = No + Not Home + Go Back + Invalid + Pending + Done
+    // Answered  = Knocks − Not Home − Invalid   (a door that opened AND could buy; Go Back counts)
     // Answer %  = Answered ÷ Knocks
     // Closing % = (Pending + Done) ÷ Answered
-    const knocks = no + notHome + goBack + pending + completed;
-    const answered = knocks - notHome;
+    const knocks = no + notHome + goBack + invalid + pending + completed;
+    const answered = knocks - notHome - invalid;
     const sales = pending + completed;
     const answerRate = knocks > 0 ? answered / knocks : 0;
     const closingRate = answered > 0 ? sales / answered : 0;
-    return { no, notHome, goBack, pending, completed, knocks, answered, sales, answerRate, closingRate };
+    return { no, notHome, goBack, invalid, pending, completed, knocks, answered, sales, answerRate, closingRate };
   }, [dispositions, houseViews]);
 
   // ---------------------------------------------------------------------
   // PACE & TIME (today) — one event per knocked house, timed by its latest state
   // ---------------------------------------------------------------------
   const knockEvents = useMemo(() => {
-    type Ev = { t: number; kind: 'no' | 'not_home' | 'go_back' | 'pending' | 'sale'; id: string };
+    type Ev = { t: number; kind: 'no' | 'not_home' | 'go_back' | 'invalid' | 'pending' | 'sale'; id: string };
     const byHouse = new Map<string, Ev>();
     // Dispositions marked today
     dispositions.forEach(d => {
@@ -796,12 +797,13 @@ const MapLogsheetPage: React.FC = () => {
 
               {statsTab === 'today' && (
                 <>
-                  <div className="grid grid-cols-4 gap-2">
+                  <div className="grid grid-cols-3 gap-2">
                     {[
                       { label: 'Knocks', value: counts.knocks, color: '#e5e7eb' },
                       { label: 'No', value: counts.no, color: HOUSE_COLORS.no },
                       { label: 'Not home', value: counts.notHome, color: '#c4c8d0' },
                       { label: 'Go back', value: counts.goBack, color: HOUSE_COLORS.go_back },
+                      { label: 'Invalid', value: counts.invalid, color: HOUSE_COLORS.invalid },
                       { label: 'Pending', value: counts.pending, color: '#facc15' },
                       { label: 'Done', value: counts.completed, color: '#4ade80' },
                       { label: 'Answered', value: counts.answered, color: '#93c5fd' },

@@ -119,7 +119,7 @@ export interface RouteHouse {
   source: 'nar' | 'osm' | 'manual';
 }
 
-export type HouseDispositionStatus = 'no' | 'not_home' | 'go_back';
+export type HouseDispositionStatus = 'no' | 'not_home' | 'go_back' | 'invalid';
 
 export interface HouseDisposition {
   routeCode: string;
@@ -132,7 +132,7 @@ export interface HouseDisposition {
 }
 
 /** Everything the map needs to colour one house. */
-export type HouseVisualState = 'none' | 'not_home' | 'no' | 'go_back' | 'pending' | 'completed';
+export type HouseVisualState = 'none' | 'not_home' | 'no' | 'go_back' | 'invalid' | 'pending' | 'completed';
 
 export interface HouseView {
   house: RouteHouse;
@@ -158,6 +158,7 @@ export const HOUSE_COLORS = {
   not_home: '#8b8f98',
   no: '#dc2626',
   go_back: '#f97316',
+  invalid: '#ec4899',
   pending: '#d4a800',
   completed: '#16a34a',
   pcl: '#1d4ed8',
@@ -169,6 +170,7 @@ export function houseColor(v: Pick<HouseView, 'state' | 'isPcl'>): string {
   if (v.state === 'pending') return HOUSE_COLORS.pending;
   if (v.state === 'no') return HOUSE_COLORS.no;
   if (v.state === 'go_back') return HOUSE_COLORS.go_back;
+  if (v.state === 'invalid') return HOUSE_COLORS.invalid;
   if (v.state === 'not_home') return v.isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home;
   return v.isPcl ? HOUSE_COLORS.pcl : HOUSE_COLORS.none;
 }
