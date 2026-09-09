@@ -510,3 +510,10 @@ body {
     min-height: 28px;
   }
 }
+/* The map logsheet opts out of the small-screen page zoom above: a zoomed
+   page leaves the Mapbox canvas drawn at 92% of its box (black bands). The
+   map view adds this class to <html> while it is mounted. */
+   html.map-fullbleed {
+    zoom: 1 !important;
+    -moz-transform: none !important;
+  }
