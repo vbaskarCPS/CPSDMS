@@ -5,7 +5,7 @@
   "description": "Digital Logsheet for Canadian Property Stars aeration services",
   "start_url": "/",
   "scope": "/",
-  "display": "fullscreen",
+  "display": "standalone",
   "orientation": "any",
   "background_color": "#000000",
   "theme_color": "#800020",
