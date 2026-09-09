@@ -155,6 +155,19 @@ const MapLogsheetPage: React.FC = () => {
 
   const housesLoadedForRef = useRef<string>('');
 
+  // Lock browser page-zoom at 100% while the map is open. A two-finger pinch
+  // that lands on the header or the sheet zooms the whole page instead of the
+  // map, and the phone then keeps that zoom for the site. Setting the viewport
+  // meta this way snaps it back and stops it recurring; restored on leave so
+  // the rest of the app keeps normal zoom behaviour.
+  useEffect(() => {
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+    if (!meta) return;
+    const previous = meta.getAttribute('content') || 'width=device-width, initial-scale=1.0';
+    meta.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
+    return () => { meta.setAttribute('content', previous); };
+  }, []);
+
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2200); };
 
   const forceLogout = useCallback(() => {
