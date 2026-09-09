@@ -46,12 +46,14 @@ export interface MapLogsheetViewProps {
   loadingMessage: string | null;
   /** When true, the next tap on empty map reports a coordinate instead of a house. */
   placingHouse: boolean;
+  /** Bump `nonce` to pan/zoom the map somewhere (e.g. a street from the Coverage tab). */
+  flyTo?: { lng: number; lat: number; zoom?: number; nonce: number } | null;
   onSelectHouse: (id: string | null) => void;
   onPlaceHouse: (lng: number, lat: number) => void;
 }
 
 const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
-  worker, routeMaps, houses, selectedId, loadingMessage, placingHouse, onSelectHouse, onPlaceHouse,
+  worker, routeMaps, houses, selectedId, loadingMessage, placingHouse, flyTo, onSelectHouse, onPlaceHouse,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -321,6 +323,13 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     if (!map || !mapLoaded || !map.getLayer(L_SEL)) return;
     map.setFilter(L_SEL, ['==', ['get', 'id'], selectedId || '__none__']);
   }, [selectedId, mapLoaded]);
+
+  // Fly-to requests from the parent (Coverage tab street rows)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !flyTo) return;
+    map.flyTo({ center: [flyTo.lng, flyTo.lat], zoom: flyTo.zoom ?? Math.max(map.getZoom(), 17), duration: 900 });
+  }, [flyTo?.nonce, mapLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Placing mode cursor
   useEffect(() => {

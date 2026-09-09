@@ -16,7 +16,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   LogOut, Loader, Plus, FileText, ListChecks, Home, X, CheckCircle2, AlertCircle, Shovel, Droplets, Leaf,
-  Menu, BarChart3, ChevronUp,
+  Menu, BarChart3, ChevronUp, Clock, MapPinned, RotateCcw,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
@@ -26,7 +26,7 @@ import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterSer
 import { subscribeAsContractor } from '../../lib/realtimeService';
 import { supabase } from '../../lib/supabase';
 import { getWorkerPCL, PCLClientGroup } from '../../lib/pclCacheService';
-import { Worker, SessionStats, MasterBooking, SeasonType, PendingSale, CommandCenter } from '../../types';
+import { Worker, SessionStats, MasterBooking, SeasonType, PendingSale, CommandCenter, SessionTransaction } from '../../types';
 import LogsheetJobCard from '../Logsheet/components/LogsheetJobCard';
 import AddContractModal from '../../components/AddContractModal';
 import QuickPendingModal from '../../components/QuickPendingModal';
@@ -36,7 +36,7 @@ import {
   MAP_LOGSHEET_PATH, isH01,
   SavedRouteMap, RouteHouse, HouseDisposition, HouseDispositionStatus, HouseView,
   fetchRouteMaps, ensureRouteHouses, fetchDispositions, setDisposition, clearDisposition, addManualHouse,
-  indexPendingSales, indexBookings, indexPcl, buildHouseViews, routeHouseId,
+  indexPendingSales, indexBookings, indexPcl, buildHouseViews, routeHouseId, houseKeyFromFullAddress, houseKeyFromAddress,
   subscribeToPendingSales, subscribeToDispositions, HOUSE_COLORS,
 } from '../../lib/mapLogsheetService';
 
@@ -126,6 +126,8 @@ const MapLogsheetPage: React.FC = () => {
   const [seasonType, setSeasonType] = useState<SeasonType>('aeration');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [stats, setStats] = useState<SessionStats>(sessionService.getEmptyStats());
+  // Today's completed transactions (with timestamps) — for the Pace tab.
+  const [transactions, setTransactions] = useState<SessionTransaction[]>([]);
   const [upsellsEnabled, setUpsellsEnabled] = useState(true);
 
   // --- logsheet data (same sources as Dashboard) ---
@@ -148,6 +150,8 @@ const MapLogsheetPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [showJobs, setShowJobs] = useState(false);
   const [showStats, setShowStats] = useState(false);
+  const [statsTab, setStatsTab] = useState<'today' | 'pace' | 'coverage'>('today');
+  const [flyTo, setFlyTo] = useState<{ lng: number; lat: number; zoom?: number; nonce: number } | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [jobsFilter, setJobsFilter] = useState<'pending' | 'completed'>('pending');
   const [showContract, setShowContract] = useState(false);
@@ -196,7 +200,7 @@ const MapLogsheetPage: React.FC = () => {
     setRouteCodes(prev => (prev.join(',') === myRoutes.join(',') ? prev : myRoutes));
     try {
       const live = await sessionService.getActiveLogsheetSession(w.contractorId);
-      if (live) setStats(live.stats);
+      if (live) { setStats(live.stats); setTransactions(live.financialStore || []); }
     } catch { /* stats are cosmetic here */ }
   }, []);
 
@@ -371,6 +375,124 @@ const MapLogsheetPage: React.FC = () => {
     const closingRate = answered > 0 ? sales / answered : 0;
     return { no, notHome, goBack, pending, completed, knocks, answered, sales, answerRate, closingRate };
   }, [dispositions, houseViews]);
+
+  // ---------------------------------------------------------------------
+  // PACE & TIME (today) — one event per knocked house, timed by its latest state
+  // ---------------------------------------------------------------------
+  const knockEvents = useMemo(() => {
+    type Ev = { t: number; kind: 'no' | 'not_home' | 'go_back' | 'pending' | 'sale'; id: string };
+    const byHouse = new Map<string, Ev>();
+    // Dispositions marked today
+    dispositions.forEach(d => {
+      if (!isToday(d.updatedAt)) return;
+      byHouse.set(routeHouseId(d.routeCode, d.houseKey), { t: new Date(d.updatedAt).getTime(), kind: d.status, id: routeHouseId(d.routeCode, d.houseKey) });
+    });
+    // Pending sales parked today (override a disposition at the same house)
+    for (const ps of pendingSales) {
+      if (ps.saleType === 'asphalt' && ps.parentId) continue;
+      if (!ps.createdAt || !isToday(ps.createdAt)) continue;
+      const key = houseKeyFromAddress(ps.houseNumber, ps.streetName);
+      if (!key) continue;
+      const id = routeHouseId(ps.routeCode || '', key);
+      byHouse.set(id, { t: new Date(ps.createdAt).getTime(), kind: 'pending', id });
+    }
+    // Completed transactions today (override everything)
+    for (const tx of transactions) {
+      if (!tx.timestamp || !isToday(tx.timestamp)) continue;
+      const key = houseKeyFromFullAddress(tx.address);
+      if (!key) continue;
+      const id = routeHouseId(tx.routeCode || '', key);
+      byHouse.set(id, { t: new Date(tx.timestamp).getTime(), kind: 'sale', id });
+    }
+    return [...byHouse.values()].sort((a, b) => a.t - b.t);
+  }, [dispositions, pendingSales, transactions]);
+
+  const pace = useMemo(() => {
+    const n = knockEvents.length;
+    if (n === 0) return null;
+    const first = knockEvents[0].t;
+    const last = knockEvents[n - 1].t;
+    const spanHrs = Math.max((last - first) / 3600000, 1 / 60); // never divide by zero
+    const doorsPerHour = n / spanHrs;
+    let longestGapMs = 0, gapAt = first;
+    for (let i = 1; i < n; i++) {
+      const g = knockEvents[i].t - knockEvents[i - 1].t;
+      if (g > longestGapMs) { longestGapMs = g; gapAt = knockEvents[i - 1].t; }
+    }
+    const saleTimes = knockEvents.filter(e => e.kind === 'sale' || e.kind === 'pending').map(e => e.t);
+    const minsToFirstSale = saleTimes.length ? (saleTimes[0] - first) / 60000 : null;
+    let avgMinsBetweenSales: number | null = null;
+    if (saleTimes.length >= 2) avgMinsBetweenSales = (saleTimes[saleTimes.length - 1] - saleTimes[0]) / 60000 / (saleTimes.length - 1);
+    // Knocks by hour, from the first knock's hour to the current hour
+    const startHour = new Date(first).getHours();
+    const endHour = Math.max(new Date().getHours(), new Date(last).getHours());
+    const hours: Array<{ hour: number; knocks: number; sales: number }> = [];
+    for (let h = startHour; h <= endHour; h++) hours.push({ hour: h, knocks: 0, sales: 0 });
+    for (const e of knockEvents) {
+      const h = new Date(e.t).getHours() - startHour;
+      if (h >= 0 && h < hours.length) { hours[h].knocks++; if (e.kind === 'sale' || e.kind === 'pending') hours[h].sales++; }
+    }
+    return { n, first, last, spanHrs, doorsPerHour, longestGapMs, gapAt, minsToFirstSale, avgMinsBetweenSales, hours };
+  }, [knockEvents]);
+
+  // Average charge (today): total price of completed sales ÷ number of them.
+  // Upgrades/add-ons are excluded so the figure reads as "what a door is worth".
+  const avgCharge = useMemo(() => {
+    const sales = transactions.filter(tx => tx.timestamp && isToday(tx.timestamp) && (tx.type === 'Sale' || tx.type === 'Production'));
+    const total = sales.reduce((sum, tx) => sum + (Number(tx.price) || 0), 0);
+    return { count: sales.length, total, avg: sales.length ? total / sales.length : 0 };
+  }, [transactions]);
+
+  const goBackQueue = useMemo(() => {
+    return houseViews
+      .filter(v => v.state === 'go_back' && v.disposition && isToday(v.disposition.updatedAt))
+      .sort((a, b) => new Date(a.disposition!.updatedAt).getTime() - new Date(b.disposition!.updatedAt).getTime());
+  }, [houseViews]);
+
+  // ---------------------------------------------------------------------
+  // COVERAGE (today) — knocked = has a knock event today
+  // ---------------------------------------------------------------------
+  const coverage = useMemo(() => {
+    const knockedIds = new Set(knockEvents.map(e => e.id));
+    const total = houseViews.length;
+    const knocked = houseViews.filter(v => knockedIds.has(routeHouseId(v.house.routeCode, v.house.houseKey))).length;
+    // Per street, per side (odd/even), sorted by number: an untouched house
+    // with a knocked house before AND after it on the same side is "skipped".
+    type Street = { key: string; name: string; routeCode: string; total: number; knocked: number; sales: number; skipped: number; lng: number; lat: number };
+    const streets = new Map<string, Street>();
+    const groups = new Map<string, HouseView[]>();
+    for (const v of houseViews) {
+      const k = `${v.house.routeCode}|${v.house.streetNorm}`;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k)!.push(v);
+    }
+    let skippedTotal = 0;
+    groups.forEach((list, k) => {
+      const first = list[0];
+      const st: Street = { key: k, name: first.house.streetName, routeCode: first.house.routeCode, total: list.length, knocked: 0, sales: 0, skipped: 0, lng: 0, lat: 0 };
+      let sLng = 0, sLat = 0;
+      for (const v of list) {
+        sLng += v.house.lng; sLat += v.house.lat;
+        if (knockedIds.has(routeHouseId(v.house.routeCode, v.house.houseKey))) st.knocked++;
+        if (v.state === 'pending' || v.state === 'completed') st.sales++;
+      }
+      st.lng = sLng / list.length; st.lat = sLat / list.length;
+      for (const parity of [0, 1]) {
+        const side = list.filter(v => v.house.civicNo % 2 === parity).sort((a, b) => a.house.civicNo - b.house.civicNo);
+        const flags = side.map(v => knockedIds.has(routeHouseId(v.house.routeCode, v.house.houseKey)));
+        let seenKnocked = false;
+        let pendingGap = 0;
+        for (const f of flags) {
+          if (f) { if (seenKnocked) st.skipped += pendingGap; seenKnocked = true; pendingGap = 0; }
+          else if (seenKnocked) pendingGap++;
+        }
+      }
+      skippedTotal += st.skipped;
+      streets.set(k, st);
+    });
+    const streetList = [...streets.values()].sort((a, b) => (b.total - b.knocked) - (a.total - a.knocked) || a.name.localeCompare(b.name));
+    return { total, knocked, untouched: total - knocked, skipped: skippedTotal, pctKnocked: total > 0 ? knocked / total : 0, streets: streetList };
+  }, [houseViews, knockEvents]);
 
   const drawerJobs = useMemo(() => {
     if (jobsFilter === 'pending') {
@@ -567,6 +689,7 @@ const MapLogsheetPage: React.FC = () => {
             selectedId={selectedId}
             loadingMessage={loadingMsg}
             placingHouse={placing}
+            flyTo={flyTo}
             onSelectHouse={handleSelectHouse}
             onPlaceHouse={handlePlaceHouse}
           />
@@ -659,47 +782,185 @@ const MapLogsheetPage: React.FC = () => {
           <div className="absolute inset-0 z-30" onClick={() => setShowStats(false)}>
             <div className="absolute inset-0 bg-black/40" />
             <div
-              className="absolute inset-x-0 top-0 bg-gray-900 border-b border-gray-700 rounded-b-2xl shadow-2xl p-4 space-y-3"
+              className="absolute inset-x-0 top-0 bg-gray-900 border-b border-gray-700 rounded-b-2xl shadow-2xl p-3 space-y-3 max-h-[85%] overflow-y-auto custom-scrollbar"
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
-                <h3 className="text-white font-bold flex items-center gap-2"><BarChart3 size={16} className="text-green-300" /> Today</h3>
+                <div className="flex bg-gray-800 rounded-lg p-1 border border-gray-700">
+                  {([['today', 'Today'], ['pace', 'Pace'], ['coverage', 'Coverage']] as const).map(([k, label]) => (
+                    <button key={k} onClick={() => setStatsTab(k)} className={`px-3 py-1.5 rounded-md text-xs font-bold ${statsTab === k ? 'bg-cps-blue text-white' : 'text-gray-400'}`}>{label}</button>
+                  ))}
+                </div>
                 <button onClick={() => setShowStats(false)} className="p-1 text-gray-400"><X size={20} /></button>
               </div>
-              <div className="grid grid-cols-4 gap-2">
-                {[
-                  { label: 'Knocks', value: counts.knocks, color: '#e5e7eb' },
-                  { label: 'No', value: counts.no, color: HOUSE_COLORS.no },
-                  { label: 'Not home', value: counts.notHome, color: '#c4c8d0' },
-                  { label: 'Go back', value: counts.goBack, color: HOUSE_COLORS.go_back },
-                  { label: 'Pending', value: counts.pending, color: '#facc15' },
-                  { label: 'Done', value: counts.completed, color: '#4ade80' },
-                  { label: 'Answered', value: counts.answered, color: '#93c5fd' },
-                  { label: 'Equiv', value: stats.totalEQ.toFixed(1), color: '#ffffff' },
-                ].map(t => (
-                  <div key={t.label} className="bg-gray-800 rounded-lg py-2 flex flex-col items-center">
-                    <span className="text-[9px] uppercase font-bold text-gray-500">{t.label}</span>
-                    <span className="text-lg font-bold" style={{ color: t.color }}>{t.value}</span>
+
+              {statsTab === 'today' && (
+                <>
+                  <div className="grid grid-cols-4 gap-2">
+                    {[
+                      { label: 'Knocks', value: counts.knocks, color: '#e5e7eb' },
+                      { label: 'No', value: counts.no, color: HOUSE_COLORS.no },
+                      { label: 'Not home', value: counts.notHome, color: '#c4c8d0' },
+                      { label: 'Go back', value: counts.goBack, color: HOUSE_COLORS.go_back },
+                      { label: 'Pending', value: counts.pending, color: '#facc15' },
+                      { label: 'Done', value: counts.completed, color: '#4ade80' },
+                      { label: 'Answered', value: counts.answered, color: '#93c5fd' },
+                      { label: 'Equiv', value: stats.totalEQ.toFixed(1), color: '#ffffff' },
+                    ].map(t => (
+                      <div key={t.label} className="bg-gray-800 rounded-lg py-2 flex flex-col items-center">
+                        <span className="text-[9px] uppercase font-bold text-gray-500">{t.label}</span>
+                        <span className="text-lg font-bold" style={{ color: t.color }}>{t.value}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="bg-gray-800 rounded-lg py-2 px-3">
-                  <div className="text-[9px] uppercase font-bold text-gray-500">Answer rate</div>
-                  <div className="text-2xl font-bold text-blue-300">{pct(counts.answerRate)}</div>
-                  <div className="text-[10px] text-gray-500">{counts.answered} answered ÷ {counts.knocks} knocks</div>
-                </div>
-                <div className="bg-gray-800 rounded-lg py-2 px-3">
-                  <div className="text-[9px] uppercase font-bold text-gray-500">Closing rate</div>
-                  <div className="text-2xl font-bold text-green-300">{pct(counts.closingRate)}</div>
-                  <div className="text-[10px] text-gray-500">{counts.sales} sales ÷ {counts.answered} answered</div>
-                </div>
-              </div>
-              <div className="text-[10px] text-gray-500 flex flex-wrap gap-x-3">
-                <span>Up gross ${stats.upsellGross.toFixed(0)}</span>
-                <span>Upsells {stats.upsellCount}</span>
-                <span>Steps {stats.stepCount}</span>
-              </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="bg-gray-800 rounded-lg py-2 px-2">
+                      <div className="text-[9px] uppercase font-bold text-gray-500">Answer rate</div>
+                      <div className="text-2xl font-bold text-blue-300">{pct(counts.answerRate)}</div>
+                      <div className="text-[10px] text-gray-500">{counts.answered} ÷ {counts.knocks} knocks</div>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg py-2 px-2">
+                      <div className="text-[9px] uppercase font-bold text-gray-500">Closing rate</div>
+                      <div className="text-2xl font-bold text-green-300">{pct(counts.closingRate)}</div>
+                      <div className="text-[10px] text-gray-500">{counts.sales} ÷ {counts.answered} answered</div>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg py-2 px-2">
+                      <div className="text-[9px] uppercase font-bold text-gray-500">Avg charge</div>
+                      <div className="text-2xl font-bold text-yellow-300">{avgCharge.count ? `$${Math.round(avgCharge.avg)}` : '—'}</div>
+                      <div className="text-[10px] text-gray-500">${Math.round(avgCharge.total)} ÷ {avgCharge.count} done</div>
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-gray-500 flex flex-wrap gap-x-3">
+                    <span>Up gross ${stats.upsellGross.toFixed(0)}</span>
+                    <span>Upsells {stats.upsellCount}</span>
+                    <span>Steps {stats.stepCount}</span>
+                  </div>
+                </>
+              )}
+
+              {statsTab === 'pace' && (
+                !pace ? (
+                  <div className="text-sm text-gray-500 py-6 text-center">No knocks yet today.</div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="bg-gray-800 rounded-lg py-2 px-2 flex flex-col items-center">
+                        <span className="text-[9px] uppercase font-bold text-gray-500">Doors / hr</span>
+                        <span className="text-2xl font-bold text-white">{pace.doorsPerHour.toFixed(1)}</span>
+                        <span className="text-[10px] text-gray-500">{pace.n} ÷ {pace.spanHrs.toFixed(1)} h</span>
+                      </div>
+                      <div className="bg-gray-800 rounded-lg py-2 px-2 flex flex-col items-center">
+                        <span className="text-[9px] uppercase font-bold text-gray-500">First knock</span>
+                        <span className="text-lg font-bold text-white">{format(pace.first, 'h:mm a')}</span>
+                      </div>
+                      <div className="bg-gray-800 rounded-lg py-2 px-2 flex flex-col items-center">
+                        <span className="text-[9px] uppercase font-bold text-gray-500">Last knock</span>
+                        <span className="text-lg font-bold text-white">{format(pace.last, 'h:mm a')}</span>
+                      </div>
+                      <div className="bg-gray-800 rounded-lg py-2 px-2 flex flex-col items-center">
+                        <span className="text-[9px] uppercase font-bold text-gray-500">Longest gap</span>
+                        <span className="text-lg font-bold text-orange-300">{Math.round(pace.longestGapMs / 60000)} min</span>
+                        <span className="text-[10px] text-gray-500">after {format(pace.gapAt, 'h:mm a')}</span>
+                      </div>
+                      <div className="bg-gray-800 rounded-lg py-2 px-2 flex flex-col items-center">
+                        <span className="text-[9px] uppercase font-bold text-gray-500">To 1st sale</span>
+                        <span className="text-lg font-bold text-green-300">{pace.minsToFirstSale == null ? '—' : `${Math.round(pace.minsToFirstSale)} min`}</span>
+                      </div>
+                      <div className="bg-gray-800 rounded-lg py-2 px-2 flex flex-col items-center">
+                        <span className="text-[9px] uppercase font-bold text-gray-500">Between sales</span>
+                        <span className="text-lg font-bold text-green-300">{pace.avgMinsBetweenSales == null ? '—' : `${Math.round(pace.avgMinsBetweenSales)} min`}</span>
+                      </div>
+                    </div>
+
+                    {/* Knocks by hour */}
+                    <div className="bg-gray-800 rounded-lg p-3">
+                      <div className="text-[9px] uppercase font-bold text-gray-500 mb-2 flex items-center gap-1"><Clock size={10} /> Knocks by hour <span className="text-green-400 normal-case font-normal">· green = sales</span></div>
+                      {(() => {
+                        const max = Math.max(1, ...pace.hours.map(h => h.knocks));
+                        return (
+                          <div className="flex items-end gap-1 h-20">
+                            {pace.hours.map(h => (
+                              <div key={h.hour} className="flex-1 flex flex-col items-center justify-end h-full">
+                                <span className="text-[9px] text-gray-400 mb-0.5">{h.knocks || ''}</span>
+                                <div className="w-full rounded-t bg-gray-600 relative" style={{ height: `${(h.knocks / max) * 100}%`, minHeight: h.knocks ? 3 : 0 }}>
+                                  {h.sales > 0 && <div className="absolute bottom-0 left-0 right-0 bg-green-500 rounded-t" style={{ height: `${(h.sales / Math.max(h.knocks, 1)) * 100}%` }} />}
+                                </div>
+                                <span className="text-[9px] text-gray-500 mt-1">{format(new Date().setHours(h.hour, 0, 0, 0), 'ha').toLowerCase()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Go back queue */}
+                    <div className="bg-gray-800 rounded-lg p-3">
+                      <div className="text-[9px] uppercase font-bold text-gray-500 mb-2 flex items-center gap-1"><RotateCcw size={10} /> Go back queue ({goBackQueue.length})</div>
+                      {goBackQueue.length === 0 ? (
+                        <div className="text-xs text-gray-500">Nothing to go back to.</div>
+                      ) : (
+                        <div className="space-y-1">
+                          {goBackQueue.map(v => (
+                            <button
+                              key={routeHouseId(v.house.routeCode, v.house.houseKey)}
+                              onClick={() => { setShowStats(false); setFlyTo({ lng: v.house.lng, lat: v.house.lat, zoom: 18, nonce: Date.now() }); setSelectedId(routeHouseId(v.house.routeCode, v.house.houseKey)); }}
+                              className="w-full text-left flex items-center gap-2 py-1.5 border-b border-gray-700/60 last:border-0"
+                            >
+                              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: HOUSE_COLORS.go_back }} />
+                              <span className="text-sm text-white font-bold shrink-0">{v.house.civicNo}{(v.house.civicSuffix || '').toUpperCase()} {v.house.streetName}</span>
+                              <span className="text-xs text-gray-400 truncate">{v.disposition?.note || ''}</span>
+                              <span className="ml-auto text-[10px] text-gray-500 shrink-0">{format(new Date(v.disposition!.updatedAt), 'h:mm a')}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )
+              )}
+
+              {statsTab === 'coverage' && (
+                <>
+                  <div className="grid grid-cols-4 gap-2">
+                    <div className="bg-gray-800 rounded-lg py-2 flex flex-col items-center">
+                      <span className="text-[9px] uppercase font-bold text-gray-500">Knocked</span>
+                      <span className="text-2xl font-bold text-white">{pct(coverage.pctKnocked)}</span>
+                      <span className="text-[10px] text-gray-500">{coverage.knocked} of {coverage.total}</span>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg py-2 flex flex-col items-center">
+                      <span className="text-[9px] uppercase font-bold text-gray-500">Untouched</span>
+                      <span className="text-2xl font-bold text-gray-300">{coverage.untouched}</span>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg py-2 flex flex-col items-center">
+                      <span className="text-[9px] uppercase font-bold text-gray-500">Skipped</span>
+                      <span className="text-2xl font-bold text-orange-300">{coverage.skipped}</span>
+                      <span className="text-[10px] text-gray-500">between knocks</span>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg py-2 flex flex-col items-center">
+                      <span className="text-[9px] uppercase font-bold text-gray-500">Streets</span>
+                      <span className="text-2xl font-bold text-white">{coverage.streets.length}</span>
+                    </div>
+                  </div>
+                  <div className="bg-gray-800 rounded-lg p-3">
+                    <div className="text-[9px] uppercase font-bold text-gray-500 mb-2 flex items-center gap-1"><MapPinned size={10} /> By street <span className="normal-case font-normal">· most left to do first · tap to go there</span></div>
+                    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 text-[9px] uppercase font-bold text-gray-500 pb-1 border-b border-gray-700">
+                      <span>Street</span><span>Knocked</span><span>Sales</span><span>Skip</span>
+                    </div>
+                    {coverage.streets.map(st => (
+                      <button
+                        key={st.key}
+                        onClick={() => { setShowStats(false); setFlyTo({ lng: st.lng, lat: st.lat, zoom: 17, nonce: Date.now() }); }}
+                        className="w-full grid grid-cols-[1fr_auto_auto_auto] gap-x-3 items-center text-left py-1.5 border-b border-gray-700/60 last:border-0"
+                      >
+                        <span className="text-sm text-white truncate">{st.name} <span className="text-[10px] text-gray-500 font-mono">{routeCodes.length > 1 ? st.routeCode : ''}</span></span>
+                        <span className={`text-sm font-mono ${st.knocked === st.total ? 'text-green-300' : 'text-gray-200'}`}>{st.knocked}/{st.total}</span>
+                        <span className="text-sm font-mono text-green-300">{st.sales || ''}</span>
+                        <span className="text-sm font-mono text-orange-300">{st.skipped || ''}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
