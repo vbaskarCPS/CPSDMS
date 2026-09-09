@@ -139,6 +139,8 @@ export interface HouseView {
   state: HouseVisualState;
   isPcl: boolean;
   pclName: string | null;
+  /** Map label under the number: "John M" + newline + "(24, 25)" (years of service). */
+  pclLabel: string | null;
   pcl: PCLClientGroup | null;
   disposition: HouseDisposition | null;
   pendingSale: PendingSale | null;
@@ -663,6 +665,20 @@ export function indexPcl(pclByRoute: Map<string, PCLClientGroup[]>): Map<string,
   return m;
 }
 
+/** "John M" on one line, "(24, 25)" on the next — first name, last initial,
+ *  two-digit years of service oldest→newest. Either line is dropped if empty. */
+export function pclMapLabel(p: PCLClientGroup): string | null {
+  const first = (p.firstName || '').trim();
+  const lastInitial = (p.lastName || '').trim().charAt(0).toUpperCase();
+  const name = [first, lastInitial].filter(Boolean).join(' ');
+  const years = Array.from(new Set(
+    (p.history || []).map(h => Number(h.year)).filter(y => Number.isFinite(y) && y > 0)
+  )).sort((a, b) => a - b).map(y => String(y).slice(-2));
+  const yearsLine = years.length ? `(${years.join(', ')})` : '';
+  const lines = [name, yearsLine].filter(Boolean);
+  return lines.length ? lines.join('\n') : null;
+}
+
 /** Combine everything into the per-house view the map renders. */
 export function buildHouseViews(
   houses: RouteHouse[],
@@ -689,6 +705,7 @@ export function buildHouseViews(
       state,
       isPcl: !!p,
       pclName,
+      pclLabel: p ? pclMapLabel(p) : null,
       pcl: p,
       disposition: d,
       pendingSale: ps,

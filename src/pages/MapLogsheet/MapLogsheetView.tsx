@@ -104,7 +104,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
         type: 'Feature',
         properties: {
           id, color, num,
-          name: v.isPcl && v.pclName ? v.pclName : '',
+          name: v.isPcl && v.pclLabel ? v.pclLabel : '',
           hasFp: hasFp ? 1 : 0,
           hasState: hasState ? 1 : 0,
           // coloured houses win label placement fights
