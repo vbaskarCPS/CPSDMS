@@ -101,6 +101,9 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
+  // TEMPORARY diagnostic readout for the black-band fault. Remove once fixed.
+  const [debugText, setDebugText] = useState<string>('');
+  const [debugHidden, setDebugHidden] = useState(false);
   const routeLayerIdsRef = useRef<string[]>([]);
   const initialFitDoneRef = useRef(false);
   const mountedRef = useRef(true);
@@ -465,6 +468,35 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     };
   }, [mapLoaded]);
 
+  // TEMPORARY diagnostic: sample every second what each layer of the stack
+  // believes the map's size to be.
+  useEffect(() => {
+    if (!mapLoaded) return;
+    const sample = () => {
+      const map = mapRef.current;
+      const el = containerRef.current;
+      if (!map || !el) return;
+      const r = el.getBoundingClientRect();
+      const cv = map.getCanvas();
+      const gl = (map as any).painter?.context?.gl;
+      const vv = window.visualViewport;
+      setDebugText([
+        `dpr ${window.devicePixelRatio}`,
+        `win ${window.innerWidth}x${window.innerHeight}  scr ${window.screen.width}x${window.screen.height}`,
+        `vv ${vv ? `${Math.round(vv.width)}x${Math.round(vv.height)} s${vv.scale}` : 'n/a'}`,
+        `box ${Math.round(r.width)}x${Math.round(r.height)}`,
+        `css ${cv.style.width}x${cv.style.height}  client ${cv.clientWidth}x${cv.clientHeight}`,
+        `px ${cv.width}x${cv.height}`,
+        `gl ${gl ? `${gl.drawingBufferWidth}x${gl.drawingBufferHeight}` : 'n/a'}`,
+        `max ${gl ? `${gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)}/${gl.getParameter(gl.MAX_TEXTURE_SIZE)}` : 'n/a'}`,
+        `tf ${map.transform.width}x${map.transform.height}`,
+      ].join('\n'));
+    };
+    sample();
+    const id = window.setInterval(sample, 1000);
+    return () => clearInterval(id);
+  }, [mapLoaded]);
+
   // Keep house layers above route lines if the style reorders anything.
   useEffect(() => {
     const map = mapRef.current;
@@ -474,7 +506,16 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
 
   return (
     <div className="relative w-full h-full">
+      <style>{`.mapboxgl-ctrl-logo { transform: scale(0.7); transform-origin: bottom left; }`}</style>
       <div ref={containerRef} className="absolute inset-0" />
+
+      {/* TEMPORARY diagnostic readout — tap to hide. Remove once the band fault is fixed. */}
+      {mapLoaded && !debugHidden && debugText && (
+        <pre
+          onClick={() => setDebugHidden(true)}
+          className="absolute top-16 left-3 z-30 bg-black/80 text-green-300 text-[11px] leading-tight p-2 rounded font-mono whitespace-pre"
+        >{debugText}</pre>
+      )}
 
       <button
         onClick={toggleFollow}
