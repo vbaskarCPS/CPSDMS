@@ -23,6 +23,8 @@ const Logsheet = React.lazy(() => import('./pages/Logsheet/Dashboard'));
 const NewJob = React.lazy(() => import('./pages/Logsheet/NewJob'));
 const JobDetail = React.lazy(() => import('./pages/Logsheet/JobDetail'));
 const NotFound = React.lazy(() => import('./pages/Logsheet/NotFound'));
+// Map logsheet (contractor H01, team seasons, digital mapping only)
+const MapLogsheetPage = React.lazy(() => import('./pages/MapLogsheet/MapLogsheetPage'));
 const PayoutContractor = React.lazy(() => import('./pages/Management/PayoutContractor'));
 const SlugRouter = React.lazy(() => import('./pages/Public/SlugRouter'));
 
@@ -90,6 +92,7 @@ function App() {
         <Route path="/logsheet" element={<Logsheet />} />
         <Route path="/logsheet/new" element={<NewJob />} />
         <Route path="/job-detail/:jobId" element={<JobDetail />} />
+        <Route path="/map-logsheet" element={<MapLogsheetPage />} />
 
         {/* Training Routes (contractors with no active session) */}
         <Route path="/training" element={<TrainingPortal />} />

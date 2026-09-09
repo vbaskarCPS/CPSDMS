@@ -123,6 +123,10 @@ interface QuickPendingModalProps {
   assignedRoutes: string[];   // Worker's assigned route codes for the day
   onClose: () => void;
   onSaved?: () => void;       // Called after a successful Save Pending so the dashboard can refresh
+  // Map logsheet: open with the tapped house's address already filled in.
+  prefill?: { routeCode: string; houseNumber: string; streetName: string };
+  // Map logsheet: where NewJob should return to after "Proceed to Complete".
+  returnTo?: string;
 }
 
 const QuickPendingModal: React.FC<QuickPendingModalProps> = ({

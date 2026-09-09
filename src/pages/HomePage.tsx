@@ -10,6 +10,7 @@ import { setStorageItem } from '../lib/localStorage';
 import { isTrainingCredentials, TRAINING_WORKER } from '../lib/trainingData';
 import { trainingService } from '../lib/trainingService';
 import { googleAuthService } from '../lib/googleAuthService';
+import { workerLandingPath } from '../lib/mapLogsheetService';
 
 // Logo URL (same as email templates)
 const LOGO_URL = 'https://mipvcafqrmwxnoqmicxh.supabase.co/storage/v1/object/public/logos/logo-white.png';
