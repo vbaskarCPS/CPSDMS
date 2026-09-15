@@ -16,7 +16,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   LogOut, Loader, Plus, FileText, ListChecks, Home, X, CheckCircle2, AlertCircle, Shovel, Droplets, Leaf,
-  Menu, BarChart3, ChevronUp, Clock, MapPinned, RotateCcw, MessageSquare,
+  Menu, BarChart3, ChevronUp, Clock, MapPinned, RotateCcw, MessageSquare, Route,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
@@ -36,8 +36,8 @@ import PclOutreachSheet, { pclOutreachClients } from './PclOutreachSheet';
 import { getPclTextedSet } from '../../lib/pclOutreachService';
 import {
   MAP_LOGSHEET_PATH, isH01,
-  SavedRouteMap, RouteHouse, HouseDisposition, HouseDispositionStatus, HouseView,
-  fetchRouteMaps, ensureRouteHouses, fetchDispositions, setDisposition, clearDisposition, addManualHouse,
+  SavedRouteMap, RouteHouse, HouseDisposition, HouseDispositionStatus, HouseView, StreetSegmentPick,
+  fetchRouteMaps, ensureRouteHouses, fetchDispositions, setDisposition, clearDisposition, addManualHouse, loadSegmentHouses,
   indexPendingSales, indexBookings, indexPcl, buildHouseViews, routeHouseId, houseKeyFromFullAddress, houseKeyFromAddress,
   subscribeToPendingSales, subscribeToDispositions, HOUSE_COLORS,
 } from '../../lib/mapLogsheetService';
@@ -159,8 +159,11 @@ const MapLogsheetPage: React.FC = () => {
   const [showContract, setShowContract] = useState(false);
   const [showPclOutreach, setShowPclOutreach] = useState(false);
   const [pclTexted, setPclTexted] = useState<Set<string>>(new Set());
-  const [quickPending, setQuickPending] = useState<null | { prefill?: { routeCode: string; houseNumber: string; streetName: string } }>(null);
+  const [quickPending, setQuickPending] = useState<null | { prefill?: { routeCode: string; houseNumber: string; streetName: string; firstName?: string } }>(null);
   const [placing, setPlacing] = useState(false);
+  // "Load houses on a street": pick mode, then the tapped street awaiting Load.
+  const [pickingStreet, setPickingStreet] = useState(false);
+  const [streetPick, setStreetPick] = useState<StreetSegmentPick | null>(null);
   const [placeAt, setPlaceAt] = useState<null | { lng: number; lat: number; routeCode: string; streets: string[] }>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -525,14 +528,14 @@ const MapLogsheetPage: React.FC = () => {
     if (id) { setPlacing(false); setPlaceAt(null); setShowJobs(false); setShowMenu(false); setShowStats(false); }
   }, []);
 
-  const handleDispose = async (status: HouseDispositionStatus, note: string) => {
+  const handleDispose = async (status: HouseDispositionStatus, note: string, firstName: string) => {
     if (!selectedView || !worker) return;
     setSaving(true);
     try {
       const d = await setDisposition({
         routeCode: selectedView.house.routeCode,
         houseKey: selectedView.house.houseKey,
-        status, note,
+        status, note, firstName,
         commandCenterId: cc?.id ?? null,
         workerId: worker.contractorId,
         sessionId,
@@ -568,6 +571,7 @@ const MapLogsheetPage: React.FC = () => {
         routeCode: h.routeCode,
         houseNumber: `${h.civicNo}${(h.civicSuffix || '').toUpperCase()}`,
         streetName: h.streetName,
+        firstName: selectedView.disposition?.firstName || undefined,
       },
     });
   };
@@ -622,6 +626,51 @@ const MapLogsheetPage: React.FC = () => {
     setPlaceAt({ lng, lat, routeCode: bestRoute.route_code, streets });
   };
 
+  // "Load houses on a street": the tapped road (or nothing) comes back from the map.
+  const handlePickStreet = (pick: StreetSegmentPick | null) => {
+    if (!pick) { showToast('Tap directly on a road'); return; }
+    setPickingStreet(false);
+    setSelectedId(null);
+    setStreetPick(pick);
+  };
+
+  // Houses go on the route the worker is on: the only assigned route, else
+  // the one whose streets are nearest the tapped road.
+  const handleLoadStreet = async () => {
+    if (!streetPick) return;
+    let rc = routeCodes.length === 1 ? routeCodes[0] : '';
+    if (!rc) {
+      const p0 = streetPick.lines.find(l => l.length)?.[0];
+      let bestD = Infinity;
+      if (p0) {
+        const kx = Math.cos(p0[1] * Math.PI / 180) * 111320;
+        for (const rm of routeMaps) {
+          for (const seg of rm.segments || []) {
+            for (const c of seg.coordinates || []) {
+              const d = Math.hypot((c[0] - p0[0]) * kx, (c[1] - p0[1]) * 111320);
+              if (d < bestD) { bestD = d; rc = rm.route_code; }
+            }
+          }
+        }
+      }
+    }
+    if (!rc) { showToast('No route to attach these houses to'); setStreetPick(null); return; }
+    const pick = streetPick;
+    setStreetPick(null);
+    setSaving(true);
+    try {
+      const { houses: updated, added } = await loadSegmentHouses(rc, pick, houses, setLoadingMsg);
+      setHouses(prev => [...prev.filter(h => h.routeCode !== rc), ...updated]);
+      showToast(added > 0 ? `Added ${added} house${added === 1 ? '' : 's'} on ${pick.name}` : `No new houses found on ${pick.name}`);
+    } catch (err) {
+      console.error('[MapLogsheet] load street failed', err);
+      showToast('Could not load that street — try again');
+    } finally {
+      setLoadingMsg(null);
+      setSaving(false);
+    }
+  };
+
   const handleAddHouse = async (civicNo: number, suffix: string, street: string) => {
     if (!placeAt) return;
     setSaving(true);
@@ -665,7 +714,7 @@ const MapLogsheetPage: React.FC = () => {
   }
 
   const pct = (x: number) => `${Math.round(x * 100)}%`;
-  const anySheetOpen = !!selectedView || !!placeAt || showJobs || showStats || showMenu || showPclOutreach;
+  const anySheetOpen = !!selectedView || !!placeAt || !!streetPick || showJobs || showStats || showMenu || showPclOutreach;
 
   return (
     // Fixed to the viewport edges: the most reliable "fill the phone screen"
@@ -704,14 +753,16 @@ const MapLogsheetPage: React.FC = () => {
             selectedId={selectedId}
             loadingMessage={loadingMsg}
             placingHouse={placing}
+            pickingStreet={pickingStreet}
             flyTo={flyTo}
             onSelectHouse={handleSelectHouse}
             onPlaceHouse={handlePlaceHouse}
+            onPickStreet={handlePickStreet}
           />
         )}
 
         {/* Hamburger (bottom-right) — hidden while any sheet is open */}
-        {!anySheetOpen && !placing && (
+        {!anySheetOpen && !placing && !pickingStreet && (
           <button
             onClick={() => setShowMenu(true)}
             className="absolute right-4 bottom-5 z-20 w-14 h-14 rounded-full shadow-xl bg-gray-900 text-white border border-gray-700 flex items-center justify-center active:bg-gray-800"
@@ -730,6 +781,41 @@ const MapLogsheetPage: React.FC = () => {
           >
             <X size={16} /> Cancel
           </button>
+        )}
+        {pickingStreet && (
+          <button
+            onClick={() => setPickingStreet(false)}
+            className="absolute right-4 bottom-5 z-20 px-4 h-12 rounded-full shadow-xl bg-yellow-500 text-black font-bold text-sm flex items-center gap-2"
+          >
+            <X size={16} /> Cancel
+          </button>
+        )}
+
+        {/* Load-street confirm strip */}
+        {streetPick && (
+          <div className="absolute inset-x-3 bottom-5 z-30 bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl p-3 flex items-center gap-3">
+            <Route size={20} className="text-yellow-300 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-white font-bold text-sm truncate">{streetPick.name}</div>
+              <div className="text-[11px] text-gray-400">Load every house on the visible stretch?</div>
+            </div>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => setStreetPick(null)}
+              className="px-3 h-10 rounded-lg bg-gray-800 border border-gray-700 text-gray-200 text-xs font-bold disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={handleLoadStreet}
+              className="px-4 h-10 rounded-lg bg-yellow-500 text-black text-xs font-bold disabled:opacity-50"
+            >
+              Load
+            </button>
+          </div>
         )}
 
         {/* Menu sheet */}
@@ -752,6 +838,12 @@ const MapLogsheetPage: React.FC = () => {
                 className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
               >
                 <Home size={18} className="text-yellow-400" /> Add missing house
+              </button>
+              <button
+                onClick={() => { setShowMenu(false); setPickingStreet(true); setSelectedId(null); }}
+                className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
+              >
+                <Route size={18} className="text-yellow-400" /> Load houses on a street
               </button>
               {sessionId && routeCodes.length > 0 && (
                 <button

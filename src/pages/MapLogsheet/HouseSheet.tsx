@@ -14,7 +14,7 @@ import { HouseView, HouseDispositionStatus, HOUSE_COLORS } from '../../lib/mapLo
 interface HouseSheetProps {
   view: HouseView;
   saving: boolean;
-  onDispose: (status: HouseDispositionStatus, note: string) => void;
+  onDispose: (status: HouseDispositionStatus, note: string, firstName: string) => void;
   onClearDisposition: () => void;
   onSale: () => void;
   onOpenPending: () => void;
@@ -40,7 +40,9 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
 }) => {
   const { house, state, isPcl, pcl, disposition, pendingSale, officeBooking, completed } = view;
   const [note, setNote] = useState(disposition?.note || '');
-  const [showNote, setShowNote] = useState(!!disposition?.note);
+  const [firstName, setFirstName] = useState(disposition?.firstName || '');
+  // Name + note row is hidden until asked for, or when either already has a value.
+  const [showNote, setShowNote] = useState(!!disposition?.note || !!disposition?.firstName);
   const [showHistory, setShowHistory] = useState(false);
   // Once a disposition exists the four buttons collapse to a summary row;
   // "Change" expands them again.
@@ -64,11 +66,12 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
   useEffect(() => {
     // Reset local edits when the selected house changes.
     setNote(disposition?.note || '');
-    setShowNote(!!disposition?.note);
+    setFirstName(disposition?.firstName || '');
+    setShowNote(!!disposition?.note || !!disposition?.firstName);
     setShowHistory(false);
     setExpanded(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [houseId, disposition?.note]);
+  }, [houseId, disposition?.note, disposition?.firstName]);
 
   useEffect(() => {
     cancelCountdown();
@@ -80,7 +83,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
       remaining -= 1;
       if (remaining <= 0) {
         cancelCountdown();
-        onDisposeRef.current('not_home', '');
+        onDisposeRef.current('not_home', '', '');
       } else {
         setCountdown(remaining);
       }
@@ -113,7 +116,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
         <button
           type="button"
           disabled={saving}
-          onClick={() => { cancelCountdown(); onDispose(status, note); }}
+          onClick={() => { cancelCountdown(); onDispose(status, note, firstName); }}
         className={`flex-1 min-w-0 py-3 rounded-lg border-2 font-bold text-xs flex flex-col items-center gap-1 transition-colors disabled:opacity-50 ${
           active ? 'text-white' : 'bg-gray-800 text-gray-200 border-gray-700 active:bg-gray-700'
         }`}
@@ -261,21 +264,28 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
               </div>
             )}
 
-            {/* Note */}
+            {/* Name + Note */}
             {showNote ? (
               <div className="flex gap-2">
+                <input
+                  value={firstName}
+                  onChange={e => setFirstName(e.target.value)}
+                  placeholder="First name"
+                  disabled={saving}
+                  className="w-28 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cps-blue"
+                />
                 <input
                   value={note}
                   onChange={e => setNote(e.target.value)}
                   placeholder="Note (e.g. try after 6, dog at side door)"
                   disabled={saving}
-                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cps-blue"
+                  className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cps-blue"
                 />
                 {disposition && (
                   <button
                     type="button"
                     disabled={saving}
-                    onClick={() => onDispose(disposition.status, note)}
+                    onClick={() => onDispose(disposition.status, note, firstName)}
                     className="px-3 rounded-lg bg-gray-700 text-white text-xs font-bold disabled:opacity-50"
                   >
                     Save
@@ -284,7 +294,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
               </div>
             ) : (
               <button type="button" onClick={() => { cancelCountdown(); setShowNote(true); }} className="text-[11px] text-gray-400 flex items-center gap-1">
-                <StickyNote size={12} /> Add a note
+                <StickyNote size={12} /> Add a name / note
               </button>
             )}
 

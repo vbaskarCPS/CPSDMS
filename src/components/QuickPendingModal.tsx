@@ -124,7 +124,8 @@ interface QuickPendingModalProps {
   onClose: () => void;
   onSaved?: () => void;       // Called after a successful Save Pending so the dashboard can refresh
   // Map logsheet: open with the tapped house's address already filled in.
-  prefill?: { routeCode: string; houseNumber: string; streetName: string };
+  // firstName: a name already noted on the house's disposition (neighbour referral).
+  prefill?: { routeCode: string; houseNumber: string; streetName: string; firstName?: string };
   // Map logsheet: where NewJob should return to after "Proceed to Complete".
   returnTo?: string;
 }
@@ -145,6 +146,13 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
   const [routeCode, setRouteCode] = useState<string>(prefill?.routeCode || assignedRoutes[0] || '');
   const [houseNumber, setHouseNumber] = useState(prefill?.houseNumber || '');
   const [streetName, setStreetName] = useState(prefill?.streetName || '');
+  // Map logsheet only: the tapped house is fixed, so the address is shown as
+  // plain text and the worker can jot the customer's name. Everyone else
+  // (and the map's own no-house "quick pending" from the menu) keeps the
+  // editable route / house / street fields and no name row.
+  const isMapPrefilled = !!prefill;
+  const [firstName, setFirstName] = useState(prefill?.firstName || '');
+  const [lastName, setLastName] = useState('');
   const [price, setPrice] = useState('');
   const [propertyType, setPropertyType] = useState<string>(getDefaultPropertyTypeForSeason(seasonType));
   const [notes, setNotes] = useState('');
@@ -273,6 +281,8 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
         propertyType: propertyType || undefined,
         services: isLawnRejuv ? services : undefined,
         notes: notes.trim() || undefined,
+        firstName: isMapPrefilled ? (firstName.trim() || undefined) : undefined,
+        lastName: isMapPrefilled ? (lastName.trim() || undefined) : undefined,
         asphaltAmount: asphaltAmountNum,
         upsoldAsphaltAmount: upsoldAmountNum,
       });
@@ -362,11 +372,44 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
           {/* ROW 1: Route + House + Street */}
           <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-700/50 space-y-4">
             <h3 className="text-sm font-bold text-gray-300 uppercase flex items-center gap-2">
-              <MapPin size={14} /> Location
+            <MapPin size={14} /> Location
             </h3>
 
+            {isMapPrefilled ? (
+              <>
+                {/* Map logsheet: the tapped house, read-only */}
+                <div className="flex items-baseline gap-3">
+                  <span className="font-mono text-sm text-gray-400">{routeCode || '—'}</span>
+                  <span className="text-lg font-bold text-white">{`${houseNumber} ${streetName}`.trim() || 'No address'}</span>
+                </div>
+
+                {/* Customer name — optional */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">First Name <span className="text-gray-600 font-normal">— optional</span></label>
+                    <input
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                      disabled={saving}
+                      placeholder="First name"
+                      className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white focus:outline-none focus:border-cps-blue"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Last Name <span className="text-gray-600 font-normal">— optional</span></label>
+                    <input
+                      value={lastName}
+                      onChange={(e) => setLastName(e.target.value)}
+                      disabled={saving}
+                      placeholder="Last name"
+                      className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white focus:outline-none focus:border-cps-blue"
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
             <div className="grid grid-cols-4 gap-3">
-              {/* Route Code Dropdown */}
+              {/* Route Code Dropdown */} 
               <div className="col-span-1">
                 <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Route</label>
                 <select
@@ -444,6 +487,7 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
                 </div>
               </div>
             </div>
+            )}
           </div>
 
           {/* ROW 2: Price + Property Type */}

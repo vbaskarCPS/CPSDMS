@@ -15,7 +15,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import { Navigation, Loader, Crosshair } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { Worker } from '../../types';
-import { SavedRouteMap, HouseView, houseColor, routeHouseId } from '../../lib/mapLogsheetService';
+import { SavedRouteMap, HouseView, StreetSegmentPick, houseColor, routeHouseId } from '../../lib/mapLogsheetService';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -74,6 +74,28 @@ const L_SEL = 'ml-sel';
 const L_NUM = 'ml-num';
 const HOUSE_LAYERS = [L_FP_FILL, L_FP_LINE, L_DISC, L_HIT, L_SEL, L_NUM];
 
+/** Street under the finger: the named road nearest the tap, plus every other
+ *  visible piece of road with the same name (Mapbox splits roads per tile and
+ *  per block). Returns null when the tap isn't on a named road. */
+function pickStreetAt(map: mapboxgl.Map, point: mapboxgl.Point): StreetSegmentPick | null {
+  const PAD = 10; // px either side of the finger
+  const box: [mapboxgl.PointLike, mapboxgl.PointLike] = [[point.x - PAD, point.y - PAD], [point.x + PAD, point.y + PAD]];
+  const isRoad = (f: mapboxgl.MapboxGeoJSONFeature) =>
+    f.sourceLayer === 'road' && !!f.properties?.name &&
+    (f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString');
+  const hit = map.queryRenderedFeatures(box).find(isRoad);
+  if (!hit) return null;
+  const name = String(hit.properties!.name);
+  const lines: [number, number][][] = [];
+  const pushGeom = (g: GeoJSON.Geometry) => {
+    if (g.type === 'LineString') lines.push(g.coordinates as [number, number][]);
+    else if (g.type === 'MultiLineString') (g.coordinates as [number, number][][]).forEach(l => lines.push(l));
+  };
+  map.queryRenderedFeatures().filter(isRoad).filter(f => String(f.properties!.name) === name).forEach(f => pushGeom(f.geometry));
+  if (!lines.length) pushGeom(hit.geometry);
+  return { name, lines };
+}
+
 function createNavArrow(): HTMLDivElement {
   const el = document.createElement('div');
   el.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#4285F4" stroke="white" stroke-width="2" opacity="0.25"/><path d="M12 4 L18 18 L12 14 L6 18 Z" fill="#4285F4" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
@@ -89,14 +111,19 @@ export interface MapLogsheetViewProps {
   loadingMessage: string | null;
   /** When true, the next tap on empty map reports a coordinate instead of a house. */
   placingHouse: boolean;
+  /** When true, the next tap on a road reports that street (every visible
+   *  piece with the same name) instead of a house. */
+  pickingStreet: boolean;
   /** Bump `nonce` to pan/zoom the map somewhere (e.g. a street from the Coverage tab). */
   flyTo?: { lng: number; lat: number; zoom?: number; nonce: number } | null;
   onSelectHouse: (id: string | null) => void;
   onPlaceHouse: (lng: number, lat: number) => void;
+  /** null = the tap didn't land on a named road. */
+  onPickStreet: (pick: StreetSegmentPick | null) => void;
 }
 
 const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
-  worker, routeMaps, houses, selectedId, loadingMessage, placingHouse, flyTo, onSelectHouse, onPlaceHouse,
+  worker, routeMaps, houses, selectedId, loadingMessage, placingHouse, pickingStreet, flyTo, onSelectHouse, onPlaceHouse, onPickStreet,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -109,9 +136,13 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   const onSelectRef = useRef(onSelectHouse);
   const onPlaceRef = useRef(onPlaceHouse);
   const placingRef = useRef(placingHouse);
+  const onPickStreetRef = useRef(onPickStreet);
+  const pickingRef = useRef(pickingStreet);
   useEffect(() => { onSelectRef.current = onSelectHouse; }, [onSelectHouse]);
   useEffect(() => { onPlaceRef.current = onPlaceHouse; }, [onPlaceHouse]);
   useEffect(() => { placingRef.current = placingHouse; }, [placingHouse]);
+  useEffect(() => { onPickStreetRef.current = onPickStreet; }, [onPickStreet]);
+  useEffect(() => { pickingRef.current = pickingStreet; }, [pickingStreet]);
 
   // GPS
   const [following, setFollowing] = useState(false);
@@ -279,6 +310,10 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
 
       // Tap handling — one listener; resolves house under the finger first.
       map.on('click', (e) => {
+        if (pickingRef.current) {
+          onPickStreetRef.current(pickStreetAt(map, e.point));
+          return;
+        }
         const feats = map.queryRenderedFeatures(e.point, { layers: [L_HIT, L_NUM, L_FP_FILL] });
         const hit = feats.find(f => f.properties && f.properties.id);
         if (hit) {
@@ -381,12 +416,12 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     map.flyTo({ center: [flyTo.lng, flyTo.lat], zoom: flyTo.zoom ?? Math.max(map.getZoom(), 17), duration: 900 });
   }, [flyTo?.nonce, mapLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Placing mode cursor
+  // Placing / picking mode cursor
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    map.getCanvas().style.cursor = placingHouse ? 'crosshair' : '';
-  }, [placingHouse]);
+    map.getCanvas().style.cursor = (placingHouse || pickingStreet) ? 'crosshair' : '';
+  }, [placingHouse, pickingStreet]);
 
   // ---------------------------------------------------------------------
   // GPS watch + follow-me + location upload (mirrors WorkerMapTab)
@@ -498,6 +533,11 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
           <Crosshair size={12} className="text-yellow-300" /> Tap the map where the house is
         </div>
       )}
+      {pickingStreet && !placingHouse && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium flex items-center gap-1.5">
+          <Crosshair size={12} className="text-yellow-300" /> Tap the road you want houses for
+        </div>
+      )}
 
       {!mapLoaded && (
         <div className="absolute inset-0 bg-gray-100 flex items-center justify-center z-10">
@@ -505,7 +545,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
         </div>
       )}
 
-      {mapLoaded && loadingMessage && !placingHouse && (
+{mapLoaded && loadingMessage && !placingHouse && !pickingStreet && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium max-w-[80%] truncate">
           <Loader size={12} className="animate-spin text-blue-400 shrink-0" /> {loadingMessage}
         </div>

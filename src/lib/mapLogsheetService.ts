@@ -126,6 +126,9 @@ export interface HouseDisposition {
   houseKey: string;
   status: HouseDispositionStatus;
   note: string | null;
+  /** Name picked up before/at the door (neighbour referral). Shown on the map
+   *  under the house number and pre-filled into the quick pending sale. */
+  firstName: string | null;
   workerId: string | null;
   sessionId: string | null;
   updatedAt: string;
@@ -560,6 +563,108 @@ export async function addManualHouse(
 }
 
 // ---------------------------------------------------------------------------
+// STREET SEGMENT — load houses along a road that isn't part of the route
+// ---------------------------------------------------------------------------
+/** The street the worker tapped: every visible piece of road with that name.
+ *  Each piece is a run of [lng, lat] points. */
+export interface StreetSegmentPick {
+  name: string;
+  lines: [number, number][][];
+}
+
+const SEGMENT_PAD_DEG = 0.0009; // ~100 m around the tapped stretch
+
+function segmentBbox(lines: [number, number][][], padDeg = SEGMENT_PAD_DEG) {
+  let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+  for (const line of lines) for (const c of line) {
+    if (c[0] < minLng) minLng = c[0];
+    if (c[0] > maxLng) maxLng = c[0];
+    if (c[1] < minLat) minLat = c[1];
+    if (c[1] > maxLat) maxLat = c[1];
+  }
+  if (!isFinite(minLng)) return null;
+  return { s: minLat - padDeg, w: minLng - padDeg, n: maxLat + padDeg, e: maxLng + padDeg };
+}
+
+function pointToLinesMeters(lng: number, lat: number, lines: [number, number][][]): number {
+  let best = Infinity;
+  for (const coords of lines) {
+    for (let i = 0; i < coords.length - 1; i++) {
+      const d = pointToSegmentMeters(lng, lat, coords[i], coords[i + 1]);
+      if (d < best) best = d;
+    }
+  }
+  return best;
+}
+
+/**
+ * Pulls every OpenStreetMap address along the tapped stretch of road (within
+ * ROUTE_MATCH_METERS of the line, on that street), skips anything already on
+ * the worker's map, and saves the rest under the worker's route so they
+ * behave like any other house (dispositions, sales, go-backs all stick).
+ * Building outlines are attached where OSM has them.
+ *
+ * Returns the route's refreshed house list and how many were added.
+ */
+export async function loadSegmentHouses(
+  routeCode: string,
+  seg: StreetSegmentPick,
+  existing: RouteHouse[],
+  onProgress?: HouseBuildProgress,
+): Promise<{ houses: RouteHouse[]; added: number }> {
+  const bbox = segmentBbox(seg.lines);
+  if (!bbox || !seg.lines.some(l => l.length >= 2)) return { houses: existing.filter(h => h.routeCode === routeCode), added: 0 };
+
+  onProgress?.(`Fetching houses on ${seg.name} from OpenStreetMap…`);
+  const elements = await fetchOverpass(bbox);
+  const { addresses, buildings } = extractOsm(elements);
+  const segNorm = normStreet(seg.name);
+
+  const byKey = new Map<string, { civicNo: number; suffix: string; street: string; lat: number; lng: number; unitCount: number }>();
+  for (const a of addresses) {
+    if (pointToLinesMeters(a.lng, a.lat, seg.lines) > ROUTE_MATCH_METERS) continue;
+    // Keep addresses on this street. OSM points with no street tag are
+    // assumed to be on the road they sit beside.
+    const street = a.street || seg.name;
+    const sn = normStreet(street);
+    if (!sn || sn !== segNorm) continue;
+    const dup = existing.some(h => metersBetween(a.lng, a.lat, h.lng, h.lat) <= DEDUPE_METERS
+      || (h.civicNo === a.civicNo && h.streetNorm === sn));
+    if (dup) continue;
+    const key = houseKeyFromParts(a.civicNo, a.suffix, sn);
+    const prev = byKey.get(key);
+    if (prev) { prev.unitCount += 1; continue; }
+    byKey.set(key, { civicNo: a.civicNo, suffix: a.suffix, street, lat: a.lat, lng: a.lng, unitCount: 1 });
+  }
+  const candidates = [...byKey.values()];
+  if (!candidates.length) return { houses: existing.filter(h => h.routeCode === routeCode), added: 0 };
+
+  onProgress?.(`Saving ${candidates.length} houses on ${seg.name}…`);
+  const { error } = await supabase.rpc('upsert_route_houses', {
+    p_route_code: routeCode,
+    p_houses: candidates,
+    p_source: 'manual',
+  });
+  if (error) throw error;
+  let houses = await fetchRouteHouses([routeCode]);
+
+  // Footprints for the new houses only.
+  const newKeys = new Set(byKey.keys());
+  const items: Array<{ houseKey: string; footprint: GeoJSON.Polygon }> = [];
+  for (const h of houses) {
+    if (h.footprint || !newKeys.has(h.houseKey)) continue;
+    const fp = footprintForPoint(h.lng, h.lat, buildings);
+    if (fp) items.push({ houseKey: h.houseKey, footprint: fp });
+  }
+  if (items.length) {
+    const { error: fpErr } = await supabase.rpc('set_route_house_footprints', { p_route_code: routeCode, p_items: items });
+    if (fpErr) console.warn('[mapLogsheet] segment footprints failed', fpErr);
+    else houses = await fetchRouteHouses([routeCode]);
+  }
+  return { houses, added: candidates.length };
+}
+
+// ---------------------------------------------------------------------------
 // DISPOSITIONS
 // ---------------------------------------------------------------------------
 function mapDisposition(r: any): HouseDisposition {
@@ -568,6 +673,7 @@ function mapDisposition(r: any): HouseDisposition {
     houseKey: r.house_key,
     status: r.status,
     note: r.note ?? null,
+    firstName: r.first_name ?? null,
     workerId: r.worker_id ?? null,
     sessionId: r.session_id ?? null,
     updatedAt: r.updated_at,
@@ -595,6 +701,7 @@ export async function setDisposition(input: {
   houseKey: string;
   status: HouseDispositionStatus;
   note?: string | null;
+  firstName?: string | null;
   commandCenterId?: string | null;
   workerId: string;
   sessionId?: string | null;
@@ -604,6 +711,7 @@ export async function setDisposition(input: {
     house_key: input.houseKey,
     status: input.status,
     note: input.note?.trim() ? input.note.trim() : null,
+    first_name: input.firstName?.trim() ? input.firstName.trim() : null,
     command_center_id: input.commandCenterId ?? null,
     worker_id: input.workerId,
     session_id: input.sessionId ?? null,
@@ -723,11 +831,13 @@ export function buildHouseViews(
     else if (ps || ob) state = 'pending';
     else if (d) state = d.status;
     const pclName = p ? `${p.firstName || ''} ${p.lastName || ''}`.trim() || null : null;
-    // Name line: the sale's customer for pending/completed houses, else the PCL
-    // name. Years line: from PCL history when present.
+    // Name line: the sale's customer for pending/completed houses, else the
+    // name jotted on the disposition, else the PCL name. Years line: from PCL
+    // history when present.
+    const dispoName = d?.firstName ? shortName(d.firstName, null) : '';
     const nameLine = (state === 'pending' || state === 'completed')
-      ? (saleShortName(ps, ob, done) || (p ? shortName(p.firstName, p.lastName) : ''))
-      : (p ? shortName(p.firstName, p.lastName) : '');
+      ? (saleShortName(ps, ob, done) || dispoName || (p ? shortName(p.firstName, p.lastName) : ''))
+      : (dispoName || (p ? shortName(p.firstName, p.lastName) : ''));
     const yearsLine = p ? pclYearsLine(p) : '';
     const mapLines = [nameLine, yearsLine].filter(Boolean);
     return {
