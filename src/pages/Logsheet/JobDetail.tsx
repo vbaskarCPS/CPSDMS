@@ -1,6 +1,6 @@
 // src/pages/Logsheet/JobDetail.tsx
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, Phone, Mail, X, CheckCircle2, Ban, Lock,
   Loader, CheckCircle, FileText, TrendingUp, DollarSign, GraduationCap, Info, Shovel, Droplets
@@ -143,6 +143,10 @@ const ServiceToggles: React.FC<{
 const JobDetail: React.FC = () => {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // Where to go when done/cancelled. The map logsheet passes ?returnTo=/map-logsheet;
+  // everyone else keeps landing on the ordinary logsheet. Mirrors NewJob.
+  const returnPath = searchParams.get('returnTo') || '/logsheet';
 
   // --- STATE ---
   const [loading, setLoading] = useState(true);
@@ -430,12 +434,12 @@ const JobDetail: React.FC = () => {
         } else {
           console.warn("Job ID not found in assignments:", decodedId);
           alert('Job not found.');
-          navigate('/logsheet');
+          navigate(returnPath);
         }
       } catch (err) {
         console.error("Error loading job:", err);
         alert('Failed to load job details.');
-        navigate('/logsheet');
+        navigate(returnPath);
       } finally {
         setLoading(false);
       }
@@ -779,7 +783,7 @@ const JobDetail: React.FC = () => {
         await service.updateLogsheetSession(session.id, { stats: newStats });
       }
 
-      navigate('/logsheet');
+      navigate(returnPath);
     } catch (err) {
       console.error(err);
       alert('Failed to save job. Please try again.');
@@ -794,7 +798,7 @@ const JobDetail: React.FC = () => {
     try {
       const service = isTrainingMode ? trainingService : sessionService;
       await service.updateBookingStatus(originalJob['Booking ID'], status);
-      navigate('/logsheet');
+      navigate(returnPath);
     } catch (err) {
       console.error('Failed to update booking status:', err);
       alert('Failed to update status. Please try again.');
@@ -831,7 +835,7 @@ const JobDetail: React.FC = () => {
         {/* HEADER */}
         <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-900/50 rounded-t-lg flex-shrink-0">
           <div className="flex items-center gap-3">
-              <button onClick={() => navigate('/logsheet')} className="p-1 hover:bg-gray-700 rounded text-gray-400" disabled={saving}><ArrowLeft size={20} /></button>
+          <button onClick={() => navigate(returnPath)} className="p-1 hover:bg-gray-700 rounded text-gray-400" disabled={saving}><ArrowLeft size={20} /></button>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <h2 className="text-xl font-bold text-white">Job Details</h2>
@@ -868,7 +872,7 @@ const JobDetail: React.FC = () => {
               </div>
               {isReadOnly && <span className="bg-blue-900/30 text-blue-300 text-xs px-2 py-0.5 rounded border border-blue-800 flex items-center gap-1"><Lock size={10}/> Completed</span>}
           </div>
-          <button onClick={() => navigate('/logsheet')} className="text-gray-400 hover:text-white" disabled={saving}><X size={24}/></button>
+          <button onClick={() => navigate(returnPath)} className="text-gray-400 hover:text-white" disabled={saving}><X size={24}/></button>
         </div>
 
         <div className="overflow-y-auto p-4 space-y-6 flex-grow custom-scrollbar">
@@ -1291,7 +1295,7 @@ const JobDetail: React.FC = () => {
         <AddContractModal
           onClose={() => setShowUpgradeModal(false)}
           directUpgradeBooking={getUpgradeBooking()}
-          onSuccess={() => navigate('/logsheet')}
+          onSuccess={() => navigate(returnPath)}
         />
       )}
 
