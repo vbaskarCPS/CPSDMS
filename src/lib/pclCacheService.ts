@@ -795,6 +795,184 @@ export async function loadAndCachePCLByPrefix(
     }
   }
 
+// ─── HISTORICAL PROPERTIES BY PREFIX (Session Command Center → Load Historical) ─
+//
+// Per-manager mapped areas never see the Logsheets tab: importSessionData only
+// reads it when the CC-level flag is on. This is the prefix-flow twin of
+// loadAndCachePCLByPrefix for that tab: keep rows whose Route# is the bare
+// prefix (e.g. "WASA"), geocode each address inside the manager's routes, bucket
+// by nearest numbered route, and replace this CC's route_historical_properties
+// rows for those routes. The RM Map (purple x's) and the H01 house map both
+// read that table.
+
+export interface HistoricalPrefixResult {
+  matched: number;   // Logsheets rows carrying the prefix
+  saved: number;     // rows written after bucketing
+  dropped: number;   // rows with no geocode / no nearby route
+}
+
+export async function loadAndCacheHistoricalByPrefix(
+  masterbookingsSheetId: string,
+  config: ManagerMappingConfig,
+  accessToken: string,
+  ccId: string,
+  sessionDate: string,
+  onProgress?: PCLProgressFn,
+): Promise<HistoricalPrefixResult> {
+  const empty: HistoricalPrefixResult = { matched: 0, saved: 0, dropped: 0 };
+  if (!masterbookingsSheetId || !accessToken) return empty;
+  if (!config?.prefix || !config.routeCodes || config.routeCodes.length === 0) return empty;
+  const report = (p: Omit<PCLPreloadProgress, 'prefix'>) =>
+    onProgress?.({ ...p, prefix: config.prefix });
+  report({ phase: 'reading_sheets', current: 0, total: 0 });
+
+  // 1. Route geometry for the geocode bbox and the bucketing.
+  const routeMaps = await getApprovedRouteMapsByCodes(config.routeCodes);
+  if (routeMaps.length === 0) {
+    console.warn(`[Historical Prefix] No approved route_maps rows for prefix "${config.prefix}" — skipping.`);
+    return empty;
+  }
+  const bbox = bboxForRouteMaps(routeMaps);
+
+  // 2. Logsheets tab. Same column order googleSheetsService.readLogsheetsForRoutes uses:
+  //    0 Route#, 1 First, 2 Last, 3 Street#, 4 StreetName, 5 Phone, 6 Email,
+  //    7 ClientType, 8 PropertyType, 9 Notes, 10 Price, 11 PaymentType, 12 Contractor
+  const rawRows = await sheetsGetRaw(accessToken, masterbookingsSheetId, `'Logsheets'!A:M`);
+  const prefix = config.prefix.trim().toUpperCase();
+  type HistRow = {
+    address: string; customerName: string; phone: string; email: string; clientType: string;
+    propertyType: string; notes: string; price: string; paymentType: string; contractorName: string;
+  };
+  const matched: HistRow[] = [];
+  for (let i = 1; i < rawRows.length; i++) {
+    const row = rawRows[i] || [];
+    const rc = cellVal(row, 0).toUpperCase();
+    if (rc !== prefix) continue;
+    const address = `${cellVal(row, 3)} ${cellVal(row, 4)}`.trim();
+    if (!address) continue;
+    matched.push({
+      address,
+      customerName: `${cellVal(row, 1)} ${cellVal(row, 2)}`.trim(),
+      phone: cellVal(row, 5),
+      email: cellVal(row, 6),
+      clientType: cellVal(row, 7),
+      propertyType: cellVal(row, 8),
+      notes: cellVal(row, 9),
+      price: cellVal(row, 10),
+      paymentType: cellVal(row, 11),
+      contractorName: cellVal(row, 12),
+    });
+  }
+  console.log(`[Historical Prefix] ${matched.length} Logsheets rows carry prefix "${config.prefix}".`);
+
+  // 3. Geocode unique addresses — permanent cache, then session cache, then Mapbox.
+  const normKey = (addr: string) => addr.toLowerCase().replace(/\s+/g, ' ').trim();
+  const geo = await loadPermanentGeocodes(ccId);
+  try {
+    const { data } = await supabase
+      .from('geocode_cache')
+      .select('address_key, lat, lng')
+      .eq('command_center_id', ccId)
+      .eq('session_date', sessionDate);
+    (data || []).forEach((r: any) => {
+      if (!geo.has(r.address_key)) geo.set(r.address_key, { lat: r.lat, lng: r.lng });
+    });
+  } catch { /* best-effort */ }
+
+  const uniqueAddrs: string[] = [];
+  const seenAddr = new Set<string>();
+  for (const r of matched) {
+    const key = normKey(r.address);
+    if (!seenAddr.has(key)) { seenAddr.add(key); uniqueAddrs.push(r.address); }
+  }
+
+  let processed = 0;
+  let pendingSaves: Array<{ key: string; pos: GeoPos }> = [];
+  const SAVE_EVERY = 25;
+  report({ phase: 'geocoding', current: 0, total: uniqueAddrs.length });
+  for (const addr of uniqueAddrs) {
+    const key = normKey(addr);
+    processed++;
+    if (geo.has(key)) {
+      if (processed % 25 === 0) report({ phase: 'geocoding', current: processed, total: uniqueAddrs.length });
+      continue;
+    }
+    const pos = await geocodeAddressInBbox(addr, bbox);
+    if (pos) {
+      geo.set(key, pos);
+      pendingSaves.push({ key, pos });
+      // Session cache too, so the RM Map's own geocode pass finds these ready.
+      const { error: gcError } = await supabase
+        .from('geocode_cache')
+        .upsert({
+          address_key: key,
+          command_center_id: ccId,
+          session_date: sessionDate,
+          lat: pos.lat,
+          lng: pos.lng,
+        }, { onConflict: 'address_key,command_center_id,session_date' });
+      if (gcError) console.warn('[Historical Prefix] geocode_cache save failed:', gcError.message);
+    }
+    if (pendingSaves.length >= SAVE_EVERY) {
+      await savePermanentGeocodes(ccId, pendingSaves);
+      pendingSaves = [];
+    }
+    if (processed % 25 === 0) report({ phase: 'geocoding', current: processed, total: uniqueAddrs.length });
+    await new Promise(res => setTimeout(res, 120));
+  }
+  await savePermanentGeocodes(ccId, pendingSaves);
+  report({ phase: 'bucketing', current: uniqueAddrs.length, total: uniqueAddrs.length });
+
+  // 4. Bucket each row into the nearest numbered route.
+  const dbRows: any[] = [];
+  let dropped = 0;
+  for (const r of matched) {
+    const pos = geo.get(normKey(r.address));
+    if (!pos) { dropped++; continue; }
+    const nearest = nearestRouteForPoint(pos.lat, pos.lng, routeMaps);
+    if (!nearest) { dropped++; continue; }
+    dbRows.push({
+      command_center_id: ccId,
+      session_date: sessionDate,
+      route_code: nearest.routeCode,
+      address: r.address,
+      customer_name: r.customerName || null,
+      phone: r.phone || null,
+      email: r.email || null,
+      client_type: r.clientType || null,
+      property_type: r.propertyType || null,
+      notes: r.notes || null,
+      price: r.price || null,
+      payment_type: r.paymentType || null,
+      contractor_name: r.contractorName || null,
+    });
+  }
+  if (dropped > 0) console.warn(`[Historical Prefix] Dropped ${dropped} of ${matched.length} rows — no geocode / no nearby route.`);
+
+  // 5. Replace this CC's rows for the mapped routes, so a re-run never duplicates.
+  const { error: delErr } = await supabase
+    .from('route_historical_properties')
+    .delete()
+    .eq('command_center_id', ccId)
+    .in('route_code', config.routeCodes);
+  if (delErr) throw new Error(`Could not clear old historical rows: ${delErr.message}`);
+
+  const CHUNK = 500;
+  for (let i = 0; i < dbRows.length; i += CHUNK) {
+    const { error } = await supabase.from('route_historical_properties').insert(dbRows.slice(i, i + CHUNK));
+    if (error) throw new Error(`Could not save historical rows: ${error.message}`);
+  }
+
+  report({
+    phase: 'done',
+    current: dbRows.length,
+    total: matched.length,
+    message: `${dbRows.length} historical properties across ${config.routeCodes.length} routes`
+      + (dropped > 0 ? ` · ${dropped} dropped, no geocode` : ''),
+  });
+  return { matched: matched.length, saved: dbRows.length, dropped };
+}
+
 // ─── MAP-SCOPED PCL LOAD (Map Builder) ───────────────────────────────────────
 //
 // Scoped to the MAP, not to a command centre: writes to map_pcl_cache, keyed by

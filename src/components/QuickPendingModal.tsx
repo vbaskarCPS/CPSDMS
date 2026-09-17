@@ -372,7 +372,7 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
           {/* ROW 1: Route + House + Street */}
           <div className="bg-gray-900/30 p-4 rounded-lg border border-gray-700/50 space-y-4">
             <h3 className="text-sm font-bold text-gray-300 uppercase flex items-center gap-2">
-            <MapPin size={14} /> Location
+              <MapPin size={14} /> Location
             </h3>
 
             {isMapPrefilled ? (
@@ -409,7 +409,7 @@ const QuickPendingModal: React.FC<QuickPendingModalProps> = ({
               </>
             ) : (
             <div className="grid grid-cols-4 gap-3">
-              {/* Route Code Dropdown */} 
+              {/* Route Code Dropdown */}
               <div className="col-span-1">
                 <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Route</label>
                 <select

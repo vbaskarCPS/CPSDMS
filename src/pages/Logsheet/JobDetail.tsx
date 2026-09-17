@@ -835,7 +835,7 @@ const JobDetail: React.FC = () => {
         {/* HEADER */}
         <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-900/50 rounded-t-lg flex-shrink-0">
           <div className="flex items-center gap-3">
-          <button onClick={() => navigate(returnPath)} className="p-1 hover:bg-gray-700 rounded text-gray-400" disabled={saving}><ArrowLeft size={20} /></button>
+              <button onClick={() => navigate(returnPath)} className="p-1 hover:bg-gray-700 rounded text-gray-400" disabled={saving}><ArrowLeft size={20} /></button>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <h2 className="text-xl font-bold text-white">Job Details</h2>

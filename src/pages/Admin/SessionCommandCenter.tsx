@@ -200,6 +200,9 @@ const SessionCommandCenter: React.FC = () => {
   const [mappingApplyingFor, setMappingApplyingFor] = useState<string | null>(null);
   // One-line result note after the bookings refresh (e.g. "3 bookings added").
   const [mappingRefreshNote, setMappingRefreshNote] = useState<string | null>(null);
+  // "Load Historical" (per-manager mapping): progress / result line + busy flag.
+  const [historicalLoading, setHistoricalLoading] = useState(false);
+  const [historicalNote, setHistoricalNote] = useState<string | null>(null);
 
   // --- ADD ADDITIONAL STATE ---
   const [showAddAdditional, setShowAddAdditional] = useState(false);
@@ -827,6 +830,52 @@ const SessionCommandCenter: React.FC = () => {
       : [...current, targetId];
     commitFloaterList(managerId, next);
   }, [floaterDraft, commitFloaterList]);
+
+  // --- LOAD HISTORICAL (per-manager mapping) ---
+  // Re-opens Google OAuth, then reads the Masterbookings Logsheets tab once per
+  // applied map: rows carrying the map's bare prefix are geocoded and bucketed
+  // into the numbered routes, replacing this CC's historical rows for them.
+  // The RM Map draws them as purple x's; the H01 house map colours them purple.
+  const handleLoadHistorical = useCallback(async () => {
+    if (historicalLoading) return;
+    const configs = Object.values(mappingDraft).flat().filter(c => c && c.routeCodes.length > 0);
+    if (configs.length === 0) { setHistoricalNote('No digital maps applied yet — nothing to load.'); return; }
+    if (!currentCC?.masterbookingsSheetId || !currentCC.id) { setHistoricalNote('This command centre has no Master Bookings sheet configured.'); return; }
+    const sessionDate = currentSession?.date;
+    if (!sessionDate) { setHistoricalNote('Initialize the session first — historical rows are stamped with the session date.'); return; }
+
+    setHistoricalLoading(true);
+    setHistoricalNote('Connecting to Google…');
+    try {
+      const connected = await googleSheetsService.authenticate();
+      setIsGoogleConnected(connected);
+      const accessToken = googleSheetsService.getAccessToken();
+      if (!connected || !accessToken) { setHistoricalNote('Google sign-in was cancelled — nothing loaded.'); return; }
+
+      const { loadAndCacheHistoricalByPrefix } = await import('../../lib/pclCacheService');
+      let saved = 0, dropped = 0;
+      for (const cfg of configs) {
+        const res = await loadAndCacheHistoricalByPrefix(
+          currentCC.masterbookingsSheetId, cfg, accessToken, currentCC.id, sessionDate,
+          p => {
+            const where = p.phase === 'geocoding' && p.total > 0 ? ` (${p.current}/${p.total} addresses)` : '';
+            setHistoricalNote(`${p.prefix}: ${p.phase.replace('_', ' ')}${where}…`);
+          },
+        );
+        saved += res.saved; dropped += res.dropped;
+      }
+      setHistoricalNote(
+        `Historical loaded · ${saved} propert${saved === 1 ? 'y' : 'ies'} across ${configs.length} map${configs.length === 1 ? '' : 's'}`
+        + (dropped > 0 ? ` · ${dropped} skipped (address could not be placed)` : '')
+        + ' · managers reopen the RM Map to see them'
+      );
+    } catch (err) {
+      console.error('[Historical] Load failed:', err);
+      setHistoricalNote(`Load Historical failed — ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setHistoricalLoading(false);
+    }
+  }, [historicalLoading, mappingDraft, currentCC, currentSession]);
 
   // Turn floating OFF entirely for a manager (clears their list).
   const clearFloater = useCallback((managerId: string) => {
@@ -1632,7 +1681,21 @@ const SessionCommandCenter: React.FC = () => {
                                         )}
                                         {/* DIGITAL MAP column — Sealing on NON-mapping CCs */}
                                         {showManagerMapping && (
-                                          <th className="py-3 font-medium text-center">Digital Map</th>
+                                          <th className="py-3 font-medium text-center">
+                                            <span className="inline-flex items-center gap-2">
+                                              Digital Map
+                                              <button
+                                                type="button"
+                                                onClick={handleLoadHistorical}
+                                                disabled={historicalLoading || mappingApplyingFor !== null}
+                                                title="Re-connect Google and read the Logsheets tab for every applied map (purple x's on the RM Map, purple houses on the house map)"
+                                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-purple-600/50 bg-purple-900/20 text-purple-300 text-[10px] font-bold normal-case hover:bg-purple-900/40 disabled:opacity-40 disabled:cursor-not-allowed"
+                                              >
+                                                {historicalLoading ? <Loader size={10} className="animate-spin" /> : <Sheet size={10} />}
+                                                Load Historical
+                                              </button>
+                                            </span>
+                                          </th>
                                         )}
                                     </tr>
                                 </thead>
@@ -1957,6 +2020,14 @@ const SessionCommandCenter: React.FC = () => {
                                 </tbody>
                             </table>
                         </div>
+
+                        {/* LOAD HISTORICAL NOTE — progress / result of the last Load Historical */}
+                        {showManagerMapping && historicalNote && (
+                          <div className="mt-3 text-xs text-purple-300 bg-purple-900/20 border border-purple-800/50 rounded-lg px-3 py-2 flex items-center gap-2">
+                            {historicalLoading && <Loader size={12} className="animate-spin flex-shrink-0" />}
+                            {historicalNote}
+                          </div>
+                        )}
 
                         {/* MAPPING REFRESH NOTE — result of the last Apply's bookings pull */}
                         {previewData && mappingRefreshNote && (

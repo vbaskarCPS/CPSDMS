@@ -16,7 +16,7 @@
 // never writes a transaction or a pending sale.
 
 import { supabase } from './supabase';
-import { Worker, MasterBooking, PendingSale } from '../types';
+import { Worker, MasterBooking, PendingSale, HistoricalProperty } from '../types';
 import { PCLClientGroup } from './pclCacheService';
 
 // ---------------------------------------------------------------------------
@@ -153,6 +153,10 @@ export interface HouseView {
   pendingSale: PendingSale | null;
   officeBooking: MasterBooking | null;   // pending office prebook at this house
   completed: MasterBooking | null;       // completed transaction at this house
+  /** Previously-serviced rows from the Logsheets tab (Load Historical). One
+   *  house can have several — a repeat customer, or a name change. Purple. */
+  historical: HistoricalProperty[];
+  isHistorical: boolean;
 }
 
 // Colours. Base map is light (streets-v12) so these are chosen to read on it.
@@ -166,11 +170,15 @@ export const HOUSE_COLORS = {
   completed: '#16a34a',
   pcl: '#1d4ed8',
   pclNotHome: '#93b4f5',
+  historical: '#7c3aed',
 } as const;
 
-export function houseColor(v: Pick<HouseView, 'state' | 'isPcl'>): string {
+export function houseColor(v: Pick<HouseView, 'state' | 'isPcl' | 'isHistorical'>): string {
   if (v.state === 'completed') return HOUSE_COLORS.completed;
   if (v.state === 'pending') return HOUSE_COLORS.pending;
+  // Historical (previously serviced) wins over dispositions and PCL. Only a
+  // sale in this session (pending / completed above) outranks it.
+  if (v.isHistorical) return HOUSE_COLORS.historical;
   if (v.state === 'no') return HOUSE_COLORS.no;
   if (v.state === 'go_back') return HOUSE_COLORS.go_back;
   if (v.state === 'invalid') return HOUSE_COLORS.invalid;
@@ -766,6 +774,61 @@ export function indexBookings(jobs: MasterBooking[]): { pending: Map<string, Mas
   return { pending, completed };
 }
 
+/** This CC's Load Historical rows for the given routes (route_historical_properties). */
+export async function fetchHistoricalForRoutes(commandCenterId: string, routeCodes: string[]): Promise<HistoricalProperty[]> {
+  if (!commandCenterId || !routeCodes.length) return [];
+  const { data, error } = await supabase
+    .from('route_historical_properties')
+    .select('*')
+    .eq('command_center_id', commandCenterId)
+    .in('route_code', routeCodes);
+  if (error) throw error;
+  return (data || []).map((r: any) => ({
+    routeCode: r.route_code,
+    address: r.address,
+    customerName: r.customer_name || undefined,
+    phone: r.phone || undefined,
+    email: r.email || undefined,
+    clientType: r.client_type || undefined,
+    propertyType: r.property_type || undefined,
+    notes: r.notes || undefined,
+    price: r.price || undefined,
+    paymentType: r.payment_type || undefined,
+    contractorName: r.contractor_name || undefined,
+  }));
+}
+
+/** routeHouseId → every historical row at that house. */
+export function indexHistorical(rows: HistoricalProperty[]): Map<string, HistoricalProperty[]> {
+  const m = new Map<string, HistoricalProperty[]>();
+  for (const h of rows) {
+    const key = houseKeyFromFullAddress(h.address);
+    if (!key || !h.routeCode) continue;
+    const id = routeHouseId(h.routeCode, key);
+    const list = m.get(id);
+    if (list) list.push(h); else m.set(id, [h]);
+  }
+  return m;
+}
+
+/** "$450" → 450; "450.00" → 450; junk → 0. */
+export function historicalPriceNumber(raw: string | undefined | null): number {
+  const n = parseFloat((raw || '').replace(/[^0-9.]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
+/** What the map and the house sheet show for a historical house: the most
+ *  recent name (last row wins), every price received, and their sum. */
+export function historicalSummary(rows: HistoricalProperty[]): { name: string; shortName: string; prices: string[]; total: number } {
+  const named = [...rows].reverse().find(r => r.customerName);
+  const name = named?.customerName || '';
+  const parts = name.split(/\s+/).filter(Boolean);
+  const short = parts.length ? shortName(parts[0], parts.length > 1 ? parts[parts.length - 1] : null) : '';
+  const prices = rows.map(r => (r.price || '').trim()).filter(Boolean).map(p => (p.startsWith('$') ? p : `$${p}`));
+  const total = rows.reduce((sum, r) => sum + historicalPriceNumber(r.price), 0);
+  return { name, shortName: short, prices, total };
+}
+
 export function indexPcl(pclByRoute: Map<string, PCLClientGroup[]>): Map<string, PCLClientGroup> {
   const m = new Map<string, PCLClientGroup>();
   pclByRoute.forEach((clients, rc) => {
@@ -818,6 +881,7 @@ export function buildHouseViews(
   officePending: Map<string, MasterBooking>,
   completed: Map<string, MasterBooking>,
   pcl: Map<string, PCLClientGroup>,
+  historical: Map<string, HistoricalProperty[]> = new Map(),
 ): HouseView[] {
   return houses.map(h => {
     const id = routeHouseId(h.routeCode, h.houseKey);
@@ -826,6 +890,8 @@ export function buildHouseViews(
     const ob = officePending.get(id) || null;
     const done = completed.get(id) || null;
     const p = pcl.get(id) || null;
+    const hist = historical.get(id) || [];
+    const hs = hist.length ? historicalSummary(hist) : null;
     let state: HouseVisualState = 'none';
     if (done) state = 'completed';
     else if (ps || ob) state = 'pending';
@@ -834,11 +900,14 @@ export function buildHouseViews(
     // Name line: the sale's customer for pending/completed houses, else the
     // name jotted on the disposition, else the PCL name. Years line: from PCL
     // history when present.
+    // Historical (previously serviced) outranks the disposition name and PCL.
     const dispoName = d?.firstName ? shortName(d.firstName, null) : '';
+    const histName = hs?.shortName || '';
     const nameLine = (state === 'pending' || state === 'completed')
-      ? (saleShortName(ps, ob, done) || dispoName || (p ? shortName(p.firstName, p.lastName) : ''))
-      : (dispoName || (p ? shortName(p.firstName, p.lastName) : ''));
-    const yearsLine = p ? pclYearsLine(p) : '';
+      ? (saleShortName(ps, ob, done) || histName || dispoName || (p ? shortName(p.firstName, p.lastName) : ''))
+      : (histName || dispoName || (p ? shortName(p.firstName, p.lastName) : ''));
+    // Second line: every price the house has paid (historical), else PCL years.
+    const yearsLine = hs && hs.prices.length ? hs.prices.join(' + ') : (p ? pclYearsLine(p) : '');
     const mapLines = [nameLine, yearsLine].filter(Boolean);
     return {
       house: h,
@@ -852,6 +921,8 @@ export function buildHouseViews(
       pendingSale: ps,
       officeBooking: ob,
       completed: done,
+      historical: hist,
+      isHistorical: hist.length > 0,
     };
   });
 }

@@ -26,7 +26,7 @@ import { commandCenterService, seasonHasTeams } from '../../lib/commandCenterSer
 import { subscribeAsContractor } from '../../lib/realtimeService';
 import { supabase } from '../../lib/supabase';
 import { getWorkerPCL, PCLClientGroup } from '../../lib/pclCacheService';
-import { Worker, SessionStats, MasterBooking, SeasonType, PendingSale, CommandCenter, SessionTransaction } from '../../types';
+import { Worker, SessionStats, MasterBooking, SeasonType, PendingSale, CommandCenter, SessionTransaction, HistoricalProperty } from '../../types';
 import LogsheetJobCard from '../Logsheet/components/LogsheetJobCard';
 import AddContractModal from '../../components/AddContractModal';
 import QuickPendingModal from '../../components/QuickPendingModal';
@@ -38,6 +38,7 @@ import {
   MAP_LOGSHEET_PATH, isH01,
   SavedRouteMap, RouteHouse, HouseDisposition, HouseDispositionStatus, HouseView, StreetSegmentPick,
   fetchRouteMaps, ensureRouteHouses, fetchDispositions, setDisposition, clearDisposition, addManualHouse, loadSegmentHouses,
+  fetchHistoricalForRoutes, indexHistorical, historicalSummary,
   indexPendingSales, indexBookings, indexPcl, buildHouseViews, routeHouseId, houseKeyFromFullAddress, houseKeyFromAddress,
   subscribeToPendingSales, subscribeToDispositions, HOUSE_COLORS,
 } from '../../lib/mapLogsheetService';
@@ -106,10 +107,12 @@ const fetchPendingSalesWithAssignments = async (sessionId: string): Promise<Pend
   return [...incoming, ...own];
 };
 
-const isToday = (iso: string) => {
+// Does this timestamp fall on the session's day (local time)? `ymd` is the
+// daily session's date ("YYYY-MM-DD"); when it's unknown, today's date is used.
+const isOnDay = (iso: string, ymd: string | null) => {
   const d = new Date(iso);
-  const n = new Date();
-  return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return day === (ymd || format(new Date(), 'yyyy-MM-dd'));
 };
 
 const SeasonPill: React.FC<{ seasonType: SeasonType }> = ({ seasonType }) => {
@@ -142,6 +145,11 @@ const MapLogsheetPage: React.FC = () => {
   const [houses, setHouses] = useState<RouteHouse[]>([]);
   const [dispositions, setDispositions] = useState<Map<string, HouseDisposition>>(new Map());
   const [pclByRoute, setPclByRoute] = useState<Map<string, PCLClientGroup[]>>(new Map());
+  // Load Historical rows (previously serviced houses) for these routes — purple.
+  const [historicalRows, setHistoricalRows] = useState<HistoricalProperty[]>([]);
+  // The daily session's date ("YYYY-MM-DD"). Today's counts and Pace are scoped
+  // to it; Coverage deliberately isn't (it belongs to the route, not the day).
+  const [sessionDate, setSessionDate] = useState<string | null>(null);
 
   // --- ui ---
   const [loading, setLoading] = useState(true);
@@ -200,6 +208,7 @@ const MapLogsheetPage: React.FC = () => {
     ]);
     setJobs(assignments);
     setPendingSales(sales);
+    setSessionDate(daily?.date || null);
     const myRoutes = daily
       ? daily.routes.filter(r => r.assignedWorkerIds && r.assignedWorkerIds.includes(w.contractorId)).map(r => r.routeCode)
       : [];
@@ -281,15 +290,17 @@ const MapLogsheetPage: React.FC = () => {
     (async () => {
       try {
         setLoadingMsg('Loading your routes…');
-        const [maps, dispos, pcl] = await Promise.all([
+        const [maps, dispos, pcl, hist] = await Promise.all([
           fetchRouteMaps(routeCodes),
           fetchDispositions(routeCodes),
           getWorkerPCL(routeCodes, cc.id).catch(err => { console.warn('[MapLogsheet] PCL load failed', err); return new Map<string, PCLClientGroup[]>(); }),
+          fetchHistoricalForRoutes(cc.id, routeCodes).catch(err => { console.warn('[MapLogsheet] historical load failed', err); return [] as HistoricalProperty[]; }),
         ]);
         if (cancelled) return;
         setRouteMaps(maps);
         setDispositions(dispos);
         setPclByRoute(pcl);
+        setHistoricalRows(hist);
 
         if (maps.length === 0) {
           setLoadingMsg(null);
@@ -353,8 +364,12 @@ const MapLogsheetPage: React.FC = () => {
     const ps = indexPendingSales(pendingSales);
     const { pending, completed } = indexBookings(jobs);
     const pcl = indexPcl(pclByRoute);
-    return buildHouseViews(houses, dispositions, ps, pending, completed, pcl);
-  }, [houses, dispositions, pendingSales, jobs, pclByRoute]);
+    const hist = indexHistorical(historicalRows);
+    return buildHouseViews(houses, dispositions, ps, pending, completed, pcl, hist);
+  }, [houses, dispositions, pendingSales, jobs, pclByRoute, historicalRows]);
+
+  // Session-day filter for Today's counts and Pace.
+  const isToday = (iso: string) => isOnDay(iso, sessionDate);
 
   // PCL Outreach: who's textable on these routes, and how many are still to do.
   const pclClients = useMemo(() => pclOutreachClients(houseViews), [houseViews]);
@@ -392,7 +407,7 @@ const MapLogsheetPage: React.FC = () => {
     const answerRate = knocks > 0 ? answered / knocks : 0;
     const closingRate = answered > 0 ? sales / answered : 0;
     return { no, notHome, goBack, invalid, pending, completed, knocks, answered, sales, answerRate, closingRate };
-  }, [dispositions, houseViews]);
+  }, [dispositions, houseViews, sessionDate]);
 
   // ---------------------------------------------------------------------
   // PACE & TIME (today) — one event per knocked house, timed by its latest state
@@ -423,7 +438,7 @@ const MapLogsheetPage: React.FC = () => {
       byHouse.set(id, { t: new Date(tx.timestamp).getTime(), kind: 'sale', id });
     }
     return [...byHouse.values()].sort((a, b) => a.t - b.t);
-  }, [dispositions, pendingSales, transactions]);
+  }, [dispositions, pendingSales, transactions, sessionDate]);
 
   const pace = useMemo(() => {
     const n = knockEvents.length;
@@ -459,19 +474,25 @@ const MapLogsheetPage: React.FC = () => {
     const sales = transactions.filter(tx => tx.timestamp && isToday(tx.timestamp) && (tx.type === 'Sale' || tx.type === 'Production'));
     const total = sales.reduce((sum, tx) => sum + (Number(tx.price) || 0), 0);
     return { count: sales.length, total, avg: sales.length ? total / sales.length : 0 };
-  }, [transactions]);
+  }, [transactions, sessionDate]);
 
   const goBackQueue = useMemo(() => {
     return houseViews
       .filter(v => v.state === 'go_back' && v.disposition && isToday(v.disposition.updatedAt))
       .sort((a, b) => new Date(a.disposition!.updatedAt).getTime() - new Date(b.disposition!.updatedAt).getTime());
-  }, [houseViews]);
+  }, [houseViews, sessionDate]);
 
   // ---------------------------------------------------------------------
-  // COVERAGE (today) — knocked = has a knock event today
+  // COVERAGE (all time) — knocked = any disposition, pending sale or completed
+  // job at the house, from any date. Coverage belongs to the route, so coming
+  // back to it on a later session still shows what's been done.
   // ---------------------------------------------------------------------
   const coverage = useMemo(() => {
-    const knockedIds = new Set(knockEvents.map(e => e.id));
+    const knockedIds = new Set(
+      houseViews
+        .filter(v => v.disposition || v.state === 'pending' || v.state === 'completed')
+        .map(v => routeHouseId(v.house.routeCode, v.house.houseKey)),
+    );
     const total = houseViews.length;
     const knocked = houseViews.filter(v => knockedIds.has(routeHouseId(v.house.routeCode, v.house.houseKey))).length;
     // Per street, per side (odd/even), sorted by number: an untouched house
@@ -510,7 +531,7 @@ const MapLogsheetPage: React.FC = () => {
     });
     const streetList = [...streets.values()].sort((a, b) => (b.total - b.knocked) - (a.total - a.knocked) || a.name.localeCompare(b.name));
     return { total, knocked, untouched: total - knocked, skipped: skippedTotal, pctKnocked: total > 0 ? knocked / total : 0, streets: streetList };
-  }, [houseViews, knockEvents]);
+  }, [houseViews]);
 
   const drawerJobs = useMemo(() => {
     if (jobsFilter === 'pending') {
@@ -571,7 +592,9 @@ const MapLogsheetPage: React.FC = () => {
         routeCode: h.routeCode,
         houseNumber: `${h.civicNo}${(h.civicSuffix || '').toUpperCase()}`,
         streetName: h.streetName,
-        firstName: selectedView.disposition?.firstName || undefined,
+        firstName: selectedView.disposition?.firstName
+          || (selectedView.isHistorical ? historicalSummary(selectedView.historical).name.split(/\s+/)[0] : '')
+          || undefined,
       },
     });
   };

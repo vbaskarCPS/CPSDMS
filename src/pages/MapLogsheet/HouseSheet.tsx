@@ -9,7 +9,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Ban, DoorClosed, RotateCcw, DollarSign, Clock, Phone, StickyNote, Trash2, Loader, CheckCircle2, MapPin, Plus, Pencil, CircleSlash } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { HouseView, HouseDispositionStatus, HOUSE_COLORS } from '../../lib/mapLogsheetService';
+import { HouseView, HouseDispositionStatus, HOUSE_COLORS, historicalSummary } from '../../lib/mapLogsheetService';
 
 interface HouseSheetProps {
   view: HouseView;
@@ -38,7 +38,9 @@ const AUTO_NOT_HOME_SECONDS = 5;
 const HouseSheet: React.FC<HouseSheetProps> = ({
   view, saving, onDispose, onClearDisposition, onSale, onOpenPending, onOpenBooking, onClose,
 }) => {
-  const { house, state, isPcl, pcl, disposition, pendingSale, officeBooking, completed } = view;
+  const { house, state, isPcl, pcl, disposition, pendingSale, officeBooking, completed, historical, isHistorical } = view;
+  const hist = isHistorical ? historicalSummary(historical) : null;
+  const [showHistRows, setShowHistRows] = useState(false);
   const [note, setNote] = useState(disposition?.note || '');
   const [firstName, setFirstName] = useState(disposition?.firstName || '');
   // Name + note row is hidden until asked for, or when either already has a value.
@@ -69,6 +71,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
     setFirstName(disposition?.firstName || '');
     setShowNote(!!disposition?.note || !!disposition?.firstName);
     setShowHistory(false);
+    setShowHistRows(false);
     setExpanded(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [houseId, disposition?.note, disposition?.firstName]);
@@ -106,6 +109,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
     state === 'no' ? HOUSE_COLORS.no :
     state === 'go_back' ? HOUSE_COLORS.go_back :
     state === 'invalid' ? HOUSE_COLORS.invalid :
+    isHistorical ? HOUSE_COLORS.historical :
     state === 'not_home' ? (isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home) :
     isPcl ? HOUSE_COLORS.pcl : '#e5e7eb';
 
@@ -147,6 +151,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
           <div className="text-[11px] text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
             <span className="font-mono bg-gray-800 border border-gray-700 px-1.5 rounded">{house.routeCode}</span>
             <span>{STATE_LABEL[state]}</span>
+            {isHistorical && <span className="text-purple-300">· previously serviced</span>}
             {house.unitCount > 1 && <span>· {house.unitCount} units</span>}
             {house.source === 'manual' && <span className="text-yellow-500">· added by hand</span>}
           </div>
@@ -155,6 +160,47 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
       </div>
 
       <div className="px-4 pb-4 overflow-y-auto custom-scrollbar space-y-3">
+        {/* Historical block — previously serviced (Load Historical). Purple. */}
+        {hist && (
+          <button
+            type="button"
+            onClick={() => setShowHistRows(v => !v)}
+            className="w-full text-left bg-purple-950/50 border border-purple-700 rounded-lg px-3 py-2"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-purple-100 font-bold text-sm truncate">{hist.name || 'Previous customer'}</div>
+                <div className="text-[11px] text-purple-200/80 flex items-center gap-2 flex-wrap">
+                  {historical.find(r => r.phone)?.phone && (
+                    <span className="flex items-center gap-1"><Phone size={10} />{historical.find(r => r.phone)!.phone}</span>
+                  )}
+                  <span className="flex items-center gap-1"><Clock size={10} />{historical.length}x</span>
+                  {hist.prices.length > 0 && <span className="font-mono">{hist.prices.join(' + ')}</span>}
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                {hist.total > 0 && <div className="text-purple-100 font-bold text-base font-mono">${hist.total.toLocaleString()}</div>}
+                <div className="text-[10px] text-purple-300">{showHistRows ? 'hide' : 'details'}</div>
+              </div>
+            </div>
+            {showHistRows && (
+              <div className="mt-2 border-t border-purple-900 pt-1 space-y-1">
+                {historical.map((r, i) => (
+                  <div key={i} className="text-[11px] text-purple-100/90">
+                    <div className="grid grid-cols-4 gap-1">
+                      <span className="truncate">{r.customerName || '—'}</span>
+                      <span className="font-mono">{r.price ? (r.price.startsWith('$') ? r.price : `$${r.price}`) : '—'}</span>
+                      <span>{[r.propertyType, r.clientType].filter(Boolean).join(' · ') || '—'}</span>
+                      <span className="truncate text-purple-300/70">{r.contractorName || '—'}</span>
+                    </div>
+                    {r.notes && <div className="text-purple-300/80 italic truncate">{r.notes}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </button>
+        )}
+
         {/* PCL block */}
         {isPcl && pcl && (
           <button

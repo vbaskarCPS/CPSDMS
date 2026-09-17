@@ -162,7 +162,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     for (const v of houses) {
       const id = routeHouseId(v.house.routeCode, v.house.houseKey);
       const color = houseColor(v);
-      const hasState = v.state !== 'none';
+      const hasState = v.state !== 'none' || v.isHistorical;
       const num = `${v.house.civicNo}${(v.house.civicSuffix || '').toUpperCase()}`;
       const hasFp = !!v.house.footprint;
       if (hasFp) {
@@ -545,7 +545,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
         </div>
       )}
 
-{mapLoaded && loadingMessage && !placingHouse && !pickingStreet && (
+      {mapLoaded && loadingMessage && !placingHouse && !pickingStreet && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium max-w-[80%] truncate">
           <Loader size={12} className="animate-spin text-blue-400 shrink-0" /> {loadingMessage}
         </div>
