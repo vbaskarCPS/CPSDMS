@@ -839,18 +839,35 @@ export async function loadAndCacheHistoricalByPrefix(
   //    7 ClientType, 8 PropertyType, 9 Notes, 10 Price, 11 PaymentType, 12 Contractor
   const rawRows = await sheetsGetRaw(accessToken, masterbookingsSheetId, `'Logsheets'!A:M`);
   const prefix = config.prefix.trim().toUpperCase();
+  // Route# comes in two styles: the bare prefix ("TDS" → geocode + bucket) or a
+  // numbered code, often zero-padded ("TDS03" → normalised to "TDS3" and kept
+  // only if it's one of the manager's chosen routes; no geocoding needed).
+  const numbered = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*0*(\\d+)$`);
+  const wanted = new Set(config.routeCodes.map(c => c.toUpperCase()));
   type HistRow = {
     address: string; customerName: string; phone: string; email: string; clientType: string;
     propertyType: string; notes: string; price: string; paymentType: string; contractorName: string;
+    routeCode: string | null;   // resolved numbered code, or null = needs geocode + bucket
   };
   const matched: HistRow[] = [];
+  let outsideRange = 0;
   for (let i = 1; i < rawRows.length; i++) {
     const row = rawRows[i] || [];
     const rc = cellVal(row, 0).toUpperCase();
-    if (rc !== prefix) continue;
+    let routeCode: string | null = null;
+    if (rc === prefix) {
+      routeCode = null;
+    } else {
+      const m = rc.match(numbered);
+      if (!m) continue;
+      const code = `${prefix}${parseInt(m[1], 10)}`;
+      if (!wanted.has(code)) { outsideRange++; continue; }
+      routeCode = config.routeCodes.find(c => c.toUpperCase() === code) || code;
+    }
     const address = `${cellVal(row, 3)} ${cellVal(row, 4)}`.trim();
     if (!address) continue;
     matched.push({
+      routeCode,
       address,
       customerName: `${cellVal(row, 1)} ${cellVal(row, 2)}`.trim(),
       phone: cellVal(row, 5),
@@ -863,7 +880,8 @@ export async function loadAndCacheHistoricalByPrefix(
       contractorName: cellVal(row, 12),
     });
   }
-  console.log(`[Historical Prefix] ${matched.length} Logsheets rows carry prefix "${config.prefix}".`);
+  const needGeo = matched.filter(r => r.routeCode === null);
+  console.log(`[Historical Prefix] ${matched.length} Logsheets rows match "${config.prefix}" (${matched.length - needGeo.length} numbered, ${needGeo.length} bare prefix, ${outsideRange} numbered outside the chosen range).`);
 
   // 3. Geocode unique addresses — permanent cache, then session cache, then Mapbox.
   const normKey = (addr: string) => addr.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -879,9 +897,10 @@ export async function loadAndCacheHistoricalByPrefix(
     });
   } catch { /* best-effort */ }
 
+  // Only bare-prefix rows need a coordinate to find their route.
   const uniqueAddrs: string[] = [];
   const seenAddr = new Set<string>();
-  for (const r of matched) {
+  for (const r of needGeo) {
     const key = normKey(r.address);
     if (!seenAddr.has(key)) { seenAddr.add(key); uniqueAddrs.push(r.address); }
   }
@@ -923,18 +942,22 @@ export async function loadAndCacheHistoricalByPrefix(
   await savePermanentGeocodes(ccId, pendingSaves);
   report({ phase: 'bucketing', current: uniqueAddrs.length, total: uniqueAddrs.length });
 
-  // 4. Bucket each row into the nearest numbered route.
+  // 4. Numbered rows keep their code; bare-prefix rows go to the nearest route.
   const dbRows: any[] = [];
   let dropped = 0;
   for (const r of matched) {
-    const pos = geo.get(normKey(r.address));
-    if (!pos) { dropped++; continue; }
-    const nearest = nearestRouteForPoint(pos.lat, pos.lng, routeMaps);
-    if (!nearest) { dropped++; continue; }
+    let routeCode = r.routeCode;
+    if (!routeCode) {
+      const pos = geo.get(normKey(r.address));
+      if (!pos) { dropped++; continue; }
+      const nearest = nearestRouteForPoint(pos.lat, pos.lng, routeMaps);
+      if (!nearest) { dropped++; continue; }
+      routeCode = nearest.routeCode;
+    }
     dbRows.push({
       command_center_id: ccId,
       session_date: sessionDate,
-      route_code: nearest.routeCode,
+      route_code: routeCode,
       address: r.address,
       customer_name: r.customerName || null,
       phone: r.phone || null,
