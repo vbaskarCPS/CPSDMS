@@ -2,8 +2,9 @@
 //
 // Full-screen pitch gallery for the H01 map logsheet.
 //
-//   View  — one step per screen (title, 1–3 photos, optional caption), swipe or
-//           arrows to move, thumbnail strip to jump. This is the at-the-door mode.
+//   View  — the list of steps (cover photo + title). Tap one to open it.
+//   Show  — one photo at a time, full screen, pinch/double-tap to zoom, swipe
+//           to the next photo and on into the next step. The at-the-door mode.
 //   Setup — the list of steps: add, edit, move up/down, delete.
 //   Edit  — one step's form: title, caption, up to three photos.
 //
@@ -45,14 +46,111 @@ const Photo: React.FC<{ path: string; className?: string; contain?: boolean }> =
 };
 
 // ---------------------------------------------------------------------------
+// ZoomableImage — pinch / double-tap zoom, drag to pan, swipe when not zoomed
+// ---------------------------------------------------------------------------
+const MAX_ZOOM = 4;
+const ZoomableImage: React.FC<{ path: string; onSwipe: (dir: -1 | 1) => void; onTap?: () => void }> = ({ path, onSwipe, onTap }) => {
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [t, setT] = useState({ s: 1, x: 0, y: 0 });
+  const tRef = useRef(t);
+  useEffect(() => { tRef.current = t; }, [t]);
+
+  // gesture state
+  const start = useRef<{ x: number; y: number; t: number; s: number; tx: number; ty: number; dist: number; two: boolean; moved: boolean } | null>(null);
+  const lastTap = useRef(0);
+
+  useEffect(() => {
+    let alive = true;
+    setSrc(null); setFailed(false); setT({ s: 1, x: 0, y: 0 });
+    resolveGalleryImage(path).then(u => { if (alive) setSrc(u); }).catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [path]);
+
+  const dist = (a: React.Touch, b: React.Touch) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  const mid = (a: React.Touch, b: React.Touch) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    const cur = tRef.current;
+    if (e.touches.length === 2) {
+      const m = mid(e.touches[0], e.touches[1]);
+      start.current = { x: m.x, y: m.y, t: Date.now(), s: cur.s, tx: cur.x, ty: cur.y, dist: dist(e.touches[0], e.touches[1]), two: true, moved: false };
+    } else if (e.touches.length === 1) {
+      const p = e.touches[0];
+      start.current = { x: p.clientX, y: p.clientY, t: Date.now(), s: cur.s, tx: cur.x, ty: cur.y, dist: 0, two: false, moved: false };
+    }
+  };
+  const onTouchMove = (e: React.TouchEvent) => {
+    const st = start.current; if (!st) return;
+    if (e.touches.length === 2 && st.two) {
+      const d = dist(e.touches[0], e.touches[1]);
+      const m = mid(e.touches[0], e.touches[1]);
+      const s = Math.min(MAX_ZOOM, Math.max(1, st.s * (d / Math.max(st.dist, 1))));
+      st.moved = true;
+      setT({ s, x: s === 1 ? 0 : st.tx + (m.x - st.x), y: s === 1 ? 0 : st.ty + (m.y - st.y) });
+    } else if (e.touches.length === 1 && !st.two) {
+      const p = e.touches[0];
+      const dx = p.clientX - st.x, dy = p.clientY - st.y;
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) st.moved = true;
+      if (st.s > 1) setT({ s: st.s, x: st.tx + dx, y: st.ty + dy });
+    }
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const st = start.current; if (!st) return;
+    if (e.touches.length > 0) { start.current = null; return; } // a finger is still down (end of pinch)
+    start.current = null;
+    if (st.two) return;
+    const p = e.changedTouches[0];
+    const dx = p.clientX - st.x, dy = p.clientY - st.y;
+    if (!st.moved) {
+      const now = Date.now();
+      if (now - lastTap.current < 300) {
+        // double tap: toggle zoom around the tap point
+        lastTap.current = 0;
+        setT(prev => prev.s > 1 ? { s: 1, x: 0, y: 0 } : { s: 2.5, x: (window.innerWidth / 2 - p.clientX) * 1.5, y: (window.innerHeight / 2 - p.clientY) * 1.5 });
+      } else {
+        lastTap.current = now;
+        onTap?.();
+      }
+      return;
+    }
+    if (st.s === 1 && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.2) onSwipe(dx < 0 ? 1 : -1);
+  };
+
+  return (
+    <div
+      className="absolute inset-0 overflow-hidden touch-none select-none flex items-center justify-center bg-black"
+      onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} onTouchCancel={() => { start.current = null; }}
+    >
+      {failed ? (
+        <div className="text-gray-500 flex flex-col items-center gap-2"><AlertCircle size={24} /><span className="text-xs">Photo unavailable offline</span></div>
+      ) : !src ? (
+        <Loader size={24} className="animate-spin text-gray-500" />
+      ) : (
+        <img
+          src={src}
+          alt=""
+          draggable={false}
+          onError={() => setFailed(true)}
+          className="max-w-full max-h-full object-contain will-change-transform"
+          style={{ transform: `translate(${t.x}px, ${t.y}px) scale(${t.s})`, transition: start.current ? 'none' : 'transform 120ms ease-out' }}
+        />
+      )}
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Sheet
 // ---------------------------------------------------------------------------
 const GallerySheet: React.FC<GallerySheetProps> = ({ contractorId, onClose }) => {
   const [steps, setSteps] = useState<GalleryStep[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<'view' | 'setup' | 'edit'>('view');
-  const [index, setIndex] = useState(0);
+  const [mode, setMode] = useState<'view' | 'show' | 'setup' | 'edit'>('view');
+  const [index, setIndex] = useState(0);       // step being shown
+  const [photoIdx, setPhotoIdx] = useState(0); // photo within that step
+  const [chrome, setChrome] = useState(true);  // overlays visible in show mode
   const [busy, setBusy] = useState(false);
 
   // Edit form
@@ -82,17 +180,21 @@ const GallerySheet: React.FC<GallerySheetProps> = ({ contractorId, onClose }) =>
 
   useEffect(() => { load(); }, [load]);
 
-  // --- swipe (view mode) ---
-  const touchX = useRef<number | null>(null);
-  const onTouchStart = (e: React.TouchEvent) => { touchX.current = e.touches[0].clientX; };
-  const onTouchEnd = (e: React.TouchEvent) => {
-    if (touchX.current == null) return;
-    const dx = e.changedTouches[0].clientX - touchX.current;
-    touchX.current = null;
-    if (Math.abs(dx) < 50) return;
-    if (dx < 0) setIndex(i => Math.min(i + 1, steps.length - 1));
-    else setIndex(i => Math.max(i - 1, 0));
+  // --- show mode navigation: through this step's photos, then into the next step ---
+  const openStep = (i: number) => { setIndex(i); setPhotoIdx(0); setChrome(true); setMode('show'); };
+  const stepPhotos = (i: number) => steps[i]?.photos || [];
+  const go = (dir: -1 | 1) => {
+    const n = stepPhotos(index).length;
+    if (dir === 1) {
+      if (photoIdx < n - 1) setPhotoIdx(photoIdx + 1);
+      else if (index < steps.length - 1) { setIndex(index + 1); setPhotoIdx(0); }
+    } else {
+      if (photoIdx > 0) setPhotoIdx(photoIdx - 1);
+      else if (index > 0) { const prev = index - 1; setIndex(prev); setPhotoIdx(Math.max(0, stepPhotos(prev).length - 1)); }
+    }
   };
+  const atStart = index === 0 && photoIdx === 0;
+  const atEnd = index >= steps.length - 1 && photoIdx >= stepPhotos(index).length - 1;
 
   // --- edit helpers ---
   const openEdit = (step: GalleryStep | null) => {
@@ -204,7 +306,8 @@ const GallerySheet: React.FC<GallerySheetProps> = ({ contractorId, onClose }) =>
   // ---------------------------------------------------------------------
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
-      {/* Header */}
+      {/* Header (not in show mode — that has its own overlay) */}
+      {mode !== 'show' && (
       <div className="shrink-0 flex items-center justify-between px-3 py-2 border-b border-gray-800 bg-black/95">
         <div className="flex items-center gap-2 min-w-0">
           <Images size={18} className="text-yellow-300 shrink-0" />
@@ -212,7 +315,7 @@ const GallerySheet: React.FC<GallerySheetProps> = ({ contractorId, onClose }) =>
             {mode === 'view' ? 'Gallery' : mode === 'setup' ? 'Gallery setup' : (editing ? 'Edit step' : 'New step')}
           </span>
           {mode === 'view' && steps.length > 0 && (
-            <span className="text-xs text-gray-500 font-mono">{index + 1}/{steps.length}</span>
+            <span className="text-xs text-gray-500 font-mono">{steps.length} step{steps.length === 1 ? '' : 's'}</span>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -239,6 +342,7 @@ const GallerySheet: React.FC<GallerySheetProps> = ({ contractorId, onClose }) =>
           )}
         </div>
       </div>
+      )}
 
       {error && (
         <div className="shrink-0 mx-3 mt-2 px-3 py-2 rounded-lg bg-red-900/30 border border-red-800 text-red-200 text-xs flex items-center gap-2">
@@ -247,7 +351,7 @@ const GallerySheet: React.FC<GallerySheetProps> = ({ contractorId, onClose }) =>
         </div>
       )}
 
-      {/* ── VIEW ── */}
+      {/* ── VIEW (step list) ── */}
       {mode === 'view' && (
         loading ? (
           <div className="flex-1 flex items-center justify-center"><Loader className="animate-spin text-gray-500" /></div>
@@ -257,60 +361,90 @@ const GallerySheet: React.FC<GallerySheetProps> = ({ contractorId, onClose }) =>
             <p className="text-sm">No steps yet. Tap <span className="text-white font-bold">Setup</span> to build your pitch.</p>
             <button type="button" onClick={() => openEdit(null)} className="px-4 py-2.5 rounded-lg bg-yellow-500 text-black text-sm font-bold flex items-center gap-2"><Plus size={16} /> Add first step</button>
           </div>
-        ) : current && (
-          <>
-            <div className="flex-1 min-h-0 flex flex-col" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-              <div className="shrink-0 px-4 pt-3 pb-2">
-                <h2 className="text-white font-bold text-2xl leading-tight">{current.title}</h2>
-                {current.caption && <p className="text-gray-300 text-sm mt-1">{current.caption}</p>}
-              </div>
-              <div className={`flex-1 min-h-0 px-2 pb-2 grid gap-2 ${
-                current.photos.length <= 1 ? 'grid-cols-1' : current.photos.length === 2 ? 'grid-cols-1 landscape:grid-cols-2' : 'grid-cols-1 landscape:grid-cols-3'
-              }`}>
-                {current.photos.length === 0 ? (
-                  <div className="rounded-xl bg-gray-900 border border-gray-800 flex items-center justify-center text-gray-600 text-sm">No photos on this step</div>
-                ) : current.photos.map(p => (
-                  <div key={p} className="min-h-0 rounded-xl overflow-hidden bg-gray-900 border border-gray-800">
-                    <Photo path={p} className="w-full h-full" contain />
-                  </div>
-                ))}
-              </div>
-            </div>
+        ) : (
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-3 grid grid-cols-2 gap-3 content-start">
+            {steps.map((s, i) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => openStep(i)}
+                className="text-left rounded-xl overflow-hidden bg-gray-900 border border-gray-800 active:border-yellow-400"
+              >
+                <div className="aspect-[4/3] bg-gray-800">
+                  {s.photos[0]
+                    ? <Photo path={s.photos[0]} className="w-full h-full" />
+                    : <div className="w-full h-full flex items-center justify-center text-gray-600"><Images size={24} /></div>}
+                </div>
+                <div className="px-2.5 py-2">
+                  <div className="text-white font-bold text-sm truncate"><span className="text-gray-500 font-mono mr-1">{i + 1}.</span>{s.title}</div>
+                  <div className="text-[11px] text-gray-500">{s.photos.length} photo{s.photos.length === 1 ? '' : 's'}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )
+      )}
 
-            {/* Nav + thumbnails */}
-            <div className="shrink-0 border-t border-gray-800 bg-black/95 px-2 py-2 flex items-center gap-2">
+      {/* ── SHOW (one photo, full screen) ── */}
+      {mode === 'show' && current && (
+        <div className="flex-1 relative min-h-0">
+          {current.photos.length === 0 ? (
+            <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">No photos on this step</div>
+          ) : (
+            <ZoomableImage
+              key={`${current.id}:${photoIdx}`}
+              path={current.photos[photoIdx]}
+              onSwipe={go}
+              onTap={() => setChrome(c => !c)}
+            />
+          )}
+
+          {/* Top overlay: step title, counter, back */}
+          <div className={`absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-black/80 to-transparent px-3 pt-2 pb-8 flex items-start gap-2 transition-opacity ${chrome ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+            <button type="button" onClick={() => setMode('view')} className="p-2 -ml-1 text-white shrink-0" aria-label="Back to steps"><ChevronLeft size={24} /></button>
+            <div className="flex-1 min-w-0 pt-1.5">
+              <div className="text-white font-bold text-lg leading-tight truncate">
+                <span className="text-yellow-300 font-mono mr-1.5">{index + 1}/{steps.length}</span>{current.title}
+              </div>
+              {current.photos.length > 1 && (
+                <div className="text-[11px] text-gray-300">photo {photoIdx + 1} of {current.photos.length}</div>
+              )}
+            </div>
+            <button type="button" onClick={onClose} className="p-2 -mr-1 text-white shrink-0" aria-label="Close"><X size={24} /></button>
+          </div>
+
+          {/* Bottom overlay: caption, dots, prev/next */}
+          <div className={`absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/85 to-transparent px-3 pb-3 pt-10 transition-opacity ${chrome ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+            {current.caption && <p className="text-white text-sm mb-2 leading-snug">{current.caption}</p>}
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                disabled={index === 0}
-                onClick={() => setIndex(i => Math.max(0, i - 1))}
-                className="w-11 h-11 rounded-full bg-gray-800 border border-gray-700 text-white flex items-center justify-center disabled:opacity-30 active:bg-gray-700 shrink-0"
+                disabled={atStart}
+                onClick={() => go(-1)}
+                className="w-11 h-11 rounded-full bg-gray-800/90 border border-gray-700 text-white flex items-center justify-center disabled:opacity-30 shrink-0"
                 aria-label="Previous"
               ><ChevronLeft size={22} /></button>
-              <div className="flex-1 min-w-0 flex gap-1.5 overflow-x-auto custom-scrollbar py-1">
-                {steps.map((s, i) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => setIndex(i)}
-                    className={`shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 ${i === index ? 'border-yellow-400' : 'border-gray-700 opacity-70'}`}
-                    title={s.title}
-                  >
-                    {s.photos[0]
-                      ? <Photo path={s.photos[0]} className="w-full h-full" />
-                      : <div className="w-full h-full bg-gray-800 text-[10px] text-gray-400 flex items-center justify-center px-1 text-center leading-tight">{s.title}</div>}
-                  </button>
+              <div className="flex-1 flex items-center justify-center gap-1.5">
+                {current.photos.map((_, k) => (
+                  <button key={k} type="button" onClick={() => setPhotoIdx(k)} className={`h-2 rounded-full transition-all ${k === photoIdx ? 'w-6 bg-yellow-400' : 'w-2 bg-gray-500'}`} aria-label={`Photo ${k + 1}`} />
                 ))}
               </div>
               <button
                 type="button"
-                disabled={index >= steps.length - 1}
-                onClick={() => setIndex(i => Math.min(steps.length - 1, i + 1))}
-                className="w-11 h-11 rounded-full bg-gray-800 border border-gray-700 text-white flex items-center justify-center disabled:opacity-30 active:bg-gray-700 shrink-0"
+                disabled={atEnd}
+                onClick={() => go(1)}
+                className={`h-11 rounded-full border text-sm font-bold flex items-center justify-center gap-1 disabled:opacity-30 shrink-0 ${
+                  photoIdx >= current.photos.length - 1 && index < steps.length - 1
+                    ? 'px-4 bg-yellow-500 border-yellow-500 text-black'
+                    : 'w-11 bg-gray-800/90 border-gray-700 text-white'
+                }`}
                 aria-label="Next"
-              ><ChevronRight size={22} /></button>
+              >
+                {photoIdx >= current.photos.length - 1 && index < steps.length - 1 ? <>Next step <ChevronRight size={18} /></> : <ChevronRight size={22} />}
+              </button>
             </div>
-          </>
-        )
+          </div>
+        </div>
       )}
 
       {/* ── SETUP (list) ── */}
