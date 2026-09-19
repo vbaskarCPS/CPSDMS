@@ -16,7 +16,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   LogOut, Loader, Plus, FileText, ListChecks, Home, X, CheckCircle2, AlertCircle, Shovel, Droplets, Leaf,
-  Menu, BarChart3, ChevronUp, Clock, MapPinned, RotateCcw, MessageSquare, Route,
+  Menu, BarChart3, ChevronUp, Clock, MapPinned, RotateCcw, MessageSquare, Route, Images,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
@@ -33,6 +33,7 @@ import QuickPendingModal from '../../components/QuickPendingModal';
 import MapLogsheetView from './MapLogsheetView';
 import HouseSheet, { AddHouseSheet } from './HouseSheet';
 import PclOutreachSheet, { pclOutreachClients } from './PclOutreachSheet';
+import GallerySheet from './GallerySheet';
 import { getPclTextedSet } from '../../lib/pclOutreachService';
 import {
   MAP_LOGSHEET_PATH, isH01,
@@ -166,6 +167,8 @@ const MapLogsheetPage: React.FC = () => {
   const [jobsFilter, setJobsFilter] = useState<'pending' | 'completed'>('pending');
   const [showContract, setShowContract] = useState(false);
   const [showPclOutreach, setShowPclOutreach] = useState(false);
+  // Pitch gallery (photos of each prep step, in sales order) — full-screen.
+  const [showGallery, setShowGallery] = useState(false);
   const [pclTexted, setPclTexted] = useState<Set<string>>(new Set());
   const [quickPending, setQuickPending] = useState<null | { prefill?: { routeCode: string; houseNumber: string; streetName: string; firstName?: string } }>(null);
   const [placing, setPlacing] = useState(false);
@@ -883,6 +886,12 @@ const MapLogsheetPage: React.FC = () => {
                 <ListChecks size={18} className="text-blue-300" /> Jobs
                 {counts.pending > 0 && <span className="ml-auto bg-yellow-500 text-black rounded-full px-2 text-[11px]">{counts.pending} pending</span>}
               </button>
+              <button
+                onClick={() => { setShowMenu(false); setShowGallery(true); setSelectedId(null); }}
+                className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
+              >
+                <Images size={18} className="text-yellow-300" /> Gallery
+              </button>
               {pclClients.length > 0 && (
                 <button
                   onClick={() => { setShowMenu(false); setShowPclOutreach(true); }}
@@ -1176,6 +1185,11 @@ const MapLogsheetPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* ── GALLERY (full screen) ── */}
+      {showGallery && worker && (
+        <GallerySheet contractorId={worker.contractorId} onClose={() => setShowGallery(false)} />
+      )}
 
       {/* ── MODALS ── */}
       {showContract && (
