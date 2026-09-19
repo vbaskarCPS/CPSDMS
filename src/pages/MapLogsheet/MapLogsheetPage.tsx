@@ -16,7 +16,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   LogOut, Loader, Plus, FileText, ListChecks, Home, X, CheckCircle2, AlertCircle, Shovel, Droplets, Leaf,
-  Menu, BarChart3, ChevronUp, Clock, MapPinned, RotateCcw, MessageSquare, Route,
+  Menu, BarChart3, ChevronUp, Clock, MapPinned, RotateCcw, MessageSquare, Route, Images,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
@@ -33,6 +33,7 @@ import QuickPendingModal from '../../components/QuickPendingModal';
 import MapLogsheetView from './MapLogsheetView';
 import HouseSheet, { AddHouseSheet } from './HouseSheet';
 import PclOutreachSheet, { pclOutreachClients } from './PclOutreachSheet';
+import GallerySheet from './GallerySheet';
 import { getPclTextedSet } from '../../lib/pclOutreachService';
 import {
   MAP_LOGSHEET_PATH, isH01,
@@ -166,6 +167,8 @@ const MapLogsheetPage: React.FC = () => {
   const [jobsFilter, setJobsFilter] = useState<'pending' | 'completed'>('pending');
   const [showContract, setShowContract] = useState(false);
   const [showPclOutreach, setShowPclOutreach] = useState(false);
+  // Pitch gallery (photos of each prep step, in sales order) — full-screen.
+  const [showGallery, setShowGallery] = useState(false);
   const [pclTexted, setPclTexted] = useState<Set<string>>(new Set());
   const [quickPending, setQuickPending] = useState<null | { prefill?: { routeCode: string; houseNumber: string; streetName: string; firstName?: string } }>(null);
   const [placing, setPlacing] = useState(false);
@@ -743,28 +746,39 @@ const MapLogsheetPage: React.FC = () => {
     // Fixed to the viewport edges: the most reliable "fill the phone screen"
     // on mobile browsers, whose 100vh wanders as the address bar shows/hides.
     <div className="fixed inset-0 bg-black flex flex-col overflow-hidden">
-      {/* ── HEADER BAR (tap for expanded stats) ── */}
-      <button
-        type="button"
-        onClick={() => { setShowStats(s => !s); setShowMenu(false); setSelectedId(null); }}
-        className="shrink-0 w-full bg-black/95 border-b border-gray-800 px-3 py-2 flex items-center justify-between gap-3 text-left active:bg-gray-900"
-      >
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-white font-bold text-base whitespace-nowrap">{format(new Date(), 'EEE, MMM d')}</span>
-          <SeasonPill seasonType={seasonType} />
-        </div>
-        <div className="flex items-center gap-4 shrink-0">
-          <div className="flex flex-col items-center leading-none">
-            <span className="text-[9px] uppercase font-bold text-gray-500">Done</span>
-            <span className="text-lg font-bold" style={{ color: '#4ade80' }}>{counts.completed}</span>
+      {/* ── HEADER BAR (tap for expanded stats; Gallery button on the right) ── */}
+      <div className="shrink-0 w-full bg-black/95 border-b border-gray-800 flex items-stretch">
+        <button
+          type="button"
+          onClick={() => { setShowStats(s => !s); setShowMenu(false); setSelectedId(null); }}
+          className="flex-1 min-w-0 px-3 py-2 flex items-center justify-between gap-3 text-left active:bg-gray-900"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-white font-bold text-base whitespace-nowrap">{format(new Date(), 'EEE, MMM d')}</span>
+            <SeasonPill seasonType={seasonType} />
           </div>
-          <div className="flex flex-col items-center leading-none">
-            <span className="text-[9px] uppercase font-bold text-gray-500">Equiv</span>
-            <span className="text-lg font-bold text-white">{stats.totalEQ.toFixed(1)}</span>
+          <div className="flex items-center gap-4 shrink-0">
+            <div className="flex flex-col items-center leading-none">
+              <span className="text-[9px] uppercase font-bold text-gray-500">Done</span>
+              <span className="text-lg font-bold" style={{ color: '#4ade80' }}>{counts.completed}</span>
+            </div>
+            <div className="flex flex-col items-center leading-none">
+              <span className="text-[9px] uppercase font-bold text-gray-500">Equiv</span>
+              <span className="text-lg font-bold text-white">{stats.totalEQ.toFixed(1)}</span>
+            </div>
+            <ChevronUp size={16} className={`text-gray-500 transition-transform ${showStats ? 'rotate-180' : ''}`} />
           </div>
-          <ChevronUp size={16} className={`text-gray-500 transition-transform ${showStats ? 'rotate-180' : ''}`} />
-        </div>
-      </button>
+        </button>
+        <button
+          type="button"
+          onClick={() => { setShowGallery(true); setShowStats(false); setShowMenu(false); setSelectedId(null); }}
+          className="shrink-0 px-3 border-l border-gray-800 flex flex-col items-center justify-center leading-none text-yellow-300 active:bg-gray-900"
+          aria-label="Gallery"
+        >
+          <Images size={18} />
+          <span className="text-[9px] uppercase font-bold mt-0.5">Gallery</span>
+        </button>
+      </div>
 
       {/* ── MAP ── */}
       <div className="flex-1 relative min-h-0">
@@ -1176,6 +1190,11 @@ const MapLogsheetPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* ── GALLERY (full screen) ── */}
+      {showGallery && worker && (
+        <GallerySheet contractorId={worker.contractorId} onClose={() => setShowGallery(false)} />
+      )}
 
       {/* ── MODALS ── */}
       {showContract && (
