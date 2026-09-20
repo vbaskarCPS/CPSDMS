@@ -27,6 +27,7 @@ import {
   BookOpen,
   Zap,
   BarChart3,
+  MapPinned,
 } from 'lucide-react';
 import {
   commandCenterService,
@@ -38,6 +39,7 @@ import {
 import { supabase } from '../../lib/supabase';
 import { removeStorageItem } from '../../lib/localStorage';
 import BamboraTestModal from './BamboraTestModal';
+import MapAccessModal from './MapAccessModal';
 import RouteFinderV2View from '../../components/RouteFinder/RouteFinderV2View';
 import ReportingView from './ReportingView';
 
@@ -55,6 +57,7 @@ const CommandCenterCreator: React.FC = () => {
   const [saving, setSaving] = useState(false);
 
   const [showBamboraTest, setShowBamboraTest] = useState(false);
+  const [showMapAccess, setShowMapAccess] = useState(false);
   const [showRouteFinder, setShowRouteFinder] = useState(false);
   const [showReporting, setShowReporting] = useState(false);
   
@@ -608,6 +611,14 @@ const CommandCenterCreator: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setShowMapAccess(true)}
+            className="bg-yellow-600 hover:bg-yellow-500 text-black px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
+          >
+            <MapPinned size={20} />
+            Map Logsheet Access
+          </button>
+
+          <button
             onClick={() => setShowBamboraTest(true)}
             className="bg-amber-600 hover:bg-amber-500 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-lg"
           >
@@ -1006,6 +1017,10 @@ const CommandCenterCreator: React.FC = () => {
 
       {showBamboraTest && (
         <BamboraTestModal onClose={() => setShowBamboraTest(false)} />
+      )}
+
+      {showMapAccess && (
+        <MapAccessModal onClose={() => setShowMapAccess(false)} />
       )}
 
 {showRouteFinder && (
