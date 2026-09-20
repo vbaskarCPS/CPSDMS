@@ -97,7 +97,7 @@ const HomePage: React.FC = () => {
         trainingService.disableTrainingMode();
         setStorageItem('current_user', worker);
         await sessionService.startLogsheetSession(worker.contractorId);
-        navigate(workerLandingPath(worker));
+        navigate(await workerLandingPath(worker));
         return;
       }
 
@@ -119,7 +119,7 @@ const HomePage: React.FC = () => {
         if (roamingWorker) {
           setStorageItem('current_user', roamingWorker);
           await sessionService.startLogsheetSession(roamingWorker.contractorId);
-          navigate(workerLandingPath(roamingWorker));
+          navigate(await workerLandingPath(roamingWorker));
           return;
         }
       }

@@ -1,5 +1,5 @@
 // src/pages/Logsheet/NewJob.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { X, Save, AlertCircle, RefreshCw, CheckCircle, Phone, Mail, Loader, TrendingUp, GraduationCap, Info, Shovel, Droplets, Bookmark } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
@@ -250,6 +250,12 @@ const NewJob: React.FC = () => {
   const [lastName, setLastName] = useState('');
   const [houseNumber, setHouseNumber] = useState('');
   const [streetName, setStreetName] = useState('');
+  // Live copy of streetName for the street-list callback below. That callback
+  // fires when the route's streets arrive, which can be AFTER the pending-sale
+  // prefill has filled the street in; reading state directly there would see
+  // the stale (empty) value and wipe the prefilled street.
+  const streetNameRef = useRef(streetName);
+  useEffect(() => { streetNameRef.current = streetName; }, [streetName]);
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [amount, setAmount] = useState('');
@@ -641,7 +647,9 @@ const NewJob: React.FC = () => {
       service.getStreetsForRoute(routeCode).then(streets => {
         if (streets && streets.length > 0) {
           setSuggestedStreets(streets);
-          if (!isResumingPending || !streetName) {
+          // Only fall back to the dropdown when nothing is filled in yet — never
+          // clear a street the prefill (or the worker) has already set.
+          if (!streetNameRef.current) {
             setIsCustomStreetMode(false);
             setStreetName('');
           }
@@ -780,6 +788,12 @@ const NewJob: React.FC = () => {
 
     if (!payload.forUpdate.houseNumber && !payload.forUpdate.streetName) {
       setError('Please enter at least a house number or street name before parking this sale.');
+      return;
+    }
+    // A resumed sale must keep a street: without one the map can't place it and
+    // a later completion can't turn the house green.
+    if (pendingSaleId && payload.forUpdate.houseNumber && !payload.forUpdate.streetName) {
+      setError('Please select the street before updating this pending sale.');
       return;
     }
 

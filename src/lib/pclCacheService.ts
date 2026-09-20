@@ -811,6 +811,45 @@ export interface HistoricalPrefixResult {
   dropped: number;   // rows with no geocode / no nearby route
 }
 
+/** Mapbox geocode with rate-limit handling. A 429 waits (Retry-After when
+ *  Mapbox sends one, else 2s/4s/8s) and retries; other failures return null. */
+async function geocodeWithBackoff(
+  addr: string,
+  bbox: { minLng: number; minLat: number; maxLng: number; maxLat: number } | null,
+  onWait?: (seconds: number) => void,
+): Promise<GeoPos | null> {
+  const token = import.meta.env.VITE_MAPBOX_TOKEN as string;
+  if (!token || !addr) return null;
+  const q = encodeURIComponent([addr, 'Ontario', 'Canada'].join(', '));
+  let url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${token}&limit=1&country=ca&types=address`;
+  if (bbox) url += `&bbox=${bbox.minLng},${bbox.minLat},${bbox.maxLng},${bbox.maxLat}`;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url);
+    } catch {
+      await new Promise(r => setTimeout(r, 1500));
+      continue;
+    }
+    if (res.status === 429) {
+      const retryAfter = parseInt(res.headers.get('Retry-After') || '', 10);
+      const waitSec = !isNaN(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 60) : 2 * Math.pow(2, attempt);
+      onWait?.(waitSec);
+      await new Promise(r => setTimeout(r, waitSec * 1000));
+      continue;
+    }
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.features?.length > 0) {
+      const [lng, lat] = data.features[0].center;
+      return { lat, lng };
+    }
+    return null;
+  }
+  console.warn('[Historical Prefix] Gave up geocoding after repeated rate limits:', addr);
+  return null;
+}
+
 export async function loadAndCacheHistoricalByPrefix(
   masterbookingsSheetId: string,
   config: ManagerMappingConfig,
@@ -897,10 +936,13 @@ export async function loadAndCacheHistoricalByPrefix(
     });
   } catch { /* best-effort */ }
 
-  // Only bare-prefix rows need a coordinate to find their route.
+  // Geocode EVERY address, not just the bare-prefix ones that need it for
+  // bucketing: the coordinates go into this session's geocode_cache so the RM
+  // Map's purple x's are placed instantly instead of the map hammering Mapbox
+  // itself on open. Done here, with backoff, where waiting is acceptable.
   const uniqueAddrs: string[] = [];
   const seenAddr = new Set<string>();
-  for (const r of needGeo) {
+  for (const r of matched) {
     const key = normKey(r.address);
     if (!seenAddr.has(key)) { seenAddr.add(key); uniqueAddrs.push(r.address); }
   }
@@ -916,7 +958,9 @@ export async function loadAndCacheHistoricalByPrefix(
       if (processed % 25 === 0) report({ phase: 'geocoding', current: processed, total: uniqueAddrs.length });
       continue;
     }
-    const pos = await geocodeAddressInBbox(addr, bbox);
+    const pos = await geocodeWithBackoff(addr, bbox, sec =>
+      report({ phase: 'geocoding', current: processed, total: uniqueAddrs.length, message: `Mapbox rate limit — waiting ${sec}s` }),
+    );
     if (pos) {
       geo.set(key, pos);
       pendingSaves.push({ key, pos });
@@ -937,7 +981,7 @@ export async function loadAndCacheHistoricalByPrefix(
       pendingSaves = [];
     }
     if (processed % 25 === 0) report({ phase: 'geocoding', current: processed, total: uniqueAddrs.length });
-    await new Promise(res => setTimeout(res, 120));
+    await new Promise(res => setTimeout(res, 200));
   }
   await savePermanentGeocodes(ccId, pendingSaves);
   report({ phase: 'bucketing', current: uniqueAddrs.length, total: uniqueAddrs.length });

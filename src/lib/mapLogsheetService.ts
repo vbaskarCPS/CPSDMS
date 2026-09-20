@@ -20,20 +20,64 @@ import { Worker, MasterBooking, PendingSale, HistoricalProperty } from '../types
 import { PCLClientGroup } from './pclCacheService';
 
 // ---------------------------------------------------------------------------
-// GATE
+// GATE — approved contractor ids live in public.map_logsheet_access (global
+// list, managed from Super Admin → Map Logsheet Access). Fails CLOSED: if the
+// table can't be read the worker gets the ordinary logsheet.
 // ---------------------------------------------------------------------------
-export const H01_CONTRACTOR_ID = 'H01';
 export const MAP_LOGSHEET_PATH = '/map-logsheet';
 
-export function isH01(worker: { contractorId?: string } | null | undefined): boolean {
-  return !!worker?.contractorId && worker.contractorId.trim().toUpperCase() === H01_CONTRACTOR_ID;
+export interface MapAccessEntry {
+  contractorId: string;
+  note: string | null;
+  createdAt: string;
 }
 
-/** Where a freshly authenticated worker should land. H01 → the map page
+export async function fetchMapAccessList(): Promise<MapAccessEntry[]> {
+  const { data, error } = await supabase
+    .from('map_logsheet_access')
+    .select('contractor_id, note, created_at')
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data || []).map((r: any) => ({ contractorId: r.contractor_id, note: r.note ?? null, createdAt: r.created_at }));
+}
+
+export async function addMapAccess(contractorId: string, note: string): Promise<void> {
+  const id = contractorId.trim().toUpperCase();
+  if (!id) throw new Error('Contractor id is required');
+  const { error } = await supabase
+    .from('map_logsheet_access')
+    .upsert({ contractor_id: id, note: note.trim() || null }, { onConflict: 'contractor_id' });
+  if (error) throw error;
+}
+
+export async function removeMapAccess(contractorId: string): Promise<void> {
+  const { error } = await supabase.from('map_logsheet_access').delete().eq('contractor_id', contractorId);
+  if (error) throw error;
+}
+
+/** Is this worker on the approved list? Never throws — a read failure means no. */
+export async function isMapWorker(worker: { contractorId?: string } | null | undefined): Promise<boolean> {
+  const id = (worker?.contractorId || '').trim().toUpperCase();
+  if (!id) return false;
+  try {
+    const { data, error } = await supabase
+      .from('map_logsheet_access')
+      .select('contractor_id')
+      .eq('contractor_id', id)
+      .maybeSingle();
+    if (error) { console.warn('[MapLogsheet] access check failed', error.message); return false; }
+    return !!data;
+  } catch (err) {
+    console.warn('[MapLogsheet] access check failed', err);
+    return false;
+  }
+}
+
+/** Where a freshly authenticated worker should land. Approved → the map page
  *  (which itself falls back to /logsheet if it can't run); everyone else →
  *  the ordinary logsheet. */
-export function workerLandingPath(worker: Worker | null | undefined): string {
-  return isH01(worker) ? MAP_LOGSHEET_PATH : '/logsheet';
+export async function workerLandingPath(worker: Worker | null | undefined): Promise<string> {
+  return (await isMapWorker(worker)) ? MAP_LOGSHEET_PATH : '/logsheet';
 }
 
 // ---------------------------------------------------------------------------
@@ -746,26 +790,40 @@ export async function clearDisposition(routeCode: string, houseKey: string): Pro
 // ---------------------------------------------------------------------------
 // INDEXES — turn logsheet data into house-key lookups
 // ---------------------------------------------------------------------------
-export function indexPendingSales(sales: PendingSale[]): Map<string, PendingSale> {
+/** A row with a house number but no street can't be keyed. If exactly one
+ *  house on that route has that number, use it (a NewJob edit once wiped the
+ *  street on resumed pending sales; this keeps those rows on the map). */
+function streetlessHouseKey(routeCode: string, houseNumber: string | undefined, houses: RouteHouse[]): string | null {
+  const civ = parseCivic(houseNumber);
+  if (!civ || !routeCode) return null;
+  const matches = houses.filter(h => h.routeCode === routeCode && h.civicNo === civ.civicNo && (h.civicSuffix || '').toLowerCase() === civ.suffix);
+  return matches.length === 1 ? matches[0].houseKey : null;
+}
+
+export function indexPendingSales(sales: PendingSale[], houses: RouteHouse[] = []): Map<string, PendingSale> {
   const m = new Map<string, PendingSale>();
   for (const ps of sales) {
     // Asphalt children share the parent's address; the parent is what we open.
     if (ps.saleType === 'asphalt' && ps.parentId) continue;
-    const key = houseKeyFromAddress(ps.houseNumber, ps.streetName);
-    if (!key) continue;
     const rc = ps.routeCode || '';
+    const key = houseKeyFromAddress(ps.houseNumber, ps.streetName)
+      || (!ps.streetName?.trim() ? streetlessHouseKey(rc, ps.houseNumber, houses) : null);
+    if (!key) continue;
     if (!m.has(routeHouseId(rc, key))) m.set(routeHouseId(rc, key), ps);
   }
   return m;
 }
 
-export function indexBookings(jobs: MasterBooking[]): { pending: Map<string, MasterBooking>; completed: Map<string, MasterBooking> } {
+export function indexBookings(jobs: MasterBooking[], houses: RouteHouse[] = []): { pending: Map<string, MasterBooking>; completed: Map<string, MasterBooking> } {
   const pending = new Map<string, MasterBooking>();
   const completed = new Map<string, MasterBooking>();
   for (const b of jobs) {
-    const key = houseKeyFromFullAddress(b['Full Address']);
-    if (!key) continue;
     const rc = b['Route Number'] || '';
+    const full = (b['Full Address'] || '').trim();
+    // "42" alone (street lost) → match by number within the route.
+    const key = houseKeyFromFullAddress(full)
+      || (/^\d+[a-zA-Z]?$/.test(full) ? streetlessHouseKey(rc, full, houses) : null);
+    if (!key) continue;
     const id = routeHouseId(rc, key);
     const isDone = b.Completed === 'x' || b.Status === 'completed';
     if (isDone) { if (!completed.has(id)) completed.set(id, b); }

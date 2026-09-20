@@ -539,13 +539,27 @@ async function geocodeAddress(
   // bbox actually rejects anything outside the box, so a garbled address can't
   // fling a pin into another city. Mapbox expects minLng,minLat,maxLng,maxLat.
   if (bbox) url += `&bbox=${bbox.minLng},${bbox.minLat},${bbox.maxLng},${bbox.maxLat}`;
-  try {
-    const res = await fetch(url, { cache: 'reload' });
+  // Mapbox answers 429 when the per-minute limit is hit. Treating that as "no
+  // result" silently dropped every remaining address; wait and retry instead.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, { cache: 'reload' });
+    } catch { return null; }
+    if (res.status === 429) {
+      const retryAfter = parseInt(res.headers.get('Retry-After') || '', 10);
+      const waitMs = (!isNaN(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 60) : 2 * Math.pow(2, attempt)) * 1000;
+      await new Promise(r => setTimeout(r, waitMs));
+      continue;
+    }
     if (!res.ok) return null;
-    const data = await res.json();
-    if (data.features?.length > 0) { const [lng, lat] = data.features[0].center; return { lat, lng }; }
+    try {
+      const data = await res.json();
+      if (data.features?.length > 0) { const [lng, lat] = data.features[0].center; return { lat, lng }; }
+    } catch { /* fall through */ }
     return null;
-  } catch { return null; }
+  }
+  return null;
 }
 
 // Helper: distance in meters between two lat/lng points using the simple
@@ -2094,6 +2108,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         cache.forEach((coords, key) => {
           if (!geocodeCache.has(key)) {
             geocodeCache.set(key, coords);
+          }
+          // Rows are stored under a plain lowercase key, but lookups use
+          // makeCacheKey (which expands "Dr" → "drive" etc). Without this, any
+          // abbreviated address missed the cache and was geocoded again on
+          // every open — the main reason the map kept hitting Mapbox's limit.
+          const lookupKey = makeCacheKey(key);
+          if (!geocodeCache.has(lookupKey)) {
+            geocodeCache.set(lookupKey, coords);
           }
         });
         console.log(`[Geocode] Hydrated ${cache.size} cached entries from Supabase`);

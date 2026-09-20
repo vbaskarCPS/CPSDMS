@@ -36,7 +36,7 @@ import PclOutreachSheet, { pclOutreachClients } from './PclOutreachSheet';
 import GallerySheet from './GallerySheet';
 import { getPclTextedSet } from '../../lib/pclOutreachService';
 import {
-  MAP_LOGSHEET_PATH, isH01,
+  MAP_LOGSHEET_PATH, isMapWorker,
   SavedRouteMap, RouteHouse, HouseDisposition, HouseDispositionStatus, HouseView, StreetSegmentPick,
   fetchRouteMaps, ensureRouteHouses, fetchDispositions, setDisposition, clearDisposition, addManualHouse, loadSegmentHouses,
   fetchHistoricalForRoutes, indexHistorical, historicalSummary,
@@ -240,7 +240,7 @@ const MapLogsheetPage: React.FC = () => {
 
       const storedWorker = getStorageItem<Worker | null>('current_user', null);
       if (!storedWorker) { navigate('/'); return; }
-      if (!isH01(storedWorker)) { navigate('/logsheet'); return; }
+      if (!(await isMapWorker(storedWorker))) { navigate('/logsheet'); return; }
       setWorker(storedWorker);
 
       const currentCc = commandCenterService.getCurrentCommandCenter();
@@ -364,8 +364,8 @@ const MapLogsheetPage: React.FC = () => {
   // DERIVED
   // ---------------------------------------------------------------------
   const houseViews: HouseView[] = useMemo(() => {
-    const ps = indexPendingSales(pendingSales);
-    const { pending, completed } = indexBookings(jobs);
+    const ps = indexPendingSales(pendingSales, houses);
+    const { pending, completed } = indexBookings(jobs, houses);
     const pcl = indexPcl(pclByRoute);
     const hist = indexHistorical(historicalRows);
     return buildHouseViews(houses, dispositions, ps, pending, completed, pcl, hist);
