@@ -818,8 +818,21 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   // they'd never match the payment-method filters below, but we make the intent
   // explicit here so anyone reading sees the asphalt-aware logic.
   const validAccountPaymentMethods = ['Billed', 'E-Transfer', 'Credit Card'];
+  // Contractors whose sales never go to the Accounts tab (H01's map-logsheet
+  // testing). Matched on the transaction's worker, the completing workers, and
+  // the team session's members, so a team sale involving them is skipped too.
+  const ACCOUNTS_EXCLUDED_CONTRACTORS = ['H01'];
+  const isAccountsExcluded = (tx: any): boolean => {
+    const ids = new Set<string>(
+      [tx.worker_id, ...(tx.completed_by_worker_ids || []), ...getTeamWorkerIds(tx, isTeamSeason ? sessionsMap : undefined).split(',')]
+        .map((id: any) => String(id || '').trim().toUpperCase())
+        .filter(Boolean),
+    );
+    return ACCOUNTS_EXCLUDED_CONTRACTORS.some(x => ids.has(x));
+  };
   const accountTransactions = transactions.filter(tx => {
     if (tx.asphalt_meta?.is_partner_phantom) return false;
+    if (isAccountsExcluded(tx)) return false;
     if (tx.payment_breakdown && typeof tx.payment_breakdown === 'object') {
       return Object.keys(tx.payment_breakdown).some(method =>
         validAccountPaymentMethods.some(valid => method.includes(valid))
