@@ -240,10 +240,9 @@ const MapLogsheetPage: React.FC = () => {
 
       const storedWorker = getStorageItem<Worker | null>('current_user', null);
       if (!storedWorker) { navigate('/'); return; }
-      if (!(await isMapWorker(storedWorker))) { navigate('/logsheet'); return; }
-      setWorker(storedWorker);
-
       const currentCc = commandCenterService.getCurrentCommandCenter();
+      if (!(await isMapWorker(storedWorker, currentCc?.id ?? null))) { navigate('/logsheet'); return; }
+      setWorker(storedWorker);
       setCc(currentCc);
 
       try {

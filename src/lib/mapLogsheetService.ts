@@ -16,6 +16,7 @@
 // never writes a transaction or a pending sale.
 
 import { supabase } from './supabase';
+import { commandCenterService } from './commandCenterService';
 import { Worker, MasterBooking, PendingSale, HistoricalProperty } from '../types';
 import { PCLClientGroup } from './pclCacheService';
 
@@ -55,18 +56,54 @@ export async function removeMapAccess(contractorId: string): Promise<void> {
   if (error) throw error;
 }
 
-/** Is this worker on the approved list? Never throws — a read failure means no. */
-export async function isMapWorker(worker: { contractorId?: string } | null | undefined): Promise<boolean> {
+// --- Whole command centres (public.map_logsheet_cc_access) ---
+export interface MapCcAccessEntry {
+  commandCenterId: string;
+  note: string | null;
+  createdAt: string;
+}
+
+export async function fetchMapCcAccessList(): Promise<MapCcAccessEntry[]> {
+  const { data, error } = await supabase
+    .from('map_logsheet_cc_access')
+    .select('command_center_id, note, created_at')
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data || []).map((r: any) => ({ commandCenterId: r.command_center_id, note: r.note ?? null, createdAt: r.created_at }));
+}
+
+export async function addMapCcAccess(commandCenterId: string, note: string): Promise<void> {
+  if (!commandCenterId) throw new Error('Command centre is required');
+  const { error } = await supabase
+    .from('map_logsheet_cc_access')
+    .upsert({ command_center_id: commandCenterId, note: note.trim() || null }, { onConflict: 'command_center_id' });
+  if (error) throw error;
+}
+
+export async function removeMapCcAccess(commandCenterId: string): Promise<void> {
+  const { error } = await supabase.from('map_logsheet_cc_access').delete().eq('command_center_id', commandCenterId);
+  if (error) throw error;
+}
+
+/** Is this worker allowed the map logsheet? Yes when their contractor id is on
+ *  the contractor list, OR the command centre they're logged into is on the
+ *  command-centre list. Never throws — a read failure counts as no. */
+export async function isMapWorker(
+  worker: { contractorId?: string } | null | undefined,
+  commandCenterId: string | null = commandCenterService.getCurrentCommandCenterId(),
+): Promise<boolean> {
   const id = (worker?.contractorId || '').trim().toUpperCase();
   if (!id) return false;
   try {
-    const { data, error } = await supabase
-      .from('map_logsheet_access')
-      .select('contractor_id')
-      .eq('contractor_id', id)
-      .maybeSingle();
-    if (error) { console.warn('[MapLogsheet] access check failed', error.message); return false; }
-    return !!data;
+    const [byWorker, byCc] = await Promise.all([
+      supabase.from('map_logsheet_access').select('contractor_id').eq('contractor_id', id).maybeSingle(),
+      commandCenterId
+        ? supabase.from('map_logsheet_cc_access').select('command_center_id').eq('command_center_id', commandCenterId).maybeSingle()
+        : Promise.resolve({ data: null, error: null } as { data: any; error: any }),
+    ]);
+    if (byWorker.error) console.warn('[MapLogsheet] contractor access check failed', byWorker.error.message);
+    if (byCc.error) console.warn('[MapLogsheet] command centre access check failed', byCc.error.message);
+    return (!byWorker.error && !!byWorker.data) || (!byCc.error && !!byCc.data);
   } catch (err) {
     console.warn('[MapLogsheet] access check failed', err);
     return false;
