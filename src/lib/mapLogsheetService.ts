@@ -270,6 +270,169 @@ export function houseColor(v: Pick<HouseView, 'state' | 'isPcl' | 'isHistorical'
 export const routeHouseId = (routeCode: string, houseKey: string) => `${routeCode}::${houseKey}`;
 
 // ---------------------------------------------------------------------------
+// HOUSE TILES — a drawn rectangle per house, turned to face its street.
+// Used for EVERY house instead of real building outlines, so every route looks
+// the same and each house (townhouses included) is its own colourable shape.
+//
+//   - Orientation: the nearest drawn segment of the house's own street on its
+//     route (any segment of the route as a fallback; else the direction to the
+//     nearest neighbour on the same street; else north-up).
+//   - Width: 80% of the gap to the nearest neighbour on the same street and
+//     same side (odd/even), clamped to 5–13 m, so tiles never overlap along a
+//     street. 11 m when the house has no neighbour.
+//   - Depth: 10 m, sitting just behind the address point, never closer than
+//     4 m to the street line.
+//   - Near corners (a house on the cross street close by) both width and depth
+//     shrink to fit, so tiles from different streets don't overlap.
+// ---------------------------------------------------------------------------
+const TILE_DEPTH_M = 10;
+const TILE_MIN_W_M = 5;
+const TILE_MAX_W_M = 13;
+const TILE_SOLO_W_M = 11;
+const TILE_STREET_GAP_M = 4;
+const TILE_SEGMENT_SEARCH_M = 80;
+
+export function buildHouseTiles(houses: RouteHouse[], routeMaps: SavedRouteMap[]): Map<string, GeoJSON.Polygon> {
+  const out = new Map<string, GeoJSON.Polygon>();
+  if (!houses.length) return out;
+
+  // Local metric frame around the first house (equirectangular — fine across a town).
+  const lat0 = houses[0].lat;
+  const kx = Math.cos(lat0 * Math.PI / 180) * 111320;
+  const ky = 111320;
+  const toXY = (lng: number, lat: number): [number, number] => [lng * kx, lat * ky];
+  const toLL = (x: number, y: number): [number, number] => [x / kx, y / ky];
+
+  // Segments per route, split by normalised street name, in metres.
+  type Seg = { a: [number, number]; b: [number, number] };
+  const segsByRoute = new Map<string, { all: Seg[]; byStreet: Map<string, Seg[]> }>();
+  for (const rm of routeMaps) {
+    const all: Seg[] = [];
+    const byStreet = new Map<string, Seg[]>();
+    for (const s of rm.segments || []) {
+      const cs = s.coordinates || [];
+      const sn = normStreet(s.name);
+      for (let i = 0; i < cs.length - 1; i++) {
+        const seg = { a: toXY(cs[i][0], cs[i][1]), b: toXY(cs[i + 1][0], cs[i + 1][1]) };
+        all.push(seg);
+        if (sn) { if (!byStreet.has(sn)) byStreet.set(sn, []); byStreet.get(sn)!.push(seg); }
+      }
+    }
+    segsByRoute.set(rm.route_code, { all, byStreet });
+  }
+
+  const nearestOnSegs = (p: [number, number], segs: Seg[]) => {
+    let best: { q: [number, number]; d: number; dir: [number, number] } | null = null;
+    for (const { a, b } of segs) {
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const len2 = dx * dx + dy * dy;
+      if (len2 === 0) continue;
+      let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2;
+      t = Math.max(0, Math.min(1, t));
+      const q: [number, number] = [a[0] + t * dx, a[1] + t * dy];
+      const d = Math.hypot(p[0] - q[0], p[1] - q[1]);
+      if (!best || d < best.d) { const L = Math.sqrt(len2); best = { q, d, dir: [dx / L, dy / L] }; }
+    }
+    return best;
+  };
+
+  // Neighbours: same route, same street, same side (parity).
+  const groups = new Map<string, Array<{ h: RouteHouse; p: [number, number] }>>();
+  // Spatial grid (20 m cells) for "nearest house on ANY street" lookups.
+  const CELL = 20;
+  const grid = new Map<string, Array<{ h: RouteHouse; p: [number, number] }>>();
+  for (const h of houses) {
+    const p = toXY(h.lng, h.lat);
+    const k = `${h.routeCode}|${h.streetNorm}|${h.civicNo % 2}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push({ h, p });
+    const gk = `${Math.floor(p[0] / CELL)}|${Math.floor(p[1] / CELL)}`;
+    if (!grid.has(gk)) grid.set(gk, []);
+    grid.get(gk)!.push({ h, p });
+  }
+  const nearestOtherStreet = (h: RouteHouse, p: [number, number]): number => {
+    const cx = Math.floor(p[0] / CELL), cy = Math.floor(p[1] / CELL);
+    let best = Infinity;
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      for (const o of grid.get(`${cx + dx}|${cy + dy}`) || []) {
+        if (o.h === h || o.h.streetNorm === h.streetNorm) continue;
+        const d = Math.hypot(o.p[0] - p[0], o.p[1] - p[1]);
+        if (d > 0.5 && d < best) best = d;
+      }
+    }
+    return best;
+  };
+
+  for (const list of groups.values()) {
+    for (const { h, p } of list) {
+      // Gap to the nearest other house on this side of this street. Houses the
+      // register puts on (almost) the same spot — e.g. both halves of a semi
+      // with one point — are "stacked" and laid out side by side below.
+      let gap = Infinity;
+      let towardNeighbour: [number, number] | null = null;
+      const stacked = [h];
+      for (const o of list) {
+        if (o.h === h) continue;
+        const d = Math.hypot(o.p[0] - p[0], o.p[1] - p[1]);
+        if (d <= 1.5) { stacked.push(o.h); continue; }
+        if (d < gap) { gap = d; towardNeighbour = [(o.p[0] - p[0]) / d, (o.p[1] - p[1]) / d]; }
+      }
+      stacked.sort((a, b) => a.civicNo - b.civicNo || (a.civicSuffix || '').localeCompare(b.civicSuffix || ''));
+      const stackIdx = stacked.indexOf(h);
+      const stackN = stacked.length;
+      let width = isFinite(gap)
+        ? Math.max(TILE_MIN_W_M, Math.min(TILE_MAX_W_M, gap * 0.8))
+        : TILE_SOLO_W_M;
+      if (stackN > 1) width = Math.max(TILE_MIN_W_M, width / stackN);
+      let depth = TILE_DEPTH_M;
+      // Corner squeeze: a house on another street within reach.
+      const cross = nearestOtherStreet(h, p);
+      if (cross < 20) {
+        const fit = Math.max(TILE_MIN_W_M, cross * 0.55);
+        width = Math.min(width, fit);
+        depth = Math.min(depth, fit);
+      }
+
+      // Street direction (along) and the way the house faces away from it (back).
+      const route = segsByRoute.get(h.routeCode);
+      let near = route ? nearestOnSegs(p, route.byStreet.get(h.streetNorm) || []) : null;
+      if (!near || near.d > TILE_SEGMENT_SEARCH_M) {
+        const any = route ? nearestOnSegs(p, route.all) : null;
+        near = any && any.d <= TILE_SEGMENT_SEARCH_M ? any : null;
+      }
+      let along: [number, number];
+      let back: [number, number];
+      let centre: [number, number];
+      if (near) {
+        along = near.dir;
+        const vx = p[0] - near.q[0], vy = p[1] - near.q[1];
+        const vlen = Math.hypot(vx, vy);
+        back = vlen > 0.5 ? [vx / vlen, vy / vlen] : [-along[1], along[0]];
+        // Keep the tile's front edge at least TILE_STREET_GAP_M from the street line.
+        const centreDist = Math.max(near.d + 2, TILE_STREET_GAP_M + depth / 2);
+        centre = [near.q[0] + back[0] * centreDist, near.q[1] + back[1] * centreDist];
+      } else {
+        along = towardNeighbour || [1, 0];
+        back = [-along[1], along[0]];
+        centre = p;
+      }
+
+      // Stacked houses: shift each one along the street so they sit side by side.
+      if (stackN > 1) {
+        const shift = (stackIdx - (stackN - 1) / 2) * width * 1.05;
+        centre = [centre[0] + along[0] * shift, centre[1] + along[1] * shift];
+      }
+      const hw = width / 2, hd = depth / 2;
+      const corner = (sa: number, sb: number): [number, number] =>
+        toLL(centre[0] + along[0] * hw * sa + back[0] * hd * sb, centre[1] + along[1] * hw * sa + back[1] * hd * sb);
+      const ring = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1), corner(-1, -1)];
+      out.set(routeHouseId(h.routeCode, h.houseKey), { type: 'Polygon', coordinates: [ring] });
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // ROUTE MAPS
 // ---------------------------------------------------------------------------
 export async function fetchRouteMaps(routeCodes: string[]): Promise<SavedRouteMap[]> {
