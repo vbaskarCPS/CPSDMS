@@ -1136,6 +1136,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // centred pop-up. `mapGate` is read once from the Super Admin access lists.
   const [mapGate, setMapGate] = useState<{ cc: boolean; contractors: Set<string> }>({ cc: false, contractors: new Set() });
   const cartMapOpenRef = useRef(false);
+  // Where the map was before a cart panel opened, so closing zooms back out.
+  const viewBeforeCartRef = useRef<{ center: mapboxgl.LngLat; zoom: number } | null>(null);
   const [selectedRouteForBookings, setSelectedRouteForBookings] = useState<string | null>(null);
   // "View PCL" from the assign modal. Floats on top of it; follows it closed.
   const [pclModalOpen, setPclModalOpen] = useState(false);
@@ -4571,8 +4573,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [sidebarOpen, cartPanelKey]);
 
   // Cart panel open: hide this tab's own pins/dots (the house tiles show the
-  // same things) and route taps are ignored (cartMapOpenRef). The map's view
-  // is never changed by opening or closing the panel.
+  // same things) and route taps are ignored (cartMapOpenRef). Opening zooms to
+  // the cart (CartMapPanel); closing zooms back to where the manager was.
+  // Rotation and tilt are never touched.
   useEffect(() => {
     const map = mapRef.current;
     const open = !!cartPanel;
@@ -4582,9 +4585,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       .map((l: any) => l.id as string)
       .filter(id => id.startsWith('rm-') && !id.startsWith('rm-line-') && id !== 'rm-num-labels' && id !== 'rm-worker-overlay');
     if (open) {
+      if (!viewBeforeCartRef.current) viewBeforeCartRef.current = { center: map.getCenter(), zoom: map.getZoom() };
       pinLayers.forEach(id => { try { map.setLayoutProperty(id, 'visibility', 'none'); } catch {} });
     } else {
       pinLayers.forEach(id => { try { map.setLayoutProperty(id, 'visibility', 'visible'); } catch {} });
+      const v = viewBeforeCartRef.current;
+      viewBeforeCartRef.current = null;
+      // centre + zoom only — easeTo leaves bearing and pitch as they are.
+      if (v) setTimeout(() => { try { map.easeTo({ center: v.center, zoom: v.zoom, duration: 600 }); } catch {} }, 320);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cartPanelKey, mapLoaded]);

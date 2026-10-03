@@ -11,13 +11,13 @@
 //   - A read-only card for a house tapped on the map.
 //
 // While open it draws the cart's houses as tiles on the manager's map, in the
-// workers' colours, without moving the map. Live: dispositions and
+// workers' colours, and zooms to the cart's routes (keeping the map's rotation). Live: dispositions and
 // pending sales refresh on the same realtime feeds the worker map uses; jobs
 // and transactions come in with RMMapTab's own refresh of the cart.
 //
 // Read only — nothing here writes.
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Map as MapboxMap, GeoJSONSource } from 'mapbox-gl';
 import { format } from 'date-fns';
 import { Loader, MapPin, X } from 'lucide-react';
@@ -248,8 +248,32 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     map.setFilter(L_SEL, ['==', ['get', 'id'], selectedId || '__none__']);
   }, [map, mapLoaded, selectedId]);
 
-  // The map is left exactly where the manager had it — opening the panel
-  // never pans or zooms. Only tapping a street / go-back row moves it.
+  // --- MAP: zoom to the cart's routes (once per cart) — keeping the
+  // manager's current rotation and tilt (fitBounds would otherwise snap the
+  // map back to north-up).
+  const fittedFor = useRef('');
+  useEffect(() => {
+    if (!map || !mapLoaded || !routeMaps.length) return;
+    const key = `${cart.sessionId}|${routeKey}`;
+    if (fittedFor.current === key) return;
+    let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+    routeMaps.forEach(rm => rm.segments?.forEach(s => s.coordinates?.forEach(c => {
+      if (c[0] < minLng) minLng = c[0]; if (c[0] > maxLng) maxLng = c[0];
+      if (c[1] < minLat) minLat = c[1]; if (c[1] > maxLat) maxLat = c[1];
+    })));
+    if (!isFinite(minLng)) return;
+    fittedFor.current = key;
+    // Let the map finish resizing for the wider panel first.
+    setTimeout(() => {
+      try {
+        map.resize();
+        map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
+          padding: 50, maxZoom: 17, duration: 700,
+          bearing: map.getBearing(), pitch: map.getPitch(),
+        });
+      } catch { /* map gone */ }
+    }, 300);
+  }, [map, mapLoaded, routeMaps, cart.sessionId, routeKey]);
 
   const flyTo = (lng: number, lat: number, zoom: number) => { map?.flyTo({ center: [lng, lat], zoom, duration: 700 }); };
 
