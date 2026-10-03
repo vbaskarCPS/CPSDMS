@@ -2463,14 +2463,29 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const cartUsesMapPanel = (cart: CartCardData) =>
     mapGate.cc || cart.members.some(m => mapGate.contractors.has((m.contractorId || '').toUpperCase()));
   const cartPanel = selectedCartForModal && cartUsesMapPanel(selectedCartForModal) ? selectedCartForModal : null;
-  // Split buckets ("ORC11a") share the base route's houses.
+  // The cart's routes, the same way the worker's map finds them: every route
+  // in today's session assigned to anyone on the cart (whole route or a split
+  // bucket), plus any route its jobs or sales sit on. (cart.assignedRoutes
+  // alone only lists routes with office bookings — empty for a cart that has
+  // only its own sales.) Split buckets ("ORC11a") share the base route's houses.
   const cartPanelRouteCodes = useMemo(() => {
     if (!cartPanel) return [] as string[];
+    const memberIds = new Set(cartPanel.members.map(m => m.contractorId));
+    const raw: string[] = [];
+    routes.forEach(r => { if (r.assignedWorkerIds?.some(id => memberIds.has(id))) raw.push(r.routeCode); });
+    routeSplitsByCode.forEach((split, code) => {
+      if (split.buckets.some(b => (b.assignedWorkers || []).some((id: string) => memberIds.has(id)))) raw.push(code);
+    });
+    raw.push(...cartPanel.assignedRoutes);
+    cartPanel.sharedBookings.forEach(b => { const rn = b['Route Number']; if (rn && rn !== 'x') raw.push(rn); });
     const known = new Set(routeMapData.map(r => r.route_code));
-    const codes = cartPanel.assignedRoutes.map(c => (known.has(c) ? c : c.replace(/[a-z]+$/, '')));
+    const codes = raw
+      .map(c => (c || '').trim())
+      .filter(Boolean)
+      .map(c => (known.has(c) ? c : c.replace(/[a-z]+$/, '')));
     return [...new Set(codes)].filter(Boolean).sort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cartPanel?.sessionId, cartPanel?.assignedRoutes.join(','), routeMapData]);
+  }, [cartPanel?.sessionId, cartPanel?.members, cartPanel?.assignedRoutes.join(','), cartPanel?.sharedBookings, routes, routeSplitsByCode, routeMapData]);
   const cartPanelKey = cartPanel ? `${cartPanel.sessionId}|${cartPanelRouteCodes.join(',')}` : '';
   const cartPanelSessionDate = useMemo(
     () => (cartPanel ? allSessions.find(s => s.id === cartPanel.sessionId)?.date || null : null),

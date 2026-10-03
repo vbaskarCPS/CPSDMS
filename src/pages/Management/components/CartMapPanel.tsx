@@ -324,9 +324,13 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
       <div className="flex-1 overflow-y-auto p-3 min-h-0 space-y-3 custom-scrollbar">
         {loading ? (
           <div className="flex items-center gap-2 text-xs text-gray-400 py-4"><Loader size={14} className="animate-spin" /> Loading the cart's houses…</div>
+        ) : routeCodes.length === 0 ? (
+          <div className="text-xs text-gray-400 bg-gray-800 rounded-lg p-3 flex items-center gap-2">
+            <MapPin size={14} /> No routes are assigned to this cart today.
+          </div>
         ) : houses.length === 0 ? (
           <div className="text-xs text-gray-400 bg-gray-800 rounded-lg p-3 flex items-center gap-2">
-            <MapPin size={14} /> No houses on these routes yet — they appear once a worker on the cart opens the map.
+            <MapPin size={14} /> No houses on {routeCodes.join(', ')} yet — they appear once a worker on the cart opens the map.
           </div>
         ) : null}
 
