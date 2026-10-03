@@ -69,7 +69,10 @@ const L_SEL = 'cmp-sel';
 const L_NUM = 'cmp-num';
 const L_PULSE_FILL = 'cmp-pulse-fill';
 const L_PULSE_LINE = 'cmp-pulse-line';
-const CMP_LAYERS = [L_NUM, L_SEL, L_HIT, L_PULSE_LINE, L_PULSE_FILL, L_LINE, L_FILL];
+const L_PULSE_EDGE = 'cmp-pulse-edge';
+const L_PULSE_RING = 'cmp-pulse-ring';
+const L_PULSE_RING2 = 'cmp-pulse-ring2';
+const CMP_LAYERS = [L_NUM, L_SEL, L_HIT, L_PULSE_RING2, L_PULSE_RING, L_PULSE_EDGE, L_PULSE_LINE, L_PULSE_FILL, L_LINE, L_FILL];
 
 const STATE_LABEL: Record<HouseView['state'], string> = {
   none: 'Not knocked', not_home: 'Not home', no: 'No', go_back: 'Go back',
@@ -189,8 +192,14 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     if (!map.getLayer(L_LINE)) map.addLayer({ id: L_LINE, type: 'line', source: SRC_FP, minzoom: 13, paint: { 'line-color': ['get', 'color'], 'line-opacity': ['get', 'lineOpacity'], 'line-width': 1.2 } });
     // "Last knock" pulse: the tile of the cart's most recent knock, filtered by
     // id and animated below (replaces the round pulse on the manager map).
-    if (!map.getLayer(L_PULSE_FILL)) map.addLayer({ id: L_PULSE_FILL, type: 'fill', source: SRC_FP, minzoom: 13, filter: ['==', ['get', 'id'], '__none__'], paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.6 } });
-    if (!map.getLayer(L_PULSE_LINE)) map.addLayer({ id: L_PULSE_LINE, type: 'line', source: SRC_FP, minzoom: 13, filter: ['==', ['get', 'id'], '__none__'], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': 1 } });
+    const none: any = ['==', ['get', 'id'], '__none__'];
+    // Solid flashing tile, a wide glowing halo, a crisp dark edge so it reads
+    // on any colour, and two big rings radiating out from the house.
+    if (!map.getLayer(L_PULSE_FILL)) map.addLayer({ id: L_PULSE_FILL, type: 'fill', source: SRC_FP, filter: none, paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.9 } });
+    if (!map.getLayer(L_PULSE_LINE)) map.addLayer({ id: L_PULSE_LINE, type: 'line', source: SRC_FP, filter: none, paint: { 'line-color': ['get', 'color'], 'line-width': 6, 'line-opacity': 1, 'line-blur': 4 } });
+    if (!map.getLayer(L_PULSE_EDGE)) map.addLayer({ id: L_PULSE_EDGE, type: 'line', source: SRC_FP, filter: none, paint: { 'line-color': '#111827', 'line-width': 2.5, 'line-opacity': 1 } });
+    if (!map.getLayer(L_PULSE_RING)) map.addLayer({ id: L_PULSE_RING, type: 'circle', source: SRC_PT, filter: none, paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 12, 'circle-stroke-color': ['get', 'color'], 'circle-stroke-width': 5, 'circle-stroke-opacity': 1, 'circle-pitch-alignment': 'map' } });
+    if (!map.getLayer(L_PULSE_RING2)) map.addLayer({ id: L_PULSE_RING2, type: 'circle', source: SRC_PT, filter: none, paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 12, 'circle-stroke-color': ['get', 'color'], 'circle-stroke-width': 4, 'circle-stroke-opacity': 1, 'circle-pitch-alignment': 'map' } });
     if (!map.getLayer(L_HIT)) map.addLayer({ id: L_HIT, type: 'circle', source: SRC_PT, minzoom: 13, paint: { 'circle-color': '#000', 'circle-opacity': 0, 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 10, 17, 18, 19, 26] } });
     if (!map.getLayer(L_SEL)) map.addLayer({
       id: L_SEL, type: 'circle', source: SRC_PT, minzoom: 13, filter: ['==', ['get', 'id'], '__none__'],
@@ -257,23 +266,32 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
 
   // --- MAP: pulse the house of the cart's most recent knock today ---
   // (No / Not home / Go back / Invalid / pending / completed — whichever is
-  // latest.) The tile's outline swells and fades on a 1.8 s loop.
+  // latest.) The tile flashes with a glowing halo and a dark edge, and two
+  // rings radiate out from it every 1.6 s — visible at any zoom.
   const lastKnockId = knockEvents.length ? knockEvents[knockEvents.length - 1].id : null;
   useEffect(() => {
     if (!map || !mapLoaded || !map.getLayer(L_PULSE_FILL)) return;
     const filter: any = ['==', ['get', 'id'], lastKnockId || '__none__'];
-    map.setFilter(L_PULSE_FILL, filter);
-    map.setFilter(L_PULSE_LINE, filter);
+    [L_PULSE_FILL, L_PULSE_LINE, L_PULSE_EDGE, L_PULSE_RING, L_PULSE_RING2].forEach(id => { if (map.getLayer(id)) map.setFilter(id, filter); });
     if (!lastKnockId) return;
     let raf = 0;
     const start = performance.now();
     const tick = (now: number) => {
-      const t = ((now - start) % 1800) / 1800;          // 0 → 1 every 1.8 s
+      const t = ((now - start) % 1600) / 1600;          // 0 → 1 every 1.6 s
       try {
         if (!map.getLayer(L_PULSE_LINE)) return;
-        map.setPaintProperty(L_PULSE_LINE, 'line-width', 2 + t * 10);
-        map.setPaintProperty(L_PULSE_LINE, 'line-opacity', 1 - t);
-        map.setPaintProperty(L_PULSE_FILL, 'fill-opacity', 0.75 - 0.35 * t);
+        // Scale with zoom so the rings stay big whether zoomed in or out.
+        const z = map.getZoom();
+        const base = Math.max(14, Math.min(60, (z - 12) * 9));
+        const t2 = (t + 0.5) % 1;                         // second ring, half a beat behind
+        const beat = 0.5 + 0.5 * Math.cos(t * Math.PI * 2); // 1 → 0 → 1
+        map.setPaintProperty(L_PULSE_FILL, 'fill-opacity', 0.45 + 0.5 * beat);
+        map.setPaintProperty(L_PULSE_LINE, 'line-width', 6 + 14 * (1 - beat));
+        map.setPaintProperty(L_PULSE_LINE, 'line-opacity', 0.35 + 0.65 * beat);
+        map.setPaintProperty(L_PULSE_RING, 'circle-radius', base * (0.4 + 2.2 * t));
+        map.setPaintProperty(L_PULSE_RING, 'circle-stroke-opacity', 1 - t);
+        map.setPaintProperty(L_PULSE_RING2, 'circle-radius', base * (0.4 + 2.2 * t2));
+        map.setPaintProperty(L_PULSE_RING2, 'circle-stroke-opacity', 1 - t2);
       } catch { return; }
       raf = requestAnimationFrame(tick);
     };
