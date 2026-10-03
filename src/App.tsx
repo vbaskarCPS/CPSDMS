@@ -10,6 +10,7 @@ import CommandCenterCreator from './pages/SuperAdmin/CommandCenterCreator';
 // DEBUG: temporary error boundary so a render crash shows the real error
 // on-screen (readable on a tablet) instead of a black screen.
 import ErrorBoundary from './components/ErrorBoundary';
+import WorkerLocationTracker from './components/WorkerLocationTracker';
 
 // Admin pages - regular imports for reliability (avoid chunk loading issues)
 import EmailTemplates from './pages/Admin/EmailTemplates';
@@ -52,6 +53,8 @@ const LoadingFallback = () => (
 function App() {
   return (
     <React.Suspense fallback={<LoadingFallback />}>
+      {/* Sends a logged-in worker's location every 2 min from any screen. */}
+      <WorkerLocationTracker />
       <Routes>
         {/* Public Routes */}
         <Route path="/login" element={<HomePage />} />

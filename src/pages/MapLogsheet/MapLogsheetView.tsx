@@ -14,13 +14,11 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { Navigation, Loader, Crosshair } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
 import { Worker } from '../../types';
 import { SavedRouteMap, HouseView, StreetSegmentPick, houseColor, routeHouseId, buildHouseTiles, normStreet, BaseRoadLines } from '../../lib/mapLogsheetService';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
-const LOCATION_UPLOAD_INTERVAL_MS = 5 * 60 * 1000;
 
 // Mapbox draws its canvas at full device resolution: CSS size × devicePixelRatio.
 // On a dense fullscreen Android display that can exceed what the GPU will
@@ -155,7 +153,7 @@ export interface MapLogsheetViewProps {
 }
 
 const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
-  worker, routeMaps, houses, selectedId, loadingMessage, placingHouse, pickingStreet, flyTo, onSelectHouse, onPlaceHouse, onPickStreet,
+  routeMaps, houses, selectedId, loadingMessage, placingHouse, pickingStreet, flyTo, onSelectHouse, onPlaceHouse, onPickStreet,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -183,7 +181,6 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   const navMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const navArrowElRef = useRef<HTMLDivElement | null>(null);
   const lastPositionRef = useRef<{ lat: number; lng: number } | null>(null);
-  const uploadIntervalRef = useRef<number | null>(null);
 
   // ---------------------------------------------------------------------
   // GeoJSON built from the house views
@@ -394,7 +391,6 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     return () => {
       mountedRef.current = false;
       initialFitDoneRef.current = false;
-      if (uploadIntervalRef.current !== null) { clearInterval(uploadIntervalRef.current); uploadIntervalRef.current = null; }
       if (watchIdRef.current !== null) { navigator.geolocation.clearWatch(watchIdRef.current); watchIdRef.current = null; }
       navMarkerRef.current?.remove();
       navMarkerRef.current = null;
@@ -512,25 +508,8 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     };
   }, [mapLoaded]);
 
-  useEffect(() => {
-    if (uploadIntervalRef.current !== null) { clearInterval(uploadIntervalRef.current); uploadIntervalRef.current = null; }
-    if (!following || !worker.commandCenterId) return;
-    const upload = async () => {
-      const pos = lastPositionRef.current;
-      if (!pos || !mountedRef.current) return;
-      try {
-        await supabase.from('worker_locations').upsert(
-          { worker_id: worker.contractorId, command_center_id: worker.commandCenterId, lat: pos.lat, lng: pos.lng, updated_at: new Date().toISOString() },
-          { onConflict: 'worker_id' },
-        );
-      } catch (e) { console.error('Failed to upload location:', e); }
-    };
-    upload();
-    uploadIntervalRef.current = window.setInterval(upload, LOCATION_UPLOAD_INTERVAL_MS);
-    return () => {
-      if (uploadIntervalRef.current !== null) { clearInterval(uploadIntervalRef.current); uploadIntervalRef.current = null; }
-    };
-  }, [following, worker.contractorId, worker.commandCenterId]);
+  // Location is sent to the manager by WorkerLocationTracker (app-wide,
+  // every 2 min while location is allowed) — Follow Me only centres the map.
 
   useEffect(() => { followingRef.current = following; }, [following]);
 
@@ -611,11 +590,6 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
         </div>
       )}
 
-      {following && mapLoaded && (
-        <div className="absolute bottom-2 left-3 z-20 bg-blue-900/90 text-blue-200 px-2 py-1 rounded text-[10px] flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse inline-block" /> Sharing location
-        </div>
-      )}
     </div>
   );
 };

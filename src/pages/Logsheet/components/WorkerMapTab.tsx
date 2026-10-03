@@ -66,7 +66,6 @@ interface WorkerMapTabProps {
   worker: Worker;
 }
 
-const LOCATION_UPLOAD_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -100,7 +99,6 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
 
   // Location broadcasting
   const lastPositionRef = useRef<{ lat: number; lng: number } | null>(null);
-  const locationUploadIntervalRef = useRef<number | null>(null);
 
   const suppressDuplicateLabels = useCallback(() => {
     const map = mapRef.current;
@@ -328,7 +326,7 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     }
   }, [routeMapData, mapLoaded, routeSplitsByCode, worker.contractorId]);
 
-  // GPS watch — stores position in lastPositionRef for DB uploads
+  // GPS watch — moves the arrow (and centres the map when following)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded || !navigator.geolocation) return;
@@ -363,46 +361,8 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     };
   }, [mapLoaded]);
 
-  // Location broadcasting — write to worker_locations when follow-me is active
-  useEffect(() => {
-    // Always clear any existing interval first
-    if (locationUploadIntervalRef.current !== null) {
-      clearInterval(locationUploadIntervalRef.current);
-      locationUploadIntervalRef.current = null;
-    }
-
-    if (!centerOnLocation || !worker.commandCenterId) return;
-
-    const upload = async () => {
-      const pos = lastPositionRef.current;
-      if (!pos || !mountedRef.current) return;
-      try {
-        await supabase.from('worker_locations').upsert(
-          {
-            worker_id: worker.contractorId,
-            command_center_id: worker.commandCenterId,
-            lat: pos.lat,
-            lng: pos.lng,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'worker_id' }
-        );
-      } catch (e) {
-        console.error('Failed to upload location:', e);
-      }
-    };
-
-    // Write immediately, then every 5 minutes
-    upload();
-    locationUploadIntervalRef.current = window.setInterval(upload, LOCATION_UPLOAD_INTERVAL_MS);
-
-    return () => {
-      if (locationUploadIntervalRef.current !== null) {
-        clearInterval(locationUploadIntervalRef.current);
-        locationUploadIntervalRef.current = null;
-      }
-    };
-  }, [centerOnLocation, worker.contractorId, worker.commandCenterId]);
+  // Location is sent to the manager by WorkerLocationTracker (app-wide,
+  // every 2 min while location is allowed) — Follow Me only centres the map.
 
   // Force resize once map is loaded
   useEffect(() => {
@@ -522,11 +482,6 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     return () => {
       mountedRef.current = false;
       initialFitDoneRef.current = false;
-      // Clean up location upload interval
-      if (locationUploadIntervalRef.current !== null) {
-        clearInterval(locationUploadIntervalRef.current);
-        locationUploadIntervalRef.current = null;
-      }
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
@@ -543,7 +498,7 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
     <div className="relative w-full h-full">
       <div ref={mapContainerRef} className="absolute inset-0" />
 
-      {/* Follow-me button — enabling this also broadcasts location to manager */}
+      {/* Follow-me button — keeps the map centred on you */}
       <button
         onClick={handleToggleCenter}
         className={`absolute top-3 left-3 z-20 w-10 h-10 rounded-full shadow-lg flex items-center justify-center transition-all ${
@@ -551,7 +506,7 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
             ? 'bg-blue-600 text-white ring-2 ring-blue-400 ring-offset-1 ring-offset-gray-900'
             : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-300'
         }`}
-        title={centerOnLocation ? 'Stop following (location sharing off)' : 'Follow my location (shares position with manager)'}
+        title={centerOnLocation ? 'Stop following' : 'Follow my location'}
       >
         <Navigation size={18} className={centerOnLocation ? 'fill-current' : ''} />
       </button>
@@ -577,13 +532,6 @@ const WorkerMapTab: React.FC<WorkerMapTabProps> = ({ worker }) => {
         </div>
       )}
 
-      {/* Location sharing indicator */}
-      {centerOnLocation && mapLoaded && (
-        <div className="absolute bottom-6 left-3 z-20 bg-blue-900/90 text-blue-300 px-3 py-1.5 rounded-lg shadow-lg text-[10px] font-medium backdrop-blur-sm flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse inline-block" />
-          Sharing location with manager
-        </div>
-      )}
     </div>
   );
 };
