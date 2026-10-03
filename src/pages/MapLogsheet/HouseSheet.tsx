@@ -1,403 +1,448 @@
-// src/pages/Management/components/CartMapPanel.tsx
+// src/pages/MapLogsheet/HouseSheet.tsx
 //
-// Manager view of one cart on the map logsheet (RMMapTab, map-logsheet
-// command centres only). Takes the place of the Staff/Routes sidebar at ~40%
-// of the screen:
+// Bottom sheet shown when a house is tapped. Phone-first: never taller than
+// roughly the lower third of a Galaxy S26 screen, big thumb buttons.
 //
-//   - Header + members/jobs: the same content as the old cart pop-up, passed
-//     in by RMMapTab so the two never drift apart.
-//   - Today / Pace / Coverage: the same tabs and maths the workers see
-//     (MapStatsTabs + lib/mapLogsheetStats), scoped to this cart.
-//   - A read-only card for a house tapped on the map.
-//
-// While open it draws the cart's houses as tiles on the manager's map, in the
-// workers' colours, zooms to the cart's routes, and pulses the house the cart
-// knocked most recently. Live: dispositions and
-// pending sales refresh on the same realtime feeds the worker map uses; jobs
-// and transactions come in with RMMapTab's own refresh of the cart.
-//
-// Read only — nothing here writes.
+// Also exports AddHouseSheet — the tiny form used when the worker places a
+// missing house by hand.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import mapboxgl from 'mapbox-gl';
-import { format } from 'date-fns';
-import { Loader, MapPin, X } from 'lucide-react';
-import { Worker, MasterBooking, PendingSale, HistoricalProperty, SessionTransaction } from '../../../types';
-import { sessionService } from '../../../lib/sessionService';
-import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
-import {
-  SavedRouteMap, RouteHouse, HouseDisposition, HouseView,
-  fetchRouteMaps, fetchRouteHouses, fetchDispositions, fetchHistoricalForRoutes,
-  subscribeToDispositions, subscribeToPendingSales,
-  indexPendingSales, indexBookings, indexPcl, indexHistorical, buildHouseViews,
-  buildHouseTiles, houseColor, routeHouseId, historicalSummary, HOUSE_COLORS,
-} from '../../../lib/mapLogsheetService';
-import {
-  CartScope, computeCounts, computeKnockEvents, computePace, computeAvgCharge, computeGoBackQueue, computeCoverage,
-} from '../../../lib/mapLogsheetStats';
-import MapStatsTabs, { StatsTab } from '../../MapLogsheet/MapStatsTabs';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Ban, DoorClosed, RotateCcw, DollarSign, Clock, Phone, StickyNote, Trash2, Loader, CheckCircle2, MapPin, Plus, Pencil, CircleSlash } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { HouseView, HouseDispositionStatus, HOUSE_COLORS, historicalSummary } from '../../lib/mapLogsheetService';
 
-export interface CartMapPanelCart {
-  sessionId: string;
-  members: Worker[];
-  sharedBookings: MasterBooking[];
-  sharedFinancialStore: any[];
-  assignedRoutes: string[];
-  stats: { steps: number; eq: number; upsellCount: number; upsellGross: number };
+interface HouseSheetProps {
+  view: HouseView;
+  saving: boolean;
+  /** auto = the 5-second Not Home timer, not a tap. */
+  onDispose: (status: HouseDispositionStatus, note: string, firstName: string, auto?: boolean) => void;
+  /** Who made the current disposition: 'you', a teammate's name, or null. */
+  markedBy?: string | null;
+  onClearDisposition: () => void;
+  onSale: () => void;
+  onOpenPending: () => void;
+  onOpenBooking: () => void;
+  onClose: () => void;
 }
-
-interface CartMapPanelProps {
-  cart: CartMapPanelCart;
-  /** Base route codes for the cart (split letters already stripped). */
-  routeCodes: string[];
-  sessionDate: string | null;
-  commandCenterId: string | null;
-  map: mapboxgl.Map | null;
-  mapLoaded: boolean;
-  /** The old pop-up's header row (names, buttons, close). */
-  header: React.ReactNode;
-  /** The old pop-up's body (members, asphalt, jobs). */
-  details: React.ReactNode;
-}
-
-const SRC_FP = 'cmp-fp-src';
-const SRC_PT = 'cmp-pt-src';
-const L_FILL = 'cmp-fp-fill';
-const L_LINE = 'cmp-fp-line';
-const L_HIT = 'cmp-hit';
-const L_SEL = 'cmp-sel';
-const L_NUM = 'cmp-num';
-const L_PULSE_FILL = 'cmp-pulse-fill';
-const L_PULSE_LINE = 'cmp-pulse-line';
-const CMP_LAYERS = [L_NUM, L_SEL, L_HIT, L_PULSE_LINE, L_PULSE_FILL, L_LINE, L_FILL];
 
 const STATE_LABEL: Record<HouseView['state'], string> = {
-  none: 'Not knocked', not_home: 'Not home', no: 'No', go_back: 'Go back',
-  invalid: 'Invalid', pending: 'Pending sale', completed: 'Completed',
+  none: 'Not knocked',
+  not_home: 'Not home',
+  no: 'No',
+  go_back: 'Go back',
+  invalid: 'Invalid',
+  pending: 'Pending sale',
+  completed: 'Completed',
 };
 
-const CartMapPanel: React.FC<CartMapPanelProps> = ({
-  cart, routeCodes, sessionDate, commandCenterId, map, mapLoaded, header, details,
+// Seconds before an untouched, un-dispositioned house is marked Not Home.
+const AUTO_NOT_HOME_SECONDS = 5;
+
+const HouseSheet: React.FC<HouseSheetProps> = ({
+  view, saving, onDispose, markedBy, onClearDisposition, onSale, onOpenPending, onOpenBooking, onClose,
 }) => {
-  const [routeMaps, setRouteMaps] = useState<SavedRouteMap[]>([]);
-  const [houses, setHouses] = useState<RouteHouse[]>([]);
-  const [dispositions, setDispositions] = useState<Map<string, HouseDisposition>>(new Map());
-  const [pendingSales, setPendingSales] = useState<PendingSale[]>([]);
-  const [pclByRoute, setPclByRoute] = useState<Map<string, PCLClientGroup[]>>(new Map());
-  const [historicalRows, setHistoricalRows] = useState<HistoricalProperty[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [tab, setTab] = useState<StatsTab>('today');
+  const { house, state, isPcl, pcl, disposition, pendingSale, officeBooking, completed, historical, isHistorical } = view;
+  const hist = isHistorical ? historicalSummary(historical) : null;
+  const [showHistRows, setShowHistRows] = useState(false);
+  const [note, setNote] = useState(disposition?.note || '');
+  const [firstName, setFirstName] = useState(disposition?.firstName || '');
+  // Name + note row is hidden until asked for, or when either already has a value.
+  const [showNote, setShowNote] = useState(!!disposition?.note || !!disposition?.firstName);
+  const [showHistory, setShowHistory] = useState(false);
+  // Once a disposition exists the four buttons collapse to a summary row;
+  // "Change" expands them again.
+  const [expanded, setExpanded] = useState(false);
 
-  const routeKey = routeCodes.join(',');
+  // --- AUTO NOT-HOME COUNTDOWN ---
+  // A fresh house (no disposition, not pending/completed) starts a countdown
+  // on open; if nothing is tapped before it hits zero, it's marked Not Home.
+  // Any tap on a button, the note, or closing the sheet cancels it.
+  const houseId = `${house.routeCode}::${house.houseKey}`;
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const timerRef = useRef<number | null>(null);
+  const onDisposeRef = useRef(onDispose);
+  useEffect(() => { onDisposeRef.current = onDispose; }, [onDispose]);
 
-  // --- LOAD (houses are only read here; building them is the worker map's job) ---
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setSelectedId(null);
-    (async () => {
-      try {
-        const [maps, hs, dispos, pcl, hist] = await Promise.all([
-          fetchRouteMaps(routeCodes),
-          fetchRouteHouses(routeCodes),
-          fetchDispositions(routeCodes),
-          commandCenterId ? getWorkerPCL(routeCodes, commandCenterId).catch(() => new Map<string, PCLClientGroup[]>()) : Promise.resolve(new Map<string, PCLClientGroup[]>()),
-          commandCenterId ? fetchHistoricalForRoutes(commandCenterId, routeCodes).catch(() => [] as HistoricalProperty[]) : Promise.resolve([] as HistoricalProperty[]),
-        ]);
-        if (cancelled) return;
-        setRouteMaps(maps); setHouses(hs); setDispositions(dispos); setPclByRoute(pcl); setHistoricalRows(hist);
-      } catch (err) {
-        console.warn('[CartMapPanel] load failed', err);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeKey, commandCenterId]);
-
-  // Pending sales for the cart's session (own + asphalt assigned to it).
-  const loadPending = useMemo(() => async () => {
-    try {
-      const [own, assigned] = await Promise.all([
-        sessionService.getPendingSalesForSession(cart.sessionId),
-        sessionService.getAsphaltAssignmentsForSession(cart.sessionId),
-      ]);
-      const ownIds = new Set(own.map(ps => ps.id));
-      setPendingSales([...assigned.filter(ps => !ownIds.has(ps.id)), ...own]);
-    } catch (err) {
-      console.warn('[CartMapPanel] pending sales load failed', err);
-    }
-  }, [cart.sessionId]);
-  useEffect(() => { loadPending(); }, [loadPending]);
-
-  // --- LIVE ---
-  useEffect(() => {
-    if (!routeCodes.length) return;
-    return subscribeToDispositions(routeCodes, () => { fetchDispositions(routeCodes).then(setDispositions).catch(() => {}); });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeKey]);
-  useEffect(() => {
-    if (!commandCenterId) return;
-    return subscribeToPendingSales(commandCenterId, () => { loadPending(); });
-  }, [commandCenterId, loadPending]);
-
-  // --- DERIVED ---
-  const transactions = (cart.sharedFinancialStore || []) as SessionTransaction[];
-  const houseViews: HouseView[] = useMemo(() => {
-    const ps = indexPendingSales(pendingSales, houses);
-    const { pending, completed } = indexBookings(cart.sharedBookings || [], houses);
-    return buildHouseViews(houses, dispositions, ps, pending, completed, indexPcl(pclByRoute), indexHistorical(historicalRows));
-  }, [houses, dispositions, pendingSales, cart.sharedBookings, pclByRoute, historicalRows]);
-
-  const scope: CartScope = useMemo(() => ({
-    workerIds: new Set(cart.members.map(m => m.contractorId)),
-    sessionIds: new Set([cart.sessionId]),
-  }), [cart.members, cart.sessionId]);
-
-  const counts = useMemo(() => computeCounts(dispositions, houseViews, sessionDate, scope), [dispositions, houseViews, sessionDate, scope]);
-  const knockEvents = useMemo(
-    () => computeKnockEvents(dispositions, pendingSales, transactions, houses, sessionDate, scope),
-    [dispositions, pendingSales, transactions, houses, sessionDate, scope],
-  );
-  const pace = useMemo(() => computePace(knockEvents), [knockEvents]);
-  const avgCharge = useMemo(() => computeAvgCharge(transactions, sessionDate), [transactions, sessionDate]);
-  const goBackQueue = useMemo(() => computeGoBackQueue(houseViews, sessionDate), [houseViews, sessionDate]);
-  const coverage = useMemo(() => computeCoverage(houseViews), [houseViews]);
-
-  const selectedView = useMemo(
-    () => (selectedId ? houseViews.find(v => routeHouseId(v.house.routeCode, v.house.houseKey) === selectedId) || null : null),
-    [selectedId, houseViews],
-  );
-
-  // Tiles depend only on where the houses are.
-  const houseSig = useMemo(() => houses.map(h => routeHouseId(h.routeCode, h.houseKey)).join(','), [houses]);
-  const tiles = useMemo(
-    () => buildHouseTiles(houses, routeMaps),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [houseSig, routeMaps],
-  );
-
-  // --- MAP: layers (added once, removed on close) ---
-  useEffect(() => {
-    if (!map || !mapLoaded) return;
-    const empty: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
-    if (!map.getSource(SRC_FP)) map.addSource(SRC_FP, { type: 'geojson', data: empty });
-    if (!map.getSource(SRC_PT)) map.addSource(SRC_PT, { type: 'geojson', data: empty });
-    if (!map.getLayer(L_FILL)) map.addLayer({ id: L_FILL, type: 'fill', source: SRC_FP, minzoom: 13, paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] } });
-    if (!map.getLayer(L_LINE)) map.addLayer({ id: L_LINE, type: 'line', source: SRC_FP, minzoom: 13, paint: { 'line-color': ['get', 'color'], 'line-opacity': ['get', 'lineOpacity'], 'line-width': 1.2 } });
-    // "Last knock" pulse: the tile of the cart's most recent knock, filtered by
-    // id and animated below (replaces the round pulse on the manager map).
-    if (!map.getLayer(L_PULSE_FILL)) map.addLayer({ id: L_PULSE_FILL, type: 'fill', source: SRC_FP, minzoom: 13, filter: ['==', ['get', 'id'], '__none__'], paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.6 } });
-    if (!map.getLayer(L_PULSE_LINE)) map.addLayer({ id: L_PULSE_LINE, type: 'line', source: SRC_FP, minzoom: 13, filter: ['==', ['get', 'id'], '__none__'], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': 1 } });
-    if (!map.getLayer(L_HIT)) map.addLayer({ id: L_HIT, type: 'circle', source: SRC_PT, minzoom: 13, paint: { 'circle-color': '#000', 'circle-opacity': 0, 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 10, 17, 18, 19, 26] } });
-    if (!map.getLayer(L_SEL)) map.addLayer({
-      id: L_SEL, type: 'circle', source: SRC_PT, minzoom: 13, filter: ['==', ['get', 'id'], '__none__'],
-      paint: { 'circle-color': '#000', 'circle-opacity': 0, 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 9, 17, 18, 19, 26], 'circle-stroke-color': '#111827', 'circle-stroke-width': 3 },
-    });
-    if (!map.getLayer(L_NUM)) map.addLayer({
-      id: L_NUM, type: 'symbol', source: SRC_PT, minzoom: 15.5,
-      layout: {
-        'text-field': ['format', ['get', 'num'], { 'font-scale': 1 }, ['case', ['==', ['get', 'name'], ''], '', ['concat', '\n', ['get', 'name']]], { 'font-scale': 0.62 }],
-        'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
-        'text-size': ['interpolate', ['linear'], ['zoom'], 15.5, 11, 17, 14, 19, 18],
-        'text-line-height': 1.05, 'text-padding': 1, 'text-allow-overlap': false, 'symbol-sort-key': ['get', 'sort'],
-      },
-      paint: { 'text-color': ['get', 'color'], 'text-halo-color': 'rgba(255,255,255,0.95)', 'text-halo-width': 1.6 },
-    });
-
-    const onClick = (e: any) => {
-      const id = e.features?.[0]?.properties?.id;
-      if (id) setSelectedId(String(id));
-    };
-    const enter = () => { map.getCanvas().style.cursor = 'pointer'; };
-    const leave = () => { map.getCanvas().style.cursor = ''; };
-    map.on('click', L_HIT, onClick);
-    map.on('click', L_FILL, onClick);
-    map.on('mouseenter', L_HIT, enter);
-    map.on('mouseleave', L_HIT, leave);
-    return () => {
-      map.off('click', L_HIT, onClick);
-      map.off('click', L_FILL, onClick);
-      map.off('mouseenter', L_HIT, enter);
-      map.off('mouseleave', L_HIT, leave);
-      try {
-        CMP_LAYERS.forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
-        [SRC_FP, SRC_PT].forEach(id => { if (map.getSource(id)) map.removeSource(id); });
-      } catch { /* map already gone */ }
-    };
-  }, [map, mapLoaded]);
-
-  // --- MAP: data ---
-  useEffect(() => {
-    if (!map || !mapLoaded) return;
-    const fp: GeoJSON.Feature[] = [];
-    const pt: GeoJSON.Feature[] = [];
-    for (const v of houseViews) {
-      const id = routeHouseId(v.house.routeCode, v.house.houseKey);
-      const color = houseColor(v);
-      const hasState = v.state !== 'none' || v.isHistorical;
-      const tile = tiles.get(id);
-      if (tile) fp.push({ type: 'Feature', properties: { id, color, fillOpacity: hasState ? 0.45 : 0.10, lineOpacity: hasState ? 0.9 : 0.35 }, geometry: tile });
-      pt.push({
-        type: 'Feature',
-        properties: { id, color, num: `${v.house.civicNo}${(v.house.civicSuffix || '').toUpperCase()}`, name: v.mapLabel || '', sort: hasState || v.isPcl ? 0 : 1 },
-        geometry: { type: 'Point', coordinates: [v.house.lng, v.house.lat] },
-      });
-    }
-    (map.getSource(SRC_FP) as mapboxgl.GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: fp });
-    (map.getSource(SRC_PT) as mapboxgl.GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pt });
-  }, [map, mapLoaded, houseViews, tiles]);
-
-  useEffect(() => {
-    if (!map || !mapLoaded || !map.getLayer(L_SEL)) return;
-    map.setFilter(L_SEL, ['==', ['get', 'id'], selectedId || '__none__']);
-  }, [map, mapLoaded, selectedId]);
-
-  // --- MAP: pulse the house of the cart's most recent knock today ---
-  // (No / Not home / Go back / Invalid / pending / completed — whichever is
-  // latest.) The tile's outline swells and fades on a 1.8 s loop.
-  const lastKnockId = knockEvents.length ? knockEvents[knockEvents.length - 1].id : null;
-  useEffect(() => {
-    if (!map || !mapLoaded || !map.getLayer(L_PULSE_FILL)) return;
-    const filter: any = ['==', ['get', 'id'], lastKnockId || '__none__'];
-    map.setFilter(L_PULSE_FILL, filter);
-    map.setFilter(L_PULSE_LINE, filter);
-    if (!lastKnockId) return;
-    let raf = 0;
-    const start = performance.now();
-    const tick = (now: number) => {
-      const t = ((now - start) % 1800) / 1800;          // 0 → 1 every 1.8 s
-      try {
-        if (!map.getLayer(L_PULSE_LINE)) return;
-        map.setPaintProperty(L_PULSE_LINE, 'line-width', 2 + t * 10);
-        map.setPaintProperty(L_PULSE_LINE, 'line-opacity', 1 - t);
-        map.setPaintProperty(L_PULSE_FILL, 'fill-opacity', 0.75 - 0.35 * t);
-      } catch { return; }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [map, mapLoaded, lastKnockId]);
-
-  // --- MAP: zoom to the cart's routes (once per cart) ---
-  const fittedFor = useRef('');
-  useEffect(() => {
-    if (!map || !mapLoaded || !routeMaps.length) return;
-    const key = `${cart.sessionId}|${routeKey}`;
-    if (fittedFor.current === key) return;
-    const coords: [number, number][] = [];
-    routeMaps.forEach(rm => rm.segments?.forEach(s => s.coordinates?.forEach(c => coords.push(c as [number, number]))));
-    if (!coords.length) return;
-    fittedFor.current = key;
-    const b = coords.reduce((bb, c) => bb.extend(c), new mapboxgl.LngLatBounds(coords[0], coords[0]));
-    // Let the map finish resizing for the wider panel first. Pass the current
-    // rotation/tilt — fitBounds otherwise turns the map back to north-up.
-    setTimeout(() => {
-      try {
-        map.resize();
-        map.fitBounds(b, { padding: 50, maxZoom: 17, duration: 700, bearing: map.getBearing(), pitch: map.getPitch() });
-      } catch { /* map gone */ }
-    }, 250);
-  }, [map, mapLoaded, routeMaps, cart.sessionId, routeKey]);
-
-  const flyTo = (lng: number, lat: number, zoom: number) => { map?.flyTo({ center: [lng, lat], zoom, duration: 700 }); };
-
-  // --- READ-ONLY HOUSE CARD ---
-  const memberName = (id: string | null | undefined) => {
-    if (!id) return null;
-    const m = cart.members.find(w => w.contractorId === id);
-    return m ? `${m.firstName} ${m.lastName ? m.lastName[0] + '.' : ''}`.trim() : id;
+  const cancelCountdown = () => {
+    if (timerRef.current !== null) { clearInterval(timerRef.current); timerRef.current = null; }
+    setCountdown(null);
   };
 
-  const houseCard = selectedView && (() => {
-    const v = selectedView;
-    const color = houseColor(v);
-    const hist = v.isHistorical ? historicalSummary(v.historical) : null;
-    const d = v.disposition;
-    return (
-      <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-1.5">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <div className="text-white font-bold text-sm truncate">{v.house.civicNo}{(v.house.civicSuffix || '').toUpperCase()} {v.house.streetName}</div>
-            <div className="text-[11px] font-bold" style={{ color: color === '#e5e7eb' ? '#9ca3af' : color }}>
-              {STATE_LABEL[v.state]}{v.isPcl ? ' · PCL' : ''}{v.isHistorical ? ' · Historical' : ''}
-            </div>
-          </div>
-          <button onClick={() => setSelectedId(null)} className="p-1 text-gray-400 hover:text-white" title="Close"><X size={14} /></button>
-        </div>
-        {d && (
-          <div className="text-[11px] text-gray-400">
-            Marked{memberName(d.workerId) ? <> by <span className="text-gray-200 font-bold">{memberName(d.workerId)}</span></> : null}
-            {' · '}{format(new Date(d.updatedAt), 'MMM d, h:mm a')}
-          </div>
-        )}
-        {(d?.firstName || d?.note) && (
-          <div className="text-xs text-gray-200">
-            {d?.firstName && <span className="font-bold">{d.firstName}</span>}
-            {d?.firstName && d?.note ? ' — ' : ''}
-            {d?.note}
-          </div>
-        )}
-        {v.pendingSale && (
-          <div className="text-xs text-yellow-300">
-            Pending sale{v.pendingSale.price ? ` · $${v.pendingSale.price}` : ''}{v.pendingSale.firstName ? ` · ${v.pendingSale.firstName} ${v.pendingSale.lastName || ''}` : ''}
-          </div>
-        )}
-        {v.officeBooking && !v.pendingSale && (
-          <div className="text-xs text-yellow-300">Office booking{v.officeBooking.Price ? ` · $${v.officeBooking.Price}` : ''}</div>
-        )}
-        {v.completed && (
-          <div className="text-xs text-green-300">Completed{v.completed.Price ? ` · $${v.completed.Price}` : ''}</div>
-        )}
-        {v.pclName && <div className="text-xs" style={{ color: HOUSE_COLORS.pcl }}>PCL client · {v.pclName}</div>}
-        {hist && <div className="text-xs" style={{ color: HOUSE_COLORS.historical }}>Previously serviced · {hist.name}</div>}
-      </div>
+  useEffect(() => {
+    // Reset local edits when the selected house changes.
+    setNote(disposition?.note || '');
+    setFirstName(disposition?.firstName || '');
+    setShowNote(!!disposition?.note || !!disposition?.firstName);
+    setShowHistory(false);
+    setShowHistRows(false);
+    setExpanded(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [houseId, disposition?.note, disposition?.firstName]);
+
+  useEffect(() => {
+    cancelCountdown();
+    const fresh = !disposition && state === 'none';
+    if (!fresh) return;
+    let remaining = AUTO_NOT_HOME_SECONDS;
+    setCountdown(remaining);
+    timerRef.current = window.setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        cancelCountdown();
+        onDisposeRef.current('not_home', '', '', true);
+      } else {
+        setCountdown(remaining);
+      }
+    }, 1000);
+    return cancelCountdown;
+    // Only re-arm when the house changes — not on every disposition/state tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [houseId]);
+
+  // Disposition arrived (from a tap or the timer) → stop counting, collapse.
+  useEffect(() => {
+    if (disposition) { cancelCountdown(); setExpanded(false); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [disposition?.status, disposition?.updatedAt]);
+
+  const address = `${house.civicNo}${(house.civicSuffix || '').toUpperCase()} ${house.streetName}`;
+  const stateColor =
+    state === 'completed' ? HOUSE_COLORS.completed :
+    state === 'pending' ? HOUSE_COLORS.pending :
+    state === 'no' ? HOUSE_COLORS.no :
+    state === 'go_back' ? HOUSE_COLORS.go_back :
+    state === 'invalid' ? HOUSE_COLORS.invalid :
+    isHistorical ? HOUSE_COLORS.historical :
+    state === 'not_home' ? (isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home) :
+    isPcl ? HOUSE_COLORS.pcl : '#e5e7eb';
+
+    const dispoBtn = (status: HouseDispositionStatus, label: string, Icon: LucideIcon, color: string) => {
+      const active = disposition?.status === status && state !== 'pending' && state !== 'completed';
+      const showCount = status === 'not_home' && countdown !== null && !disposition;
+      return (
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => { cancelCountdown(); onDispose(status, note, firstName); }}
+        className={`flex-1 min-w-0 py-3 rounded-lg border-2 font-bold text-xs flex flex-col items-center gap-1 transition-colors disabled:opacity-50 ${
+          active ? 'text-white' : 'bg-gray-800 text-gray-200 border-gray-700 active:bg-gray-700'
+        }`}
+        style={active ? { backgroundColor: color, borderColor: color } : undefined}
+      >
+        <Icon size={18} />
+        {showCount ? `${label} ${countdown}` : label}
+      </button>
     );
-  })();
+  };
+
+  const STATUS_META: Record<HouseDispositionStatus, { label: string; color: string; Icon: LucideIcon }> = {
+    not_home: { label: 'Not home', color: isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home, Icon: DoorClosed },
+    no: { label: 'No', color: HOUSE_COLORS.no, Icon: Ban },
+    go_back: { label: 'Go back', color: HOUSE_COLORS.go_back, Icon: RotateCcw },
+    invalid: { label: 'Invalid', color: HOUSE_COLORS.invalid, Icon: CircleSlash },
+  };
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="flex-shrink-0 border-b border-gray-700">{header}</div>
-      <div className="flex-1 overflow-y-auto p-3 min-h-0 space-y-3 custom-scrollbar">
-        {loading ? (
-          <div className="flex items-center gap-2 text-xs text-gray-400 py-4"><Loader size={14} className="animate-spin" /> Loading the cart's houses…</div>
-        ) : routeCodes.length === 0 ? (
-          <div className="text-xs text-gray-400 bg-gray-800 rounded-lg p-3 flex items-center gap-2">
-            <MapPin size={14} /> No routes are assigned to this cart today.
+    <div className="absolute inset-x-0 bottom-0 z-30 bg-gray-900 border-t border-gray-700 rounded-t-2xl shadow-2xl max-h-[45vh] flex flex-col">
+      {/* Header */}
+      <div className="flex items-start justify-between px-4 pt-3 pb-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: stateColor }} />
+            <h3 className="text-white font-bold text-base truncate">{address}</h3>
           </div>
-        ) : houses.length === 0 ? (
-          <div className="text-xs text-gray-400 bg-gray-800 rounded-lg p-3 flex items-center gap-2">
-            <MapPin size={14} /> No houses on {routeCodes.join(', ')} yet — they appear once a worker on the cart opens the map.
+          <div className="text-[11px] text-gray-400 mt-0.5 flex items-center gap-2 flex-wrap">
+            <span className="font-mono bg-gray-800 border border-gray-700 px-1.5 rounded">{house.routeCode}</span>
+            <span>{STATE_LABEL[state]}</span>
+            {isHistorical && <span className="text-purple-300">· previously serviced</span>}
+            {house.unitCount > 1 && <span>· {house.unitCount} units</span>}
+            {house.source === 'manual' && <span className="text-yellow-500">· added by hand</span>}
           </div>
-        ) : null}
+        </div>
+        <button onClick={() => { cancelCountdown(); onClose(); }} className="p-1.5 text-gray-400 hover:text-white shrink-0"><X size={20} /></button>
+      </div>
 
-        {houseCard}
+      <div className="px-4 pb-4 overflow-y-auto custom-scrollbar space-y-3">
+        {/* Historical block — previously serviced (Load Historical). Purple. */}
+        {hist && (
+          <button
+            type="button"
+            onClick={() => setShowHistRows(v => !v)}
+            className="w-full text-left bg-purple-950/50 border border-purple-700 rounded-lg px-3 py-2"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-purple-100 font-bold text-sm truncate">{hist.name || 'Previous customer'}</div>
+                <div className="text-[11px] text-purple-200/80 flex items-center gap-2 flex-wrap">
+                  {historical.find(r => r.phone)?.phone && (
+                    <span className="flex items-center gap-1"><Phone size={10} />{historical.find(r => r.phone)!.phone}</span>
+                  )}
+                  <span className="flex items-center gap-1"><Clock size={10} />{historical.length}x</span>
+                  {hist.prices.length > 0 && <span className="font-mono">{hist.prices.join(' + ')}</span>}
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                {hist.total > 0 && <div className="text-purple-100 font-bold text-base font-mono">${hist.total.toLocaleString()}</div>}
+                <div className="text-[10px] text-purple-300">{showHistRows ? 'hide' : 'details'}</div>
+              </div>
+            </div>
+            {showHistRows && (
+              <div className="mt-2 border-t border-purple-900 pt-1 space-y-1">
+                {historical.map((r, i) => (
+                  <div key={i} className="text-[11px] text-purple-100/90">
+                    <div className="grid grid-cols-4 gap-1">
+                      <span className="truncate">{r.customerName || '—'}</span>
+                      <span className="font-mono">{r.price ? (r.price.startsWith('$') ? r.price : `$${r.price}`) : '—'}</span>
+                      <span>{[r.propertyType, r.clientType].filter(Boolean).join(' · ') || '—'}</span>
+                      <span className="truncate text-purple-300/70">{r.contractorName || '—'}</span>
+                    </div>
+                    {r.notes && <div className="text-purple-300/80 italic truncate">{r.notes}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </button>
+        )}
 
-        <MapStatsTabs
-          tab={tab}
-          onTab={setTab}
-          counts={counts}
-          avgCharge={avgCharge}
-          pace={pace}
-          goBackQueue={goBackQueue}
-          coverage={coverage}
-          equiv={cart.stats.eq}
-          footer={<>
-            <span>Up gross ${cart.stats.upsellGross.toFixed(0)}</span>
-            <span>Upsells {cart.stats.upsellCount}</span>
-            <span>Steps {cart.stats.steps}</span>
-          </>}
-          showRouteCodes={routeCodes.length > 1}
-          onGoBackHouse={v => { flyTo(v.house.lng, v.house.lat, 18); setSelectedId(routeHouseId(v.house.routeCode, v.house.houseKey)); }}
-          onStreet={st => flyTo(st.lng, st.lat, 17)}
-        />
+        {/* PCL block */}
+        {isPcl && pcl && (
+          <button
+            type="button"
+            onClick={() => setShowHistory(s => !s)}
+            className="w-full text-left bg-blue-950/50 border border-blue-800 rounded-lg px-3 py-2"
+          >
+            <div className="flex items-center justify-between">
+              <div className="min-w-0">
+                <div className="text-blue-200 font-bold text-sm truncate">{pcl.firstName} {pcl.lastName}</div>
+                <div className="text-[11px] text-blue-300/80 flex items-center gap-2">
+                  {pcl.phone && <span className="flex items-center gap-1"><Phone size={10} />{pcl.phone}</span>}
+                  <span className="flex items-center gap-1"><Clock size={10} />{pcl.history.length}x</span>
+                  {pcl.history[0] && <span>last {pcl.history[0].year} · {pcl.history[0].price}</span>}
+                </div>
+              </div>
+              <span className="text-[10px] text-blue-300">{showHistory ? 'hide' : 'history'}</span>
+            </div>
+            {showHistory && (
+              <div className="mt-2 border-t border-blue-900 pt-1">
+                {pcl.history.map((h, i) => (
+                  <div key={i} className="grid grid-cols-4 text-[11px] py-0.5 text-blue-100/90">
+                    <span className="font-mono">{h.year}</span>
+                    <span className="font-mono">{h.price}</span>
+                    <span>{h.serviceType}</span>
+                    <span className="truncate text-blue-300/70">{h.contractor || '—'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </button>
+        )}
 
-        {details}
+        {/* Completed — nothing else to do here */}
+        {state === 'completed' && completed && (
+          <div className="bg-green-950/50 border border-green-800 rounded-lg px-3 py-2 text-sm text-green-200 flex items-center gap-2">
+            <CheckCircle2 size={16} /> Sale completed{completed.Price ? ` · $${completed.Price}` : ''}
+          </div>
+        )}
+
+        {/* Pending — tap to complete */}
+        {state === 'pending' && (pendingSale || officeBooking) && (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={pendingSale ? onOpenPending : onOpenBooking}
+            className="w-full bg-yellow-600 active:bg-yellow-500 text-black font-bold rounded-lg py-3 flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+          >
+            <DollarSign size={18} />
+            {pendingSale
+              ? `Complete pending sale${pendingSale.price ? ` · $${pendingSale.price}` : ''}`
+              : `Open booking${officeBooking?.Price ? ` · $${officeBooking.Price}` : ''}`}
+          </button>
+        )}
+
+        {/* Dispositions + Sale */}
+        {state !== 'completed' && state !== 'pending' && (
+          <>
+            {disposition && !expanded ? (
+              // Collapsed: what it's marked as, a Change button, and Sale.
+              <div className="flex gap-2 items-stretch">
+                {(() => {
+                  const m = STATUS_META[disposition.status];
+                  return (
+                    <div
+                      className="flex-1 min-w-0 rounded-lg border-2 px-3 py-2 flex items-center gap-2 text-white font-bold text-sm"
+                      style={{ backgroundColor: m.color, borderColor: m.color }}
+                    >
+                      <m.Icon size={18} /> {m.label}
+                    </div>
+                  );
+                })()}
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => setExpanded(true)}
+                  className="px-3 rounded-lg border-2 border-gray-700 bg-gray-800 text-gray-200 font-bold text-xs flex flex-col items-center justify-center gap-1 active:bg-gray-700 disabled:opacity-50"
+                >
+                  <Pencil size={16} />
+                  Change
+                </button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => { cancelCountdown(); onSale(); }}
+                  className="px-4 rounded-lg border-2 border-yellow-500 bg-yellow-600 text-black font-bold text-xs flex flex-col items-center justify-center gap-1 active:bg-yellow-500 disabled:opacity-50"
+                >
+                  <DollarSign size={18} />
+                  Sale
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                {dispoBtn('not_home', 'Not home', DoorClosed, isPcl ? HOUSE_COLORS.pclNotHome : HOUSE_COLORS.not_home)}
+                {dispoBtn('no', 'No', Ban, HOUSE_COLORS.no)}
+                {dispoBtn('go_back', 'Go back', RotateCcw, HOUSE_COLORS.go_back)}
+                {dispoBtn('invalid', 'Invalid', CircleSlash, HOUSE_COLORS.invalid)}
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => { cancelCountdown(); onSale(); }}
+                  className="flex-1 min-w-0 py-3 rounded-lg border-2 border-yellow-500 bg-yellow-600 text-black font-bold text-xs flex flex-col items-center gap-1 active:bg-yellow-500 disabled:opacity-50"
+                >
+                  <DollarSign size={18} />
+                  Sale
+                </button>
+              </div>
+            )}
+
+            {/* Name + Note */}
+            {showNote ? (
+              <div className="flex gap-2">
+                <input
+                  value={firstName}
+                  onChange={e => setFirstName(e.target.value)}
+                  placeholder="First name"
+                  disabled={saving}
+                  className="w-28 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cps-blue"
+                />
+                <input
+                  value={note}
+                  onChange={e => setNote(e.target.value)}
+                  placeholder="Note (e.g. try after 6, dog at side door)"
+                  disabled={saving}
+                  className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cps-blue"
+                />
+                {disposition && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => onDispose(disposition.status, note, firstName)}
+                    className="px-3 rounded-lg bg-gray-700 text-white text-xs font-bold disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                )}
+              </div>
+            ) : (
+              <button type="button" onClick={() => { cancelCountdown(); setShowNote(true); }} className="text-[11px] text-gray-400 flex items-center gap-1">
+                <StickyNote size={12} /> Add a name / note
+              </button>
+            )}
+
+            {disposition && (
+              <div className="flex items-center justify-between text-[11px] text-gray-500">
+                <span>
+                  Marked{markedBy ? <> by <span className={markedBy === 'you' ? '' : 'text-gray-300 font-bold'}>{markedBy}</span></> : null}
+                  {' · '}{new Date(disposition.updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                </span>
+                <button type="button" disabled={saving} onClick={onClearDisposition} className="flex items-center gap-1 text-red-400 disabled:opacity-50">
+                  <Trash2 size={12} /> Clear
+                </button>
+              </div>
+            )}
+          </>
+        )}
+
+        {saving && (
+          <div className="flex items-center gap-2 text-xs text-gray-400"><Loader size={12} className="animate-spin" /> Saving…</div>
+        )}
       </div>
     </div>
   );
 };
 
-export default CartMapPanel;
+export default HouseSheet;
+
+// ---------------------------------------------------------------------------
+// ADD HOUSE SHEET
+// ---------------------------------------------------------------------------
+interface AddHouseSheetProps {
+  routeCode: string;
+  streetOptions: string[];   // route's street names, nearest first
+  lng: number;
+  lat: number;
+  saving: boolean;
+  onSave: (civicNo: number, suffix: string, street: string) => void;
+  onCancel: () => void;
+}
+
+export const AddHouseSheet: React.FC<AddHouseSheetProps> = ({ routeCode, streetOptions, lng, lat, saving, onSave, onCancel }) => {
+  const [num, setNum] = useState('');
+  const [street, setStreet] = useState(streetOptions[0] || '');
+  const [custom, setCustom] = useState(streetOptions.length === 0);
+  const [err, setErr] = useState<string | null>(null);
+
+  const submit = () => {
+    const m = num.trim().match(/^(\d+)\s*([a-zA-Z]?)$/);
+    if (!m) { setErr('Enter a house number like 42 or 42A.'); return; }
+    if (!street.trim()) { setErr('Enter a street name.'); return; }
+    setErr(null);
+    onSave(parseInt(m[1], 10), m[2].toLowerCase(), street.trim());
+  };
+
+  return (
+    <div className="absolute inset-x-0 bottom-0 z-30 bg-gray-900 border-t border-gray-700 rounded-t-2xl shadow-2xl">
+      <div className="flex items-center justify-between px-4 pt-3 pb-2">
+        <h3 className="text-white font-bold text-base flex items-center gap-2"><Plus size={16} className="text-yellow-400" /> Add missing house</h3>
+        <button onClick={onCancel} className="p-1.5 text-gray-400 hover:text-white"><X size={20} /></button>
+      </div>
+      <div className="px-4 pb-4 space-y-3">
+        <div className="text-[11px] text-gray-400 flex items-center gap-1">
+          <MapPin size={11} /> {routeCode} · {lat.toFixed(5)}, {lng.toFixed(5)}
+        </div>
+        <div className="flex gap-2">
+          <input
+            value={num}
+            onChange={e => setNum(e.target.value)}
+            placeholder="House #"
+            inputMode="numeric"
+            autoFocus
+            className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cps-blue"
+          />
+          {custom ? (
+            <input
+              value={street}
+              onChange={e => setStreet(e.target.value)}
+              placeholder="Street name"
+              className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cps-blue"
+            />
+          ) : (
+            <select
+              value={street}
+              onChange={e => { if (e.target.value === '__custom__') { setCustom(true); setStreet(''); } else setStreet(e.target.value); }}
+              className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cps-blue"
+            >
+              {streetOptions.map(s => <option key={s} value={s}>{s}</option>)}
+              <option value="__custom__">+ Other…</option>
+            </select>
+          )}
+        </div>
+        {err && <div className="text-xs text-red-400">{err}</div>}
+        <div className="flex gap-2">
+          <button type="button" onClick={onCancel} disabled={saving} className="flex-1 py-3 rounded-lg bg-gray-800 text-gray-300 font-bold text-sm disabled:opacity-50">Cancel</button>
+          <button type="button" onClick={submit} disabled={saving} className="flex-1 py-3 rounded-lg bg-cps-blue text-white font-bold text-sm disabled:opacity-50 flex items-center justify-center gap-2">
+            {saving ? <Loader size={14} className="animate-spin" /> : <Plus size={14} />} Add house
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
