@@ -499,7 +499,11 @@ const NewJob: React.FC = () => {
             return;
           }
 
-          setRouteCode(myRoutes[0]);
+          // Only default to the first route on a blank form. When a pending
+          // sale is being resumed, its own route (set by the prefill, which
+          // can finish before this) must win — overwriting it saved the sale
+          // under the wrong route and the map lost track of it.
+          setRouteCode(prev => prev || myRoutes[0]);
 
           const upsellStatus = await service.getWorkerUpsellsEnabled(currentWorker.contractorId);
           setUpsellsEnabled(upsellStatus);
@@ -1369,7 +1373,10 @@ const NewJob: React.FC = () => {
                 <div className="md:col-span-1">
                   <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Route Code</label>
                   <select value={routeCode} onChange={(e) => setRouteCode(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-white font-mono">
-                    {assignedRoutes.map(r => <option key={r} value={r}>{r}</option>)}
+                    {/* A resumed pending sale can sit on a route that isn't one of
+                        today's assignments — keep it selectable so it isn't lost. */}
+                    {(routeCode && !assignedRoutes.includes(routeCode) ? [routeCode, ...assignedRoutes] : assignedRoutes)
+                      .map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </div>
                 <div className="md:col-span-2 grid grid-cols-2 gap-4">

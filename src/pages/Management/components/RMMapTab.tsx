@@ -36,6 +36,8 @@ import type { GeocodePhase, GeocodeProgress, FilterVisibility } from '../RMLogbo
 // Aliased: this file already imports a lucide icon called MapPin.
 import type { MapPin as MapPinRecord } from '../../../lib/sessionService';
 import RoutePCLModal from './RoutePCLModal';
+import CartMapPanel from './CartMapPanel';
+import { fetchMapAccessList } from '../../../lib/mapLogsheetService';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -1123,6 +1125,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [sortBy, setSortBy] = useState<SortOption>('recent');
   const [selectedWorkerForModal, setSelectedWorkerForModal] = useState<WorkerCardData | null>(null);
   const [selectedCartForModal, setSelectedCartForModal] = useState<CartCardData | null>(null);
+  // MAP-LOGSHEET CART PANEL — for command centres on the map logsheet (or carts
+  // with an individually approved contractor), tapping a cart opens a ~40%
+  // panel in place of the sidebar with Today/Pace/Coverage, and the map zooms
+  // to that cart's routes with their houses drawn. Everyone else keeps the
+  // centred pop-up. `mapGate` is read once from the Super Admin access lists.
+  const [mapGate, setMapGate] = useState<{ cc: boolean; contractors: Set<string> }>({ cc: false, contractors: new Set() });
+  const cartMapOpenRef = useRef(false);
+  const viewBeforeCartRef = useRef<{ center: mapboxgl.LngLat; zoom: number } | null>(null);
   const [selectedRouteForBookings, setSelectedRouteForBookings] = useState<string | null>(null);
   // "View PCL" from the assign modal. Floats on top of it; follows it closed.
   const [pclModalOpen, setPclModalOpen] = useState(false);
@@ -2426,6 +2436,48 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   }, [routeMapData, routes, workers, mapLoaded, myRouteCodes, routeSplitsByCode]);
 
+  // Load who's on the map logsheet (once per command centre).
+  useEffect(() => {
+    const ccId = commandCenterService.getCurrentCommandCenterId();
+    let cancelled = false;
+    (async () => {
+      try {
+        const [ccRow, list] = await Promise.all([
+          ccId
+            ? supabase.from('map_logsheet_cc_access').select('command_center_id').eq('command_center_id', ccId).maybeSingle()
+            : Promise.resolve({ data: null, error: null } as { data: any; error: any }),
+          fetchMapAccessList().catch(() => []),
+        ]);
+        if (cancelled) return;
+        setMapGate({
+          cc: !ccRow.error && !!ccRow.data,
+          contractors: new Set(list.map(e => (e.contractorId || '').toUpperCase())),
+        });
+      } catch (err) {
+        console.warn('[RMMap] map logsheet access check failed', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const cartUsesMapPanel = (cart: CartCardData) =>
+    mapGate.cc || cart.members.some(m => mapGate.contractors.has((m.contractorId || '').toUpperCase()));
+  const cartPanel = selectedCartForModal && cartUsesMapPanel(selectedCartForModal) ? selectedCartForModal : null;
+  // Split buckets ("ORC11a") share the base route's houses.
+  const cartPanelRouteCodes = useMemo(() => {
+    if (!cartPanel) return [] as string[];
+    const known = new Set(routeMapData.map(r => r.route_code));
+    const codes = cartPanel.assignedRoutes.map(c => (known.has(c) ? c : c.replace(/[a-z]+$/, '')));
+    return [...new Set(codes)].filter(Boolean).sort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cartPanel?.sessionId, cartPanel?.assignedRoutes.join(','), routeMapData]);
+  const cartPanelKey = cartPanel ? `${cartPanel.sessionId}|${cartPanelRouteCodes.join(',')}` : '';
+  const cartPanelSessionDate = useMemo(
+    () => (cartPanel ? allSessions.find(s => s.id === cartPanel.sessionId)?.date || null : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cartPanel?.sessionId, allSessions],
+  );
+
   // Route opacity — V2 SPLIT-AWARE.
   // For unsplit routes, behaviour is unchanged. For split routes, "any bucket
   // assigned" is the OR across all buckets' assignedWorkers. Since all buckets
@@ -2442,13 +2494,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const splitAssigned = !!split && split.buckets.some(b => (b.assignedWorkers?.length || 0) > 0);
       const isAssigned = baseAssigned || splitAssigned;
 
-      if (sidebarMode === 'routes' && myRouteCodes.includes(route.route_code)) {
+      if (cartPanelRouteCodes.length) {
+        // Cart panel open: that cart's routes stay, everything else fades back.
+        map.setPaintProperty(lid, 'line-opacity', cartPanelRouteCodes.includes(route.route_code) ? 0.55 : 0.12);
+      } else if (sidebarMode === 'routes' && myRouteCodes.includes(route.route_code)) {
         map.setPaintProperty(lid, 'line-opacity', isAssigned ? 0.9 : 0.3);
       } else {
         map.setPaintProperty(lid, 'line-opacity', isAssigned ? 0.75 : 0.4);
       }
     });
-  }, [sidebarMode, routeMapData, routes, mapLoaded, myRouteCodes, routeSplitsByCode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sidebarMode, routeMapData, routes, mapLoaded, myRouteCodes, routeSplitsByCode, cartPanelKey]);
 
   // Route click handlers — V2 RECURSIVE-SPLIT-AWARE.
   //
@@ -2477,7 +2533,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const makeRouteClick = (route: SavedRoute) => (e:any) => {
         // Pin mode owns every tap. Without this, tapping a route to place a pin
         // would ALSO open the assignment modal underneath it.
-        if (pinModeRef.current) return;
+        if (pinModeRef.current || cartMapOpenRef.current) return;
         e.preventDefault();
         const mode = sidebarModeRef.current;
         const rc = route.route_code;
@@ -2727,7 +2783,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     map.on('mouseenter', 'rm-pending-pins-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'rm-pending-pins-circles', () => { map.getCanvas().style.cursor = ''; });
     map.on('click', 'rm-pending-pins-circles', (e: any) => {
-      if (pinModeRef.current) return;
+      if (pinModeRef.current || cartMapOpenRef.current) return;
       const f = e.features?.[0]; if (!f) return;
       const { name, address, routeCode, routeColor, phone, email, price, confirmed } = f.properties;
       const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
@@ -2775,7 +2831,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     map.on('mouseenter', 'rm-completed-pins-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'rm-completed-pins-circles', () => { map.getCanvas().style.cursor = ''; });
     map.on('click', 'rm-completed-pins-circles', (e: any) => {
-      if (pinModeRef.current) return;
+      if (pinModeRef.current || cartMapOpenRef.current) return;
       const f = e.features?.[0]; if (!f) return;
       const { name, address, routeCode, routeColor, status, phone, email, price, paymentMethod } = f.properties;
       const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
@@ -2865,7 +2921,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       paint: { 'icon-opacity': 0.95 },
     });
     const openPs = (e: any) => {
-      if (pinModeRef.current) return;
+      if (pinModeRef.current || cartMapOpenRef.current) return;
       const f = e.features?.[0]; if (!f) return;
       const id = f.properties?.psId;
       const ps = geocodedPendingSalesRef.current.find(g => g.id === id);
@@ -2909,7 +2965,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     map.on('mouseenter', 'rm-upsell-only-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'rm-upsell-only-circles', () => { map.getCanvas().style.cursor = ''; });
     map.on('click', 'rm-upsell-only-circles', (e: any) => {
-      if (pinModeRef.current) return;
+      if (pinModeRef.current || cartMapOpenRef.current) return;
       const f = e.features?.[0]; if (!f) return;
       const { name, address, routeCode, routeColor, phone, email, price } = f.properties;
       const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
@@ -4420,13 +4476,36 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   const handleCopyPhone = (phone: string, id: string) => { navigator.clipboard.writeText(phone); };
 
-  // Resize map when sidebar opens/closes
+  // Resize map when sidebar / cart panel opens or closes
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
     const t = setTimeout(() => { try { map.resize(); } catch {} }, 250);
     return () => clearTimeout(t);
-  }, [sidebarOpen]);
+  }, [sidebarOpen, cartPanelKey]);
+
+  // Cart panel open: hide this tab's own pins/dots (the house tiles show the
+  // same things) and route taps are ignored (cartMapOpenRef). Restore the
+  // view the manager had when the panel closes.
+  useEffect(() => {
+    const map = mapRef.current;
+    const open = !!cartPanel;
+    cartMapOpenRef.current = open;
+    if (!map || !mapLoaded) return;
+    const pinLayers = (map.getStyle()?.layers || [])
+      .map((l: any) => l.id as string)
+      .filter(id => id.startsWith('rm-') && !id.startsWith('rm-line-') && id !== 'rm-num-labels' && id !== 'rm-worker-overlay');
+    if (open) {
+      if (!viewBeforeCartRef.current) viewBeforeCartRef.current = { center: map.getCenter(), zoom: map.getZoom() };
+      pinLayers.forEach(id => { try { map.setLayoutProperty(id, 'visibility', 'none'); } catch {} });
+    } else {
+      pinLayers.forEach(id => { try { map.setLayoutProperty(id, 'visibility', 'visible'); } catch {} });
+      const v = viewBeforeCartRef.current;
+      viewBeforeCartRef.current = null;
+      if (v) setTimeout(() => { try { map.resize(); map.easeTo({ center: v.center, zoom: v.zoom, duration: 600 }); } catch {} }, 260);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cartPanelKey, mapLoaded]);
 
   // --- ROUTE ASSIGNMENT MODAL HELPERS (sort + route-badge data) ---
   //
@@ -4494,6 +4573,155 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [contractorsByCart, workerRouteBadges]);
 
   // --- RENDER ---
+
+  // Cart pop-up pieces, shared by the pop-up and the map-logsheet cart panel.
+  const renderCartHeader = (c: CartCardData) => (
+    <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between gap-2">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          {c.isRcCart && (<Truck size={13} className="text-orange-400 flex-shrink-0" />)}
+          <div className="text-white font-bold text-base truncate">
+            {c.members.length > 1
+              ? c.members.map(m => m.firstName).join(' & ')
+              : `${c.members[0]?.firstName} ${c.members[0]?.lastName}`}
+          </div>
+        </div>
+        <div className="text-[11px] text-gray-400">
+          {c.stats.steps} steps • {c.stats.eq.toFixed(1)} EQ • ${c.stats.upsellGross.toFixed(0)} upsell
+        </div>
+      </div>
+      <div className="flex-shrink-0 flex items-center gap-1.5">
+        {cartCanNavigate(c) && (
+          <button
+            onClick={() => { const cart = c; setSelectedCartForModal(null); handleNavigateToCart(cart); }}
+            className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors"
+            title="Navigate to most recent transaction"
+          ><Navigation2 size={12} />Navigate</button>
+        )}
+        <button
+          onClick={() => handleViewLogsheet(c.members[0], c.members)}
+          className="px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md flex items-center gap-1.5"
+          title="Open cart logsheet"
+        ><FileText size={12} />Logsheet</button>
+        {/* CRACKFILLER COUNTER — sealing only. Locked once PAID. */}
+        {isSealing && (() => {
+          const cart = c;
+          const locked = cart.sessionStatus === 'PAID';
+          const saving = bottleSavingId === cart.sessionId;
+          return (
+            <span
+              className={`inline-flex items-center rounded-md text-xs font-bold border overflow-hidden ${
+                locked
+                  ? 'bg-gray-800 text-gray-500 border-gray-700'
+                  : 'bg-slate-800 text-slate-200 border-slate-600'
+              }`}
+              title={
+                locked
+                  ? `${cart.crackfillerBottles} crackfiller bottle(s) — locked, payout finalised`
+                  : `${cart.crackfillerBottles} crackfiller bottle(s) = ${cart.crackfillerBottles * CRACKFILLER_LBS_PER_BOTTLE} lbs`
+              }
+            >
+              <button
+                onClick={() => handleAdjustBottles(cart, -1)}
+                disabled={locked || saving || cart.crackfillerBottles === 0}
+                className="px-2 py-1.5 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                aria-label="Remove one crackfiller bottle"
+              ><Minus size={12} /></button>
+              <span className="flex items-center gap-1 px-1 min-w-[32px] justify-center">
+                {saving
+                  ? <Loader size={12} className="animate-spin text-slate-400" />
+                  : <FlaskConical size={12} className="text-slate-400" />}
+                {cart.crackfillerBottles}
+              </span>
+              <button
+                onClick={() => handleAdjustBottles(cart, 1)}
+                disabled={locked || saving}
+                className="px-2 py-1.5 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                aria-label="Add one crackfiller bottle"
+              ><Plus size={12} /></button>
+            </span>
+          );
+        })()}
+        <button
+          onClick={() => setSelectedCartForModal(null)}
+          className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+        ><X size={14} /></button>
+      </div>
+    </div>
+  );
+  const renderCartDetails = (c: CartCardData) => (
+    <>
+    <div>
+      <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Cart members</div>
+      <div className="space-y-1.5">
+        {c.members.map(m => (
+          <div key={m.contractorId} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
+            <Users size={11} className="text-gray-400 flex-shrink-0" />
+            <span className="text-white text-xs font-medium flex-1 min-w-0 truncate">{m.firstName} {m.lastName}</span>
+            {isRcWorker(m.teamId) && (<span className="text-[9px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded font-bold">RC</span>)}
+            {m.cellPhone && (<a href={`tel:${m.cellPhone}`} className="text-blue-400 hover:text-blue-300" title="Call"><Phone size={11} /></a>)}
+          </div>
+        ))}
+      </div>
+    </div>
+
+    {isSealing && c.asphaltOwnedRows.length > 0 && (
+      <div>
+        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Asphalt sold by this cart</div>
+        <div className="space-y-1">
+          {c.asphaltOwnedRows.map(ps => (
+            <div key={ps.id} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
+              <Shovel size={11} className="text-amber-400 flex-shrink-0" />
+              <span className="text-white text-xs flex-1 min-w-0 truncate">{assembleAddressFromPending(ps)}</span>
+              <span className="text-amber-300 text-[10px] font-bold">{formatAsphaltDollars(ps.asphaltAmount)}</span>
+              {ps.assignedRcSessionId && (
+                <button
+                  onClick={() => handleUnassignAsphalt(ps.id, assembleAddressFromPending(ps))}
+                  disabled={unassigningAsphaltId === ps.id}
+                  className="text-[9px] bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white px-1.5 py-0.5 rounded font-bold transition-colors disabled:opacity-50"
+                  title="Unassign asphalt"
+                >{unassigningAsphaltId === ps.id ? '...' : 'Unassign'}</button>
+              )}
+            </div>
+          ))}
+        </div>
+        {unassignError && (<div className="text-[10px] text-red-400 mt-1">{unassignError}</div>)}
+      </div>
+    )}
+
+    {isSealing && c.asphaltIncomingRows.length > 0 && (
+      <div>
+        <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Asphalt assigned to this RC</div>
+        <div className="space-y-1">
+          {c.asphaltIncomingRows.map(ps => (
+            <div key={ps.id} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
+              <Shovel size={11} className="text-amber-400 flex-shrink-0" />
+              <span className="text-white text-xs flex-1 min-w-0 truncate">{assembleAddressFromPending(ps)}</span>
+              <span className="text-amber-300 text-[10px] font-bold">{formatAsphaltDollars(ps.asphaltAmount)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+
+    <div>
+      <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">
+        Cart jobs ({c.sharedBookings.length})
+      </div>
+      <ContractorJobs
+        bookings={c.sharedBookings}
+        financialStore={c.sharedFinancialStore}
+        workerName={
+          c.members.length > 1
+            ? c.members.map(m => m.firstName).join(' & ')
+            : `${c.members[0]?.firstName || ''} ${c.members[0]?.lastName || ''}`
+        }
+        isReadOnly
+      />
+    </div>
+    </>
+  );
+
   return (
     <>
       <style>{`
@@ -4506,8 +4734,28 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         style={{ height: 'calc(100vh - 160px)' }}
       >
 
+        {/* CART MAP PANEL — map-logsheet carts; takes the sidebar's place */}
+        {cartPanel && (
+          <div
+            className="flex-shrink-0 w-[max(380px,40%)] max-w-[90vw] bg-gray-900 border-r border-gray-700 z-30 shadow-2xl flex flex-col h-full"
+            style={{ animation: 'rmSlideIn 0.2s ease-out forwards' }}
+          >
+            <CartMapPanel
+              key={cartPanel.sessionId}
+              cart={cartPanel}
+              routeCodes={cartPanelRouteCodes}
+              sessionDate={cartPanelSessionDate}
+              commandCenterId={commandCenterService.getCurrentCommandCenterId()}
+              map={mapRef.current}
+              mapLoaded={mapLoaded}
+              header={renderCartHeader(cartPanel)}
+              details={renderCartDetails(cartPanel)}
+            />
+          </div>
+        )}
+
         {/* SIDEBAR */}
-        {sidebarOpen && (
+        {!cartPanel && sidebarOpen && (
           <div
             className="flex-shrink-0 w-[min(380px,90vw)] bg-gray-900 border-r border-gray-700 z-30 shadow-2xl flex flex-col h-full"
             style={{ animation: 'rmSlideIn 0.2s ease-out forwards' }}
@@ -4852,8 +5100,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           </div>
         )}
 
-        {/* CART DETAIL MODAL — WIDENED to max-w-3xl */}
-        {selectedCartForModal && (
+        {/* CART DETAIL MODAL — WIDENED to max-w-3xl (non-map-logsheet carts) */}
+        {selectedCartForModal && !cartPanel && (
           <div
             className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
             onClick={() => setSelectedCartForModal(null)}
@@ -4862,148 +5110,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
               onClick={e => e.stopPropagation()}
             >
-              <div className="flex-shrink-0 p-3 border-b border-gray-700 flex items-center justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    {selectedCartForModal.isRcCart && (<Truck size={13} className="text-orange-400 flex-shrink-0" />)}
-                    <div className="text-white font-bold text-base truncate">
-                      {selectedCartForModal.members.length > 1
-                        ? selectedCartForModal.members.map(m => m.firstName).join(' & ')
-                        : `${selectedCartForModal.members[0]?.firstName} ${selectedCartForModal.members[0]?.lastName}`}
-                    </div>
-                  </div>
-                  <div className="text-[11px] text-gray-400">
-                    {selectedCartForModal.stats.steps} steps • {selectedCartForModal.stats.eq.toFixed(1)} EQ • ${selectedCartForModal.stats.upsellGross.toFixed(0)} upsell
-                  </div>
-                </div>
-                <div className="flex-shrink-0 flex items-center gap-1.5">
-                  {cartCanNavigate(selectedCartForModal) && (
-                    <button
-                      onClick={() => { const cart = selectedCartForModal; setSelectedCartForModal(null); handleNavigateToCart(cart); }}
-                      className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-md flex items-center gap-1.5 transition-colors"
-                      title="Navigate to most recent transaction"
-                    ><Navigation2 size={12} />Navigate</button>
-                  )}
-                  <button
-                    onClick={() => handleViewLogsheet(selectedCartForModal.members[0], selectedCartForModal.members)}
-                    className="px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs font-bold rounded-md flex items-center gap-1.5"
-                    title="Open cart logsheet"
-                  ><FileText size={12} />Logsheet</button>
-                  {/* CRACKFILLER COUNTER — sealing only. Locked once PAID. */}
-                  {isSealing && (() => {
-                    const cart = selectedCartForModal;
-                    const locked = cart.sessionStatus === 'PAID';
-                    const saving = bottleSavingId === cart.sessionId;
-                    return (
-                      <span
-                        className={`inline-flex items-center rounded-md text-xs font-bold border overflow-hidden ${
-                          locked
-                            ? 'bg-gray-800 text-gray-500 border-gray-700'
-                            : 'bg-slate-800 text-slate-200 border-slate-600'
-                        }`}
-                        title={
-                          locked
-                            ? `${cart.crackfillerBottles} crackfiller bottle(s) — locked, payout finalised`
-                            : `${cart.crackfillerBottles} crackfiller bottle(s) = ${cart.crackfillerBottles * CRACKFILLER_LBS_PER_BOTTLE} lbs`
-                        }
-                      >
-                        <button
-                          onClick={() => handleAdjustBottles(cart, -1)}
-                          disabled={locked || saving || cart.crackfillerBottles === 0}
-                          className="px-2 py-1.5 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                          aria-label="Remove one crackfiller bottle"
-                        ><Minus size={12} /></button>
-                        <span className="flex items-center gap-1 px-1 min-w-[32px] justify-center">
-                          {saving
-                            ? <Loader size={12} className="animate-spin text-slate-400" />
-                            : <FlaskConical size={12} className="text-slate-400" />}
-                          {cart.crackfillerBottles}
-                        </span>
-                        <button
-                          onClick={() => handleAdjustBottles(cart, 1)}
-                          disabled={locked || saving}
-                          className="px-2 py-1.5 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                          aria-label="Add one crackfiller bottle"
-                        ><Plus size={12} /></button>
-                      </span>
-                    );
-                  })()}
-                  <button
-                    onClick={() => setSelectedCartForModal(null)}
-                    className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
-                  ><X size={14} /></button>
-                </div>
-              </div>
-
+              {renderCartHeader(selectedCartForModal)}
               <div className="flex-1 overflow-y-auto p-3 min-h-0 space-y-3">
-                <div>
-                  <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Cart members</div>
-                  <div className="space-y-1.5">
-                    {selectedCartForModal.members.map(m => (
-                      <div key={m.contractorId} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
-                        <Users size={11} className="text-gray-400 flex-shrink-0" />
-                        <span className="text-white text-xs font-medium flex-1 min-w-0 truncate">{m.firstName} {m.lastName}</span>
-                        {isRcWorker(m.teamId) && (<span className="text-[9px] bg-orange-500/20 text-orange-300 px-1.5 py-0.5 rounded font-bold">RC</span>)}
-                        {m.cellPhone && (<a href={`tel:${m.cellPhone}`} className="text-blue-400 hover:text-blue-300" title="Call"><Phone size={11} /></a>)}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {isSealing && selectedCartForModal.asphaltOwnedRows.length > 0 && (
-                  <div>
-                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Asphalt sold by this cart</div>
-                    <div className="space-y-1">
-                      {selectedCartForModal.asphaltOwnedRows.map(ps => (
-                        <div key={ps.id} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
-                          <Shovel size={11} className="text-amber-400 flex-shrink-0" />
-                          <span className="text-white text-xs flex-1 min-w-0 truncate">{assembleAddressFromPending(ps)}</span>
-                          <span className="text-amber-300 text-[10px] font-bold">{formatAsphaltDollars(ps.asphaltAmount)}</span>
-                          {ps.assignedRcSessionId && (
-                            <button
-                              onClick={() => handleUnassignAsphalt(ps.id, assembleAddressFromPending(ps))}
-                              disabled={unassigningAsphaltId === ps.id}
-                              className="text-[9px] bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white px-1.5 py-0.5 rounded font-bold transition-colors disabled:opacity-50"
-                              title="Unassign asphalt"
-                            >{unassigningAsphaltId === ps.id ? '...' : 'Unassign'}</button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    {unassignError && (<div className="text-[10px] text-red-400 mt-1">{unassignError}</div>)}
-                  </div>
-                )}
-
-                {isSealing && selectedCartForModal.asphaltIncomingRows.length > 0 && (
-                  <div>
-                    <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Asphalt assigned to this RC</div>
-                    <div className="space-y-1">
-                      {selectedCartForModal.asphaltIncomingRows.map(ps => (
-                        <div key={ps.id} className="bg-gray-800 rounded-md px-2.5 py-1.5 flex items-center gap-2">
-                          <Shovel size={11} className="text-amber-400 flex-shrink-0" />
-                          <span className="text-white text-xs flex-1 min-w-0 truncate">{assembleAddressFromPending(ps)}</span>
-                          <span className="text-amber-300 text-[10px] font-bold">{formatAsphaltDollars(ps.asphaltAmount)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div>
-                  <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">
-                    Cart jobs ({selectedCartForModal.sharedBookings.length})
-                  </div>
-                  <ContractorJobs
-                    bookings={selectedCartForModal.sharedBookings}
-                    financialStore={selectedCartForModal.sharedFinancialStore}
-                    workerName={
-                      selectedCartForModal.members.length > 1
-                        ? selectedCartForModal.members.map(m => m.firstName).join(' & ')
-                        : `${selectedCartForModal.members[0]?.firstName || ''} ${selectedCartForModal.members[0]?.lastName || ''}`
-                    }
-                    isReadOnly
-                  />
-                </div>
+                {renderCartDetails(selectedCartForModal)}
               </div>
             </div>
           </div>
