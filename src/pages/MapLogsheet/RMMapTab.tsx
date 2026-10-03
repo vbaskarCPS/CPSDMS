@@ -3656,13 +3656,15 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     updatePendingSalePins(map, geocodedPendingSales);
   }, [geocodedPendingSales, mapLoaded, updatePendingSalePins]);
 
-  // Pulsing completion dots
+  // Pulsing completion dots. Hidden while a cart panel is open — there the
+  // house tile of the cart's last knock pulses instead (CartMapPanel).
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
     pulsingMarkersRef.current.forEach(m => m.remove());
     pulsingMarkersRef.current = [];
     if (!filterVisibility.pendingSalesAndCompleted) return;
+    if (cartPanelKey) return;
     mostRecentCompletionPins.forEach(pin => {
       const color = pin.routeColor || '#22c55e';
       const el = createPulsingRing(color);
@@ -3673,7 +3675,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       pulsingMarkersRef.current.forEach(m => m.remove());
       pulsingMarkersRef.current = [];
     };
-  }, [mostRecentCompletionPins, mapLoaded, filterVisibility.pendingSalesAndCompleted]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mostRecentCompletionPins, mapLoaded, filterVisibility.pendingSalesAndCompleted, cartPanelKey]);
 
   // GPS + drag-to-disable-follow-me + cart-aware on-route
   useEffect(() => {
@@ -4553,22 +4556,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   const handleCopyPhone = (phone: string, id: string) => { navigator.clipboard.writeText(phone); };
 
-  // Resize map when sidebar / cart panel opens or closes. The map area loses
-  // (or gains) width on its LEFT edge; Mapbox keeps the centre fixed on resize,
-  // which would slide everything sideways by half that width. Pan it back so
-  // what was on screen stays exactly where it was — no re-orienting.
+  // Resize map when sidebar / cart panel opens or closes
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const t = setTimeout(() => {
-      try {
-        const oldW = map.getCanvas().clientWidth;
-        const newW = map.getContainer().clientWidth;
-        map.resize();
-        const dx = oldW - newW;
-        if (oldW > 0 && newW > 0 && Math.abs(dx) > 1) map.panBy([dx / 2, 0], { animate: false });
-      } catch {}
-    }, 250);
+    const t = setTimeout(() => { try { map.resize(); } catch {} }, 250);
     return () => clearTimeout(t);
   }, [sidebarOpen, cartPanelKey]);
 

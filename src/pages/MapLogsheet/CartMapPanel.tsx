@@ -11,14 +11,15 @@
 //   - A read-only card for a house tapped on the map.
 //
 // While open it draws the cart's houses as tiles on the manager's map, in the
-// workers' colours, and zooms to the cart's routes (keeping the map's rotation). Live: dispositions and
+// workers' colours, zooms to the cart's routes, and pulses the house the cart
+// knocked most recently. Live: dispositions and
 // pending sales refresh on the same realtime feeds the worker map uses; jobs
 // and transactions come in with RMMapTab's own refresh of the cart.
 //
 // Read only — nothing here writes.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { Map as MapboxMap, GeoJSONSource } from 'mapbox-gl';
+import mapboxgl from 'mapbox-gl';
 import { format } from 'date-fns';
 import { Loader, MapPin, X } from 'lucide-react';
 import { Worker, MasterBooking, PendingSale, HistoricalProperty, SessionTransaction } from '../../../types';
@@ -51,7 +52,7 @@ interface CartMapPanelProps {
   routeCodes: string[];
   sessionDate: string | null;
   commandCenterId: string | null;
-  map: MapboxMap | null;
+  map: mapboxgl.Map | null;
   mapLoaded: boolean;
   /** The old pop-up's header row (names, buttons, close). */
   header: React.ReactNode;
@@ -66,7 +67,9 @@ const L_LINE = 'cmp-fp-line';
 const L_HIT = 'cmp-hit';
 const L_SEL = 'cmp-sel';
 const L_NUM = 'cmp-num';
-const CMP_LAYERS = [L_NUM, L_SEL, L_HIT, L_LINE, L_FILL];
+const L_PULSE_FILL = 'cmp-pulse-fill';
+const L_PULSE_LINE = 'cmp-pulse-line';
+const CMP_LAYERS = [L_NUM, L_SEL, L_HIT, L_PULSE_LINE, L_PULSE_FILL, L_LINE, L_FILL];
 
 const STATE_LABEL: Record<HouseView['state'], string> = {
   none: 'Not knocked', not_home: 'Not home', no: 'No', go_back: 'Go back',
@@ -184,6 +187,10 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     if (!map.getSource(SRC_PT)) map.addSource(SRC_PT, { type: 'geojson', data: empty });
     if (!map.getLayer(L_FILL)) map.addLayer({ id: L_FILL, type: 'fill', source: SRC_FP, minzoom: 13, paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] } });
     if (!map.getLayer(L_LINE)) map.addLayer({ id: L_LINE, type: 'line', source: SRC_FP, minzoom: 13, paint: { 'line-color': ['get', 'color'], 'line-opacity': ['get', 'lineOpacity'], 'line-width': 1.2 } });
+    // "Last knock" pulse: the tile of the cart's most recent knock, filtered by
+    // id and animated below (replaces the round pulse on the manager map).
+    if (!map.getLayer(L_PULSE_FILL)) map.addLayer({ id: L_PULSE_FILL, type: 'fill', source: SRC_FP, minzoom: 13, filter: ['==', ['get', 'id'], '__none__'], paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.6 } });
+    if (!map.getLayer(L_PULSE_LINE)) map.addLayer({ id: L_PULSE_LINE, type: 'line', source: SRC_FP, minzoom: 13, filter: ['==', ['get', 'id'], '__none__'], paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': 1 } });
     if (!map.getLayer(L_HIT)) map.addLayer({ id: L_HIT, type: 'circle', source: SRC_PT, minzoom: 13, paint: { 'circle-color': '#000', 'circle-opacity': 0, 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 10, 17, 18, 19, 26] } });
     if (!map.getLayer(L_SEL)) map.addLayer({
       id: L_SEL, type: 'circle', source: SRC_PT, minzoom: 13, filter: ['==', ['get', 'id'], '__none__'],
@@ -239,8 +246,8 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
         geometry: { type: 'Point', coordinates: [v.house.lng, v.house.lat] },
       });
     }
-    (map.getSource(SRC_FP) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: fp });
-    (map.getSource(SRC_PT) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pt });
+    (map.getSource(SRC_FP) as mapboxgl.GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: fp });
+    (map.getSource(SRC_PT) as mapboxgl.GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pt });
   }, [map, mapLoaded, houseViews, tiles]);
 
   useEffect(() => {
@@ -248,31 +255,51 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     map.setFilter(L_SEL, ['==', ['get', 'id'], selectedId || '__none__']);
   }, [map, mapLoaded, selectedId]);
 
-  // --- MAP: zoom to the cart's routes (once per cart) — keeping the
-  // manager's current rotation and tilt (fitBounds would otherwise snap the
-  // map back to north-up).
+  // --- MAP: pulse the house of the cart's most recent knock today ---
+  // (No / Not home / Go back / Invalid / pending / completed — whichever is
+  // latest.) The tile's outline swells and fades on a 1.8 s loop.
+  const lastKnockId = knockEvents.length ? knockEvents[knockEvents.length - 1].id : null;
+  useEffect(() => {
+    if (!map || !mapLoaded || !map.getLayer(L_PULSE_FILL)) return;
+    const filter: any = ['==', ['get', 'id'], lastKnockId || '__none__'];
+    map.setFilter(L_PULSE_FILL, filter);
+    map.setFilter(L_PULSE_LINE, filter);
+    if (!lastKnockId) return;
+    let raf = 0;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = ((now - start) % 1800) / 1800;          // 0 → 1 every 1.8 s
+      try {
+        if (!map.getLayer(L_PULSE_LINE)) return;
+        map.setPaintProperty(L_PULSE_LINE, 'line-width', 2 + t * 10);
+        map.setPaintProperty(L_PULSE_LINE, 'line-opacity', 1 - t);
+        map.setPaintProperty(L_PULSE_FILL, 'fill-opacity', 0.75 - 0.35 * t);
+      } catch { return; }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [map, mapLoaded, lastKnockId]);
+
+  // --- MAP: zoom to the cart's routes (once per cart) ---
   const fittedFor = useRef('');
   useEffect(() => {
     if (!map || !mapLoaded || !routeMaps.length) return;
     const key = `${cart.sessionId}|${routeKey}`;
     if (fittedFor.current === key) return;
-    let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
-    routeMaps.forEach(rm => rm.segments?.forEach(s => s.coordinates?.forEach(c => {
-      if (c[0] < minLng) minLng = c[0]; if (c[0] > maxLng) maxLng = c[0];
-      if (c[1] < minLat) minLat = c[1]; if (c[1] > maxLat) maxLat = c[1];
-    })));
-    if (!isFinite(minLng)) return;
+    const coords: [number, number][] = [];
+    routeMaps.forEach(rm => rm.segments?.forEach(s => s.coordinates?.forEach(c => coords.push(c as [number, number]))));
+    if (!coords.length) return;
     fittedFor.current = key;
-    // Let the map finish resizing for the wider panel first.
+    const b = coords.reduce((bb, c) => bb.extend(c), new mapboxgl.LngLatBounds(coords[0], coords[0]));
+    // Let the map finish resizing for the wider panel first. Pass the current
+    // rotation/tilt — fitBounds otherwise turns the map back to north-up.
     setTimeout(() => {
       try {
         map.resize();
-        map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
-          padding: 50, maxZoom: 17, duration: 700,
-          bearing: map.getBearing(), pitch: map.getPitch(),
-        });
+        map.fitBounds(b, { padding: 50, maxZoom: 17, duration: 700, bearing: map.getBearing(), pitch: map.getPitch() });
       } catch { /* map gone */ }
-    }, 300);
+    }, 250);
   }, [map, mapLoaded, routeMaps, cart.sessionId, routeKey]);
 
   const flyTo = (lng: number, lat: number, zoom: number) => { map?.flyTo({ center: [lng, lat], zoom, duration: 700 }); };
