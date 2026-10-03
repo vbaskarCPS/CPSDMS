@@ -11,14 +11,14 @@
 //   - A read-only card for a house tapped on the map.
 //
 // While open it draws the cart's houses as tiles on the manager's map, in the
-// workers' colours, and zooms to the cart's routes. Live: dispositions and
+// workers' colours, without moving the map. Live: dispositions and
 // pending sales refresh on the same realtime feeds the worker map uses; jobs
 // and transactions come in with RMMapTab's own refresh of the cart.
 //
 // Read only — nothing here writes.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import mapboxgl from 'mapbox-gl';
+import React, { useEffect, useMemo, useState } from 'react';
+import type { Map as MapboxMap, GeoJSONSource } from 'mapbox-gl';
 import { format } from 'date-fns';
 import { Loader, MapPin, X } from 'lucide-react';
 import { Worker, MasterBooking, PendingSale, HistoricalProperty, SessionTransaction } from '../../../types';
@@ -51,7 +51,7 @@ interface CartMapPanelProps {
   routeCodes: string[];
   sessionDate: string | null;
   commandCenterId: string | null;
-  map: mapboxgl.Map | null;
+  map: MapboxMap | null;
   mapLoaded: boolean;
   /** The old pop-up's header row (names, buttons, close). */
   header: React.ReactNode;
@@ -239,8 +239,8 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
         geometry: { type: 'Point', coordinates: [v.house.lng, v.house.lat] },
       });
     }
-    (map.getSource(SRC_FP) as mapboxgl.GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: fp });
-    (map.getSource(SRC_PT) as mapboxgl.GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pt });
+    (map.getSource(SRC_FP) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: fp });
+    (map.getSource(SRC_PT) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pt });
   }, [map, mapLoaded, houseViews, tiles]);
 
   useEffect(() => {
@@ -248,20 +248,8 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     map.setFilter(L_SEL, ['==', ['get', 'id'], selectedId || '__none__']);
   }, [map, mapLoaded, selectedId]);
 
-  // --- MAP: zoom to the cart's routes (once per cart) ---
-  const fittedFor = useRef('');
-  useEffect(() => {
-    if (!map || !mapLoaded || !routeMaps.length) return;
-    const key = `${cart.sessionId}|${routeKey}`;
-    if (fittedFor.current === key) return;
-    const coords: [number, number][] = [];
-    routeMaps.forEach(rm => rm.segments?.forEach(s => s.coordinates?.forEach(c => coords.push(c as [number, number]))));
-    if (!coords.length) return;
-    fittedFor.current = key;
-    const b = coords.reduce((bb, c) => bb.extend(c), new mapboxgl.LngLatBounds(coords[0], coords[0]));
-    // Let the map finish resizing for the wider panel first.
-    setTimeout(() => { map.resize(); map.fitBounds(b, { padding: 50, maxZoom: 17, duration: 700 }); }, 250);
-  }, [map, mapLoaded, routeMaps, cart.sessionId, routeKey]);
+  // The map is left exactly where the manager had it — opening the panel
+  // never pans or zooms. Only tapping a street / go-back row moves it.
 
   const flyTo = (lng: number, lat: number, zoom: number) => { map?.flyTo({ center: [lng, lat], zoom, duration: 700 }); };
 

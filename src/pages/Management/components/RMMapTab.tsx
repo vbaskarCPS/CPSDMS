@@ -1136,7 +1136,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // centred pop-up. `mapGate` is read once from the Super Admin access lists.
   const [mapGate, setMapGate] = useState<{ cc: boolean; contractors: Set<string> }>({ cc: false, contractors: new Set() });
   const cartMapOpenRef = useRef(false);
-  const viewBeforeCartRef = useRef<{ center: mapboxgl.LngLat; zoom: number } | null>(null);
   const [selectedRouteForBookings, setSelectedRouteForBookings] = useState<string | null>(null);
   // "View PCL" from the assign modal. Floats on top of it; follows it closed.
   const [pclModalOpen, setPclModalOpen] = useState(false);
@@ -4552,17 +4551,28 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   const handleCopyPhone = (phone: string, id: string) => { navigator.clipboard.writeText(phone); };
 
-  // Resize map when sidebar / cart panel opens or closes
+  // Resize map when sidebar / cart panel opens or closes. The map area loses
+  // (or gains) width on its LEFT edge; Mapbox keeps the centre fixed on resize,
+  // which would slide everything sideways by half that width. Pan it back so
+  // what was on screen stays exactly where it was — no re-orienting.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const t = setTimeout(() => { try { map.resize(); } catch {} }, 250);
+    const t = setTimeout(() => {
+      try {
+        const oldW = map.getCanvas().clientWidth;
+        const newW = map.getContainer().clientWidth;
+        map.resize();
+        const dx = oldW - newW;
+        if (oldW > 0 && newW > 0 && Math.abs(dx) > 1) map.panBy([dx / 2, 0], { animate: false });
+      } catch {}
+    }, 250);
     return () => clearTimeout(t);
   }, [sidebarOpen, cartPanelKey]);
 
   // Cart panel open: hide this tab's own pins/dots (the house tiles show the
-  // same things) and route taps are ignored (cartMapOpenRef). Restore the
-  // view the manager had when the panel closes.
+  // same things) and route taps are ignored (cartMapOpenRef). The map's view
+  // is never changed by opening or closing the panel.
   useEffect(() => {
     const map = mapRef.current;
     const open = !!cartPanel;
@@ -4572,13 +4582,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       .map((l: any) => l.id as string)
       .filter(id => id.startsWith('rm-') && !id.startsWith('rm-line-') && id !== 'rm-num-labels' && id !== 'rm-worker-overlay');
     if (open) {
-      if (!viewBeforeCartRef.current) viewBeforeCartRef.current = { center: map.getCenter(), zoom: map.getZoom() };
       pinLayers.forEach(id => { try { map.setLayoutProperty(id, 'visibility', 'none'); } catch {} });
     } else {
       pinLayers.forEach(id => { try { map.setLayoutProperty(id, 'visibility', 'visible'); } catch {} });
-      const v = viewBeforeCartRef.current;
-      viewBeforeCartRef.current = null;
-      if (v) setTimeout(() => { try { map.resize(); map.easeTo({ center: v.center, zoom: v.zoom, duration: 600 }); } catch {} }, 260);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cartPanelKey, mapLoaded]);
