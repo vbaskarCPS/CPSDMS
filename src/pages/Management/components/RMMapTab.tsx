@@ -37,7 +37,11 @@ import type { GeocodePhase, GeocodeProgress, FilterVisibility } from '../RMLogbo
 import type { MapPin as MapPinRecord } from '../../../lib/sessionService';
 import RoutePCLModal from './RoutePCLModal';
 import CartMapPanel from './CartMapPanel';
-import { fetchMapAccessList } from '../../../lib/mapLogsheetService';
+import {
+  fetchMapAccessList, fetchRouteHouses, fetchDispositions, subscribeToDispositions,
+  indexBookings, buildHouseViews, RouteHouse, HouseDisposition,
+} from '../../../lib/mapLogsheetService';
+import { CartScope, computeCounts, isOnDay, isCartKnock } from '../../../lib/mapLogsheetStats';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -1650,6 +1654,120 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   }, [cartCardData, sortBy]);
 
+  // Load who's on the map logsheet (once per command centre).
+  useEffect(() => {
+    const ccId = commandCenterService.getCurrentCommandCenterId();
+    let cancelled = false;
+    (async () => {
+      try {
+        const [ccRow, list] = await Promise.all([
+          ccId
+            ? supabase.from('map_logsheet_cc_access').select('command_center_id').eq('command_center_id', ccId).maybeSingle()
+            : Promise.resolve({ data: null, error: null } as { data: any; error: any }),
+          fetchMapAccessList().catch(() => []),
+        ]);
+        if (cancelled) return;
+        setMapGate({
+          cc: !ccRow.error && !!ccRow.data,
+          contractors: new Set(list.map(e => (e.contractorId || '').toUpperCase())),
+        });
+      } catch (err) {
+        console.warn('[RMMap] map logsheet access check failed', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const cartUsesMapPanel = (cart: CartCardData) =>
+    mapGate.cc || cart.members.some(m => mapGate.contractors.has((m.contractorId || '').toUpperCase()));
+  const cartPanel = selectedCartForModal && cartUsesMapPanel(selectedCartForModal) ? selectedCartForModal : null;
+  // The cart's routes, the same way the worker's map finds them: every route
+  // in today's session assigned to anyone on the cart (whole route or a split
+  // bucket), plus any route its jobs or sales sit on. (cart.assignedRoutes
+  // alone only lists routes with office bookings — empty for a cart that has
+  // only its own sales.) Split buckets ("ORC11a") share the base route's houses.
+  const routesForCart = useCallback((cart: CartCardData): string[] => {
+    const memberIds = new Set(cart.members.map(m => m.contractorId));
+    const raw: string[] = [];
+    routes.forEach(r => { if (r.assignedWorkerIds?.some(id => memberIds.has(id))) raw.push(r.routeCode); });
+    routeSplitsByCode.forEach((split, code) => {
+      if (split.buckets.some(b => (b.assignedWorkers || []).some((id: string) => memberIds.has(id)))) raw.push(code);
+    });
+    raw.push(...cart.assignedRoutes);
+    cart.sharedBookings.forEach(b => { const rn = b['Route Number']; if (rn && rn !== 'x') raw.push(rn); });
+    const known = new Set(routeMapData.map(r => r.route_code));
+    const codes = raw
+      .map(c => (c || '').trim())
+      .filter(Boolean)
+      .map(c => (known.has(c) ? c : c.replace(/[a-z]+$/, '')));
+    return [...new Set(codes)].filter(Boolean).sort();
+  }, [routes, routeSplitsByCode, routeMapData]);
+  const cartPanelRouteCodes = useMemo(
+    () => (cartPanel ? routesForCart(cartPanel) : [] as string[]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cartPanel?.sessionId, cartPanel?.members, cartPanel?.assignedRoutes.join(','), cartPanel?.sharedBookings, routesForCart],
+  );
+  const cartPanelKey = cartPanel ? `${cartPanel.sessionId}|${cartPanelRouteCodes.join(',')}` : '';
+  const cartPanelSessionDate = useMemo(
+    () => (cartPanel ? allSessions.find(s => s.id === cartPanel.sessionId)?.date || null : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cartPanel?.sessionId, allSessions],
+  );
+
+
+  // --- MAP-LOGSHEET CART CARDS: today's knocks + coverage ---
+  // For carts on the map logsheet, the sidebar card shows Knocks, Nos,
+  // Go-backs, Invalids and % of its routes covered TODAY, worked out exactly
+  // like the cart panel's Today tab (lib/mapLogsheetStats). Houses and
+  // dispositions for every such cart's routes are loaded once and kept live.
+  const mapCarts = useMemo(() => cartCardData.filter(c => cartUsesMapPanel(c)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cartCardData, mapGate]);
+  const mapCartRouteKey = useMemo(
+    () => [...new Set(mapCarts.flatMap(c => routesForCart(c)))].sort().join(','),
+    [mapCarts, routesForCart],
+  );
+  const [knockHouses, setKnockHouses] = useState<RouteHouse[]>([]);
+  const [knockDispositions, setKnockDispositions] = useState<Map<string, HouseDisposition>>(new Map());
+  useEffect(() => {
+    const codes = mapCartRouteKey ? mapCartRouteKey.split(',') : [];
+    if (!codes.length) { setKnockHouses([]); setKnockDispositions(new Map()); return; }
+    let cancelled = false;
+    Promise.all([fetchRouteHouses(codes), fetchDispositions(codes)])
+      .then(([hs, ds]) => { if (!cancelled) { setKnockHouses(hs); setKnockDispositions(ds); } })
+      .catch(err => console.warn('[RMMap] cart knock data load failed', err));
+    const unsub = subscribeToDispositions(codes, () => {
+      fetchDispositions(codes).then(ds => { if (!cancelled) setKnockDispositions(ds); }).catch(() => {});
+    });
+    return () => { cancelled = true; unsub(); };
+  }, [mapCartRouteKey]);
+
+  const cartKnockSummary = useMemo(() => {
+    const out = new Map<string, { knocks: number; no: number; goBack: number; invalid: number; touched: number; total: number; pct: number }>();
+    for (const cart of mapCarts) {
+      const codes = new Set(routesForCart(cart));
+      const houses = knockHouses.filter(h => codes.has(h.routeCode));
+      const dispos = new Map<string, HouseDisposition>();
+      knockDispositions.forEach((d, k) => { if (codes.has(d.routeCode)) dispos.set(k, d); });
+      const { pending, completed } = indexBookings(cart.sharedBookings, houses);
+      const views = buildHouseViews(houses, dispos, new Map(), pending, completed, new Map());
+      const sessionDate = allSessions.find(s => s.id === cart.sessionId)?.date || null;
+      const scope: CartScope = { workerIds: new Set(cart.members.map(m => m.contractorId)), sessionIds: new Set([cart.sessionId]) };
+      const counts = computeCounts(dispos, views, sessionDate, scope);
+      // Covered today = houses this cart knocked today, or with a sale on this
+      // cart's session (pending or done), out of every house on its routes.
+      const touched = views.filter(v =>
+        v.state === 'pending' || v.state === 'completed'
+        || (!!v.disposition && isOnDay(v.disposition.updatedAt, sessionDate) && isCartKnock(v.disposition, scope)),
+      ).length;
+      out.set(cart.sessionId, {
+        knocks: counts.knocks, no: counts.no, goBack: counts.goBack, invalid: counts.invalid,
+        touched, total: houses.length, pct: houses.length ? touched / houses.length : 0,
+      });
+    }
+    return out;
+  }, [mapCarts, routesForCart, knockHouses, knockDispositions, allSessions]);
+
   const cartByWorkerId = useMemo(() => {
     const map = new Map<string, TeamCart>();
     teamCarts.forEach(cart => {
@@ -2435,63 +2553,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       map.addLayer({id:'rm-worker-overlay',type:'symbol',source:'rm-worker-overlay-src',layout:{'text-field':['get','label'],'text-font':['DIN Pro Medium','Arial Unicode MS Regular'],'text-size':11,'text-offset':[0,2.3],'text-allow-overlap':true,'text-ignore-placement':true},paint:{'text-color':['get','color'],'text-halo-color':'rgba(255,255,255,0.9)','text-halo-width':1.5}});
     }
   }, [routeMapData, routes, workers, mapLoaded, myRouteCodes, routeSplitsByCode]);
-
-  // Load who's on the map logsheet (once per command centre).
-  useEffect(() => {
-    const ccId = commandCenterService.getCurrentCommandCenterId();
-    let cancelled = false;
-    (async () => {
-      try {
-        const [ccRow, list] = await Promise.all([
-          ccId
-            ? supabase.from('map_logsheet_cc_access').select('command_center_id').eq('command_center_id', ccId).maybeSingle()
-            : Promise.resolve({ data: null, error: null } as { data: any; error: any }),
-          fetchMapAccessList().catch(() => []),
-        ]);
-        if (cancelled) return;
-        setMapGate({
-          cc: !ccRow.error && !!ccRow.data,
-          contractors: new Set(list.map(e => (e.contractorId || '').toUpperCase())),
-        });
-      } catch (err) {
-        console.warn('[RMMap] map logsheet access check failed', err);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  const cartUsesMapPanel = (cart: CartCardData) =>
-    mapGate.cc || cart.members.some(m => mapGate.contractors.has((m.contractorId || '').toUpperCase()));
-  const cartPanel = selectedCartForModal && cartUsesMapPanel(selectedCartForModal) ? selectedCartForModal : null;
-  // The cart's routes, the same way the worker's map finds them: every route
-  // in today's session assigned to anyone on the cart (whole route or a split
-  // bucket), plus any route its jobs or sales sit on. (cart.assignedRoutes
-  // alone only lists routes with office bookings — empty for a cart that has
-  // only its own sales.) Split buckets ("ORC11a") share the base route's houses.
-  const cartPanelRouteCodes = useMemo(() => {
-    if (!cartPanel) return [] as string[];
-    const memberIds = new Set(cartPanel.members.map(m => m.contractorId));
-    const raw: string[] = [];
-    routes.forEach(r => { if (r.assignedWorkerIds?.some(id => memberIds.has(id))) raw.push(r.routeCode); });
-    routeSplitsByCode.forEach((split, code) => {
-      if (split.buckets.some(b => (b.assignedWorkers || []).some((id: string) => memberIds.has(id)))) raw.push(code);
-    });
-    raw.push(...cartPanel.assignedRoutes);
-    cartPanel.sharedBookings.forEach(b => { const rn = b['Route Number']; if (rn && rn !== 'x') raw.push(rn); });
-    const known = new Set(routeMapData.map(r => r.route_code));
-    const codes = raw
-      .map(c => (c || '').trim())
-      .filter(Boolean)
-      .map(c => (known.has(c) ? c : c.replace(/[a-z]+$/, '')));
-    return [...new Set(codes)].filter(Boolean).sort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cartPanel?.sessionId, cartPanel?.members, cartPanel?.assignedRoutes.join(','), cartPanel?.sharedBookings, routes, routeSplitsByCode, routeMapData]);
-  const cartPanelKey = cartPanel ? `${cartPanel.sessionId}|${cartPanelRouteCodes.join(',')}` : '';
-  const cartPanelSessionDate = useMemo(
-    () => (cartPanel ? allSessions.find(s => s.id === cartPanel.sessionId)?.date || null : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cartPanel?.sessionId, allSessions],
-  );
 
   // Route opacity — V2 SPLIT-AWARE.
   // For unsplit routes, behaviour is unchanged. For split routes, "any bucket
@@ -4910,6 +4971,19 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                           <span>${cart.stats.upsellGross.toFixed(0)}</span>
                           {cart.stats.pendingSaleCount > 0 && (<><span className="text-gray-600">•</span><span className="text-amber-400">{cart.stats.pendingSaleCount} sale</span></>)}
                         </div>
+                        {(() => {
+                          const k = cartKnockSummary.get(cart.sessionId);
+                          if (!k) return null;
+                          return (
+                            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1 text-[10px] text-gray-300">
+                              <span>{k.knocks} knocks</span><span className="text-gray-600">•</span>
+                              <span className={k.no > 0 ? 'text-red-400' : ''}>{k.no} no</span><span className="text-gray-600">•</span>
+                              <span className={k.goBack > 0 ? 'text-orange-300' : ''}>{k.goBack} go-back</span><span className="text-gray-600">•</span>
+                              <span className={k.invalid > 0 ? 'text-pink-300' : ''}>{k.invalid} invalid</span><span className="text-gray-600">•</span>
+                              <span className="text-blue-300" title={`${k.touched} of ${k.total} houses knocked or sold today`}>{k.total ? `${Math.round(k.pct * 100)}% covered` : '— covered'}</span>
+                            </div>
+                          );
+                        })()}
                       </div>
                       <div className="flex-shrink-0 flex items-center gap-1">
                         {canNav && (
