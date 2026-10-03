@@ -39,9 +39,9 @@ import RoutePCLModal from './RoutePCLModal';
 import CartMapPanel from './CartMapPanel';
 import {
   fetchMapAccessList, fetchRouteHouses, fetchDispositions, subscribeToDispositions,
-  indexBookings, buildHouseViews, RouteHouse, HouseDisposition,
+  indexBookings, buildHouseViews, routeHouseId, RouteHouse, HouseDisposition,
 } from '../../../lib/mapLogsheetService';
-import { CartScope, computeCounts, isOnDay, isCartKnock } from '../../../lib/mapLogsheetStats';
+import { CartScope, computeCounts, computeKnockEvents, isOnDay, isCartKnock } from '../../../lib/mapLogsheetStats';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -1744,7 +1744,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [mapCartRouteKey]);
 
   const cartKnockSummary = useMemo(() => {
-    const out = new Map<string, { knocks: number; no: number; goBack: number; invalid: number; touched: number; total: number; pct: number }>();
+    type Summary = {
+      knocks: number; no: number; goBack: number; invalid: number; touched: number; total: number; pct: number;
+      /** House of the cart's most recent knock today (any kind) — where Navigate goes. */
+      last: { lat: number; lng: number; address: string } | null;
+    };
+    const out = new Map<string, Summary>();
     for (const cart of mapCarts) {
       const codes = new Set(routesForCart(cart));
       const houses = knockHouses.filter(h => codes.has(h.routeCode));
@@ -1761,13 +1766,24 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         v.state === 'pending' || v.state === 'completed'
         || (!!v.disposition && isOnDay(v.disposition.updatedAt, sessionDate) && isCartKnock(v.disposition, scope)),
       ).length;
+      // Latest knock today: dispositions + the cart's sales (completed txs and
+      // pending-sale stand-ins, both already in navActivity), matched to houses.
+      const events = computeKnockEvents(dispos, [], (cart.navActivity || []) as any[], houses, sessionDate, scope);
+      const lastId = events.length ? events[events.length - 1].id : null;
+      const lastView = lastId ? views.find(v => routeHouseId(v.house.routeCode, v.house.houseKey) === lastId) : undefined;
       out.set(cart.sessionId, {
         knocks: counts.knocks, no: counts.no, goBack: counts.goBack, invalid: counts.invalid,
         touched, total: houses.length, pct: houses.length ? touched / houses.length : 0,
+        last: lastView
+          ? { lat: lastView.house.lat, lng: lastView.house.lng, address: `${lastView.house.civicNo}${(lastView.house.civicSuffix || '').toUpperCase()} ${lastView.house.streetName}` }
+          : null,
       });
     }
     return out;
   }, [mapCarts, routesForCart, knockHouses, knockDispositions, allSessions]);
+  // For map handlers registered once (route-line "navigate to who?" prompt).
+  const cartKnockSummaryRef = useRef(cartKnockSummary);
+  cartKnockSummaryRef.current = cartKnockSummary;
 
   const cartByWorkerId = useMemo(() => {
     const map = new Map<string, TeamCart>();
@@ -2714,7 +2730,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
               type: 'cart',
               label: label || cart.teamId,
               card: cart,
-              hasGeocodableAddress: resolveNavDestination(cart.navActivity) !== null,
+              hasGeocodableAddress: !!cartKnockSummaryRef.current.get(cart.sessionId)?.last || resolveNavDestination(cart.navActivity) !== null,
             });
           }
         } else {
@@ -4131,8 +4147,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     setSwitchNavConfirm({ newDestination: newDest, newTargetKey: newKey, currentLabel: navState.destination.label, newLabel: label });
   }, [navState, startNavToDestination]);
 
+  // Map-logsheet carts: navigate to the house of their most recent knock today
+  // (any disposition or sale). Otherwise — or before their first knock — the
+  // newest geocoded job/pending sale, as before.
   const handleNavigateToCart = useCallback((cart: CartCardData) => {
-    const resolved = resolveNavDestination(cart.navActivity);
+    const resolved = cartKnockSummary.get(cart.sessionId)?.last || resolveNavDestination(cart.navActivity);
     if (!resolved) { console.warn('[RMNav] No geocoded address for cart', cart.sessionId); return; }
     const label = cart.members.length > 1
       ? cart.members.map(m => m.firstName).join(' & ')
@@ -4142,7 +4161,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (!navState) { startNavToDestination(newDest, newKey); return; }
     if (navState.targetKey === newKey) return;
     setSwitchNavConfirm({ newDestination: newDest, newTargetKey: newKey, currentLabel: navState.destination.label, newLabel: label });
-  }, [navState, startNavToDestination]);
+  }, [navState, startNavToDestination, cartKnockSummary]);
 
   // A dropped pin is already a coordinate and a label, which is exactly what the
   // navigator wants — so it hands straight over with no resolution step, unlike
@@ -4165,7 +4184,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [navState, startNavToDestination, onExitPinMode]);
 
   const workerCanNavigate = useCallback((card: WorkerCardData): boolean => resolveNavDestination(card.financialStore) !== null, []);
-  const cartCanNavigate = useCallback((cart: CartCardData): boolean => resolveNavDestination(cart.navActivity) !== null, []);
+  const cartCanNavigate = useCallback(
+    (cart: CartCardData): boolean => !!cartKnockSummary.get(cart.sessionId)?.last || resolveNavDestination(cart.navActivity) !== null,
+    [cartKnockSummary],
+  );
 
   const handleNavCancel = useCallback(() => { setNavState(null); }, []);
   const handleNavArrived = useCallback(() => { setNavState(null); }, []);
