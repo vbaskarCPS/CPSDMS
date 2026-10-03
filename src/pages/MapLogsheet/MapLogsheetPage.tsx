@@ -38,9 +38,9 @@ import { getPclTextedSet } from '../../lib/pclOutreachService';
 import {
   MAP_LOGSHEET_PATH, isMapWorker,
   SavedRouteMap, RouteHouse, HouseDisposition, HouseDispositionStatus, HouseView, StreetSegmentPick,
-  fetchRouteMaps, ensureRouteHouses, fetchDispositions, setDisposition, clearDisposition, addManualHouse, loadSegmentHouses,
+  fetchRouteMaps, ensureRouteHouses, fetchDispositions, fetchDisposition, setDisposition, clearDisposition, addManualHouse, loadSegmentHouses,
   fetchHistoricalForRoutes, indexHistorical, historicalSummary,
-  indexPendingSales, indexBookings, indexPcl, buildHouseViews, routeHouseId, houseKeyFromFullAddress, houseKeyFromAddress,
+  indexPendingSales, indexBookings, indexPcl, buildHouseViews, routeHouseId, HouseLocator,
   subscribeToPendingSales, subscribeToDispositions, HOUSE_COLORS,
 } from '../../lib/mapLogsheetService';
 
@@ -145,6 +145,12 @@ const MapLogsheetPage: React.FC = () => {
   const [routeMaps, setRouteMaps] = useState<SavedRouteMap[]>([]);
   const [houses, setHouses] = useState<RouteHouse[]>([]);
   const [dispositions, setDispositions] = useState<Map<string, HouseDisposition>>(new Map());
+  // Teams: who's on this worker's cart today (contractor ids + the cart's
+  // shared logsheet session) and everyone's display name, from the daily
+  // session. Today's counts and Pace only count this cart's knocks, and the
+  // house sheet says who marked a house.
+  const [cart, setCart] = useState<{ workerIds: Set<string>; sessionIds: Set<string> }>({ workerIds: new Set(), sessionIds: new Set() });
+  const [workerNames, setWorkerNames] = useState<Map<string, string>>(new Map());
   const [pclByRoute, setPclByRoute] = useState<Map<string, PCLClientGroup[]>>(new Map());
   // Load Historical rows (previously serviced houses) for these routes — purple.
   const [historicalRows, setHistoricalRows] = useState<HistoricalProperty[]>([]);
@@ -217,6 +223,19 @@ const MapLogsheetPage: React.FC = () => {
       : [];
     myRoutes.sort();
     setRouteCodes(prev => (prev.join(',') === myRoutes.join(',') ? prev : myRoutes));
+    // Cart + names (teams). A solo worker's "cart" is just themselves.
+    const myCart = daily?.teamCarts?.find(c => c.workerIds?.includes(w.contractorId));
+    const cartWorkerIds = new Set<string>(myCart?.workerIds?.length ? myCart.workerIds : [w.contractorId]);
+    cartWorkerIds.add(w.contractorId);
+    const cartSessionIds = new Set<string>([sid]);
+    if (myCart?.logsheetSessionId) cartSessionIds.add(myCart.logsheetSessionId);
+    setCart({ workerIds: cartWorkerIds, sessionIds: cartSessionIds });
+    const names = new Map<string, string>();
+    for (const dw of daily?.workers || []) {
+      const nm = `${dw.firstName || ''} ${dw.lastName ? dw.lastName[0] + '.' : ''}`.trim();
+      if (dw.contractorId && nm) names.set(dw.contractorId, nm);
+    }
+    setWorkerNames(names);
     try {
       const live = await sessionService.getActiveLogsheetSession(w.contractorId);
       if (live) { setStats(live.stats); setTransactions(live.financialStore || []); }
@@ -388,10 +407,17 @@ const MapLogsheetPage: React.FC = () => {
     [selectedId, houseViews],
   );
 
+  // A knock belongs to this cart if it was made by someone on the cart or in
+  // the cart's session. Rows with neither (very old) still count.
+  const isCartKnock = (d: HouseDisposition) =>
+    (!d.workerId && !d.sessionId)
+    || (!!d.workerId && cart.workerIds.has(d.workerId))
+    || (!!d.sessionId && cart.sessionIds.has(d.sessionId));
+
   const counts = useMemo(() => {
     let no = 0, notHome = 0, goBack = 0, invalid = 0;
     dispositions.forEach(d => {
-      if (!isToday(d.updatedAt)) return;
+      if (!isToday(d.updatedAt) || !isCartKnock(d)) return;
       if (d.status === 'no') no++;
       else if (d.status === 'not_home') notHome++;
       else if (d.status === 'invalid') invalid++;
@@ -409,7 +435,8 @@ const MapLogsheetPage: React.FC = () => {
     const answerRate = knocks > 0 ? answered / knocks : 0;
     const closingRate = answered > 0 ? sales / answered : 0;
     return { no, notHome, goBack, invalid, pending, completed, knocks, answered, sales, answerRate, closingRate };
-  }, [dispositions, houseViews, sessionDate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispositions, houseViews, sessionDate, cart]);
 
   // ---------------------------------------------------------------------
   // PACE & TIME (today) — one event per knocked house, timed by its latest state
@@ -417,30 +444,30 @@ const MapLogsheetPage: React.FC = () => {
   const knockEvents = useMemo(() => {
     type Ev = { t: number; kind: 'no' | 'not_home' | 'go_back' | 'invalid' | 'pending' | 'sale'; id: string };
     const byHouse = new Map<string, Ev>();
-    // Dispositions marked today
+    const loc = new HouseLocator(houses);
+    // Dispositions marked today by this cart
     dispositions.forEach(d => {
-      if (!isToday(d.updatedAt)) return;
+      if (!isToday(d.updatedAt) || !isCartKnock(d)) return;
       byHouse.set(routeHouseId(d.routeCode, d.houseKey), { t: new Date(d.updatedAt).getTime(), kind: d.status, id: routeHouseId(d.routeCode, d.houseKey) });
     });
     // Pending sales parked today (override a disposition at the same house)
     for (const ps of pendingSales) {
       if (ps.saleType === 'asphalt' && ps.parentId) continue;
       if (!ps.createdAt || !isToday(ps.createdAt)) continue;
-      const key = houseKeyFromAddress(ps.houseNumber, ps.streetName);
-      if (!key) continue;
-      const id = routeHouseId(ps.routeCode || '', key);
+      const id = loc.idForAddress(ps.routeCode || '', ps.houseNumber, ps.streetName);
+      if (!id) continue;
       byHouse.set(id, { t: new Date(ps.createdAt).getTime(), kind: 'pending', id });
     }
     // Completed transactions today (override everything)
     for (const tx of transactions) {
       if (!tx.timestamp || !isToday(tx.timestamp)) continue;
-      const key = houseKeyFromFullAddress(tx.address);
-      if (!key) continue;
-      const id = routeHouseId(tx.routeCode || '', key);
+      const id = loc.idForFullAddress(tx.routeCode || '', tx.address);
+      if (!id) continue;
       byHouse.set(id, { t: new Date(tx.timestamp).getTime(), kind: 'sale', id });
     }
     return [...byHouse.values()].sort((a, b) => a.t - b.t);
-  }, [dispositions, pendingSales, transactions, sessionDate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispositions, pendingSales, transactions, sessionDate, houses, cart]);
 
   const pace = useMemo(() => {
     const n = knockEvents.length;
@@ -551,10 +578,20 @@ const MapLogsheetPage: React.FC = () => {
     if (id) { setPlacing(false); setPlaceAt(null); setShowJobs(false); setShowMenu(false); setShowStats(false); }
   }, []);
 
-  const handleDispose = async (status: HouseDispositionStatus, note: string, firstName: string) => {
+  const handleDispose = async (status: HouseDispositionStatus, note: string, firstName: string, auto = false) => {
     if (!selectedView || !worker) return;
     setSaving(true);
     try {
+      if (auto) {
+        // The 5-second auto Not Home must never overwrite a partner: check
+        // the database first, and if anyone has marked this house meanwhile,
+        // keep theirs (with its note) and just show it.
+        const existing = await fetchDisposition(selectedView.house.routeCode, selectedView.house.houseKey);
+        if (existing) {
+          setDispositions(prev => { const m = new Map(prev); m.set(routeHouseId(existing.routeCode, existing.houseKey), existing); return m; });
+          return;
+        }
+      }
       const d = await setDisposition({
         routeCode: selectedView.house.routeCode,
         houseKey: selectedView.house.houseKey,
@@ -1119,6 +1156,12 @@ const MapLogsheetPage: React.FC = () => {
             view={selectedView}
             saving={saving}
             onDispose={handleDispose}
+            markedBy={(() => {
+              const wid = selectedView.disposition?.workerId;
+              if (!wid) return null;
+              if (worker && wid === worker.contractorId) return 'you';
+              return workerNames.get(wid) || wid;
+            })()}
             onClearDisposition={handleClearDisposition}
             onSale={handleSale}
             onOpenPending={handleOpenPending}

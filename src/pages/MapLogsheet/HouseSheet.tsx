@@ -14,7 +14,10 @@ import { HouseView, HouseDispositionStatus, HOUSE_COLORS, historicalSummary } fr
 interface HouseSheetProps {
   view: HouseView;
   saving: boolean;
-  onDispose: (status: HouseDispositionStatus, note: string, firstName: string) => void;
+  /** auto = the 5-second Not Home timer, not a tap. */
+  onDispose: (status: HouseDispositionStatus, note: string, firstName: string, auto?: boolean) => void;
+  /** Who made the current disposition: 'you', a teammate's name, or null. */
+  markedBy?: string | null;
   onClearDisposition: () => void;
   onSale: () => void;
   onOpenPending: () => void;
@@ -36,7 +39,7 @@ const STATE_LABEL: Record<HouseView['state'], string> = {
 const AUTO_NOT_HOME_SECONDS = 5;
 
 const HouseSheet: React.FC<HouseSheetProps> = ({
-  view, saving, onDispose, onClearDisposition, onSale, onOpenPending, onOpenBooking, onClose,
+  view, saving, onDispose, markedBy, onClearDisposition, onSale, onOpenPending, onOpenBooking, onClose,
 }) => {
   const { house, state, isPcl, pcl, disposition, pendingSale, officeBooking, completed, historical, isHistorical } = view;
   const hist = isHistorical ? historicalSummary(historical) : null;
@@ -86,7 +89,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
       remaining -= 1;
       if (remaining <= 0) {
         cancelCountdown();
-        onDisposeRef.current('not_home', '', '');
+        onDisposeRef.current('not_home', '', '', true);
       } else {
         setCountdown(remaining);
       }
@@ -346,7 +349,10 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
 
             {disposition && (
               <div className="flex items-center justify-between text-[11px] text-gray-500">
-                <span>Marked {new Date(disposition.updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+                <span>
+                  Marked{markedBy ? <> by <span className={markedBy === 'you' ? '' : 'text-gray-300 font-bold'}>{markedBy}</span></> : null}
+                  {' · '}{new Date(disposition.updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                </span>
                 <button type="button" disabled={saving} onClick={onClearDisposition} className="flex items-center gap-1 text-red-400 disabled:opacity-50">
                   <Trash2 size={12} /> Clear
                 </button>

@@ -5,9 +5,10 @@
 // Responsibilities
 //   - Street / house-key normalisation (MUST mirror norm_street() and
 //     house_key() in the Supabase schema — delivery 1 SQL).
-//   - Loading the per-route house list: National Address Register first
-//     (build_route_houses RPC), OpenStreetMap as the gap-filler, building
-//     footprints from OpenStreetMap for every house that has one.
+//   - Loading the per-route house list from the National Address Register
+//     (build_route_houses RPC). OpenStreetMap is only used for a route the
+//     register has nothing for (its town isn't loaded yet). Houses are drawn
+//     as tiles, so building outlines are no longer fetched.
 //   - Reading / writing house dispositions (No, Not Home, Go Back).
 //   - Small helpers for turning pending sales, bookings, transactions and
 //     PCL records into house keys so the map can colour them.
@@ -274,9 +275,11 @@ export const routeHouseId = (routeCode: string, houseKey: string) => `${routeCod
 // Used for EVERY house instead of real building outlines, so every route looks
 // the same and each house (townhouses included) is its own colourable shape.
 //
-//   - Orientation: the nearest drawn segment of the house's own street on its
-//     route (any segment of the route as a fallback; else the direction to the
-//     nearest neighbour on the same street; else north-up).
+//   - Orientation: the nearest piece of the house's OWN street — from any
+//     loaded route's segments, or from the base map's roads with the same name.
+//     It never borrows a different street's line. When its street can't be
+//     found, the tile lines up with its same-street neighbours and faces away
+//     from the closest road; with no neighbours either, it's north-up.
 //   - Width: 80% of the gap to the nearest neighbour on the same street and
 //     same side (odd/even), clamped to 5–13 m, so tiles never overlap along a
 //     street. 11 m when the house has no neighbour.
@@ -292,7 +295,14 @@ const TILE_SOLO_W_M = 11;
 const TILE_STREET_GAP_M = 4;
 const TILE_SEGMENT_SEARCH_M = 80;
 
-export function buildHouseTiles(houses: RouteHouse[], routeMaps: SavedRouteMap[]): Map<string, GeoJSON.Polygon> {
+/** Base-map road lines keyed by normStreet(name), [lng, lat] points. */
+export type BaseRoadLines = Map<string, [number, number][][]>;
+
+export function buildHouseTiles(
+  houses: RouteHouse[],
+  routeMaps: SavedRouteMap[],
+  baseRoads?: BaseRoadLines | null,
+): Map<string, GeoJSON.Polygon> {
   const out = new Map<string, GeoJSON.Polygon>();
   if (!houses.length) return out;
 
@@ -303,22 +313,29 @@ export function buildHouseTiles(houses: RouteHouse[], routeMaps: SavedRouteMap[]
   const toXY = (lng: number, lat: number): [number, number] => [lng * kx, lat * ky];
   const toLL = (x: number, y: number): [number, number] => [x / kx, y / ky];
 
-  // Segments per route, split by normalised street name, in metres.
+  // Street lines in metres, by normalised street name, from every loaded
+  // route plus the base map's roads. allSegs = every road, named or not
+  // (only used to tell which side of a house the road is on).
   type Seg = { a: [number, number]; b: [number, number] };
-  const segsByRoute = new Map<string, { all: Seg[]; byStreet: Map<string, Seg[]> }>();
-  for (const rm of routeMaps) {
-    const all: Seg[] = [];
-    const byStreet = new Map<string, Seg[]>();
-    for (const s of rm.segments || []) {
-      const cs = s.coordinates || [];
-      const sn = normStreet(s.name);
-      for (let i = 0; i < cs.length - 1; i++) {
-        const seg = { a: toXY(cs[i][0], cs[i][1]), b: toXY(cs[i + 1][0], cs[i + 1][1]) };
-        all.push(seg);
-        if (sn) { if (!byStreet.has(sn)) byStreet.set(sn, []); byStreet.get(sn)!.push(seg); }
-      }
+  const byStreet = new Map<string, Seg[]>();
+  const allSegs: Seg[] = [];
+  const addLine = (sn: string, cs: [number, number][]) => {
+    for (let i = 0; i < cs.length - 1; i++) {
+      const seg = { a: toXY(cs[i][0], cs[i][1]), b: toXY(cs[i + 1][0], cs[i + 1][1]) };
+      allSegs.push(seg);
+      if (sn) { if (!byStreet.has(sn)) byStreet.set(sn, []); byStreet.get(sn)!.push(seg); }
     }
-    segsByRoute.set(rm.route_code, { all, byStreet });
+  };
+  for (const rm of routeMaps) {
+    for (const s of rm.segments || []) addLine(normStreet(s.name), (s.coordinates || []) as [number, number][]);
+  }
+  if (baseRoads) {
+    // Only streets that have houses here — keeps the work small.
+    const wanted = new Set(houses.map(h => h.streetNorm));
+    for (const [sn, lines] of baseRoads) {
+      if (!wanted.has(sn)) continue;
+      for (const l of lines) addLine(sn, l);
+    }
   }
 
   const nearestOnSegs = (p: [number, number], segs: Seg[]) => {
@@ -394,12 +411,9 @@ export function buildHouseTiles(houses: RouteHouse[], routeMaps: SavedRouteMap[]
       }
 
       // Street direction (along) and the way the house faces away from it (back).
-      const route = segsByRoute.get(h.routeCode);
-      let near = route ? nearestOnSegs(p, route.byStreet.get(h.streetNorm) || []) : null;
-      if (!near || near.d > TILE_SEGMENT_SEARCH_M) {
-        const any = route ? nearestOnSegs(p, route.all) : null;
-        near = any && any.d <= TILE_SEGMENT_SEARCH_M ? any : null;
-      }
+      // Only the house's own street counts — never the nearest other road.
+      let near = nearestOnSegs(p, byStreet.get(h.streetNorm) || []);
+      if (near && near.d > TILE_SEGMENT_SEARCH_M) near = null;
       let along: [number, number];
       let back: [number, number];
       let centre: [number, number];
@@ -412,8 +426,15 @@ export function buildHouseTiles(houses: RouteHouse[], routeMaps: SavedRouteMap[]
         const centreDist = Math.max(near.d + 2, TILE_STREET_GAP_M + depth / 2);
         centre = [near.q[0] + back[0] * centreDist, near.q[1] + back[1] * centreDist];
       } else {
+        // Own street not found: line up with same-street neighbours and face
+        // away from whichever road is closest (just to pick the side).
         along = towardNeighbour || [1, 0];
         back = [-along[1], along[0]];
+        const road = towardNeighbour ? nearestOnSegs(p, allSegs) : null;
+        if (road && road.d <= TILE_SEGMENT_SEARCH_M) {
+          const vx = p[0] - road.q[0], vy = p[1] - road.q[1];
+          if (vx * back[0] + vy * back[1] < 0) back = [-back[0], -back[1]];
+        }
         centre = p;
       }
 
@@ -546,17 +567,6 @@ function nearestRouteSegment(rm: SavedRouteMap, lng: number, lat: number): { met
   return best;
 }
 
-function pointInRing(lng: number, lat: number, ring: [number, number][]): boolean {
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const xi = ring[i][0], yi = ring[i][1];
-    const xj = ring[j][0], yj = ring[j][1];
-    const intersect = ((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
-    if (intersect) inside = !inside;
-  }
-  return inside;
-}
-
 function routeBbox(rm: SavedRouteMap, padDeg = 0.0009): { s: number; w: number; n: number; e: number } | null {
   let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
   for (const seg of rm.segments || []) {
@@ -572,7 +582,7 @@ function routeBbox(rm: SavedRouteMap, padDeg = 0.0009): { s: number; w: number; 
 }
 
 // ---------------------------------------------------------------------------
-// OPENSTREETMAP (Overpass) — gap-filler for houses, sole source for footprints
+// OPENSTREETMAP (Overpass) — fallback only, where the register has nothing
 // ---------------------------------------------------------------------------
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -595,7 +605,6 @@ async function fetchOverpass(bbox: { s: number; w: number; n: number; e: number 
 (
   node["addr:housenumber"](${b});
   way["addr:housenumber"](${b});
-  way["building"](${b});
 );
 out body geom;`;
   let lastErr: unknown = null;
@@ -616,12 +625,6 @@ out body geom;`;
   throw lastErr instanceof Error ? lastErr : new Error('All Overpass mirrors failed');
 }
 
-interface OsmBuilding {
-  ring: [number, number][];       // closed ring [lng, lat]
-  cLng: number;
-  cLat: number;
-}
-
 interface OsmAddressPoint {
   civicNo: number;
   suffix: string;
@@ -637,9 +640,8 @@ function wayCentroid(g: Array<{ lat: number; lon: number }>): { lat: number; lng
   return { lat: la / g.length, lng: lo / g.length };
 }
 
-function extractOsm(elements: OsmElement[]): { addresses: OsmAddressPoint[]; buildings: OsmBuilding[] } {
+function extractOsm(elements: OsmElement[]): { addresses: OsmAddressPoint[] } {
   const addresses: OsmAddressPoint[] = [];
-  const buildings: OsmBuilding[] = [];
   for (const el of elements) {
     const tags = el.tags || {};
     let lat: number | undefined, lng: number | undefined;
@@ -647,12 +649,6 @@ function extractOsm(elements: OsmElement[]): { addresses: OsmAddressPoint[]; bui
     else if (el.type === 'way' && el.geometry && el.geometry.length >= 3) {
       const c = wayCentroid(el.geometry);
       lat = c.lat; lng = c.lng;
-      if (tags.building) {
-        const ring = el.geometry.map(p => [p.lon, p.lat] as [number, number]);
-        const first = ring[0], last = ring[ring.length - 1];
-        if (first[0] !== last[0] || first[1] !== last[1]) ring.push([first[0], first[1]]);
-        buildings.push({ ring, cLng: c.lng, cLat: c.lat });
-      }
     }
     if (lat == null || lng == null) continue;
     if (tags['addr:housenumber']) {
@@ -667,21 +663,7 @@ function extractOsm(elements: OsmElement[]): { addresses: OsmAddressPoint[]; bui
       });
     }
   }
-  return { addresses, buildings };
-}
-
-/** Building polygon for a house point: containing polygon first, else nearest
- *  centroid within maxMeters. */
-function footprintForPoint(lng: number, lat: number, buildings: OsmBuilding[], maxMeters = 18): GeoJSON.Polygon | null {
-  let nearest: OsmBuilding | null = null;
-  let nearestD = Infinity;
-  for (const b of buildings) {
-    if (pointInRing(lng, lat, b.ring)) return { type: 'Polygon', coordinates: [b.ring] };
-    const d = metersBetween(lng, lat, b.cLng, b.cLat);
-    if (d < nearestD) { nearestD = d; nearest = b; }
-  }
-  if (nearest && nearestD <= maxMeters) return { type: 'Polygon', coordinates: [nearest.ring] };
-  return null;
+  return { addresses };
 }
 
 // ---------------------------------------------------------------------------
@@ -697,12 +679,10 @@ const DEDUPE_METERS = 8;        // OSM house this close to a NAR house = same ho
  *
  * 1. No build row yet → ask the DB to build from the National Address
  *    Register. If that yields houses, the route is "nar" sourced.
- * 2. Whenever the route has never had an OSM pass (no footprints_at), fetch
- *    OpenStreetMap once for the route's bbox:
- *      - add OSM addresses on the route's streets that aren't already known
- *        (fills gaps in the register, or the whole route if the register is
- *        empty or not yet imported);
- *      - attach building footprints to every house that lacks one.
+ * 2. Only when the register found NOTHING for the route (its town isn't
+ *    loaded) and OpenStreetMap hasn't been tried yet (no footprints_at),
+ *    fetch OSM once for the route's bbox and add its addresses on the
+ *    route's streets. Routes the register covers never touch OSM.
  * 3. Return the fresh list.
  *
  * Overpass failures are non-fatal: whatever exists is returned and the OSM
@@ -725,16 +705,17 @@ export async function ensureRouteHouses(rm: SavedRouteMap, onProgress?: HouseBui
 
   let houses = await fetchRouteHouses([rc]);
 
-  const needsOsmPass = !build || !build.footprints_at;
+  const hasRegisterHouses = houses.some(h => h.source === 'nar');
+  const needsOsmPass = !hasRegisterHouses && (!build || !build.footprints_at);
   if (needsOsmPass) {
     const bbox = routeBbox(rm);
     if (bbox) {
       onProgress?.(`Fetching houses for ${rc} from OpenStreetMap…`);
       try {
         const elements = await fetchOverpass(bbox);
-        const { addresses, buildings } = extractOsm(elements);
+        const { addresses } = extractOsm(elements);
 
-        // --- Gap-fill houses from OSM ---
+        // --- Houses from OSM (the register has none for this route) ---
         const routeNames = new Set(
           (rm.segments || []).map(s => normStreet(s.name)).filter(Boolean)
         );
@@ -771,22 +752,13 @@ export async function ensureRouteHouses(rm: SavedRouteMap, onProgress?: HouseBui
           await supabase.rpc('upsert_route_houses', { p_route_code: rc, p_houses: [], p_source: 'osm' });
         }
 
-        // --- Footprints ---
-        onProgress?.(`Matching building outlines for ${rc}…`);
-        const items: Array<{ houseKey: string; footprint: GeoJSON.Polygon }> = [];
-        for (const h of houses) {
-          if (h.footprint) continue;
-          const fp = footprintForPoint(h.lng, h.lat, buildings);
-          if (fp) items.push({ houseKey: h.houseKey, footprint: fp });
-        }
-        // Always call it (even with zero items) so footprints_at is stamped
-        // and the OSM pass isn't repeated on every load.
-        const { error: fpErr } = await supabase.rpc('set_route_house_footprints', {
+        // Stamp the build (footprints_at) so the OSM pass isn't repeated on
+        // every load. No outlines are sent — houses are drawn as tiles.
+        const { error: stampErr } = await supabase.rpc('set_route_house_footprints', {
           p_route_code: rc,
-          p_items: items,
+          p_items: [],
         });
-        if (fpErr) throw fpErr;
-        if (items.length) houses = await fetchRouteHouses([rc]);
+        if (stampErr) throw stampErr;
       } catch (e) {
         console.warn('[mapLogsheet] OpenStreetMap pass failed for', rc, e);
       }
@@ -850,11 +822,13 @@ function pointToLinesMeters(lng: number, lat: number, lines: [number, number][][
 }
 
 /**
- * Pulls every OpenStreetMap address along the tapped stretch of road (within
- * ROUTE_MATCH_METERS of the line, on that street), skips anything already on
- * the worker's map, and saves the rest under the worker's route so they
- * behave like any other house (dispositions, sales, go-backs all stick).
- * Building outlines are attached where OSM has them.
+ * Pulls every address along the tapped stretch of road (within
+ * ROUTE_MATCH_METERS of the line, on that street) — from the National Address
+ * Register first (nar_street_houses RPC), and from OpenStreetMap only when
+ * the register has nothing for that street (town not loaded yet). Skips
+ * anything already on the worker's map and saves the rest under the worker's
+ * route so they behave like any other house (dispositions, sales, go-backs
+ * all stick).
  *
  * Returns the route's refreshed house list and how many were added.
  */
@@ -867,26 +841,53 @@ export async function loadSegmentHouses(
   const bbox = segmentBbox(seg.lines);
   if (!bbox || !seg.lines.some(l => l.length >= 2)) return { houses: existing.filter(h => h.routeCode === routeCode), added: 0 };
 
-  onProgress?.(`Fetching houses on ${seg.name} from OpenStreetMap…`);
-  const elements = await fetchOverpass(bbox);
-  const { addresses, buildings } = extractOsm(elements);
   const segNorm = normStreet(seg.name);
+  type Cand = { civicNo: number; suffix: string; street: string; lat: number; lng: number; unitCount: number };
+  const byKey = new Map<string, Cand>();
+  const isKnown = (lng: number, lat: number, civicNo: number, sn: string) =>
+    existing.some(h => metersBetween(lng, lat, h.lng, h.lat) <= DEDUPE_METERS
+      || (h.civicNo === civicNo && h.streetNorm === sn));
 
-  const byKey = new Map<string, { civicNo: number; suffix: string; street: string; lat: number; lng: number; unitCount: number }>();
-  for (const a of addresses) {
-    if (pointToLinesMeters(a.lng, a.lat, seg.lines) > ROUTE_MATCH_METERS) continue;
-    // Keep addresses on this street. OSM points with no street tag are
-    // assumed to be on the road they sit beside.
-    const street = a.street || seg.name;
-    const sn = normStreet(street);
-    if (!sn || sn !== segNorm) continue;
-    const dup = existing.some(h => metersBetween(a.lng, a.lat, h.lng, h.lat) <= DEDUPE_METERS
-      || (h.civicNo === a.civicNo && h.streetNorm === sn));
-    if (dup) continue;
-    const key = houseKeyFromParts(a.civicNo, a.suffix, sn);
-    const prev = byKey.get(key);
-    if (prev) { prev.unitCount += 1; continue; }
-    byKey.set(key, { civicNo: a.civicNo, suffix: a.suffix, street, lat: a.lat, lng: a.lng, unitCount: 1 });
+  // --- 1. National Address Register ---
+  onProgress?.(`Fetching houses on ${seg.name} from the address register…`);
+  let registerHits = 0;
+  try {
+    const { data, error } = await supabase.rpc('nar_street_houses', {
+      p_street_norm: segNorm,
+      p_lines: seg.lines.filter(l => l.length >= 2),
+      p_buffer_m: ROUTE_MATCH_METERS,
+    });
+    if (error) throw error;
+    for (const r of (data || []) as Array<{ civic_no: number; civic_suffix: string | null; street_name: string; unit_count: number; lat: number; lng: number }>) {
+      registerHits++;
+      if (isKnown(r.lng, r.lat, r.civic_no, segNorm)) continue;
+      const suffix = (r.civic_suffix || '').toLowerCase();
+      const key = houseKeyFromParts(r.civic_no, suffix, segNorm);
+      if (byKey.has(key)) continue;
+      byKey.set(key, { civicNo: r.civic_no, suffix, street: r.street_name || seg.name, lat: r.lat, lng: r.lng, unitCount: r.unit_count || 1 });
+    }
+  } catch (e) {
+    console.warn('[mapLogsheet] nar_street_houses failed (falling back to OSM):', e);
+  }
+
+  // --- 2. OpenStreetMap, only when the register has nothing on this street ---
+  if (registerHits === 0) {
+    onProgress?.(`Fetching houses on ${seg.name} from OpenStreetMap…`);
+    const elements = await fetchOverpass(bbox);
+    const { addresses } = extractOsm(elements);
+    for (const a of addresses) {
+      if (pointToLinesMeters(a.lng, a.lat, seg.lines) > ROUTE_MATCH_METERS) continue;
+      // Keep addresses on this street. OSM points with no street tag are
+      // assumed to be on the road they sit beside.
+      const street = a.street || seg.name;
+      const sn = normStreet(street);
+      if (!sn || sn !== segNorm) continue;
+      if (isKnown(a.lng, a.lat, a.civicNo, sn)) continue;
+      const key = houseKeyFromParts(a.civicNo, a.suffix, sn);
+      const prev = byKey.get(key);
+      if (prev) { prev.unitCount += 1; continue; }
+      byKey.set(key, { civicNo: a.civicNo, suffix: a.suffix, street, lat: a.lat, lng: a.lng, unitCount: 1 });
+    }
   }
   const candidates = [...byKey.values()];
   if (!candidates.length) return { houses: existing.filter(h => h.routeCode === routeCode), added: 0 };
@@ -898,21 +899,7 @@ export async function loadSegmentHouses(
     p_source: 'manual',
   });
   if (error) throw error;
-  let houses = await fetchRouteHouses([routeCode]);
-
-  // Footprints for the new houses only.
-  const newKeys = new Set(byKey.keys());
-  const items: Array<{ houseKey: string; footprint: GeoJSON.Polygon }> = [];
-  for (const h of houses) {
-    if (h.footprint || !newKeys.has(h.houseKey)) continue;
-    const fp = footprintForPoint(h.lng, h.lat, buildings);
-    if (fp) items.push({ houseKey: h.houseKey, footprint: fp });
-  }
-  if (items.length) {
-    const { error: fpErr } = await supabase.rpc('set_route_house_footprints', { p_route_code: routeCode, p_items: items });
-    if (fpErr) console.warn('[mapLogsheet] segment footprints failed', fpErr);
-    else houses = await fetchRouteHouses([routeCode]);
-  }
+  const houses = await fetchRouteHouses([routeCode]);
   return { houses, added: candidates.length };
 }
 
@@ -933,6 +920,18 @@ function mapDisposition(r: any): HouseDisposition {
 }
 
 /** Map of routeHouseId → disposition for the given routes. */
+/** One house's current disposition straight from the database (null = none). */
+export async function fetchDisposition(routeCode: string, houseKey: string): Promise<HouseDisposition | null> {
+  const { data, error } = await supabase
+    .from('house_dispositions')
+    .select('*')
+    .eq('route_code', routeCode)
+    .eq('house_key', houseKey)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? mapDisposition(data) : null;
+}
+
 export async function fetchDispositions(routeCodes: string[]): Promise<Map<string, HouseDisposition>> {
   const m = new Map<string, HouseDisposition>();
   if (!routeCodes.length) return m;
@@ -990,26 +989,74 @@ export async function clearDisposition(routeCode: string, houseKey: string): Pro
 // ---------------------------------------------------------------------------
 // INDEXES — turn logsheet data into house-key lookups
 // ---------------------------------------------------------------------------
-/** A row with a house number but no street can't be keyed. If exactly one
- *  house on that route has that number, use it (a NewJob edit once wiped the
- *  street on resumed pending sales; this keeps those rows on the map). */
-function streetlessHouseKey(routeCode: string, houseNumber: string | undefined, houses: RouteHouse[]): string | null {
-  const civ = parseCivic(houseNumber);
-  if (!civ || !routeCode) return null;
-  const matches = houses.filter(h => h.routeCode === routeCode && h.civicNo === civ.civicNo && (h.civicSuffix || '').toLowerCase() === civ.suffix);
-  return matches.length === 1 ? matches[0].houseKey : null;
+/** Where a sale/booking sits on the map.
+ *
+ *  Sales are matched to houses by route + address. A sale can carry a
+ *  different route than the house it belongs to (split routes, or a resumed
+ *  pending sale that NewJob saved under the worker's first route), and then
+ *  nothing matches: Equiv counts the money but Done and the house colour
+ *  miss it. So when the address isn't on the sale's own route, look for it on
+ *  the other routes loaded on the map; if exactly one route has it, use that.
+ *  The stored data is never changed — this only decides where it's drawn.
+ */
+export class HouseLocator {
+  private routesByKey = new Map<string, string[]>();
+  private byCivic = new Map<string, RouteHouse[]>();   // "42a" → houses with that number
+  constructor(houses: RouteHouse[]) {
+    for (const h of houses) {
+      const list = this.routesByKey.get(h.houseKey);
+      if (list) { if (!list.includes(h.routeCode)) list.push(h.routeCode); }
+      else this.routesByKey.set(h.houseKey, [h.routeCode]);
+      const ck = `${h.civicNo}${(h.civicSuffix || '').toLowerCase()}`;
+      const cl = this.byCivic.get(ck);
+      if (cl) cl.push(h); else this.byCivic.set(ck, [h]);
+    }
+  }
+
+  /** routeHouseId for a known house key, preferring the row's own route. */
+  idForKey(routeCode: string, houseKey: string): string {
+    const routes = this.routesByKey.get(houseKey);
+    if (!routes || routes.includes(routeCode)) return routeHouseId(routeCode, houseKey);
+    return routes.length === 1 ? routeHouseId(routes[0], houseKey) : routeHouseId(routeCode, houseKey);
+  }
+
+  /** A row with a house number but no street (a NewJob edit once wiped the
+   *  street on resumed pending sales). If exactly one house on the row's route
+   *  has that number use it; else exactly one on any loaded route. */
+  idForStreetless(routeCode: string, houseNumber: string | undefined): string | null {
+    const civ = parseCivic(houseNumber);
+    if (!civ) return null;
+    const all = this.byCivic.get(`${civ.civicNo}${civ.suffix}`) || [];
+    const own = all.filter(h => h.routeCode === routeCode);
+    const pick = own.length === 1 ? own[0] : (own.length === 0 && all.length === 1 ? all[0] : null);
+    return pick ? routeHouseId(pick.routeCode, pick.houseKey) : null;
+  }
+
+  /** From a split address (pending sales). */
+  idForAddress(routeCode: string, houseNumber: string | undefined, streetName: string | undefined): string | null {
+    const key = houseKeyFromAddress(houseNumber, streetName);
+    if (key) return this.idForKey(routeCode, key);
+    return !streetName?.trim() ? this.idForStreetless(routeCode, houseNumber) : null;
+  }
+
+  /** From a one-line address (bookings, transactions). */
+  idForFullAddress(routeCode: string, full: string | undefined): string | null {
+    const f = (full || '').trim();
+    const key = houseKeyFromFullAddress(f);
+    if (key) return this.idForKey(routeCode, key);
+    return /^\d+[a-zA-Z]?$/.test(f) ? this.idForStreetless(routeCode, f) : null;
+  }
 }
 
 export function indexPendingSales(sales: PendingSale[], houses: RouteHouse[] = []): Map<string, PendingSale> {
   const m = new Map<string, PendingSale>();
+  const loc = new HouseLocator(houses);
   for (const ps of sales) {
     // Asphalt children share the parent's address; the parent is what we open.
     if (ps.saleType === 'asphalt' && ps.parentId) continue;
-    const rc = ps.routeCode || '';
-    const key = houseKeyFromAddress(ps.houseNumber, ps.streetName)
-      || (!ps.streetName?.trim() ? streetlessHouseKey(rc, ps.houseNumber, houses) : null);
-    if (!key) continue;
-    if (!m.has(routeHouseId(rc, key))) m.set(routeHouseId(rc, key), ps);
+    const id = loc.idForAddress(ps.routeCode || '', ps.houseNumber, ps.streetName);
+    if (!id) continue;
+    if (!m.has(id)) m.set(id, ps);
   }
   return m;
 }
@@ -1017,14 +1064,10 @@ export function indexPendingSales(sales: PendingSale[], houses: RouteHouse[] = [
 export function indexBookings(jobs: MasterBooking[], houses: RouteHouse[] = []): { pending: Map<string, MasterBooking>; completed: Map<string, MasterBooking> } {
   const pending = new Map<string, MasterBooking>();
   const completed = new Map<string, MasterBooking>();
+  const loc = new HouseLocator(houses);
   for (const b of jobs) {
-    const rc = b['Route Number'] || '';
-    const full = (b['Full Address'] || '').trim();
-    // "42" alone (street lost) → match by number within the route.
-    const key = houseKeyFromFullAddress(full)
-      || (/^\d+[a-zA-Z]?$/.test(full) ? streetlessHouseKey(rc, full, houses) : null);
-    if (!key) continue;
-    const id = routeHouseId(rc, key);
+    const id = loc.idForFullAddress(b['Route Number'] || '', b['Full Address']);
+    if (!id) continue;
     const isDone = b.Completed === 'x' || b.Status === 'completed';
     if (isDone) { if (!completed.has(id)) completed.set(id, b); }
     else if (!b.Status || b.Status === 'pending') { if (!pending.has(id)) pending.set(id, b); }

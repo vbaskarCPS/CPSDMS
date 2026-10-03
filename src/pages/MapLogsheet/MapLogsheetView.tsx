@@ -16,7 +16,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import { Navigation, Loader, Crosshair } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { Worker } from '../../types';
-import { SavedRouteMap, HouseView, StreetSegmentPick, houseColor, routeHouseId, buildHouseTiles } from '../../lib/mapLogsheetService';
+import { SavedRouteMap, HouseView, StreetSegmentPick, houseColor, routeHouseId, buildHouseTiles, normStreet, BaseRoadLines } from '../../lib/mapLogsheetService';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -97,6 +97,37 @@ function pickStreetAt(map: mapboxgl.Map, point: mapboxgl.Point): StreetSegmentPi
   return { name, lines };
 }
 
+/** Adds every named road in the base map's loaded tiles to `store`, keyed by
+ *  normStreet(name). Returns true when anything new was added. Only runs from
+ *  zoom 14 up, where residential streets are present and not simplified. */
+const BASE_ROAD_MIN_ZOOM = 14;
+function harvestBaseRoads(map: mapboxgl.Map, store: BaseRoadLines, seen: Set<string>): boolean {
+  if (map.getZoom() < BASE_ROAD_MIN_ZOOM || !map.getSource('composite')) return false;
+  let added = false;
+  let feats: mapboxgl.MapboxGeoJSONFeature[] = [];
+  try { feats = map.querySourceFeatures('composite', { sourceLayer: 'road' }); } catch { return false; }
+  const push = (sn: string, line: [number, number][]) => {
+    if (line.length < 2) return;
+    const a = line[0], b = line[line.length - 1];
+    const key = `${sn}|${a[0].toFixed(5)},${a[1].toFixed(5)}|${b[0].toFixed(5)},${b[1].toFixed(5)}|${line.length}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (!store.has(sn)) store.set(sn, []);
+    store.get(sn)!.push(line);
+    added = true;
+  };
+  for (const f of feats) {
+    const name = f.properties?.name;
+    if (!name) continue;
+    const sn = normStreet(String(name));
+    if (!sn) continue;
+    const g = f.geometry;
+    if (g.type === 'LineString') push(sn, g.coordinates as [number, number][]);
+    else if (g.type === 'MultiLineString') (g.coordinates as [number, number][][]).forEach(l => push(sn, l));
+  }
+  return added;
+}
+
 function createNavArrow(): HTMLDivElement {
   const el = document.createElement('div');
   el.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="11" fill="#4285F4" stroke="white" stroke-width="2" opacity="0.25"/><path d="M12 4 L18 18 L12 14 L6 18 Z" fill="#4285F4" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
@@ -160,14 +191,21 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   // House tiles depend only on WHERE the houses are, not on their state, so
   // they're rebuilt when the house list or route lines change — not on every
   // knock. The signature keeps that cheap.
+  // Named roads from the base map, so houses on streets that aren't part of a
+  // route still face their own street. Grows as the map loads more area;
+  // baseRoadsVer bumps when something new arrives.
+  const baseRoadsRef = useRef<BaseRoadLines>(new Map());
+  const baseRoadSeenRef = useRef<Set<string>>(new Set());
+  const [baseRoadsVer, setBaseRoadsVer] = useState(0);
+
   const houseListSig = useMemo(
     () => houses.map(v => routeHouseId(v.house.routeCode, v.house.houseKey)).join(','),
     [houses],
   );
   const tiles = useMemo(
-    () => buildHouseTiles(houses.map(v => v.house), routeMaps),
+    () => buildHouseTiles(houses.map(v => v.house), routeMaps, baseRoadsRef.current),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [houseListSig, routeMaps],
+    [houseListSig, routeMaps, baseRoadsVer],
   );
 
   const { fpCollection, ptCollection } = useMemo(() => {
@@ -340,6 +378,13 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
           return;
         }
         onSelectRef.current(null);
+      });
+
+      // Collect base-map roads whenever the map settles after loading tiles.
+      map.on('idle', () => {
+        if (harvestBaseRoads(map, baseRoadsRef.current, baseRoadSeenRef.current)) {
+          setBaseRoadsVer(v => v + 1);
+        }
       });
 
       setMapLoaded(true);
