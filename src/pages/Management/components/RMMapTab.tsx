@@ -910,7 +910,7 @@ function createDashedRotatingRing(fillColor: string): HTMLDivElement {
   return el;
 }
 
-const WORKER_LOCATION_POLL_MS = 5 * 60 * 1000;
+const WORKER_LOCATION_POLL_MS = 60 * 1000; // workers write every 2 min (WorkerLocationTracker)
 // Pins are shared across the command centre, so another manager's drop needs to
 // appear here without a page reload. Same polling approach as worker locations.
 const MAP_PIN_POLL_MS = 60 * 1000;
@@ -1746,8 +1746,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const cartKnockSummary = useMemo(() => {
     type Summary = {
       knocks: number; no: number; goBack: number; invalid: number; touched: number; total: number; pct: number;
-      /** House of the cart's most recent knock today (any kind) — where Navigate goes. */
-      last: { lat: number; lng: number; address: string } | null;
+      /** House of the cart's most recent knock today (any kind), and when. */
+      last: { lat: number; lng: number; address: string; t: number } | null;
     };
     const out = new Map<string, Summary>();
     for (const cart of mapCarts) {
@@ -1769,13 +1769,14 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       // Latest knock today: dispositions + the cart's sales (completed txs and
       // pending-sale stand-ins, both already in navActivity), matched to houses.
       const events = computeKnockEvents(dispos, [], (cart.navActivity || []) as any[], houses, sessionDate, scope);
-      const lastId = events.length ? events[events.length - 1].id : null;
+      const lastEv = events.length ? events[events.length - 1] : null;
+      const lastId = lastEv ? lastEv.id : null;
       const lastView = lastId ? views.find(v => routeHouseId(v.house.routeCode, v.house.houseKey) === lastId) : undefined;
       out.set(cart.sessionId, {
         knocks: counts.knocks, no: counts.no, goBack: counts.goBack, invalid: counts.invalid,
         touched, total: houses.length, pct: houses.length ? touched / houses.length : 0,
         last: lastView
-          ? { lat: lastView.house.lat, lng: lastView.house.lng, address: `${lastView.house.civicNo}${(lastView.house.civicSuffix || '').toUpperCase()} ${lastView.house.streetName}` }
+          ? { lat: lastView.house.lat, lng: lastView.house.lng, address: `${lastView.house.civicNo}${(lastView.house.civicSuffix || '').toUpperCase()} ${lastView.house.streetName}`, t: lastEv!.t }
           : null,
       });
     }
@@ -2139,13 +2140,39 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => clearInterval(interval);
   }, [mapLoaded, fetchWorkerLocations]);
 
+  // Where each worker's initials circle goes. For map-logsheet carts it's
+  // whichever is more recent: the phone's live position, or the house of the
+  // cart's last knock today (a knock can be newer than the last GPS write, e.g.
+  // phone was in a pocket with the app closed). Border colour (freshness)
+  // follows the same timestamp.
+  const effectiveWorkerLocations = useMemo<WorkerLocation[]>(() => {
+    const byId = new Map<string, WorkerLocation>(workerLocations.map(l => [l.worker_id, l]));
+    for (const cart of mapCarts) {
+      const last = cartKnockSummary.get(cart.sessionId)?.last;
+      if (!last) continue;
+      for (const m of cart.members) {
+        const live = byId.get(m.contractorId);
+        const liveT = live ? new Date(live.updated_at).getTime() : -Infinity;
+        if (last.t > liveT) {
+          byId.set(m.contractorId, {
+            worker_id: m.contractorId,
+            command_center_id: live?.command_center_id || '',
+            lat: last.lat, lng: last.lng,
+            updated_at: new Date(last.t).toISOString(),
+          });
+        }
+      }
+    }
+    return [...byId.values()];
+  }, [workerLocations, mapCarts, cartKnockSummary]);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
     const existingIds = new Set(workerLocationMarkersRef.current.keys());
 
-    workerLocations.forEach(loc => {
+    effectiveWorkerLocations.forEach(loc => {
       const worker = workers.find(w => w.contractorId === loc.worker_id);
       if (!worker) return;
 
@@ -2173,7 +2200,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       workerLocationMarkersRef.current.get(id)?.remove();
       workerLocationMarkersRef.current.delete(id);
     });
-  }, [workerLocations, mapLoaded, workers]);
+  }, [effectiveWorkerLocations, mapLoaded, workers]);
 
   // MANAGER LOCATION poll (floater only). Fetches every reporting manager's
   // position every 8s; the marker effect filters to the covered set. Only runs
