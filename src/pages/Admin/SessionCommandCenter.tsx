@@ -887,6 +887,15 @@ const SessionCommandCenter: React.FC = () => {
   // Feature gate: CC-level mapping OFF and the session/selection is Sealing.
   const showManagerMapping = !hasDigitalMapping && selectedSeasonType === 'sealing';
 
+  // FLOATER on NON-mapping CCs: the Floater column also appears once any
+  // manager in the session has a Digital Map, and a floater there may only
+  // cover managers who have one (the floater view is a map — a manager with
+  // no map has nothing on it to show). Mapping CCs are unchanged.
+  const managerHasMap = (managerId: string) => (mappingDraft[managerId] || []).length > 0;
+  const anyManagerMapped = showManagerMapping && Object.values(mappingDraft).some(list => (list || []).length > 0);
+  const showFloater = hasDigitalMapping || anyManagerMapped;
+  const managerTableCols = 4 + (showFloater ? 1 : 0) + (showManagerMapping ? 1 : 0);
+
   // Route codes already claimed by managers' staged configs — a range that
   // overlaps ANOTHER manager's claim is rejected (last-writer-wins in
   // pcl_cache would otherwise make results order-dependent).
@@ -1675,8 +1684,8 @@ const SessionCommandCenter: React.FC = () => {
                                         <th className="py-3 font-medium text-center">Workers</th>
                                         <th className="py-3 font-medium text-center">Routes</th>
                                         <th className="py-3 font-medium text-center">Pre-books</th>
-                                        {/* FLOATER column — only on digital-mapping CCs */}
-                                        {hasDigitalMapping && (
+                                        {/* FLOATER column — digital-mapping CCs, or any manager with a Digital Map */}
+                                        {showFloater && (
                                           <th className="py-3 font-medium text-center">Floater</th>
                                         )}
                                         {/* DIGITAL MAP column — Sealing on NON-mapping CCs */}
@@ -1721,6 +1730,8 @@ const SessionCommandCenter: React.FC = () => {
                                           const otherIsFloater = (floaterDraft[other.userId] || []).length > 0;
                                           if (takenByOther) return false;
                                           if (otherIsFloater && !alreadyMine) return false;
+                                          // Non-mapping CC: only managers with a Digital Map.
+                                          if (!hasDigitalMapping && !managerHasMap(other.userId) && !alreadyMine) return false;
                                           return true;
                                         });
                                         // This manager can't BE a floater if someone is already floating
@@ -1739,7 +1750,7 @@ const SessionCommandCenter: React.FC = () => {
                                             <td className="py-3 text-center">
                                                 <span className="bg-gray-700 px-2 py-1 rounded text-xs text-yellow-300 font-mono">{manager.prebooks}</span>
                                             </td>
-                                            {hasDigitalMapping && (
+                                            {showFloater && (
                                               <td className="py-3 text-center">
                                                 <button
                                                   onClick={() => setFloaterPickerFor(pickerOpen ? null : manager.userId)}
@@ -1804,9 +1815,9 @@ const SessionCommandCenter: React.FC = () => {
                                             )}
                                         </tr>
                                         {/* FLOATER PICKER ROW — expands beneath the manager when open */}
-                                        {hasDigitalMapping && pickerOpen && (
+                                        {showFloater && pickerOpen && (
                                           <tr className="bg-gray-900/40">
-                                            <td colSpan={5} className="px-3 py-3">
+                                            <td colSpan={managerTableCols} className="px-3 py-3">
                                               <div className="bg-gray-900 border border-gray-700 rounded-lg p-3">
                                                 <div className="flex items-center justify-between mb-2">
                                                   <div className="text-xs font-bold text-white flex items-center gap-1.5">
@@ -1837,7 +1848,8 @@ const SessionCommandCenter: React.FC = () => {
                                                   <div className="text-[11px] text-gray-500 py-2">
                                                     No eligible managers to float for. (A manager who is
                                                     already a floater, or who is already being floated for,
-                                                    can't be selected — no mutual or chained floating.)
+                                                    can't be selected — no mutual or chained floating.
+                                                    {!hasDigitalMapping && ' On this command centre a manager also needs a Digital Map to be floated for.'})
                                                   </div>
                                                 ) : (
                                                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
@@ -1879,7 +1891,7 @@ const SessionCommandCenter: React.FC = () => {
                                         {/* MAPPING PICKER ROW — expands beneath the manager when open */}
                                         {showManagerMapping && mappingPickerFor === manager.userId && (
                                           <tr className="bg-gray-900/40">
-                                            <td colSpan={5} className="px-3 py-3">
+                                            <td colSpan={managerTableCols} className="px-3 py-3">
                                               <div className="bg-gray-900 border border-gray-700 rounded-lg p-3">
                                                 <div className="flex items-center justify-between mb-2">
                                                   <div className="text-xs font-bold text-white flex items-center gap-1.5">
@@ -2014,7 +2026,7 @@ const SessionCommandCenter: React.FC = () => {
                                         <td className="py-3 text-center text-white">{activeReportData.reduce((sum, m) => sum + m.workers, 0)}</td>
                                         <td className="py-3 text-center text-white">{activeReportData.reduce((sum, m) => sum + m.routes, 0)}</td>
                                         <td className="py-3 text-center text-white">{activeReportData.reduce((sum, m) => sum + m.prebooks, 0)}</td>
-                                        {hasDigitalMapping && <td className="py-3" />}
+                                        {showFloater && <td className="py-3" />}
                                         {showManagerMapping && <td className="py-3" />}
                                     </tr>
                                 </tbody>

@@ -378,7 +378,10 @@ const RMLogbook: React.FC = () => {
       // CC-level mapping OR per-manager mapping (Sealing, non-mapping CCs):
       // authenticateRM stamps users.metadata.digitalMapping onto current_user
       // at login, so the check extends to "CC has mapping OR I do".
-      const hasMapping = commandCenterService.currentHasDigitalMapping() || !!user.digitalMapping;
+      // A FLOATER also gets the map: on a non-mapping CC they can only float
+      // for managers with a Digital Map, and usually have none of their own.
+      const isFloater = Array.isArray(user.floatingFor) && user.floatingFor.length > 0;
+      const hasMapping = commandCenterService.currentHasDigitalMapping() || !!user.digitalMapping || isFloater;
       setDigitalMappingEnabled(hasMapping);
 
       if (hasMapping) {
