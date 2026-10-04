@@ -18,6 +18,7 @@ import { Worker } from '../../types';
 import { SavedRouteMap, HouseView, StreetSegmentPick, houseColor, routeHouseId, buildHouseTiles, normStreet, BaseRoadLines } from '../../lib/mapLogsheetService';
 import {
   BUILDING_MIN_ZOOM, BuildingMatch, BuildingStyle, matchHousesToBuildings, addBuildingLayers, applyBuildingStyles, buildingIdAt,
+  addSliceLayers, setSliceData, emptyBuildingMatch, buildingMatchSig,
 } from '../../lib/mapBuildings';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -214,7 +215,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   // Houses drawn as Mapbox's own building (see lib/mapBuildings). Re-matched
   // whenever the map finishes loading tiles or the house list changes.
   const BLD_PREFIX = 'ml';
-  const bldMatchRef = useRef<BuildingMatch>({ houseToBuilding: new Map(), buildingToHouse: new Map() });
+  const bldMatchRef = useRef<BuildingMatch>(emptyBuildingMatch());
   const [bldMatchVer, setBldMatchVer] = useState(0);
   const housePtsRef = useRef<Array<{ id: string; lng: number; lat: number }>>([]);
   housePtsRef.current = useMemo(
@@ -228,13 +229,17 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     const m = matchHousesToBuildings(map, housePtsRef.current);
     const prev = bldMatchRef.current;
     // Keep earlier matches for buildings that scrolled off (tiles unloaded).
+    const known = new Set(housePtsRef.current.map(h => h.id));
+    const slices = m.houseToSlice!;
     prev.houseToBuilding.forEach((bid, hid) => {
-      if (!m.houseToBuilding.has(hid) && !m.buildingToHouse.has(bid) && housePtsRef.current.some(h => h.id === hid)) {
+      if (!m.houseToBuilding.has(hid) && !slices.has(hid) && !m.buildingToHouse.has(bid) && known.has(hid)) {
         m.houseToBuilding.set(hid, bid); m.buildingToHouse.set(bid, hid);
       }
     });
-    const sig = (x: BuildingMatch) => [...x.houseToBuilding].map(([h, b]) => `${h}:${b}`).sort().join(',');
-    if (sig(m) !== sig(prev)) { bldMatchRef.current = m; setBldMatchVer(v => v + 1); }
+    prev.houseToSlice?.forEach((sl, hid) => {
+      if (!m.houseToBuilding.has(hid) && !slices.has(hid) && !m.buildingToHouse.has(sl.bid) && known.has(hid)) slices.set(hid, sl);
+    });
+    if (buildingMatchSig(m) !== buildingMatchSig(prev)) { bldMatchRef.current = m; setBldMatchVer(v => v + 1); }
   }, []);
   const rematchRef = useRef(rematchBuildings);
   rematchRef.current = rematchBuildings;
@@ -257,7 +262,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
             fillOpacity: hasState ? 0.45 : 0.10,
             lineOpacity: hasState ? 0.9 : 0.35,
             // 1 = this house is drawn as its Mapbox building when zoomed in
-            b: bldMatchRef.current.houseToBuilding.has(id) ? 1 : 0,
+            b: bldMatchRef.current.houseToBuilding.has(id) || !!bldMatchRef.current.houseToSlice?.has(id) ? 1 : 0,
           },
           geometry: tile,
         });
@@ -328,6 +333,8 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
 
       // Mapbox's buildings, coloured per house where a building holds one house.
       addBuildingLayers(map, BLD_PREFIX, before);
+      // Slices of shared buildings (2–6 houses), drawn over their building.
+      addSliceLayers(map, BLD_PREFIX, before);
       // Tiles: every house while zoomed out; zoomed in, only houses that
       // don't have their own Mapbox building.
       map.addLayer({
@@ -413,7 +420,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
           onPickStreetRef.current(pickStreetAt(map, e.point));
           return;
         }
-        const feats = map.queryRenderedFeatures(e.point, { layers: [L_HIT, L_NUM, L_FP_FILL, L_FP_FILL_Z] });
+        const feats = map.queryRenderedFeatures(e.point, { layers: [L_HIT, L_NUM, L_FP_FILL, L_FP_FILL_Z, `${BLD_PREFIX}-slice-fill`] });
         const hit = feats.find(f => f.properties && f.properties.id);
         if (hit) {
           onSelectRef.current(String(hit.properties!.id));
@@ -527,7 +534,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   // House list changed → re-match to buildings.
   useEffect(() => {
     // Houses changed or moved: forget old matches (they may point at the wrong building).
-    bldMatchRef.current = { houseToBuilding: new Map(), buildingToHouse: new Map() };
+    bldMatchRef.current = emptyBuildingMatch();
     setBldMatchVer(v => v + 1);
     if (mapLoaded) rematchBuildings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -539,14 +546,17 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
     const styles = new Map<number, BuildingStyle>();
+    const byHouse = new Map<string, BuildingStyle>();
     for (const v of houses) {
       const id = routeHouseId(v.house.routeCode, v.house.houseKey);
-      const bid = bldMatchRef.current.houseToBuilding.get(id);
-      if (bid == null) continue;
       const hasState = v.state !== 'none' || v.isHistorical;
-      styles.set(bid, { color: houseColor(v), fill: hasState ? 0.55 : 0.18, line: hasState ? 0.95 : 0.6, width: hasState ? 1.6 : 1 });
+      const st: BuildingStyle = { color: houseColor(v), fill: hasState ? 0.55 : 0.18, line: hasState ? 0.95 : 0.6, width: hasState ? 1.6 : 1 };
+      byHouse.set(id, st);
+      const bid = bldMatchRef.current.houseToBuilding.get(id);
+      if (bid != null) styles.set(bid, st);
     }
     styledBuildingsRef.current = applyBuildingStyles(map, styles, styledBuildingsRef.current);
+    setSliceData(map, BLD_PREFIX, bldMatchRef.current, id => byHouse.get(id) || null);
   }, [houses, bldMatchVer, mapLoaded]);
 
   // Selection ring
@@ -640,7 +650,9 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-    HOUSE_LAYERS.forEach(id => { if (map.getLayer(id)) map.moveLayer(id); });
+    // Buildings and slices first, so the tiles and numbers end up above them.
+    [`${BLD_PREFIX}-bld-fill`, `${BLD_PREFIX}-bld-line`, `${BLD_PREFIX}-slice-fill`, `${BLD_PREFIX}-slice-line`, ...HOUSE_LAYERS]
+      .forEach(id => { if (map.getLayer(id)) map.moveLayer(id); });
   }, [routeMaps, mapLoaded]);
 
   return (

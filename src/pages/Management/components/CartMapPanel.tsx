@@ -38,6 +38,7 @@ import {
 import MapStatsTabs, { StatsTab } from '../../MapLogsheet/MapStatsTabs';
 import {
   BUILDING_MIN_ZOOM, BuildingMatch, BuildingStyle, matchHousesToBuildings, addBuildingLayers, applyBuildingStyles,
+  addSliceLayers, setSliceData, removeSliceLayers, emptyBuildingMatch, buildingMatchSig,
 } from '../../../lib/mapBuildings';
 
 export interface CartMapPanelCart {
@@ -214,7 +215,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
   );
 
   // --- Houses drawn as Mapbox's own buildings (lib/mapBuildings) ---
-  const bldMatchRef = useRef<BuildingMatch>({ houseToBuilding: new Map(), buildingToHouse: new Map() });
+  const bldMatchRef = useRef<BuildingMatch>(emptyBuildingMatch());
   const [bldMatchVer, setBldMatchVer] = useState(0);
   const housePtsRef = useRef<Array<{ id: string; lng: number; lat: number }>>([]);
   housePtsRef.current = useMemo(
@@ -227,13 +228,17 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     if (!map || map.getZoom() < BUILDING_MIN_ZOOM - 0.5) return;
     const m = matchHousesToBuildings(map, housePtsRef.current);
     const prev = bldMatchRef.current;
+    const known = new Set(housePtsRef.current.map(h => h.id));
+    const slices = m.houseToSlice!;
     prev.houseToBuilding.forEach((bid, hid) => {
-      if (!m.houseToBuilding.has(hid) && !m.buildingToHouse.has(bid) && housePtsRef.current.some(h => h.id === hid)) {
+      if (!m.houseToBuilding.has(hid) && !slices.has(hid) && !m.buildingToHouse.has(bid) && known.has(hid)) {
         m.houseToBuilding.set(hid, bid); m.buildingToHouse.set(bid, hid);
       }
     });
-    const sig = (x: BuildingMatch) => [...x.houseToBuilding].map(([h, b]) => `${h}:${b}`).sort().join(',');
-    if (sig(m) !== sig(prev)) { bldMatchRef.current = m; setBldMatchVer(v => v + 1); }
+    prev.houseToSlice?.forEach((sl, hid) => {
+      if (!m.houseToBuilding.has(hid) && !slices.has(hid) && !m.buildingToHouse.has(sl.bid) && known.has(hid)) slices.set(hid, sl);
+    });
+    if (buildingMatchSig(m) !== buildingMatchSig(prev)) { bldMatchRef.current = m; setBldMatchVer(v => v + 1); }
   };
   const styledBuildingsRef = useRef<Set<number>>(new Set());
 
@@ -246,6 +251,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     // Mapbox buildings (coloured per house), then tiles: every house while
     // zoomed out; zoomed in, only houses without their own building.
     addBuildingLayers(map, BLD_PREFIX);
+    addSliceLayers(map, BLD_PREFIX);   // slices of shared buildings (2–6 houses)
     if (!map.getLayer(L_FILL)) map.addLayer({ id: L_FILL, type: 'fill', source: SRC_FP, minzoom: 13, maxzoom: BUILDING_MIN_ZOOM, paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] } });
     if (!map.getLayer(L_LINE)) map.addLayer({ id: L_LINE, type: 'line', source: SRC_FP, minzoom: 13, maxzoom: BUILDING_MIN_ZOOM, paint: { 'line-color': ['get', 'color'], 'line-opacity': ['get', 'lineOpacity'], 'line-width': 1.2 } });
     if (!map.getLayer(L_FILL_Z)) map.addLayer({ id: L_FILL_Z, type: 'fill', source: SRC_FP, minzoom: BUILDING_MIN_ZOOM, filter: ['!=', ['get', 'b'], 1], paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] } });
@@ -300,6 +306,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     map.on('click', L_HIT, onClick);
     map.on('click', L_FILL, onClick);
     map.on('click', L_FILL_Z, onClick);
+    map.on('click', `${BLD_PREFIX}-slice-fill`, onClick);
     if (map.getLayer(bldFill)) map.on('click', bldFill, onBuildingClick);
     map.on('moveend', queueRematch);
     map.on('sourcedata', onSourceData);
@@ -310,6 +317,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
       map.off('click', L_HIT, onClick);
       map.off('click', L_FILL, onClick);
       map.off('click', L_FILL_Z, onClick);
+      map.off('click', `${BLD_PREFIX}-slice-fill`, onClick);
       map.off('click', bldFill, onBuildingClick);
       map.off('moveend', queueRematch);
       map.off('sourcedata', onSourceData);
@@ -319,6 +327,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
       try { styledBuildingsRef.current = applyBuildingStyles(map, new Map(), styledBuildingsRef.current); } catch { /* gone */ }
       try {
         CMP_LAYERS.forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
+        removeSliceLayers(map, BLD_PREFIX);
         [SRC_FP, SRC_PT].forEach(id => { if (map.getSource(id)) map.removeSource(id); });
       } catch { /* map already gone */ }
     };
@@ -334,7 +343,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
       const color = houseColor(v);
       const hasState = v.state !== 'none' || v.isHistorical;
       const tile = tiles.get(id);
-      if (tile) fp.push({ type: 'Feature', properties: { id, color, fillOpacity: hasState ? 0.45 : 0.10, lineOpacity: hasState ? 0.9 : 0.35, b: bldMatchRef.current.houseToBuilding.has(id) ? 1 : 0 }, geometry: tile });
+      if (tile) fp.push({ type: 'Feature', properties: { id, color, fillOpacity: hasState ? 0.45 : 0.10, lineOpacity: hasState ? 0.9 : 0.35, b: bldMatchRef.current.houseToBuilding.has(id) || !!bldMatchRef.current.houseToSlice?.has(id) ? 1 : 0 }, geometry: tile });
       pt.push({
         type: 'Feature',
         properties: { id, color, num: `${v.house.civicNo}${(v.house.civicSuffix || '').toUpperCase()}`, name: v.mapLabel || '', sort: hasState || v.isPcl ? 0 : 1 },
@@ -345,20 +354,24 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     (map.getSource(SRC_PT) as mapboxgl.GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: pt });
     // Colour each matched Mapbox building with its house's colour.
     const styles = new Map<number, BuildingStyle>();
+    const byHouse = new Map<string, BuildingStyle>();
     for (const v of houseViews) {
-      const bid = bldMatchRef.current.houseToBuilding.get(routeHouseId(v.house.routeCode, v.house.houseKey));
-      if (bid == null) continue;
+      const id = routeHouseId(v.house.routeCode, v.house.houseKey);
       const hasState = v.state !== 'none' || v.isHistorical;
-      styles.set(bid, { color: houseColor(v), fill: hasState ? 0.55 : 0.18, line: hasState ? 0.95 : 0.6, width: hasState ? 1.6 : 1 });
+      const st: BuildingStyle = { color: houseColor(v), fill: hasState ? 0.55 : 0.18, line: hasState ? 0.95 : 0.6, width: hasState ? 1.6 : 1 };
+      byHouse.set(id, st);
+      const bid = bldMatchRef.current.houseToBuilding.get(id);
+      if (bid != null) styles.set(bid, st);
     }
     styledBuildingsRef.current = applyBuildingStyles(map, styles, styledBuildingsRef.current);
+    setSliceData(map, BLD_PREFIX, bldMatchRef.current, id => byHouse.get(id) || null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, mapLoaded, houseViews, tiles, bldMatchVer]);
 
   // House list changed → re-match to buildings.
   useEffect(() => {
     // Houses changed or moved: forget old matches (they may point at the wrong building).
-    bldMatchRef.current = { houseToBuilding: new Map(), buildingToHouse: new Map() };
+    bldMatchRef.current = emptyBuildingMatch();
     setBldMatchVer(v => v + 1);
     if (map && mapLoaded) rematchRef.current();
     // eslint-disable-next-line react-hooks/exhaustive-deps
