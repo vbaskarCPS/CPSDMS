@@ -201,6 +201,8 @@ export interface RouteHouse {
   source: 'nar' | 'osm' | 'manual';
   /** 'mapbox' once the house has a Mapbox rooftop position; null = register/OSM point. */
   geoSource: string | null;
+  /** When Mapbox was asked about this house (matched or not) — never asked twice. */
+  geoTriedAt: string | null;
 }
 
 export type HouseDispositionStatus = 'no' | 'not_home' | 'go_back' | 'invalid';
@@ -543,6 +545,7 @@ function mapHouseRow(r: any): RouteHouse {
     footprint: r.footprint ?? null,
     source: r.source,
     geoSource: r.geo_source ?? null,
+    geoTriedAt: r.geocoded_at ?? null,
   };
 }
 
@@ -577,6 +580,7 @@ interface RouteHouseBuild {
   footprints_at: string | null;
   footprint_count: number;
   geocoded_at?: string | null;
+  geocode_started_at?: string | null;
 }
 
 async function fetchBuild(routeCode: string): Promise<RouteHouseBuild | null> {
@@ -746,22 +750,42 @@ const GEOCODE_BATCH = 50;
 const GEOCODE_MAX_MOVE_M = 400;
 const GEOCODE_GOOD = new Set(['rooftop', 'parcel', 'point']);
 
+const GEOCODE_BUSY_WAIT_S = 60;   // Mapbox "too many requests" → wait this long, then retry the batch
+const GEOCODE_BUSY_TRIES = 5;     // give up after this many busy waits (route retried on a later open)
+const GEOCODE_CLAIM_STALE_MS = 10 * 60 * 1000;  // mirrors claim_route_geocode
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+export type GeocodeOutcome =
+  | { status: 'done'; updated: number; looked: number }
+  | { status: 'stopped'; updated: number; looked: number }   // Mapbox error — retried on a later open
+  | { status: 'busy' }                                        // another device is placing this route right now
+  | { status: 'skip' };                                       // already done / nothing to do / no token
+
 export async function geocodeRouteHouses(
   routeCode: string,
   houses: RouteHouse[],
   onProgress?: HouseBuildProgress,
-): Promise<{ updated: number; looked: number } | null> {
+): Promise<GeocodeOutcome> {
   const token = (import.meta as any).env?.VITE_MAPBOX_TOKEN as string | undefined;
-  if (!token || !houses.length) return null;
+  if (!token || !houses.length) return { status: 'skip' };
   const { data: claimed, error: claimErr } = await supabase.rpc('claim_route_geocode', { p_route_code: routeCode });
-  if (claimErr || !claimed) return null;          // done already, or another device is on it
+  if (claimErr) return { status: 'skip' };
+  if (!claimed) {
+    const b = await fetchBuild(routeCode).catch(() => null);
+    if (b && !b.geocoded_at) return { status: 'busy' };
+    return { status: 'skip' };
+  }
 
-  const todo = houses.filter(h => !h.geoSource);
+  // Only houses Mapbox hasn't been asked about yet (matched or not), so a
+  // retry never pays twice for the same house.
+  const todo = houses.filter(h => !h.geoSource && !h.geoTriedAt);
   let updated = 0, looked = 0;
   try {
     for (let i = 0; i < todo.length; i += GEOCODE_BATCH) {
       const chunk = todo.slice(i, i + GEOCODE_BATCH);
-      onProgress?.(`Placing ${routeCode} houses on their roofs… ${Math.min(i + chunk.length, todo.length)}/${todo.length}`);
+      const progress = `Placing ${routeCode} houses on their roofs… ${Math.min(i + chunk.length, todo.length)}/${todo.length}`;
+      onProgress?.(progress);
       const body = chunk.map(h => ({
         q: `${h.civicNo}${(h.civicSuffix || '').toUpperCase()} ${h.streetName}`,
         country: 'ca',
@@ -769,49 +793,103 @@ export async function geocodeRouteHouses(
         limit: 1,
         proximity: [h.lng, h.lat],
       }));
-      const res = await fetch(`https://api.mapbox.com/search/geocode/v6/batch?permanent=true&access_token=${token}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+
+      let res: Response | null = null;
+      for (let attempt = 0; ; attempt++) {
+        res = await fetch(`https://api.mapbox.com/search/geocode/v6/batch?permanent=true&access_token=${token}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (res.status !== 429 || attempt >= GEOCODE_BUSY_TRIES) break;
+        // Mapbox is busy (too many lookups this minute across all devices).
+        // Wait it out, keep our claim alive, and try the same batch again.
+        await supabase.rpc('set_route_house_positions', { p_route_code: routeCode, p_items: [], p_done: false });
+        for (let left = GEOCODE_BUSY_WAIT_S; left > 0; left -= 5) {
+          onProgress?.(`Mapbox is busy — retrying in ${left}s… (${routeCode} ${Math.min(i + chunk.length, todo.length)}/${todo.length})`);
+          await sleep(5000);
+        }
+        onProgress?.(progress);
+      }
       if (!res.ok) {
         const msg = `Mapbox ${res.status}`;
-        // Leave the route unfinished so it's retried later (claim expires in 10 min).
-        await supabase.rpc('set_route_house_positions', { p_route_code: routeCode, p_items: [], p_done: false, p_note: msg });
+        // Leave the route unfinished and let go of it, so the next open tries again.
+        await supabase.rpc('set_route_house_positions', { p_route_code: routeCode, p_items: [], p_done: false, p_note: msg, p_release: true });
         console.warn('[mapLogsheet] geocode batch failed', msg, await res.text().catch(() => ''));
-        return { updated, looked };
+        return { status: 'stopped', updated, looked };
       }
       const json = await res.json();
       const items: Array<{ houseKey: string; lat: number; lng: number; accuracy: string }> = [];
+      const tried: string[] = [];
       (json.batch || []).forEach((r: any, k: number) => {
         looked++;
         const h = chunk[k];
+        if (!h) return;
         const f = r?.features?.[0];
         const props = f?.properties;
         const c = props?.coordinates;
-        if (!h || !c || !GEOCODE_GOOD.has(c.accuracy)) return;
         const addr = props?.context?.address;
         const num = String(addr?.address_number ?? '').toLowerCase().replace(/\s+/g, '');
         const want = `${h.civicNo}${(h.civicSuffix || '').toLowerCase()}`;
-        if (num !== want) return;
-        if (normStreet(addr?.street_name) !== h.streetNorm) return;
-        if (metersBetween(h.lng, h.lat, c.longitude, c.latitude) > GEOCODE_MAX_MOVE_M) return;
-        items.push({ houseKey: h.houseKey, lat: c.latitude, lng: c.longitude, accuracy: c.accuracy });
+        const ok = !!c && GEOCODE_GOOD.has(c.accuracy)
+          && num === want
+          && normStreet(addr?.street_name) === h.streetNorm
+          && metersBetween(h.lng, h.lat, c.longitude, c.latitude) <= GEOCODE_MAX_MOVE_M;
+        if (ok) items.push({ houseKey: h.houseKey, lat: c.latitude, lng: c.longitude, accuracy: c.accuracy });
+        else tried.push(h.houseKey);
       });
-      if (items.length) {
-        const { data: n, error } = await supabase.rpc('set_route_house_positions', { p_route_code: routeCode, p_items: items, p_done: false });
-        if (error) throw error;
-        updated += Number(n) || 0;
-      }
+      const { data: n, error } = await supabase.rpc('set_route_house_positions', {
+        p_route_code: routeCode, p_items: items, p_done: false, p_tried: tried,
+      });
+      if (error) throw error;
+      updated += Number(n) || 0;
     }
     await supabase.rpc('set_route_house_positions', {
       p_route_code: routeCode, p_items: [], p_done: true,
       p_note: `${updated} of ${looked} placed by Mapbox`,
     });
+    return { status: 'done', updated, looked };
   } catch (e) {
     console.warn('[mapLogsheet] geocode failed for', routeCode, e);
+    await supabase.rpc('set_route_house_positions', { p_route_code: routeCode, p_items: [], p_done: false, p_release: true }).then(() => {}, () => {});
+    return { status: 'stopped', updated, looked };
   }
-  return { updated, looked };
+}
+
+/**
+ * Another device is placing this route right now — wait for it to finish
+ * (up to the claim's 10 minutes), then return the fresh houses. Returns null
+ * if it didn't finish in time.
+ */
+async function waitForOtherDevice(routeCode: string, onProgress?: HouseBuildProgress): Promise<RouteHouse[] | null> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < GEOCODE_CLAIM_STALE_MS) {
+    onProgress?.(`Placing ${routeCode} houses on their roofs (another device is on it)…`);
+    await sleep(4000);
+    const b = await fetchBuild(routeCode).catch(() => null);
+    if (!b) return null;
+    if (b.geocoded_at) return fetchRouteHouses([routeCode]);
+    // The other device stopped (Mapbox error → claim released, or closed → claim gone stale).
+    const started = b.geocode_started_at ? Date.parse(b.geocode_started_at) : 0;
+    if (!started || Date.now() - started > GEOCODE_CLAIM_STALE_MS) return null;
+  }
+  return null;
+}
+
+/**
+ * Place one route's houses with Mapbox if that hasn't been done yet.
+ * Used by the manager's cart panel (runs in the background there).
+ * Returns the fresh house list when positions changed, otherwise null.
+ */
+export async function placeRouteOnRoofs(routeCode: string, onProgress?: HouseBuildProgress): Promise<RouteHouse[] | null> {
+  const build = await fetchBuild(routeCode).catch(() => null);
+  if (!build || build.geocoded_at) return null;
+  const houses = await fetchRouteHouses([routeCode]);
+  if (!houses.length) return null;
+  const r = await geocodeRouteHouses(routeCode, houses, onProgress);
+  if (r.status === 'busy') return waitForOtherDevice(routeCode, onProgress);
+  if ((r.status === 'done' || r.status === 'stopped') && r.updated) return fetchRouteHouses([routeCode]);
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -917,7 +995,14 @@ export async function ensureRouteHouses(rm: SavedRouteMap, onProgress?: HouseBui
   build = build || await fetchBuild(rc);
   if (build && !build.geocoded_at && houses.length) {
     const r = await geocodeRouteHouses(rc, houses, onProgress);
-    if (r && r.updated) houses = await fetchRouteHouses([rc]);
+    if (r.status === 'busy') {
+      // Someone else (a manager's panel or another worker) is placing this
+      // route right now — wait for them so this map opens with houses in place.
+      const fresh = await waitForOtherDevice(rc, onProgress);
+      if (fresh) houses = fresh;
+    } else if ((r.status === 'done' || r.status === 'stopped') && r.updated) {
+      houses = await fetchRouteHouses([rc]);
+    }
   }
 
   return houses;

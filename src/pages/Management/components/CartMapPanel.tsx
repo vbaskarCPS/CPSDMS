@@ -30,7 +30,7 @@ import {
   fetchRouteMaps, fetchRouteHouses, fetchDispositions, fetchHistoricalForRoutes,
   subscribeToDispositions, subscribeToPendingSales,
   indexPendingSales, indexBookings, indexPcl, indexHistorical, buildHouseViews,
-  buildHouseTiles, houseColor, routeHouseId, historicalSummary, HOUSE_COLORS,
+  buildHouseTiles, houseColor, routeHouseId, historicalSummary, HOUSE_COLORS, placeRouteOnRoofs,
 } from '../../../lib/mapLogsheetService';
 import {
   CartScope, computeCounts, computeKnockEvents, computePace, computeAvgCharge, computeGoBackQueue, computeCoverage,
@@ -97,10 +97,11 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState<StatsTab>('today');
+  const [placingMsg, setPlacingMsg] = useState<string | null>(null);
 
   const routeKey = routeCodes.join(',');
 
-  // --- LOAD (houses are only read here; building them is the worker map's job) ---
+  // --- LOAD (houses are read here; a route with no house list yet is built by the worker map) ---
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -125,6 +126,29 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeKey, commandCenterId]);
+
+  // Once per route: if a route's houses haven't been placed with Mapbox yet,
+  // do it now in the background (whoever opens the route first pays for it —
+  // a manager here or a worker on their map). Houses move into place when done.
+  useEffect(() => {
+    if (loading || !routeCodes.length) return;
+    let cancelled = false;
+    (async () => {
+      for (const rc of routeCodes) {
+        if (cancelled) return;
+        try {
+          const fresh = await placeRouteOnRoofs(rc, msg => { if (!cancelled) setPlacingMsg(msg); });
+          if (cancelled) return;
+          if (fresh) setHouses(prev => [...prev.filter(h => h.routeCode !== rc), ...fresh]);
+        } catch (err) {
+          console.warn('[CartMapPanel] placing houses failed for', rc, err);
+        }
+      }
+      if (!cancelled) setPlacingMsg(null);
+    })();
+    return () => { cancelled = true; setPlacingMsg(null); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, routeKey]);
 
   // Pending sales for the cart's session (own + asphalt assigned to it).
   const loadPending = useMemo(() => async () => {
@@ -455,6 +479,10 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
             <MapPin size={14} /> No houses on {routeCodes.join(', ')} yet — they appear once a worker on the cart opens the map.
           </div>
         ) : null}
+
+        {placingMsg && !loading && (
+          <div className="flex items-center gap-2 text-xs text-gray-400"><Loader size={14} className="animate-spin" /> {placingMsg}</div>
+        )}
 
         {houseCard}
 
