@@ -47,15 +47,25 @@ function parsePrice(raw: any): number | undefined {
   return isFinite(n) ? n : undefined;
 }
 
-/** Houses that are candidates for a text: a PCL with a phone, not already dealt with today. */
-export function pclOutreachClients(views: HouseView[]): PclOutreachClient[] {
+/** A phone number reduced to its last 10 digits, for comparing. */
+export function phoneKey(raw: unknown): string {
+  return String(raw ?? '').replace(/\D/g, '').slice(-10);
+}
+
+/** Houses that are candidates for a text: a PCL with a phone, not already dealt
+ *  with today, and NOT in the historicals (Load Historical) — neither the same
+ *  house nor the same phone number as any historical row on these routes. */
+export function pclOutreachClients(views: HouseView[], historicalPhones: Set<string> = new Set()): PclOutreachClient[] {
   const list: PclOutreachClient[] = [];
   for (const v of views) {
     const c = v.pcl;
     if (!c) continue;
+    if (v.isHistorical) continue;
     if (v.state === 'no' || v.state === 'invalid' || v.state === 'pending' || v.state === 'completed') continue;
     const phone = String(c.phone || '').trim();
     if (!phone) continue;
+    const pk = phoneKey(phone);
+    if (pk.length === 10 && historicalPhones.has(pk)) continue;
     const history: any[] = Array.isArray(c.history) ? c.history : [];
     const recent = history.length > 0 ? history[0] : null;
     let maxPrice: number | undefined;

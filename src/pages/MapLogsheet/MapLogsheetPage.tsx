@@ -32,7 +32,7 @@ import AddContractModal from '../../components/AddContractModal';
 import QuickPendingModal from '../../components/QuickPendingModal';
 import MapLogsheetView from './MapLogsheetView';
 import HouseSheet, { AddHouseSheet } from './HouseSheet';
-import PclOutreachSheet, { pclOutreachClients } from './PclOutreachSheet';
+import PclOutreachSheet, { pclOutreachClients, phoneKey } from './PclOutreachSheet';
 import GallerySheet from './GallerySheet';
 import MenuGrid from './MenuGrid';
 import ContactsSheet, { ContactPerson } from './ContactsSheet';
@@ -395,7 +395,13 @@ const MapLogsheetPage: React.FC = () => {
   }, [houses, dispositions, pendingSales, jobs, pclByRoute, historicalRows]);
 
   // PCL Outreach: who's textable on these routes, and how many are still to do.
-  const pclClients = useMemo(() => pclOutreachClients(houseViews), [houseViews]);
+  // Anyone in the historicals (same house, or same phone number) is left out.
+  const historicalPhones = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of historicalRows) { const k = phoneKey(r.phone); if (k.length === 10) set.add(k); }
+    return set;
+  }, [historicalRows]);
+  const pclClients = useMemo(() => pclOutreachClients(houseViews, historicalPhones), [houseViews, historicalPhones]);
   const pclToText = useMemo(() => pclClients.filter(c => !pclTexted.has(c.key)).length, [pclClients, pclTexted]);
   useEffect(() => {
     if (!worker) return;
