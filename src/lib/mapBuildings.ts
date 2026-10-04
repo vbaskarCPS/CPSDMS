@@ -326,6 +326,31 @@ export function applyBuildingStyles(map: MapboxMap, styles: Map<number, Building
   return new Set(styles.keys());
 }
 
+/**
+ * The outline of one Mapbox building (by id) as a polygon, for drawing an
+ * effect over it (e.g. the last-knock pulse). If the building comes in
+ * pieces (it crosses a map tile edge), the biggest piece. Null if its tile
+ * isn't loaded.
+ */
+export function buildingShape(map: MapboxMap, bid: number): GeoJSON.Polygon | null {
+  if (!hasBuildingSource(map)) return null;
+  let feats: any[] = [];
+  try { feats = map.querySourceFeatures(SRC, { sourceLayer: SRC_LAYER, filter: ['==', ['id'], bid] } as any) as any[]; } catch { feats = []; }
+  if (!feats.length) {
+    try { feats = (map.querySourceFeatures(SRC, { sourceLayer: SRC_LAYER }) as any[]).filter(f => Number(f.id) === bid); } catch { return null; }
+  }
+  let best: number[][][] | null = null, bestArea = -1;
+  for (const f of feats) {
+    const polys: number[][][][] = f.geometry?.type === 'Polygon' ? [f.geometry.coordinates]
+      : f.geometry?.type === 'MultiPolygon' ? f.geometry.coordinates : [];
+    for (const poly of polys) {
+      const a = poly[0] ? ringArea(poly[0]) : 0;
+      if (a > bestArea) { bestArea = a; best = poly; }
+    }
+  }
+  return best ? { type: 'Polygon', coordinates: best } : null;
+}
+
 /** Building id under a tap, if any (only buildings that are matched to a house). */
 export function buildingIdAt(map: MapboxMap, point: { x: number; y: number }, fillLayer: string): number | null {
   try {

@@ -38,7 +38,7 @@ import {
 import MapStatsTabs, { StatsTab } from '../../MapLogsheet/MapStatsTabs';
 import {
   BUILDING_MIN_ZOOM, BuildingMatch, BuildingStyle, matchHousesToBuildings, addBuildingLayers, applyBuildingStyles,
-  addSliceLayers, setSliceData, removeSliceLayers, emptyBuildingMatch, buildingMatchSig,
+  addSliceLayers, setSliceData, removeSliceLayers, emptyBuildingMatch, buildingMatchSig, buildingShape,
 } from '../../../lib/mapBuildings';
 
 export interface CartMapPanelCart {
@@ -71,6 +71,7 @@ const L_LINE = 'cmp-fp-line';
 const L_HIT = 'cmp-hit';
 const L_SEL = 'cmp-sel';
 const L_NUM = 'cmp-num';
+const SRC_PULSE = 'cmp-pulse-src';   // the shape of the last-knock house (building, slice or tile)
 const L_PULSE_FILL = 'cmp-pulse-fill';
 const L_PULSE_LINE = 'cmp-pulse-line';
 const L_PULSE_EDGE = 'cmp-pulse-edge';
@@ -262,14 +263,16 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     if (!map.getLayer(L_LINE)) map.addLayer({ id: L_LINE, type: 'line', source: SRC_FP, minzoom: 13, maxzoom: BUILDING_MIN_ZOOM, paint: { 'line-color': ['get', 'color'], 'line-opacity': ['get', 'lineOpacity'], 'line-width': 1.2 } });
     if (!map.getLayer(L_FILL_Z)) map.addLayer({ id: L_FILL_Z, type: 'fill', source: SRC_FP, minzoom: BUILDING_MIN_ZOOM, filter: ['!=', ['get', 'b'], 1], paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] } });
     if (!map.getLayer(L_LINE_Z)) map.addLayer({ id: L_LINE_Z, type: 'line', source: SRC_FP, minzoom: BUILDING_MIN_ZOOM, filter: ['!=', ['get', 'b'], 1], paint: { 'line-color': ['get', 'color'], 'line-opacity': ['get', 'lineOpacity'], 'line-width': 1.2 } });
-    // "Last knock" pulse: the tile of the cart's most recent knock, filtered by
-    // id and animated below (replaces the round pulse on the manager map).
+    // "Last knock" pulse: the shape of the cart's most recent knock — its own
+    // Mapbox building, its slice of a shared building, or its tile when it has
+    // no building — animated below (replaces the round pulse on the manager map).
     const none: any = ['==', ['get', 'id'], '__none__'];
+    if (!map.getSource(SRC_PULSE)) map.addSource(SRC_PULSE, { type: 'geojson', data: empty });
     // Solid flashing tile, a wide glowing halo, a crisp dark edge so it reads
     // on any colour, and two big rings radiating out from the house.
-    if (!map.getLayer(L_PULSE_FILL)) map.addLayer({ id: L_PULSE_FILL, type: 'fill', source: SRC_FP, filter: none, paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.9 } });
-    if (!map.getLayer(L_PULSE_LINE)) map.addLayer({ id: L_PULSE_LINE, type: 'line', source: SRC_FP, filter: none, paint: { 'line-color': ['get', 'color'], 'line-width': 6, 'line-opacity': 1, 'line-blur': 4 } });
-    if (!map.getLayer(L_PULSE_EDGE)) map.addLayer({ id: L_PULSE_EDGE, type: 'line', source: SRC_FP, filter: none, paint: { 'line-color': '#111827', 'line-width': 2.5, 'line-opacity': 1 } });
+    if (!map.getLayer(L_PULSE_FILL)) map.addLayer({ id: L_PULSE_FILL, type: 'fill', source: SRC_PULSE, paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.9 } });
+    if (!map.getLayer(L_PULSE_LINE)) map.addLayer({ id: L_PULSE_LINE, type: 'line', source: SRC_PULSE, paint: { 'line-color': ['get', 'color'], 'line-width': 6, 'line-opacity': 1, 'line-blur': 4 } });
+    if (!map.getLayer(L_PULSE_EDGE)) map.addLayer({ id: L_PULSE_EDGE, type: 'line', source: SRC_PULSE, paint: { 'line-color': '#111827', 'line-width': 2.5, 'line-opacity': 1 } });
     if (!map.getLayer(L_PULSE_RING)) map.addLayer({ id: L_PULSE_RING, type: 'circle', source: SRC_PT, filter: none, paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 12, 'circle-stroke-color': ['get', 'color'], 'circle-stroke-width': 5, 'circle-stroke-opacity': 1, 'circle-pitch-alignment': 'map' } });
     if (!map.getLayer(L_PULSE_RING2)) map.addLayer({ id: L_PULSE_RING2, type: 'circle', source: SRC_PT, filter: none, paint: { 'circle-color': 'rgba(0,0,0,0)', 'circle-radius': 12, 'circle-stroke-color': ['get', 'color'], 'circle-stroke-width': 4, 'circle-stroke-opacity': 1, 'circle-pitch-alignment': 'map' } });
     if (!map.getLayer(L_HIT)) map.addLayer({ id: L_HIT, type: 'circle', source: SRC_PT, minzoom: 13, paint: { 'circle-color': '#000', 'circle-opacity': 0, 'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 10, 17, 18, 19, 26] } });
@@ -334,7 +337,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
       try {
         CMP_LAYERS.forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
         removeSliceLayers(map, BLD_PREFIX);
-        [SRC_FP, SRC_PT].forEach(id => { if (map.getSource(id)) map.removeSource(id); });
+        [SRC_FP, SRC_PT, SRC_PULSE].forEach(id => { if (map.getSource(id)) map.removeSource(id); });
       } catch { /* map already gone */ }
     };
   }, [map, mapLoaded]);
@@ -396,10 +399,31 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
   // latest.) The tile flashes with a glowing halo and a dark edge, and two
   // rings radiate out from it every 1.6 s — visible at any zoom.
   const lastKnockId = knockEvents.length ? knockEvents[knockEvents.length - 1].id : null;
+
+  // The shape to pulse: the house's own building, else its slice, else its tile.
+  useEffect(() => {
+    if (!map || !mapLoaded) return;
+    const src = map.getSource(SRC_PULSE) as mapboxgl.GeoJSONSource | undefined;
+    if (!src) return;
+    const v = lastKnockId ? houseViews.find(x => routeHouseId(x.house.routeCode, x.house.houseKey) === lastKnockId) : undefined;
+    let shape: GeoJSON.Polygon | null = null;
+    if (v && lastKnockId) {
+      const bid = bldMatchRef.current.houseToBuilding.get(lastKnockId);
+      const slice = bldMatchRef.current.houseToSlice?.get(lastKnockId);
+      if (bid != null) shape = buildingShape(map, bid);
+      if (!shape && slice) shape = { type: 'Polygon', coordinates: [slice.ring] };
+      if (!shape) shape = tiles.get(lastKnockId) || null;
+    }
+    src.setData({
+      type: 'FeatureCollection',
+      features: shape && v ? [{ type: 'Feature', properties: { id: lastKnockId, color: houseColor(v) }, geometry: shape }] : [],
+    });
+  }, [map, mapLoaded, lastKnockId, houseViews, tiles, bldMatchVer]);
+
   useEffect(() => {
     if (!map || !mapLoaded || !map.getLayer(L_PULSE_FILL)) return;
     const filter: any = ['==', ['get', 'id'], lastKnockId || '__none__'];
-    [L_PULSE_FILL, L_PULSE_LINE, L_PULSE_EDGE, L_PULSE_RING, L_PULSE_RING2].forEach(id => { if (map.getLayer(id)) map.setFilter(id, filter); });
+    [L_PULSE_RING, L_PULSE_RING2].forEach(id => { if (map.getLayer(id)) map.setFilter(id, filter); });
     if (!lastKnockId) return;
     let raf = 0;
     const start = performance.now();
