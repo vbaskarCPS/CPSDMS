@@ -380,7 +380,55 @@ export function buildHouseTiles(
     return best;
   };
 
+  // Rows: houses on the same street and side, in number order, form runs (a
+  // gap over ROW_MAX_M breaks the run). Each tile is lined up with a short
+  // straight line fitted through its own house and up to ROW_WINDOW houses
+  // either side, and its point is snapped onto that line — so a townhouse row
+  // or a set-back row draws as a straight, even row instead of each tile
+  // turning to whatever bit of street line happens to be nearest.
+  const ROW_MAX_M = 40;
+  const ROW_WINDOW = 3;
+  const ROW_STRAIGHT_M = 4;
+  const ROW_SNAP_M = 3;
+  const rowFit = (sorted: Array<{ h: RouteHouse; p: [number, number] }>, idx: number): { dir: [number, number]; at: [number, number] } | null => {
+    const pts: Array<[number, number]> = [sorted[idx].p];
+    const walk = (step: number) => {
+      let last = sorted[idx].p, taken = 0;
+      for (let j = idx + step; j >= 0 && j < sorted.length && taken < ROW_WINDOW; j += step) {
+        const q = sorted[j].p;
+        const d = Math.hypot(q[0] - last[0], q[1] - last[1]);
+        if (d <= 1.5) continue;              // stacked on the same spot
+        if (d > ROW_MAX_M) break;            // end of this run
+        pts.push(q); last = q; taken++;
+      }
+    };
+    walk(-1); walk(1);
+    if (pts.length < 2) return null;
+    const mx = pts.reduce((t, q) => t + q[0], 0) / pts.length;
+    const my = pts.reduce((t, q) => t + q[1], 0) / pts.length;
+    let sxx = 0, syy = 0, sxy = 0;
+    for (const q of pts) { const dx = q[0] - mx, dy = q[1] - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+    if (sxx + syy < 4) return null;          // all within ~2 m — no direction
+    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    const dir: [number, number] = [Math.cos(ang), Math.sin(ang)];
+    // Only a real row counts: the houses must sit within ROW_STRAIGHT_M of the
+    // fitted line on average. A run that turns a corner or mixes two rows is
+    // not a row — the caller falls back to the street's direction.
+    const perp = (q: [number, number]) => (q[0] - mx) * -dir[1] + (q[1] - my) * dir[0];
+    const rms = Math.sqrt(pts.reduce((t, q) => t + perp(q) ** 2, 0) / pts.length);
+    if (rms > ROW_STRAIGHT_M) return null;
+    // Nudge this house onto the line only when it's already close (≤
+    // ROW_SNAP_M) — straightens small wobbles, never drags a tile off its house.
+    const p = sorted[idx].p;
+    const off = perp(p);
+    const at: [number, number] = pts.length >= 3 && Math.abs(off) <= ROW_SNAP_M
+      ? [p[0] + dir[1] * off, p[1] - dir[0] * off]
+      : p;
+    return { dir, at };
+  };
+
   for (const list of groups.values()) {
+    const sorted = [...list].sort((a, b) => a.h.civicNo - b.h.civicNo || (a.h.civicSuffix || '').localeCompare(b.h.civicSuffix || ''));
     for (const { h, p } of list) {
       // Gap to the nearest other house on this side of this street. Houses the
       // register puts on (almost) the same spot — e.g. both halves of a semi
@@ -417,14 +465,23 @@ export function buildHouseTiles(
       let along: [number, number];
       let back: [number, number];
       let centre: [number, number];
+      const row = rowFit(sorted, sorted.findIndex(o => o.h === h));
+      const pp: [number, number] = row ? row.at : p;
       if (near) {
-        along = near.dir;
-        const vx = p[0] - near.q[0], vy = p[1] - near.q[1];
-        const vlen = Math.hypot(vx, vy);
-        back = vlen > 0.5 ? [vx / vlen, vy / vlen] : [-along[1], along[0]];
-        // Keep the tile's front edge at least TILE_STREET_GAP_M from the street line.
-        const centreDist = Math.max(near.d + 2, TILE_STREET_GAP_M + depth / 2);
-        centre = [near.q[0] + back[0] * centreDist, near.q[1] + back[1] * centreDist];
+        // Line up with the row when there is one; else with the street.
+        along = row ? row.dir : near.dir;
+        // Face away from the street: the perpendicular that points from the
+        // street line toward the house.
+        back = [-along[1], along[0]];
+        const vx = pp[0] - near.q[0], vy = pp[1] - near.q[1];
+        if (vx * back[0] + vy * back[1] < 0) back = [-back[0], -back[1]];
+        // How far the house point already sits back from the street, measured
+        // straight out from the row. Push the tile back only as far as needed
+        // to keep its front edge TILE_STREET_GAP_M off the street line; houses
+        // set well back stay on their own point, so a row stays a row.
+        const setBack = Math.max(0, vx * back[0] + vy * back[1]);
+        const push = Math.max(2, TILE_STREET_GAP_M + depth / 2 - setBack);
+        centre = [pp[0] + back[0] * push, pp[1] + back[1] * push];
       } else {
         // Own street not found: line up with same-street neighbours and face
         // away from whichever road is closest (just to pick the side).
