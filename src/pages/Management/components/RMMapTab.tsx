@@ -8,7 +8,7 @@ import {
   AlertCircle, LayoutList, AlertTriangle, Truck, Bookmark, Shovel, Leaf,
   FileText, Check, ArrowRight, ArrowRightLeft, Shuffle, Trash2, UserPlus,
   UserMinus, Undo2, Navigation2, Compass, Scissors,
-  FlaskConical, Plus, Minus,
+  FlaskConical, Plus, Minus, Clock,
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { sessionService } from '../../../lib/sessionService';
@@ -1055,6 +1055,45 @@ function bucketCentroid(
 
 // --- COMPONENT ---
 
+// --- SIDEBAR "LAST ACTIVE" BADGE ---
+// Green dot = a knock or sale in the last 3 minutes. After that an orange
+// clock with how long they've been quiet: 3m (3-5 min), then 5-minute steps
+// (5m, 10m, ... 55m), then half-hour steps from an hour (1h, 1.5h, 2h ...).
+function activityBadge(lastMs: number | null, nowMs: number): { live: true } | { live: false; label: string } | null {
+  if (!lastMs || !isFinite(lastMs)) return null;
+  const mins = Math.max(0, (nowMs - lastMs) / 60000);
+  if (mins < 3) return { live: true };
+  if (mins < 5) return { live: false, label: '3m' };
+  if (mins < 60) return { live: false, label: `${Math.floor(mins / 5) * 5}m` };
+  const halfHours = Math.floor(mins / 30) / 2;
+  return { live: false, label: `${halfHours}h` };
+}
+
+const ActivityBadge: React.FC<{ lastMs: number | null; nowMs: number }> = ({ lastMs, nowMs }) => {
+  const b = activityBadge(lastMs, nowMs);
+  if (!b) return null;
+  const at = lastMs ? new Date(lastMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+  if (b.live) {
+    return <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0 animate-pulse" title={`Active — last knock ${at}`} />;
+  }
+  return (
+    <span className="flex items-center gap-0.5 text-[10px] font-bold text-orange-400 flex-shrink-0" title={`Away — last knock ${at}`}>
+      <Clock size={11} /> {b.label}
+    </span>
+  );
+};
+
+/** Latest of several timestamps (ms or ISO text); null if none. */
+function latestMs(...vals: Array<number | string | null | undefined>): number | null {
+  let best: number | null = null;
+  for (const v of vals) {
+    if (v === null || v === undefined || v === '') continue;
+    const ms = typeof v === 'number' ? v : new Date(v).getTime();
+    if (isFinite(ms) && (best === null || ms > best)) best = ms;
+  }
+  return best;
+}
+
 const RMMapTab: React.FC<RMMapTabProps> = ({
   managerId,
   routes,
@@ -1127,6 +1166,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [compassNeedsPermission, setCompassNeedsPermission] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('staff');
+  // Ticks every 30 s so the sidebar's green dot / away clock keep up.
+  const [activityNow, setActivityNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setActivityNow(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
   const [sortBy, setSortBy] = useState<SortOption>('recent');
   const [selectedWorkerForModal, setSelectedWorkerForModal] = useState<WorkerCardData | null>(null);
   const [selectedCartForModal, setSelectedCartForModal] = useState<CartCardData | null>(null);
@@ -4962,13 +5007,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                           <span className="text-white font-bold text-sm truncate">
                             {card.worker.firstName} {card.worker.lastName}
                           </span>
+                          <ActivityBadge lastMs={latestMs(card.lastActiveTimestamp)} nowMs={activityNow} />
                           {hasFlag && (<span title={`Red flags: ${flags.join(', ')}`} className="text-red-400"><AlertTriangle size={12} /></span>)}
                         </div>
-                        {card.lastActiveAddress && (
-                          <div className="text-[10px] text-gray-400 truncate mt-0.5">
-                            {card.lastActiveTime} • {card.lastActiveAddress}
-                          </div>
-                        )}
                         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1.5 text-[10px] text-gray-300">
                           <span>{card.stats.steps} steps</span><span className="text-gray-600">•</span>
                           <span className={card.stats.pending > 0 ? 'text-amber-400' : ''}>{card.stats.pending} pend</span><span className="text-gray-600">•</span>
@@ -5014,11 +5055,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                         <div className="flex items-center gap-1.5">
                           {cart.isRcCart && <Truck size={11} className="text-orange-400 flex-shrink-0" title="Ramp Crew" />}
                           <span className="text-white font-bold text-sm truncate">{label}</span>
+                          <ActivityBadge lastMs={latestMs(cart.lastActiveTimestamp, cartKnockSummary.get(cart.sessionId)?.last?.t)} nowMs={activityNow} />
                           {hasFlag && (<span title={`Red flags: ${flags.join(', ')}`} className="text-red-400"><AlertTriangle size={12} /></span>)}
                         </div>
-                        {cart.lastActiveAddress && (
-                          <div className="text-[10px] text-gray-400 truncate mt-0.5">{cart.lastActiveTime} • {cart.lastActiveAddress}</div>
-                        )}
                         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1.5 text-[10px] text-gray-300">
                           <span>{cart.stats.steps} steps</span><span className="text-gray-600">•</span>
                           <span className={cart.stats.pending > 0 ? 'text-amber-400' : ''}>{cart.stats.pending} pend</span><span className="text-gray-600">•</span>
@@ -5034,9 +5073,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                             <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1 text-[10px] text-gray-300">
                               <span>{k.knocks} knocks</span><span className="text-gray-600">•</span>
                               <span className={k.no > 0 ? 'text-red-400' : ''}>{k.no} no</span><span className="text-gray-600">•</span>
-                              <span className={k.goBack > 0 ? 'text-orange-300' : ''}>{k.goBack} go-back</span><span className="text-gray-600">•</span>
-                              <span className={k.invalid > 0 ? 'text-pink-300' : ''}>{k.invalid} invalid</span><span className="text-gray-600">•</span>
-                              <span className="text-blue-300" title={`${k.touched} of ${k.total} houses knocked or sold today`}>{k.total ? `${Math.round(k.pct * 100)}% covered` : '— covered'}</span>
+                              <span className={k.goBack > 0 ? 'text-orange-300' : ''} title="Go-backs">{k.goBack} GB</span><span className="text-gray-600">•</span>
+                              <span className={k.invalid > 0 ? 'text-pink-300' : ''} title="Invalid">{k.invalid} inv</span><span className="text-gray-600">•</span>
+                              <span className="text-blue-300" title={`${k.touched} of ${k.total} houses knocked or sold today`}>{k.total ? `${Math.round(k.pct * 100)}% cov` : '— cov'}</span>
                             </div>
                           );
                         })()}
