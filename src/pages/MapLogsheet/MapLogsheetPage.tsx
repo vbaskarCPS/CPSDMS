@@ -764,7 +764,7 @@ const MapLogsheetPage: React.FC = () => {
         )}
 
         {/* Contacts: route managers + today's cart partners */}
-        {showContacts && <ContactsSheet partners={partners} onClose={() => setShowContacts(false)} />}
+        {showContacts && <ContactsSheet partners={partners} workerId={worker?.contractorId} assignedManagerId={worker?.assignedManagerId} onClose={() => setShowContacts(false)} />}
 
         {/* Stats sheet */}
         {showStats && (

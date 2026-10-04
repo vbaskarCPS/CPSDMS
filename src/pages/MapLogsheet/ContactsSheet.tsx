@@ -1,7 +1,8 @@
 // src/pages/MapLogsheet/ContactsSheet.tsx
 //
 // "Contacts" from the map logsheet menu: every route manager in this command
-// centre, plus the worker's cart partners today, each with Call and Text.
+// centre — the worker's own assigned manager first and highlighted — plus the
+// worker's cart partners today, each with Call and Text.
 
 import React, { useEffect, useState } from 'react';
 import { X, Phone, MessageSquare, Loader, Users, UserCog } from 'lucide-react';
@@ -11,6 +12,10 @@ export interface ContactPerson { id: string; name: string; phone: string | null 
 
 interface ContactsSheetProps {
   partners: ContactPerson[];
+  /** The worker — their CURRENT assigned route manager is listed first, highlighted. */
+  workerId?: string | null;
+  /** Fallback: the assigned manager saved at login. */
+  assignedManagerId?: string | null;
   onClose: () => void;
 }
 
@@ -22,9 +27,10 @@ function prettyPhone(raw: string): string {
 const telHref = (raw: string) => `tel:${raw.replace(/[^\d+]/g, '')}`;
 const smsHref = (raw: string) => `sms:${raw.replace(/[^\d+]/g, '')}`;
 
-const Row: React.FC<{ person: ContactPerson }> = ({ person }) => (
-  <div className="flex items-center gap-3 bg-gray-800 rounded-xl px-3 py-2.5">
+const Row: React.FC<{ person: ContactPerson; mine?: boolean }> = ({ person, mine }) => (
+  <div className={`flex items-center gap-3 rounded-xl px-3 py-2.5 ${mine ? 'bg-emerald-900/40 border border-emerald-500' : 'bg-gray-800'}`}>
     <div className="flex-1 min-w-0">
+      {mine && <div className="text-[10px] font-bold uppercase tracking-wide text-emerald-300 mb-0.5">Your manager</div>}
       <div className="text-sm font-bold text-white truncate">{person.name}</div>
       <div className="text-xs text-gray-400">{person.phone ? prettyPhone(person.phone) : 'No number on file'}</div>
     </div>
@@ -41,16 +47,27 @@ const Row: React.FC<{ person: ContactPerson }> = ({ person }) => (
   </div>
 );
 
-const ContactsSheet: React.FC<ContactsSheetProps> = ({ partners, onClose }) => {
+const ContactsSheet: React.FC<ContactsSheetProps> = ({ partners, workerId, assignedManagerId, onClose }) => {
   const [managers, setManagers] = useState<ContactPerson[] | null>(null);
+  const [mineId, setMineId] = useState<string | null>(assignedManagerId || null);
 
   useEffect(() => {
     let cancelled = false;
-    sessionService.getCommandCenterManagerContacts()
-      .then(list => { if (!cancelled) setManagers(list); })
+    Promise.all([
+      sessionService.getCommandCenterManagerContacts(),
+      workerId ? sessionService.getWorkerAssignedManagerId(workerId).catch(() => null) : Promise.resolve(null),
+    ])
+      .then(([list, fresh]) => {
+        if (cancelled) return;
+        const mid = fresh || assignedManagerId || null;
+        setMineId(mid);
+        // The worker's own manager on top; everyone else stays alphabetical.
+        const mine = list.filter(m => m.id === mid);
+        setManagers([...mine, ...list.filter(m => m.id !== mid)]);
+      })
       .catch(() => { if (!cancelled) setManagers([]); });
     return () => { cancelled = true; };
-  }, []);
+  }, [workerId, assignedManagerId]);
 
   return (
     <div className="absolute inset-0 z-30" onClick={onClose}>
@@ -72,7 +89,7 @@ const ContactsSheet: React.FC<ContactsSheetProps> = ({ partners, onClose }) => {
             <div className="flex items-center gap-2 text-xs text-gray-400 px-1 py-2"><Loader size={14} className="animate-spin" /> Loading…</div>
           ) : managers.length === 0 ? (
             <div className="text-xs text-gray-500 px-1 py-2">No route managers found.</div>
-          ) : managers.map(m => <Row key={m.id} person={m} />)}
+          ) : managers.map(m => <Row key={m.id} person={m} mine={!!mineId && m.id === mineId} />)}
         </div>
 
         <div className="text-[11px] uppercase tracking-wide text-gray-500 px-1 pb-1.5 flex items-center gap-1.5">
