@@ -31,6 +31,7 @@ import {
   subscribeToDispositions, subscribeToPendingSales,
   indexPendingSales, indexBookings, indexPcl, indexHistorical, buildHouseViews,
   buildHouseTiles, houseColor, routeHouseId, historicalSummary, HOUSE_COLORS, placeRouteOnRoofs, tileCentre, cleanupRouteGhosts,
+  fillRouteGaps, fetchStreetChecks, StreetCheck, streetBase,
 } from '../../../lib/mapLogsheetService';
 import {
   CartScope, computeCounts, computeKnockEvents, computePace, computeAvgCharge, computeGoBackQueue, computeCoverage,
@@ -100,6 +101,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState<StatsTab>('today');
   const [placingMsg, setPlacingMsg] = useState<string | null>(null);
+  const [streetChecks, setStreetChecks] = useState<StreetCheck[]>([]);
 
   const routeKey = routeCodes.join(',');
 
@@ -141,10 +143,17 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
         try {
           let fresh = await placeRouteOnRoofs(rc, msg => { if (!cancelled) setPlacingMsg(msg); });
           if (cancelled) return;
-          // Then clear out ghost houses on this route (only ones Mapbox has checked).
+          // Then clear out ghost houses and houses on another route's stretch.
           if (await cleanupRouteGhosts(rc)) {
             fresh = await fetchRouteHouses([rc]);
             fetchDispositions(routeCodes).then(d => { if (!cancelled) setDispositions(d); }).catch(() => {});
+          }
+          if (cancelled) return;
+          // Then fill streets on the route map that have no houses.
+          const rm = routeMaps.find(m => m.route_code === rc);
+          if (rm) {
+            const filled = await fillRouteGaps(rm, fresh || undefined, msg => { if (!cancelled) setPlacingMsg(msg); });
+            if (filled) fresh = filled;
           }
           if (cancelled) return;
           if (fresh) setHouses(prev => [...prev.filter(h => h.routeCode !== rc), ...fresh!]);
@@ -153,6 +162,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
         }
       }
       if (!cancelled) setPlacingMsg(null);
+      if (!cancelled) fetchStreetChecks(routeCodes).then(c => { if (!cancelled) setStreetChecks(c); }).catch(() => {});
     })();
     return () => { cancelled = true; setPlacingMsg(null); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -542,6 +552,20 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
             <MapPin size={14} /> No houses on {routeCodes.join(', ')} yet — they appear once a worker on the cart opens the map.
           </div>
         ) : null}
+
+        {(() => {
+          // Streets on the route map where no houses could be found (checked once).
+          const empty = streetChecks.filter(c => c.checkedAt && !c.found
+            && !houses.some(h => h.routeCode === c.routeCode
+              && (h.streetNorm === c.streetNorm || streetBase(h.streetNorm) === streetBase(c.streetNorm))));
+          if (!empty.length || loading) return null;
+          return (
+            <div className="text-xs text-gray-400 bg-gray-800 rounded-lg p-2 flex items-start gap-2">
+              <MapPin size={14} className="mt-0.5 flex-shrink-0" />
+              <span>No houses found on: {empty.map(c => `${c.streetName || c.streetNorm}${routeCodes.length > 1 ? ` (${c.routeCode})` : ''}`).join(', ')}</span>
+            </div>
+          );
+        })()}
 
         {placingMsg && !loading && (
           <div className="flex items-center gap-2 text-xs text-gray-400"><Loader size={14} className="animate-spin" /> {placingMsg}</div>

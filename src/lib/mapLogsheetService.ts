@@ -198,7 +198,7 @@ export interface RouteHouse {
   lat: number;
   lng: number;
   footprint: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
-  source: 'nar' | 'osm' | 'manual';
+  source: 'nar' | 'osm' | 'manual' | 'mapbox';
   /** 'mapbox' once the house has a Mapbox rooftop position; null = register/OSM point. */
   geoSource: string | null;
   /** When Mapbox was asked about this house (matched or not) — never asked twice. */
@@ -970,6 +970,191 @@ export async function cleanupRouteGhosts(routeCode: string): Promise<number> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// STREET GAPS — streets on the route map with no houses
+// ---------------------------------------------------------------------------
+// When a route loads: any street on its map with no houses is a "gap".
+//   1. Free: re-run the house builder (picks up register houses it missed,
+//      e.g. a different street ending), and give any new ones rooftop spots.
+//   2. Paid, once per street: walk the street line, a point every
+//      GAP_STEP_M on each side, and ask Mapbox which addresses are there
+//      (2 lookups per 10 m of street ≈ $1 per km, once). Keep only answers
+//      on that street, on this route's stretch of it.
+// Each street is checked once (route_street_checks); a street where nothing
+// turns up is remembered and listed for managers as "no houses found".
+const GAP_STEP_M = 10;
+const GAP_OFFSET_M = 18;
+const GAP_MAX_FROM_STREET_M = 45;
+const GAP_MAX_LOOKUPS_PER_LOAD = 600;          // ≈ $3 — anything beyond waits for the next load
+
+export interface StreetCheck {
+  routeCode: string;
+  streetNorm: string;
+  streetName: string | null;
+  checkedAt: string | null;
+  found: number | null;
+}
+
+export async function fetchStreetChecks(routeCodes: string[]): Promise<StreetCheck[]> {
+  if (!routeCodes.length) return [];
+  try {
+    const { data, error } = await supabase
+      .from('route_street_checks')
+      .select('route_code, street_norm, street_name, checked_at, found')
+      .in('route_code', routeCodes);
+    if (error) return [];
+    return (data || []).map((r: any) => ({
+      routeCode: r.route_code, streetNorm: r.street_norm, streetName: r.street_name ?? null,
+      checkedAt: r.checked_at ?? null, found: r.found ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/** Street name without its ending ("terra cotta way" → "terra cotta"). */
+export const streetBase = (sn: string) => sn.replace(/\s+\S+$/, '');
+
+export interface RouteStreetGap { norm: string; name: string; lines: [number, number][][] }
+
+/** Streets on this route's map that have no houses on the route. */
+export function routeStreetGaps(rm: SavedRouteMap, houses: RouteHouse[]): RouteStreetGap[] {
+  const byNorm = new Map<string, RouteStreetGap>();
+  for (const seg of rm.segments || []) {
+    const norm = normStreet(seg.name);
+    if (!norm || !seg.coordinates || seg.coordinates.length < 2) continue;
+    const g = byNorm.get(norm);
+    if (g) g.lines.push(seg.coordinates as [number, number][]);
+    else byNorm.set(norm, { norm, name: seg.name, lines: [seg.coordinates as [number, number][]] });
+  }
+  const mine = houses.filter(h => h.routeCode === rm.route_code);
+  return [...byNorm.values()].filter(g =>
+    !mine.some(h => h.streetNorm === g.norm || streetBase(h.streetNorm) === streetBase(g.norm)));
+}
+
+/** Points along the street, every `step` m, `off` m out on each side. */
+function sampleStreet(lines: [number, number][][], step: number, off: number): [number, number][] {
+  const out: [number, number][] = [];
+  for (const cs of lines) {
+    if (cs.length < 2) continue;
+    const kx = Math.cos(cs[0][1] * Math.PI / 180) * M_PER_DEG_LAT, ky = M_PER_DEG_LAT;
+    let carry = 0;
+    for (let i = 0; i < cs.length - 1; i++) {
+      const dx = (cs[i + 1][0] - cs[i][0]) * kx, dy = (cs[i + 1][1] - cs[i][1]) * ky;
+      const L = Math.hypot(dx, dy);
+      if (L === 0) continue;
+      const nx = -dy / L, ny = dx / L;
+      let d = carry;
+      for (; d < L; d += step) {
+        const x = cs[i][0] + (cs[i + 1][0] - cs[i][0]) * d / L, y = cs[i][1] + (cs[i + 1][1] - cs[i][1]) * d / L;
+        out.push([x + nx * off / kx, y + ny * off / ky], [x - nx * off / kx, y - ny * off / ky]);
+      }
+      carry = d - L;
+    }
+  }
+  return out;
+}
+
+/** One Mapbox batch request, waiting out "busy" answers. Null on any other failure. */
+async function mapboxBatch(body: any[], onBusy?: (secondsLeft: number) => void): Promise<any | null> {
+  const token = (import.meta as any).env?.VITE_MAPBOX_TOKEN as string | undefined;
+  if (!token) return null;
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(`https://api.mapbox.com/search/geocode/v6/batch?permanent=true&access_token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+    } catch { return null; }
+    if (res.status === 429 && attempt < GEOCODE_BUSY_TRIES) {
+      for (let left = GEOCODE_BUSY_WAIT_S; left > 0; left -= 5) { onBusy?.(left); await sleep(5000); }
+      continue;
+    }
+    if (!res.ok) return null;
+    try { return await res.json(); } catch { return null; }
+  }
+}
+
+/**
+ * Find and fill this route's empty streets (see above). Returns the route's
+ * fresh house list when anything was added, otherwise null. Never throws.
+ */
+export async function fillRouteGaps(rm: SavedRouteMap, houses?: RouteHouse[], onProgress?: HouseBuildProgress): Promise<RouteHouse[] | null> {
+  const rc = rm.route_code;
+  try {
+    let current = houses ? houses.filter(h => h.routeCode === rc) : await fetchRouteHouses([rc]);
+    if (!current.length) return null;                 // route not built yet — the builder handles it
+    const checked = new Set((await fetchStreetChecks([rc])).map(c => c.streetNorm));
+    let todo = routeStreetGaps(rm, current).filter(g => !checked.has(g.norm));
+    if (!todo.length) return null;
+    let changed = false;
+
+    // 1. Free: the register, via the house builder.
+    onProgress?.(`Looking for missing houses on ${rc}…`);
+    const before = current.length;
+    try { await supabase.rpc('build_route_houses', { p_route_code: rc }); } catch { /* keep going */ }
+    current = await fetchRouteHouses([rc]);
+    if (current.length > before) {
+      changed = true;
+      // Rooftop spots for the new ones (houses already placed aren't paid again).
+      await supabase.rpc('reopen_route_geocode', { p_route_code: rc }).then(() => {}, () => {});
+      const r = await geocodeRouteHouses(rc, current, onProgress);
+      if (r.status === 'done' || r.status === 'stopped') current = await fetchRouteHouses([rc]);
+    }
+    todo = routeStreetGaps(rm, current).filter(g => !checked.has(g.norm));
+
+    // 2. Paid, once per street: Mapbox addresses along the street.
+    let budget = GAP_MAX_LOOKUPS_PER_LOAD;
+    for (const g of todo) {
+      const pts = sampleStreet(g.lines, GAP_STEP_M, GAP_OFFSET_M);
+      if (!pts.length) continue;
+      if (pts.length > budget) break;                  // the rest wait for the next load
+      const { data: claimed } = await supabase.rpc('claim_street_check', { p_route_code: rc, p_street_norm: g.norm, p_street_name: g.name });
+      if (!claimed) continue;                          // another device is on it, or it's done
+      budget -= pts.length;
+      const found = new Map<string, { civicNo: number; suffix: string; street: string; lat: number; lng: number; accuracy: string }>();
+      let ok = true;
+      for (let i = 0; i < pts.length; i += GEOCODE_BATCH) {
+        const chunk = pts.slice(i, i + GEOCODE_BATCH);
+        const msg = `Finding houses on ${g.name}… ${Math.min(i + chunk.length, pts.length)}/${pts.length}`;
+        onProgress?.(msg);
+        const json = await mapboxBatch(
+          chunk.map(([lng, lat]) => ({ longitude: lng, latitude: lat, types: ['address'], limit: 5 })),
+          left => onProgress?.(`Mapbox is busy — retrying in ${left}s… (${g.name})`),
+        );
+        if (!json) { ok = false; break; }
+        for (const fc of json.batch || []) {
+          for (const f of fc?.features || []) {
+            const props = f?.properties;
+            const c = props?.coordinates;
+            const addr = props?.context?.address;
+            if (!c || !addr || !GEOCODE_GOOD.has(c.accuracy)) continue;
+            const sn = normStreet(addr.street_name);
+            if (!sn || (sn !== g.norm && streetBase(sn) !== streetBase(g.norm))) continue;
+            const m = String(addr.address_number ?? '').trim().match(/^(\d+)\s*([A-Za-z]?)$/);
+            if (!m) continue;
+            if (pointToLinesMeters(c.longitude, c.latitude, g.lines) > GAP_MAX_FROM_STREET_M) continue;
+            const key = `${m[1]}${m[2].toLowerCase()}`;
+            if (!found.has(key)) found.set(key, {
+              civicNo: Number(m[1]), suffix: m[2].toLowerCase(), street: addr.street_name,
+              lat: c.latitude, lng: c.longitude, accuracy: c.accuracy,
+            });
+          }
+        }
+      }
+      if (!ok) continue;                               // unfinished — retried on a later load
+      const { data: n } = await supabase.rpc('add_street_houses', {
+        p_route_code: rc, p_street_norm: g.norm, p_items: [...found.values()], p_lookups: pts.length,
+      });
+      if (Number(n)) changed = true;
+    }
+    return changed ? await fetchRouteHouses([rc]) : null;
+  } catch (e) {
+    console.warn('[mapLogsheet] fillRouteGaps failed for', rc, e);
+    return null;
+  }
+}
+
 /**
  * Place one route's houses with Mapbox if that hasn't been done yet.
  * Used by the manager's cart panel (runs in the background there).
@@ -1099,10 +1284,16 @@ export async function ensureRouteHouses(rm: SavedRouteMap, onProgress?: HouseBui
     }
   }
 
-  // Clear out ghost houses (only ones Mapbox has already checked).
-  if (houses.some(h => h.source === 'osm' && !h.geoSource && h.geoTriedAt)) {
+  // Clear out ghost houses and houses that belong to another route's stretch.
+  if (houses.length) {
     const removed = await cleanupRouteGhosts(rc);
     if (removed) houses = await fetchRouteHouses([rc]);
+  }
+
+  // Fill streets on the route map that have no houses.
+  if (houses.length) {
+    const filled = await fillRouteGaps(rm, houses, onProgress);
+    if (filled) houses = filled;
   }
 
   return houses;
