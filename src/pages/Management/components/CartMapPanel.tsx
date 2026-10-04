@@ -30,7 +30,7 @@ import {
   fetchRouteMaps, fetchRouteHouses, fetchDispositions, fetchHistoricalForRoutes,
   subscribeToDispositions, subscribeToPendingSales,
   indexPendingSales, indexBookings, indexPcl, indexHistorical, buildHouseViews,
-  buildHouseTiles, houseColor, routeHouseId, historicalSummary, HOUSE_COLORS, placeRouteOnRoofs,
+  buildHouseTiles, houseColor, routeHouseId, historicalSummary, HOUSE_COLORS, placeRouteOnRoofs, tileCentre, cleanupRouteGhosts,
 } from '../../../lib/mapLogsheetService';
 import {
   CartScope, computeCounts, computeKnockEvents, computePace, computeAvgCharge, computeGoBackQueue, computeCoverage,
@@ -138,9 +138,15 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
       for (const rc of routeCodes) {
         if (cancelled) return;
         try {
-          const fresh = await placeRouteOnRoofs(rc, msg => { if (!cancelled) setPlacingMsg(msg); });
+          let fresh = await placeRouteOnRoofs(rc, msg => { if (!cancelled) setPlacingMsg(msg); });
           if (cancelled) return;
-          if (fresh) setHouses(prev => [...prev.filter(h => h.routeCode !== rc), ...fresh]);
+          // Then clear out ghost houses on this route (only ones Mapbox has checked).
+          if (await cleanupRouteGhosts(rc)) {
+            fresh = await fetchRouteHouses([rc]);
+            fetchDispositions(routeCodes).then(d => { if (!cancelled) setDispositions(d); }).catch(() => {});
+          }
+          if (cancelled) return;
+          if (fresh) setHouses(prev => [...prev.filter(h => h.routeCode !== rc), ...fresh!]);
         } catch (err) {
           console.warn('[CartMapPanel] placing houses failed for', rc, err);
         }
@@ -251,7 +257,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     // Mapbox buildings (coloured per house), then tiles: every house while
     // zoomed out; zoomed in, only houses without their own building.
     addBuildingLayers(map, BLD_PREFIX);
-    addSliceLayers(map, BLD_PREFIX);   // slices of shared buildings (2–6 houses)
+    addSliceLayers(map, BLD_PREFIX);   // slices of shared buildings (2–10 houses, rows up to 12)
     if (!map.getLayer(L_FILL)) map.addLayer({ id: L_FILL, type: 'fill', source: SRC_FP, minzoom: 13, maxzoom: BUILDING_MIN_ZOOM, paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] } });
     if (!map.getLayer(L_LINE)) map.addLayer({ id: L_LINE, type: 'line', source: SRC_FP, minzoom: 13, maxzoom: BUILDING_MIN_ZOOM, paint: { 'line-color': ['get', 'color'], 'line-opacity': ['get', 'lineOpacity'], 'line-width': 1.2 } });
     if (!map.getLayer(L_FILL_Z)) map.addLayer({ id: L_FILL_Z, type: 'fill', source: SRC_FP, minzoom: BUILDING_MIN_ZOOM, filter: ['!=', ['get', 'b'], 1], paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] } });
@@ -343,11 +349,14 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
       const color = houseColor(v);
       const hasState = v.state !== 'none' || v.isHistorical;
       const tile = tiles.get(id);
-      if (tile) fp.push({ type: 'Feature', properties: { id, color, fillOpacity: hasState ? 0.45 : 0.10, lineOpacity: hasState ? 0.9 : 0.35, b: bldMatchRef.current.houseToBuilding.has(id) || !!bldMatchRef.current.houseToSlice?.has(id) ? 1 : 0 }, geometry: tile });
+      const onBuilding = bldMatchRef.current.houseToBuilding.has(id) || !!bldMatchRef.current.houseToSlice?.has(id);
+      // Number on the building when it has one, else in the middle of its tile.
+      const labelAt: [number, number] = tile && !onBuilding ? tileCentre(tile) : [v.house.lng, v.house.lat];
+      if (tile) fp.push({ type: 'Feature', properties: { id, color, fillOpacity: hasState ? 0.45 : 0.10, lineOpacity: hasState ? 0.9 : 0.35, b: onBuilding ? 1 : 0 }, geometry: tile });
       pt.push({
         type: 'Feature',
         properties: { id, color, num: `${v.house.civicNo}${(v.house.civicSuffix || '').toUpperCase()}`, name: v.mapLabel || '', sort: hasState || v.isPcl ? 0 : 1 },
-        geometry: { type: 'Point', coordinates: [v.house.lng, v.house.lat] },
+        geometry: { type: 'Point', coordinates: labelAt },
       });
     }
     (map.getSource(SRC_FP) as mapboxgl.GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: fp });

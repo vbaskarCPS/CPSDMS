@@ -11,12 +11,14 @@
 //      it sits inside (from the building tiles already loaded on screen).
 //   2. A building holding exactly ONE house becomes that house: coloured with
 //      the house's colour, tappable. Its tile is hidden.
-//   3. A building with 2–6 houses is split into equal-width slices, one
+//   3. A building with 2–10 houses is split into equal-width slices, one
 //      per house, with the cuts running straight front-to-back (parallel to
 //      the building's side walls). Each slice gets its house's colour.
 //      The slices are worked out on the device each time, never stored.
-//   4. A building with more houses (condos, plazas), or a house in no
-//      building, keeps the drawn tile as before.
+//      A long building with up to 12 houses that clearly sit in a line (a
+//      townhouse row) is sliced the same way.
+//   4. A building with more houses, or bunched ones (condos, plazas), or a
+//      house in no building, keeps the drawn tile as before.
 //
 // Mapbox only sends building shapes from about zoom 15, so below that every
 // house shows its tile (the callers use two tile layers split at
@@ -34,12 +36,14 @@ export interface BuildingMatch {
   houseToBuilding: Map<string, number>;
   /** building id → houseId (the reverse, for taps). */
   buildingToHouse: Map<number, string>;
-  /** houseId → its slice of a shared building (2–6 houses), as a polygon ring [lng,lat][]. */
+  /** houseId → its slice of a shared building (2–10 houses, or a row of up to 12), as a polygon ring [lng,lat][]. */
   houseToSlice?: Map<string, { bid: number; ring: number[][] }>;
 }
 
-/** Shared buildings with more houses than this keep their tiles. */
-export const SPLIT_MAX_HOUSES = 6;
+/** Shared buildings with more houses than this keep their tiles... */
+export const SPLIT_MAX_HOUSES = 10;
+/** ...unless the houses clearly sit in a line (a townhouse row), up to this many. */
+export const SPLIT_ROW_MAX_HOUSES = 12;
 
 export function emptyBuildingMatch(): BuildingMatch {
   return { houseToBuilding: new Map(), buildingToHouse: new Map(), houseToSlice: new Map() };
@@ -80,7 +84,7 @@ function ringArea(r: number[][]): number {
  * parallel to the building's own side walls, and the units are equal width.
  * The house points only decide the ORDER of the units along the building.
  */
-function splitBuilding(outer: number[][], pts: Array<{ id: string; lng: number; lat: number }>): Map<string, number[][]> {
+function splitBuilding(outer: number[][], pts: Array<{ id: string; lng: number; lat: number }>, rowOnly = false): Map<string, number[][]> {
   const out = new Map<string, number[][]>();
   const lat0 = pts[0].lat, lng0 = pts[0].lng;
   const kx = Math.cos(lat0 * Math.PI / 180) * 111320, ky = 111320;
@@ -114,6 +118,14 @@ function splitBuilding(outer: number[][], pts: Array<{ id: string; lng: number; 
   let row = longer;
   if (pA >= 1 && pA >= 1.5 * pB) row = axA;
   else if (pB >= 1 && pB >= 1.5 * pA) row = axB;
+  // Big groups are only sliced when they're plainly a row: points spread
+  // along the building at least 3× more than across it, and every unit at
+  // least 4 m wide.
+  if (rowOnly) {
+    const along = row === axA ? pA : pB, across = row === axA ? pB : pA;
+    const len = spread(ring.map(p => dot(p, row)));
+    if (along < 3 * Math.max(across, 1) || len / pts.length < 4) return out;
+  }
 
   // 3. Equal-width units along that direction, in the order of the points.
   const proj = ring.map(p => dot(p, row));
@@ -162,7 +174,7 @@ export function matchHousesToBuildings(
   try { feats = map.querySourceFeatures(SRC, { sourceLayer: SRC_LAYER }) as any[]; } catch { return none; }
 
   // Bounding boxes so each house only tests nearby buildings.
-  type B = { id: number; rings: number[][][]; minX: number; minY: number; maxX: number; maxY: number };
+  type B = { id: number; rings: number[][][]; minX: number; minY: number; maxX: number; maxY: number; area: number };
   const blds: B[] = [];
   for (const f of feats) {
     if (f.id == null || !f.geometry) continue;
@@ -174,7 +186,7 @@ export function matchHousesToBuildings(
       if (!outer || outer.length < 4) continue;
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const [x, y] of outer) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
-      blds.push({ id: Number(f.id), rings: poly, minX, minY, maxX, maxY });
+      blds.push({ id: Number(f.id), rings: poly, minX, minY, maxX, maxY, area: ringArea(outer) });
     }
   }
   if (!blds.length) return none;
@@ -184,8 +196,7 @@ export function matchHousesToBuildings(
   const biggest = new Map<number, number[][]>();
   const bigArea = new Map<number, number>();
   for (const b of blds) {
-    const a = ringArea(b.rings[0]);
-    if (a > (bigArea.get(b.id) ?? -1)) { bigArea.set(b.id, a); biggest.set(b.id, b.rings[0]); }
+    if (b.area > (bigArea.get(b.id) ?? -1)) { bigArea.set(b.id, b.area); biggest.set(b.id, b.rings[0]); }
   }
 
   // Grid of ~50 m cells.
@@ -204,10 +215,13 @@ export function matchHousesToBuildings(
   const byId = new Map(houses.map(h => [h.id, h]));
   for (const h of houses) {
     const cand = grid.get(`${Math.floor(h.lng / CELL)}|${Math.floor(h.lat / CELL)}`) || [];
-    let found: number | null = null;
+    // A house can sit inside two outlines (e.g. a unit drawn on top of a big
+    // lot/podium outline). Take the SMALLEST one — that's the unit itself.
+    let found: number | null = null, foundArea = Infinity;
     for (const b of cand) {
       if (h.lng < b.minX || h.lng > b.maxX || h.lat < b.minY || h.lat > b.maxY) continue;
-      if (inRing(h.lng, h.lat, b.rings[0]) && !b.rings.slice(1).some(hole => inRing(h.lng, h.lat, hole))) { found = b.id; break; }
+      if (b.area >= foundArea) continue;
+      if (inRing(h.lng, h.lat, b.rings[0]) && !b.rings.slice(1).some(hole => inRing(h.lng, h.lat, hole))) { found = b.id; foundArea = b.area; }
     }
     if (found == null) continue;
     const l = housesIn.get(found); if (l) l.push(h.id); else housesIn.set(found, [h.id]);
@@ -219,11 +233,11 @@ export function matchHousesToBuildings(
       return;
     }
     // Shared building: slice it between its houses (big ones keep tiles).
-    if (ids.length > SPLIT_MAX_HOUSES) return;
+    if (ids.length > SPLIT_ROW_MAX_HOUSES) return;
     const outer = biggest.get(bid);
     if (!outer) return;
     const pts = ids.map(id => byId.get(id)!).filter(Boolean);
-    splitBuilding(outer, pts).forEach((ring, hid) => houseToSlice.set(hid, { bid, ring }));
+    splitBuilding(outer, pts, ids.length > SPLIT_MAX_HOUSES).forEach((ring, hid) => houseToSlice.set(hid, { bid, ring }));
   });
   return { houseToBuilding, buildingToHouse, houseToSlice };
 }

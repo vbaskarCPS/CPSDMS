@@ -15,7 +15,7 @@ import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { Navigation, Loader, Crosshair } from 'lucide-react';
 import { Worker } from '../../types';
-import { SavedRouteMap, HouseView, StreetSegmentPick, houseColor, routeHouseId, buildHouseTiles, normStreet, BaseRoadLines } from '../../lib/mapLogsheetService';
+import { SavedRouteMap, HouseView, StreetSegmentPick, houseColor, routeHouseId, buildHouseTiles, normStreet, BaseRoadLines, tileCentre } from '../../lib/mapLogsheetService';
 import {
   BUILDING_MIN_ZOOM, BuildingMatch, BuildingStyle, matchHousesToBuildings, addBuildingLayers, applyBuildingStyles, buildingIdAt,
   addSliceLayers, setSliceData, emptyBuildingMatch, buildingMatchSig,
@@ -254,6 +254,10 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
       const num = `${v.house.civicNo}${(v.house.civicSuffix || '').toUpperCase()}`;
       const tile = tiles.get(id);
       const hasFp = !!tile;
+      const onBuilding = bldMatchRef.current.houseToBuilding.has(id) || !!bldMatchRef.current.houseToSlice?.has(id);
+      // Number sits on its house: on the building when it has one, otherwise
+      // in the middle of its tile (tiles in a tidied row aren't on the raw point).
+      const labelAt: [number, number] = tile && !onBuilding ? tileCentre(tile) : [v.house.lng, v.house.lat];
       if (tile) {
         fp.push({
           type: 'Feature',
@@ -262,7 +266,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
             fillOpacity: hasState ? 0.45 : 0.10,
             lineOpacity: hasState ? 0.9 : 0.35,
             // 1 = this house is drawn as its Mapbox building when zoomed in
-            b: bldMatchRef.current.houseToBuilding.has(id) || !!bldMatchRef.current.houseToSlice?.has(id) ? 1 : 0,
+            b: onBuilding ? 1 : 0,
           },
           geometry: tile,
         });
@@ -277,7 +281,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
           // coloured houses win label placement fights
           sort: hasState || v.isPcl ? 0 : 1,
         },
-        geometry: { type: 'Point', coordinates: [v.house.lng, v.house.lat] },
+        geometry: { type: 'Point', coordinates: labelAt },
       });
     }
     return {
@@ -333,7 +337,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
 
       // Mapbox's buildings, coloured per house where a building holds one house.
       addBuildingLayers(map, BLD_PREFIX, before);
-      // Slices of shared buildings (2–6 houses), drawn over their building.
+      // Slices of shared buildings (2–10 houses, rows up to 12), drawn over their building.
       addSliceLayers(map, BLD_PREFIX, before);
       // Tiles: every house while zoomed out; zoomed in, only houses that
       // don't have their own Mapbox building.

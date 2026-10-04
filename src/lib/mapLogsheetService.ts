@@ -203,6 +203,8 @@ export interface RouteHouse {
   geoSource: string | null;
   /** When Mapbox was asked about this house (matched or not) — never asked twice. */
   geoTriedAt: string | null;
+  /** Mapbox's accuracy for geoSource 'mapbox' ('rooftop', 'parcel', 'point'). */
+  geoAccuracy?: string | null;
 }
 
 export type HouseDispositionStatus = 'no' | 'not_home' | 'go_back' | 'invalid';
@@ -298,6 +300,12 @@ const TILE_MAX_W_M = 13;
 const TILE_SOLO_W_M = 11;
 const TILE_STREET_GAP_M = 4;
 const TILE_SEGMENT_SEARCH_M = 80;
+
+/** Middle of a house tile (average of its four corners), [lng, lat]. */
+export function tileCentre(tile: GeoJSON.Polygon): [number, number] {
+  const r = tile.coordinates[0].slice(0, 4);
+  return [r.reduce((t, c) => t + c[0], 0) / r.length, r.reduce((t, c) => t + c[1], 0) / r.length];
+}
 
 /** Base-map road lines keyed by normStreet(name), [lng, lat] points. */
 export type BaseRoadLines = Map<string, [number, number][][]>;
@@ -431,9 +439,75 @@ export function buildHouseTiles(
     return { dir, at };
   };
 
+  // Neat rows — only for houses whose position is ROUGH (Mapbox gave just an
+  // approximate point, or never placed it: e.g. a new subdivision Mapbox has
+  // no buildings for yet). Houses Mapbox put on a rooftop/parcel stay exactly
+  // where they are and break a run. A run of 3+ rough houses on the same
+  // street and side, in number order, that sits roughly in a line (within
+  // ROW_NEAT_RMS_M) is laid out as an even row — equal spacing, in number
+  // order, all facing the same way.
+  // The run's ends stay where its first and last houses are; the houses in
+  // between are spread evenly. A run breaks at a gap over ROW_MAX_M or where
+  // the street bends enough that the houses stop being a line.
+  const ROW_NEAT_RMS_M = 6;
+  const ROW_NEAT_MIN_STEP_M = 5;
+  type Slot = { at: [number, number]; dir: [number, number]; width: number };
+  const neat = new Map<RouteHouse, Slot>();
+  const lineFit = (pts: Array<[number, number]>) => {
+    const mx = pts.reduce((t, q) => t + q[0], 0) / pts.length;
+    const my = pts.reduce((t, q) => t + q[1], 0) / pts.length;
+    let sxx = 0, syy = 0, sxy = 0;
+    for (const q of pts) { const dx = q[0] - mx, dy = q[1] - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+    const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    const dir: [number, number] = [Math.cos(ang), Math.sin(ang)];
+    const perp = (q: [number, number]) => (q[0] - mx) * -dir[1] + (q[1] - my) * dir[0];
+    const rms = Math.sqrt(pts.reduce((t, q) => t + perp(q) ** 2, 0) / pts.length);
+    return { mx, my, dir, rms, spread: sxx + syy };
+  };
+  const layOutRun = (run: Array<{ h: RouteHouse; p: [number, number] }>) => {
+    if (run.length < 3) return;
+    const fit = lineFit(run.map(o => o.p));
+    if (fit.spread < 4) return;                         // all on one spot — no direction
+    const { mx, my, dir } = fit;
+    const t = (q: [number, number]) => (q[0] - mx) * dir[0] + (q[1] - my) * dir[1];
+    // Ends: where the lowest and highest numbers are along the line.
+    let t0 = t(run[0].p), t1 = t(run[run.length - 1].p);
+    let step = (t1 - t0) / (run.length - 1);
+    if (Math.abs(step) < ROW_NEAT_MIN_STEP_M) {        // bunched up — spread them out
+      const mid = (t0 + t1) / 2, sgn = step < 0 ? -1 : 1;
+      step = sgn * ROW_NEAT_MIN_STEP_M;
+      t0 = mid - step * (run.length - 1) / 2;
+    }
+    const width = Math.max(TILE_MIN_W_M, Math.min(TILE_MAX_W_M, Math.abs(step) * 0.85));
+    run.forEach((o, i) => {
+      const ti = t0 + step * i;
+      neat.set(o.h, { at: [mx + dir[0] * ti, my + dir[1] * ti], dir, width });
+    });
+  };
+  for (const list of groups.values()) {
+    const sorted = [...list].sort((a, b) => a.h.civicNo - b.h.civicNo || (a.h.civicSuffix || '').localeCompare(b.h.civicSuffix || ''));
+    let run: typeof sorted = [];
+    for (const o of sorted) {
+      const precise = o.h.geoSource === 'mapbox' && (o.h.geoAccuracy === 'rooftop' || o.h.geoAccuracy === 'parcel');
+      if (precise) { layOutRun(run); run = []; continue; }
+      if (run.length) {
+        const last = run[run.length - 1].p;
+        const d = Math.hypot(o.p[0] - last[0], o.p[1] - last[1]);
+        const next = [...run, o];
+        if (d > ROW_MAX_M || (next.length >= 3 && lineFit(next.map(x => x.p)).rms > ROW_NEAT_RMS_M)) {
+          layOutRun(run);
+          run = [];
+        }
+      }
+      run.push(o);
+    }
+    layOutRun(run);
+  }
+
   for (const list of groups.values()) {
     const sorted = [...list].sort((a, b) => a.h.civicNo - b.h.civicNo || (a.h.civicSuffix || '').localeCompare(b.h.civicSuffix || ''));
     for (const { h, p } of list) {
+      const slot = neat.get(h);
       // Gap to the nearest other house on this side of this street. Houses the
       // register puts on (almost) the same spot — e.g. both halves of a semi
       // with one point — are "stacked" and laid out side by side below.
@@ -453,6 +527,7 @@ export function buildHouseTiles(
         ? Math.max(TILE_MIN_W_M, Math.min(TILE_MAX_W_M, gap * 0.8))
         : TILE_SOLO_W_M;
       if (stackN > 1) width = Math.max(TILE_MIN_W_M, width / stackN);
+      if (slot) width = slot.width;
       let depth = TILE_DEPTH_M;
       // Corner squeeze: a house on another street within reach.
       const cross = nearestOtherStreet(h, p);
@@ -469,7 +544,7 @@ export function buildHouseTiles(
       let along: [number, number];
       let back: [number, number];
       let centre: [number, number];
-      const row = rowFit(sorted, sorted.findIndex(o => o.h === h));
+      const row = slot ? { dir: slot.dir, at: slot.at } : rowFit(sorted, sorted.findIndex(o => o.h === h));
       const pp: [number, number] = row ? row.at : p;
       if (near) {
         // Line up with the row when there is one; else with the street.
@@ -489,18 +564,19 @@ export function buildHouseTiles(
       } else {
         // Own street not found: line up with same-street neighbours and face
         // away from whichever road is closest (just to pick the side).
-        along = towardNeighbour || [1, 0];
+        along = slot ? slot.dir : (towardNeighbour || [1, 0]);
         back = [-along[1], along[0]];
-        const road = towardNeighbour ? nearestOnSegs(p, allSegs) : null;
+        const road = (slot || towardNeighbour) ? nearestOnSegs(pp, allSegs) : null;
         if (road && road.d <= TILE_SEGMENT_SEARCH_M) {
-          const vx = p[0] - road.q[0], vy = p[1] - road.q[1];
+          const vx = pp[0] - road.q[0], vy = pp[1] - road.q[1];
           if (vx * back[0] + vy * back[1] < 0) back = [-back[0], -back[1]];
         }
-        centre = p;
+        centre = pp;
       }
 
       // Stacked houses: shift each one along the street so they sit side by side.
-      if (stackN > 1) {
+      // (A neat row already spreads them out.)
+      if (stackN > 1 && !slot) {
         const shift = (stackIdx - (stackN - 1) / 2) * width * 1.05;
         centre = [centre[0] + along[0] * shift, centre[1] + along[1] * shift];
       }
@@ -546,6 +622,7 @@ function mapHouseRow(r: any): RouteHouse {
     source: r.source,
     geoSource: r.geo_source ?? null,
     geoTriedAt: r.geocoded_at ?? null,
+    geoAccuracy: r.geo_accuracy ?? null,
   };
 }
 
@@ -877,6 +954,23 @@ async function waitForOtherDevice(routeCode: string, onProgress?: HouseBuildProg
 }
 
 /**
+ * Remove this route's "ghost" houses: OpenStreetMap-only addresses that are
+ * in neither the federal register nor the city's address list, and that
+ * Mapbox couldn't place either (plus any knock on them). Runs in the
+ * database (cleanup_route_ghosts). Returns how many were removed; 0 if the
+ * function isn't installed or anything goes wrong — never blocks loading.
+ */
+export async function cleanupRouteGhosts(routeCode: string): Promise<number> {
+  try {
+    const { data, error } = await supabase.rpc('cleanup_route_ghosts', { p_route_code: routeCode });
+    if (error) return 0;
+    return Number(data) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Place one route's houses with Mapbox if that hasn't been done yet.
  * Used by the manager's cart panel (runs in the background there).
  * Returns the fresh house list when positions changed, otherwise null.
@@ -1003,6 +1097,12 @@ export async function ensureRouteHouses(rm: SavedRouteMap, onProgress?: HouseBui
     } else if ((r.status === 'done' || r.status === 'stopped') && r.updated) {
       houses = await fetchRouteHouses([rc]);
     }
+  }
+
+  // Clear out ghost houses (only ones Mapbox has already checked).
+  if (houses.some(h => h.source === 'osm' && !h.geoSource && h.geoTriedAt)) {
+    const removed = await cleanupRouteGhosts(rc);
+    if (removed) houses = await fetchRouteHouses([rc]);
   }
 
   return houses;
