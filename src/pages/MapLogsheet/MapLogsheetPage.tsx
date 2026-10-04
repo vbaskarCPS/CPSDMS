@@ -15,8 +15,8 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  LogOut, Loader, Plus, FileText, ListChecks, Home, X, CheckCircle2, AlertCircle, Shovel, Droplets, Leaf,
-  Menu, BarChart3, ChevronUp, MessageSquare, Route, Images,
+  Loader, X, CheckCircle2, AlertCircle, Shovel, Droplets, Leaf,
+  Menu, ChevronUp, Route,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
@@ -34,6 +34,8 @@ import MapLogsheetView from './MapLogsheetView';
 import HouseSheet, { AddHouseSheet } from './HouseSheet';
 import PclOutreachSheet, { pclOutreachClients } from './PclOutreachSheet';
 import GallerySheet from './GallerySheet';
+import MenuGrid from './MenuGrid';
+import ContactsSheet, { ContactPerson } from './ContactsSheet';
 import MapStatsTabs, { StatsTab } from './MapStatsTabs';
 import {
   CartScope, computeCounts, computeKnockEvents, computePace, computeAvgCharge, computeGoBackQueue, computeCoverage,
@@ -172,6 +174,8 @@ const MapLogsheetPage: React.FC = () => {
   const [showPclOutreach, setShowPclOutreach] = useState(false);
   // Pitch gallery (photos of each prep step, in sales order) — full-screen.
   const [showGallery, setShowGallery] = useState(false);
+  const [showContacts, setShowContacts] = useState(false);
+  const [partners, setPartners] = useState<ContactPerson[]>([]);
   const [pclTexted, setPclTexted] = useState<Set<string>>(new Set());
   const [quickPending, setQuickPending] = useState<null | { prefill?: { routeCode: string; houseNumber: string; streetName: string; firstName?: string } }>(null);
   const [placing, setPlacing] = useState(false);
@@ -227,6 +231,10 @@ const MapLogsheetPage: React.FC = () => {
     const cartSessionIds = new Set<string>([sid]);
     if (myCart?.logsheetSessionId) cartSessionIds.add(myCart.logsheetSessionId);
     setCart({ workerIds: cartWorkerIds, sessionIds: cartSessionIds });
+    // Cart partners (everyone on my cart but me) for the Contacts list.
+    setPartners((daily?.workers || [])
+      .filter(dw => cartWorkerIds.has(dw.contractorId) && dw.contractorId !== w.contractorId)
+      .map(dw => ({ id: dw.contractorId, name: `${dw.firstName || ''} ${dw.lastName || ''}`.trim() || dw.contractorId, phone: (dw.cellPhone || '').trim() || null })));
     const names = new Map<string, string>();
     for (const dw of daily?.workers || []) {
       const nm = `${dw.firstName || ''} ${dw.lastName ? dw.lastName[0] + '.' : ''}`.trim();
@@ -730,86 +738,33 @@ const MapLogsheetPage: React.FC = () => {
           </div>
         )}
 
-        {/* Menu sheet */}
+        {/* Menu: 3 x 3 grid of tiles */}
         {showMenu && (
-          <div className="absolute inset-0 z-30" onClick={() => setShowMenu(false)}>
-            <div className="absolute inset-0 bg-black/40" />
-            <div
-              className="absolute inset-x-0 bottom-0 bg-gray-900 border-t border-gray-700 rounded-t-2xl shadow-2xl p-3 pb-5 space-y-2"
-              onClick={e => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between px-1 pb-1">
-                <span className="text-xs text-gray-400">
-                  {worker?.firstName} <span className="font-mono bg-gray-800 border border-gray-700 px-1 rounded">#{worker?.contractorId}</span>
-                  {routeCodes.length > 0 && <span className="ml-2 font-mono text-gray-500">{routeCodes.join(' ')}</span>}
-                </span>
-                <button onClick={() => setShowMenu(false)} className="p-1 text-gray-400"><X size={20} /></button>
-              </div>
-              <button
-                onClick={() => { setShowMenu(false); setPlacing(true); setSelectedId(null); }}
-                className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
-              >
-                <Home size={18} className="text-yellow-400" /> Add missing house
-              </button>
-              <button
-                onClick={() => { setShowMenu(false); setPickingStreet(true); setSelectedId(null); }}
-                className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
-              >
-                <Route size={18} className="text-yellow-400" /> Load houses on a street
-              </button>
-              {sessionId && routeCodes.length > 0 && (
-                <button
-                  onClick={() => { setShowMenu(false); setQuickPending({}); }}
-                  className="w-full py-3.5 rounded-xl bg-cps-blue text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-blue-600"
-                >
-                  <Plus size={18} /> Add sale (not on the map)
-                </button>
-              )}
-              <button
-                onClick={() => { setShowMenu(false); setShowJobs(true); }}
-                className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
-              >
-                <ListChecks size={18} className="text-blue-300" /> Jobs
-                {counts.pending > 0 && <span className="ml-auto bg-yellow-500 text-black rounded-full px-2 text-[11px]">{counts.pending} pending</span>}
-              </button>
-              <button
-                onClick={() => { setShowMenu(false); setShowGallery(true); setSelectedId(null); }}
-                className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
-              >
-                <Images size={18} className="text-yellow-300" /> Gallery
-              </button>
-              {pclClients.length > 0 && (
-                <button
-                  onClick={() => { setShowMenu(false); setShowPclOutreach(true); }}
-                  className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
-                >
-                  <MessageSquare size={18} className="text-teal-300" /> PCL Outreach
-                  {pclToText > 0 && <span className="ml-auto bg-teal-600 text-white rounded-full px-2 text-[11px]">{pclToText} to text</span>}
-                </button>
-              )}
-              {upsellsEnabled && (
-                <button
-                  onClick={() => { setShowMenu(false); setShowContract(true); }}
-                  className="w-full py-3.5 rounded-xl bg-purple-700 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-purple-600"
-                >
-                  <FileText size={18} /> Contract / upsell
-                </button>
-              )}
-              <button
-                onClick={() => { setShowMenu(false); setShowStats(true); }}
-                className="w-full py-3.5 rounded-xl bg-gray-800 text-white font-bold text-sm flex items-center gap-3 px-4 active:bg-gray-700"
-              >
-                <BarChart3 size={18} className="text-green-300" /> Today's stats
-              </button>
-              <button
-                onClick={handleLogout}
-                className="w-full py-3.5 rounded-xl bg-gray-800 text-red-400 font-bold text-sm flex items-center gap-3 px-4 border border-gray-700 active:bg-gray-700"
-              >
-                <LogOut size={18} /> Log out
-              </button>
-            </div>
-          </div>
+          <MenuGrid
+            workerName={worker?.firstName}
+            contractorId={worker?.contractorId}
+            routeCodes={routeCodes}
+            pendingCount={counts.pending}
+            pclToText={pclToText}
+            canAddSale={!!sessionId && routeCodes.length > 0}
+            upsellsEnabled={upsellsEnabled}
+            hasPcl={pclClients.length > 0}
+            onClose={() => setShowMenu(false)}
+            onLogsheet={() => { setShowMenu(false); setShowJobs(true); }}
+            onAddSale={() => { setShowMenu(false); setQuickPending({}); }}
+            onContract={() => { setShowMenu(false); setShowContract(true); }}
+            onStats={() => { setShowMenu(false); setShowStats(true); }}
+            onGallery={() => { setShowMenu(false); setShowGallery(true); setSelectedId(null); }}
+            onAddHouse={() => { setShowMenu(false); setPlacing(true); setSelectedId(null); }}
+            onLoadStreet={() => { setShowMenu(false); setPickingStreet(true); setSelectedId(null); }}
+            onPcl={() => { setShowMenu(false); setShowPclOutreach(true); }}
+            onContacts={() => { setShowMenu(false); setShowContacts(true); }}
+            onLogout={handleLogout}
+          />
         )}
+
+        {/* Contacts: route managers + today's cart partners */}
+        {showContacts && <ContactsSheet partners={partners} onClose={() => setShowContacts(false)} />}
 
         {/* Stats sheet */}
         {showStats && (

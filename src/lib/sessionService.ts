@@ -637,6 +637,21 @@ class SessionService {
     });
   }
 
+  // Every route manager on this command centre, with their phone number —
+  // the map logsheet's Contacts list. Sorted by name.
+  public async getCommandCenterManagerContacts(): Promise<Array<{ id: string; name: string; phone: string | null }>> {
+    const ccId = this.getCCId();
+    const { data, error } = await supabase
+      .from('users')
+      .select('user_id, name, metadata')
+      .eq('role', 'RouteManager')
+      .eq('command_center_id', ccId);
+    if (error) throw error;
+    return (data || [])
+      .map((u: any) => ({ id: u.user_id, name: u.name || 'Route manager', phone: (u.metadata?.phone || '').trim() || null }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   public async getManagerById(managerId: string): Promise<ManagementUser | null> {
     const ccId = this.getCCId();
     const { data } = await supabase
