@@ -162,7 +162,8 @@ export function hasBuildingSource(map: MapboxMap): boolean {
 /** Match house points to the Mapbox buildings currently loaded. */
 export function matchHousesToBuildings(
   map: MapboxMap,
-  houses: Array<{ id: string; lng: number; lat: number }>,
+  /** key = the address (same for one house loaded on two routes); defaults to id. */
+  houses: Array<{ id: string; lng: number; lat: number; key?: string }>,
 ): BuildingMatch {
   const houseToBuilding = new Map<string, number>();
   const buildingToHouse = new Map<number, string>();
@@ -227,17 +228,24 @@ export function matchHousesToBuildings(
     const l = housesIn.get(found); if (l) l.push(h.id); else housesIn.set(found, [h.id]);
   }
   housesIn.forEach((ids, bid) => {
-    if (ids.length === 1) {
-      houseToBuilding.set(ids[0], bid);
+    // The same address can be loaded twice (a boundary street on two routes).
+    // Count addresses, not copies: every copy shares its address's shape.
+    const keyOf = (id: string) => byId.get(id)?.key ?? id;
+    const byKey = new Map<string, string[]>();
+    for (const id of ids) { const k = keyOf(id); const l = byKey.get(k); if (l) l.push(id); else byKey.set(k, [id]); }
+    if (byKey.size === 1) {
+      for (const id of ids) houseToBuilding.set(id, bid);
       buildingToHouse.set(bid, ids[0]);
       return;
     }
-    // Shared building: slice it between its houses (big ones keep tiles).
-    if (ids.length > SPLIT_ROW_MAX_HOUSES) return;
+    // Shared building: slice it between its addresses (big ones keep tiles).
+    if (byKey.size > SPLIT_ROW_MAX_HOUSES) return;
     const outer = biggest.get(bid);
     if (!outer) return;
-    const pts = ids.map(id => byId.get(id)!).filter(Boolean);
-    splitBuilding(outer, pts, ids.length > SPLIT_MAX_HOUSES).forEach((ring, hid) => houseToSlice.set(hid, { bid, ring }));
+    const reps = [...byKey.values()].map(l => byId.get(l[0])!).filter(Boolean);
+    splitBuilding(outer, reps, byKey.size > SPLIT_MAX_HOUSES).forEach((ring, repId) => {
+      for (const id of byKey.get(keyOf(repId)) || [repId]) houseToSlice.set(id, { bid, ring });
+    });
   });
   return { houseToBuilding, buildingToHouse, houseToSlice };
 }
@@ -295,11 +303,18 @@ export function addSliceLayers(map: MapboxMap, prefix: string, before?: string):
 export function setSliceData(map: MapboxMap, prefix: string, match: BuildingMatch, styleFor: (houseId: string) => BuildingStyle | null): void {
   const src = map.getSource(`${prefix}-slice-src`) as any;
   if (!src) return;
-  const features: any[] = [];
+  // One feature per slice. Copies of the same address share a slice — draw
+  // it once, in the stronger colour (a knocked copy beats an unknocked one).
+  const best = new Map<number[][], { id: string; st: BuildingStyle }>();
   (match.houseToSlice || new Map()).forEach((s, id) => {
     const st = styleFor(id);
     if (!st) return;
-    features.push({ type: 'Feature', properties: { id, ...st }, geometry: { type: 'Polygon', coordinates: [s.ring] } });
+    const cur = best.get(s.ring);
+    if (!cur || Number(st.fill) > Number(cur.st.fill)) best.set(s.ring, { id, st });
+  });
+  const features: any[] = [];
+  best.forEach(({ id, st }, ring) => {
+    features.push({ type: 'Feature', properties: { id, ...st }, geometry: { type: 'Polygon', coordinates: [ring] } });
   });
   src.setData({ type: 'FeatureCollection', features });
 }

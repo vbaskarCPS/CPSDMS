@@ -217,9 +217,9 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   const BLD_PREFIX = 'ml';
   const bldMatchRef = useRef<BuildingMatch>(emptyBuildingMatch());
   const [bldMatchVer, setBldMatchVer] = useState(0);
-  const housePtsRef = useRef<Array<{ id: string; lng: number; lat: number }>>([]);
+  const housePtsRef = useRef<Array<{ id: string; key: string; lng: number; lat: number }>>([]);
   housePtsRef.current = useMemo(
-    () => houses.map(v => ({ id: routeHouseId(v.house.routeCode, v.house.houseKey), lng: v.house.lng, lat: v.house.lat })),
+    () => houses.map(v => ({ id: routeHouseId(v.house.routeCode, v.house.houseKey), key: v.house.houseKey, lng: v.house.lng, lat: v.house.lat })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [houseListSig],
   );
@@ -557,7 +557,8 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
       const st: BuildingStyle = { color: houseColor(v), fill: hasState ? 0.55 : 0.18, line: hasState ? 0.95 : 0.6, width: hasState ? 1.6 : 1 };
       byHouse.set(id, st);
       const bid = bldMatchRef.current.houseToBuilding.get(id);
-      if (bid != null) styles.set(bid, st);
+      // Same house on two routes → one building; the knocked copy's colour wins.
+      if (bid != null && !(styles.has(bid) && Number(styles.get(bid)!.fill) >= Number(st.fill))) styles.set(bid, st);
     }
     styledBuildingsRef.current = applyBuildingStyles(map, styles, styledBuildingsRef.current);
     setSliceData(map, BLD_PREFIX, bldMatchRef.current, id => byHouse.get(id) || null);
