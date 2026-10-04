@@ -11,9 +11,9 @@
 //      it sits inside (from the building tiles already loaded on screen).
 //   2. A building holding exactly ONE house becomes that house: coloured with
 //      the house's colour, tappable. Its tile is hidden.
-//   3. A building with 2–6 houses is split into one slice per house: a
-//      dividing line halfway between each pair of neighbouring house points,
-//      trimmed to the building outline. Each slice gets its house's colour.
+//   3. A building with 2–6 houses is split into equal-width slices, one
+//      per house, with the cuts running straight front-to-back (parallel to
+//      the building's side walls). Each slice gets its house's colour.
 //      The slices are worked out on the device each time, never stored.
 //   4. A building with more houses (condos, plazas), or a house in no
 //      building, keeps the drawn tile as before.
@@ -75,9 +75,10 @@ function ringArea(r: number[][]): number {
 }
 
 /**
- * Split one building outline between the houses inside it: each house gets
- * the part of the building closer to its point than to any other house's
- * (so the dividing lines sit halfway between neighbours).
+ * Split one building outline between the houses inside it, the way real
+ * semis and townhouse rows are built: the cuts run straight front-to-back,
+ * parallel to the building's own side walls, and the units are equal width.
+ * The house points only decide the ORDER of the units along the building.
  */
 function splitBuilding(outer: number[][], pts: Array<{ id: string; lng: number; lat: number }>): Map<string, number[][]> {
   const out = new Map<string, number[][]>();
@@ -86,22 +87,48 @@ function splitBuilding(outer: number[][], pts: Array<{ id: string; lng: number; 
   const toM = (lng: number, lat: number) => [(lng - lng0) * kx, (lat - lat0) * ky];
   const toLL = (p: number[]) => [p[0] / kx + lng0, p[1] / ky + lat0];
   // drop the closing point; clipping works on an open ring
-  const ring = outer.slice(0, outer.length > 1 && outer[0][0] === outer[outer.length - 1][0] && outer[0][1] === outer[outer.length - 1][1] ? -1 : undefined)
-    .map(c => toM(c[0], c[1]));
+  const closed = outer.length > 1 && outer[0][0] === outer[outer.length - 1][0] && outer[0][1] === outer[outer.length - 1][1];
+  const ring = (closed ? outer.slice(0, -1) : outer).map(c => toM(c[0], c[1]));
+  if (ring.length < 3) return out;
   const P = pts.map(p => toM(p.lng, p.lat));
-  pts.forEach((h, i) => {
+
+  // 1. Which way is the building squared up? Average its edge directions,
+  //    weighted by length (folded so walls at 90° to each other agree).
+  let C = 0, S = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const [x1, y1] = ring[i], [x2, y2] = ring[(i + 1) % ring.length];
+    const len = Math.hypot(x2 - x1, y2 - y1);
+    const th = Math.atan2(y2 - y1, x2 - x1);
+    C += len * Math.cos(4 * th); S += len * Math.sin(4 * th);
+  }
+  const th0 = Math.atan2(S, C) / 4;
+  const axA = [Math.cos(th0), Math.sin(th0)], axB = [-Math.sin(th0), Math.cos(th0)];
+  const dot = (p: number[], ax: number[]) => p[0] * ax[0] + p[1] * ax[1];
+  const spread = (vals: number[]) => Math.max(...vals) - Math.min(...vals);
+
+  // 2. The units sit side by side along one of those two directions: the one
+  //    the house points are clearly spread along (1.5× more than the other
+  //    way). If the points don't say clearly, the building's longer side.
+  const pA = spread(P.map(p => dot(p, axA))), pB = spread(P.map(p => dot(p, axB)));
+  const longer = spread(ring.map(p => dot(p, axA))) >= spread(ring.map(p => dot(p, axB))) ? axA : axB;
+  let row = longer;
+  if (pA >= 1 && pA >= 1.5 * pB) row = axA;
+  else if (pB >= 1 && pB >= 1.5 * pA) row = axB;
+
+  // 3. Equal-width units along that direction, in the order of the points.
+  const proj = ring.map(p => dot(p, row));
+  const lo = Math.min(...proj), hi = Math.max(...proj);
+  const w = (hi - lo) / pts.length;
+  const order = pts.map((_, i) => i).sort((i, j) => dot(P[i], row) - dot(P[j], row));
+  order.forEach((hi_, k) => {
+    const from = lo + k * w, to = lo + (k + 1) * w;
     let cell = ring;
-    for (let j = 0; j < P.length && cell.length >= 3; j++) {
-      if (j === i) continue;
-      const [ax, ay] = P[i], [bx, by] = P[j];
-      if (ax === bx && ay === by) continue;           // same spot — can't split
-      const mx = (ax + bx) / 2, my = (ay + by) / 2, dx = ax - bx, dy = ay - by;
-      cell = clipHalf(cell, p => (p[0] - mx) * dx + (p[1] - my) * dy);
-    }
+    if (k > 0) cell = clipHalf(cell, p => dot(p, row) - from);
+    if (k < pts.length - 1 && cell.length >= 3) cell = clipHalf(cell, p => to - dot(p, row));
     if (cell.length >= 3 && ringArea(cell) >= 4) {   // at least ~4 m²
       const ll = cell.map(toLL);
       ll.push(ll[0]);
-      out.set(h.id, ll);
+      out.set(pts[hi_].id, ll);
     }
   });
   return out;
