@@ -3,10 +3,15 @@
 // "Contacts" from the map logsheet menu: every route manager in this command
 // centre — the worker's own assigned manager first and highlighted — plus the
 // worker's cart partners today, each with Call and Text.
+//
+// It looks the managers up itself (straight from the users table) so it
+// doesn't depend on any other file being a particular version, and any
+// failure shows a message inside the sheet instead of breaking the page.
 
 import React, { useEffect, useState } from 'react';
 import { X, Phone, MessageSquare, Loader, Users, UserCog } from 'lucide-react';
-import { sessionService } from '../../lib/sessionService';
+import { supabase } from '../../lib/supabase';
+import { commandCenterService } from '../../lib/commandCenterService';
 
 export interface ContactPerson { id: string; name: string; phone: string | null }
 
@@ -21,8 +26,14 @@ interface ContactsSheetProps {
 
 /** "(905) 555-1234" for a 10-digit number; anything else as typed. */
 function prettyPhone(raw: string): string {
-  const d = raw.replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+  const d = String(raw).replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
   return d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : raw;
+}
+/** Any stored phone value → trimmed text, or null when there isn't one. */
+function cleanPhone(raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null;
+  const t = String(raw).trim();
+  return t ? t : null;
 }
 const telHref = (raw: string) => `tel:${raw.replace(/[^\d+]/g, '')}`;
 const smsHref = (raw: string) => `sms:${raw.replace(/[^\d+]/g, '')}`;
@@ -50,22 +61,46 @@ const Row: React.FC<{ person: ContactPerson; mine?: boolean }> = ({ person, mine
 const ContactsSheet: React.FC<ContactsSheetProps> = ({ partners, workerId, assignedManagerId, onClose }) => {
   const [managers, setManagers] = useState<ContactPerson[] | null>(null);
   const [mineId, setMineId] = useState<string | null>(assignedManagerId || null);
+  const [failed, setFailed] = useState(false);
+  const mineLc = (mineId || '').toLowerCase();
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      sessionService.getCommandCenterManagerContacts(),
-      workerId ? sessionService.getWorkerAssignedManagerId(workerId).catch(() => null) : Promise.resolve(null),
-    ])
-      .then(([list, fresh]) => {
+    (async () => {
+      try {
+        const ccId = commandCenterService.getCurrentCommandCenterId?.() || null;
+        let q = supabase.from('users').select('user_id, name, metadata').eq('role', 'RouteManager');
+        if (ccId) q = q.eq('command_center_id', ccId);
+        const { data, error } = await q;
+        if (error) throw error;
+        const list: ContactPerson[] = (data || [])
+          .map((u: any) => ({
+            id: String(u.user_id ?? ''),
+            name: String(u.name || 'Route manager'),
+            phone: cleanPhone(u.metadata?.phone),
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+
+        // The worker's CURRENT assigned manager (falls back to the one saved at login).
+        let mid: string | null = assignedManagerId || null;
+        if (workerId) {
+          try {
+            const { data: me } = await supabase.from('users').select('metadata')
+              .ilike('user_id', workerId).eq('role', 'Worker').limit(1);
+            mid = (me as any)?.[0]?.metadata?.assignedManagerId || mid;
+          } catch { /* keep the fallback */ }
+        }
         if (cancelled) return;
-        const mid = fresh || assignedManagerId || null;
+        const midLc = (mid || '').toLowerCase();
         setMineId(mid);
         // The worker's own manager on top; everyone else stays alphabetical.
-        const mine = list.filter(m => m.id === mid);
-        setManagers([...mine, ...list.filter(m => m.id !== mid)]);
-      })
-      .catch(() => { if (!cancelled) setManagers([]); });
+        const isMine = (m: ContactPerson) => !!midLc && m.id.toLowerCase() === midLc;
+        setManagers([...list.filter(isMine), ...list.filter(m => !isMine(m))]);
+      } catch (e: any) {
+        console.error('[Contacts] could not load route managers', e);
+        if (!cancelled) { setFailed(true); setManagers([]); }
+      }
+    })();
     return () => { cancelled = true; };
   }, [workerId, assignedManagerId]);
 
@@ -88,17 +123,17 @@ const ContactsSheet: React.FC<ContactsSheetProps> = ({ partners, workerId, assig
           {managers === null ? (
             <div className="flex items-center gap-2 text-xs text-gray-400 px-1 py-2"><Loader size={14} className="animate-spin" /> Loading…</div>
           ) : managers.length === 0 ? (
-            <div className="text-xs text-gray-500 px-1 py-2">No route managers found.</div>
-          ) : managers.map(m => <Row key={m.id} person={m} mine={!!mineId && m.id === mineId} />)}
+            <div className="text-xs text-gray-500 px-1 py-2">{failed ? "Couldn't load route managers — check your connection and try again." : 'No route managers found.'}</div>
+          ) : managers.map(m => <Row key={m.id} person={m} mine={!!mineLc && m.id.toLowerCase() === mineLc} />)}
         </div>
 
         <div className="text-[11px] uppercase tracking-wide text-gray-500 px-1 pb-1.5 flex items-center gap-1.5">
           <Users size={13} /> Your partners today
         </div>
         <div className="space-y-1.5">
-          {partners.length === 0
+          {(partners || []).length === 0
             ? <div className="text-xs text-gray-500 px-1 py-2">You're working solo today.</div>
-            : partners.map(p => <Row key={p.id} person={p} />)}
+            : (partners || []).map((p, i) => <Row key={p.id || i} person={{ ...p, name: String(p.name || 'Partner'), phone: cleanPhone(p.phone) }} />)}
         </div>
       </div>
     </div>

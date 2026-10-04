@@ -234,7 +234,7 @@ const MapLogsheetPage: React.FC = () => {
     // Cart partners (everyone on my cart but me) for the Contacts list.
     setPartners((daily?.workers || [])
       .filter(dw => cartWorkerIds.has(dw.contractorId) && dw.contractorId !== w.contractorId)
-      .map(dw => ({ id: dw.contractorId, name: `${dw.firstName || ''} ${dw.lastName || ''}`.trim() || dw.contractorId, phone: (dw.cellPhone || '').trim() || null })));
+      .map(dw => ({ id: dw.contractorId, name: `${dw.firstName || ''} ${dw.lastName || ''}`.trim() || dw.contractorId, phone: String(dw.cellPhone ?? '').trim() || null })));
     const names = new Map<string, string>();
     for (const dw of daily?.workers || []) {
       const nm = `${dw.firstName || ''} ${dw.lastName ? dw.lastName[0] + '.' : ''}`.trim();
