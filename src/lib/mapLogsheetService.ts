@@ -199,6 +199,8 @@ export interface RouteHouse {
   lng: number;
   footprint: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
   source: 'nar' | 'osm' | 'manual';
+  /** 'mapbox' once the house has a Mapbox rooftop position; null = register/OSM point. */
+  geoSource: string | null;
 }
 
 export type HouseDispositionStatus = 'no' | 'not_home' | 'go_back' | 'invalid';
@@ -540,6 +542,7 @@ function mapHouseRow(r: any): RouteHouse {
     lng: r.lng,
     footprint: r.footprint ?? null,
     source: r.source,
+    geoSource: r.geo_source ?? null,
   };
 }
 
@@ -573,6 +576,7 @@ interface RouteHouseBuild {
   house_count: number;
   footprints_at: string | null;
   footprint_count: number;
+  geocoded_at?: string | null;
 }
 
 async function fetchBuild(routeCode: string): Promise<RouteHouseBuild | null> {
@@ -724,6 +728,93 @@ function extractOsm(elements: OsmElement[]): { addresses: OsmAddressPoint[] } {
 }
 
 // ---------------------------------------------------------------------------
+// MAPBOX ROOFTOP POSITIONS — once per route
+// ---------------------------------------------------------------------------
+// The register / city points are sometimes in the road or piled up at a
+// corner. Mapbox's geocoder places most addresses on the actual roof. The
+// first time a route's houses are loaded, every house is looked up with
+// Mapbox's *permanent* geocoding (the kind we may store), 50 per request, and
+// the rooftop position replaces the old point. A result is only used when:
+//   - its house number and street match the house exactly,
+//   - Mapbox rates it rooftop / parcel / point (not "interpolated" guesses),
+//   - it's within GEOCODE_MAX_MOVE_M of the old point (guards against the
+//     same street name in another town).
+// Otherwise the house keeps its old point. claim_route_geocode makes sure only
+// one device pays for a route; set_route_house_positions stores the results
+// and marks the route done, and rebuilds never overwrite them.
+const GEOCODE_BATCH = 50;
+const GEOCODE_MAX_MOVE_M = 400;
+const GEOCODE_GOOD = new Set(['rooftop', 'parcel', 'point']);
+
+export async function geocodeRouteHouses(
+  routeCode: string,
+  houses: RouteHouse[],
+  onProgress?: HouseBuildProgress,
+): Promise<{ updated: number; looked: number } | null> {
+  const token = (import.meta as any).env?.VITE_MAPBOX_TOKEN as string | undefined;
+  if (!token || !houses.length) return null;
+  const { data: claimed, error: claimErr } = await supabase.rpc('claim_route_geocode', { p_route_code: routeCode });
+  if (claimErr || !claimed) return null;          // done already, or another device is on it
+
+  const todo = houses.filter(h => !h.geoSource);
+  let updated = 0, looked = 0;
+  try {
+    for (let i = 0; i < todo.length; i += GEOCODE_BATCH) {
+      const chunk = todo.slice(i, i + GEOCODE_BATCH);
+      onProgress?.(`Placing ${routeCode} houses on their roofs… ${Math.min(i + chunk.length, todo.length)}/${todo.length}`);
+      const body = chunk.map(h => ({
+        q: `${h.civicNo}${(h.civicSuffix || '').toUpperCase()} ${h.streetName}`,
+        country: 'ca',
+        types: 'address',
+        limit: 1,
+        proximity: [h.lng, h.lat],
+      }));
+      const res = await fetch(`https://api.mapbox.com/search/geocode/v6/batch?permanent=true&access_token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const msg = `Mapbox ${res.status}`;
+        // Leave the route unfinished so it's retried later (claim expires in 10 min).
+        await supabase.rpc('set_route_house_positions', { p_route_code: routeCode, p_items: [], p_done: false, p_note: msg });
+        console.warn('[mapLogsheet] geocode batch failed', msg, await res.text().catch(() => ''));
+        return { updated, looked };
+      }
+      const json = await res.json();
+      const items: Array<{ houseKey: string; lat: number; lng: number; accuracy: string }> = [];
+      (json.batch || []).forEach((r: any, k: number) => {
+        looked++;
+        const h = chunk[k];
+        const f = r?.features?.[0];
+        const props = f?.properties;
+        const c = props?.coordinates;
+        if (!h || !c || !GEOCODE_GOOD.has(c.accuracy)) return;
+        const addr = props?.context?.address;
+        const num = String(addr?.address_number ?? '').toLowerCase().replace(/\s+/g, '');
+        const want = `${h.civicNo}${(h.civicSuffix || '').toLowerCase()}`;
+        if (num !== want) return;
+        if (normStreet(addr?.street_name) !== h.streetNorm) return;
+        if (metersBetween(h.lng, h.lat, c.longitude, c.latitude) > GEOCODE_MAX_MOVE_M) return;
+        items.push({ houseKey: h.houseKey, lat: c.latitude, lng: c.longitude, accuracy: c.accuracy });
+      });
+      if (items.length) {
+        const { data: n, error } = await supabase.rpc('set_route_house_positions', { p_route_code: routeCode, p_items: items, p_done: false });
+        if (error) throw error;
+        updated += Number(n) || 0;
+      }
+    }
+    await supabase.rpc('set_route_house_positions', {
+      p_route_code: routeCode, p_items: [], p_done: true,
+      p_note: `${updated} of ${looked} placed by Mapbox`,
+    });
+  } catch (e) {
+    console.warn('[mapLogsheet] geocode failed for', routeCode, e);
+  }
+  return { updated, looked };
+}
+
+// ---------------------------------------------------------------------------
 // ROUTE HOUSES — ensure (build on first use)
 // ---------------------------------------------------------------------------
 export type HouseBuildProgress = (msg: string) => void;
@@ -820,6 +911,13 @@ export async function ensureRouteHouses(rm: SavedRouteMap, onProgress?: HouseBui
         console.warn('[mapLogsheet] OpenStreetMap pass failed for', rc, e);
       }
     }
+  }
+
+  // Once per route: move houses onto their Mapbox rooftop positions.
+  build = build || await fetchBuild(rc);
+  if (build && !build.geocoded_at && houses.length) {
+    const r = await geocodeRouteHouses(rc, houses, onProgress);
+    if (r && r.updated) houses = await fetchRouteHouses([rc]);
   }
 
   return houses;

@@ -16,6 +16,9 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import { Navigation, Loader, Crosshair } from 'lucide-react';
 import { Worker } from '../../types';
 import { SavedRouteMap, HouseView, StreetSegmentPick, houseColor, routeHouseId, buildHouseTiles, normStreet, BaseRoadLines } from '../../lib/mapLogsheetService';
+import {
+  BUILDING_MIN_ZOOM, BuildingMatch, BuildingStyle, matchHousesToBuildings, addBuildingLayers, applyBuildingStyles, buildingIdAt,
+} from '../../lib/mapBuildings';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -65,13 +68,15 @@ function installPixelRatioCap(): () => void {
 
 const SRC_FP = 'ml-fp-src';
 const SRC_PT = 'ml-pt-src';
-const L_FP_FILL = 'ml-fp-fill';
+const L_FP_FILL = 'ml-fp-fill';        // tiles, zoomed out (every house)
 const L_FP_LINE = 'ml-fp-line';
+const L_FP_FILL_Z = 'ml-fp-fill-z';    // tiles, zoomed in (only houses without their own Mapbox building)
+const L_FP_LINE_Z = 'ml-fp-line-z';
 const L_DISC = 'ml-disc';
 const L_HIT = 'ml-hit';
 const L_SEL = 'ml-sel';
 const L_NUM = 'ml-num';
-const HOUSE_LAYERS = [L_FP_FILL, L_FP_LINE, L_DISC, L_HIT, L_SEL, L_NUM];
+const HOUSE_LAYERS = [L_FP_FILL, L_FP_LINE, L_FP_FILL_Z, L_FP_LINE_Z, L_DISC, L_HIT, L_SEL, L_NUM];
 
 /** Street under the finger: the named road nearest the tap, plus every other
  *  visible piece of road with the same name (Mapbox splits roads per tile and
@@ -205,6 +210,34 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     [houseListSig, routeMaps, baseRoadsVer],
   );
 
+  // Houses drawn as Mapbox's own building (see lib/mapBuildings). Re-matched
+  // whenever the map finishes loading tiles or the house list changes.
+  const BLD_PREFIX = 'ml';
+  const bldMatchRef = useRef<BuildingMatch>({ houseToBuilding: new Map(), buildingToHouse: new Map() });
+  const [bldMatchVer, setBldMatchVer] = useState(0);
+  const housePtsRef = useRef<Array<{ id: string; lng: number; lat: number }>>([]);
+  housePtsRef.current = useMemo(
+    () => houses.map(v => ({ id: routeHouseId(v.house.routeCode, v.house.houseKey), lng: v.house.lng, lat: v.house.lat })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [houseListSig],
+  );
+  const rematchBuildings = useCallback(() => {
+    const map = mapRef.current;
+    if (!map || map.getZoom() < BUILDING_MIN_ZOOM - 0.5) return;
+    const m = matchHousesToBuildings(map, housePtsRef.current);
+    const prev = bldMatchRef.current;
+    // Keep earlier matches for buildings that scrolled off (tiles unloaded).
+    prev.houseToBuilding.forEach((bid, hid) => {
+      if (!m.houseToBuilding.has(hid) && !m.buildingToHouse.has(bid) && housePtsRef.current.some(h => h.id === hid)) {
+        m.houseToBuilding.set(hid, bid); m.buildingToHouse.set(bid, hid);
+      }
+    });
+    const sig = (x: BuildingMatch) => [...x.houseToBuilding].map(([h, b]) => `${h}:${b}`).sort().join(',');
+    if (sig(m) !== sig(prev)) { bldMatchRef.current = m; setBldMatchVer(v => v + 1); }
+  }, []);
+  const rematchRef = useRef(rematchBuildings);
+  rematchRef.current = rematchBuildings;
+
   const { fpCollection, ptCollection } = useMemo(() => {
     const fp: GeoJSON.Feature[] = [];
     const pt: GeoJSON.Feature[] = [];
@@ -222,6 +255,8 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
             id, color,
             fillOpacity: hasState ? 0.45 : 0.10,
             lineOpacity: hasState ? 0.9 : 0.35,
+            // 1 = this house is drawn as its Mapbox building when zoomed in
+            b: bldMatchRef.current.houseToBuilding.has(id) ? 1 : 0,
           },
           geometry: tile,
         });
@@ -243,7 +278,8 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
       fpCollection: { type: 'FeatureCollection', features: fp } as GeoJSON.FeatureCollection,
       ptCollection: { type: 'FeatureCollection', features: pt } as GeoJSON.FeatureCollection,
     };
-  }, [houses, tiles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [houses, tiles, bldMatchVer]);
 
   // ---------------------------------------------------------------------
   // Map init (once)
@@ -289,12 +325,24 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
 
       const before = map.getLayer('road-label') ? 'road-label' : undefined;
 
+      // Mapbox's buildings, coloured per house where a building holds one house.
+      addBuildingLayers(map, BLD_PREFIX, before);
+      // Tiles: every house while zoomed out; zoomed in, only houses that
+      // don't have their own Mapbox building.
       map.addLayer({
-        id: L_FP_FILL, type: 'fill', source: SRC_FP, minzoom: 14,
+        id: L_FP_FILL, type: 'fill', source: SRC_FP, minzoom: 14, maxzoom: BUILDING_MIN_ZOOM,
         paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] },
       }, before);
       map.addLayer({
-        id: L_FP_LINE, type: 'line', source: SRC_FP, minzoom: 14,
+        id: L_FP_LINE, type: 'line', source: SRC_FP, minzoom: 14, maxzoom: BUILDING_MIN_ZOOM,
+        paint: { 'line-color': ['get', 'color'], 'line-opacity': ['get', 'lineOpacity'], 'line-width': 1.2 },
+      }, before);
+      map.addLayer({
+        id: L_FP_FILL_Z, type: 'fill', source: SRC_FP, minzoom: BUILDING_MIN_ZOOM, filter: ['!=', ['get', 'b'], 1],
+        paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] },
+      }, before);
+      map.addLayer({
+        id: L_FP_LINE_Z, type: 'line', source: SRC_FP, minzoom: BUILDING_MIN_ZOOM, filter: ['!=', ['get', 'b'], 1],
         paint: { 'line-color': ['get', 'color'], 'line-opacity': ['get', 'lineOpacity'], 'line-width': 1.2 },
       }, before);
       // Soft disc for houses with no footprint and a state
@@ -364,10 +412,17 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
           onPickStreetRef.current(pickStreetAt(map, e.point));
           return;
         }
-        const feats = map.queryRenderedFeatures(e.point, { layers: [L_HIT, L_NUM, L_FP_FILL] });
+        const feats = map.queryRenderedFeatures(e.point, { layers: [L_HIT, L_NUM, L_FP_FILL, L_FP_FILL_Z] });
         const hit = feats.find(f => f.properties && f.properties.id);
         if (hit) {
           onSelectRef.current(String(hit.properties!.id));
+          return;
+        }
+        // Tapped a house's Mapbox building?
+        const bid = buildingIdAt(map, e.point, `${BLD_PREFIX}-bld-fill`);
+        const bHouse = bid != null ? bldMatchRef.current.buildingToHouse.get(bid) : undefined;
+        if (bHouse) {
+          onSelectRef.current(bHouse);
           return;
         }
         if (placingRef.current) {
@@ -382,6 +437,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
         if (harvestBaseRoads(map, baseRoadsRef.current, baseRoadSeenRef.current)) {
           setBaseRoadsVer(v => v + 1);
         }
+        rematchRef.current();
       });
 
       setMapLoaded(true);
@@ -457,6 +513,28 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     (map.getSource(SRC_FP) as mapboxgl.GeoJSONSource | undefined)?.setData(fpCollection);
     (map.getSource(SRC_PT) as mapboxgl.GeoJSONSource | undefined)?.setData(ptCollection);
   }, [fpCollection, ptCollection, mapLoaded]);
+
+  // House list changed → re-match to buildings.
+  useEffect(() => {
+    if (mapLoaded) rematchBuildings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [houseListSig, mapLoaded]);
+
+  // Colour each matched Mapbox building with its house's colour.
+  const styledBuildingsRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const styles = new Map<number, BuildingStyle>();
+    for (const v of houses) {
+      const id = routeHouseId(v.house.routeCode, v.house.houseKey);
+      const bid = bldMatchRef.current.houseToBuilding.get(id);
+      if (bid == null) continue;
+      const hasState = v.state !== 'none' || v.isHistorical;
+      styles.set(bid, { color: houseColor(v), fill: hasState ? 0.55 : 0.18, line: hasState ? 0.95 : 0.6, width: hasState ? 1.6 : 1 });
+    }
+    styledBuildingsRef.current = applyBuildingStyles(map, styles, styledBuildingsRef.current);
+  }, [houses, bldMatchVer, mapLoaded]);
 
   // Selection ring
   useEffect(() => {
