@@ -7,7 +7,7 @@
 import React from 'react';
 import { format } from 'date-fns';
 import { Clock, RotateCcw, MapPinned } from 'lucide-react';
-import { HOUSE_COLORS, HouseView, routeHouseId } from '../../lib/mapLogsheetService';
+import { HOUSE_COLORS, HouseView, routeHouseId, houseAddressLabel } from '../../lib/mapLogsheetService';
 import { KnockCounts, Pace, Coverage, CoverageStreet } from '../../lib/mapLogsheetStats';
 
 export type StatsTab = 'today' | 'pace' | 'coverage';
@@ -157,7 +157,7 @@ const MapStatsTabs: React.FC<MapStatsTabsProps> = ({
                     className="w-full text-left flex items-center gap-2 py-1.5 border-b border-gray-700/60 last:border-0"
                   >
                     <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: HOUSE_COLORS.go_back }} />
-                    <span className="text-sm text-white font-bold shrink-0">{v.house.civicNo}{(v.house.civicSuffix || '').toUpperCase()} {v.house.streetName}</span>
+                    <span className="text-sm text-white font-bold shrink-0">{houseAddressLabel(v.house)}</span>
                     <span className="text-xs text-gray-400 truncate">{v.disposition?.note || ''}</span>
                     <span className="ml-auto text-[10px] text-gray-500 shrink-0">{format(new Date(v.disposition!.updatedAt), 'h:mm a')}</span>
                   </button>

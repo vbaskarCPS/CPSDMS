@@ -40,6 +40,7 @@ import CartMapPanel from './CartMapPanel';
 import {
   fetchMapAccessList, fetchRouteHouses, fetchDispositions, subscribeToDispositions,
   indexBookings, buildHouseViews, routeHouseId, RouteHouse, HouseDisposition,
+  houseAddressLabel,
 } from '../../../lib/mapLogsheetService';
 import { CartScope, computeCounts, computeKnockEvents, isOnDay, isCartKnock } from '../../../lib/mapLogsheetStats';
 
@@ -1776,7 +1777,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         knocks: counts.knocks, no: counts.no, goBack: counts.goBack, invalid: counts.invalid,
         touched, total: houses.length, pct: houses.length ? touched / houses.length : 0,
         last: lastView
-          ? { lat: lastView.house.lat, lng: lastView.house.lng, address: `${lastView.house.civicNo}${(lastView.house.civicSuffix || '').toUpperCase()} ${lastView.house.streetName}`, t: lastEv!.t }
+          ? { lat: lastView.house.lat, lng: lastView.house.lng, address: houseAddressLabel(lastView.house), t: lastEv!.t }
           : null,
       });
     }

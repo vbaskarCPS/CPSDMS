@@ -9,7 +9,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Ban, DoorClosed, RotateCcw, DollarSign, Clock, Phone, StickyNote, Trash2, Loader, CheckCircle2, MapPin, Plus, Pencil, CircleSlash } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { HouseView, HouseDispositionStatus, HOUSE_COLORS, historicalSummary } from '../../lib/mapLogsheetService';
+import { HouseView, HouseDispositionStatus, HOUSE_COLORS, historicalSummary, houseAddressLabel } from '../../lib/mapLogsheetService';
 
 interface HouseSheetProps {
   view: HouseView;
@@ -105,7 +105,7 @@ const HouseSheet: React.FC<HouseSheetProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disposition?.status, disposition?.updatedAt]);
 
-  const address = `${house.civicNo}${(house.civicSuffix || '').toUpperCase()} ${house.streetName}`;
+  const address = houseAddressLabel(house);
   const stateColor =
     state === 'completed' ? HOUSE_COLORS.completed :
     state === 'pending' ? HOUSE_COLORS.pending :

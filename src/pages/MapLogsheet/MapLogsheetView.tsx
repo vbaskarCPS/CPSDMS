@@ -15,7 +15,7 @@ import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { Navigation, Loader, Crosshair } from 'lucide-react';
 import { Worker } from '../../types';
-import { SavedRouteMap, HouseView, StreetSegmentPick, houseColor, routeHouseId, buildHouseTiles, normStreet, BaseRoadLines, tileCentre } from '../../lib/mapLogsheetService';
+import { SavedRouteMap, HouseView, StreetSegmentPick, houseColor, routeHouseId, buildHouseTiles, normStreet, BaseRoadLines, tileCentre, houseMapNumber } from '../../lib/mapLogsheetService';
 import {
   BUILDING_MIN_ZOOM, BuildingMatch, BuildingStyle, matchHousesToBuildings, addBuildingLayers, applyBuildingStyles, buildingIdAt,
   addSliceLayers, setSliceData, emptyBuildingMatch, buildingMatchSig,
@@ -251,7 +251,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
       const id = routeHouseId(v.house.routeCode, v.house.houseKey);
       const color = houseColor(v);
       const hasState = v.state !== 'none' || v.isHistorical;
-      const num = `${v.house.civicNo}${(v.house.civicSuffix || '').toUpperCase()}`;
+      const num = houseMapNumber(v.house);   // "#12" for a condo unit
       const tile = tiles.get(id);
       const hasFp = !!tile;
       const onBuilding = bldMatchRef.current.houseToBuilding.has(id) || !!bldMatchRef.current.houseToSlice?.has(id);

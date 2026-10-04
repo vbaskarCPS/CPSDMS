@@ -46,6 +46,7 @@ import {
   fetchHistoricalForRoutes, indexHistorical, historicalSummary,
   indexPendingSales, indexBookings, indexPcl, buildHouseViews, routeHouseId,
   subscribeToPendingSales, subscribeToDispositions,
+  houseNumberLabel,
 } from '../../lib/mapLogsheetService';
 
 // --- ASPHALT MERGE HELPERS ---
@@ -380,8 +381,8 @@ const MapLogsheetPage: React.FC = () => {
   const houseViews: HouseView[] = useMemo(() => {
     const ps = indexPendingSales(pendingSales, houses);
     const { pending, completed } = indexBookings(jobs, houses);
-    const pcl = indexPcl(pclByRoute);
-    const hist = indexHistorical(historicalRows);
+    const pcl = indexPcl(pclByRoute, houses);
+    const hist = indexHistorical(historicalRows, houses);
     return buildHouseViews(houses, dispositions, ps, pending, completed, pcl, hist);
   }, [houses, dispositions, pendingSales, jobs, pclByRoute, historicalRows]);
 
@@ -479,7 +480,7 @@ const MapLogsheetPage: React.FC = () => {
     setQuickPending({
       prefill: {
         routeCode: h.routeCode,
-        houseNumber: `${h.civicNo}${(h.civicSuffix || '').toUpperCase()}`,
+        houseNumber: houseNumberLabel(h),   // "12-4241" for a condo unit
         streetName: h.streetName,
         firstName: selectedView.disposition?.firstName
           || (selectedView.isHistorical ? historicalSummary(selectedView.historical).name.split(/\s+/)[0] : '')

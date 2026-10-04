@@ -176,6 +176,74 @@ export function houseKeyFromFullAddress(full: string | undefined): string | null
   return houseKeyFromAddress(m[1], m[2]);
 }
 
+// --- Condo units -------------------------------------------------------------
+// A complex whose units each have their own register point is split into one
+// house per unit, key "<civic><suffix>#<unit>|<street>" (e.g. "4241#12|sarazen dr").
+// Addresses arrive written every which way ("12-4241", "4241 #12", "4241-12",
+// "Unit 12 4241", "4241 Sarazen Dr Unit 12"), and "A-B" doesn't say which part is
+// the unit. So every reading becomes a candidate key; the first one that's a
+// real house on the map wins, else the whole complex, else the plain number.
+
+const unitKey = (civicNo: number, suffix: string, unit: string, sn: string) =>
+  `${civicNo}${(suffix || '').toLowerCase()}#${unit.toLowerCase()}|${sn}`;
+
+/** Candidate keys for a house-number field + street, best first. */
+export function houseKeyCandidates(houseNumber: string | undefined, streetName: string | undefined): string[] {
+  let sn = normStreet(streetName);
+  let hn = (houseNumber || '').trim();
+  // A unit tacked onto the street ("Sarazen Dr Unit 12", "Sarazen Dr #12").
+  const tail = (streetName || '').match(/^(.*?)[\s,]+(?:#|unit|apt\.?|suite|ste\.?)\s*([A-Za-z0-9]+)\s*$/i);
+  if (tail) { sn = normStreet(tail[1]); hn = `${hn} #${tail[2]}`; }
+  if (!sn) return [];
+  const out: string[] = [];
+  const add = (k: string) => { if (!out.includes(k)) out.push(k); };
+  let m: RegExpMatchArray | null;
+  // "4241 #12" / "4241 unit 12" / "4241A apt 3"
+  if ((m = hn.match(/^(\d+)([A-Za-z]?)\s*(?:#|unit|apt\.?|suite|ste\.?)\s*([A-Za-z0-9]+)$/i))) {
+    add(unitKey(+m[1], m[2], m[3], sn)); add(houseKeyFromParts(+m[1], m[2], sn));
+  }
+  // "Unit 12 4241" / "#12-4241"
+  else if ((m = hn.match(/^(?:#|unit|apt\.?|suite|ste\.?)\s*([A-Za-z0-9]+)[\s,-]+(\d+)([A-Za-z]?)$/i))) {
+    add(unitKey(+m[2], m[3], m[1], sn)); add(houseKeyFromParts(+m[2], m[3], sn));
+  }
+  // "12-4241" (unit first, the Canadian way) or "4241-12" (civic first)
+  else if ((m = hn.match(/^([A-Za-z0-9]+)\s*-\s*(\d+)([A-Za-z]?)$/))) {
+    add(unitKey(+m[2], m[3], m[1], sn));
+    if (/^\d+$/.test(m[1])) add(unitKey(+m[1], '', m[2] + m[3], sn));
+    add(houseKeyFromParts(+m[2], m[3], sn));
+    if (/^\d+$/.test(m[1])) add(houseKeyFromParts(+m[1], '', sn));
+  }
+  const legacy = houseKeyFromAddress(hn, sn);
+  if (legacy) add(legacy);
+  return out;
+}
+
+/** Same, from a one-string address ("12-4241 Sarazen Dr", "4241 Sarazen Dr Unit 12"). */
+export function houseKeyCandidatesFromFull(full: string | undefined): string[] {
+  const f = (full || '').trim();
+  // number part = everything up to the first word that starts with a letter
+  // and isn't a unit marker
+  const m = f.match(/^((?:(?:#|unit|apt\.?|suite|ste\.?)\s*)?[A-Za-z0-9]*\d[A-Za-z0-9]*(?:\s*(?:-|#|unit|apt\.?|suite|ste\.?)\s*[A-Za-z0-9]+)?)\s+([A-Za-z].*)$/i);
+  if (!m) return [];
+  return houseKeyCandidates(m[1], m[2]);
+}
+
+/** "12-4241" for a unit, "4241A" for a house. */
+export function houseNumberLabel(h: Pick<RouteHouse, 'civicNo' | 'civicSuffix' | 'unit'>): string {
+  const civic = `${h.civicNo}${(h.civicSuffix || '').toUpperCase()}`;
+  return h.unit ? `${h.unit}-${civic}` : civic;
+}
+
+/** "12-4241 Sarazen Dr" / "4241 Sarazen Dr". */
+export function houseAddressLabel(h: Pick<RouteHouse, 'civicNo' | 'civicSuffix' | 'unit' | 'streetName'>): string {
+  return `${houseNumberLabel(h)} ${h.streetName}`;
+}
+
+/** What the map prints on a house: "#12" for a unit, "4241A" for a house. */
+export function houseMapNumber(h: Pick<RouteHouse, 'civicNo' | 'civicSuffix' | 'unit'>): string {
+  return h.unit ? `#${h.unit}` : `${h.civicNo}${(h.civicSuffix || '').toUpperCase()}`;
+}
+
 // ---------------------------------------------------------------------------
 // TYPES
 // ---------------------------------------------------------------------------
@@ -205,6 +273,8 @@ export interface RouteHouse {
   geoTriedAt: string | null;
   /** Mapbox's accuracy for geoSource 'mapbox' ('rooftop', 'parcel', 'point'). */
   geoAccuracy?: string | null;
+  /** Condo unit, when a complex is split into one house per unit; null otherwise. */
+  unit?: string | null;
 }
 
 export type HouseDispositionStatus = 'no' | 'not_home' | 'go_back' | 'invalid';
@@ -372,7 +442,10 @@ export function buildHouseTiles(
   const grid = new Map<string, Array<{ h: RouteHouse; p: [number, number] }>>();
   for (const h of houses) {
     const p = toXY(h.lng, h.lat);
-    const k = `${h.routeCode}|${h.streetNorm}|${h.civicNo % 2}`;
+    // Units of a split complex form their own group (they sit along its private road).
+    const k = h.unit
+      ? `${h.routeCode}|${h.streetNorm}|${h.civicNo}${h.civicSuffix || ''}#units`
+      : `${h.routeCode}|${h.streetNorm}|${h.civicNo % 2}`;
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k)!.push({ h, p });
     const gk = `${Math.floor(p[0] / CELL)}|${Math.floor(p[1] / CELL)}`;
@@ -488,7 +561,7 @@ export function buildHouseTiles(
     const sorted = [...list].sort((a, b) => a.h.civicNo - b.h.civicNo || (a.h.civicSuffix || '').localeCompare(b.h.civicSuffix || ''));
     let run: typeof sorted = [];
     for (const o of sorted) {
-      const precise = o.h.geoSource === 'mapbox' && (o.h.geoAccuracy === 'rooftop' || o.h.geoAccuracy === 'parcel');
+      const precise = !!o.h.unit || (o.h.geoSource === 'mapbox' && (o.h.geoAccuracy === 'rooftop' || o.h.geoAccuracy === 'parcel'));
       if (precise) { layOutRun(run); run = []; continue; }
       if (run.length) {
         const last = run[run.length - 1].p;
@@ -623,6 +696,7 @@ function mapHouseRow(r: any): RouteHouse {
     geoSource: r.geo_source ?? null,
     geoTriedAt: r.geocoded_at ?? null,
     geoAccuracy: r.geo_accuracy ?? null,
+    unit: r.unit ?? null,
   };
 }
 
@@ -856,7 +930,8 @@ export async function geocodeRouteHouses(
 
   // Only houses Mapbox hasn't been asked about yet (matched or not), so a
   // retry never pays twice for the same house.
-  const todo = houses.filter(h => !h.geoSource && !h.geoTriedAt);
+  // Units already sit on their own register point (Mapbox can't place units).
+  const todo = houses.filter(h => !h.geoSource && !h.geoTriedAt && !h.unit);
   let updated = 0, looked = 0;
   try {
     for (let i = 0; i < todo.length; i += GEOCODE_BATCH) {
@@ -1544,6 +1619,11 @@ export class HouseLocator {
     }
   }
 
+  /** Routes that have a house with this key. */
+  routesFor(houseKey: string): string[] {
+    return this.routesByKey.get(houseKey) || [];
+  }
+
   /** routeHouseId for a known house key, preferring the row's own route. */
   idForKey(routeCode: string, houseKey: string): string {
     const routes = this.routesByKey.get(houseKey);
@@ -1563,18 +1643,26 @@ export class HouseLocator {
     return pick ? routeHouseId(pick.routeCode, pick.houseKey) : null;
   }
 
-  /** From a split address (pending sales). */
+  /** Of several candidate keys (unit readings first), the first that's a
+   *  real house on the map; else the last (the plain reading). */
+  idForCandidates(routeCode: string, candidates: string[]): string | null {
+    if (!candidates.length) return null;
+    for (const k of candidates) if (this.routesByKey.has(k)) return this.idForKey(routeCode, k);
+    return this.idForKey(routeCode, candidates[candidates.length - 1]);
+  }
+
+  /** From a split address (pending sales, PCL). */
   idForAddress(routeCode: string, houseNumber: string | undefined, streetName: string | undefined): string | null {
-    const key = houseKeyFromAddress(houseNumber, streetName);
-    if (key) return this.idForKey(routeCode, key);
+    const cands = houseKeyCandidates(houseNumber, streetName);
+    if (cands.length) return this.idForCandidates(routeCode, cands);
     return !streetName?.trim() ? this.idForStreetless(routeCode, houseNumber) : null;
   }
 
-  /** From a one-line address (bookings, transactions). */
+  /** From a one-line address (bookings, transactions, historical). */
   idForFullAddress(routeCode: string, full: string | undefined): string | null {
     const f = (full || '').trim();
-    const key = houseKeyFromFullAddress(f);
-    if (key) return this.idForKey(routeCode, key);
+    const cands = houseKeyCandidatesFromFull(f);
+    if (cands.length) return this.idForCandidates(routeCode, cands);
     return /^\d+[a-zA-Z]?$/.test(f) ? this.idForStreetless(routeCode, f) : null;
   }
 }
@@ -1631,11 +1719,15 @@ export async function fetchHistoricalForRoutes(commandCenterId: string, routeCod
 }
 
 /** routeHouseId → every historical row at that house. */
-export function indexHistorical(rows: HistoricalProperty[]): Map<string, HistoricalProperty[]> {
+export function indexHistorical(rows: HistoricalProperty[], houses: RouteHouse[] = []): Map<string, HistoricalProperty[]> {
   const m = new Map<string, HistoricalProperty[]>();
+  const loc = new HouseLocator(houses);
   for (const h of rows) {
-    const key = houseKeyFromFullAddress(h.address);
-    if (!key || !h.routeCode) continue;
+    if (!h.routeCode) continue;
+    const cands = houseKeyCandidatesFromFull(h.address);
+    if (!cands.length) continue;
+    // Own route only (historical rows are per route); unit reading first.
+    const key = cands.find(k => loc.routesFor(k).includes(h.routeCode)) || cands[cands.length - 1];
     const id = routeHouseId(h.routeCode, key);
     const list = m.get(id);
     if (list) list.push(h); else m.set(id, [h]);
@@ -1661,12 +1753,15 @@ export function historicalSummary(rows: HistoricalProperty[]): { name: string; s
   return { name, shortName: short, prices, total };
 }
 
-export function indexPcl(pclByRoute: Map<string, PCLClientGroup[]>): Map<string, PCLClientGroup> {
+export function indexPcl(pclByRoute: Map<string, PCLClientGroup[]>, houses: RouteHouse[] = []): Map<string, PCLClientGroup> {
   const m = new Map<string, PCLClientGroup>();
+  const onRoute = new Set(houses.map(h => routeHouseId(h.routeCode, h.houseKey)));
   pclByRoute.forEach((clients, rc) => {
     for (const c of clients) {
-      const key = houseKeyFromAddress(c.houseNum, c.streetName);
-      if (!key) continue;
+      const cands = houseKeyCandidates(c.houseNum, c.streetName);
+      if (!cands.length) continue;
+      // Unit reading first when that unit is a house on the route.
+      const key = cands.find(k => onRoute.has(routeHouseId(rc, k))) || cands[cands.length - 1];
       const id = routeHouseId(rc, key);
       if (!m.has(id)) m.set(id, c);
     }

@@ -32,6 +32,7 @@ import {
   indexPendingSales, indexBookings, indexPcl, indexHistorical, buildHouseViews,
   buildHouseTiles, houseColor, routeHouseId, historicalSummary, HOUSE_COLORS, placeRouteOnRoofs, tileCentre, cleanupRouteGhosts,
   fillRouteGaps, fetchStreetChecks, StreetCheck, streetBase,
+  houseMapNumber, houseAddressLabel,
 } from '../../../lib/mapLogsheetService';
 import {
   CartScope, computeCounts, computeKnockEvents, computePace, computeAvgCharge, computeGoBackQueue, computeCoverage,
@@ -199,7 +200,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
   const houseViews: HouseView[] = useMemo(() => {
     const ps = indexPendingSales(pendingSales, houses);
     const { pending, completed } = indexBookings(cart.sharedBookings || [], houses);
-    return buildHouseViews(houses, dispositions, ps, pending, completed, indexPcl(pclByRoute), indexHistorical(historicalRows));
+    return buildHouseViews(houses, dispositions, ps, pending, completed, indexPcl(pclByRoute, houses), indexHistorical(historicalRows, houses));
   }, [houses, dispositions, pendingSales, cart.sharedBookings, pclByRoute, historicalRows]);
 
   const scope: CartScope = useMemo(() => ({
@@ -368,7 +369,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
       if (tile) fp.push({ type: 'Feature', properties: { id, color, fillOpacity: hasState ? 0.45 : 0.10, lineOpacity: hasState ? 0.9 : 0.35, b: onBuilding ? 1 : 0 }, geometry: tile });
       pt.push({
         type: 'Feature',
-        properties: { id, color, num: `${v.house.civicNo}${(v.house.civicSuffix || '').toUpperCase()}`, name: v.mapLabel || '', sort: hasState || v.isPcl ? 0 : 1 },
+        properties: { id, color, num: houseMapNumber(v.house), name: v.mapLabel || '', sort: hasState || v.isPcl ? 0 : 1 },
         geometry: { type: 'Point', coordinates: labelAt },
       });
     }
@@ -500,7 +501,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
       <div className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-1.5">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <div className="text-white font-bold text-sm truncate">{v.house.civicNo}{(v.house.civicSuffix || '').toUpperCase()} {v.house.streetName}</div>
+            <div className="text-white font-bold text-sm truncate">{houseAddressLabel(v.house)}</div>
             <div className="text-[11px] font-bold" style={{ color: color === '#e5e7eb' ? '#9ca3af' : color }}>
               {STATE_LABEL[v.state]}{v.isPcl ? ' · PCL' : ''}{v.isHistorical ? ' · Historical' : ''}
             </div>
