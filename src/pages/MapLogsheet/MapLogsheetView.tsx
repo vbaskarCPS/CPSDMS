@@ -201,7 +201,8 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   const [baseRoadsVer, setBaseRoadsVer] = useState(0);
 
   const houseListSig = useMemo(
-    () => houses.map(v => routeHouseId(v.house.routeCode, v.house.houseKey)).join(','),
+    // Includes positions, so tiles and building matches redraw when houses are re-placed.
+    () => houses.map(v => `${routeHouseId(v.house.routeCode, v.house.houseKey)}@${v.house.lat.toFixed(6)},${v.house.lng.toFixed(6)}`).join(','),
     [houses],
   );
   const tiles = useMemo(
@@ -439,6 +440,15 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
         }
         rematchRef.current();
       });
+      // Also re-match after moves / new building tiles, in case something
+      // keeps the map from going idle.
+      let rematchTimer: ReturnType<typeof setTimeout> | null = null;
+      const queueRematch = () => {
+        if (rematchTimer) clearTimeout(rematchTimer);
+        rematchTimer = setTimeout(() => { rematchTimer = null; rematchRef.current(); }, 300);
+      };
+      map.on('moveend', queueRematch);
+      map.on('sourcedata', (e: any) => { if (e.sourceId === 'composite' && e.tile) queueRematch(); });
 
       setMapLoaded(true);
     });
@@ -516,6 +526,9 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
 
   // House list changed → re-match to buildings.
   useEffect(() => {
+    // Houses changed or moved: forget old matches (they may point at the wrong building).
+    bldMatchRef.current = { houseToBuilding: new Map(), buildingToHouse: new Map() };
+    setBldMatchVer(v => v + 1);
     if (mapLoaded) rematchBuildings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [houseListSig, mapLoaded]);

@@ -205,7 +205,8 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
   );
 
   // Tiles depend only on where the houses are.
-  const houseSig = useMemo(() => houses.map(h => routeHouseId(h.routeCode, h.houseKey)).join(','), [houses]);
+  // Includes positions, so tiles and building matches redraw when houses are re-placed.
+  const houseSig = useMemo(() => houses.map(h => `${routeHouseId(h.routeCode, h.houseKey)}@${h.lat.toFixed(6)},${h.lng.toFixed(6)}`).join(','), [houses]);
   const tiles = useMemo(
     () => buildHouseTiles(houses, routeMaps),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -284,7 +285,15 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
       const hid = bid != null ? bldMatchRef.current.buildingToHouse.get(Number(bid)) : undefined;
       if (hid) setSelectedId(hid);
     };
-    const onIdle = () => rematchRef.current();
+    // Re-match houses to buildings after the map moves or building tiles
+    // arrive. (Not on 'idle': the last-knock pulse redraws every frame, so
+    // this map never goes idle while the panel is open.)
+    let rematchTimer: ReturnType<typeof setTimeout> | null = null;
+    const queueRematch = () => {
+      if (rematchTimer) clearTimeout(rematchTimer);
+      rematchTimer = setTimeout(() => { rematchTimer = null; rematchRef.current(); }, 300);
+    };
+    const onSourceData = (e: any) => { if (e.sourceId === 'composite' && e.tile) queueRematch(); };
     const enter = () => { map.getCanvas().style.cursor = 'pointer'; };
     const leave = () => { map.getCanvas().style.cursor = ''; };
     const bldFill = `${BLD_PREFIX}-bld-fill`;
@@ -292,7 +301,9 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     map.on('click', L_FILL, onClick);
     map.on('click', L_FILL_Z, onClick);
     if (map.getLayer(bldFill)) map.on('click', bldFill, onBuildingClick);
-    map.on('idle', onIdle);
+    map.on('moveend', queueRematch);
+    map.on('sourcedata', onSourceData);
+    queueRematch();
     map.on('mouseenter', L_HIT, enter);
     map.on('mouseleave', L_HIT, leave);
     return () => {
@@ -300,7 +311,9 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
       map.off('click', L_FILL, onClick);
       map.off('click', L_FILL_Z, onClick);
       map.off('click', bldFill, onBuildingClick);
-      map.off('idle', onIdle);
+      map.off('moveend', queueRematch);
+      map.off('sourcedata', onSourceData);
+      if (rematchTimer) clearTimeout(rematchTimer);
       map.off('mouseenter', L_HIT, enter);
       map.off('mouseleave', L_HIT, leave);
       try { styledBuildingsRef.current = applyBuildingStyles(map, new Map(), styledBuildingsRef.current); } catch { /* gone */ }
@@ -344,6 +357,9 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
 
   // House list changed → re-match to buildings.
   useEffect(() => {
+    // Houses changed or moved: forget old matches (they may point at the wrong building).
+    bldMatchRef.current = { houseToBuilding: new Map(), buildingToHouse: new Map() };
+    setBldMatchVer(v => v + 1);
     if (map && mapLoaded) rematchRef.current();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [houseSig, map, mapLoaded]);
