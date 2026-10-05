@@ -148,6 +148,10 @@ export interface RMPhoneCtx {
   onNavigateToPoint: (dest: PhoneNavDestination) => void;
   onNavigateToMapPin: (pin: MapPinRecord) => void;
   onRemoveMapPin: (pin: MapPinRecord) => void;
+  /** Worker driver stops (all drivers) and the queue editor. */
+  driverStopCount: number;
+  onOpenDriverStops: (focusWorkerId?: string | null) => void;
+  workerName: (id: string | null | undefined) => string;
 
   // ③ navigation
   nav: PhoneNavDestination | null;
@@ -529,9 +533,16 @@ const RMPhoneLayout: React.FC<{ ctx: RMPhoneCtx }> = ({ ctx }) => {
             <div className="text-[11px] text-gray-400 mt-0.5">
               {ctx.mapPin.visibility === 'private' ? 'Only you can see this pin.'
                 : ctx.mapPin.visibility === 'all' ? 'Visible to every manager.'
+                : ctx.mapPin.visibility === 'worker' ? `Worker driver stop for ${ctx.workerName(ctx.mapPin.targetWorkerId)}.`
                 : `Sent to ${ctx.managerName(ctx.mapPin.targetManagerId)}.`}
               {ctx.mapPin.createdBy !== ctx.currentUserId && ' Dropped by someone else.'}
             </div>
+            {ctx.mapPin.visibility === 'worker' && (
+              <button
+                onClick={() => { const w = ctx.mapPin!.targetWorkerId; ctx.onCloseMapPin(); ctx.onOpenDriverStops(w); }}
+                className="w-full h-10 mt-2.5 rounded-xl bg-teal-900/40 border border-teal-700 text-teal-200 text-sm font-bold"
+              >Reorder this driver's stops</button>
+            )}
             <div className="grid grid-cols-2 gap-2 mt-2.5">
               {ctx.mapPin.createdBy === ctx.currentUserId ? (
                 <button onClick={() => ctx.onRemoveMapPin(ctx.mapPin!)} className="h-11 rounded-xl bg-red-900/40 border border-red-800 text-red-200 text-sm font-bold flex items-center justify-center gap-1.5"><Trash2 size={15} /> Remove</button>
@@ -654,6 +665,8 @@ const RMPhoneLayout: React.FC<{ ctx: RMPhoneCtx }> = ({ ctx }) => {
             <Tile icon={Trophy} label="Team Battle" iconClass="text-yellow-300" onClick={() => setSheet('battle')} />
             <Tile icon={shell.isTeamLocked ? Lock : Unlock} label={shell.lockLoading ? '…' : shell.isTeamLocked ? 'Team Locked' : 'Team Lock'}
               iconClass={shell.isTeamLocked ? 'text-red-400' : 'text-gray-300'} active={shell.isTeamLocked} onClick={shell.onToggleLock} disabled={shell.lockLoading} />
+            <Tile icon={Truck} label="Driver Stops" iconClass="text-teal-300" onClick={() => { setSheet(null); ctx.onOpenDriverStops(null); }}
+              badge={ctx.driverStopCount > 0 ? String(ctx.driverStopCount) : null} badgeClass="bg-teal-600 text-white" />
             <Tile icon={Monitor} label="Desktop view" iconClass="text-gray-300" onClick={() => { setSheet(null); shell.onDesktopView(); }} />
           </div>
         </PhoneSheet>

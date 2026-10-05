@@ -38,6 +38,7 @@ import type { MapPin as MapPinRecord } from '../../../lib/sessionService';
 import RoutePCLModal from './RoutePCLModal';
 import CartMapPanel from './CartMapPanel';
 import { ActivityBadge, latestMs, computeRedFlags } from './rmMapShared';
+import WorkerDriverStops, { WORKER_STOP_COLOR, workerName as driverName } from './WorkerDriverStops';
 import RMPhoneLayout, {
   RMPhoneShell, RMPhoneCtx, PhoneCrew, PhoneRouteState, PhonePinCardData, crewLabel,
 } from '../mobile/RMPhoneLayout';
@@ -892,7 +893,7 @@ const MAP_PIN_POLL_MS = 60 * 1000;
 // outside it. That matters: with anchor:'bottom' Mapbox lands the bottom-centre
 // of the wrapper on the coordinate, so if the label were part of the box's flow
 // it would widen the box and shove the teardrop's point off the spot you tapped.
-function createDroppedPinEl(label: string, kind: 'private' | 'all' | 'manager' = 'private'): HTMLDivElement {
+function createDroppedPinEl(label: string, kind: 'private' | 'all' | 'manager' | 'worker' = 'private'): HTMLDivElement {
   // OUTER — Mapbox's. It owns this element's position and writes a transform to
   // it on every render. We must NOT set `position` here: Mapbox's stylesheet
   // makes markers position:absolute, an inline style beats a stylesheet rule,
@@ -906,8 +907,9 @@ function createDroppedPinEl(label: string, kind: 'private' | 'all' | 'manager' =
   el.style.cssText = 'width:24px;height:30px;cursor:pointer;';
   // Colour carries the audience: violet = just me, green = everyone, amber =
   // aimed at one manager. Readable at a glance without tapping anything.
-  const fill = kind === 'all' ? '#22c55e' : kind === 'manager' ? '#f59e0b' : '#a855f7';
-  const chip = kind === 'all' ? '#bbf7d0' : kind === 'manager' ? '#fde68a' : '#f3e8ff';
+  // Teal = a worker driver stop.
+  const fill = kind === 'all' ? '#22c55e' : kind === 'manager' ? '#f59e0b' : kind === 'worker' ? WORKER_STOP_COLOR : '#a855f7';
+  const chip = kind === 'all' ? '#bbf7d0' : kind === 'manager' ? '#fde68a' : kind === 'worker' ? '#99f6e4' : '#f3e8ff';
 
   // INNER — ours. Same size, zero offset, and free to be a positioning context
   // so the label can hang off the side without widening the box Mapbox anchors
@@ -1225,13 +1227,19 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   // --- DROPPED PINS ---
   const [mapPins, setMapPins] = useState<MapPinRecord[]>([]);
   const mapPinMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
+  // What each pin marker currently says, so a reordered stop gets redrawn.
+  const mapPinSigRef = useRef<Map<string, string>>(new Map());
   // A tap in pin mode captures coordinates here and waits for a label. Cancel
   // throws the coordinates away; nothing is written until Save.
   const [pendingPinDrop, setPendingPinDrop] = useState<{ lat: number; lng: number } | null>(null);
   const [pinLabelDraft, setPinLabelDraft] = useState('');
   const [pinSaving, setPinSaving] = useState(false);
-  const [pinVisibility, setPinVisibility] = useState<'private' | 'all' | 'manager'>('private');
+  const [pinVisibility, setPinVisibility] = useState<'private' | 'all' | 'manager' | 'worker'>('private');
   const [pinTargetManagerId, setPinTargetManagerId] = useState<string>('');
+  // WORKER DRIVER STOPS: which contractor the stop is for (remembered between
+  // drops so a run of stops goes to the same driver), and the queue editor.
+  const [pinTargetWorkerId, setPinTargetWorkerId] = useState<string>('');
+  const [driverStopsOpen, setDriverStopsOpen] = useState<{ focus: string | null } | null>(null);
   const [selectedMapPin, setSelectedMapPin] = useState<MapPinRecord | null>(null);
   // Mirrored into a ref because the map click handlers are registered once and
   // would otherwise close over whatever pinMode was on first render, forever.
@@ -4148,41 +4156,60 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (!map || !mapLoaded) return;
     const seen = new Set<string>();
 
+    // Worker driver stops show their place in the driver's queue: "2. Plaza → Hassan".
+    const stopNumber = new Map<string, number>();
+    const byDriver = new Map<string, MapPinRecord[]>();
+    mapPins.filter(p => p.visibility === 'worker' && p.targetWorkerId).forEach(p => {
+      if (!byDriver.has(p.targetWorkerId!)) byDriver.set(p.targetWorkerId!, []);
+      byDriver.get(p.targetWorkerId!)!.push(p);
+    });
+    byDriver.forEach(list => list
+      .sort((a, b) => (a.stopOrder ?? 0) - (b.stopOrder ?? 0) || (a.createdAt || "").localeCompare(b.createdAt || ""))
+      .forEach((p, i) => stopNumber.set(p.id, i + 1)));
+
     mapPins.forEach(pin => {
       seen.add(pin.id);
+      let text = pin.label;
+      if (pin.visibility === 'manager' && pin.targetManagerId) {
+        const n = allManagers.find(m => m.userId === pin.targetManagerId)?.name || 'manager';
+        text = `${pin.label} → ${n.split(' ')[0]}`;
+      } else if (pin.visibility === 'worker') {
+        text = `${stopNumber.get(pin.id) || '?'}. ${pin.label} → ${driverName(workers, pin.targetWorkerId).split(' ')[0]}`;
+      }
+      const sig = `${text}|${pin.visibility}`;
       const existing = mapPinMarkersRef.current.get(pin.id);
-      if (existing) { existing.setLngLat([pin.lng, pin.lat]); return; }
-      const targetName = pin.visibility === 'manager' && pin.targetManagerId
-        ? (allManagers.find(m => m.userId === pin.targetManagerId)?.name || 'manager')
-        : null;
-      const el = createDroppedPinEl(
-        targetName ? `${pin.label} → ${targetName.split(' ')[0]}` : pin.label,
-        pin.visibility,
-      );
+      if (existing && mapPinSigRef.current.get(pin.id) === sig) { existing.setLngLat([pin.lng, pin.lat]); return; }
+      existing?.remove();
+      const el = createDroppedPinEl(text, pin.visibility);
       el.addEventListener('click', (ev) => { ev.stopPropagation(); setPhonePin(null); setSelectedMapPin(pin); });
       const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
         .setLngLat([pin.lng, pin.lat])
         .addTo(map);
       mapPinMarkersRef.current.set(pin.id, marker);
+      mapPinSigRef.current.set(pin.id, sig);
     });
 
     mapPinMarkersRef.current.forEach((marker, id) => {
       if (seen.has(id)) return;
       marker.remove();
       mapPinMarkersRef.current.delete(id);
+      mapPinSigRef.current.delete(id);
     });
-  }, [mapPins, mapLoaded]);
+  }, [mapPins, mapLoaded, workers, allManagers]);
 
   // --- DROPPED PIN: ACTIONS ---
   const handleSavePin = useCallback(async () => {
     if (!pendingPinDrop) return;
-    const label = pinLabelDraft.trim() || `Pin ${mapPins.length + 1}`;
+    if (pinVisibility === 'worker' && !pinTargetWorkerId) return;
+    const driverStopCount = mapPins.filter(p => p.visibility === 'worker' && p.targetWorkerId === pinTargetWorkerId).length;
+    const label = pinLabelDraft.trim() || (pinVisibility === 'worker' ? `Stop ${driverStopCount + 1}` : `Pin ${mapPins.length + 1}`);
     setPinSaving(true);
     try {
       const created = await sessionService.createMapPin(
         label, pendingPinDrop.lat, pendingPinDrop.lng, currentUser.userId,
         pinVisibility,
         pinVisibility === 'manager' ? pinTargetManagerId : null,
+        pinVisibility === 'worker' ? pinTargetWorkerId : null,
       );
       if (created) setMapPins(prev => [...prev, created]);
       else await reloadMapPins();
@@ -4193,7 +4220,33 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     } finally {
       setPinSaving(false);
     }
-  }, [pendingPinDrop, pinLabelDraft, mapPins.length, currentUser.userId, reloadMapPins]);
+    // (pinVisibility / targets are deps too — without them the choice made in
+    // the dialog was ignored unless a label was also typed.)
+  }, [pendingPinDrop, pinLabelDraft, mapPins, currentUser.userId, reloadMapPins, pinVisibility, pinTargetManagerId, pinTargetWorkerId]);
+
+  // --- WORKER DRIVER STOPS: queue edits ---
+  const handleReorderDriverStops = useCallback(async (ids: string[]) => {
+    // Optimistic: renumber locally, then save; reload on failure.
+    setMapPins(prev => prev.map(p => (ids.includes(p.id) ? { ...p, stopOrder: ids.indexOf(p.id) + 1 } : p)));
+    try {
+      await sessionService.reorderWorkerDriverStops(ids);
+    } catch (err) {
+      await reloadMapPins();
+      throw err;
+    }
+  }, [reloadMapPins]);
+
+  const handleDeleteDriverStop = useCallback(async (pin: MapPinRecord) => {
+    await sessionService.deleteMapPin(pin.id);
+    setMapPins(prev => prev.filter(p => p.id !== pin.id));
+  }, []);
+
+  const showMapPinOnMap = useCallback((pin: MapPinRecord) => {
+    setDriverStopsOpen(null);
+    setPhonePin(null);
+    try { mapRef.current?.easeTo({ center: [pin.lng, pin.lat], zoom: Math.max(mapRef.current.getZoom(), 16), duration: 600 }); } catch { /* */ }
+    setSelectedMapPin(pin);
+  }, []);
 
   const handleRemovePin = useCallback(async (pin: MapPinRecord) => {
     setSelectedMapPin(null);
@@ -5839,11 +5892,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                   accident. */}
               <div className="mb-3">
                 <label className="block text-[10px] text-gray-500 font-bold uppercase mb-1.5">Who can see it</label>
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="grid grid-cols-2 gap-1.5">
                   {([
                     { key: 'private' as const, label: 'Just me', dot: '#a855f7' },
                     { key: 'all' as const, label: 'Everyone', dot: '#22c55e' },
                     { key: 'manager' as const, label: 'One manager', dot: '#f59e0b' },
+                    { key: 'worker' as const, label: 'Worker driver', dot: WORKER_STOP_COLOR },
                   ]).map(opt => (
                     <button
                       key={opt.key}
@@ -5878,6 +5932,40 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 </div>
               )}
 
+              {/* WORKER DRIVER: the contractor who drives the teams. Stops go to
+                  the end of their queue, in the order they're dropped. */}
+              {pinVisibility === 'worker' && (() => {
+                const queued = pinTargetWorkerId
+                  ? mapPins.filter(p => p.visibility === 'worker' && p.targetWorkerId === pinTargetWorkerId).length
+                  : 0;
+                return (
+                  <div className="mb-3">
+                    <select
+                      value={pinTargetWorkerId}
+                      onChange={e => setPinTargetWorkerId(e.target.value)}
+                      disabled={pinSaving}
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white text-sm focus:outline-none focus:border-teal-500"
+                    >
+                      <option value="">Choose the worker driver…</option>
+                      {[...myTeamWorkers]
+                        .sort((a, b) => `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`))
+                        .map(w => <option key={w.contractorId} value={w.contractorId}>{w.firstName} {w.lastName} ({w.contractorId})</option>)}
+                    </select>
+                    {pinTargetWorkerId && (
+                      <div className="mt-1.5 flex items-center justify-between text-[11px] text-gray-400">
+                        <span>This will be stop <b className="text-teal-300">{queued + 1}</b> for {driverName(workers, pinTargetWorkerId)}</span>
+                        {queued > 0 && (
+                          <button
+                            onClick={() => setDriverStopsOpen({ focus: pinTargetWorkerId })}
+                            className="text-teal-300 font-bold hover:text-teal-200"
+                          >Manage stops</button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               <div className="flex gap-2">
                 <button
                   onClick={() => { setPendingPinDrop(null); setPinLabelDraft(''); }}
@@ -5886,7 +5974,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 >Cancel</button>
                 <button
                   onClick={handleSavePin}
-                  disabled={pinSaving || (pinVisibility === 'manager' && !pinTargetManagerId)}
+                  disabled={pinSaving || (pinVisibility === 'manager' && !pinTargetManagerId) || (pinVisibility === 'worker' && !pinTargetWorkerId)}
                   className="flex-1 px-3 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-800 disabled:text-gray-500 text-white text-xs font-bold rounded-md flex items-center justify-center gap-1.5"
                 >
                   {pinSaving ? <Loader size={12} className="animate-spin" /> : <Check size={12} />}
@@ -5922,9 +6010,17 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                 <div className="text-[10px] text-gray-500 mb-2">
                   {selectedMapPin.visibility === 'all'
                     ? 'Visible to every manager on this command center.'
-                    : `Sent to ${allManagers.find(m => m.userId === selectedMapPin.targetManagerId)?.name || 'another manager'}.`}
+                    : selectedMapPin.visibility === 'worker'
+                      ? `Worker driver stop for ${driverName(workers, selectedMapPin.targetWorkerId)} — it's on their map logsheet.`
+                      : `Sent to ${allManagers.find(m => m.userId === selectedMapPin.targetManagerId)?.name || 'another manager'}.`}
                   {selectedMapPin.createdBy !== currentUser.userId && ' Dropped by someone else — only they can remove it.'}
                 </div>
+              )}
+              {selectedMapPin.visibility === 'worker' && (
+                <button
+                  onClick={() => { const w = selectedMapPin.targetWorkerId; setSelectedMapPin(null); setDriverStopsOpen({ focus: w }); }}
+                  className="w-full mb-2 px-3 py-2 bg-teal-900/40 hover:bg-teal-900/60 border border-teal-700 text-teal-200 text-xs font-bold rounded-md"
+                >Reorder this driver's stops</button>
               )}
               <div className="flex gap-2">
                 {selectedMapPin.createdBy === currentUser.userId && (
@@ -5964,6 +6060,18 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
           />
         )}
 
+      {driverStopsOpen && (
+        <WorkerDriverStops
+          pins={mapPins}
+          workers={workers}
+          asSheet={isPhone}
+          focusWorkerId={driverStopsOpen.focus}
+          onClose={() => setDriverStopsOpen(null)}
+          onShowPin={showMapPinOnMap}
+          onReorder={handleReorderDriverStops}
+          onDelete={handleDeleteDriverStop}
+        />
+      )}
       {phonePclRoute && (
         <RoutePCLModal
           routeCode={phonePclRoute.routeCode}
@@ -6081,6 +6189,9 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       onNavigateToPoint: dest => phoneNavigateTo(dest, `point:${dest.lat.toFixed(5)},${dest.lng.toFixed(5)}`),
       onNavigateToMapPin: handleNavigateToPin,
       onRemoveMapPin: handleRemovePin,
+      driverStopCount: mapPins.filter(p => p.visibility === 'worker').length,
+      onOpenDriverStops: focus => setDriverStopsOpen({ focus: focus ?? null }),
+      workerName: id => driverName(workers, id),
 
       nav: navState ? navState.destination : null,
       onNavEnd: () => { handleNavCancel(); setPhoneRefit(n => n + 1); },

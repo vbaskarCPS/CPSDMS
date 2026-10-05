@@ -3137,6 +3137,8 @@ class SessionService {
         createdAt: row.created_at,
         visibility: (row.visibility as MapPinVisibility) || 'private',
         targetManagerId: row.target_manager_id ?? null,
+        targetWorkerId: row.target_worker_id ?? null,
+        stopOrder: row.stop_order ?? null,
       };
     }
 
@@ -3188,10 +3190,26 @@ class SessionService {
       createdBy: string,
       visibility: MapPinVisibility = 'private',
       targetManagerId?: string | null,
+      targetWorkerId?: string | null,
     ): Promise<MapPin | null> {
       const ccId = this.getCCId();
       const date = await this.getDailySessionDate();
       if (!date) throw new Error('No active session');
+
+      // Worker driver stop: goes to the end of that driver's queue.
+      let stopOrder: number | null = null;
+      if (visibility === 'worker') {
+        if (!targetWorkerId) throw new Error('Pick the worker driver first');
+        const { data: last } = await supabase
+          .from('map_pins')
+          .select('stop_order')
+          .eq('command_center_id', ccId)
+          .eq('session_date', date)
+          .eq('target_worker_id', targetWorkerId)
+          .order('stop_order', { ascending: false, nullsFirst: false })
+          .limit(1);
+        stopOrder = ((last && last[0]?.stop_order) || 0) + 1;
+      }
 
       const row = {
         id: `pin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -3205,6 +3223,8 @@ class SessionService {
         // Only meaningful for 'manager'; nulled otherwise so a stale target can't
         // linger on a pin that's since been made private or public.
         target_manager_id: visibility === 'manager' ? (targetManagerId || null) : null,
+        target_worker_id: visibility === 'worker' ? (targetWorkerId || null) : null,
+        stop_order: stopOrder,
       };
 
       const { data, error } = await supabase
@@ -3218,6 +3238,44 @@ class SessionService {
         throw error;
       }
       return data ? this.mapDbMapPin(data) : null;
+    }
+
+    /** A worker driver's stops for today, in the order to drive them. */
+    public async getWorkerDriverStops(workerId: string): Promise<MapPin[]> {
+      try {
+        const ccId = this.getCCId();
+        const date = await this.getDailySessionDate();
+        if (!date || !workerId) return [];
+        const { data, error } = await supabase
+          .from('map_pins')
+          .select('*')
+          .eq('command_center_id', ccId)
+          .eq('session_date', date)
+          .eq('visibility', 'worker')
+          .eq('target_worker_id', workerId)
+          .order('stop_order', { ascending: true })
+          .order('created_at', { ascending: true });
+        if (error) {
+          console.warn('[MapPins] getWorkerDriverStops failed:', error);
+          return [];
+        }
+        return (data || []).map((r: any) => this.mapDbMapPin(r));
+      } catch (err) {
+        console.warn('[MapPins] getWorkerDriverStops error:', err);
+        return [];
+      }
+    }
+
+    /** Rewrite a driver's queue so the given pins run 1, 2, 3… in this order. */
+    public async reorderWorkerDriverStops(pinIdsInOrder: string[]): Promise<void> {
+      const ccId = this.getCCId();
+      const results = await Promise.all(pinIdsInOrder.map((id, i) =>
+        supabase.from('map_pins').update({ stop_order: i + 1 }).eq('id', id).eq('command_center_id', ccId)));
+      const failed = results.find(r => r.error);
+      if (failed?.error) {
+        console.error('[MapPins] reorderWorkerDriverStops failed:', failed.error);
+        throw failed.error;
+      }
     }
 
     public async deleteMapPin(pinId: string): Promise<void> {
@@ -5160,7 +5218,11 @@ class SessionService {
 //   'private' — only whoever dropped it.
 //   'all'     — every manager on the command centre.
 //   'manager' — one named manager (targetManagerId), plus the author.
-export type MapPinVisibility = 'private' | 'all' | 'manager';
+//   'worker'  — a WORKER DRIVER STOP: one contractor (targetWorkerId) who drives
+//               teams around sees it on their map logsheet, in stopOrder order,
+//               and navigates through them. The author (and anyone they float
+//               for) still sees it on the RM map.
+export type MapPinVisibility = 'private' | 'all' | 'manager' | 'worker';
 
 export interface MapPin {
   id: string;
@@ -5171,6 +5233,9 @@ export interface MapPin {
   createdAt: string;
   visibility: MapPinVisibility;
   targetManagerId: string | null;
+  /** Worker driver stops only: who drives to it, and its place in their queue (1, 2, 3…). */
+  targetWorkerId: string | null;
+  stopOrder: number | null;
 }
 
 export const sessionService = SessionService.getInstance();

@@ -31,6 +31,11 @@ interface PhoneNavigationProps {
   destination: PhoneNavDestination;
   onArrived: () => void;
   onCancel: () => void;
+  /** Keep navigating (and following) after arriving — the caller decides what's
+   *  next (worker driver stops: a Continue button moves to the next stop). */
+  stayOnArrival?: boolean;
+  /** Extra row on top of the ETA bar; told whether we've arrived. */
+  renderExtra?: (arrived: boolean) => React.ReactNode;
 }
 
 // --- tuning ---
@@ -121,7 +126,8 @@ function TurnIcon({ type, modifier, size, className = 'text-white' }: { type?: s
   return <ArrowUp size={size} className={className} />;
 }
 
-const PhoneNavigation: React.FC<PhoneNavigationProps> = ({ map, destination, onArrived, onCancel }) => {
+const PhoneNavigation: React.FC<PhoneNavigationProps> = ({ map, destination, onArrived, onCancel, stayOnArrival = false, renderExtra }) => {
+  const [arrived, setArrived] = useState(false);
   const [route, setRoute] = useState<Route | null>(null);
   const [routeVersion, setRouteVersion] = useState(0);
   const [stepIdx, setStepIdx] = useState(0);
@@ -207,7 +213,7 @@ const PhoneNavigation: React.FC<PhoneNavigationProps> = ({ map, destination, onA
     const prevPadding = map.getPadding();
     const h = map.getContainer().clientHeight || window.innerHeight;
     // Put "you" about 70% of the way down the screen, above the ETA bar.
-    try { map.easeTo({ padding: { top: Math.round(h * 0.42), bottom: 110, left: 0, right: 0 }, pitch: 60, zoom: Math.max(map.getZoom(), 16.5), duration: 600 }); } catch { /* */ }
+    try { map.easeTo({ padding: { top: Math.round(h * 0.42), bottom: renderExtra ? 170 : 110, left: 0, right: 0 }, pitch: 60, zoom: Math.max(map.getZoom(), 16.5), duration: 600 }); } catch { /* */ }
     const pause = (e: any) => { if (e?.originalEvent) setFollowing(false); };
     map.on('dragstart', pause);
     map.on('pitchstart', pause);
@@ -295,14 +301,15 @@ const PhoneNavigation: React.FC<PhoneNavigationProps> = ({ map, destination, onA
 
   // --- every fix: arrival, step advance, voice, reroute, camera ---
   useEffect(() => {
-    if (!gps || !route || arrivedRef.current) return;
+    if (!gps || !route || (arrivedRef.current && !stayOnArrival)) return;
 
     // Arrival.
-    if (distM(gps.lat, gps.lng, destination.lat, destination.lng) <= ARRIVAL_M) {
+    if (!arrivedRef.current && distM(gps.lat, gps.lng, destination.lat, destination.lng) <= ARRIVAL_M) {
       arrivedRef.current = true;
+      setArrived(true);
       speak(`You have arrived at ${destination.label}.`);
       onArrived();
-      return;
+      if (!stayOnArrival) return;
     }
 
     // Step advance: stepIdx is the NEXT maneuver.
@@ -439,6 +446,14 @@ const PhoneNavigation: React.FC<PhoneNavigationProps> = ({ map, destination, onA
               <AlertTriangle size={28} className="text-amber-300 flex-shrink-0" />
               <div className="text-sm font-bold">{error}</div>
             </div>
+          ) : arrived && stayOnArrival ? (
+            <div className="flex items-center gap-3 p-3">
+              <div className="flex-shrink-0 w-14 h-14 rounded-xl bg-green-900/60 flex items-center justify-center"><MapPin size={36} /></div>
+              <div className="min-w-0">
+                <div className="text-[22px] font-extrabold leading-none">Arrived</div>
+                <div className="text-[15px] font-bold leading-snug mt-1 truncate">{destination.label}</div>
+              </div>
+            </div>
           ) : !route ? (
             <div className="flex items-center gap-3 p-3">
               <Loader size={24} className="animate-spin flex-shrink-0" />
@@ -484,7 +499,7 @@ const PhoneNavigation: React.FC<PhoneNavigationProps> = ({ map, destination, onA
 
       {/* SPEED / LIMIT */}
       {route && (
-        <div className="absolute left-3 z-30 flex flex-col items-center gap-1.5" style={{ bottom: 104 }}>
+        <div className="absolute left-3 z-30 flex flex-col items-center gap-1.5" style={{ bottom: renderExtra ? 172 : 104 }}>
           {limit != null && (
             <div className="w-14 rounded-lg bg-[#ffffff] border-2 border-[#000000] text-[#000000] text-center leading-none py-1 shadow-lg">
               <div className="text-[8px] font-extrabold tracking-wide">MAXIMUM</div>
@@ -504,15 +519,17 @@ const PhoneNavigation: React.FC<PhoneNavigationProps> = ({ map, destination, onA
         <button
           onClick={recentre}
           className="absolute right-3 z-30 h-12 px-4 rounded-full bg-gray-900 border border-gray-700 text-white font-bold text-sm flex items-center gap-2 shadow-xl"
-          style={{ bottom: 104 }}
+          style={{ bottom: renderExtra ? 172 : 104 }}
         ><LocateFixed size={18} /> Re-centre</button>
       )}
 
       {/* ETA BAR */}
       <div
-        className="absolute inset-x-0 bottom-0 z-30 bg-gray-900 border-t border-gray-700 rounded-t-2xl shadow-2xl flex items-center gap-3 px-4 pt-3"
+        className="absolute inset-x-0 bottom-0 z-30 bg-gray-900 border-t border-gray-700 rounded-t-2xl shadow-2xl px-4 pt-3"
         style={{ paddingBottom: 'max(14px, env(safe-area-inset-bottom))' }}
       >
+      {renderExtra && <div className="mb-3">{renderExtra(arrived)}</div>}
+      <div className="flex items-center gap-3">
         <button
           onClick={() => setMuted(m => !m)}
           className="w-11 h-11 rounded-full bg-gray-800 flex items-center justify-center text-gray-200 flex-shrink-0"
@@ -532,6 +549,7 @@ const PhoneNavigation: React.FC<PhoneNavigationProps> = ({ map, destination, onA
           onClick={onCancel}
           className="h-11 px-5 rounded-full bg-red-600 active:bg-red-500 text-white font-extrabold text-sm flex-shrink-0"
         >End</button>
+      </div>
       </div>
     </>
   );
