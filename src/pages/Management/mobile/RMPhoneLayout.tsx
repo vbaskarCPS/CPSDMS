@@ -28,8 +28,7 @@ import { ActivityBadge, latestMs, computeRedFlags } from '../components/rmMapSha
 import PhoneDrawer, { DrawerSnap } from './PhoneDrawer';
 import { PhoneSheet, Tile } from './PhoneSheet';
 import PhoneNavigation, { PhoneNavDestination } from './PhoneNavigation';
-import { money, safeAreaTop } from './rmPhone';
-import { installPixelRatioCap } from '../../MapLogsheet/MapLogsheetView';
+import { money, safeAreaTop, installPixelRatioCap } from './rmPhone';
 
 // ---------------------------------------------------------------------------
 // Types shared with RMMapTab / RMLogbook

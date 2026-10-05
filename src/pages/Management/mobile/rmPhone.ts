@@ -113,3 +113,49 @@ export function safeAreaTop(): number {
     return 0;
   }
 }
+
+// Same Android GPU workaround the map logsheet uses (copied from MapLogsheetView
+// so this file doesn't depend on that one).
+
+// Mapbox draws its canvas at full device resolution: CSS size × devicePixelRatio.
+// On a dense fullscreen Android display that can exceed what the GPU will
+// render (commonly 4096px a side). The browser then hands back a smaller
+// drawing buffer, Mapbox paints the top-left of it, and the rest of the map is
+// a black band. Mapbox offers no pixel-ratio setting, but it reads
+// window.devicePixelRatio live, so while the map is mounted we cap that value
+// to the largest ratio the GPU can actually draw at this screen size. On most
+// tablets the cap never bites and nothing changes.
+export function installPixelRatioCap(): () => void {
+  const real = window.devicePixelRatio || 1;
+  let limit = 0;
+  try {
+    const c = document.createElement('canvas');
+    const gl = (c.getContext('webgl2') || c.getContext('webgl')) as WebGLRenderingContext | null;
+    if (gl) {
+      limit = Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_TEXTURE_SIZE));
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+    }
+  } catch { /* no WebGL info — leave the ratio alone */ }
+  if (!limit) return () => {};
+
+  const longest = Math.max(
+    window.screen?.width || 0, window.screen?.height || 0,
+    window.innerWidth || 0, window.innerHeight || 0,
+  );
+  if (!longest) return () => {};
+  // Small margin so we never land exactly on the ceiling.
+  const cap = Math.floor(((limit - 64) / longest) * 100) / 100;
+  if (cap >= real || cap < 1) return () => {};
+
+  const original = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+  try {
+    Object.defineProperty(window, 'devicePixelRatio', { get: () => cap, configurable: true });
+  } catch { return () => {}; }
+  console.info(`[MapLogsheet] pixel ratio capped ${real} → ${cap} (GPU limit ${limit}px, screen ${longest}px)`);
+  return () => {
+    try {
+      if (original) Object.defineProperty(window, 'devicePixelRatio', original);
+      else delete (window as any).devicePixelRatio;
+    } catch { /* ignore */ }
+  };
+}
