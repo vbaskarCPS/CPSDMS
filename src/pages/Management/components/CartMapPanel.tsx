@@ -64,6 +64,10 @@ interface CartMapPanelProps {
   header: React.ReactNode;
   /** The old pop-up's body (members, asphalt, jobs). */
   details: React.ReactNode;
+  /** Padding when zooming to the routes (the phone layout keeps them clear of its drawer). Default 50. */
+  fitPadding?: number | { top: number; bottom: number; left: number; right: number };
+  /** Don't zoom to the routes — the caller frames the map itself (phone layout). */
+  skipFit?: boolean;
 }
 
 const SRC_FP = 'cmp-fp-src';
@@ -90,7 +94,7 @@ const STATE_LABEL: Record<HouseView['state'], string> = {
 };
 
 const CartMapPanel: React.FC<CartMapPanelProps> = ({
-  cart, routeCodes, sessionDate, commandCenterId, map, mapLoaded, header, details,
+  cart, routeCodes, sessionDate, commandCenterId, map, mapLoaded, header, details, fitPadding = 50, skipFit = false,
 }) => {
   const [routeMaps, setRouteMaps] = useState<SavedRouteMap[]>([]);
   const [houses, setHouses] = useState<RouteHouse[]>([]);
@@ -465,7 +469,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
   // --- MAP: zoom to the cart's routes (once per cart) ---
   const fittedFor = useRef('');
   useEffect(() => {
-    if (!map || !mapLoaded || !routeMaps.length) return;
+    if (skipFit || !map || !mapLoaded || !routeMaps.length) return;
     const key = `${cart.sessionId}|${routeKey}`;
     if (fittedFor.current === key) return;
     const coords: [number, number][] = [];
@@ -478,7 +482,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     setTimeout(() => {
       try {
         map.resize();
-        map.fitBounds(b, { padding: 50, maxZoom: 17, duration: 700, bearing: map.getBearing(), pitch: map.getPitch() });
+        map.fitBounds(b, { padding: fitPadding, maxZoom: 17, duration: 700, bearing: map.getBearing(), pitch: map.getPitch() });
       } catch { /* map gone */ }
     }, 250);
   }, [map, mapLoaded, routeMaps, cart.sessionId, routeKey]);
@@ -540,7 +544,7 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex-shrink-0 border-b border-gray-700">{header}</div>
+      {header != null && <div className="flex-shrink-0 border-b border-gray-700">{header}</div>}
       <div className="flex-1 overflow-y-auto p-3 min-h-0 space-y-3 custom-scrollbar">
         {loading ? (
           <div className="flex items-center gap-2 text-xs text-gray-400 py-4"><Loader size={14} className="animate-spin" /> Loading the cart's houses…</div>

@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock,
   Lock, Unlock, Leaf, CreditCard, Shovel, Droplets, Bookmark, Navigation, History,
-  CheckCircle2, MapPin as MapPinIcon,
+  CheckCircle2, MapPin as MapPinIcon, Smartphone,
 } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import {
@@ -21,6 +21,8 @@ import RMRoutesTab from './components/RMRoutesTab';
 import RMMapTab from './components/RMMapTab';
 import BamboraTransactionsModal from '../../components/BamboraTransactionsModal';
 import RMAsphaltModal from '../../components/RMAsphaltModal';
+import { useRMLayout, isPhoneDevice } from './mobile/rmPhone';
+import type { RMPhoneShell } from './mobile/RMPhoneLayout';
 
 export interface TabStats {
   totalSteps: number;
@@ -39,6 +41,9 @@ export interface TabStats {
   teamPendingSalesCount: number;
   teamPendingOfficeCount: number;
   teamCartAvgGross: number;
+
+  /** Completed jobs today (Production + Sale transactions) — phone header. */
+  completedJobs: number;
 }
 
 // Geocode phase machine — drives the per-layer "Loading X/Y" indicators on the
@@ -146,6 +151,9 @@ const RMLogbook: React.FC = () => {
   const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<ManagementUser | null>(null);
   const [activeTab, setActiveTab] = useState<'team' | 'routes' | 'maps'>('team');
+  // PHONE LAYOUT: phones get the three-state phone map (when the map is on);
+  // "Desktop view" / "Phone view" switches and is remembered on this device.
+  const [layout, setLayout] = useRMLayout();
 
   const [isTeamLocked, setIsTeamLocked] = useState(false);
   const [lockLoading, setLockLoading] = useState(false);
@@ -183,6 +191,7 @@ const RMLogbook: React.FC = () => {
     teamPendingSalesCount: 0,
     teamPendingOfficeCount: 0,
     teamCartAvgGross: 0,
+    completedJobs: 0,
   });
 
   const [loading, setLoading] = useState(true);
@@ -464,10 +473,12 @@ const RMLogbook: React.FC = () => {
     let totalUpsellCount = 0;
     let totalUpsellGross = 0;
     let teamTotalGross = 0;
+    let completedJobs = 0;
 
     mySessions.forEach(s => {
       if (!countedSessionIds.has(s.id)) {
         countedSessionIds.add(s.id);
+        completedJobs += (s.financialStore || []).filter((tx: any) => tx.type === 'Production' || tx.type === 'Sale').length;
         totalSteps += s.stats?.stepCount || 0;
         totalTeamEQ += s.stats?.totalEQ || 0;
         totalUpsellCount += s.stats?.upsellCount || 0;
@@ -535,6 +546,7 @@ const RMLogbook: React.FC = () => {
         teamPendingSalesCount,
         teamPendingOfficeCount,
         teamCartAvgGross,
+        completedJobs,
     });
 
   }, [dailyData, allSessions, currentUser, isTeamSeason, pendingSalesByManager, seasonType]);
@@ -545,6 +557,141 @@ const RMLogbook: React.FC = () => {
         <Loader className="animate-spin text-cps-blue" />
       </div>
     );
+
+  const sharedHeaderModals = (
+    <>
+      {showTransactionsModal && (
+        <BamboraTransactionsModal
+          sessionDate={dailyData.date}
+          onClose={() => setShowTransactionsModal(false)}
+        />
+      )}
+
+      {showAsphaltModal && (
+        <RMAsphaltModal
+          managerId={currentUser.userId}
+          managerName={currentUser.name}
+          onClose={() => setShowAsphaltModal(false)}
+          onAssignmentChange={() => refreshData()}
+        />
+      )}
+    </>
+  );
+
+  // ── PHONE LAYOUT ── map-only RMs on a phone. The desktop header's contents
+  // (stats, filters, lock, asphalt, cards, battle cards) move into the phone
+  // screen's header and hamburger menu; the map and its data are the same
+  // RMMapTab, just laid out for a phone.
+  if (digitalMappingEnabled && layout === 'phone') {
+    const statTile = (label: string, value: React.ReactNode, tone = 'text-white') => (
+      <div className="bg-gray-800 rounded-xl px-3 py-2.5">
+        <div className="text-[9.5px] uppercase tracking-wide text-gray-500 font-bold">{label}</div>
+        <div className={`text-lg font-extrabold ${tone}`}>{value}</div>
+      </div>
+    );
+    const eqTone = stats.avgEQ >= 3 ? 'text-green-400' : stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400';
+    const statsPanel = (
+      <div className="space-y-2">
+        {isTeamSeason && (
+          <div className="bg-gray-800 rounded-xl px-3 py-3 text-center">
+            <div className="text-[10px] uppercase tracking-wide text-gray-500 font-bold">Total gross</div>
+            <div className="text-3xl font-extrabold text-white">${stats.teamTotalGross.toFixed(0)}</div>
+            <div className="text-sm text-yellow-400 font-bold">+ ${stats.teamTotalPendingDollars.toFixed(0)} pending</div>
+          </div>
+        )}
+        <div className="grid grid-cols-3 gap-2">
+          {statTile('Workers', stats.workerCount, 'text-blue-300')}
+          {statTile('Steps', stats.totalSteps)}
+          {statTile('Done', stats.completedJobs, 'text-green-400')}
+          {isTeamSeason
+            ? statTile('Prebooks', stats.teamPendingOfficeCount, 'text-green-400')
+            : statTile('Pending', stats.totalPending, 'text-yellow-400')}
+          {isTeamSeason && statTile('Pend. sales', stats.teamPendingSalesCount, 'text-yellow-400')}
+          {statTile('Avg EQ', stats.avgEQ.toFixed(2), eqTone)}
+          {isTeamSeason && statTile('Cart avg', `$${stats.teamCartAvgGross.toFixed(0)}`, 'text-gray-200')}
+          {statTile('Upsells', stats.totalUpsellCount, 'text-purple-300')}
+          {statTile('Up $', `$${stats.totalGross.toFixed(0)}`, 'text-purple-400')}
+          {statTile('Open routes', stats.unassignedRoutes, stats.unassignedRoutes > 0 ? 'text-amber-400' : 'text-gray-300')}
+        </div>
+      </div>
+    );
+
+    const covering = ((currentUser.floatingFor as string[] | undefined) || [])
+      .map(id => dailyData.managers.find(m => m.userId === id)?.name?.split(' ')[0])
+      .filter(Boolean) as string[];
+
+    const phoneShell: RMPhoneShell = {
+      header: {
+        isTeamSeason,
+        done: stats.completedJobs,
+        pendingSales: stats.teamPendingSalesCount,
+        prebooks: stats.teamPendingOfficeCount,
+        gross: stats.teamTotalGross,
+        pendingGross: stats.teamTotalPendingDollars,
+        pending: stats.totalPending,
+        upsellGross: stats.totalGross,
+      },
+      statsPanel,
+      battleCards: (
+        <RMTeamBattleCards
+          managers={dailyData.managers}
+          workers={dailyData.workers}
+          routes={dailyData.routes}
+          pendingBookings={dailyData.pendingBookings}
+          allSessions={allSessions}
+          allPendingSales={allPendingSales}
+          currentManagerId={currentUser.userId}
+          seasonType={seasonType}
+        />
+      ),
+      onToggleFilter: handleToggleFilter,
+      onToggleFollowMe: handleToggleCenter,
+      onTogglePinMode: () => setPinMode(prev => !prev),
+      isTeamLocked,
+      lockLoading,
+      onToggleLock: handleToggleLock,
+      onOpenTransactions: () => setShowTransactionsModal(true),
+      isSealing,
+      unassignedAsphaltCount,
+      onOpenAsphalt: () => setShowAsphaltModal(true),
+      onOpenManageTeam: () => setShowManageTeamModal(true),
+      onDesktopView: () => setLayout('desktop'),
+      userName: currentUser.name,
+      coveringNames: covering,
+    };
+
+    return (
+      <>
+        <RMMapTab
+          layout="phone"
+          phone={phoneShell}
+          managerId={currentUser.userId}
+          routes={dailyData.routes}
+          bookings={dailyData.pendingBookings}
+          allSessions={allSessions}
+          workers={dailyData.workers}
+          currentUser={currentUser}
+          allManagers={dailyData.managers}
+          seasonType={seasonType}
+          teamCarts={dailyData.teamCarts}
+          pendingSalesByManager={pendingSalesByManager}
+          onRefresh={refreshData}
+          filterVisibility={filterVisibility}
+          geocodePhase={geocodePhase}
+          geocodeProgress={geocodeProgress}
+          onGeocodeProgress={handleGeocodeProgress}
+          centerOnLocation={centerOnLocation}
+          onFollowMeAutoDisable={handleFollowMeAutoDisable}
+          onForceFollowMeOn={handleForceFollowMeOn}
+          showManageTeamModal={showManageTeamModal}
+          onCloseManageTeamModal={() => setShowManageTeamModal(false)}
+          pinMode={pinMode}
+          onExitPinMode={() => setPinMode(false)}
+        />
+        {sharedHeaderModals}
+      </>
+    );
+  }
 
   // FILTER BUTTON COMPONENT — small helper to keep the JSX below readable.
   // Renders the icon, ON/OFF visual state, and the loading badge when a phase
@@ -611,6 +758,16 @@ const RMLogbook: React.FC = () => {
           />
 
           <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
+            {/* Back to the phone layout — only offered on a phone that chose Desktop view. */}
+            {digitalMappingEnabled && isPhoneDevice() && (
+              <button
+                onClick={() => setLayout('phone')}
+                className="flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-blue-700 hover:bg-blue-600 text-white transition-all"
+                title="Phone view"
+              >
+                <Smartphone size={16} />
+              </button>
+            )}
             {/* Manage Team — leftmost in the actions block per spec. Only renders
                 on digital-mapping CCs since RMTeamTab still owns this on non-mapping CCs. */}
             {digitalMappingEnabled && (
@@ -1031,21 +1188,7 @@ const RMLogbook: React.FC = () => {
         )}
       </div>
 
-      {showTransactionsModal && (
-        <BamboraTransactionsModal
-          sessionDate={dailyData.date}
-          onClose={() => setShowTransactionsModal(false)}
-        />
-      )}
-
-      {showAsphaltModal && (
-        <RMAsphaltModal
-          managerId={currentUser.userId}
-          managerName={currentUser.name}
-          onClose={() => setShowAsphaltModal(false)}
-          onAssignmentChange={() => refreshData()}
-        />
-      )}
+      {sharedHeaderModals}
     </div>
   );
 };

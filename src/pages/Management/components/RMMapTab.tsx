@@ -8,7 +8,7 @@ import {
   AlertCircle, LayoutList, AlertTriangle, Truck, Bookmark, Shovel, Leaf,
   FileText, Check, ArrowRight, ArrowRightLeft, Shuffle, Trash2, UserPlus,
   UserMinus, Undo2, Navigation2, Compass, Scissors,
-  FlaskConical, Plus, Minus, Clock,
+  FlaskConical, Plus, Minus,
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { sessionService } from '../../../lib/sessionService';
@@ -37,6 +37,11 @@ import type { GeocodePhase, GeocodeProgress, FilterVisibility } from '../RMLogbo
 import type { MapPin as MapPinRecord } from '../../../lib/sessionService';
 import RoutePCLModal from './RoutePCLModal';
 import CartMapPanel from './CartMapPanel';
+import { ActivityBadge, latestMs, computeRedFlags } from './rmMapShared';
+import RMPhoneLayout, {
+  RMPhoneShell, RMPhoneCtx, PhoneCrew, PhoneRouteState, PhonePinCardData, crewLabel,
+} from '../mobile/RMPhoneLayout';
+import { pendingDollarValue, primeSpeech, safeAreaTop } from '../mobile/rmPhone';
 import {
   fetchMapAccessList, fetchRouteHouses, fetchDispositions, subscribeToDispositions,
   indexBookings, buildHouseViews, routeHouseId, RouteHouse, HouseDisposition,
@@ -120,9 +125,14 @@ interface RMMapTabProps {
   // off from down here when it would otherwise get in the way.
   pinMode: boolean;
   onExitPinMode?: () => void;
+  // PHONE LAYOUT. 'phone' swaps the desktop sidebar/modals for the three-state
+  // phone screen (mobile/RMPhoneLayout). Same data, same actions — only the
+  // screen differs. `phone` carries what the desktop header shows.
+  layout?: 'desktop' | 'phone';
+  phone?: RMPhoneShell;
 }
 
-interface WorkerCardData {
+export interface WorkerCardData {
   worker: Worker;
   displayBookings: MasterBooking[];
   financialStore: any[];
@@ -134,7 +144,7 @@ interface WorkerCardData {
   stats: { steps: number; pending: number; eq: number; upsellCount: number; upsellGross: number; gross: number; };
 }
 
-interface CartCardData {
+export interface CartCardData {
   sessionId: string;
   teamId: string;
   members: Worker[];
@@ -177,7 +187,7 @@ interface CartCardData {
 // Each card's prebookCount, prepayCount, totalEQ, assignedWorkerIds are scoped
 // to that bucket. The Split button is no longer on these cards — it lives
 // inside the assignment modal that opens when a card is tapped.
-interface RouteCardData {
+export interface RouteCardData {
   routeCode: string;          // baseRouteCode for split cards; full code for non-split
   displayRouteCode: string;   // what to show in UI ("BIN09" or "BIN09a"/"BIN09b"/...)
   routeColor: string;
@@ -800,47 +810,6 @@ function matchingStreetDistances(
   return out;
 }
 
-function computeRedFlags(financialStore: any[]): { hasFlag: boolean; flags: string[] } {
-  const flags: string[] = [];
-  const sales = financialStore.filter((tx: any) => tx.type === 'Sale');
-
-  if (sales.length > 0) {
-    const first5 = sales.slice(0, 5);
-    const after5 = sales.slice(5);
-
-    const first5Filled = first5.reduce((n: number, tx: any) => {
-      if (tx.customerPhone?.trim()) n++;
-      if (tx.customerEmail?.trim()) n++;
-      return n;
-    }, 0);
-    if (first5Filled / (first5.length * 2) < 0.5) {
-      flags.push('contacts_first5');
-    }
-
-    if (after5.length > 0) {
-      const after5Filled = after5.reduce((n: number, tx: any) => {
-        if (tx.customerPhone?.trim()) n++;
-        if (tx.customerEmail?.trim()) n++;
-        return n;
-      }, 0);
-      if (after5Filled / (after5.length * 2) < 0.7) {
-        flags.push('contacts_after5');
-      }
-    }
-  }
-
-  const completedJobs = financialStore.filter((tx: any) => tx.type === 'Production' || tx.type === 'Sale');
-  for (const tx of completedJobs) {
-    const st = tx.serviceType;
-    const price = typeof tx.price === 'number' ? tx.price : parseFloat(String(tx.price || '0'));
-    if (!st || !price) continue;
-    if ((st === 'FO' || st === 'BO') && price < 50) { flags.push('pricing'); break; }
-    if (st === 'FP' && price < 60) { flags.push('pricing'); break; }
-  }
-
-  return { hasFlag: flags.length > 0, flags };
-}
-
 function createPulsingRing(color: string): HTMLDivElement {
   let pulseStyle = document.getElementById('rm-pulse-keyframes') as HTMLStyleElement | null;
   if (!pulseStyle) {
@@ -1055,45 +1024,6 @@ function bucketCentroid(
 
 // --- COMPONENT ---
 
-// --- SIDEBAR "LAST ACTIVE" BADGE ---
-// Green dot = a knock or sale in the last 3 minutes. After that an orange
-// clock with how long they've been quiet: 3m (3-5 min), then 5-minute steps
-// (5m, 10m, ... 55m), then half-hour steps from an hour (1h, 1.5h, 2h ...).
-function activityBadge(lastMs: number | null, nowMs: number): { live: true } | { live: false; label: string } | null {
-  if (!lastMs || !isFinite(lastMs)) return null;
-  const mins = Math.max(0, (nowMs - lastMs) / 60000);
-  if (mins < 3) return { live: true };
-  if (mins < 5) return { live: false, label: '3m' };
-  if (mins < 60) return { live: false, label: `${Math.floor(mins / 5) * 5}m` };
-  const halfHours = Math.floor(mins / 30) / 2;
-  return { live: false, label: `${halfHours}h` };
-}
-
-const ActivityBadge: React.FC<{ lastMs: number | null; nowMs: number }> = ({ lastMs, nowMs }) => {
-  const b = activityBadge(lastMs, nowMs);
-  if (!b) return null;
-  const at = lastMs ? new Date(lastMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
-  if (b.live) {
-    return <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0 animate-pulse" title={`Active — last knock ${at}`} />;
-  }
-  return (
-    <span className="flex items-center gap-0.5 text-[10px] font-bold text-orange-400 flex-shrink-0" title={`Away — last knock ${at}`}>
-      <Clock size={11} /> {b.label}
-    </span>
-  );
-};
-
-/** Latest of several timestamps (ms or ISO text); null if none. */
-function latestMs(...vals: Array<number | string | null | undefined>): number | null {
-  let best: number | null = null;
-  for (const v of vals) {
-    if (v === null || v === undefined || v === '') continue;
-    const ms = typeof v === 'number' ? v : new Date(v).getTime();
-    if (isFinite(ms) && (best === null || ms > best)) best = ms;
-  }
-  return best;
-}
-
 const RMMapTab: React.FC<RMMapTabProps> = ({
   managerId,
   routes,
@@ -1117,7 +1047,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   onCloseManageTeamModal,
   pinMode,
   onExitPinMode,
+  layout = 'desktop',
+  phone,
 }) => {
+  const isPhone = layout === 'phone';
+  // Read by the map handlers, which are registered once.
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -1306,6 +1242,26 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   const [navState, setNavState] = useState<NavState | null>(null);
   const [switchNavConfirm, setSwitchNavConfirm] = useState<SwitchNavConfirmation | null>(null);
   const [routeNavPrompt, setRouteNavPrompt] = useState<RouteNavPrompt | null>(null);
+
+  // --- PHONE LAYOUT STATE ---
+  // phoneRoute = state ② (null = state ①). navState doubles as state ③.
+  const [phoneRoute, setPhoneRoute] = useState<PhoneRouteState | null>(null);
+  const phoneRouteRef = useRef<PhoneRouteState | null>(null);
+  phoneRouteRef.current = phoneRoute;
+  const [phonePin, setPhonePin] = useState<PhonePinCardData | null>(null);
+  const [phonePclRoute, setPhonePclRoute] = useState<{ routeCode: string; display: string; color: string } | null>(null);
+  // Drawer height isn't needed for rendering here (the layout positions its own
+  // buttons), so it lives in a ref and settling the drawer costs no re-render.
+  const phoneDrawerHRef = useRef(112);
+  const phoneSafeTopRef = useRef<number | null>(null);
+  // Bumped when the route should be re-framed (e.g. after navigation ends).
+  const [phoneRefit, setPhoneRefit] = useState(0);
+  // Map handlers are registered once; they call through these.
+  const onPhoneRouteTapRef = useRef<(routeCode: string, letter?: string) => void>(() => {});
+  const onWorkerMarkerTapRef = useRef<(workerId: string) => void>(() => {});
+  // True while phone navigation owns the camera — the follow-me easing below
+  // must stand aside or the two fight every GPS fix.
+  const phoneNavRef = useRef(false);
 
   // --- ARROW ROTATION ---
   const HEADING_FRESHNESS_MS = 5000;
@@ -1727,7 +1683,66 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   const cartUsesMapPanel = (cart: CartCardData) =>
     mapGate.cc || cart.members.some(m => mapGate.contractors.has((m.contractorId || '').toUpperCase()));
-  const cartPanel = selectedCartForModal && cartUsesMapPanel(selectedCartForModal) ? selectedCartForModal : null;
+
+  // --- PHONE: who is on the route being viewed (state ②) ---
+  // The crew actually assigned to the route/bucket wins; otherwise the crew the
+  // RM tapped to get here (a cart with no route yet, or one just unassigned).
+  const phoneCrewByKey = useCallback((key: string | undefined): PhoneCrew | null => {
+    if (!key) return null;
+    if (key.startsWith('cart:')) {
+      const cart = cartCardData.find(c => `cart:${c.sessionId}` === key);
+      return cart ? { type: 'cart', key, cart } : null;
+    }
+    const card = workerCardData.find(w => `worker:${w.worker.contractorId}` === key);
+    return card ? { type: 'worker', key, card } : null;
+  }, [cartCardData, workerCardData]);
+
+  const phoneCrewForIds = useCallback((ids: string[]): PhoneCrew | null => {
+    if (!ids.length) return null;
+    if (isTeamSeason) {
+      const cart = cartCardData.find(c => c.members.some(m => ids.includes(m.contractorId)));
+      return cart ? { type: 'cart', key: `cart:${cart.sessionId}`, cart } : null;
+    }
+    const card = workerCardData.find(w => ids.includes(w.worker.contractorId));
+    return card ? { type: 'worker', key: `worker:${card.worker.contractorId}`, card } : null;
+  }, [isTeamSeason, cartCardData, workerCardData]);
+
+  // A split route always has a bucket; with no letter given, that's 'a'.
+  const phoneRouteLetter = useMemo(() => {
+    if (!phoneRoute?.routeCode) return undefined;
+    const split = routeSplitsByCode.get(phoneRoute.routeCode);
+    if (!split || split.buckets.length === 0) return undefined;
+    return phoneRoute.letter && split.buckets.some(b => b.letter === phoneRoute.letter) ? phoneRoute.letter : 'a';
+  }, [phoneRoute, routeSplitsByCode]);
+
+  const phoneRouteAssignedIds = useMemo<string[]>(() => {
+    if (!phoneRoute?.routeCode) return [];
+    if (phoneRouteLetter) {
+      return routeSplitsByCode.get(phoneRoute.routeCode)?.buckets.find(b => b.letter === phoneRouteLetter)?.assignedWorkers || [];
+    }
+    return routes.find(r => r.routeCode === phoneRoute.routeCode)?.assignedWorkerIds || [];
+  }, [phoneRoute, phoneRouteLetter, routes, routeSplitsByCode]);
+
+  const phoneCrew = useMemo<PhoneCrew | null>(() => {
+    if (!isPhone || !phoneRoute) return null;
+    // The crew the RM came in through wins when they're on this route (a route
+    // shared by two carts, or one they only have jobs on); otherwise whoever
+    // the route is assigned to.
+    const keyCrew = phoneCrewByKey(phoneRoute.crewKey);
+    if (keyCrew && phoneRoute.routeCode) {
+      const ids = keyCrew.type === 'cart' ? keyCrew.cart.members.map(m => m.contractorId) : [keyCrew.card.worker.contractorId];
+      const theirRoutes = keyCrew.type === 'cart' ? keyCrew.cart.assignedRoutes : keyCrew.card.assignedRoutes;
+      if (ids.some(id => phoneRouteAssignedIds.includes(id)) || theirRoutes.includes(phoneRoute.routeCode)) return keyCrew;
+    }
+    return phoneCrewForIds(phoneRouteAssignedIds) || keyCrew;
+  }, [isPhone, phoneRoute, phoneRouteAssignedIds, phoneCrewForIds, phoneCrewByKey]);
+
+  const phoneCartPanel = isPhone && phoneRoute?.routeCode && phoneCrew?.type === 'cart' && cartUsesMapPanel(phoneCrew.cart)
+    ? phoneCrew.cart
+    : null;
+  const cartPanel = isPhone
+    ? phoneCartPanel
+    : (selectedCartForModal && cartUsesMapPanel(selectedCartForModal) ? selectedCartForModal : null);
   // The cart's routes, the same way the worker's map finds them: every route
   // in today's session assigned to anyone on the cart (whole route or a split
   // bucket), plus any route its jobs or sales sit on. (cart.assignedRoutes
@@ -1750,9 +1765,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return [...new Set(codes)].filter(Boolean).sort();
   }, [routes, routeSplitsByCode, routeMapData]);
   const cartPanelRouteCodes = useMemo(
-    () => (cartPanel ? routesForCart(cartPanel) : [] as string[]),
+    // Phone: the panel shows just the route being viewed, not all the cart's routes.
+    () => (cartPanel ? (isPhone ? (phoneRoute?.routeCode ? [phoneRoute.routeCode] : []) : routesForCart(cartPanel)) : [] as string[]),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cartPanel?.sessionId, cartPanel?.members, cartPanel?.assignedRoutes.join(','), cartPanel?.sharedBookings, routesForCart],
+    [cartPanel?.sessionId, cartPanel?.members, cartPanel?.assignedRoutes.join(','), cartPanel?.sharedBookings, routesForCart, isPhone, phoneRoute?.routeCode],
   );
   const cartPanelKey = cartPanel ? `${cartPanel.sessionId}|${cartPanelRouteCodes.join(',')}` : '';
   const cartPanelSessionDate = useMemo(
@@ -2235,6 +2251,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         existingIds.delete(loc.worker_id);
       } else {
         const el = createWorkerMarkerEl(initials, borderColor, fullName);
+        if (layoutRef.current === 'phone') {
+          // Bigger finger target on a phone, and a tap opens that worker's cart.
+          el.style.width = '26px'; el.style.height = '26px'; el.style.fontSize = '10px';
+          el.style.borderWidth = '3px'; el.style.cursor = 'pointer';
+          const wid = loc.worker_id;
+          el.addEventListener('click', ev => { ev.stopPropagation(); onWorkerMarkerTapRef.current(wid); });
+        }
         const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
           .setLngLat([loc.lng, loc.lat])
           .addTo(map);
@@ -2660,7 +2683,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const splitAssigned = !!split && split.buckets.some(b => (b.assignedWorkers?.length || 0) > 0);
       const isAssigned = baseAssigned || splitAssigned;
 
-      if (cartPanelRouteCodes.length) {
+      if (isPhone && phoneRoute?.routeCode) {
+        // Phone route state: the route being viewed stands out, the rest fade.
+        map.setPaintProperty(lid, 'line-opacity', route.route_code === phoneRoute.routeCode ? (cartPanelRouteCodes.length ? 0.55 : 0.9) : 0.15);
+      } else if (cartPanelRouteCodes.length) {
         // Cart panel open: that cart's routes stay, everything else fades back.
         map.setPaintProperty(lid, 'line-opacity', cartPanelRouteCodes.includes(route.route_code) ? 0.55 : 0.12);
       } else if (sidebarMode === 'routes' && myRouteCodes.includes(route.route_code)) {
@@ -2670,7 +2696,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sidebarMode, routeMapData, routes, mapLoaded, myRouteCodes, routeSplitsByCode, cartPanelKey]);
+  }, [sidebarMode, routeMapData, routes, mapLoaded, myRouteCodes, routeSplitsByCode, cartPanelKey, isPhone, phoneRoute?.routeCode]);
 
   // Route click handlers — V2 RECURSIVE-SPLIT-AWARE.
   //
@@ -2699,7 +2725,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const makeRouteClick = (route: SavedRoute) => (e:any) => {
         // Pin mode owns every tap. Without this, tapping a route to place a pin
         // would ALSO open the assignment modal underneath it.
-        if (pinModeRef.current || cartMapOpenRef.current) return;
+        // (On the phone a route tap is how you move between routes, so it still
+        // works while a cart's houses are showing.)
+        if (pinModeRef.current) return;
+        if (cartMapOpenRef.current && layoutRef.current !== 'phone') return;
         e.preventDefault();
         const mode = sidebarModeRef.current;
         const rc = route.route_code;
@@ -2732,6 +2761,12 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         // three attempts above came back empty, do nothing rather than silently
         // handing over the lot.
         if (split && split.buckets.length > 0 && !clickedLetter) return;
+
+        // PHONE: a route tap opens (or switches to) that route's state ②.
+        if (layoutRef.current === 'phone') {
+          onPhoneRouteTapRef.current(rc, clickedLetter);
+          return;
+        }
 
         if (mode === 'routes') {
           if (split && clickedLetter) {
@@ -2954,6 +2989,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const { name, address, routeCode, routeColor, phone, email, price, confirmed } = f.properties;
       const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
       if (popupRef.current) popupRef.current.remove();
+      if (layoutRef.current === 'phone') {
+        setSelectedMapPin(null);
+        setPhonePin({ kind: 'pending', name, address, routeCode, routeColor, phone, email, price, confirmed: confirmed === true || confirmed === 'true', lng: coords[0], lat: coords[1] });
+        return;
+      }
       const sn=esc(name),sa=esc(address),sp=esc(phone),se=esc(email),spr=esc(price),src2=esc(routeCode);
       const confDiag = `<div style="color:${confirmed?'#16a34a':'#999'};font-size:11px;font-weight:700;margin-top:4px;">DIAG confirmed=${String(confirmed)}</div>`;
       const pRow=sp?`<div style="margin-top:5px;"><a href="tel:${sp}" style="color:#60a5fa;font-size:12px;text-decoration:none;">📞 ${sp}</a></div>`:'';
@@ -3002,6 +3042,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const { name, address, routeCode, routeColor, status, phone, email, price, paymentMethod } = f.properties;
       const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
       if (popupRef.current) popupRef.current.remove();
+      if (layoutRef.current === 'phone') {
+        const ov = overlapInfoRef.current.get(makeCacheKey(address));
+        setSelectedMapPin(null);
+        setPhonePin({
+          kind: status === 'new_sale' ? 'new_sale' : 'completed', name, address, routeCode, routeColor, phone, email, price, paymentMethod,
+          upsell: ov ? { name: ov.upsellPin.name, price: ov.upsellPin.price || '' } : null,
+          lng: coords[0], lat: coords[1],
+        });
+        return;
+      }
       const sl = status === 'completed' ? '✅ Done' : '🆕 Sale';
       const sc = status === 'completed' ? '#22c55e' : '#eab308';
       const sn=esc(name),sa=esc(address),sp=esc(phone),se=esc(email),spr=esc(price),sm=esc(paymentMethod),src2=esc(routeCode);
@@ -3136,6 +3186,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       const { name, address, routeCode, routeColor, phone, email, price } = f.properties;
       const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
       if (popupRef.current) popupRef.current.remove();
+      if (layoutRef.current === 'phone') {
+        setSelectedMapPin(null);
+        setPhonePin({ kind: 'upsell', name, address, routeCode, routeColor, phone, email, price, lng: coords[0], lat: coords[1] });
+        return;
+      }
       const sn=esc(name),sa=esc(address),sp=esc(phone),se=esc(email),spr=esc(price),src2=esc(routeCode);
       const pRow=sp?`<div style="margin-top:5px;"><a href="tel:${sp}" style="color:#60a5fa;font-size:12px;text-decoration:none;">📞 ${sp}</a></div>`:'';
       const eRow=se?`<div style="color:#9ca3af;font-size:11px;margin-top:2px;">✉️ ${se}</div>`:'';
@@ -3809,7 +3864,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       lastSelfPosRef.current = { lat, lng };
       sessionService.upsertManagerLocation(lat, lng).catch(() => {});
       applyArrowRotation();
-      if (centerOnLocationRef.current) {
+      if (centerOnLocationRef.current && !phoneNavRef.current) {
         mapRef.current.easeTo({ center: [lng, lat], duration: 300 });
         lastCenteredAtRef.current = { lat, lng };
       }
@@ -3895,7 +3950,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [attachCompassListener]);
 
   useEffect(() => {
-    if (centerOnLocation && navMarkerRef.current && mapRef.current) {
+    if (centerOnLocation && navMarkerRef.current && mapRef.current && !phoneNavRef.current) {
       const ll = navMarkerRef.current.getLngLat();
       if (ll.lng !== 0 || ll.lat !== 0) {
         mapRef.current.easeTo({ center: [ll.lng, ll.lat], duration: 800 });
@@ -3914,7 +3969,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     mountedRef.current=true;
     if(!mapContainerRef.current||mapRef.current) return;
     const map=new mapboxgl.Map({container:mapContainerRef.current,style:'mapbox://styles/mapbox/streets-v12',center:[-79.870,43.320],zoom:13});
-    map.addControl(new mapboxgl.NavigationControl(),'top-right');
+    if (layoutRef.current !== 'phone') map.addControl(new mapboxgl.NavigationControl(),'top-right');
     map.on('load',()=>{
       map.resize();
       const xh=['poi-label','housenum-label','road-number-shield','transit-label'];
@@ -4104,7 +4159,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         targetName ? `${pin.label} → ${targetName.split(' ')[0]}` : pin.label,
         pin.visibility,
       );
-      el.addEventListener('click', (ev) => { ev.stopPropagation(); setSelectedMapPin(pin); });
+      el.addEventListener('click', (ev) => { ev.stopPropagation(); setPhonePin(null); setSelectedMapPin(pin); });
       const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom' })
         .setLngLat([pin.lng, pin.lat])
         .addTo(map);
@@ -4204,7 +4259,13 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
   // --- NAV ACTION HANDLERS ---
   const startNavToDestination = useCallback((dest: NavDestination, targetKey: string) => {
-    if (!centerOnLocation && onForceFollowMeOn) onForceFollowMeOn();
+    if (layoutRef.current === 'phone') {
+      // Phone navigation drives its own camera; it just needs the voice unlocked
+      // while we're still inside the tap.
+      primeSpeech();
+      setPhonePin(null);
+      setSelectedMapPin(null);
+    } else if (!centerOnLocation && onForceFollowMeOn) onForceFollowMeOn();
     setNavState({ destination: dest, targetKey });
     if (popupRef.current) { popupRef.current.remove(); popupRef.current = null; }
   }, [centerOnLocation, onForceFollowMeOn]);
@@ -4277,6 +4338,241 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     if (entry.type === 'cart') handleNavigateToCart(entry.card as CartCardData);
     else handleNavigateToWorker(entry.card as WorkerCardData);
   }, [handleNavigateToWorker, handleNavigateToCart]);
+
+  // --- PHONE LAYOUT: STATE ② (route) + ③ (navigation) PLUMBING ---
+
+  // Routes a crew is on: every route/bucket assigned to them, plus any of this
+  // manager's routes their jobs sit on.
+  const phoneCrewRoutesFor = useCallback((crew: PhoneCrew | null) => {
+    if (!crew) return [] as Array<{ routeCode: string; letter?: string; display: string; color: string }>;
+    const ids = new Set(crew.type === 'cart' ? crew.cart.members.map(m => m.contractorId) : [crew.card.worker.contractorId]);
+    const out = routeCardData
+      .filter(rc => rc.assignedWorkerIds.some(id => ids.has(id)))
+      .map(rc => ({ routeCode: rc.baseRouteCode, letter: rc.letter, display: rc.displayRouteCode, color: rc.routeColor }));
+    const extra = crew.type === 'cart' ? routesForCart(crew.cart) : crew.card.assignedRoutes;
+    for (const code of extra) {
+      if (!myRouteCodes.includes(code) || out.some(o => o.routeCode === code)) continue;
+      const rc = routeCardData.find(r => r.baseRouteCode === code);
+      out.push({ routeCode: code, letter: rc?.letter, display: rc?.displayRouteCode || code, color: rc?.routeColor || routeColorMap.get(code) || '#6b7280' });
+    }
+    return out.sort((a, b) => a.display.localeCompare(b.display));
+  }, [routeCardData, routesForCart, myRouteCodes, routeColorMap]);
+
+  // Where a crew is right now: last knock, else newest geocoded job/sale, else
+  // the phone's last GPS write.
+  const phoneCrewLocation = useCallback((crew: PhoneCrew): { lat: number; lng: number } | null => {
+    if (crew.type === 'cart') {
+      const k = cartKnockSummary.get(crew.cart.sessionId)?.last;
+      if (k) return k;
+      const r = resolveNavDestination(crew.cart.navActivity);
+      if (r) return r;
+      const ids = new Set(crew.cart.members.map(m => m.contractorId));
+      const loc = effectiveWorkerLocations.find(l => ids.has(l.worker_id));
+      return loc ? { lat: loc.lat, lng: loc.lng } : null;
+    }
+    const r = resolveNavDestination(crew.card.financialStore);
+    if (r) return r;
+    const loc = effectiveWorkerLocations.find(l => l.worker_id === crew.card.worker.contractorId);
+    return loc ? { lat: loc.lat, lng: loc.lng } : null;
+  }, [cartKnockSummary, effectiveWorkerLocations]);
+
+  // Line pieces of a route, or of one bucket of a split route.
+  const phoneRouteCoords = useCallback((routeCode: string, letter?: string): [number, number][] => {
+    const rmd = routeMapData.find(r => r.route_code === routeCode);
+    if (!rmd) return [];
+    const split = routeSplitsByCode.get(routeCode);
+    const out: [number, number][] = [];
+    rmd.segments?.forEach(seg => {
+      const cs = seg.coordinates || [];
+      for (let i = 0; i < cs.length - 1; i++) {
+        if (split && split.buckets.length > 0 && letter) {
+          const mid = lineMidCoord(cs[i], cs[i + 1]);
+          if (bucketForPoint(mid[0], mid[1], split.buckets as any) !== letter) continue;
+        }
+        out.push(cs[i], cs[i + 1]);
+      }
+    });
+    return out;
+  }, [routeMapData, routeSplitsByCode]);
+
+  const phoneEnterCrew = useCallback((key: string) => {
+    const crew = phoneCrewByKey(key);
+    if (!crew) return;
+    const list = phoneCrewRoutesFor(crew);
+    let pick = list[0];
+    const loc = list.length > 1 ? phoneCrewLocation(crew) : null;
+    if (loc) {
+      let best = Infinity;
+      for (const r of list) {
+        const cs = phoneRouteCoords(r.routeCode, r.letter);
+        for (let i = 0; i < cs.length - 1; i += 2) {
+          const d = distToSegmentMeters(loc.lat, loc.lng, cs[i][1], cs[i][0], cs[i + 1][1], cs[i + 1][0]);
+          if (d < best) { best = d; pick = r; }
+        }
+      }
+    }
+    setPhonePin(null);
+    setSelectedMapPin(null);
+    setPhoneRoute(pick ? { routeCode: pick.routeCode, letter: pick.letter, crewKey: key } : { routeCode: null, crewKey: key });
+  }, [phoneCrewByKey, phoneCrewRoutesFor, phoneCrewLocation, phoneRouteCoords]);
+
+  // Map handlers (registered once) reach the latest versions through refs.
+  onPhoneRouteTapRef.current = (routeCode: string, letter?: string) => {
+    const cur = phoneRouteRef.current;
+    if (cur && cur.routeCode === routeCode && (cur.letter || 'a') === (letter || 'a')) return; // already here (a house tap underneath)
+    setPhonePin(null);
+    setSelectedMapPin(null);
+    setPhoneRoute({ routeCode, letter });
+  };
+  onWorkerMarkerTapRef.current = (workerId: string) => {
+    if (isTeamSeason) {
+      const cart = cartCardData.find(c => c.members.some(m => m.contractorId === workerId));
+      if (cart) phoneEnterCrew(`cart:${cart.sessionId}`);
+    } else {
+      phoneEnterCrew(`worker:${workerId}`);
+    }
+  };
+  phoneNavRef.current = isPhone && !!navState;
+
+  // Leave the route state if the route stops being ours (transferred away).
+  useEffect(() => {
+    if (!isPhone || !phoneRoute?.routeCode || myRouteCodes.length === 0) return;
+    if (!myRouteCodes.includes(phoneRoute.routeCode)) setPhoneRoute(null);
+  }, [isPhone, phoneRoute?.routeCode, myRouteCodes]);
+
+  // Frame the route (or the crew) on entering ②; put the view back on leaving.
+  const phoneViewBeforeRef = useRef<{ center: mapboxgl.LngLat; zoom: number; bearing: number; pitch: number } | null>(null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!isPhone || !map || !mapLoaded) return;
+    if (!phoneRoute) {
+      const v = phoneViewBeforeRef.current;
+      phoneViewBeforeRef.current = null;
+      if (v) { try { map.easeTo({ center: v.center, zoom: v.zoom, bearing: v.bearing, pitch: v.pitch, padding: { top: 0, bottom: 0, left: 0, right: 0 }, duration: 600 }); } catch { /* */ } }
+      return;
+    }
+    if (!phoneViewBeforeRef.current) {
+      phoneViewBeforeRef.current = { center: map.getCenter(), zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
+      // Follow-me would drag the camera off the route on the next GPS fix.
+      if (centerOnLocationRef.current) onFollowMeAutoDisable();
+    }
+    const pad = phoneFitPadding();
+    const coords = phoneRoute.routeCode ? phoneRouteCoords(phoneRoute.routeCode, phoneRouteLetter) : [];
+    try {
+      if (coords.length) {
+        const b = coords.reduce((bb, c) => bb.extend(c), new mapboxgl.LngLatBounds(coords[0], coords[0]));
+        // Flat and north-up: after navigation the camera is still tilted/turned.
+        map.fitBounds(b, { padding: pad, maxZoom: 17, duration: 700, bearing: 0, pitch: 0 });
+      } else if (phoneCrew) {
+        const loc = phoneCrewLocation(phoneCrew);
+        if (loc) map.easeTo({ center: [loc.lng, loc.lat], zoom: 16, padding: pad, bearing: 0, pitch: 0, duration: 700 });
+      }
+    } catch { /* map busy */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPhone, mapLoaded, phoneRoute?.routeCode, phoneRouteLetter, phoneRoute?.crewKey, routeMapData.length > 0, phoneRefit]);
+
+  // Keep the framed route clear of the top bar and the half-open drawer.
+  function phoneFitPadding() {
+    const h = mapRef.current?.getContainer().clientHeight || window.innerHeight;
+    if (phoneSafeTopRef.current === null) phoneSafeTopRef.current = safeAreaTop();
+    return { top: 48 + phoneSafeTopRef.current + 24, bottom: Math.round(h * 0.48) + 20, left: 28, right: 28 };
+  }
+
+  const phoneRouteCard = useMemo<RouteCardData | null>(() => {
+    if (!isPhone || !phoneRoute?.routeCode) return null;
+    return routeCardData.find(rc => rc.baseRouteCode === phoneRoute.routeCode && (rc.letter || undefined) === phoneRouteLetter) || null;
+  }, [isPhone, phoneRoute?.routeCode, phoneRouteLetter, routeCardData]);
+
+  const phoneRouteBookings = useMemo<MasterBooking[]>(() => {
+    if (!isPhone || !phoneRoute?.routeCode) return [];
+    let list = bookings.filter(b =>
+      b['Route Number'] === phoneRoute.routeCode && b.Completed !== 'x'
+      && b.Status !== 'completed' && b.Status !== 'cancelled' && b.Status !== 'next_time');
+    if (phoneRouteLetter) {
+      const ids = new Set(routeSplitsByCode.get(phoneRoute.routeCode)?.buckets.find(b => b.letter === phoneRouteLetter)?.bookingIds || []);
+      list = list.filter(b => ids.has(b['Booking ID']));
+    }
+    return list;
+  }, [isPhone, phoneRoute?.routeCode, phoneRouteLetter, bookings, routeSplitsByCode]);
+
+  const isPendingBooking = (b: MasterBooking) =>
+    b.Completed !== 'x' && b.Status !== 'completed' && b.Status !== 'cancelled' && b.Status !== 'next_time';
+
+  const phoneCrewMoney = useCallback((crew: PhoneCrew) => {
+    if (crew.type === 'cart') {
+      const c = crew.cart;
+      const session = allSessions.find(s => s.id === c.sessionId);
+      return {
+        steps: c.stats.steps,
+        pending: c.stats.pending + c.stats.pendingSaleCount,
+        gross: session?.stats?.prodGross || 0,
+        pendingGross: c.sharedBookings.filter(isPendingBooking).reduce((sum, b) => sum + pendingDollarValue(b.Price, seasonType), 0),
+        eq: c.stats.eq,
+      };
+    }
+    const w = crew.card;
+    const session = allSessions.find(s => s.workerId === w.worker.contractorId);
+    return {
+      steps: w.stats.steps,
+      pending: w.stats.pending,
+      gross: session?.stats?.prodGross || 0,
+      pendingGross: w.displayBookings.filter(isPendingBooking).reduce((sum, b) => sum + pendingDollarValue(b.Price, seasonType), 0),
+      eq: w.stats.eq,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allSessions, seasonType]);
+
+  const phoneOpenAssign = useCallback(() => {
+    const rc = phoneRouteCard;
+    if (!rc) return;
+    setAssignModalData({
+      routeCode: rc.baseRouteCode,
+      displayRouteCode: rc.displayRouteCode,
+      routeColor: rc.routeColor,
+      prebookCount: rc.prebookCount,
+      prepayCount: rc.prepayCount,
+      totalEQ: rc.totalEQ,
+      currentWorkerIds: rc.assignedWorkerIds,
+      letter: rc.letter,
+      canSplit: rc.assignedWorkerIds.length === 0,
+    });
+  }, [phoneRouteCard]);
+
+  const phoneNavigateTo = useCallback((dest: NavDestination, key: string) => {
+    if (!navState) { startNavToDestination(dest, key); return; }
+    if (navState.targetKey === key) return;
+    setSwitchNavConfirm({ newDestination: dest, newTargetKey: key, currentLabel: navState.destination.label, newLabel: dest.label });
+  }, [navState, startNavToDestination]);
+
+  const phoneNavigateRoute = useCallback(() => {
+    if (!phoneRoute?.routeCode) return;
+    const cs = phoneRouteCoords(phoneRoute.routeCode, phoneRouteLetter);
+    if (!cs.length) return;
+    // Head for the stretch of the route nearest its middle.
+    const lng = cs.reduce((s, c) => s + c[0], 0) / cs.length;
+    const lat = cs.reduce((s, c) => s + c[1], 0) / cs.length;
+    let best = cs[0], bestD = Infinity;
+    for (const c of cs) { const d = (c[0] - lng) ** 2 + (c[1] - lat) ** 2; if (d < bestD) { bestD = d; best = c; } }
+    const label = phoneRouteCard?.displayRouteCode || phoneRoute.routeCode;
+    phoneNavigateTo({ lat: best[1], lng: best[0], label: `Route ${label}` }, `route:${label}`);
+  }, [phoneRoute, phoneRouteLetter, phoneRouteCoords, phoneRouteCard, phoneNavigateTo]);
+
+  const phoneShowBooking = useCallback((bookingId: string) => {
+    const pin = geocodedPins.find(p => p.id === bookingId) || knownPinsRef.current.get(bookingId);
+    const map = mapRef.current;
+    if (!pin || !map) return;
+    const split = routeSplitsByCode.get(pin.routeCode);
+    const bucket = split?.buckets.find(b => b.bookingIds.includes(pin.id));
+    const color = bucket ? colorForBucket(pin.routeColor, bucket.letter) : pin.routeColor;
+    try { map.easeTo({ center: [pin.lng, pin.lat], zoom: Math.max(map.getZoom(), 17), duration: 600 }); } catch { /* */ }
+    setSelectedMapPin(null);
+    setPhonePin({
+      kind: 'pending', name: pin.name, address: pin.address, routeCode: pin.routeCode, routeColor: color,
+      phone: pin.phone, email: pin.email, price: pin.price, confirmed: pin.confirmed, lat: pin.lat, lng: pin.lng,
+    });
+  }, [geocodedPins, routeSplitsByCode]);
+
+  // ---------------------------------------------------------------------------
 
   // --- ROUTE SPLIT HANDLERS (V2 RECURSIVE) ---
   //
@@ -4378,6 +4674,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const totalEQ = newBucketBookings.reduce((sum, b) => sum + calculateBookingEQ(b), 0);
 
     setSplitModalData(null);
+    if (layoutRef.current === 'phone') setPhoneRoute(prev => prev ? { ...prev, routeCode, letter: newLetter } : prev);
 
     // Open the assignment picker for the NEW LETTER. canSplit is true since
     // it has zero assigned workers.
@@ -4672,7 +4969,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       .map((l: any) => l.id as string)
       .filter(id => id.startsWith('rm-') && !id.startsWith('rm-line-') && id !== 'rm-num-labels' && id !== 'rm-worker-overlay');
     if (open) {
-      if (!viewBeforeCartRef.current) viewBeforeCartRef.current = { center: map.getCenter(), zoom: map.getZoom() };
+      if (!viewBeforeCartRef.current && layoutRef.current !== 'phone') viewBeforeCartRef.current = { center: map.getCenter(), zoom: map.getZoom() };
       pinLayers.forEach(id => { try { map.setLayoutProperty(id, 'visibility', 'none'); } catch {} });
     } else {
       pinLayers.forEach(id => { try { map.setLayoutProperty(id, 'visibility', 'visible'); } catch {} });
@@ -4899,332 +5196,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     </>
   );
 
-  return (
+  // Modals shared by both layouts (they're fixed-position, so they work over
+  // either screen).
+  const sharedModals = (
     <>
-      <style>{`
-        @keyframes rmSlideIn { from { transform: translateX(-100%); } to { transform: translateX(0); } }
-        @keyframes rmSlideOut { from { transform: translateX(0); } to { transform: translateX(-100%); } }
-      `}</style>
-
-      <div
-        className="relative w-full flex flex-row"
-        style={{ height: 'calc(100vh - 160px)' }}
-      >
-
-        {/* CART MAP PANEL — map-logsheet carts; takes the sidebar's place */}
-        {cartPanel && (
-          <div
-            className="flex-shrink-0 w-[max(380px,40%)] max-w-[90vw] bg-gray-900 border-r border-gray-700 z-30 shadow-2xl flex flex-col h-full"
-            style={{ animation: 'rmSlideIn 0.2s ease-out forwards' }}
-          >
-            <CartMapPanel
-              key={cartPanel.sessionId}
-              cart={cartPanel}
-              routeCodes={cartPanelRouteCodes}
-              sessionDate={cartPanelSessionDate}
-              commandCenterId={commandCenterService.getCurrentCommandCenterId()}
-              map={mapRef.current}
-              mapLoaded={mapLoaded}
-              header={renderCartHeader(cartPanel)}
-              details={renderCartDetails(cartPanel)}
-            />
-          </div>
-        )}
-
-        {/* SIDEBAR */}
-        {!cartPanel && sidebarOpen && (
-          <div
-            className="flex-shrink-0 w-[min(380px,90vw)] bg-gray-900 border-r border-gray-700 z-30 shadow-2xl flex flex-col h-full"
-            style={{ animation: 'rmSlideIn 0.2s ease-out forwards' }}
-          >
-            {/* Header */}
-            <div className="flex-shrink-0 p-3 border-b border-gray-700 bg-gray-900/95">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">
-                  {sidebarMode === 'staff' ? 'Staff' : 'Routes'}
-                </span>
-                <button
-                  onClick={() => setSidebarOpen(false)}
-                  className="w-7 h-7 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 flex items-center justify-center"
-                  title="Close sidebar"
-                >
-                  <ChevronLeft size={14} />
-                </button>
-              </div>
-
-              <div className="flex bg-gray-800 rounded-lg p-0.5 mb-3">
-                <button
-                  onClick={() => setSidebarMode('staff')}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors ${
-                    sidebarMode === 'staff' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
-                  }`}
-                >
-                  <Users size={12} className="inline mr-1" />
-                  Staff
-                </button>
-                <button
-                  onClick={() => setSidebarMode('routes')}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors ${
-                    sidebarMode === 'routes' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
-                  }`}
-                >
-                  <MapPin size={12} className="inline mr-1" />
-                  Routes
-                </button>
-              </div>
-
-              {sidebarMode === 'staff' && (
-                <select
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value as SortOption)}
-                  className="w-full bg-gray-800 text-white text-xs rounded-md px-2 py-1.5 border border-gray-700"
-                >
-                  <option value="recent">Most recent</option>
-                  <option value="alpha">Alphabetical</option>
-                  <option value="steps">Steps</option>
-                  <option value="equiv">EQ</option>
-                  <option value="upGross">Upsell $</option>
-                </select>
-              )}
-            </div>
-
-            {/* Body — scrollable */}
-            <div className="flex-1 overflow-y-auto p-2 space-y-2">
-
-              {/* STAFF MODE — workers (aeration) */}
-              {sidebarMode === 'staff' && !isTeamSeason && sortedWorkerCards.map(card => {
-                const canNav = workerCanNavigate(card);
-                const { hasFlag, flags } = computeRedFlags(card.financialStore);
-                return (
-                  <div
-                    key={card.worker.contractorId}
-                    onClick={() => setSelectedWorkerForModal(card)}
-                    className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-white font-bold text-sm truncate">
-                            {card.worker.firstName} {card.worker.lastName}
-                          </span>
-                          <ActivityBadge lastMs={latestMs(card.lastActiveTimestamp)} nowMs={activityNow} />
-                          {hasFlag && (<span title={`Red flags: ${flags.join(', ')}`} className="text-red-400"><AlertTriangle size={12} /></span>)}
-                        </div>
-                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1.5 text-[10px] text-gray-300">
-                          <span>{card.stats.steps} steps</span><span className="text-gray-600">•</span>
-                          <span className={card.stats.pending > 0 ? 'text-amber-400' : ''}>{card.stats.pending} pend</span><span className="text-gray-600">•</span>
-                          <span>{card.stats.eq.toFixed(1)} EQ</span><span className="text-gray-600">•</span>
-                          <span>{card.stats.upsellCount} up</span><span className="text-gray-600">•</span>
-                          <span>${card.stats.upsellGross.toFixed(0)}</span>
-                        </div>
-                      </div>
-                      <div className="flex-shrink-0 flex items-center gap-1">
-                        {canNav && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleNavigateToWorker(card); }}
-                            className="w-7 h-7 rounded-md bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white flex items-center justify-center transition-colors"
-                            title={`Navigate to ${card.worker.firstName}`}
-                          ><Navigation2 size={13} /></button>
-                        )}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleViewLogsheet(card.worker); }}
-                          className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
-                          title="Open logsheet"
-                        ><Eye size={13} /></button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* STAFF MODE — carts (team seasons) */}
-              {sidebarMode === 'staff' && isTeamSeason && sortedCartCards.map(cart => {
-                const canNav = cartCanNavigate(cart);
-                const { hasFlag, flags } = computeRedFlags(cart.sharedFinancialStore);
-                const label = cart.members.length > 1
-                  ? cart.members.map(m => m.firstName).join(' & ')
-                  : `${cart.members[0]?.firstName || ''} ${cart.members[0]?.lastName || ''}`.trim() || cart.teamId;
-                return (
-                  <div
-                    key={cart.sessionId}
-                    onClick={() => setSelectedCartForModal(cart)}
-                    className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          {cart.isRcCart && <Truck size={11} className="text-orange-400 flex-shrink-0" title="Ramp Crew" />}
-                          <span className="text-white font-bold text-sm truncate">{label}</span>
-                          <ActivityBadge lastMs={latestMs(cart.lastActiveTimestamp, cartKnockSummary.get(cart.sessionId)?.last?.t)} nowMs={activityNow} />
-                          {hasFlag && (<span title={`Red flags: ${flags.join(', ')}`} className="text-red-400"><AlertTriangle size={12} /></span>)}
-                        </div>
-                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1.5 text-[10px] text-gray-300">
-                          <span>{cart.stats.steps} steps</span><span className="text-gray-600">•</span>
-                          <span className={cart.stats.pending > 0 ? 'text-amber-400' : ''}>{cart.stats.pending} pend</span><span className="text-gray-600">•</span>
-                          <span>{cart.stats.eq.toFixed(1)} EQ</span><span className="text-gray-600">•</span>
-                          <span>{cart.stats.upsellCount} up</span><span className="text-gray-600">•</span>
-                          <span>${cart.stats.upsellGross.toFixed(0)}</span>
-                          {cart.stats.pendingSaleCount > 0 && (<><span className="text-gray-600">•</span><span className="text-amber-400">{cart.stats.pendingSaleCount} sale</span></>)}
-                        </div>
-                        {(() => {
-                          const k = cartKnockSummary.get(cart.sessionId);
-                          if (!k) return null;
-                          return (
-                            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1 text-[10px] text-gray-300">
-                              <span>{k.knocks} knocks</span><span className="text-gray-600">•</span>
-                              <span className={k.no > 0 ? 'text-red-400' : ''}>{k.no} no</span><span className="text-gray-600">•</span>
-                              <span className={k.goBack > 0 ? 'text-orange-300' : ''} title="Go-backs">{k.goBack} GB</span><span className="text-gray-600">•</span>
-                              <span className={k.invalid > 0 ? 'text-pink-300' : ''} title="Invalid">{k.invalid} inv</span><span className="text-gray-600">•</span>
-                              <span className="text-blue-300" title={`${k.touched} of ${k.total} houses knocked or sold today`}>{k.total ? `${Math.round(k.pct * 100)}% cov` : '— cov'}</span>
-                            </div>
-                          );
-                        })()}
-                      </div>
-                      <div className="flex-shrink-0 flex items-center gap-1">
-                        {canNav && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleNavigateToCart(cart); }}
-                            className="w-7 h-7 rounded-md bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white flex items-center justify-center transition-colors"
-                            title={`Navigate to ${label}`}
-                          ><Navigation2 size={13} /></button>
-                        )}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleViewLogsheet(cart.members[0], cart.members); }}
-                          className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
-                          title="Open logsheet"
-                        ><Eye size={13} /></button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {/* ROUTES MODE — SPLIT-AWARE.
-                  Each card shows its display code (e.g. "BIN09a" for split halves).
-                  Split button appears only on cards that are: not split AND not assigned. */}
-              {sidebarMode === 'routes' && routeCardData.map(rc => (
-                <div
-                  key={`${rc.baseRouteCode}-${rc.letter || 'whole'}`}
-                  onClick={() => {
-                    // V2 design: sidebar card tap opens the assignment modal
-                    // (matching the route-line tap on the map). The Split
-                    // button is inside the modal, so this is the entry point
-                    // for both assignment and split flows.
-                    setAssignModalData({
-                      routeCode: rc.baseRouteCode,
-                      displayRouteCode: rc.displayRouteCode,
-                      routeColor: rc.routeColor,
-                      prebookCount: rc.prebookCount,
-                      prepayCount: rc.prepayCount,
-                      totalEQ: rc.totalEQ,
-                      currentWorkerIds: rc.assignedWorkerIds,
-                      letter: rc.letter,
-                      canSplit: rc.assignedWorkerIds.length === 0,
-                    });
-                  }}
-                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="h-8 px-2 min-w-[44px] rounded-md flex items-center justify-center font-bold text-white text-[11px] flex-shrink-0 leading-none whitespace-nowrap"
-                      style={{ background: rc.routeColor }}
-                    >
-                      {rc.displayRouteCode}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-white text-xs font-bold truncate">
-                        {rc.assignedWorkerLabel || <span className="text-amber-400">⚠ Unassigned</span>}
-                      </div>
-                      <div className="text-[10px] text-gray-400">
-                        {rc.prebookCount} jobs • {rc.prepayCount} prepaid • {rc.totalEQ.toFixed(1)} EQ
-                      </div>
-                    </div>
-                    {/* SPLIT BUTTON removed in v2 — Split now lives inside the
-                        assignment modal (opens when the card or line is tapped),
-                        which is also how the user splits buckets recursively. */}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* MAP AREA */}
-        <div className="flex-1 relative h-full min-w-0">
-          <div ref={mapContainerRef} className="absolute inset-0 bg-gray-900" />
-
-          {routesLoading && (
-            <div className="absolute top-3 left-3 z-30 bg-gray-900/90 text-white text-xs px-3 py-2 rounded-lg flex items-center gap-2 shadow-lg">
-              <Loader size={14} className="animate-spin" />
-              Loading routes…
-            </div>
-          )}
-
-          {!routesLoading && mapLoaded && routeMapData.length === 0 && myRouteCodes.length > 0 && (
-            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-amber-900/90 text-amber-100 text-xs px-3 py-2 rounded-lg shadow-lg max-w-md text-center">
-              <AlertCircle size={14} className="inline mr-1" />
-              No approved route geometry found. Have a Senior RM approve routes.
-            </div>
-          )}
-
-          {compassNeedsPermission && !navState && (
-            <button
-              onClick={handleEnableCompass}
-              className="absolute top-3 left-1/2 -translate-x-1/2 z-[55] bg-blue-600/95 hover:bg-blue-500 text-white text-xs font-bold px-3 py-2 rounded-lg shadow-xl flex items-center gap-2 border border-blue-400 transition-colors"
-              title="Enable compass for nav arrow rotation"
-            >
-              <Compass size={14} />
-              Enable compass
-            </button>
-          )}
-
-          {!sidebarOpen && !navState && (
-            <button
-              onClick={() => setSidebarOpen(true)}
-              className="absolute top-3 left-3 z-40 w-11 h-11 bg-gray-900/95 hover:bg-gray-800 text-white rounded-lg shadow-xl flex items-center justify-center transition-all border border-gray-700"
-              title="Open sidebar"
-            ><LayoutList size={20} /></button>
-          )}
-
-          {(onRouteWorkerCard || onRouteCartCard) && !navState && (
-            <div
-              onClick={() => {
-                if (onRouteCartCard) setSelectedCartForModal(onRouteCartCard);
-                else if (onRouteWorkerCard) setSelectedWorkerForModal(onRouteWorkerCard);
-              }}
-              className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 bg-gray-900/95 backdrop-blur-sm border border-blue-500/60 rounded-xl shadow-2xl px-4 py-2.5 cursor-pointer hover:bg-gray-800 transition-colors flex items-center gap-3 max-w-[90%]"
-            >
-              <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
-              <div className="min-w-0">
-                <div className="text-[10px] text-blue-300 font-bold uppercase tracking-wide">On route</div>
-                <div className="text-white text-sm font-bold truncate">
-                  {onRouteCartCard
-                    ? (onRouteCartCard.members.length > 1
-                        ? onRouteCartCard.members.map(m => m.firstName).join(' & ')
-                        : `${onRouteCartCard.members[0]?.firstName} ${onRouteCartCard.members[0]?.lastName.charAt(0)}.`)
-                    : `${onRouteWorkerCard!.worker.firstName} ${onRouteWorkerCard!.worker.lastName.charAt(0)}.`}
-                  {onRouteRedFlags.hasFlag && (<AlertTriangle size={12} className="inline ml-1.5 text-red-400" />)}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {navState && mapRef.current && (
-            <RMNavigation
-              map={mapRef.current}
-              destination={navState.destination}
-              onArrived={handleNavArrived}
-              onCancel={handleNavCancel}
-              initialHeading={
-                gpsHeadingRef.current != null
-                  && (Date.now() - gpsHeadingUpdatedAtRef.current) < 300000
-                  ? gpsHeadingRef.current
-                  : null
-              }
-            />
-          )}
-        </div>
-
         {/* WORKER DETAIL MODAL — WIDENED to max-w-3xl */}
         {selectedWorkerForModal && (
           <div
@@ -5343,11 +5318,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             Split button at the TOP (enabled when bucket has zero assigned workers). */}
         {assignModalData && (
           <div
-            className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+            className={isPhone
+              ? 'fixed inset-0 bg-black/60 z-50 flex items-end justify-center'
+              : 'fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4'}
             onClick={() => setAssignModalData(null)}
           >
             <div
-              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
+              className={isPhone
+                ? 'bg-gray-900 border-t border-gray-700 rounded-t-2xl w-full max-h-[88vh] flex flex-col'
+                : 'bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col'}
+              style={isPhone ? { paddingBottom: 'env(safe-area-inset-bottom)' } : undefined}
               onClick={e => e.stopPropagation()}
             >
               <div className="flex-shrink-0 p-4 border-b border-gray-700 flex items-center justify-between">
@@ -5363,10 +5343,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                     <div className="text-[10px] text-gray-400">
                       {assignModalData.prebookCount} jobs • {assignModalData.prepayCount} prepaid • {assignModalData.totalEQ.toFixed(1)} EQ
                     </div>
-                    <div className="text-[10px] text-amber-400 font-mono">
+                    {!isPhone && <div className="text-[10px] text-amber-400 font-mono">
                       DIAG letter={String(assignModalData.letter)} | split buckets=[
                       {(routeSplitsByCode.get(assignModalData.routeCode)?.buckets || []).map(b => `${b.letter}:${(b.assignedWorkers||[]).length}`).join(', ')}]
-                    </div>
+                    </div>}
                   </div>
                 </div>
                 <button
@@ -5468,7 +5448,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                         key={sessionWorkerId}
                         onClick={() => handleAssignRoute(sessionWorker.contractorId)}
                         disabled={assignLoading}
-                        className={`w-full text-left px-3 py-2.5 rounded-md text-xs font-medium border ${
+                        className={`w-full text-left px-3 ${isPhone ? 'py-3.5 text-sm rounded-xl' : 'py-2.5 text-xs rounded-md'} font-medium border ${
                           isAssigned ? 'bg-blue-900/40 border-blue-700 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700'
                         } disabled:opacity-50`}
                       >
@@ -5499,7 +5479,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
                         key={w.contractorId}
                         onClick={() => handleAssignRoute(w.contractorId)}
                         disabled={assignLoading}
-                        className={`w-full text-left px-3 py-2.5 rounded-md text-xs font-medium border ${
+                        className={`w-full text-left px-3 ${isPhone ? 'py-3.5 text-sm rounded-xl' : 'py-2.5 text-xs rounded-md'} font-medium border ${
                           isAssigned ? 'bg-blue-900/40 border-blue-700 text-blue-200' : 'bg-gray-800 hover:bg-gray-700 text-white border-gray-700'
                         } disabled:opacity-50`}
                       >
@@ -5552,11 +5532,11 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
 
         {transferModalData && (
           <div
-            className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+            className={`fixed inset-0 bg-black/60 z-50 flex justify-center ${isPhone ? 'items-end' : 'items-center p-4'}`}
             onClick={() => setTransferModalData(null)}
           >
             <div
-              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md p-4"
+              className={isPhone ? 'bg-gray-900 border-t border-gray-700 rounded-t-2xl w-full p-4 pb-8 max-h-[80vh] overflow-y-auto' : 'bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md p-4'}
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-3">
@@ -5920,7 +5900,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         {/* TAPPED AN EXISTING PIN — navigate to it or bin it. No confirmation on
             Remove: you had to deliberately open this to reach the button, and
             re-dropping a pin takes five seconds. */}
-        {selectedMapPin && (
+        {selectedMapPin && !isPhone && (
           <div
             className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4"
             onClick={() => setSelectedMapPin(null)}
@@ -5983,6 +5963,467 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             onConfirm={handleSplitConfirm}
           />
         )}
+
+      {phonePclRoute && (
+        <RoutePCLModal
+          routeCode={phonePclRoute.routeCode}
+          displayRouteCode={phonePclRoute.display}
+          routeColor={phonePclRoute.color}
+          clients={pclByRoute.get(phonePclRoute.routeCode) || []}
+          seasonType={seasonType}
+          onClose={() => setPhonePclRoute(null)}
+        />
+      )}
+    </>
+  );
+
+
+  // ===========================================================================
+  // PHONE LAYOUT — same engine, phone screen (mobile/RMPhoneLayout).
+  // ===========================================================================
+  if (isPhone && phone) {
+    const phoneCartPanelNode = cartPanel ? (
+      <CartMapPanel
+        key={`${cartPanel.sessionId}|${cartPanelRouteCodes.join(',')}`}
+        cart={cartPanel}
+        routeCodes={cartPanelRouteCodes}
+        sessionDate={cartPanelSessionDate}
+        commandCenterId={commandCenterService.getCurrentCommandCenterId()}
+        map={mapRef.current}
+        mapLoaded={mapLoaded}
+        header={null}
+        details={null}
+        skipFit
+      />
+    ) : null;
+
+    const onRouteCrew: PhoneCrew | null = onRouteCartCard
+      ? { type: 'cart', key: `cart:${onRouteCartCard.sessionId}`, cart: onRouteCartCard }
+      : onRouteWorkerCard
+        ? { type: 'worker', key: `worker:${onRouteWorkerCard.worker.contractorId}`, card: onRouteWorkerCard }
+        : null;
+
+    const ctx: RMPhoneCtx = {
+      shell: phone,
+      mapContainerRef,
+      map: mapRef.current,
+      mapLoaded,
+      isTeamSeason,
+      isSealing,
+      routesLoading,
+      noGeometry: !routesLoading && mapLoaded && routeMapData.length === 0 && myRouteCodes.length > 0,
+      compassNeedsPermission: compassNeedsPermission && !navState,
+      onEnableCompass: handleEnableCompass,
+      activityNow,
+      filterVisibility,
+      geocodeProgress,
+      centerOnLocation,
+      pinMode,
+
+      sortBy,
+      onSortBy: setSortBy,
+      carts: sortedCartCards,
+      workers: sortedWorkerCards,
+      knock: cartKnockSummary,
+      crewMoney: phoneCrewMoney,
+      onEnterCrew: phoneEnterCrew,
+      onRouteCrewLabel: onRouteCrew ? crewLabel(onRouteCrew) : null,
+      onOnRouteTap: () => { if (onRouteCrew) phoneEnterCrew(onRouteCrew.key); },
+
+      phoneRoute,
+      route: phoneRouteCard,
+      crew: phoneCrew,
+      crewRoutes: phoneCrewRoutesFor(phoneCrew),
+      onEnterRoute: (routeCode, letter) => setPhoneRoute(prev => ({ routeCode, letter, crewKey: prev?.crewKey })),
+      onExitRoute: () => { setPhonePin(null); setPhoneRoute(null); },
+      onAssign: phoneOpenAssign,
+      onNavigateCrew: () => {
+        if (!phoneCrew) return;
+        if (phoneCrew.type === 'cart') handleNavigateToCart(phoneCrew.cart);
+        else handleNavigateToWorker(phoneCrew.card);
+      },
+      canNavigateCrew: !!phoneCrew && (phoneCrew.type === 'cart' ? cartCanNavigate(phoneCrew.cart) : workerCanNavigate(phoneCrew.card)),
+      onNavigateRoute: phoneNavigateRoute,
+      onViewLogsheet: crew => {
+        if (crew.type === 'cart') handleViewLogsheet(crew.cart.members[0], crew.cart.members);
+        else handleViewLogsheet(crew.card.worker);
+      },
+      cartPanelNode: phoneCartPanelNode,
+      cartDetails: cart => renderCartDetails(cart),
+      workerJobs: card => (
+        <ContractorJobs
+          bookings={card.displayBookings}
+          financialStore={card.financialStore}
+          seasonType={seasonType}
+        />
+      ),
+      routeBookings: phoneRouteBookings,
+      onShowBooking: phoneShowBooking,
+      pclCount: phoneRoute?.routeCode ? (pclByRoute.get(phoneRoute.routeCode) || []).length : 0,
+      onOpenPcl: () => {
+        if (!phoneRoute?.routeCode) return;
+        setPhonePclRoute({
+          routeCode: phoneRoute.routeCode,
+          display: phoneRouteCard?.displayRouteCode || phoneRoute.routeCode,
+          color: phoneRouteCard?.routeColor || routeColorMap.get(phoneRoute.routeCode) || '#6b7280',
+        });
+      },
+      bottleSavingId,
+      onAdjustBottles: (cart, d) => { handleAdjustBottles(cart, d); },
+      onToggleUpsells: card => { handleToggleUpsells(card.worker.contractorId, card.upsellsEnabled); },
+
+      pin: phonePin,
+      onClosePin: () => setPhonePin(null),
+      mapPin: selectedMapPin,
+      onCloseMapPin: () => setSelectedMapPin(null),
+      currentUserId: currentUser.userId,
+      managerName: id => allManagers.find(m => m.userId === id)?.name || 'another manager',
+      onNavigateToPoint: dest => phoneNavigateTo(dest, `point:${dest.lat.toFixed(5)},${dest.lng.toFixed(5)}`),
+      onNavigateToMapPin: handleNavigateToPin,
+      onRemoveMapPin: handleRemovePin,
+
+      nav: navState ? navState.destination : null,
+      onNavEnd: () => { handleNavCancel(); setPhoneRefit(n => n + 1); },
+      onNavArrived: () => { handleNavArrived(); setPhoneRefit(n => n + 1); },
+
+      onDrawerHeight: h => { phoneDrawerHRef.current = h; },
+    };
+
+    return (
+      <>
+        <RMPhoneLayout ctx={ctx} />
+        {sharedModals}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <style>{`
+        @keyframes rmSlideIn { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+        @keyframes rmSlideOut { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+      `}</style>
+
+      <div
+        className="relative w-full flex flex-row"
+        style={{ height: 'calc(100vh - 160px)' }}
+      >
+
+        {/* CART MAP PANEL — map-logsheet carts; takes the sidebar's place */}
+        {cartPanel && (
+          <div
+            className="flex-shrink-0 w-[max(380px,40%)] max-w-[90vw] bg-gray-900 border-r border-gray-700 z-30 shadow-2xl flex flex-col h-full"
+            style={{ animation: 'rmSlideIn 0.2s ease-out forwards' }}
+          >
+            <CartMapPanel
+              key={cartPanel.sessionId}
+              cart={cartPanel}
+              routeCodes={cartPanelRouteCodes}
+              sessionDate={cartPanelSessionDate}
+              commandCenterId={commandCenterService.getCurrentCommandCenterId()}
+              map={mapRef.current}
+              mapLoaded={mapLoaded}
+              header={renderCartHeader(cartPanel)}
+              details={renderCartDetails(cartPanel)}
+            />
+          </div>
+        )}
+
+        {/* SIDEBAR */}
+        {!cartPanel && sidebarOpen && (
+          <div
+            className="flex-shrink-0 w-[min(380px,90vw)] bg-gray-900 border-r border-gray-700 z-30 shadow-2xl flex flex-col h-full"
+            style={{ animation: 'rmSlideIn 0.2s ease-out forwards' }}
+          >
+            {/* Header */}
+            <div className="flex-shrink-0 p-3 border-b border-gray-700 bg-gray-900/95">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] text-gray-400 uppercase tracking-wide font-bold">
+                  {sidebarMode === 'staff' ? 'Staff' : 'Routes'}
+                </span>
+                <button
+                  onClick={() => setSidebarOpen(false)}
+                  className="w-7 h-7 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 flex items-center justify-center"
+                  title="Close sidebar"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+              </div>
+
+              <div className="flex bg-gray-800 rounded-lg p-0.5 mb-3">
+                <button
+                  onClick={() => setSidebarMode('staff')}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors ${
+                    sidebarMode === 'staff' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <Users size={12} className="inline mr-1" />
+                  Staff
+                </button>
+                <button
+                  onClick={() => setSidebarMode('routes')}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors ${
+                    sidebarMode === 'routes' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <MapPin size={12} className="inline mr-1" />
+                  Routes
+                </button>
+              </div>
+
+              {sidebarMode === 'staff' && (
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as SortOption)}
+                  className="w-full bg-gray-800 text-white text-xs rounded-md px-2 py-1.5 border border-gray-700"
+                >
+                  <option value="recent">Most recent</option>
+                  <option value="alpha">Alphabetical</option>
+                  <option value="steps">Steps</option>
+                  <option value="equiv">EQ</option>
+                  <option value="upGross">Upsell $</option>
+                </select>
+              )}
+            </div>
+
+            {/* Body — scrollable */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-2">
+
+              {/* STAFF MODE — workers (aeration) */}
+              {sidebarMode === 'staff' && !isTeamSeason && sortedWorkerCards.map(card => {
+                const canNav = workerCanNavigate(card);
+                const { hasFlag, flags } = computeRedFlags(card.financialStore);
+                return (
+                  <div
+                    key={card.worker.contractorId}
+                    onClick={() => setSelectedWorkerForModal(card)}
+                    className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-white font-bold text-sm truncate">
+                            {card.worker.firstName} {card.worker.lastName}
+                          </span>
+                          <ActivityBadge lastMs={latestMs(card.lastActiveTimestamp)} nowMs={activityNow} />
+                          {hasFlag && (<span title={`Red flags: ${flags.join(', ')}`} className="text-red-400"><AlertTriangle size={12} /></span>)}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1.5 text-[10px] text-gray-300">
+                          <span>{card.stats.steps} steps</span><span className="text-gray-600">•</span>
+                          <span className={card.stats.pending > 0 ? 'text-amber-400' : ''}>{card.stats.pending} pend</span><span className="text-gray-600">•</span>
+                          <span>{card.stats.eq.toFixed(1)} EQ</span><span className="text-gray-600">•</span>
+                          <span>{card.stats.upsellCount} up</span><span className="text-gray-600">•</span>
+                          <span>${card.stats.upsellGross.toFixed(0)}</span>
+                        </div>
+                      </div>
+                      <div className="flex-shrink-0 flex items-center gap-1">
+                        {canNav && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleNavigateToWorker(card); }}
+                            className="w-7 h-7 rounded-md bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white flex items-center justify-center transition-colors"
+                            title={`Navigate to ${card.worker.firstName}`}
+                          ><Navigation2 size={13} /></button>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleViewLogsheet(card.worker); }}
+                          className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                          title="Open logsheet"
+                        ><Eye size={13} /></button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* STAFF MODE — carts (team seasons) */}
+              {sidebarMode === 'staff' && isTeamSeason && sortedCartCards.map(cart => {
+                const canNav = cartCanNavigate(cart);
+                const { hasFlag, flags } = computeRedFlags(cart.sharedFinancialStore);
+                const label = cart.members.length > 1
+                  ? cart.members.map(m => m.firstName).join(' & ')
+                  : `${cart.members[0]?.firstName || ''} ${cart.members[0]?.lastName || ''}`.trim() || cart.teamId;
+                return (
+                  <div
+                    key={cart.sessionId}
+                    onClick={() => setSelectedCartForModal(cart)}
+                    className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          {cart.isRcCart && <Truck size={11} className="text-orange-400 flex-shrink-0" title="Ramp Crew" />}
+                          <span className="text-white font-bold text-sm truncate">{label}</span>
+                          <ActivityBadge lastMs={latestMs(cart.lastActiveTimestamp, cartKnockSummary.get(cart.sessionId)?.last?.t)} nowMs={activityNow} />
+                          {hasFlag && (<span title={`Red flags: ${flags.join(', ')}`} className="text-red-400"><AlertTriangle size={12} /></span>)}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1.5 text-[10px] text-gray-300">
+                          <span>{cart.stats.steps} steps</span><span className="text-gray-600">•</span>
+                          <span className={cart.stats.pending > 0 ? 'text-amber-400' : ''}>{cart.stats.pending} pend</span><span className="text-gray-600">•</span>
+                          <span>{cart.stats.eq.toFixed(1)} EQ</span><span className="text-gray-600">•</span>
+                          <span>{cart.stats.upsellCount} up</span><span className="text-gray-600">•</span>
+                          <span>${cart.stats.upsellGross.toFixed(0)}</span>
+                          {cart.stats.pendingSaleCount > 0 && (<><span className="text-gray-600">•</span><span className="text-amber-400">{cart.stats.pendingSaleCount} sale</span></>)}
+                        </div>
+                        {(() => {
+                          const k = cartKnockSummary.get(cart.sessionId);
+                          if (!k) return null;
+                          return (
+                            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-1 text-[10px] text-gray-300">
+                              <span>{k.knocks} knocks</span><span className="text-gray-600">•</span>
+                              <span className={k.no > 0 ? 'text-red-400' : ''}>{k.no} no</span><span className="text-gray-600">•</span>
+                              <span className={k.goBack > 0 ? 'text-orange-300' : ''} title="Go-backs">{k.goBack} GB</span><span className="text-gray-600">•</span>
+                              <span className={k.invalid > 0 ? 'text-pink-300' : ''} title="Invalid">{k.invalid} inv</span><span className="text-gray-600">•</span>
+                              <span className="text-blue-300" title={`${k.touched} of ${k.total} houses knocked or sold today`}>{k.total ? `${Math.round(k.pct * 100)}% cov` : '— cov'}</span>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                      <div className="flex-shrink-0 flex items-center gap-1">
+                        {canNav && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleNavigateToCart(cart); }}
+                            className="w-7 h-7 rounded-md bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white flex items-center justify-center transition-colors"
+                            title={`Navigate to ${label}`}
+                          ><Navigation2 size={13} /></button>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleViewLogsheet(cart.members[0], cart.members); }}
+                          className="w-7 h-7 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-300 flex items-center justify-center"
+                          title="Open logsheet"
+                        ><Eye size={13} /></button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* ROUTES MODE — SPLIT-AWARE.
+                  Each card shows its display code (e.g. "BIN09a" for split halves).
+                  Split button appears only on cards that are: not split AND not assigned. */}
+              {sidebarMode === 'routes' && routeCardData.map(rc => (
+                <div
+                  key={`${rc.baseRouteCode}-${rc.letter || 'whole'}`}
+                  onClick={() => {
+                    // V2 design: sidebar card tap opens the assignment modal
+                    // (matching the route-line tap on the map). The Split
+                    // button is inside the modal, so this is the entry point
+                    // for both assignment and split flows.
+                    setAssignModalData({
+                      routeCode: rc.baseRouteCode,
+                      displayRouteCode: rc.displayRouteCode,
+                      routeColor: rc.routeColor,
+                      prebookCount: rc.prebookCount,
+                      prepayCount: rc.prepayCount,
+                      totalEQ: rc.totalEQ,
+                      currentWorkerIds: rc.assignedWorkerIds,
+                      letter: rc.letter,
+                      canSplit: rc.assignedWorkerIds.length === 0,
+                    });
+                  }}
+                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg p-2.5 cursor-pointer transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="h-8 px-2 min-w-[44px] rounded-md flex items-center justify-center font-bold text-white text-[11px] flex-shrink-0 leading-none whitespace-nowrap"
+                      style={{ background: rc.routeColor }}
+                    >
+                      {rc.displayRouteCode}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-white text-xs font-bold truncate">
+                        {rc.assignedWorkerLabel || <span className="text-amber-400">⚠ Unassigned</span>}
+                      </div>
+                      <div className="text-[10px] text-gray-400">
+                        {rc.prebookCount} jobs • {rc.prepayCount} prepaid • {rc.totalEQ.toFixed(1)} EQ
+                      </div>
+                    </div>
+                    {/* SPLIT BUTTON removed in v2 — Split now lives inside the
+                        assignment modal (opens when the card or line is tapped),
+                        which is also how the user splits buckets recursively. */}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* MAP AREA */}
+        <div className="flex-1 relative h-full min-w-0">
+          <div ref={mapContainerRef} className="absolute inset-0 bg-gray-900" />
+
+          {routesLoading && (
+            <div className="absolute top-3 left-3 z-30 bg-gray-900/90 text-white text-xs px-3 py-2 rounded-lg flex items-center gap-2 shadow-lg">
+              <Loader size={14} className="animate-spin" />
+              Loading routes…
+            </div>
+          )}
+
+          {!routesLoading && mapLoaded && routeMapData.length === 0 && myRouteCodes.length > 0 && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-amber-900/90 text-amber-100 text-xs px-3 py-2 rounded-lg shadow-lg max-w-md text-center">
+              <AlertCircle size={14} className="inline mr-1" />
+              No approved route geometry found. Have a Senior RM approve routes.
+            </div>
+          )}
+
+          {compassNeedsPermission && !navState && (
+            <button
+              onClick={handleEnableCompass}
+              className="absolute top-3 left-1/2 -translate-x-1/2 z-[55] bg-blue-600/95 hover:bg-blue-500 text-white text-xs font-bold px-3 py-2 rounded-lg shadow-xl flex items-center gap-2 border border-blue-400 transition-colors"
+              title="Enable compass for nav arrow rotation"
+            >
+              <Compass size={14} />
+              Enable compass
+            </button>
+          )}
+
+          {!sidebarOpen && !navState && (
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="absolute top-3 left-3 z-40 w-11 h-11 bg-gray-900/95 hover:bg-gray-800 text-white rounded-lg shadow-xl flex items-center justify-center transition-all border border-gray-700"
+              title="Open sidebar"
+            ><LayoutList size={20} /></button>
+          )}
+
+          {(onRouteWorkerCard || onRouteCartCard) && !navState && (
+            <div
+              onClick={() => {
+                if (onRouteCartCard) setSelectedCartForModal(onRouteCartCard);
+                else if (onRouteWorkerCard) setSelectedWorkerForModal(onRouteWorkerCard);
+              }}
+              className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 bg-gray-900/95 backdrop-blur-sm border border-blue-500/60 rounded-xl shadow-2xl px-4 py-2.5 cursor-pointer hover:bg-gray-800 transition-colors flex items-center gap-3 max-w-[90%]"
+            >
+              <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+              <div className="min-w-0">
+                <div className="text-[10px] text-blue-300 font-bold uppercase tracking-wide">On route</div>
+                <div className="text-white text-sm font-bold truncate">
+                  {onRouteCartCard
+                    ? (onRouteCartCard.members.length > 1
+                        ? onRouteCartCard.members.map(m => m.firstName).join(' & ')
+                        : `${onRouteCartCard.members[0]?.firstName} ${onRouteCartCard.members[0]?.lastName.charAt(0)}.`)
+                    : `${onRouteWorkerCard!.worker.firstName} ${onRouteWorkerCard!.worker.lastName.charAt(0)}.`}
+                  {onRouteRedFlags.hasFlag && (<AlertTriangle size={12} className="inline ml-1.5 text-red-400" />)}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {navState && mapRef.current && (
+            <RMNavigation
+              map={mapRef.current}
+              destination={navState.destination}
+              onArrived={handleNavArrived}
+              onCancel={handleNavCancel}
+              initialHeading={
+                gpsHeadingRef.current != null
+                  && (Date.now() - gpsHeadingUpdatedAtRef.current) < 300000
+                  ? gpsHeadingRef.current
+                  : null
+              }
+            />
+          )}
+        </div>
+
+        {sharedModals}
 
       </div>
     </>
