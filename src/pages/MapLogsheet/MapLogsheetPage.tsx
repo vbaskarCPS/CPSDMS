@@ -234,6 +234,55 @@ const MapLogsheetPage: React.FC = () => {
   // Every stop done (or the RM cleared them) → out of navigation.
   useEffect(() => { if (driverNav && driverStops.length === 0) setDriverNav(false); }, [driverNav, driverStops.length]);
 
+  // While a worker driver is navigating, share their position with the RM map
+  // every 8 seconds (instead of the usual every 2 minutes), with heading and
+  // the stop they're heading to. Cleared the moment navigation ends.
+  const navShareRef = useRef<{ label: string; left: number }>({ label: '', left: 0 });
+  navShareRef.current = { label: driverStops[0]?.label || '', left: driverStops.length };
+  useEffect(() => {
+    if (!driverNav || !worker?.contractorId || !('geolocation' in navigator)) return;
+    if (trainingService.isTrainingMode()) return;
+    const workerId = worker.contractorId;
+    const ccId = cc?.id || commandCenterService.getCurrentCommandCenterId();
+    if (!ccId) return;
+    let last: { lat: number; lng: number; heading: number | null } | null = null;
+    let prev: { lat: number; lng: number } | null = null;
+    let sentAny = false;
+    const send = async () => {
+      if (!last) return;
+      try {
+        await supabase.from('worker_locations').upsert({
+          worker_id: workerId, command_center_id: ccId,
+          lat: last.lat, lng: last.lng, heading: last.heading,
+          updated_at: new Date().toISOString(), nav_active_at: new Date().toISOString(),
+          nav_label: navShareRef.current.label || null, nav_stops_left: navShareRef.current.left,
+        }, { onConflict: 'worker_id' });
+      } catch { /* next tick */ }
+    };
+    const watchId = navigator.geolocation.watchPosition(pos => {
+      const { latitude: lat, longitude: lng, heading, speed } = pos.coords;
+      let h: number | null = heading != null && !isNaN(heading) && (speed ?? 0) > 1 ? heading : last?.heading ?? null;
+      if (h == null && prev) {
+        const dy = lat - prev.lat, dx = (lng - prev.lng) * Math.cos(lat * Math.PI / 180);
+        if (Math.hypot(dx, dy) * 111320 > 8) h = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+      }
+      if (!prev || Math.hypot(lat - prev.lat, lng - prev.lng) * 111320 > 8) prev = { lat, lng };
+      last = { lat, lng, heading: h };
+      if (!sentAny) { sentAny = true; send(); }
+    }, () => { /* keep trying */ }, { enableHighAccuracy: true, maximumAge: 3000, timeout: 20000 });
+    const id = window.setInterval(send, 8000);
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+      clearInterval(id);
+      // Off the road: tell the RM map straight away.
+      supabase.from('worker_locations')
+        .update({ nav_active_at: null, nav_label: null, nav_stops_left: null })
+        .eq('worker_id', workerId)
+        .then(() => {}, () => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driverNav, worker?.contractorId]);
+
   const startDriverNav = () => {
     if (!driverStops.length) return;
     primeSpeech();   // voice prompts need unlocking inside the tap (iOS)

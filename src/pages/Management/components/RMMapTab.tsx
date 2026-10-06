@@ -89,6 +89,41 @@ interface WorkerLocation {
   lat: number;
   lng: number;
   updated_at: string;
+  /** Worker driver navigation (MapLogsheetPage): set every 8 s while navigating. */
+  heading?: number | null;
+  nav_active_at?: string | null;
+  nav_label?: string | null;
+  nav_stops_left?: number | null;
+}
+
+/** A worker driver counts as driving while their phone reported nav in the last 45 s. */
+const DRIVING_FRESH_MS = 45 * 1000;
+const isDriving = (l: WorkerLocation) => !!l.nav_active_at && Date.now() - new Date(l.nav_active_at).getTime() < DRIVING_FRESH_MS;
+const DRIVER_POLL_MS = 8 * 1000;
+
+/** Worker driver on the road: teal arrow (turns with their heading) + "Name → stop" tag. */
+function createDriverMarkerEl(name: string, dest: string, left: number | null | undefined): HTMLDivElement {
+  const el = document.createElement('div');
+  el.style.cssText = 'position:relative;width:34px;height:34px;cursor:pointer;user-select:none;';
+  el.innerHTML = `
+    <div data-arrow style="position:absolute;inset:0;transition:transform .6s linear;">
+      <svg width="34" height="34" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="12" cy="12" r="11" fill="${WORKER_STOP_COLOR}" stroke="#ffffff" stroke-width="2"/>
+        <path d="M12 4.5 L17 17 L12 13.8 L7 17 Z" fill="#ffffff"/>
+      </svg>
+    </div>
+    <div data-tag style="position:absolute;left:38px;top:50%;transform:translateY(-50%);white-space:nowrap;
+      background:#042f2e;color:#ccfbf1;border:1px solid ${WORKER_STOP_COLOR};border-radius:6px;padding:2px 6px;
+      font:700 11px system-ui,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.4);"></div>`;
+  setDriverMarkerText(el, name, dest, left);
+  return el;
+}
+function setDriverMarkerText(el: HTMLElement, name: string, dest: string, left: number | null | undefined) {
+  const tag = el.querySelector('[data-tag]') as HTMLElement | null;
+  if (!tag) return;
+  const more = left && left > 1 ? ` (+${left - 1})` : '';
+  tag.textContent = dest ? `${name} → ${dest}${more}` : `${name} · driving`;
+  el.title = tag.textContent;
 }
 
 interface RMMapTabProps {
@@ -2203,11 +2238,19 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     }
   }, [workers, coveredManagerIds]);
 
+  // Every 60 s normally; every 8 s while any worker driver is navigating.
+  const anyDrivingRef = useRef(false);
+  anyDrivingRef.current = workerLocations.some(isDriving);
   useEffect(() => {
     if (!mapLoaded) return;
-    fetchWorkerLocations();
-    const interval = setInterval(fetchWorkerLocations, WORKER_LOCATION_POLL_MS);
-    return () => clearInterval(interval);
+    let stopped = false;
+    let t: number | undefined;
+    const tick = async () => {
+      await fetchWorkerLocations();
+      if (!stopped) t = window.setTimeout(tick, anyDrivingRef.current ? DRIVER_POLL_MS : WORKER_LOCATION_POLL_MS);
+    };
+    tick();
+    return () => { stopped = true; if (t) clearTimeout(t); };
   }, [mapLoaded, fetchWorkerLocations]);
 
   // Where each worker's initials circle goes. For map-logsheet carts it's
@@ -2223,7 +2266,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       for (const m of cart.members) {
         const live = byId.get(m.contractorId);
         const liveT = live ? new Date(live.updated_at).getTime() : -Infinity;
-        if (last.t > liveT) {
+        if (last.t > liveT && !(live && isDriving(live))) {
           byId.set(m.contractorId, {
             worker_id: m.contractorId,
             command_center_id: live?.command_center_id || '',
@@ -2245,6 +2288,34 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     effectiveWorkerLocations.forEach(loc => {
       const worker = workers.find(w => w.contractorId === loc.worker_id);
       if (!worker) return;
+
+      // Worker driver navigating → teal arrow with where they're headed.
+      const driving = isDriving(loc);
+      const prevMarker = workerLocationMarkersRef.current.get(loc.worker_id);
+      if (prevMarker && (prevMarker.getElement().dataset.driving === '1') !== driving) {
+        prevMarker.remove();
+        workerLocationMarkersRef.current.delete(loc.worker_id);
+      }
+      if (driving) {
+        const name = worker.firstName;
+        const cur = workerLocationMarkersRef.current.get(loc.worker_id);
+        const el = cur ? cur.getElement() : createDriverMarkerEl(name, loc.nav_label || '', loc.nav_stops_left);
+        el.dataset.driving = '1';
+        el.dataset.heading = loc.heading != null ? String(loc.heading) : '';
+        setDriverMarkerText(el, name, loc.nav_label || '', loc.nav_stops_left);
+        const arrow = el.querySelector('[data-arrow]') as HTMLElement | null;
+        if (arrow) arrow.style.transform = `rotate(${loc.heading != null ? loc.heading - map.getBearing() : 0}deg)`;
+        if (cur) {
+          cur.setLngLat([loc.lng, loc.lat]);
+        } else {
+          const wid = loc.worker_id;
+          el.addEventListener('click', ev => { ev.stopPropagation(); onWorkerMarkerTapRef.current(wid); });
+          const marker = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([loc.lng, loc.lat]).addTo(map);
+          workerLocationMarkersRef.current.set(loc.worker_id, marker);
+        }
+        existingIds.delete(loc.worker_id);
+        return;
+      }
 
       const initials = `${worker.firstName.charAt(0)}${worker.lastName.charAt(0)}`.toUpperCase();
       const fullName = `${worker.firstName} ${worker.lastName}`;
@@ -2278,6 +2349,28 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       workerLocationMarkersRef.current.delete(id);
     });
   }, [effectiveWorkerLocations, mapLoaded, workers]);
+
+  // Driver arrows point the way they're driving even when the map is turned.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const onRotate = () => {
+      const b = map.getBearing();
+      workerLocationMarkersRef.current.forEach(m => {
+        const el = m.getElement();
+        if (el.dataset.driving !== '1' || !el.dataset.heading) return;
+        const arrow = el.querySelector('[data-arrow]') as HTMLElement | null;
+        if (arrow) { arrow.style.transition = 'none'; arrow.style.transform = `rotate(${Number(el.dataset.heading) - b}deg)`; }
+      });
+    };
+    const onRotateEnd = () => workerLocationMarkersRef.current.forEach(m => {
+      const arrow = m.getElement().querySelector('[data-arrow]') as HTMLElement | null;
+      if (arrow) arrow.style.transition = 'transform .6s linear';
+    });
+    map.on('rotate', onRotate);
+    map.on('rotateend', onRotateEnd);
+    return () => { map.off('rotate', onRotate); map.off('rotateend', onRotateEnd); };
+  }, [mapLoaded]);
 
   // MANAGER LOCATION poll (floater only). Fetches every reporting manager's
   // position every 8s; the marker effect filters to the covered set. Only runs
