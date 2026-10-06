@@ -38,6 +38,172 @@ export interface BuildingMatch {
   buildingToHouse: Map<number, string>;
   /** houseId → its slice of a shared building (2–10 houses, or a row of up to 12), as a polygon ring [lng,lat][]. */
   houseToSlice?: Map<string, { bid: number; ring: number[][] }>;
+  /** Gap-fill result (see gapFill below). Absent when gap-fill is off. */
+  gapFill?: GapFillInfo;
+}
+
+// ---------------------------------------------------------------------------
+// GAP-FILL — placing a house by elimination.
+//
+// Some house points land outside every building (curb/driveway points). When
+// such houses sit between two neighbours on the same side of the street that
+// ARE in buildings, and there are exactly as many empty buildings between
+// those two neighbours as there are unplaced houses, the houses take the empty
+// buildings in house-number order. Anything less certain stays a tile.
+//
+// Nothing is stored — it's recomputed on every match, like the slices.
+//   off — not run.   dry — worked out and outlined, houses keep their tiles.
+//   on  — the houses are drawn as those buildings.
+// Set with ?gapfill=dry|on|off (remembered on the device).
+// ---------------------------------------------------------------------------
+export type GapFillMode = 'off' | 'dry' | 'on';
+
+export interface GapFillInfo {
+  mode: GapFillMode;
+  /** houseId → the empty building it takes (dry: would take). */
+  proposals: Map<string, { bid: number; ring: number[][]; label: string }>;
+  /** Addresses filled (dry: would be filled). */
+  filled: number;
+  /** Addresses still outside a building, by reason. */
+  held: { noAnchor: number; countMismatch: number; contested: number; tooFar: number; noAddress: number };
+}
+
+const GAP_MAX_SIDEWAYS_M = 15;    // empty building centre within 15 m of the line between the two neighbours
+const GAP_MAX_HOUSE_TO_BLD_M = 40; // each house's own point within 40 m of the building it takes
+const GAP_MAX_SPACING_M = 35;     // neighbours at most 35 m apart per house slot
+const GAP_MIN_AREA_M2 = 30, GAP_MAX_AREA_M2 = 800;
+
+export function gapFillMode(): GapFillMode {
+  try {
+    const q = new URLSearchParams(window.location.search).get('gapfill');
+    if (q === 'off' || q === 'dry' || q === 'on') {
+      try { localStorage.setItem('gapfill', q); } catch { /* private mode */ }
+      return q;
+    }
+    const s = localStorage.getItem('gapfill');
+    if (s === 'dry' || s === 'on') return s;
+  } catch { /* no window / storage */ }
+  return 'off';
+}
+
+export function emptyGapFill(mode: GapFillMode): GapFillInfo {
+  return { mode, proposals: new Map(), filled: 0, held: { noAnchor: 0, countMismatch: 0, contested: 0, tooFar: 0, noAddress: 0 } };
+}
+
+export function gapFillHeldTotal(g: GapFillInfo): number {
+  const h = g.held;
+  return h.noAnchor + h.countMismatch + h.contested + h.tooFar + h.noAddress;
+}
+
+export type GapHouse = { id: string; lng: number; lat: number; key?: string; street?: string | null; civic?: number | null; suffix?: string | null; unit?: string | null };
+
+function gapFill(
+  mode: GapFillMode,
+  houses: GapHouse[],
+  housesIn: Map<number, string[]>,
+  houseToBuilding: Map<string, number>,
+  houseToSlice: Map<string, { bid: number; ring: number[][] }>,
+  biggest: Map<number, number[][]>,
+): GapFillInfo {
+  const out = emptyGapFill(mode);
+  const lat0 = houses[0].lat, lng0 = houses[0].lng;
+  const kx = Math.cos(lat0 * Math.PI / 180) * 111320, ky = 111320;
+  const toM = (lng: number, lat: number): [number, number] => [(lng - lng0) * kx, (lat - lat0) * ky];
+  const centre = (ring: number[][]): [number, number] => {
+    const r = ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1] ? ring.slice(0, -1) : ring;
+    let x = 0, y = 0;
+    for (const p of r) { x += p[0]; y += p[1]; }
+    return toM(x / r.length, y / r.length);
+  };
+
+  // Every building that already holds a house (any number) is taken.
+  const inBuilding = new Set<string>();
+  housesIn.forEach(ids => ids.forEach(id => inBuilding.add(id)));
+
+  // Empty buildings of house size.
+  const empties: Array<{ bid: number; c: [number, number]; ring: number[][] }> = [];
+  biggest.forEach((ring, bid) => {
+    if (housesIn.has(bid)) return;
+    const a = ringArea(ring.map(p => toM(p[0], p[1])));
+    if (a < GAP_MIN_AREA_M2 || a > GAP_MAX_AREA_M2) return;
+    empties.push({ bid, c: centre(ring), ring });
+  });
+
+  // One entry per address (the same address can be loaded on two routes).
+  type Addr = { key: string; ids: string[]; street: string; civic: number; suffix: string; p: [number, number]; placedAt: [number, number] | null; inBld: boolean };
+  const addrs = new Map<string, Addr>();
+  let noAddress = 0;
+  for (const h of houses) {
+    const k = h.key ?? h.id;
+    const ex = addrs.get(k);
+    if (ex) { ex.ids.push(h.id); continue; }
+    if (!h.street || h.civic == null || h.unit) {
+      if (!inBuilding.has(h.id)) noAddress++;
+      continue;
+    }
+    let placedAt: [number, number] | null = null;
+    const bid = houseToBuilding.get(h.id);
+    const sl = houseToSlice.get(h.id);
+    if (bid != null && biggest.get(bid)) placedAt = centre(biggest.get(bid)!);
+    else if (sl) placedAt = centre(sl.ring);
+    addrs.set(k, { key: k, ids: [h.id], street: h.street, civic: h.civic, suffix: h.suffix || '', p: toM(h.lng, h.lat), placedAt, inBld: inBuilding.has(h.id) });
+  }
+  out.held.noAddress = noAddress;
+
+  // Each side of each street, in house-number order.
+  const sides = new Map<string, Addr[]>();
+  addrs.forEach(a => {
+    const k = `${a.street}|${a.civic % 2}`;
+    const l = sides.get(k); if (l) l.push(a); else sides.set(k, [a]);
+  });
+
+  type Run = { houses: Addr[]; bids: number[]; rings: number[][][] };
+  const runs: Run[] = [];
+  sides.forEach(list => {
+    list.sort((a, b) => a.civic - b.civic || a.suffix.localeCompare(b.suffix));
+    let anchor: Addr | null = null;
+    let pending: Addr[] = [];
+    let blocked = false;   // a house inside a building it couldn't be drawn as (big block) breaks the run
+    const close = (next: Addr | null) => {
+      if (!pending.length) return;
+      if (!anchor || !next || blocked) { out.held.noAnchor += pending.length; return; }
+      const A = anchor.placedAt!, B = next.placedAt!;
+      const ux = B[0] - A[0], uy = B[1] - A[1];
+      const L = Math.hypot(ux, uy);
+      if (L < 4 || L > (pending.length + 1) * GAP_MAX_SPACING_M) { out.held.countMismatch += pending.length; return; }
+      const cands = empties
+        .map(e => {
+          const dx = e.c[0] - A[0], dy = e.c[1] - A[1];
+          return { e, along: (dx * ux + dy * uy) / L, side: Math.abs(dx * uy - dy * ux) / L };
+        })
+        .filter(c => c.along > 2 && c.along < L - 2 && c.side <= GAP_MAX_SIDEWAYS_M)
+        .sort((a, b) => a.along - b.along);
+      if (cands.length !== pending.length) { out.held.countMismatch += pending.length; return; }
+      // Sanity: each house's own point is near the building it would take.
+      const far = pending.some((h, i) => Math.hypot(h.p[0] - cands[i].e.c[0], h.p[1] - cands[i].e.c[1]) > GAP_MAX_HOUSE_TO_BLD_M);
+      if (far) { out.held.tooFar += pending.length; return; }
+      runs.push({ houses: pending, bids: cands.map(c => c.e.bid), rings: cands.map(c => c.e.ring) });
+    };
+    for (const a of list) {
+      if (a.placedAt) { close(a); anchor = a; pending = []; blocked = false; }
+      else if (a.inBld) { blocked = true; }
+      else pending.push(a);
+    }
+    close(null);
+  });
+
+  // A building wanted by two runs goes to neither.
+  const uses = new Map<number, number>();
+  runs.forEach(r => r.bids.forEach(b => uses.set(b, (uses.get(b) || 0) + 1)));
+  for (const r of runs) {
+    if (r.bids.some(b => (uses.get(b) || 0) > 1)) { out.held.contested += r.houses.length; continue; }
+    r.houses.forEach((a, i) => {
+      const label = `${a.civic}${a.suffix.toUpperCase()}`;
+      for (const id of a.ids) out.proposals.set(id, { bid: r.bids[i], ring: r.rings[i], label });
+      out.filled++;
+    });
+  }
+  return out;
 }
 
 /** Shared buildings with more houses than this keep their tiles... */
@@ -53,7 +219,8 @@ export function emptyBuildingMatch(): BuildingMatch {
 export function buildingMatchSig(x: BuildingMatch): string {
   const a = [...x.houseToBuilding].map(([h, b]) => `${h}:${b}`);
   const b = [...(x.houseToSlice || new Map())].map(([h, s]) => `${h}:s${s.bid}:${s.ring.length}`);
-  return [...a, ...b].sort().join(',');
+  const g = x.gapFill ? [`g:${x.gapFill.mode}:${x.gapFill.filled}:${gapFillHeldTotal(x.gapFill)}`, ...[...x.gapFill.proposals].map(([h, p]) => `${h}:g${p.bid}`)] : [];
+  return [...a, ...b, ...g].sort().join(',');
 }
 
 // Keep the part of a polygon on the side of the line where f(x,y) >= 0
@@ -163,12 +330,14 @@ export function hasBuildingSource(map: MapboxMap): boolean {
 export function matchHousesToBuildings(
   map: MapboxMap,
   /** key = the address (same for one house loaded on two routes); defaults to id. */
-  houses: Array<{ id: string; lng: number; lat: number; key?: string }>,
+  houses: GapHouse[],
+  /** Place leftover houses by elimination between neighbours (see GAP-FILL). */
+  gapMode: GapFillMode = 'off',
 ): BuildingMatch {
   const houseToBuilding = new Map<string, number>();
   const buildingToHouse = new Map<number, string>();
   const houseToSlice = new Map<string, { bid: number; ring: number[][] }>();
-  const none = { houseToBuilding, buildingToHouse, houseToSlice };
+  const none: BuildingMatch = { houseToBuilding, buildingToHouse, houseToSlice, gapFill: gapMode === 'off' ? undefined : emptyGapFill(gapMode) };
   if (!hasBuildingSource(map) || !houses.length) return none;
 
   let feats: any[] = [];
@@ -247,7 +416,17 @@ export function matchHousesToBuildings(
       for (const id of byKey.get(keyOf(repId)) || [repId]) houseToSlice.set(id, { bid, ring });
     });
   });
-  return { houseToBuilding, buildingToHouse, houseToSlice };
+  let gap: GapFillInfo | undefined;
+  if (gapMode !== 'off') {
+    gap = gapFill(gapMode, houses, housesIn, houseToBuilding, houseToSlice, biggest);
+    if (gapMode === 'on') {
+      gap.proposals.forEach((g, id) => {
+        houseToBuilding.set(id, g.bid);
+        if (!buildingToHouse.has(g.bid)) buildingToHouse.set(g.bid, id);
+      });
+    }
+  }
+  return { houseToBuilding, buildingToHouse, houseToSlice, gapFill: gap };
 }
 
 /** Add the coloured-building layers (once). `before` keeps them under labels. */
@@ -296,6 +475,24 @@ export function addSliceLayers(map: MapboxMap, prefix: string, before?: string):
       paint: { 'line-color': ['get', 'color'], 'line-opacity': ['get', 'line'], 'line-width': ['get', 'width'] },
     } as any, before);
   }
+  // Gap-fill dry run: dashed outline + number on each building a house would take.
+  const gsrc = `${prefix}-gap-src`;
+  if (!map.getSource(gsrc)) map.addSource(gsrc, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } } as any);
+  if (!map.getLayer(`${prefix}-gap-line`)) {
+    map.addLayer({
+      id: `${prefix}-gap-line`, type: 'line', source: gsrc, minzoom: BUILDING_MIN_ZOOM,
+      filter: ['==', ['geometry-type'], 'Polygon'],
+      paint: { 'line-color': '#e879f9', 'line-width': 2, 'line-dasharray': [2, 1.5] },
+    } as any, before);
+  }
+  if (!map.getLayer(`${prefix}-gap-num`)) {
+    map.addLayer({
+      id: `${prefix}-gap-num`, type: 'symbol', source: gsrc, minzoom: BUILDING_MIN_ZOOM + 1,
+      filter: ['==', ['geometry-type'], 'Point'],
+      layout: { 'text-field': ['get', 'label'], 'text-size': 11, 'text-allow-overlap': true, 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'] },
+      paint: { 'text-color': '#f5d0fe', 'text-halo-color': '#4a044e', 'text-halo-width': 1.5 },
+    } as any, before);
+  }
   return { fill, line, source };
 }
 
@@ -317,13 +514,33 @@ export function setSliceData(map: MapboxMap, prefix: string, match: BuildingMatc
     features.push({ type: 'Feature', properties: { id, ...st }, geometry: { type: 'Polygon', coordinates: [ring] } });
   });
   src.setData({ type: 'FeatureCollection', features });
+
+  // Gap-fill dry run outlines (nothing in other modes).
+  const gsrc = map.getSource(`${prefix}-gap-src`) as any;
+  if (gsrc) {
+    const gf: any[] = [];
+    const g = match.gapFill;
+    if (g && g.mode === 'dry') {
+      const seen = new Set<number>();
+      g.proposals.forEach(p => {
+        if (seen.has(p.bid)) return;
+        seen.add(p.bid);
+        gf.push({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [p.ring] } });
+        let x = 0, y = 0; const n = Math.max(1, p.ring.length - 1);
+        for (let i = 0; i < n; i++) { x += p.ring[i][0]; y += p.ring[i][1]; }
+        gf.push({ type: 'Feature', properties: { label: p.label }, geometry: { type: 'Point', coordinates: [x / n, y / n] } });
+      });
+    }
+    gsrc.setData({ type: 'FeatureCollection', features: gf });
+  }
 }
 
 /** Remove the slice layers + source. */
 export function removeSliceLayers(map: MapboxMap, prefix: string): void {
   try {
-    [`${prefix}-slice-line`, `${prefix}-slice-fill`].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
+    [`${prefix}-gap-num`, `${prefix}-gap-line`, `${prefix}-slice-line`, `${prefix}-slice-fill`].forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
     if (map.getSource(`${prefix}-slice-src`)) map.removeSource(`${prefix}-slice-src`);
+    if (map.getSource(`${prefix}-gap-src`)) map.removeSource(`${prefix}-gap-src`);
   } catch { /* map gone */ }
 }
 

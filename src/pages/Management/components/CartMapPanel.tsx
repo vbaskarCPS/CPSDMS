@@ -41,6 +41,7 @@ import MapStatsTabs, { StatsTab } from '../../MapLogsheet/MapStatsTabs';
 import {
   BUILDING_MIN_ZOOM, BuildingMatch, BuildingStyle, matchHousesToBuildings, addBuildingLayers, applyBuildingStyles,
   addSliceLayers, setSliceData, removeSliceLayers, emptyBuildingMatch, buildingMatchSig, buildingShape,
+  gapFillMode, gapFillHeldTotal, GapHouse,
 } from '../../../lib/mapBuildings';
 
 export interface CartMapPanelCart {
@@ -239,16 +240,20 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
   // --- Houses drawn as Mapbox's own buildings (lib/mapBuildings) ---
   const bldMatchRef = useRef<BuildingMatch>(emptyBuildingMatch());
   const [bldMatchVer, setBldMatchVer] = useState(0);
-  const housePtsRef = useRef<Array<{ id: string; key: string; lng: number; lat: number }>>([]);
+  const housePtsRef = useRef<GapHouse[]>([]);
+  const gapModeRef = useRef(gapFillMode());
   housePtsRef.current = useMemo(
-    () => houses.map(h => ({ id: routeHouseId(h.routeCode, h.houseKey), key: h.houseKey, lng: h.lng, lat: h.lat })),
+    () => houses.map(h => ({
+      id: routeHouseId(h.routeCode, h.houseKey), key: h.houseKey, lng: h.lng, lat: h.lat,
+      street: h.streetNorm, civic: h.civicNo, suffix: h.civicSuffix, unit: h.unit,
+    })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [houseSig],
   );
   const rematchRef = useRef<() => void>(() => {});
   rematchRef.current = () => {
     if (!map || map.getZoom() < BUILDING_MIN_ZOOM - 0.5) return;
-    const m = matchHousesToBuildings(map, housePtsRef.current);
+    const m = matchHousesToBuildings(map, housePtsRef.current, gapModeRef.current);
     const prev = bldMatchRef.current;
     const known = new Set(housePtsRef.current.map(h => h.id));
     const slices = m.houseToSlice!;
@@ -546,6 +551,23 @@ const CartMapPanel: React.FC<CartMapPanelProps> = ({
     <div className="flex flex-col h-full min-h-0">
       {header != null && <div className="flex-shrink-0 border-b border-gray-700">{header}</div>}
       <div className="flex-1 overflow-y-auto p-3 min-h-0 space-y-3 custom-scrollbar">
+        {(() => {
+          // Gap-fill test counter (only when ?gapfill=dry|on was set on this device).
+          const g = bldMatchVer >= 0 ? bldMatchRef.current.gapFill : undefined;
+          if (!g) return null;
+          const h = g.held, held = gapFillHeldTotal(g);
+          return (
+            <div className="rounded-lg px-2.5 py-1.5 text-[11px] text-white" style={{ background: 'rgba(74,4,78,0.6)', border: '1px solid #e879f9' }}>
+              <b>Gap-fill {g.mode === 'dry' ? '(dry run)' : '(on)'}: {g.filled} {g.mode === 'dry' ? 'would fill' : 'filled'} · {held} held</b>
+              {held > 0 && (
+                <div className="text-fuchsia-200">
+                  {[h.noAnchor && `${h.noAnchor} one-sided`, h.countMismatch && `${h.countMismatch} count≠`, h.contested && `${h.contested} contested`, h.tooFar && `${h.tooFar} too far`, h.noAddress && `${h.noAddress} no number`].filter(Boolean).join(' · ')}
+                </div>
+              )}
+              <div className="text-fuchsia-300/80 text-[10px]">Counts the houses in view at zoom 15+.</div>
+            </div>
+          );
+        })()}
         {loading ? (
           <div className="flex items-center gap-2 text-xs text-gray-400 py-4"><Loader size={14} className="animate-spin" /> Loading the cart's houses…</div>
         ) : routeCodes.length === 0 ? (

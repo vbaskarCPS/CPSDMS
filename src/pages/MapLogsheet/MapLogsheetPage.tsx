@@ -16,8 +16,11 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   Loader, X, CheckCircle2, AlertCircle, Shovel, Droplets, Leaf,
-  Menu, ChevronUp, Route,
+  Menu, ChevronUp, Route, Truck, ArrowRight,
 } from 'lucide-react';
+import PhoneNavigation from '../Management/mobile/PhoneNavigation';
+import { primeSpeech } from '../Management/mobile/rmPhone';
+import type { MapPin as DriverStop } from '../../lib/sessionService';
 import { format } from 'date-fns';
 import { getStorageItem, removeStorageItem } from '../../lib/localStorage';
 import { sessionService } from '../../lib/sessionService';
@@ -168,6 +171,16 @@ const MapLogsheetPage: React.FC = () => {
   const [showStats, setShowStats] = useState(false);
   const [statsTab, setStatsTab] = useState<StatsTab>('today');
   const [flyTo, setFlyTo] = useState<{ lng: number; lat: number; zoom?: number; nonce: number } | null>(null);
+
+  // --- WORKER DRIVER STOPS ---
+  // Pickups / drop-offs the RM queued for this worker (map_pins, visibility
+  // 'worker'), in order. Navigate drives to the first; Continue at a stop
+  // deletes it and moves on to the next.
+  const [driverStops, setDriverStops] = useState<DriverStop[]>([]);
+  const [driverNav, setDriverNav] = useState(false);
+  const [continuing, setContinuing] = useState(false);
+  const [mapInstance, setMapInstance] = useState<mapboxgl.Map | null>(null);
+  const continuedIdsRef = useRef<Set<string>>(new Set());
   const [showMenu, setShowMenu] = useState(false);
   const [jobsFilter, setJobsFilter] = useState<'pending' | 'completed'>('pending');
   const [showContract, setShowContract] = useState(false);
@@ -201,6 +214,49 @@ const MapLogsheetPage: React.FC = () => {
   }, []);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 2200); };
+
+  const loadDriverStops = useCallback(async () => {
+    if (!worker?.contractorId) return;
+    const stops = await sessionService.getWorkerDriverStops(worker.contractorId);
+    // A stop just continued past may still be on its way out of the database.
+    setDriverStops(stops.filter(s => !continuedIdsRef.current.has(s.id)));
+  }, [worker?.contractorId]);
+
+  useEffect(() => {
+    if (!worker?.contractorId) return;
+    loadDriverStops();
+    const id = setInterval(loadDriverStops, 20000);
+    const onVis = () => { if (document.visibilityState === 'visible') loadDriverStops(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
+  }, [worker?.contractorId, loadDriverStops]);
+
+  // Every stop done (or the RM cleared them) → out of navigation.
+  useEffect(() => { if (driverNav && driverStops.length === 0) setDriverNav(false); }, [driverNav, driverStops.length]);
+
+  const startDriverNav = () => {
+    if (!driverStops.length) return;
+    primeSpeech();   // voice prompts need unlocking inside the tap (iOS)
+    setShowMenu(false); setShowStats(false); setSelectedId(null);
+    setDriverNav(true);
+  };
+
+  const continueToNextStop = async () => {
+    const current = driverStops[0];
+    if (!current || continuing) return;
+    setContinuing(true);
+    continuedIdsRef.current.add(current.id);
+    const rest = driverStops.slice(1);
+    setDriverStops(rest);
+    try {
+      await sessionService.deleteMapPin(current.id);
+    } catch {
+      showToast('Could not clear that stop — it may come back');
+    } finally {
+      setContinuing(false);
+    }
+    if (rest.length === 0) showToast('All stops done ✓');
+  };
 
   const forceLogout = useCallback(() => {
     removeStorageItem('current_user');
@@ -684,11 +740,56 @@ const MapLogsheetPage: React.FC = () => {
             onSelectHouse={handleSelectHouse}
             onPlaceHouse={handlePlaceHouse}
             onPickStreet={handlePickStreet}
+            driverStops={driverStops}
+            onMapReady={setMapInstance}
+            navigating={driverNav}
           />
         )}
 
+        {/* WORKER DRIVER: turn-by-turn through the queued stops. */}
+        {driverNav && mapInstance && driverStops[0] && (
+          <PhoneNavigation
+            key={driverStops[0].id}
+            map={mapInstance}
+            destination={{ lat: driverStops[0].lat, lng: driverStops[0].lng, label: driverStops[0].label }}
+            stayOnArrival
+            onArrived={() => {}}
+            onCancel={() => setDriverNav(false)}
+            renderExtra={arrived => (
+              <div className="flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[10px] uppercase tracking-wide font-bold text-teal-300">Stop 1 of {driverStops.length}</div>
+                  <div className="text-white font-bold text-sm truncate">{driverStops[0].label}</div>
+                  {driverStops[1] && <div className="text-[11px] text-gray-400 truncate">Next: {driverStops[1].label}</div>}
+                </div>
+                <button
+                  onClick={continueToNextStop}
+                  disabled={continuing}
+                  className={`flex-shrink-0 rounded-full font-extrabold flex items-center gap-2 transition-all disabled:opacity-50 ${
+                    arrived ? 'h-14 px-6 text-base bg-green-500 text-black ring-4 ring-green-300/40 animate-pulse' : 'h-11 px-4 text-sm bg-gray-700 text-white'
+                  }`}
+                >
+                  {continuing ? <Loader size={16} className="animate-spin" /> : null}
+                  {driverStops.length > 1 ? 'Continue' : 'Finish'} <ArrowRight size={18} />
+                </button>
+              </div>
+            )}
+          />
+        )}
+
+        {/* Navigate button — only when the RM has queued stops for this worker. */}
+        {!driverNav && driverStops.length > 0 && !anySheetOpen && !placing && !pickingStreet && (
+          <button
+            onClick={startDriverNav}
+            className="absolute left-4 bottom-5 z-20 h-14 pl-4 pr-5 rounded-full shadow-xl bg-teal-600 active:bg-teal-500 text-white font-bold text-sm flex items-center gap-2 border border-teal-400"
+          >
+            <Truck size={20} />
+            Navigate · {driverStops.length} stop{driverStops.length === 1 ? '' : 's'}
+          </button>
+        )}
+
         {/* Hamburger (bottom-right) — hidden while any sheet is open */}
-        {!anySheetOpen && !placing && !pickingStreet && (
+        {!anySheetOpen && !placing && !pickingStreet && !driverNav && (
           <button
             onClick={() => setShowMenu(true)}
             className="absolute right-4 bottom-5 z-20 w-14 h-14 rounded-full shadow-xl bg-gray-900 text-white border border-gray-700 flex items-center justify-center active:bg-gray-800"

@@ -18,7 +18,7 @@ import { Worker } from '../../types';
 import { SavedRouteMap, HouseView, StreetSegmentPick, houseColor, routeHouseId, buildHouseTiles, normStreet, BaseRoadLines, tileCentre, houseMapNumber } from '../../lib/mapLogsheetService';
 import {
   BUILDING_MIN_ZOOM, BuildingMatch, BuildingStyle, matchHousesToBuildings, addBuildingLayers, applyBuildingStyles, buildingIdAt,
-  addSliceLayers, setSliceData, emptyBuildingMatch, buildingMatchSig,
+  addSliceLayers, setSliceData, emptyBuildingMatch, buildingMatchSig, gapFillMode, gapFillHeldTotal, GapHouse,
 } from '../../lib/mapBuildings';
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
@@ -156,10 +156,17 @@ export interface MapLogsheetViewProps {
   onPlaceHouse: (lng: number, lat: number) => void;
   /** null = the tap didn't land on a named road. */
   onPickStreet: (pick: StreetSegmentPick | null) => void;
+  /** WORKER DRIVER: the stops the RM queued for this worker, drawn numbered in order. */
+  driverStops?: Array<{ id: string; label: string; lat: number; lng: number }>;
+  /** Hands the map to the page (turn-by-turn navigation draws on it). */
+  onMapReady?: (map: mapboxgl.Map | null) => void;
+  /** While navigation owns the camera: no follow-me button or follow easing. */
+  navigating?: boolean;
 }
 
 const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   routeMaps, houses, selectedId, loadingMessage, placingHouse, pickingStreet, flyTo, onSelectHouse, onPlaceHouse, onPickStreet,
+  driverStops, onMapReady, navigating = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -183,6 +190,8 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   // GPS
   const [following, setFollowing] = useState(false);
   const followingRef = useRef(false);
+  const navigatingRef = useRef(navigating);
+  navigatingRef.current = navigating;
   const watchIdRef = useRef<number | null>(null);
   const navMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const navArrowElRef = useRef<HTMLDivElement | null>(null);
@@ -217,16 +226,20 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   const BLD_PREFIX = 'ml';
   const bldMatchRef = useRef<BuildingMatch>(emptyBuildingMatch());
   const [bldMatchVer, setBldMatchVer] = useState(0);
-  const housePtsRef = useRef<Array<{ id: string; key: string; lng: number; lat: number }>>([]);
+  const housePtsRef = useRef<GapHouse[]>([]);
+  const gapModeRef = useRef(gapFillMode());
   housePtsRef.current = useMemo(
-    () => houses.map(v => ({ id: routeHouseId(v.house.routeCode, v.house.houseKey), key: v.house.houseKey, lng: v.house.lng, lat: v.house.lat })),
+    () => houses.map(v => ({
+      id: routeHouseId(v.house.routeCode, v.house.houseKey), key: v.house.houseKey, lng: v.house.lng, lat: v.house.lat,
+      street: v.house.streetNorm, civic: v.house.civicNo, suffix: v.house.civicSuffix, unit: v.house.unit,
+    })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [houseListSig],
   );
   const rematchBuildings = useCallback(() => {
     const map = mapRef.current;
     if (!map || map.getZoom() < BUILDING_MIN_ZOOM - 0.5) return;
-    const m = matchHousesToBuildings(map, housePtsRef.current);
+    const m = matchHousesToBuildings(map, housePtsRef.current, gapModeRef.current);
     const prev = bldMatchRef.current;
     // Keep earlier matches for buildings that scrolled off (tiles unloaded).
     const known = new Set(housePtsRef.current.map(h => h.id));
@@ -600,9 +613,9 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
         navMarkerRef.current.setLngLat([lng, lat]);
         lastPositionRef.current = { lat, lng };
         if (heading != null && !isNaN(heading) && navArrowElRef.current) {
-          navArrowElRef.current.style.transform = `rotate(${heading}deg)`;
+          navArrowElRef.current.style.transform = `rotate(${heading - (mapRef.current?.getBearing() || 0)}deg)`;  // relative to the map (nav turns it)
         }
-        if (followingRef.current) mapRef.current.easeTo({ center: [lng, lat], duration: 1000 });
+        if (followingRef.current && !navigatingRef.current) mapRef.current.easeTo({ center: [lng, lat], duration: 1000 });
       },
       err => console.warn('GPS:', err.code),
       { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 },
@@ -618,6 +631,42 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
   // every 2 min while location is allowed) — Follow Me only centres the map.
 
   useEffect(() => { followingRef.current = following; }, [following]);
+
+  // Navigation takes the camera: stop following, and don't fight it.
+  useEffect(() => {
+    if (navigating) { setFollowing(false); followingRef.current = false; }
+  }, [navigating]);
+
+  // Give the page the map once it's loaded (and take it back on unmount).
+  useEffect(() => {
+    if (!onMapReady) return;
+    onMapReady(mapLoaded ? mapRef.current : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapLoaded]);
+  useEffect(() => () => { onMapReady?.(null); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // WORKER DRIVER STOPS: numbered teal pins with their label, in queue order.
+  const stopMarkersRef = useRef<mapboxgl.Marker[]>([]);
+  const stopsKey = (driverStops || []).map(s => `${s.id}@${s.lat},${s.lng}|${s.label}`).join(';');
+  useEffect(() => {
+    const map = mapRef.current;
+    stopMarkersRef.current.forEach(m => m.remove());
+    stopMarkersRef.current = [];
+    if (!map || !mapLoaded || !driverStops?.length) return;
+    driverStops.forEach((s, i) => {
+      const el = document.createElement('div');
+      el.style.cssText = 'width:30px;height:30px;';
+      const inner = document.createElement('div');
+      inner.style.cssText = 'position:relative;width:100%;height:100%;';
+      const safe = String(s.label || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      inner.innerHTML = `<div style="width:30px;height:30px;border-radius:50%;background:#0d9488;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.45);color:#fff;font:800 13px system-ui,sans-serif;display:flex;align-items:center;justify-content:center;">${i + 1}</div>`
+        + `<span style="position:absolute;left:34px;top:5px;background:rgba(17,24,39,.9);color:#99f6e4;border:1px solid #0d9488;border-radius:4px;padding:1px 5px;font:700 11px system-ui,sans-serif;white-space:nowrap;">${safe}</span>`;
+      el.appendChild(inner);
+      stopMarkersRef.current.push(new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([s.lng, s.lat]).addTo(map));
+    });
+    return () => { stopMarkersRef.current.forEach(m => m.remove()); stopMarkersRef.current = []; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopsKey, mapLoaded]);
 
   const toggleFollow = useCallback(() => {
     setFollowing(prev => {
@@ -656,7 +705,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
     // Buildings and slices first, so the tiles and numbers end up above them.
-    [`${BLD_PREFIX}-bld-fill`, `${BLD_PREFIX}-bld-line`, `${BLD_PREFIX}-slice-fill`, `${BLD_PREFIX}-slice-line`, ...HOUSE_LAYERS]
+    [`${BLD_PREFIX}-bld-fill`, `${BLD_PREFIX}-bld-line`, `${BLD_PREFIX}-slice-fill`, `${BLD_PREFIX}-slice-line`, ...HOUSE_LAYERS, `${BLD_PREFIX}-gap-line`, `${BLD_PREFIX}-gap-num`]
       .forEach(id => { if (map.getLayer(id)) map.moveLayer(id); });
   }, [routeMaps, mapLoaded]);
 
@@ -664,8 +713,9 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
     <div className="relative w-full h-full">
       <style>{`.mapboxgl-ctrl-logo { transform: scale(0.7); transform-origin: bottom left; }`}</style>
       <div ref={containerRef} className="absolute inset-0" />
+      <GapFillChip info={bldMatchRef.current.gapFill} ver={bldMatchVer} />
 
-      <button
+      {!navigating && <button
         onClick={toggleFollow}
         className={`absolute top-3 left-3 z-20 w-11 h-11 rounded-full shadow-lg flex items-center justify-center transition-all ${
           following ? 'bg-blue-600 text-white ring-2 ring-blue-400' : 'bg-white text-gray-700 border border-gray-300'
@@ -673,7 +723,7 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
         title={following ? 'Stop following' : 'Follow my location'}
       >
         <Navigation size={18} className={following ? 'fill-current' : ''} />
-      </button>
+      </button>}
 
       {placingHouse && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-gray-900/90 text-white px-3 py-1.5 rounded-full shadow-lg text-xs font-medium flex items-center gap-1.5">
@@ -698,6 +748,26 @@ const MapLogsheetView: React.FC<MapLogsheetViewProps> = ({
         </div>
       )}
 
+    </div>
+  );
+};
+
+/** Gap-fill test counter (only when ?gapfill=dry|on was set on this device). */
+const GapFillChip: React.FC<{ info?: import('../../lib/mapBuildings').GapFillInfo; ver: number }> = ({ info }) => {
+  if (!info) return null;
+  const held = gapFillHeldTotal(info);
+  const h = info.held;
+  return (
+    <div
+      className="absolute bottom-24 left-2 z-20 pointer-events-none rounded-lg px-2 py-1 text-[10px] leading-tight font-bold text-white shadow-lg"
+      style={{ background: 'rgba(74,4,78,0.88)', border: '1px solid #e879f9' }}
+    >
+      <div>Gap-fill {info.mode === 'dry' ? '(dry run)' : '(on)'}: {info.filled} {info.mode === 'dry' ? 'would fill' : 'filled'} · {held} held</div>
+      {held > 0 && (
+        <div className="font-normal text-fuchsia-200">
+          {[h.noAnchor && `${h.noAnchor} one-sided`, h.countMismatch && `${h.countMismatch} count≠`, h.contested && `${h.contested} contested`, h.tooFar && `${h.tooFar} too far`, h.noAddress && `${h.noAddress} no number`].filter(Boolean).join(' · ')}
+        </div>
+      )}
     </div>
   );
 };
