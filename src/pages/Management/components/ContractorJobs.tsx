@@ -12,6 +12,8 @@ interface ContractorJobsProps {
   financialStore: SessionTransaction[];
   onRefresh?: () => void;
   seasonType?: SeasonType;
+  /** Phone layout: each entry on two lines (name/price/status, then address/notes/payment). */
+  twoLine?: boolean;
 }
 
 // Map the full service names (from AddContractModal) to short badge text
@@ -138,7 +140,8 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
   bookings,
   financialStore,
   onRefresh,
-  seasonType = 'aeration'
+  seasonType = 'aeration',
+  twoLine = false,
 }) => {
   const [editingTransaction, setEditingTransaction] = useState<SessionTransaction | null>(null);
   const [pendingJob, setPendingJob] = useState<MasterBooking | null>(null);
@@ -445,6 +448,71 @@ const ContractorJobs: React.FC<ContractorJobsProps> = ({
           hoverBorder = 'hover:border-slate-400';
       } else if (isPaid) {
           hoverBorder = 'hover:border-cps-blue';
+      }
+
+      const nameClass = `font-bold truncate ${isCancelled ? 'text-gray-500 line-through' : isStandaloneAsphalt && !hasName ? 'text-amber-200 italic' : isPendingSale && !hasName ? 'text-slate-300 italic' : 'text-gray-200'}`;
+      const priceClass = `font-mono font-bold text-right ${isCancelled ? 'text-gray-500 line-through' : isStandaloneAsphalt ? 'text-amber-200' : isPendingSale ? 'text-slate-300' : 'text-gray-300'}`;
+      const badgeEl = (
+          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border min-w-[55px] text-center flex items-center justify-center gap-1 ${badge.color}`}>
+              {isLoading ? <Loader size={8} className="animate-spin" /> : (
+                <>
+                  {isStandaloneAsphalt && <Shovel size={8} strokeWidth={2.5} />}
+                  {!isStandaloneAsphalt && isPendingSale && <Bookmark size={8} strokeWidth={2.5}/>}
+                  {badge.text}
+                </>
+              )}
+          </span>
+      );
+
+      // --- PHONE: two lines ---
+      //   1. route · name (services)            FO/BO · +ASPH · price · status
+      //   2. address · notes · payment                              phone · email
+      if (twoLine) {
+          return (
+              <div
+                key={job['Booking ID']}
+                onClick={() => handleJobClick(job)}
+                className={`bg-gray-800 border rounded-lg px-2.5 py-2 relative mb-1.5 cursor-pointer active:bg-gray-700 ${baseBorder}`}
+              >
+                  <div className="flex items-center gap-2 text-[13px]">
+                      <span className="font-mono font-bold bg-gray-700 text-gray-300 px-1.5 rounded text-[10px] min-w-[32px] text-center flex-shrink-0">
+                          {job['Route Number'] || '--'}
+                      </span>
+                      <span className={`${nameClass} min-w-0`}>{displayName}</span>
+                      {isLawnRejuv && job.services && <ServiceBadges services={job.services} />}
+                      <span className="flex-1" />
+                      {job['FO/BO/FP'] && job['FO/BO/FP'] !== 'FP' && (
+                          <span className="text-[9px] font-bold text-gray-500 border border-gray-600 px-1 rounded flex-shrink-0">{job['FO/BO/FP']}</span>
+                      )}
+                      <span className={`${priceClass} flex-shrink-0`}>{displayPrice}</span>
+                      <span className="flex-shrink-0">{badgeEl}</span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1 text-[11px]">
+                      <span className="text-gray-400 truncate min-w-0 flex-1">
+                          {assembledAddress}
+                          {notes && <span className="text-gray-500 italic"> · {notes}</span>}
+                      </span>
+                      {isMergedAsphalt && (
+                          <span className="inline-flex items-center gap-1 text-[9px] font-bold bg-amber-900/30 text-amber-300 border border-amber-700 px-1.5 py-0.5 rounded whitespace-nowrap flex-shrink-0">
+                              <Shovel size={9} strokeWidth={2.5} />
+                              +ASPH {formatAsphaltDollars(asphaltAmount)}
+                              {upsoldAsphaltAmount > 0 && <span className="text-amber-200/90 ml-0.5">+UP {formatAsphaltDollars(upsoldAsphaltAmount)}</span>}
+                          </span>
+                      )}
+                      {isPaid && paymentDisplay && (
+                          <span className="text-[10px] text-gray-400 italic truncate max-w-[110px] flex-shrink-0">{paymentDisplay}</span>
+                      )}
+                      <span className="flex items-center gap-1.5 flex-shrink-0">
+                          <Phone size={13} className={job['Cell Phone'] || job['Home Phone'] ? "text-green-500" : "text-gray-600 opacity-30"} strokeWidth={2.5} />
+                          {isPaid && job['Email Address'] ? (
+                            <EmailStatusIcon email={job['Email Address']} />
+                          ) : (
+                            <Mail size={13} className={job['Email Address'] ? "text-blue-500" : "text-gray-600 opacity-30"} strokeWidth={2.5} />
+                          )}
+                      </span>
+                  </div>
+              </div>
+          );
       }
 
       return (

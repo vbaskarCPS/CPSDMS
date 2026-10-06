@@ -5176,7 +5176,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       </div>
     </div>
   );
-  const renderCartDetails = (c: CartCardData) => (
+  const renderCartDetails = (c: CartCardData, twoLine = false) => (
     <>
     <div>
       <div className="text-[10px] text-gray-400 uppercase tracking-wide font-bold mb-1.5">Cart members</div>
@@ -5238,6 +5238,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       <ContractorJobs
         bookings={c.sharedBookings}
         financialStore={c.sharedFinancialStore}
+        twoLine={twoLine}
         workerName={
           c.members.length > 1
             ? c.members.map(m => m.firstName).join(' & ')
@@ -6157,9 +6158,10 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         else handleViewLogsheet(crew.card.worker);
       },
       cartPanelNode: phoneCartPanelNode,
-      cartDetails: cart => renderCartDetails(cart),
+      cartDetails: cart => renderCartDetails(cart, true),
       workerJobs: card => (
         <ContractorJobs
+          twoLine
           bookings={card.displayBookings}
           financialStore={card.financialStore}
           seasonType={seasonType}
