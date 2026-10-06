@@ -246,9 +246,14 @@ const RMNavigation: React.FC<RMNavigationProps> = ({ map, destination, onArrived
   const fetchRoute = useCallback(async (fromLat: number, fromLng: number): Promise<DirectionsRoute | null> => {
     const origin = `${fromLng},${fromLat}`;
     const dest = `${destination.lng},${destination.lat}`;
-    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${origin};${dest}?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
+    const base = `https://api.mapbox.com/directions/v5/mapbox/driving/${origin};${dest}?geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
     try {
-      const res = await fetch(url);
+      // Avoid toll roads; only use one if there's no other way there.
+      let res = await fetch(`${base}&exclude=toll`);
+      if (res.ok) {
+        const probe = await res.clone().json().catch(() => null);
+        if (probe && (!probe.routes || probe.routes.length === 0)) res = await fetch(base);
+      }
       if (!res.ok) {
         const body = await res.text().catch(() => '');
         // Common cause: token lacks 'directions:read' scope.

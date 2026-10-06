@@ -168,15 +168,23 @@ const PhoneNavigation: React.FC<PhoneNavigationProps> = ({ map, destination, onA
     const coords = `${lng},${lat};${destination.lng},${destination.lat}`;
     const bearings = heading != null ? `&bearings=${Math.round(heading)},60;` : '';
     const qs = `geometries=geojson&overview=full&steps=true&banner_instructions=true&voice_instructions=true&voice_units=metric&language=en&annotations=maxspeed&alternatives=false${bearings}&access_token=${MAPBOX_TOKEN}`;
-    for (const profile of ['driving-traffic', 'driving']) {
-      try {
-        const res = await fetch(`https://api.mapbox.com/directions/v5/mapbox/${profile}/${coords}?${qs}`);
-        if (res.status === 401 || res.status === 403) { setError('The map key can’t get directions.'); return null; }
-        if (!res.ok) continue;
-        const data = await res.json();
-        if (data.routes?.length) { setError(null); return data.routes[0] as Route; }
-        if (data.code === 'NoRoute') { setError('No driving route to there.'); return null; }
-      } catch { /* try the next profile */ }
+    // Toll roads (e.g. the 407) are always avoided. Only if there's no way
+    // there without one do we fall back to a route that uses a toll.
+    let noRoute = false;
+    for (const avoid of ['&exclude=toll', '']) {
+      for (const profile of ['driving-traffic', 'driving']) {
+        try {
+          const res = await fetch(`https://api.mapbox.com/directions/v5/mapbox/${profile}/${coords}?${qs}${avoid}`);
+          if (res.status === 401 || res.status === 403) { setError('The map key can’t get directions.'); return null; }
+          if (!res.ok) continue;
+          const data = await res.json();
+          if (data.routes?.length) { setError(null); return data.routes[0] as Route; }
+          if (data.code === 'NoRoute') { noRoute = true; break; }   // no point asking the other profile
+        } catch { /* try the next profile */ }
+      }
+      if (!noRoute) break;   // a network problem, not a toll problem — don't retry with tolls
+      if (!avoid) { setError('No driving route to there.'); return null; }
+      noRoute = false;
     }
     setError('Couldn’t get directions — check the connection.');
     return null;
