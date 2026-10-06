@@ -14,11 +14,10 @@
 // back. Navigate goes to ③; End comes back to where you were.
 
 import React, { useEffect, useMemo, useState } from 'react';
-import type { LucideIcon } from 'lucide-react';
 import {
-  Menu, BarChart3, Layers, MapPin, Users, Shovel, CreditCard, Trophy, Lock, Unlock, Monitor,
+  Menu, MapPin, Users, Monitor,
   Navigation, Navigation2, ChevronLeft, ChevronDown, Phone, FileText, Truck, AlertTriangle, Loader,
-  Compass, Clock, CheckCircle2, History, X, ArrowUpDown, Trash2, Mail, Check, Minus, Plus, FlaskConical,
+  Compass, X, ArrowUpDown, Trash2, Mail, Check, Minus, Plus, FlaskConical,
 } from 'lucide-react';
 import type { MasterBooking } from '../../../types';
 import type { MapPin as MapPinRecord } from '../../../lib/sessionService';
@@ -26,7 +25,8 @@ import type { FilterVisibility, GeocodeProgress } from '../RMLogbook';
 import type { CartCardData, WorkerCardData, RouteCardData } from '../components/RMMapTab';
 import { ActivityBadge, latestMs, computeRedFlags } from '../components/rmMapShared';
 import PhoneDrawer, { DrawerSnap } from './PhoneDrawer';
-import { PhoneSheet, Tile } from './PhoneSheet';
+import { PhoneSheet } from './PhoneSheet';
+import { MenuTiles, LayersList, PinsList } from './RMMenu';
 import PhoneNavigation, { PhoneNavDestination } from './PhoneNavigation';
 import { money, safeAreaTop, installPixelRatioCap } from './rmPhone';
 
@@ -60,6 +60,8 @@ export interface RMPhoneShell {
   onOpenAsphalt: () => void;
   onOpenManageTeam: () => void;
   onDesktopView: () => void;
+  /** Desktop only: back to the phone layout (offered on phones that chose Desktop view). */
+  onPhoneView?: () => void;
   userName: string;
   coveringNames: string[];
 }
@@ -185,7 +187,7 @@ const SORT_LABEL: Record<SortOption, string> = {
   recent: 'Most recent', alpha: 'A–Z', steps: 'Steps', equiv: 'EQ', upGross: 'Upsell $',
 };
 
-type SheetKind = 'menu' | 'stats' | 'layers' | 'battle' | 'routes' | 'sort' | null;
+type SheetKind = 'menu' | 'stats' | 'layers' | 'pins' | 'routes' | 'sort' | null;
 type RouteTab = 'stats' | 'logsheet' | 'prebooks';
 
 // ---------------------------------------------------------------------------
@@ -653,46 +655,40 @@ const RMPhoneLayout: React.FC<{ ctx: RMPhoneCtx }> = ({ ctx }) => {
           title={<span className="text-xs text-gray-400 font-normal">{shell.userName}{shell.coveringNames.length > 0 && <> · covering {shell.coveringNames.join(', ')}</>}</span>}
           onClose={() => setSheet(null)}
         >
-          <div className="grid grid-cols-3 gap-2.5 pb-1">
-            <Tile icon={BarChart3} label="Stats" iconClass="text-green-300" onClick={() => setSheet('stats')} />
-            <Tile icon={Layers} label="Layers" iconClass="text-sky-300" onClick={() => setSheet('layers')} />
-            <Tile icon={MapPin} label="Drop Pin" iconClass="text-purple-300" active={ctx.pinMode} onClick={() => { setSheet(null); shell.onTogglePinMode(); }} />
-            <Tile icon={Users} label="Manage Team" iconClass="text-blue-300" onClick={() => { setSheet(null); shell.onOpenManageTeam(); }} />
-            <Tile icon={Shovel} label="Asphalt" iconClass="text-amber-300" disabled={!shell.isSealing}
-              onClick={() => { setSheet(null); shell.onOpenAsphalt(); }}
-              badge={shell.isSealing && shell.unassignedAsphaltCount > 0 ? String(shell.unassignedAsphaltCount) : null} badgeClass="bg-amber-500 text-black" />
-            <Tile icon={CreditCard} label="Card Txns" iconClass="text-emerald-300" onClick={() => { setSheet(null); shell.onOpenTransactions(); }} />
-            <Tile icon={Trophy} label="Team Battle" iconClass="text-yellow-300" onClick={() => setSheet('battle')} />
-            <Tile icon={shell.isTeamLocked ? Lock : Unlock} label={shell.lockLoading ? '…' : shell.isTeamLocked ? 'Team Locked' : 'Team Lock'}
-              iconClass={shell.isTeamLocked ? 'text-red-400' : 'text-gray-300'} active={shell.isTeamLocked} onClick={shell.onToggleLock} disabled={shell.lockLoading} />
-            <Tile icon={Truck} label="Driver Stops" iconClass="text-teal-300" onClick={() => { setSheet(null); ctx.onOpenDriverStops(null); }}
-              badge={ctx.driverStopCount > 0 ? String(ctx.driverStopCount) : null} badgeClass="bg-teal-600 text-white" />
-            <Tile icon={Monitor} label="Desktop view" iconClass="text-gray-300" onClick={() => { setSheet(null); shell.onDesktopView(); }} />
-          </div>
+          <MenuTiles
+            shell={shell}
+            pinMode={ctx.pinMode}
+            driverStopCount={ctx.driverStopCount}
+            onClose={() => setSheet(null)}
+            onOpenSub={k => setSheet(k)}
+            viewSwitch={{ icon: Monitor, label: 'Desktop view', onClick: shell.onDesktopView }}
+          />
         </PhoneSheet>
       )}
 
       {sheet === 'stats' && (
         <PhoneSheet title="Today's team stats" onClose={() => setSheet(null)}>
           <div className="pb-2">{shell.statsPanel}</div>
+          <div className="pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-500 font-bold">Team battle</div>
+          <div className="pb-2 flex">{shell.battleCards}</div>
+          <div className="text-[10px] text-gray-500 pb-2">Steps · pending prebooks + pending sales · gross + pending $. Tap a team for its carts.</div>
         </PhoneSheet>
       )}
 
       {sheet === 'layers' && (
         <PhoneSheet title="Map layers" onClose={() => setSheet(null)}>
-          <div className="space-y-2 pb-2">
-            <LayerRow icon={Clock} label="Pending prebooks" on={ctx.filterVisibility.pendingBookings} progress={ctx.geocodeProgress.pendingBookings} onToggle={() => shell.onToggleFilter('pendingBookings')} />
-            <LayerRow icon={CheckCircle2} label="Sales & completed" on={ctx.filterVisibility.pendingSalesAndCompleted} progress={ctx.geocodeProgress.pendingSalesAndCompleted} onToggle={() => shell.onToggleFilter('pendingSalesAndCompleted')} />
-            <LayerRow icon={History} label="Previously done" on={ctx.filterVisibility.historical} progress={ctx.geocodeProgress.historical} onToggle={() => shell.onToggleFilter('historical')} />
-            <LayerRow icon={Users} label="Callbook clients (PCL)" on={ctx.filterVisibility.pcl} progress={ctx.geocodeProgress.pcl} onToggle={() => shell.onToggleFilter('pcl')} />
-          </div>
+          <LayersList filterVisibility={ctx.filterVisibility} geocodeProgress={ctx.geocodeProgress} onToggle={shell.onToggleFilter} />
         </PhoneSheet>
       )}
 
-      {sheet === 'battle' && (
-        <PhoneSheet title="Team battle" onClose={() => setSheet(null)}>
-          <div className="pb-3 flex">{shell.battleCards}</div>
-          <div className="text-[10px] text-gray-500 pb-2">Steps · pending prebooks + pending sales · gross + pending $. Tap a team for its carts.</div>
+      {sheet === 'pins' && (
+        <PhoneSheet title="Pins" onClose={() => setSheet(null)}>
+          <PinsList
+            pinMode={ctx.pinMode}
+            onTogglePinMode={() => { setSheet(null); shell.onTogglePinMode(); }}
+            driverStopCount={ctx.driverStopCount}
+            onOpenDriverStops={() => { setSheet(null); ctx.onOpenDriverStops(null); }}
+          />
         </PhoneSheet>
       )}
 
@@ -754,28 +750,6 @@ const StatBox: React.FC<{ label: string; value: React.ReactNode; tone?: string }
     <div className={`text-[15px] font-extrabold truncate ${tone || 'text-white'}`}>{value}</div>
   </div>
 );
-
-const LayerRow: React.FC<{ icon: LucideIcon; label: string; on: boolean; progress: { current: number; total: number; done: boolean }; onToggle: () => void }> = ({ icon: Icon, label, on, progress, onToggle }) => {
-  const loading = !progress.done;
-  return (
-    <button
-      onClick={loading ? undefined : onToggle}
-      className={`w-full h-14 rounded-xl px-4 flex items-center gap-3 ${on && !loading ? 'bg-blue-600/25 ring-1 ring-blue-500' : 'bg-gray-800'} ${loading ? 'opacity-60' : ''}`}
-    >
-      <Icon size={18} className={on ? 'text-blue-300' : 'text-gray-400'} />
-      <span className="text-sm font-bold text-white flex-1 text-left">{label}</span>
-      {loading ? (
-        <span className="text-[11px] text-amber-300 font-bold flex items-center gap-1">
-          <Loader size={12} className="animate-spin" />{progress.total > 0 ? `${progress.current}/${progress.total}` : 'waiting'}
-        </span>
-      ) : (
-        <span className={`w-11 h-6 rounded-full relative transition-colors ${on ? 'bg-blue-500' : 'bg-gray-600'}`}>
-          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
-        </span>
-      )}
-    </button>
-  );
-};
 
 const BottleCounter: React.FC<{ cart: CartCardData; saving: boolean; onAdjust: (d: number) => void }> = ({ cart, saving, onAdjust }) => {
   const locked = cart.sessionStatus === 'PAID';

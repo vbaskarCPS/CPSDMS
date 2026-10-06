@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Users, Map as MapIcon, Loader, BookOpen, Activity, DollarSign, Clock,
   Lock, Unlock, Leaf, CreditCard, Shovel, Droplets, Bookmark, Navigation, History,
-  CheckCircle2, MapPin as MapPinIcon, Smartphone,
+  CheckCircle2, MapPin as MapPinIcon, Smartphone, LayoutGrid, X as XIcon,
 } from 'lucide-react';
 import { getStorageItem } from '../../lib/localStorage';
 import {
@@ -175,6 +175,12 @@ const RMLogbook: React.FC = () => {
   // dropped in a row; RMMapTab can ask us to switch it off (it does when the RM
   // starts navigating to a pin, so nav taps don't litter the map).
   const [pinMode, setPinMode] = useState(false);
+
+  // DIGITAL-MAPPING DESKTOP: the grid menu (opened from the header's grid
+  // button, drawn by RMMapTab) and the Stats modal (opened by clicking the
+  // stats bar).
+  const [desktopMenuOpen, setDesktopMenuOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
 
   const [stats, setStats] = useState<TabStats>({
     totalSteps: 0,
@@ -578,88 +584,297 @@ const RMLogbook: React.FC = () => {
     </>
   );
 
-  // ── PHONE LAYOUT ── map-only RMs on a phone. The desktop header's contents
-  // (stats, filters, lock, asphalt, cards, battle cards) move into the phone
-  // screen's header and hamburger menu; the map and its data are the same
-  // RMMapTab, just laid out for a phone.
-  if (digitalMappingEnabled && layout === 'phone') {
-    const statTile = (label: string, value: React.ReactNode, tone = 'text-white') => (
-      <div className="bg-gray-800 rounded-xl px-3 py-2.5">
-        <div className="text-[9.5px] uppercase tracking-wide text-gray-500 font-bold">{label}</div>
-        <div className={`text-lg font-extrabold ${tone}`}>{value}</div>
-      </div>
-    );
-    const eqTone = stats.avgEQ >= 3 ? 'text-green-400' : stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400';
-    const statsPanel = (
-      <div className="space-y-2">
-        {isTeamSeason && (
-          <div className="bg-gray-800 rounded-xl px-3 py-3 text-center">
-            <div className="text-[10px] uppercase tracking-wide text-gray-500 font-bold">Total gross</div>
-            <div className="text-3xl font-extrabold text-white">${stats.teamTotalGross.toFixed(0)}</div>
-            <div className="text-sm text-yellow-400 font-bold">+ ${stats.teamTotalPendingDollars.toFixed(0)} pending</div>
+  // The stats bar (unchanged look). On the digital-mapping desktop it sits in
+  // the header beside the grid button and opens the Stats modal on click.
+  const statsBar = (
+    <>
+        {!isTeamSeason && (
+          <div className="grid grid-cols-6 gap-px bg-gray-700 border-t border-gray-700">
+
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                  <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Workers</span>
+                  <div className="flex items-center gap-1 text-blue-300 font-bold text-base">
+                      <Users size={12} className="opacity-70" /> {stats.workerCount}
+                  </div>
+              </div>
+
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                  <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Steps</span>
+                  <div className="flex items-center gap-1 text-white font-bold text-base">
+                      <Activity size={12} className="opacity-70 text-green-400" /> {stats.totalSteps}
+                  </div>
+              </div>
+
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                  <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Pending</span>
+                  <div className="flex items-center gap-1 text-yellow-400 font-bold text-base">
+                      <Clock size={12} className="opacity-70" /> {stats.totalPending}
+                  </div>
+              </div>
+
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                  <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Avg EQ</span>
+                  <div className={`font-bold text-base ${
+                      stats.avgEQ >= 3 ? 'text-green-400' : stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
+                  }`}>
+                      {stats.avgEQ.toFixed(2)}
+                  </div>
+              </div>
+
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                  <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Upsells</span>
+                  <div className="text-purple-300 font-bold text-base">
+                      {stats.totalUpsellCount}
+                  </div>
+              </div>
+
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                  <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Up $</span>
+                  <div className="flex items-center gap-0.5 text-purple-400 font-bold text-base">
+                      <DollarSign size={12} className="opacity-70" />
+                      {stats.totalGross.toFixed(0)}
+                  </div>
+              </div>
+
           </div>
         )}
-        <div className="grid grid-cols-3 gap-2">
-          {statTile('Workers', stats.workerCount, 'text-blue-300')}
-          {statTile('Steps', stats.totalSteps)}
-          {statTile('Done', stats.completedJobs, 'text-green-400')}
-          {isTeamSeason
-            ? statTile('Prebooks', stats.teamPendingOfficeCount, 'text-green-400')
-            : statTile('Pending', stats.totalPending, 'text-yellow-400')}
-          {isTeamSeason && statTile('Pend. sales', stats.teamPendingSalesCount, 'text-yellow-400')}
-          {statTile('Avg EQ', stats.avgEQ.toFixed(2), eqTone)}
-          {isTeamSeason && statTile('Cart avg', `$${stats.teamCartAvgGross.toFixed(0)}`, 'text-gray-200')}
-          {statTile('Upsells', stats.totalUpsellCount, 'text-purple-300')}
-          {statTile('Up $', `$${stats.totalGross.toFixed(0)}`, 'text-purple-400')}
-          {statTile('Open routes', stats.unassignedRoutes, stats.unassignedRoutes > 0 ? 'text-amber-400' : 'text-gray-300')}
+
+        {isTeamSeason && (
+          <div className="border-t border-gray-700">
+            <div className="sm:hidden bg-gray-800 p-3 flex flex-col items-center justify-center border-b border-gray-700">
+              <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-1">Total Gross</span>
+              <div className="flex items-center gap-1 text-white font-bold text-2xl">
+                <DollarSign size={18} className="opacity-70" />
+                {stats.teamTotalGross.toFixed(0)}
+              </div>
+              <div className="flex items-center gap-1 text-yellow-400 font-medium text-xs mt-1">
+                <span className="text-gray-500 text-[9px] uppercase tracking-wider">Pending $:</span>
+                <DollarSign size={10} className="opacity-70" />
+                <span>{stats.teamTotalPendingDollars.toFixed(0)}</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-px bg-gray-700 sm:hidden">
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Workers</span>
+                <div className="flex items-center gap-1 text-blue-300 font-bold text-base">
+                  <Users size={12} className="opacity-70" /> {stats.workerCount}
+                </div>
+              </div>
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Steps</span>
+                <div className="flex items-center gap-1 text-white font-bold text-base">
+                  <Activity size={12} className="opacity-70 text-green-400" /> {stats.totalSteps}
+                </div>
+              </div>
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Pending</span>
+                <div className="flex items-center gap-1 font-bold text-base">
+                  <Clock size={12} className="text-yellow-400 opacity-70" />
+                  <span className="text-green-400">{stats.teamPendingOfficeCount}</span>
+                  {stats.teamPendingSalesCount > 0 && (
+                    <>
+                      <span className="text-gray-500 text-xs">+</span>
+                      <span className="text-yellow-400 flex items-center gap-0.5">
+                        <Bookmark size={10} />
+                        {stats.teamPendingSalesCount}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Avg EQ</span>
+                <div className={`font-bold text-base ${
+                  stats.avgEQ >= 3 ? 'text-green-400' : stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
+                }`}>
+                  {stats.avgEQ.toFixed(2)}
+                </div>
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold mt-0.5">Cart Avg</span>
+                <div className="flex items-center gap-0.5 text-gray-300 text-xs font-medium">
+                  <DollarSign size={9} className="opacity-70" />
+                  {stats.teamCartAvgGross.toFixed(0)}
+                </div>
+              </div>
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Upsells</span>
+                <div className="text-purple-300 font-bold text-base">
+                  {stats.totalUpsellCount}
+                </div>
+              </div>
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Up $</span>
+                <div className="flex items-center gap-0.5 text-purple-400 font-bold text-base">
+                  <DollarSign size={12} className="opacity-70" />
+                  {stats.totalGross.toFixed(0)}
+                </div>
+              </div>
+            </div>
+
+            <div className="hidden sm:grid grid-cols-8 gap-px bg-gray-700">
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Workers</span>
+                <div className="flex items-center gap-1 text-blue-300 font-bold text-base">
+                  <Users size={12} className="opacity-70" /> {stats.workerCount}
+                </div>
+              </div>
+
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Steps</span>
+                <div className="flex items-center gap-1 text-white font-bold text-base">
+                  <Activity size={12} className="opacity-70 text-green-400" /> {stats.totalSteps}
+                </div>
+              </div>
+
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Pending</span>
+                <div className="flex items-center gap-1 font-bold text-base">
+                  <Clock size={12} className="text-yellow-400 opacity-70" />
+                  <span className="text-green-400">{stats.teamPendingOfficeCount}</span>
+                  {stats.teamPendingSalesCount > 0 && (
+                    <>
+                      <span className="text-gray-500 text-xs">+</span>
+                      <span className="text-yellow-400 flex items-center gap-0.5">
+                        <Bookmark size={10} />
+                        {stats.teamPendingSalesCount}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="col-span-2 bg-gray-800 p-2 flex flex-col items-center justify-center">
+                <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold">Total Gross</span>
+                <div className="flex items-center gap-1 text-white font-bold text-2xl leading-tight">
+                  <DollarSign size={18} className="opacity-70" />
+                  {stats.teamTotalGross.toFixed(0)}
+                </div>
+                <div className="flex items-center gap-1 text-yellow-400 font-medium text-xs mt-0.5">
+                  <span className="text-gray-500 text-[9px] uppercase tracking-wider">Pending $:</span>
+                  <DollarSign size={10} className="opacity-70" />
+                  <span>{stats.teamTotalPendingDollars.toFixed(0)}</span>
+                </div>
+              </div>
+
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Avg EQ</span>
+                <div className={`font-bold text-base ${
+                  stats.avgEQ >= 3 ? 'text-green-400' : stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
+                }`}>
+                  {stats.avgEQ.toFixed(2)}
+                </div>
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold mt-1">Cart Avg</span>
+                <div className="flex items-center gap-0.5 text-gray-300 text-xs font-medium">
+                  <DollarSign size={9} className="opacity-70" />
+                  {stats.teamCartAvgGross.toFixed(0)}
+                </div>
+              </div>
+
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Upsells</span>
+                <div className="text-purple-300 font-bold text-base">
+                  {stats.totalUpsellCount}
+                </div>
+              </div>
+
+              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
+                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Up $</span>
+                <div className="flex items-center gap-0.5 text-purple-400 font-bold text-base">
+                  <DollarSign size={12} className="opacity-70" />
+                  {stats.totalGross.toFixed(0)}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+    </>
+  );
+
+  // Stats panel, battle cards and the menu's actions — shared by the phone
+  // layout and the digital-mapping desktop (Stats modal, grid menu).
+  const statTile = (label: string, value: React.ReactNode, tone = 'text-white') => (
+    <div className="bg-gray-800 rounded-xl px-3 py-2.5">
+      <div className="text-[9.5px] uppercase tracking-wide text-gray-500 font-bold">{label}</div>
+      <div className={`text-lg font-extrabold ${tone}`}>{value}</div>
+    </div>
+  );
+  const eqTone = stats.avgEQ >= 3 ? 'text-green-400' : stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400';
+  const statsPanel = (
+    <div className="space-y-2">
+      {isTeamSeason && (
+        <div className="bg-gray-800 rounded-xl px-3 py-3 text-center">
+          <div className="text-[10px] uppercase tracking-wide text-gray-500 font-bold">Total gross</div>
+          <div className="text-3xl font-extrabold text-white">${stats.teamTotalGross.toFixed(0)}</div>
+          <div className="text-sm text-yellow-400 font-bold">+ ${stats.teamTotalPendingDollars.toFixed(0)} pending</div>
         </div>
+      )}
+      <div className="grid grid-cols-3 gap-2">
+        {statTile('Workers', stats.workerCount, 'text-blue-300')}
+        {statTile('Steps', stats.totalSteps)}
+        {statTile('Done', stats.completedJobs, 'text-green-400')}
+        {isTeamSeason
+          ? statTile('Prebooks', stats.teamPendingOfficeCount, 'text-green-400')
+          : statTile('Pending', stats.totalPending, 'text-yellow-400')}
+        {isTeamSeason && statTile('Pend. sales', stats.teamPendingSalesCount, 'text-yellow-400')}
+        {statTile('Avg EQ', stats.avgEQ.toFixed(2), eqTone)}
+        {isTeamSeason && statTile('Cart avg', `$${stats.teamCartAvgGross.toFixed(0)}`, 'text-gray-200')}
+        {statTile('Upsells', stats.totalUpsellCount, 'text-purple-300')}
+        {statTile('Up $', `$${stats.totalGross.toFixed(0)}`, 'text-purple-400')}
+        {statTile('Open routes', stats.unassignedRoutes, stats.unassignedRoutes > 0 ? 'text-amber-400' : 'text-gray-300')}
       </div>
-    );
+    </div>
+  );
 
-    const covering = ((currentUser.floatingFor as string[] | undefined) || [])
-      .map(id => dailyData.managers.find(m => m.userId === id)?.name?.split(' ')[0])
-      .filter(Boolean) as string[];
+  const covering = ((currentUser.floatingFor as string[] | undefined) || [])
+    .map(id => dailyData.managers.find(m => m.userId === id)?.name?.split(' ')[0])
+    .filter(Boolean) as string[];
 
-    const phoneShell: RMPhoneShell = {
-      header: {
-        isTeamSeason,
-        done: stats.completedJobs,
-        pendingSales: stats.teamPendingSalesCount,
-        prebooks: stats.teamPendingOfficeCount,
-        gross: stats.teamTotalGross,
-        pendingGross: stats.teamTotalPendingDollars,
-        pending: stats.totalPending,
-        upsellGross: stats.totalGross,
-      },
-      statsPanel,
-      battleCards: (
-        <RMTeamBattleCards
-          managers={dailyData.managers}
-          workers={dailyData.workers}
-          routes={dailyData.routes}
-          pendingBookings={dailyData.pendingBookings}
-          allSessions={allSessions}
-          allPendingSales={allPendingSales}
-          currentManagerId={currentUser.userId}
-          seasonType={seasonType}
-        />
-      ),
-      onToggleFilter: handleToggleFilter,
-      onToggleFollowMe: handleToggleCenter,
-      onTogglePinMode: () => setPinMode(prev => !prev),
-      isTeamLocked,
-      lockLoading,
-      onToggleLock: handleToggleLock,
-      onOpenTransactions: () => setShowTransactionsModal(true),
-      isSealing,
-      unassignedAsphaltCount,
-      onOpenAsphalt: () => setShowAsphaltModal(true),
-      onOpenManageTeam: () => setShowManageTeamModal(true),
-      onDesktopView: () => setLayout('desktop'),
-      userName: currentUser.name,
-      coveringNames: covering,
-    };
+  const phoneShell: RMPhoneShell = {
+    header: {
+      isTeamSeason,
+      done: stats.completedJobs,
+      pendingSales: stats.teamPendingSalesCount,
+      prebooks: stats.teamPendingOfficeCount,
+      gross: stats.teamTotalGross,
+      pendingGross: stats.teamTotalPendingDollars,
+      pending: stats.totalPending,
+      upsellGross: stats.totalGross,
+    },
+    statsPanel,
+    battleCards: (
+      <RMTeamBattleCards
+        managers={dailyData.managers}
+        workers={dailyData.workers}
+        routes={dailyData.routes}
+        pendingBookings={dailyData.pendingBookings}
+        allSessions={allSessions}
+        allPendingSales={allPendingSales}
+        currentManagerId={currentUser.userId}
+        seasonType={seasonType}
+      />
+    ),
+    onToggleFilter: handleToggleFilter,
+    onToggleFollowMe: handleToggleCenter,
+    onTogglePinMode: () => setPinMode(prev => !prev),
+    isTeamLocked,
+    lockLoading,
+    onToggleLock: handleToggleLock,
+    onOpenTransactions: () => setShowTransactionsModal(true),
+    isSealing,
+    unassignedAsphaltCount,
+    onOpenAsphalt: () => setShowAsphaltModal(true),
+    onOpenManageTeam: () => setShowManageTeamModal(true),
+    onDesktopView: () => setLayout('desktop'),
+    // Only offered on a phone that chose Desktop view.
+    onPhoneView: isPhoneDevice() ? () => setLayout('phone') : undefined,
+    userName: currentUser.name,
+    coveringNames: covering,
+  };
 
+  // ── PHONE LAYOUT ── map-only RMs on a phone. The header's contents (stats,
+  // filters, lock, asphalt, cards, battle cards) move into the phone screen's
+  // header and menu; the map and its data are the same RMMapTab.
+  if (digitalMappingEnabled && layout === 'phone') {
     return (
       <>
         <RMMapTab
@@ -690,6 +905,93 @@ const RMLogbook: React.FC = () => {
         />
         {sharedHeaderModals}
       </>
+    );
+  }
+
+  // ── DIGITAL-MAPPING DESKTOP ── header = grid button + the stats bar.
+  // Everything the old icon row held lives in the grid menu (Team, Pins,
+  // Layers, Card Txns, Asphalt); clicking the stats bar opens today's stats
+  // with Team Battle underneath. Follow-me is a floating button on the map.
+  if (digitalMappingEnabled) {
+    return (
+      <div className="h-screen bg-gray-900 text-white flex flex-col overflow-hidden">
+        <div className="flex-shrink-0 bg-gray-800 border-b border-gray-700 shadow-md z-10 flex items-stretch">
+          <button
+            onClick={() => setDesktopMenuOpen(true)}
+            className="relative flex-shrink-0 w-16 flex flex-col items-center justify-center gap-0.5 bg-gray-900 hover:bg-gray-700 border-r border-gray-700 text-white transition-colors"
+            title="Menu"
+            aria-label="Menu"
+          >
+            <LayoutGrid size={22} />
+            <span className="text-[9px] uppercase tracking-wider text-gray-400 font-bold">Menu</span>
+            {isSealing && unassignedAsphaltCount > 0 && (
+              <span className="absolute top-1.5 right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-black text-[10px] font-extrabold flex items-center justify-center">{unassignedAsphaltCount}</span>
+            )}
+            {pinMode && <span className="absolute bottom-1.5 right-2 w-2 h-2 rounded-full bg-purple-400" title="Pin mode on" />}
+          </button>
+          <button
+            onClick={() => setStatsOpen(true)}
+            className="flex-1 min-w-0 text-left cursor-pointer hover:brightness-125 transition [&>div]:border-t-0"
+            title="Open today's stats"
+          >
+            {statsBar}
+          </button>
+        </div>
+
+        <div className="flex-1 min-h-0 relative">
+          <RMMapTab
+            desktopShell={phoneShell}
+            desktopMenuOpen={desktopMenuOpen}
+            onCloseDesktopMenu={() => setDesktopMenuOpen(false)}
+            managerId={currentUser.userId}
+            routes={dailyData.routes}
+            bookings={dailyData.pendingBookings}
+            allSessions={allSessions}
+            workers={dailyData.workers}
+            currentUser={currentUser}
+            allManagers={dailyData.managers}
+            seasonType={seasonType}
+            teamCarts={dailyData.teamCarts}
+            pendingSalesByManager={pendingSalesByManager}
+            onRefresh={refreshData}
+            filterVisibility={filterVisibility}
+            geocodePhase={geocodePhase}
+            geocodeProgress={geocodeProgress}
+            onGeocodeProgress={handleGeocodeProgress}
+            centerOnLocation={centerOnLocation}
+            onFollowMeAutoDisable={handleFollowMeAutoDisable}
+            onForceFollowMeOn={handleForceFollowMeOn}
+            showManageTeamModal={showManageTeamModal}
+            onCloseManageTeamModal={() => setShowManageTeamModal(false)}
+            pinMode={pinMode}
+            onExitPinMode={() => setPinMode(false)}
+          />
+        </div>
+
+        {statsOpen && (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setStatsOpen(false)}>
+            <div
+              className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex-shrink-0 px-4 pt-4 pb-2 flex items-center justify-between">
+                <div className="text-white font-bold text-sm">Today's team stats</div>
+                <button onClick={() => setStatsOpen(false)} className="w-8 h-8 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 flex items-center justify-center" aria-label="Close">
+                  <XIcon size={16} />
+                </button>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 pb-4">
+                {statsPanel}
+                <div className="pt-4 pb-1.5 text-[10px] uppercase tracking-wide text-gray-500 font-bold">Team battle</div>
+                <div className="flex">{phoneShell.battleCards}</div>
+                <div className="text-[10px] text-gray-500 pt-2">Steps · pending prebooks + pending sales · gross + pending $. Click a team for its carts.</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {sharedHeaderModals}
+      </div>
     );
   }
 
@@ -927,208 +1229,7 @@ const RMLogbook: React.FC = () => {
           </div>
         </div>
 
-        {/* Stats grids stay exactly as they were — these continue to show on
-            digital-mapping CCs too. Visual continuity. */}
-
-        {!isTeamSeason && (
-          <div className="grid grid-cols-6 gap-px bg-gray-700 border-t border-gray-700">
-
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                  <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Workers</span>
-                  <div className="flex items-center gap-1 text-blue-300 font-bold text-base">
-                      <Users size={12} className="opacity-70" /> {stats.workerCount}
-                  </div>
-              </div>
-
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                  <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Steps</span>
-                  <div className="flex items-center gap-1 text-white font-bold text-base">
-                      <Activity size={12} className="opacity-70 text-green-400" /> {stats.totalSteps}
-                  </div>
-              </div>
-
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                  <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Pending</span>
-                  <div className="flex items-center gap-1 text-yellow-400 font-bold text-base">
-                      <Clock size={12} className="opacity-70" /> {stats.totalPending}
-                  </div>
-              </div>
-
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                  <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Avg EQ</span>
-                  <div className={`font-bold text-base ${
-                      stats.avgEQ >= 3 ? 'text-green-400' : stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
-                  }`}>
-                      {stats.avgEQ.toFixed(2)}
-                  </div>
-              </div>
-
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                  <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Upsells</span>
-                  <div className="text-purple-300 font-bold text-base">
-                      {stats.totalUpsellCount}
-                  </div>
-              </div>
-
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                  <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Up $</span>
-                  <div className="flex items-center gap-0.5 text-purple-400 font-bold text-base">
-                      <DollarSign size={12} className="opacity-70" />
-                      {stats.totalGross.toFixed(0)}
-                  </div>
-              </div>
-
-          </div>
-        )}
-
-        {isTeamSeason && (
-          <div className="border-t border-gray-700">
-            <div className="sm:hidden bg-gray-800 p-3 flex flex-col items-center justify-center border-b border-gray-700">
-              <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold mb-1">Total Gross</span>
-              <div className="flex items-center gap-1 text-white font-bold text-2xl">
-                <DollarSign size={18} className="opacity-70" />
-                {stats.teamTotalGross.toFixed(0)}
-              </div>
-              <div className="flex items-center gap-1 text-yellow-400 font-medium text-xs mt-1">
-                <span className="text-gray-500 text-[9px] uppercase tracking-wider">Pending $:</span>
-                <DollarSign size={10} className="opacity-70" />
-                <span>{stats.teamTotalPendingDollars.toFixed(0)}</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-px bg-gray-700 sm:hidden">
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Workers</span>
-                <div className="flex items-center gap-1 text-blue-300 font-bold text-base">
-                  <Users size={12} className="opacity-70" /> {stats.workerCount}
-                </div>
-              </div>
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Steps</span>
-                <div className="flex items-center gap-1 text-white font-bold text-base">
-                  <Activity size={12} className="opacity-70 text-green-400" /> {stats.totalSteps}
-                </div>
-              </div>
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Pending</span>
-                <div className="flex items-center gap-1 font-bold text-base">
-                  <Clock size={12} className="text-yellow-400 opacity-70" />
-                  <span className="text-green-400">{stats.teamPendingOfficeCount}</span>
-                  {stats.teamPendingSalesCount > 0 && (
-                    <>
-                      <span className="text-gray-500 text-xs">+</span>
-                      <span className="text-yellow-400 flex items-center gap-0.5">
-                        <Bookmark size={10} />
-                        {stats.teamPendingSalesCount}
-                      </span>
-                    </>
-                  )}
-                </div>
-              </div>
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Avg EQ</span>
-                <div className={`font-bold text-base ${
-                  stats.avgEQ >= 3 ? 'text-green-400' : stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
-                }`}>
-                  {stats.avgEQ.toFixed(2)}
-                </div>
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold mt-0.5">Cart Avg</span>
-                <div className="flex items-center gap-0.5 text-gray-300 text-xs font-medium">
-                  <DollarSign size={9} className="opacity-70" />
-                  {stats.teamCartAvgGross.toFixed(0)}
-                </div>
-              </div>
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Upsells</span>
-                <div className="text-purple-300 font-bold text-base">
-                  {stats.totalUpsellCount}
-                </div>
-              </div>
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Up $</span>
-                <div className="flex items-center gap-0.5 text-purple-400 font-bold text-base">
-                  <DollarSign size={12} className="opacity-70" />
-                  {stats.totalGross.toFixed(0)}
-                </div>
-              </div>
-            </div>
-
-            <div className="hidden sm:grid grid-cols-8 gap-px bg-gray-700">
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Workers</span>
-                <div className="flex items-center gap-1 text-blue-300 font-bold text-base">
-                  <Users size={12} className="opacity-70" /> {stats.workerCount}
-                </div>
-              </div>
-
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Steps</span>
-                <div className="flex items-center gap-1 text-white font-bold text-base">
-                  <Activity size={12} className="opacity-70 text-green-400" /> {stats.totalSteps}
-                </div>
-              </div>
-
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Pending</span>
-                <div className="flex items-center gap-1 font-bold text-base">
-                  <Clock size={12} className="text-yellow-400 opacity-70" />
-                  <span className="text-green-400">{stats.teamPendingOfficeCount}</span>
-                  {stats.teamPendingSalesCount > 0 && (
-                    <>
-                      <span className="text-gray-500 text-xs">+</span>
-                      <span className="text-yellow-400 flex items-center gap-0.5">
-                        <Bookmark size={10} />
-                        {stats.teamPendingSalesCount}
-                      </span>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              <div className="col-span-2 bg-gray-800 p-2 flex flex-col items-center justify-center">
-                <span className="text-[9px] uppercase tracking-wider text-gray-500 font-bold">Total Gross</span>
-                <div className="flex items-center gap-1 text-white font-bold text-2xl leading-tight">
-                  <DollarSign size={18} className="opacity-70" />
-                  {stats.teamTotalGross.toFixed(0)}
-                </div>
-                <div className="flex items-center gap-1 text-yellow-400 font-medium text-xs mt-0.5">
-                  <span className="text-gray-500 text-[9px] uppercase tracking-wider">Pending $:</span>
-                  <DollarSign size={10} className="opacity-70" />
-                  <span>{stats.teamTotalPendingDollars.toFixed(0)}</span>
-                </div>
-              </div>
-
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Avg EQ</span>
-                <div className={`font-bold text-base ${
-                  stats.avgEQ >= 3 ? 'text-green-400' : stats.avgEQ >= 2 ? 'text-yellow-400' : 'text-red-400'
-                }`}>
-                  {stats.avgEQ.toFixed(2)}
-                </div>
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold mt-1">Cart Avg</span>
-                <div className="flex items-center gap-0.5 text-gray-300 text-xs font-medium">
-                  <DollarSign size={9} className="opacity-70" />
-                  {stats.teamCartAvgGross.toFixed(0)}
-                </div>
-              </div>
-
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Upsells</span>
-                <div className="text-purple-300 font-bold text-base">
-                  {stats.totalUpsellCount}
-                </div>
-              </div>
-
-              <div className="bg-gray-800 p-1.5 flex flex-col items-center justify-center">
-                <span className="text-[8px] uppercase tracking-wider text-gray-500 font-bold">Up $</span>
-                <div className="flex items-center gap-0.5 text-purple-400 font-bold text-base">
-                  <DollarSign size={12} className="opacity-70" />
-                  {stats.totalGross.toFixed(0)}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {statsBar}
 
 </div>
 

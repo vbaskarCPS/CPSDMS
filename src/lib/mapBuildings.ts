@@ -26,6 +26,8 @@
 // tiles, so houses fill in as you pan.
 
 import type { Map as MapboxMap } from 'mapbox-gl';
+// Ships with mapbox-gl (one of its own dependencies), so it's always installed.
+import { union as polygonUnion } from 'martinez-polygon-clipping';
 
 export const BUILDING_MIN_ZOOM = 15;
 const SRC = 'composite';
@@ -251,7 +253,13 @@ function ringArea(r: number[][]): number {
  * parallel to the building's own side walls, and the units are equal width.
  * The house points only decide the ORDER of the units along the building.
  */
-function splitBuilding(outer: number[][], pts: Array<{ id: string; lng: number; lat: number }>, rowOnly = false): Map<string, number[][]> {
+function splitBuilding(
+  outer: number[][],
+  pts: Array<{ id: string; lng: number; lat: number }>,
+  rowOnly = false,
+  /** Direction the street runs here ([dLng·cos, dLat], any length), when known. */
+  streetDir: [number, number] | null = null,
+): Map<string, number[][]> {
   const out = new Map<string, number[][]>();
   const lat0 = pts[0].lat, lng0 = pts[0].lng;
   const kx = Math.cos(lat0 * Math.PI / 180) * 111320, ky = 111320;
@@ -283,7 +291,14 @@ function splitBuilding(outer: number[][], pts: Array<{ id: string; lng: number; 
   const pA = spread(P.map(p => dot(p, axA))), pB = spread(P.map(p => dot(p, axB)));
   const longer = spread(ring.map(p => dot(p, axA))) >= spread(ring.map(p => dot(p, axB))) ? axA : axB;
   let row = longer;
-  if (pA >= 1 && pA >= 1.5 * pB) row = axA;
+  // Best guide: units sit side by side ALONG THE STREET, so the cuts run
+  // front-to-back, square to the street. Used when the street's direction
+  // clearly matches one of the building's two sides.
+  const sl = streetDir ? Math.hypot(streetDir[0], streetDir[1]) : 0;
+  const cA = sl ? Math.abs(dot(streetDir!, axA)) / sl : 0, cB = sl ? Math.abs(dot(streetDir!, axB)) / sl : 0;
+  if (sl && Math.abs(cA - cB) >= 0.3) row = cA > cB ? axA : axB;
+  // Otherwise: the way the house points are clearly spread.
+  else if (pA >= 1 && pA >= 1.5 * pB) row = axA;
   else if (pB >= 1 && pB >= 1.5 * pA) row = axB;
   // Big groups are only sliced when they're plainly a row: points spread
   // along the building at least 3× more than across it, and every unit at
@@ -361,13 +376,35 @@ export function matchHousesToBuildings(
   }
   if (!blds.length) return none;
 
-  // A building can come back in several pieces (one per map tile it
-  // crosses). For splitting, use its biggest piece.
+  // A building comes back in several pieces when it crosses a map-tile edge
+  // (each tile sends its own clipped piece). Splitting just one piece cut
+  // the row short and its straight tile-edge threw the cut direction off, so
+  // glue the pieces back together first. Falls back to the biggest piece.
   const biggest = new Map<number, number[][]>();
-  const bigArea = new Map<number, number>();
-  for (const b of blds) {
-    if (b.area > (bigArea.get(b.id) ?? -1)) { bigArea.set(b.id, b.area); biggest.set(b.id, b.rings[0]); }
-  }
+  const pieces = new Map<number, B[]>();
+  for (const b of blds) { const l = pieces.get(b.id); if (l) l.push(b); else pieces.set(b.id, [b]); }
+  pieces.forEach((ps, id) => {
+    let best = ps[0];
+    for (const p of ps) if (p.area > best.area) best = p;
+    biggest.set(id, best.rings[0]);
+  });
+  const merged = new Set<number>();
+  /** The whole outline of a building, pieces glued (only worked out for buildings we split). */
+  const wholeOutline = (bid: number): number[][] | undefined => {
+    const ps = pieces.get(bid);
+    if (!ps || ps.length < 2 || merged.has(bid)) return biggest.get(bid);
+    merged.add(bid);
+    try {
+      let acc: any = [ps[0].rings[0]];
+      for (let i = 1; i < ps.length; i++) acc = polygonUnion(acc, [ps[i].rings[0]] as any) || acc;
+      // Polygon (rings) or MultiPolygon (polygons of rings)? Take the largest outer ring.
+      const polys: number[][][][] = typeof acc?.[0]?.[0]?.[0] === 'number' ? [acc] : acc;
+      let ring: number[][] | null = null, area = -1;
+      for (const poly of polys) { const r = poly?.[0]; if (r && r.length >= 4) { const a = ringArea(r); if (a > area) { area = a; ring = r; } } }
+      if (ring) biggest.set(bid, ring);
+    } catch { /* keep the biggest piece */ }
+    return biggest.get(bid);
+  };
 
   // Grid of ~50 m cells.
   const CELL = 0.0005;
@@ -383,6 +420,42 @@ export function matchHousesToBuildings(
 
   const housesIn = new Map<number, string[]>();
   const byId = new Map(houses.map(h => [h.id, h]));
+
+  // Houses by street, so a shared building can be cut square to its street.
+  const byStreet = new Map<string, GapHouse[]>();
+  for (const h of houses) {
+    if (!h.street || h.unit || h.civic == null) continue;
+    const k = `${h.street}|${h.civic % 2}`;   // one side of the street
+    const l = byStreet.get(k); if (l) l.push(h); else byStreet.set(k, [h]);
+  }
+  /**
+   * Which way the street runs at these houses: the main direction of the
+   * neighbouring house points on the same street (within ~80 m). Null unless
+   * they clearly line up (spread ≥ 15 m, 4× longer than wide).
+   */
+  const streetDirAt = (reps: GapHouse[]): [number, number] | null => {
+    const r0 = reps.find(r => r.street && r.civic != null);
+    if (!r0) return null;
+    const st = `${r0.street}|${r0.civic! % 2}`;
+    const c = r0;
+    const kx = Math.cos(c.lat * Math.PI / 180) * 111320, ky = 111320;
+    const pts: Array<[number, number]> = [];
+    for (const h of byStreet.get(st) || []) {
+      const x = (h.lng - c.lng) * kx, y = (h.lat - c.lat) * ky;
+      if (x * x + y * y <= 80 * 80) pts.push([x, y]);
+    }
+    if (pts.length < 3) return null;
+    let mx = 0, my = 0;
+    for (const [x, y] of pts) { mx += x; my += y; }
+    mx /= pts.length; my /= pts.length;
+    let sxx = 0, syy = 0, sxy = 0;
+    for (const [x, y] of pts) { const dx = x - mx, dy = y - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+    const tr = sxx + syy, det = sxx * syy - sxy * sxy;
+    const l1 = tr / 2 + Math.sqrt(Math.max(0, tr * tr / 4 - det)), l2 = tr - l1;
+    if (l1 / pts.length < 15 * 15 / 12 || l1 < 16 * Math.max(l2, 1e-6)) return null;   // spread ≥ ~15 m, 4× longer than wide (λ ratio 16)
+    const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    return [Math.cos(th), Math.sin(th)];   // metres east, metres north — same frame splitBuilding uses
+  };
   for (const h of houses) {
     const cand = grid.get(`${Math.floor(h.lng / CELL)}|${Math.floor(h.lat / CELL)}`) || [];
     // A house can sit inside two outlines (e.g. a unit drawn on top of a big
@@ -409,10 +482,10 @@ export function matchHousesToBuildings(
     }
     // Shared building: slice it between its addresses (big ones keep tiles).
     if (byKey.size > SPLIT_ROW_MAX_HOUSES) return;
-    const outer = biggest.get(bid);
+    const outer = wholeOutline(bid);
     if (!outer) return;
     const reps = [...byKey.values()].map(l => byId.get(l[0])!).filter(Boolean);
-    splitBuilding(outer, reps, byKey.size > SPLIT_MAX_HOUSES).forEach((ring, repId) => {
+    splitBuilding(outer, reps, byKey.size > SPLIT_MAX_HOUSES, streetDirAt(reps)).forEach((ring, repId) => {
       for (const id of byKey.get(keyOf(repId)) || [repId]) houseToSlice.set(id, { bid, ring });
     });
   });
