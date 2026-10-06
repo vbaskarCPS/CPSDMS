@@ -4,8 +4,8 @@
 // route's view in its place when one is opened (‹ goes back to the list).
 // RMMapTab owns the data and every action; these only draw.
 //
-//   RouteList  one card per route with the crew working it (unassigned
-//              routes first, with Assign), then crews with no route.
+//   RouteList  the team first (each crew with its route chips; a click opens
+//              their route), then the routes (open ones first, with Assign).
 //   RoutePanel what a click on a route (list, map line, or a worker's
 //              initials) opens: Logsheet first, then Stats / Prebooks / PCL,
 //              with Assign and Navigate on top.
@@ -59,42 +59,43 @@ export interface RouteListProps {
 }
 
 export const RouteList: React.FC<RouteListProps> = p => {
-  const rows = useMemo(() => {
-    const order = new Map(p.crews.map((c, i) => [c.key, i]));
-    const list = p.routeCards.map(rc => ({ rc, crew: rc.isAssigned ? p.crewForIds(rc.assignedWorkerIds) : null }));
-    const code = (rc: RouteCardData) => rc.displayRouteCode;
-    list.sort((a, b) => {
-      const ua = a.rc.isAssigned ? 1 : 0, ub = b.rc.isAssigned ? 1 : 0;
-      if (ua !== ub) return ua - ub;                       // unassigned first
-      const oa = a.crew ? order.get(a.crew.key) ?? 9999 : 9999;
-      const ob = b.crew ? order.get(b.crew.key) ?? 9999 : 9999;
-      if (oa !== ob) return oa - ob;                       // then by the crew's place in the sort
-      return code(a.rc).localeCompare(code(b.rc), undefined, { numeric: true });
-    });
-    return list;
-  }, [p.routeCards, p.crews, p.crewForIds]);
+  // Each crew's routes (chips on their one card, however many routes).
+  const routesOf = useMemo(() => {
+    const m = new Map<string, RouteCardData[]>();
+    for (const c of p.crews) {
+      const ids = crewIds(c);
+      m.set(c.key, p.routeCards
+        .filter(rc => rc.assignedWorkerIds.some(id => ids.includes(id)))
+        .sort((x, y) => x.displayRouteCode.localeCompare(y.displayRouteCode, undefined, { numeric: true })));
+    }
+    return m;
+  }, [p.crews, p.routeCards]);
 
-  const idle = useMemo(() => {
-    const onRoute = new Set(p.routeCards.flatMap(rc => rc.assignedWorkerIds));
-    return p.crews.filter(c => !crewIds(c).some(id => onRoute.has(id)));
-  }, [p.routeCards, p.crews]);
+  // Routes nobody is on yet — listed at the bottom with Assign.
+  const open = useMemo(() => p.routeCards
+    .filter(rc => !rc.isAssigned)
+    .sort((x, y) => x.displayRouteCode.localeCompare(y.displayRouteCode, undefined, { numeric: true })), [p.routeCards]);
 
-  const unassigned = rows.filter(r => !r.rc.isAssigned).length;
   const sel = p.selected;
+  const selRouteCrewKey = useMemo(() => {
+    if (!sel?.routeCode) return null;
+    const rc = p.routeCards.find(r => r.baseRouteCode === sel.routeCode && (r.letter || undefined) === (sel.letter || undefined));
+    return rc ? p.crewForIds(rc.assignedWorkerIds)?.key ?? null : null;
+  }, [sel, p.routeCards, p.crewForIds]);
 
   return (
     <div className="flex flex-col h-full">
       <div className="flex-shrink-0 p-3 border-b border-gray-700 bg-gray-900/95">
         <div className="flex items-center gap-2">
-          <span className="text-white font-bold text-sm">Routes</span>
-          <span className="text-[11px] text-gray-400">· {rows.length}{unassigned > 0 && <span className="text-amber-400"> · {unassigned} open</span>}</span>
+          <span className="text-white font-bold text-sm">{p.isTeamSeason ? 'Carts' : 'Workers'}</span>
+          <span className="text-[11px] text-gray-400">· {p.crews.length}{open.length > 0 && <span className="text-amber-400"> · {open.length} open route{open.length === 1 ? '' : 's'}</span>}</span>
           <label className="ml-auto flex items-center gap-1 text-[11px] text-gray-300 bg-gray-800 rounded-full pl-2 pr-1 py-0.5 border border-gray-700">
             <ArrowUpDown size={11} />
             <select
               value={p.sortBy}
               onChange={e => p.onSortBy(e.target.value as SortOption)}
               className="bg-transparent text-[11px] text-gray-200 outline-none cursor-pointer"
-              title="Order of the assigned routes (open routes always come first)"
+              title="Sort the team"
             >
               {(Object.keys(SORT_LABEL) as SortOption[]).map(k => <option key={k} value={k} className="bg-gray-800">{SORT_LABEL[k]}</option>)}
             </select>
@@ -108,81 +109,80 @@ export const RouteList: React.FC<RouteListProps> = p => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scrollbar">
-        {rows.length === 0 && <div className="text-xs text-gray-500 p-3">No routes today.</div>}
-        {rows.map(({ rc, crew }) => {
-          const on = !!sel && sel.routeCode === rc.baseRouteCode && (sel.letter || undefined) === (rc.letter || undefined);
-          const m = crew ? p.crewMoney(crew) : null;
-          const k = crew?.type === 'cart' ? p.knock.get(crew.cart.sessionId) : undefined;
+        {/* WORKERS / CARTS — one card each; a click opens their route */}
+        {p.crews.length === 0 && <div className="text-xs text-gray-500 p-3">Nobody on your team yet today.</div>}
+        {p.crews.map(c => {
+          const m = p.crewMoney(c);
+          const k = c.type === 'cart' ? p.knock.get(c.cart.sessionId) : undefined;
+          const theirs = routesOf.get(c.key) || [];
+          const on = !!sel && (sel.crewKey === c.key || selRouteCrewKey === c.key);
           return (
             <div
-              key={`${rc.baseRouteCode}-${rc.letter || 'whole'}`}
-              onClick={() => p.onOpenRoute(rc)}
+              key={c.key}
+              onClick={() => p.onOpenCrew(c.key)}
               className={`rounded-lg p-2.5 cursor-pointer border transition-colors ${on ? 'bg-gray-700 border-blue-500 ring-1 ring-blue-500' : 'bg-gray-800 hover:bg-gray-700 border-gray-700'}`}
             >
-              <div className="flex items-center gap-2">
-                <div
-                  className="h-8 px-2 min-w-[48px] rounded-md flex items-center justify-center font-bold text-white text-[11px] flex-shrink-0 leading-none whitespace-nowrap"
-                  style={{ background: rc.routeColor }}
-                >{rc.displayRouteCode}</div>
-                <div className="flex-1 min-w-0">
-                  {crew ? (
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      {crew.type === 'cart' && crew.cart.isRcCart && <Truck size={11} className="text-orange-400 flex-shrink-0" />}
-                      <span className="text-white text-xs font-bold truncate">{crewLabel(crew)}</span>
-                      <ActivityBadge lastMs={crewLastMs(crew, p.knock)} nowMs={p.activityNow} />
-                    </div>
-                  ) : rc.isAssigned ? (
-                    <div className="text-white text-xs font-bold truncate">{rc.assignedWorkerLabel}</div>
-                  ) : (
-                    <div className="text-amber-400 text-xs font-bold">⚠ Unassigned</div>
-                  )}
-                  {m ? (
-                    <div className="flex flex-wrap items-center gap-x-1.5 text-[10px] text-gray-300 mt-0.5">
-                      <span><b className="text-white">{m.steps}</b> steps</span><Dot />
-                      <span className={m.pending > 0 ? 'text-amber-400' : ''}>{m.pending} pend</span><Dot />
-                      <span>{money(m.gross, true)}<span className="text-yellow-400"> +{money(m.pendingGross, true).slice(1)}</span></span>
-                      {k && (<><Dot /><span className="text-blue-300">{k.total ? `${Math.round(k.pct * 100)}% cov` : '— cov'}</span></>)}
-                    </div>
-                  ) : (
-                    <div className="text-[10px] text-gray-400 mt-0.5">{rc.prebookCount} jobs · {rc.prepayCount} prepaid · {rc.totalEQ.toFixed(1)} EQ</div>
-                  )}
+              <div className="flex items-start gap-2">
+                <div className="flex flex-col gap-1 flex-shrink-0">
+                  {theirs.length === 0 ? (
+                    <div className="h-8 px-2 min-w-[48px] rounded-md flex items-center justify-center font-bold text-gray-400 text-[10px] bg-gray-700 leading-none">No route</div>
+                  ) : theirs.map(rc => (
+                    <div
+                      key={`${rc.baseRouteCode}-${rc.letter || ''}`}
+                      className={`${theirs.length > 1 ? 'h-6 text-[10px]' : 'h-8 text-[11px]'} px-2 min-w-[48px] rounded-md flex items-center justify-center font-bold text-white leading-none whitespace-nowrap`}
+                      style={{ background: rc.routeColor }}
+                    >{rc.displayRouteCode}</div>
+                  ))}
                 </div>
-                {!rc.isAssigned && (
-                  <button
-                    onClick={e => { e.stopPropagation(); p.onAssignRoute(rc); }}
-                    className="flex-shrink-0 h-7 px-2.5 rounded-md bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold"
-                  >Assign</button>
-                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    {c.type === 'cart' && c.cart.isRcCart && <Truck size={11} className="text-orange-400 flex-shrink-0" />}
+                    <span className="text-white text-xs font-bold truncate">{crewLabel(c)}</span>
+                    <ActivityBadge lastMs={crewLastMs(c, p.knock)} nowMs={p.activityNow} />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-1.5 text-[10px] text-gray-300 mt-0.5">
+                    <span><b className="text-white">{m.steps}</b> steps</span><Dot />
+                    <span className={m.pending > 0 ? 'text-amber-400' : ''}>{m.pending} pend</span><Dot />
+                    <span>{money(m.gross, true)}<span className="text-yellow-400"> +{money(m.pendingGross, true).slice(1)}</span></span>
+                    {k && (<><Dot /><span className="text-blue-300">{k.total ? `${Math.round(k.pct * 100)}% cov` : '— cov'}</span></>)}
+                  </div>
+                </div>
               </div>
             </div>
           );
         })}
 
-        {idle.length > 0 && (
-          <>
-            <div className="pt-3 pb-1 px-1 text-[10px] uppercase tracking-wide text-gray-500 font-bold">
-              Not on a route · {idle.length}
-            </div>
-            {idle.map(c => {
-              const st = c.type === 'cart' ? c.cart.stats : c.card.stats;
-              const on = !!sel && !sel.routeCode && sel.crewKey === c.key;
-              return (
-                <div
-                  key={c.key}
-                  onClick={() => p.onOpenCrew(c.key)}
-                  className={`rounded-lg px-2.5 py-2 cursor-pointer border transition-colors ${on ? 'bg-gray-700 border-blue-500' : 'bg-gray-800/70 hover:bg-gray-700 border-gray-700'}`}
-                >
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    {c.type === 'cart' && c.cart.isRcCart && <Truck size={11} className="text-orange-400 flex-shrink-0" />}
-                    <span className="text-gray-100 text-xs font-bold truncate">{crewLabel(c)}</span>
-                    <ActivityBadge lastMs={crewLastMs(c, p.knock)} nowMs={p.activityNow} />
-                    <span className="ml-auto text-[10px] text-gray-400">{st.steps} steps · {st.pending} pend</span>
-                  </div>
-                </div>
-              );
-            })}
-          </>
+        {/* OPEN ROUTES — at the bottom, with Assign */}
+        {open.length > 0 && (
+          <div className="pt-3 pb-1 px-1 text-[10px] uppercase tracking-wide text-amber-400 font-bold">
+            Open routes · {open.length}
+          </div>
         )}
+        {open.map(rc => {
+          const on = !!sel && sel.routeCode === rc.baseRouteCode && (sel.letter || undefined) === (rc.letter || undefined);
+          return (
+            <div
+              key={`${rc.baseRouteCode}-${rc.letter || 'whole'}`}
+              onClick={() => p.onOpenRoute(rc)}
+              className={`rounded-lg px-2.5 py-2 cursor-pointer border transition-colors ${on ? 'bg-gray-700 border-blue-500 ring-1 ring-blue-500' : 'bg-gray-800/70 hover:bg-gray-700 border-gray-700'}`}
+            >
+              <div className="flex items-center gap-2">
+                <div
+                  className="h-7 px-2 min-w-[44px] rounded-md flex items-center justify-center font-bold text-white text-[11px] flex-shrink-0 leading-none whitespace-nowrap"
+                  style={{ background: rc.routeColor }}
+                >{rc.displayRouteCode}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-amber-400 text-xs font-bold">⚠ Unassigned</div>
+                  <div className="text-[10px] text-gray-400">{rc.prebookCount} jobs · {rc.prepayCount} prepaid · {rc.totalEQ.toFixed(1)} EQ</div>
+                </div>
+                <button
+                  onClick={e => { e.stopPropagation(); p.onAssignRoute(rc); }}
+                  className="flex-shrink-0 h-7 px-2.5 rounded-md bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold"
+                >Assign</button>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
