@@ -1,13 +1,17 @@
 // src/v2/features/workerbook/Payouts.tsx — the live day's payouts (shown on the day page). The screen itself is the old
 // app's payout screen (same numbers, same saves), shown in the new app's colours.
-import React, { Suspense, useState } from 'react';
+import React, { Suspense, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
 import { legacyLiveSession, pointLegacyAt } from '../../lib/legacy';
 import { ErrorBox, Loading } from '../../ui';
-import type { SortOption } from '../../../types';
+import { cartContext, cartStats, dayLines, saveDay, type PayoutCart } from '../../lib/payoutCarts';
+import { cartSessionId, fromBonus, savedDayView } from '../../lib/savedPayouts';
+import type { PayoutLine } from '../../lib/payslips';
+import type { LogsheetSession, SeasonType, SortOption } from '../../../types';
+import type { PayoutTodaySource } from '../../../pages/Management/PayoutToday';
 import '../../ui/legacy.css';
 
 const PayoutToday = React.lazy(() => import('../../../pages/Management/PayoutToday'));
@@ -23,6 +27,21 @@ const SORTS: { key: SortOption; label: string }[] = [
   { key: 'bonusEquiv', label: 'Bonus EQ' },
   { key: 'commission', label: 'Sort by Payout' },
 ];
+
+/** Search and sort above the payout list. */
+const PayoutBar: React.FC<{ search: string; setSearch: (v: string) => void; sort: SortOption; setSort: (v: SortOption) => void; children?: React.ReactNode }> =
+  ({ search, setSearch, sort, setSort, children }) => (
+    <div className="v2-card v2-row" style={{ marginBottom: 14, padding: 10 }}>
+      <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+        <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: '#6b7280' }} />
+        <input className="v2-input" style={{ paddingLeft: 30 }} placeholder="Search workers…" value={search} onChange={e => setSearch(e.target.value)} aria-label="Search workers" />
+      </div>
+      <select className="v2-sel" style={{ width: 200 }} value={sort} onChange={e => setSort(e.target.value as SortOption)} aria-label="Sort">
+        {SORTS.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+      </select>
+      {children}
+    </div>
+  );
 
 const prettyDate = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 
@@ -61,15 +80,7 @@ export const SessionPayouts: React.FC<{ centerId: string; centerName: string; da
         </div>
       ) : (
         <>
-          <div className="v2-card v2-row" style={{ marginBottom: 14, padding: 10 }}>
-            <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
-              <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: '#6b7280' }} />
-              <input className="v2-input" style={{ paddingLeft: 30 }} placeholder="Search workers…" value={search} onChange={e => setSearch(e.target.value)} aria-label="Search workers" />
-            </div>
-            <select className="v2-sel" style={{ width: 200 }} value={sort} onChange={e => setSort(e.target.value as SortOption)} aria-label="Sort">
-              {SORTS.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-            </select>
-          </div>
+          <PayoutBar search={search} setSearch={setSearch} sort={sort} setSort={setSort} />
           <div className="v2-legacy v2-legacy-panel">
             <Suspense fallback={<Loading />}>
               <PayoutToday consoleProfileId={1} date={session.date} sortOption={sort} searchTerm={search}
@@ -79,6 +90,50 @@ export const SessionPayouts: React.FC<{ centerId: string; centerName: string; da
           </div>
         </>
       )}
+    </>
+  );
+};
+
+/**
+ * A saved day's payouts (closed, or handed off to a newer day) on the live payout screen: the same
+ * carts, numbers, Paid / Pending and bonuses. Adding or removing a bonus works the day's pay out
+ * again and saves it (until a payslip is generated). A worker opens the payout editor at their cart.
+ */
+export const SavedDayPayouts: React.FC<{
+  centerId: string; region: string; date: string; carts: PayoutCart[]; lines: PayoutLine[]; readOnly: boolean;
+  onChanged: () => void; toolbar?: React.ReactNode;
+}> = ({ centerId, region, date, carts, lines, readOnly, onChanged, toolbar }) => {
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<SortOption>('standard');
+  const ctx = useLoad(() => cartContext(centerId, region, date, carts), [centerId, region, date, carts]);
+  const stats = useLoad(async () => ctx.data ? Promise.all(carts.map(c => cartStats(c, ctx.data!.service, ctx.data!.settings))) : null, [ctx.data, carts]);
+  const changed = useRef(onChanged); changed.current = onChanged;
+  const view = useMemo(() => stats.data ? savedDayView(date, carts, stats.data as Record<string, number>[], lines) : null, [date, carts, stats.data, lines]);
+  const source = useMemo<PayoutTodaySource | null>(() => !view || !ctx.data ? null : {
+    seasonType: ctx.data.service as SeasonType,
+    load: async () => view.sessions,
+    readOnly,
+    update: async (sessionId: string, patch: Partial<LogsheetSession>) => {
+      if (!patch.bonuses || !ctx.data) return;
+      const next = carts.map((c, i) => cartSessionId(c, i) === sessionId ? { ...c, bonuses: patch.bonuses!.map(fromBonus) } : c);
+      await saveDay(centerId, date, next, await dayLines(next, ctx.data));
+      changed.current();
+    },
+  }, [view, ctx.data, readOnly, carts, centerId, date]);
+  return (
+    <>
+      <ErrorBox error={ctx.error || stats.error} />
+      <PayoutBar search={search} setSearch={setSearch} sort={sort} setSort={setSort}>{toolbar}</PayoutBar>
+      {!view || !source ? <Loading /> : (
+        <div className="v2-legacy v2-legacy-panel">
+          <Suspense fallback={<Loading />}>
+            <PayoutToday consoleProfileId={1} date={date} sortOption={sort} searchTerm={search} source={source}
+              managers={view.managers} workers={view.workers}
+              workerHref={id => `/app/workerbook/days/${date}?edit=${encodeURIComponent(id)}`} />
+          </Suspense>
+        </div>
+      )}
+      {view && !view.sessions.length && <div className="v2-card v2-mut" style={{ marginTop: 10 }}>No carts with anyone on them for this day.</div>}
     </>
   );
 };

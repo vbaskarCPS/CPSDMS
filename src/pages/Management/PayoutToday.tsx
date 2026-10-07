@@ -70,6 +70,19 @@ interface PayoutTodayProps {
   workers: Worker[];
   /** Where a worker's payout opens. Defaults to the old app's page; the new app passes its own. */
   workerHref?: (contractorId: string) => string;
+  /**
+   * Where the carts come from. Defaults to the live session (the old app's tables); the new app
+   * passes a saved day's carts so an earlier day looks the same as the live one.
+   */
+  source?: PayoutTodaySource;
+}
+
+export interface PayoutTodaySource {
+  seasonType: SeasonType;
+  load: () => Promise<LogsheetSession[]>;
+  update: (sessionId: string, patch: Partial<LogsheetSession>) => Promise<void>;
+  /** bonuses can't be changed (e.g. the day is on a payslip) */
+  readOnly?: boolean;
 }
 
 interface AggregatedStats {
@@ -612,8 +625,12 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   managers,
   workers,
   workerHref,
+  source,
 }) => {
   const navigate = useNavigate();
+  const updateSession = (id: string, patch: Partial<LogsheetSession>) =>
+    source ? source.update(id, patch) : sessionService.updateLogsheetSession(id, patch);
+  const canBonus = !source?.readOnly;
   const openWorker = (contractorId: string) =>
     navigate(workerHref ? workerHref(contractorId) : `/admin/payout/${contractorId}?date=${date}`);
   const [loading, setLoading] = useState(true);
@@ -677,10 +694,10 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
   const loadData = async () => {
     setLoading(true);
     try {
-      const currentSeasonType = await sessionService.getSessionSeasonType();
+      const currentSeasonType = source ? source.seasonType : await sessionService.getSessionSeasonType();
       setSeasonType(currentSeasonType);
 
-      const allSessions = await sessionService.getLogsheetSessions();
+      const allSessions = source ? await source.load() : await sessionService.getLogsheetSessions();
 
       const merged = allSessions
         .map((session) => {
@@ -702,7 +719,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
     if (workers.length > 0) {
       loadData();
     }
-  }, [date, workers]);
+  }, [date, workers, source]);
 
   const teamCartsDisplay = useMemo<TeamCartDisplay[]>(() => {
     if (!isTeamSeason) return [];
@@ -1066,7 +1083,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         });
 
         savePromises.push(
-          sessionService.updateLogsheetSession(sid, { bonuses: updatedBonuses })
+          updateSession(sid, { bonuses: updatedBonuses })
         );
       }
 
@@ -1290,7 +1307,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       ? { ...selectedSession.validation, finalCommission: newPay }
       : undefined;
 
-    await sessionService.updateLogsheetSession(selectedSession.id, {
+    await updateSession(selectedSession.id, {
       bonuses: updatedBonuses,
       validation: updatedValidation,
     });
@@ -1314,7 +1331,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       ? { ...selectedSession.validation, finalCommission: newPay }
       : undefined;
 
-    await sessionService.updateLogsheetSession(selectedSession.id, {
+    await updateSession(selectedSession.id, {
       bonuses: updatedBonuses,
       validation: updatedValidation,
     });
@@ -1407,7 +1424,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
               </div>
             )}
 
-            {isValidated && (
+            {isValidated && canBonus && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1572,7 +1589,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
         </div>
 
         <div className="ml-2 min-w-[70px] flex justify-center">
-          {isValidated ? (
+          {isValidated && canBonus ? (
             <button
               onClick={(e) => {
                 e.stopPropagation();

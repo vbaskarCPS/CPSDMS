@@ -21,7 +21,7 @@ export interface SlipSettings {
   extraDeductions: ExtraItem[]; additions: ExtraItem[];
 }
 export interface Payslip {
-  id: string; run_id: string; cn: string; first_name: string; last_name: string; batch: string | null;
+  id: string; run_id: string; cn: string; hire_id?: string | null; first_name: string; last_name: string; batch: string | null;
   settings: SlipSettings; days: PayslipDayRow[]; earned: number; final_pay: number;
   status: 'generated' | 'paid' | 'void'; generated_at: string; paid_at: string | null;
 }

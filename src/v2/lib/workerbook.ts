@@ -27,7 +27,11 @@ export interface Hire {
   person: Person;
 }
 export interface DaySummaryStored { carts: number; steps: number; gross: number; upsells: number; booked: number; showed: number; no_shows: number; had_session: boolean; archived_rows: number }
-export interface Day { id: string; center_id: string; day: string; state: 'planned' | 'live' | 'closed'; notes: string | null; closed_at?: string | null; summary?: DaySummaryStored | null }
+export interface Day {
+  id: string; center_id: string; day: string; state: 'planned' | 'live' | 'closed'; notes: string | null; closed_at?: string | null; summary?: DaySummaryStored | null;
+  /** an open day whose old-app session went to a newer day; its payouts are finished in the app */
+  handed_off_at?: string | null;
+}
 export interface RosterRow {
   id: string; day_id: string; hire_id: string; shuttle: string | null; manager_id: string | null; team: string | null;
   confirmed_at: string | null; confirmed_via: 'staff' | 'email' | 'text' | 'worker' | null; attendance: 'showed' | 'no_show' | null;
@@ -172,19 +176,36 @@ export interface DaySummary {
   day: string; state: Day['state']; booked: number; confirmed: number; showed: number; noShow: number; firstDay: number;
   /** closed days: from the day's summary and payout lines */
   steps?: number; gross?: number; worked?: number;
+  /** an open day handed off to a newer one (numbers from its saved carts) */
+  handedOff?: boolean;
 }
 
+type MonthRow = { day: string; state: Day['state']; summary: Record<string, unknown> | null; handed_off_at?: string | null;
+  day_roster: { confirmed_at: string | null; attendance: string | null; hire: { person: { lifetime_days: number } } | null }[] };
+
 export async function monthSummary(centerId: string, from: string, to: string): Promise<DaySummary[]> {
-  const rows = must(await db.from('days')
-    .select('day, state, summary, day_roster(confirmed_at, attendance, hire:hires(person:people(lifetime_days)))')
-    .eq('center_id', centerId).gte('day', from).lte('day', to)) as unknown as
-    { day: string; state: Day['state']; summary: Record<string, unknown> | null; day_roster: { confirmed_at: string | null; attendance: string | null; hire: { person: { lifetime_days: number } } | null }[] }[];
-  // who worked a closed day = who has a payout line for it
-  const lines = rows.some(d => d.state === 'closed')
+  const q = (cols: string) => db.from('days').select(`${cols}, day_roster(confirmed_at, attendance, hire:hires(person:people(lifetime_days)))`)
+    .eq('center_id', centerId).gte('day', from).lte('day', to);
+  let res = await q('day, state, summary, handed_off_at');
+  if (res.error && /handed_off_at/.test(res.error.message)) res = await q('day, state, summary');   // before the open-days SQL
+  const rows = must(res) as unknown as MonthRow[];
+  const handedOff = rows.filter(d => d.state === 'live' && d.handed_off_at).map(d => d.day);
+  // who worked a closed (or handed-off) day = who has a payout line for it
+  const lines = rows.some(d => d.state === 'closed') || handedOff.length
     ? (await db.from('payout_lines').select('day, cn').eq('center_id', centerId).gte('day', from).lte('day', to)).data as { day: string; cn: string }[] | null
     : null;
   const worked = new Map<string, Set<string>>();
   for (const l of lines || []) { if (!worked.has(l.day)) worked.set(l.day, new Set()); worked.get(l.day)!.add(l.cn); }
+  // a handed-off day's steps and gross: its saved sales (steps count like the payout screen's)
+  const sales = handedOff.length
+    ? (await db.from('payout_sales').select('day, price, type').eq('center_id', centerId).in('day', handedOff)).data as { day: string; price: number; type: string }[] | null
+    : null;
+  const sold = new Map<string, { steps: number; gross: number }>();
+  for (const x of sales || []) {
+    const t = sold.get(x.day) || { steps: 0, gross: 0 };
+    t.gross += Number(x.price) || 0; if (['Sale', 'Production', 'Upgrade'].includes(x.type)) t.steps++;
+    sold.set(x.day, t);
+  }
   return rows.map(d => {
     const s = summarize(d.day, d.state, d.day_roster.map(r => ({
       confirmed_at: r.confirmed_at, attendance: r.attendance, firstDay: (r.hire?.person?.lifetime_days ?? 1) === 0,
@@ -192,6 +213,10 @@ export async function monthSummary(centerId: string, from: string, to: string): 
     if (d.state === 'closed') {
       const num = (v: unknown) => (v == null || v === '' ? undefined : Number(v));
       return { ...s, steps: num(d.summary?.steps), gross: num(d.summary?.gross), worked: worked.get(d.day)?.size ?? num(d.summary?.showed) };
+    }
+    if (d.state === 'live' && d.handed_off_at) {
+      const t = sold.get(d.day) || { steps: 0, gross: 0 };
+      return { ...s, handedOff: true, steps: t.steps, gross: t.gross, worked: worked.get(d.day)?.size ?? 0 };
     }
     return s;
   });
@@ -217,8 +242,11 @@ export function monthCells(year: number, month0: number): (string | null)[] {
 }
 
 export async function getDay(centerId: string, day: string): Promise<Day | null> {
-  const res = await db.from('days').select('id, center_id, day, state, notes, closed_at, summary').eq('center_id', centerId).eq('day', day).maybeSingle();
-  // (before the close-day columns exist, read without them)
+  const res = await db.from('days').select('id, center_id, day, state, notes, closed_at, summary, handed_off_at').eq('center_id', centerId).eq('day', day).maybeSingle();
+  // (before the newer columns exist, read without them)
+  if (res.error && /handed_off_at/.test(res.error.message)) {
+    return must(await db.from('days').select('id, center_id, day, state, notes, closed_at, summary').eq('center_id', centerId).eq('day', day).maybeSingle()) as Day | null;
+  }
   if (res.error && /closed_at|summary/.test(res.error.message)) {
     return must(await db.from('days').select('id, center_id, day, state, notes').eq('center_id', centerId).eq('day', day).maybeSingle()) as Day | null;
   }
@@ -232,6 +260,9 @@ export interface CloseCheck {
   road_trip?: boolean;
   carts: number; paid: number; steps: number; gross: number; upsells: number; booked: number; showed: number;
   unpaid: { worker_id: string; status: string; names: string | null; sales: number }[];
+  /** carts saved when the day was handed off that aren't paid out yet (finish them in the payout editor) */
+  unfinalized?: { label: string; sales: number }[];
+  handed_off?: boolean;
   unmarked: { cn: string; name: string }[];
   no_shows: { cn: string; name: string; status: string; ns_count: number }[];
   can_close: boolean;
@@ -276,6 +307,12 @@ export async function updateRoster(id: string, patch: Partial<Pick<RosterRow, 'm
   const body: Record<string, unknown> = { ...rest };
   if (confirmed !== undefined) { body.confirmed_at = confirmed ? new Date().toISOString() : null; body.confirmed_via = confirmed ? 'staff' : null; }
   must(await db.from('day_roster').update(body).eq('id', id));
+}
+
+/** Mark several roster rows confirmed at once (on a road trip: planning to work). */
+export async function confirmRows(ids: string[]) {
+  if (!ids.length) return;
+  must(await db.from('day_roster').update({ confirmed_at: new Date().toISOString(), confirmed_via: 'staff' }).in('id', ids));
 }
 
 export async function removeFromDay(id: string) { must(await db.from('day_roster').delete().eq('id', id)); }

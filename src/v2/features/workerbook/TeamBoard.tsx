@@ -21,7 +21,23 @@ interface Props {
   onRemove: (team: string) => void;
   /** Shown in the pool when everyone is on a team. */
   emptyPoolText?: string;
+  /**
+   * A list beside the board that people are dragged from (e.g. the road-trip crew) instead of the
+   * "Not on a team" pool. Dropping someone back on it takes them off their team.
+   */
+  side?: (drag: { Draggable: typeof SideDraggable }) => React.ReactNode;
 }
+
+/** A row in the side list that can be dragged onto a team. */
+export const SideDraggable: React.FC<{ hireId: string; className?: string; children: React.ReactNode; label: string }> = ({ hireId, className, children, label }) => {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: `s:${hireId}`, data: { hireId } });
+  return (
+    <div ref={setNodeRef} {...attributes} {...listeners} aria-label={`${label}, drag to a team`} className={`${className || ''} v2-draggable`}
+      style={{ opacity: isDragging ? 0.4 : 1 }}>
+      <GripVertical size={14} color="#9ca3af" style={{ flexShrink: 0 }} />{children}
+    </div>
+  );
+};
 
 const teamLabel = (t: PlanTeam) => t.kind === 'ramp' ? t.name : `Cart ${t.name}`;
 
@@ -43,7 +59,7 @@ const Drop: React.FC<{ id: string; className?: string; children: React.ReactNode
   return <div ref={setNodeRef} className={`${className || ''}${isOver ? ' over' : ''}`} style={style}>{children}</div>;
 };
 
-export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, onAssign, onNewTeam, onRamp, onManager, onRemove, emptyPoolText }) => {
+export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, onAssign, onNewTeam, onRamp, onManager, onRemove, emptyPoolText, side }) => {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 160, tolerance: 6 } }),
@@ -68,8 +84,10 @@ export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, o
 
   return (
     <DndContext sensors={sensors} onDragStart={onStart} onDragEnd={onEnd} onDragCancel={() => setDragging(null)}>
+      <div className={side ? 'v2-plan' : undefined}>
+      {side && <Drop id="pool" className="v2-drop v2-side-drop">{side({ Draggable: SideDraggable })}</Drop>}
       <div className="v2-stack">
-        <Drop id="pool" className="v2-card v2-drop">
+        {!side && <Drop id="pool" className="v2-card v2-drop">
           <div className="v2-row" style={{ marginBottom: 8 }}>
             <b>Not on a team</b><span className="v2-mut v2-small">{unassigned.length}</span>
             <span className="v2-spacer" /><span className="v2-mut v2-small">Drag people onto a cart, a ramp crew, or a “new” box</span>
@@ -78,14 +96,14 @@ export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, o
             {unassigned.sort(sortByName).map(r => <Person key={r.hire_id} row={r} />)}
             {unassigned.length === 0 && <span className="v2-mut v2-small">{people.length ? (emptyPoolText || 'Everyone who showed is on a team.') : 'Tick who showed in roll call first.'}</span>}
           </div>
-        </Drop>
+        </Drop>}
 
         {managers.map(m => {
           const mine = teams.filter(t => t.managerId === m.id);
           return (
             <div key={m.id} className="v2-card">
               <div className="v2-row" style={{ marginBottom: 10 }}><b>{m.full_name}</b>
-                <span className="v2-mut v2-small">{mine.length} team{mine.length === 1 ? '' : 's'} · {people.filter(r => mine.some(t => t.name === members[r.hire_id])).length} people</span></div>
+                <span className="v2-mut v2-small">{mine.length} team{mine.length === 1 ? '' : 's'} · {people.filter(r => mine.some(t => t.name === members[r.hire_id])).length} on teams</span></div>
               <div className="v2-teams">
                 {mine.map(t => {
                   const inTeam = people.filter(r => members[r.hire_id] === t.name).sort(sortByName);
@@ -120,6 +138,7 @@ export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, o
             </div>
           );
         })}
+      </div>
       </div>
       <DragOverlay dropAnimation={null}>{dragging ? <Person row={dragging} overlay /> : null}</DragOverlay>
     </DndContext>

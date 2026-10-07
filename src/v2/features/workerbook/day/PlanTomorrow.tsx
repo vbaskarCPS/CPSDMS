@@ -7,7 +7,7 @@ import { fullName, updateRoster, type RosterRow } from '../../../lib/workerbook'
 import { nextTeamName, type PlanManager, type PlanTeam } from '../../../lib/startSession';
 import { ErrorBox, Tag } from '../../../ui';
 import type { CrewRow } from '../../../lib/crew';
-import { TeamBoard } from '../TeamBoard';
+import { SideDraggable, TeamBoard } from '../TeamBoard';
 import { ContractorLink } from '../ContractorCard';
 
 const teamsFromRows = (rows: RosterRow[], fallbackMgr: string): PlanTeam[] =>
@@ -42,32 +42,44 @@ export const PlanTomorrow: React.FC<{ rows: RosterRow[]; managers: PlanManager[]
     const confirmed = rows.filter(r => r.confirmed_at).length;
     const sorted = [...rows].sort((a, b) => Number(!!a.confirmed_at) - Number(!!b.confirmed_at) || fullName(a.hire.person).localeCompare(fullName(b.hire.person)));
 
+    const working = rows.filter(r => r.confirmed_at).length;
+    const crewSorted = crew ? [...rows].sort((a, b) => Number(!a.confirmed_at) - Number(!b.confirmed_at)
+      || (crew.get(a.hire_id)?.room || '~').localeCompare(crew.get(b.hire_id)?.room || '~', undefined, { numeric: true })
+      || fullName(a.hire.person).localeCompare(fullName(b.hire.person))) : [];
+    const crewSide = crew ? ({ Draggable }: { Draggable: typeof SideDraggable }) => (
+      <section className="v2-card" style={{ padding: 0 }}>
+        <div className="v2-row" style={{ padding: '12px 14px 6px' }}>
+          <b>Crew</b><span className="v2-mut v2-small">{rows.length} on the road trip · {working} working</span>
+        </div>
+        <div className="v2-note" style={{ margin: '0 14px 6px' }}>Drag people onto a cart or ramp crew; drop them back here to take them off.</div>
+        <div className="v2-confirm-list">
+          {crewSorted.map(r => {
+            const c = crew.get(r.hire_id); const cell = r.hire.person.cell_phone; const on = !!r.confirmed_at;
+            return (
+              <Draggable key={r.id} hireId={r.hire_id} label={fullName(r.hire.person)} className={`v2-confirm${r.team ? ' on' : ''}${on ? '' : ' off'}`}>
+                <span className="v2-roomtag" title="Room">{c?.room || '—'}</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <b><ContractorLink hireId={r.hire_id} onSaved={onChanged}>{fullName(r.hire.person)}</ContractorLink></b>
+                  <span className="v2-small v2-mut" style={{ display: 'block' }}>{r.hire.cn}{r.hire.shuttle ? ` · ${r.hire.shuttle}` : ''}{r.team ? ` · ${/^RC/i.test(r.team) ? r.team : `Cart ${r.team}`}` : ''}</span>
+                </span>
+                <label className="v2-row v2-small" style={{ gap: 4, flexWrap: 'nowrap' }} title="Planning to work (sorts the list; anyone can still go on a team)"
+                  onPointerDown={e => e.stopPropagation()}>
+                  <input type="checkbox" checked={on} disabled={!canEdit || busy} aria-label={`${fullName(r.hire.person)} working`}
+                    onChange={e => save(() => updateRoster(r.id, { confirmed: e.target.checked }))} />Working
+                </label>
+                {cell && <a className="v2-gbtn" style={{ width: 32, height: 32 }} href={`tel:${cell.replace(/[^\d+]/g, '')}`} aria-label={`Call ${fullName(r.hire.person)}`}
+                  onPointerDown={e => e.stopPropagation()}><Phone size={14} /></a>}
+              </Draggable>
+            );
+          })}
+          {rows.length === 0 && <div className="v2-mut v2-small" style={{ padding: 14 }}>Nobody in the crew yet. Add people on the Crew list.</div>}
+        </div>
+      </section>
+    ) : undefined;
+
     return (
-      <div className="v2-plan">
-        {crew ? (
-          <section className="v2-card" style={{ padding: 0 }}>
-            <div className="v2-row" style={{ padding: '12px 14px 6px' }}>
-              <b>Crew</b><span className="v2-mut v2-small">{rows.length} on the road trip</span>
-            </div>
-            <div className="v2-confirm-list">
-              {[...rows].sort((a, b) => (crew.get(a.hire_id)?.room || '~').localeCompare(crew.get(b.hire_id)?.room || '~', undefined, { numeric: true })
-                || fullName(a.hire.person).localeCompare(fullName(b.hire.person))).map(r => {
-                const c = crew.get(r.hire_id); const cell = r.hire.person.cell_phone;
-                return (
-                  <div key={r.id} className={`v2-confirm${r.team ? ' on' : ''}`}>
-                    <span className="v2-roomtag" title="Room">{c?.room || '—'}</span>
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      <b><ContractorLink hireId={r.hire_id} onSaved={onChanged}>{fullName(r.hire.person)}</ContractorLink></b>
-                      <span className="v2-small v2-mut" style={{ display: 'block' }}>{r.hire.cn}{r.hire.shuttle ? ` · ${r.hire.shuttle}` : ''}{r.team ? ` · ${/^RC/i.test(r.team) ? r.team : `Cart ${r.team}`}` : ''}</span>
-                    </span>
-                    {cell && <a className="v2-gbtn" style={{ width: 32, height: 32 }} href={`tel:${cell.replace(/[^\d+]/g, '')}`} aria-label={`Call ${fullName(r.hire.person)}`}><Phone size={14} /></a>}
-                  </div>
-                );
-              })}
-              {rows.length === 0 && <div className="v2-mut v2-small" style={{ padding: 14 }}>Nobody in the crew yet. Add people on the Crew list.</div>}
-            </div>
-          </section>
-        ) : (
+      <div className={crew ? undefined : 'v2-plan'}>
+        {!crew && (
         <section className="v2-card" style={{ padding: 0 }}>
           <div className="v2-row" style={{ padding: '12px 14px 6px' }}>
             <b>Confirmations</b><span className="v2-mut v2-small">{confirmed} of {rows.length} confirmed</span>
@@ -103,6 +115,7 @@ export const PlanTomorrow: React.FC<{ rows: RosterRow[]; managers: PlanManager[]
           {managers.length === 0 ? <div className="v2-card">No route managers at this center yet.</div> : (
             <TeamBoard
               people={rows} teams={teams} emptyPoolText={crew ? 'Everyone in the crew is on a draft team.' : 'Everyone booked is on a draft team.'} members={members} managers={managers}
+              side={crewSide}
               onAssign={(h, t) => canEdit && save(() => assign(h, t))}
               onNewTeam={(mid, kind, h) => {
                 if (!canEdit) return;

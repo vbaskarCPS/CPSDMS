@@ -1,11 +1,11 @@
-// src/v2/features/workerbook/CloseDay.tsx — close a day: check, download the day's Excel, close.
-// Closing keeps a copy of the old app's session, clears it so the next day can start, moves
-// the day's no-shows onto the NS list and records the day's numbers (app_close_day).
+// src/v2/features/workerbook/CloseDay.tsx — close a day: check, then close. Days close one at a
+// time, whenever you get to them. If the old app's session still holds this day, closing saves its
+// carts, keeps a copy of the session and clears it; a day handed off to a newer one closes from its
+// saved carts once every cart with sales is paid out. In-city no-shows go onto the NS list.
 import React, { useState } from 'react';
-import { CheckCircle2, AlertTriangle, Download, Lock } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, Lock } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import { closeDay, closeDayCheck, type DaySummaryStored } from '../../lib/workerbook';
-import { pointLegacyAt } from '../../lib/legacy';
 import { saveLines } from '../../lib/payslips';
 import { liveDayForClose, saveDay } from '../../lib/payoutCarts';
 import { Btn, ErrorBox, Loading, Modal } from '../../ui';
@@ -22,20 +22,10 @@ const Line: React.FC<{ ok: boolean; warn?: boolean; title: React.ReactNode; chil
 export const CloseDay: React.FC<{ centerId: string; date: string; pretty: string; onClose: () => void; onClosed: (s: DaySummaryStored) => void }> =
   ({ centerId, date, pretty, onClose, onClosed }) => {
     const check = useLoad(() => closeDayCheck(centerId, date), [centerId, date]);
-    const [downloaded, setDownloaded] = useState(false);
-    const [busy, setBusy] = useState<'export' | 'close' | null>(null);
+    const [busy, setBusy] = useState<'close' | null>(null);
     const [error, setError] = useState<unknown>(null);
     const c = check.data;
 
-    const download = async () => {
-      setBusy('export'); setError(null);
-      try {
-        await pointLegacyAt(centerId);
-        const { generateSessionExport } = await import('../../../lib/exportService');
-        await generateSessionExport();
-        setDownloaded(true);
-      } catch (e) { setError(e); } finally { setBusy(null); }
-    };
     const close = async () => {
       setBusy('close'); setError(null);
       try {
@@ -55,8 +45,8 @@ export const CloseDay: React.FC<{ centerId: string; date: string; pretty: string
       } catch (e) { setError(e); check.reload(); } finally { setBusy(null); }
     };
 
-    const needsExport = !!c?.has_session;
-    const ready = !!c?.can_close && (!needsExport || downloaded);
+    const ready = !!c?.can_close;
+    const unfinalized = c?.unfinalized || [];
     return (
       <Modal title={`Close ${pretty}`} onClose={onClose} footer={
         <div className="v2-row" style={{ width: '100%', justifyContent: 'flex-end' }}>
@@ -71,9 +61,14 @@ export const CloseDay: React.FC<{ centerId: string; date: string; pretty: string
               <div className="v2-kpi-box"><span className="l">Gross</span><span className="n green">{money(Number(c.gross))}</span></div>
             </div>
 
-            <Line ok={c.unpaid.length === 0} title={c.unpaid.length === 0 ? 'Every cart with sales is paid out' : `${c.unpaid.length} cart${c.unpaid.length === 1 ? '' : 's'} with sales not paid out yet`}>
+            <Line ok={c.unpaid.length + unfinalized.length === 0} title={c.unpaid.length + unfinalized.length === 0 ? 'Every cart with sales is paid out'
+              : `${c.unpaid.length + unfinalized.length} cart${c.unpaid.length + unfinalized.length === 1 ? '' : 's'} with sales not paid out yet`}>
               {c.unpaid.length > 0 && <>
                 {c.unpaid.map(u => `${u.names || u.worker_id} (${u.sales} sale${u.sales === 1 ? '' : 's'})`).join(' · ')}{' — pay them out on the day page first.'}
+              </>}
+              {unfinalized.length > 0 && <>
+                {unfinalized.length} cart{unfinalized.length === 1 ? '' : 's'} saved when the day was handed off still {unfinalized.length === 1 ? 'needs' : 'need'} paying out: {unfinalized.map(u => `${u.label} (${u.sales} sale${u.sales === 1 ? '' : 's'})`).join(' · ')}.
+                {' '}Open a worker on the day page, check the cart and tick Paid out.
               </>}
             </Line>
             {c.road_trip ? (
@@ -86,15 +81,11 @@ export const CloseDay: React.FC<{ centerId: string; date: string; pretty: string
                 {c.no_shows.length > 0 && c.no_shows.map(n => `${n.name} ${n.cn} (${n.ns_count + 1} NS)`).join(' · ')}
               </Line>
             </>}
-            {needsExport && (
-              <Line ok={downloaded} warn title={downloaded ? 'Day’s Excel downloaded' : 'Download the day’s Excel first'}>
-                The same export the old command center made before closing.{' '}
-                <Btn size="sm" kind="o" icon={Download} disabled={!!busy} onClick={download}>{busy === 'export' ? 'Preparing…' : downloaded ? 'Download again' : 'Download Excel'}</Btn>
-              </Line>
-            )}
             <div className="v2-note">{c.has_session
-              ? 'Closing saves each worker’s finalized day for payslips, keeps a copy of the session, then clears it from the RM map and worker logsheets so the next day can start. It can’t be undone from the app.'
-              : 'There’s no live session to clear for this day; closing records attendance and moves no-shows.'}</div>
+              ? 'Closing saves each worker’s finalized day for payslips, keeps a copy of the session, then clears it from the RM map and worker logsheets. It can’t be undone from the app. (You don’t have to close a day before starting the next one: starting a newer day moves worker sign-ins to it and leaves this one open.)'
+              : c.handed_off
+                ? 'A newer day has the RM map and worker sign-ins, so closing only locks in this day’s numbers from its saved carts. Payouts stay editable until a payslip is generated.'
+                : `There’s no live session to clear for this day; closing records ${c.road_trip ? 'the day’s numbers' : 'attendance and moves no-shows'}.`}</div>
             <ErrorBox error={error} />
           </div>
         )}

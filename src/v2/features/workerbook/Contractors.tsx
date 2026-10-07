@@ -6,7 +6,7 @@ import { useAuth } from '../../lib/auth';
 import { useCurrentSeason, useLoad } from '../../lib/data';
 import {
   listHires, showedCounts, STATUS_LISTS, statusLabel, fullName, HAT_CODES,
-  type Hire, type StatusCode,
+  type StatusCode,
 } from '../../lib/workerbook';
 import { Btn, ErrorBox, Loading, Tag } from '../../ui';
 import { useContractorCard } from './ContractorCard';
@@ -89,7 +89,7 @@ export const Contractors: React.FC = () => {
 
       {filter !== 'active' && filter !== 'all' && (
         <div className="v2-note" style={{ marginTop: -4, marginBottom: 10 }}>
-          {statusLabel(filter)}. Open someone to move them back to Active.{filter === 'WL' ? ' People on the waitlist can’t be booked.' : ''}
+          {filter === 'inactive' ? 'Inactive' : statusLabel(filter)}. Open someone to move them back to Active.{filter === 'WL' ? ' People on the waitlist can’t be booked.' : ''}
         </div>
       )}
       <ErrorBox error={hires.error} />
