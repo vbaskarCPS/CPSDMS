@@ -4,6 +4,7 @@
 // their home cities), with hotel room numbers you can change any time. "Pull in workers" brings
 // people over from other centers; "Send home" puts them back on their home city's WDR list.
 // In-city center: who from here is away on a road trip, and "Send to a road trip".
+import { Link } from 'react-router-dom';
 import React, { useEffect, useMemo, useState } from 'react';
 import { BedDouble, Check, Home, Search, Truck, UserPlus } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
@@ -67,6 +68,7 @@ export const Crew: React.FC = () => {
   return (
     <div className="v2-main">
       <div className="v2-head">
+        <Link to="/app/workerbook/days" className="v2-link">‹ Calendar</Link>
         <span className="v2-h1">Crew list</span>
         {data && <Tag tone={rt ? 'v' : 'b'}>{centerTypeLabel(data.type)}</Tag>}
         {data && <span className="v2-mut v2-small">{rt ? `${data.here.length} at ${center.display_name}` : `${data.away.length} away on road trips`}</span>}

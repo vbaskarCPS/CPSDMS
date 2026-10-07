@@ -1,19 +1,17 @@
 // src/v2/app/Home.tsx — the dashboard: a large stat card per component the user may open;
-// "Open" on a card shows that component's screens.
+// "Open" on a card goes to that component's home.
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { hasLiveRouteManagerSeat } from '../lib/legacy';
 import { legacyManagerId } from '../lib/startSession';
 import { useAuth } from '../lib/auth';
-import { Tile, Card } from '../ui';
-import { visibleComponents, type Component } from './nav';
+import { visibleComponents, homeOf } from './nav';
 import { StatCards } from './StatCards';
 
 export const Home: React.FC = () => {
   const { profile, can, center } = useAuth();
   const nav = useNavigate();
   const comps = visibleComponents(can);
-  const [openComp, setOpenComp] = useState<Component | null>(null);
   const d = new Date();
   const hour = d.getHours();
   const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
@@ -41,15 +39,7 @@ export const Home: React.FC = () => {
         <div className="v2-mut">{d.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' })}{center ? ` · ${center.display_name}` : ''}</div>
         <div className="v2-h1">{greet}, {first}</div>
       </div>
-      {!openComp ? (
-        <StatCards comps={comps} onOpen={c => (c.key === 'wb' ? nav('/app/workerbook/days') : setOpenComp(c))} />
-      ) : (
-        <Card title={openComp.label} right={<button className="v2-link" onClick={() => setOpenComp(null)}>‹ All components</button>}>
-          <div className="v2-tiles">
-            {openComp.subs.map(s => <Tile key={s.key} icon={s.icon} label={s.label} color={s.color} soon={!s.ready} onClick={() => nav(s.path)} />)}
-          </div>
-        </Card>
-      )}
+      <StatCards comps={comps} onOpen={c => nav(homeOf(c))} />
       {comps.length === 0 && <div className="v2-card">Your account has no permissions yet. Ask the Super Admin to set them in User Management.</div>}
       {!center && comps.length > 0 && <div className="v2-note">You aren’t linked to a command center yet.</div>}
     </div>

@@ -1,6 +1,6 @@
 // src/v2/features/workerbook/Contractors.tsx — every contractor hired this year, their status lists, profile and import.
 import React, { useMemo, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, Link } from 'react-router-dom';
 import { Search, Upload, UserPlus } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useCurrentSeason, useLoad } from '../../lib/data';
@@ -55,6 +55,7 @@ export const Contractors: React.FC = () => {
   return (
     <div className="v2-main">
       <div className="v2-head">
+        <Link to="/app/workerbook/days" className="v2-link">‹ Calendar</Link>
         <span className="v2-h1">Contractors</span>
         <select className="v2-select-pill" value={year} onChange={e => setYear(Number(e.target.value))} aria-label="Year">
           {[year + 1, year, year - 1, year - 2].map(y => <option key={y} value={y}>{y}</option>)}

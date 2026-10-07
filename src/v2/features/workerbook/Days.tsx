@@ -2,7 +2,7 @@
 // session is started on it; until then it's a Workerbook day (bookings and confirmations).
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BedDouble, ChevronLeft, ChevronRight, Contact, FileText, SlidersHorizontal, Wallet } from 'lucide-react';
+import { BedDouble, ChevronLeft, ChevronRight, Contact, FileText, SlidersHorizontal } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
 import { listHires, monthCells, monthSummary, STATUS_LISTS, type DaySummary } from '../../lib/workerbook';
@@ -38,7 +38,6 @@ export const Days: React.FC = () => {
         <span className="v2-spacer" />
         <div className="v2-row v2-wb-links" style={{ gap: 6 }}>
           <Btn kind="o" size="sm" icon={FileText} onClick={() => nav('/app/workerbook/payslips')}>Payslips</Btn>
-          <Btn kind="o" size="sm" icon={Wallet} onClick={() => nav('/app/workerbook/payouts')}>Payouts</Btn>
           <Btn kind="o" size="sm" icon={Contact} onClick={() => nav('/app/workerbook/contractors')}>Contractors</Btn>
           <Btn kind="o" size="sm" icon={BedDouble} onClick={() => nav('/app/workerbook/crew')}>Crew list</Btn>
           <Btn kind="o" size="sm" icon={SlidersHorizontal} onClick={() => nav('/app/workerbook/rate-cards')}>Rate cards</Btn>
