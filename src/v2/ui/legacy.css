@@ -1,0 +1,95 @@
+/* Old-app screens shown inside the new app (payouts), in the new app's light colours.
+   Nothing about the screens changes but colour: every dark Tailwind colour they use is
+   mapped to its light equivalent, only under .v2-legacy, so the old app is untouched. */
+
+.v2-legacy { color: var(--ink); --l-green: #047857; --l-amber: #b45309; --l-red: #b91c1c; --l-blue: #1d4ed8;
+  --l-violet: #6d28d9; --l-indigo: #4338ca; --l-cyan: #0e7490; --l-orange: #c2410c; }
+.v2-legacy-panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; min-height: 500px;
+  display: flex; flex-direction: column; overflow: hidden; }
+.v2-legacy-full .h-screen { height: calc(100vh - 58px); }
+
+/* ---------- surfaces ---------- */
+.v2-legacy .bg-gray-900, .v2-legacy .bg-cps-dark, .v2-legacy .bg-cps-light { background-color: var(--bg); }
+.v2-legacy .bg-gray-900\/50, .v2-legacy .bg-gray-750, .v2-legacy .bg-slate-900\/40, .v2-legacy .bg-slate-800\/40,
+.v2-legacy .bg-slate-700\/40 { background-color: #f9fafb; }
+.v2-legacy .bg-gray-800, .v2-legacy .bg-gray-800\/80, .v2-legacy .bg-gray-800\/50, .v2-legacy .bg-slate-800,
+.v2-legacy .bg-white { background-color: #fff; }
+.v2-legacy .bg-gray-700, .v2-legacy .bg-gray-700\/50, .v2-legacy .bg-gray-500\/20 { background-color: var(--soft); }
+.v2-legacy .bg-gray-500 { background-color: #d1d5db; }
+/* modal backdrops stay dim */
+.v2-legacy .bg-black, .v2-legacy .bg-black\/70, .v2-legacy .bg-black\/80, .v2-legacy .bg-black\/90 { background-color: rgba(17, 24, 39, .45); }
+
+.v2-legacy .hover\:bg-gray-800:hover, .v2-legacy .hover\:bg-gray-750:hover { background-color: #f9fafb; }
+.v2-legacy .hover\:bg-gray-700:hover, .v2-legacy .group:hover .group-hover\:bg-gray-600 { background-color: var(--soft); }
+.v2-legacy .hover\:bg-gray-600:hover { background-color: #e5e7eb; }
+.v2-legacy .disabled\:bg-gray-700:disabled { background-color: var(--soft); }
+
+/* ---------- lines ---------- */
+.v2-legacy .border-gray-800, .v2-legacy .border-gray-700, .v2-legacy .border-gray-700\/50, .v2-legacy .border-slate-700,
+.v2-legacy .border-slate-600\/50 { border-color: var(--line); }
+.v2-legacy .border-gray-600, .v2-legacy .border-slate-600, .v2-legacy .border-gray-500, .v2-legacy .border-gray-400,
+.v2-legacy .hover\:border-gray-600:hover, .v2-legacy .hover\:border-gray-500:hover { border-color: #d1d5db; }
+.v2-legacy .divide-gray-700\/50 > * + * { border-color: var(--line-soft); }
+
+/* ---------- text ---------- */
+.v2-legacy .text-white, .v2-legacy .text-gray-100, .v2-legacy .text-gray-200, .v2-legacy .text-slate-200,
+.v2-legacy .hover\:text-white:hover, .v2-legacy .group:hover .group-hover\:text-white { color: var(--ink); }
+.v2-legacy .text-gray-300, .v2-legacy .text-slate-300, .v2-legacy .text-gray-700, .v2-legacy .hover\:text-gray-300:hover { color: #374151; }
+.v2-legacy .text-gray-400, .v2-legacy .text-slate-400, .v2-legacy .text-gray-500, .v2-legacy .text-slate-500,
+.v2-legacy .disabled\:text-gray-500:disabled { color: var(--mut); }
+.v2-legacy .text-gray-600 { color: #9ca3af; }
+.v2-legacy .placeholder-gray-500::placeholder { color: #9ca3af; }
+
+.v2-legacy .text-green-200, .v2-legacy .text-green-300, .v2-legacy .text-green-400, .v2-legacy .hover\:text-green-200:hover { color: var(--l-green); }
+.v2-legacy .text-yellow-200, .v2-legacy .text-yellow-400, .v2-legacy .text-yellow-500, .v2-legacy .text-amber-400 { color: var(--l-amber); }
+.v2-legacy .text-red-200, .v2-legacy .text-red-300, .v2-legacy .text-red-400, .v2-legacy .hover\:text-red-300:hover { color: var(--l-red); }
+.v2-legacy .text-blue-300, .v2-legacy .text-blue-400, .v2-legacy .text-blue-500, .v2-legacy .text-cps-blue,
+.v2-legacy .hover\:text-blue-200:hover, .v2-legacy .hover\:text-blue-300:hover { color: var(--l-blue); }
+.v2-legacy .text-purple-200, .v2-legacy .text-purple-300, .v2-legacy .text-purple-400 { color: var(--l-violet); }
+.v2-legacy .text-indigo-300, .v2-legacy .text-indigo-400 { color: var(--l-indigo); }
+.v2-legacy .text-cyan-300, .v2-legacy .text-cyan-400 { color: var(--l-cyan); }
+.v2-legacy .text-orange-300, .v2-legacy .text-orange-400 { color: var(--l-orange); }
+
+/* ---------- tinted panels (dark x-900 tints → light x-50/100 tints) ---------- */
+.v2-legacy .bg-green-900\/20, .v2-legacy .bg-green-900\/30, .v2-legacy .bg-green-900\/40 { background-color: #ecfdf5; }
+.v2-legacy .bg-green-900\/50, .v2-legacy .hover\:bg-green-900\/50:hover { background-color: #d1fae5; }
+.v2-legacy .bg-yellow-900\/20, .v2-legacy .bg-yellow-900\/30, .v2-legacy .bg-yellow-500\/20 { background-color: #fffbeb; }
+.v2-legacy .bg-yellow-900\/50, .v2-legacy .hover\:bg-yellow-900\/50:hover, .v2-legacy .group:hover .group-hover\:bg-yellow-900\/50 { background-color: #fef3c7; }
+.v2-legacy .bg-red-900\/20, .v2-legacy .bg-red-900\/30, .v2-legacy .bg-red-900\/40 { background-color: #fef2f2; }
+.v2-legacy .hover\:bg-red-900\/40:hover, .v2-legacy .hover\:bg-red-900\/50:hover { background-color: #fee2e2; }
+.v2-legacy .bg-blue-900\/20, .v2-legacy .bg-blue-900\/30, .v2-legacy .bg-blue-500\/20 { background-color: #eff6ff; }
+.v2-legacy .hover\:bg-blue-900\/30:hover, .v2-legacy .hover\:bg-blue-900\/50:hover, .v2-legacy .group:hover .group-hover\:bg-blue-900\/50 { background-color: #dbeafe; }
+.v2-legacy .bg-purple-900\/30, .v2-legacy .bg-purple-500\/20 { background-color: #f5f3ff; }
+.v2-legacy .bg-purple-900\/50, .v2-legacy .group:hover .group-hover\:bg-purple-900\/50 { background-color: #ede9fe; }
+.v2-legacy .bg-indigo-900\/20 { background-color: #eef2ff; }
+.v2-legacy .bg-orange-900\/30 { background-color: #fff7ed; }
+.v2-legacy .bg-cyan-900\/30 { background-color: #ecfeff; }
+
+.v2-legacy .border-green-800, .v2-legacy .border-green-700, .v2-legacy .border-green-700\/50, .v2-legacy .border-green-700\/30 { border-color: #a7f3d0; }
+.v2-legacy .border-yellow-800, .v2-legacy .border-yellow-700, .v2-legacy .border-yellow-700\/50 { border-color: #fde68a; }
+.v2-legacy .border-red-900\/50, .v2-legacy .border-red-800, .v2-legacy .border-red-700, .v2-legacy .border-red-700\/50 { border-color: #fecaca; }
+.v2-legacy .border-blue-800, .v2-legacy .border-blue-700 { border-color: #bfdbfe; }
+.v2-legacy .border-purple-700 { border-color: #ddd6fe; }
+.v2-legacy .border-indigo-700 { border-color: #c7d2fe; }
+.v2-legacy .border-orange-800, .v2-legacy .border-orange-700 { border-color: #fed7aa; }
+.v2-legacy .border-cyan-700\/50 { border-color: #a5f3fc; }
+
+/* the red "danger" gradient button becomes the new app's rose */
+.v2-legacy .from-red-900 { --tw-gradient-from: #e11d48 var(--tw-gradient-from-position); --tw-gradient-to: rgb(225 29 72 / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to); }
+.v2-legacy .via-red-800 { --tw-gradient-to: rgb(225 29 72 / 0) var(--tw-gradient-to-position);
+  --tw-gradient-stops: var(--tw-gradient-from), #be123c var(--tw-gradient-via-position), var(--tw-gradient-to); }
+.v2-legacy .to-red-900 { --tw-gradient-to: #e11d48 var(--tw-gradient-to-position); }
+
+/* ---------- solid buttons and badges keep white text ---------- */
+.v2-legacy .bg-green-600, .v2-legacy .bg-green-500 { background-color: var(--green); }
+.v2-legacy .hover\:bg-green-500:hover { background-color: #047857; }
+.v2-legacy :is(.bg-green-600, .bg-green-500, .bg-blue-600, .bg-blue-500, .bg-blue-400, .bg-purple-600, .bg-orange-600,
+  .bg-yellow-600, .bg-red-600, .bg-cps-blue, .bg-cps-red, .bg-cps-green, .from-red-900),
+.v2-legacy :is(.bg-green-600, .bg-green-500, .bg-blue-600, .bg-blue-500, .bg-blue-400, .bg-purple-600, .bg-orange-600,
+  .bg-yellow-600, .bg-red-600, .bg-cps-blue, .bg-cps-red, .bg-cps-green, .from-red-900) :is(.text-white, .text-gray-100, .text-gray-200) { color: #fff; }
+.v2-legacy .bg-yellow-500 { color: var(--ink); }
+
+/* form fields: white with a light border */
+.v2-legacy :is(input, select, textarea):is(.bg-gray-900, .bg-gray-800, .bg-gray-700) { background-color: #fff; color: var(--ink); }
+.v2-legacy :is(input, select, textarea) { color-scheme: light; }

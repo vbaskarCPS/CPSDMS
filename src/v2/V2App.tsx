@@ -15,6 +15,7 @@ import { Contractors } from './features/workerbook/Contractors';
 import { Days } from './features/workerbook/Days';
 import { Day } from './features/workerbook/Day';
 import { StartSession } from './features/workerbook/StartSession';
+import { Payouts, PayoutsLive, PayoutWorker } from './features/workerbook/Payouts';
 import { Territory } from './features/admin/Territory';
 import { Loading } from './ui';
 
@@ -42,6 +43,9 @@ const V2Routes: React.FC = () => (
     <Route path="workerbook/days" element={<Guard perm="workerbook"><Days /></Guard>} />
     <Route path="workerbook/days/:date" element={<Guard perm="workerbook"><Day /></Guard>} />
     <Route path="workerbook/days/:date/start" element={<Guard perm="workerbook"><StartSession /></Guard>} />
+    <Route path="workerbook/payouts" element={<Guard perm="workerbook"><PayoutsLive /></Guard>} />
+    <Route path="workerbook/days/:date/payouts" element={<Guard perm="workerbook"><Payouts /></Guard>} />
+    <Route path="workerbook/days/:date/payouts/:contractorId" element={<Guard perm="workerbook"><PayoutWorker /></Guard>} />
     <Route path="admin/territory" element={<Guard perm="sa_territory"><Territory /></Guard>} />
     <Route path="*" element={<Guard><Soon /></Guard>} />
   </Routes>

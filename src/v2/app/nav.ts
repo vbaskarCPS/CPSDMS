@@ -2,7 +2,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Map, BookOpen, CalendarCheck, Phone, Shield, Calendar, FileText, SlidersHorizontal, UserPlus, Contact, AlertCircle,
-  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff,
+  List, Inbox, Receipt, Truck, BarChart3, Users, Megaphone, Clock, MapPin, Building2, CalendarOff, Wallet,
 } from 'lucide-react';
 import type { ColorName } from '../ui';
 import type { Permission } from '../lib/permissions';
@@ -16,6 +16,7 @@ export const COMPONENTS: Component[] = [
   ] },
   { key: 'wb', label: 'Workerbook', icon: BookOpen, color: 'green', perm: 'workerbook', subs: [
     { key: 'days', label: 'Days', icon: Calendar, color: 'green', path: '/app/workerbook/days', ready: true },
+    { key: 'payouts', label: 'Payouts', icon: Wallet, color: 'green', path: '/app/workerbook/payouts', ready: true },
     { key: 'payslips', label: 'Payslips', icon: FileText, color: 'sky', path: '/app/workerbook/payslips', ready: false },
     { key: 'rates', label: 'Rate cards', icon: SlidersHorizontal, color: 'slate', path: '/app/workerbook/rate-cards', ready: true },
     { key: 'pipeline', label: 'Pipeline', icon: UserPlus, color: 'violet', path: '/app/workerbook/pipeline', ready: false },
