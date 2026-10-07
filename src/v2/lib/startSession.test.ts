@@ -102,3 +102,12 @@ describe('start session → the old app’s session data', () => {
     expect(formatPhone('+1 226 387 8803')).toBe('(226) 387-8803');
   });
 });
+
+describe('Alumni rate on the live map counts app days too', () => {
+  it('days before the app + days showed in the app before this day', () => {
+    const kyle = (p: Plan) => buildLegacySession(p, CENTER).data.workers.find(w => w.contractorId === 'I1065')!;
+    const plan = basePlan();
+    expect(kyle(plan).alumniRate).toBe(0);                                         // 28 days: under 50
+    expect(kyle({ ...plan, appDaysBefore: { h3: 22 } }).alumniRate).toBe(0.25);   // 28 + 22 = 50
+  });
+});

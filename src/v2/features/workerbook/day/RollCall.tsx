@@ -6,6 +6,7 @@ import { Search, UserPlus } from 'lucide-react';
 import { fullName, updateRoster, type RosterRow } from '../../../lib/workerbook';
 import { Btn, ErrorBox, Tag } from '../../../ui';
 import type { CenterType } from '../../../lib/crew';
+import { ContractorLink } from '../ContractorCard';
 
 const addDays = (iso: string, n: number) => { const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 const short = (iso: string) => new Date(iso + 'T12:00').toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' });
@@ -60,7 +61,7 @@ export const RollCall: React.FC<{
               <div key={r.id} className={`v2-card v2-rc${isHere ? ' here' : r.attendance === 'no_show' ? ' ns' : ''}`} style={{ opacity: busy === r.id ? 0.55 : 1 }}>
                 <div className="v2-row" style={{ flexWrap: 'nowrap', gap: 10 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="nm">{fullName(r.hire.person)}{r.hire.person.lifetime_days === 0 && <> <Tag tone="v">FIRST DAY</Tag></>}</div>
+                    <div className="nm"><ContractorLink hireId={r.hire_id} onSaved={onChanged}>{fullName(r.hire.person)}</ContractorLink>{r.hire.person.lifetime_days === 0 && <> <Tag tone="v">FIRST DAY</Tag></>}</div>
                     <div className="v2-small v2-mut">{r.hire.cn}{r.shuttle ? ` · ${r.shuttle}` : ''}{r.hire.ns_count ? ` · ${r.hire.ns_count} NS` : ''}</div>
                   </div>
                   <button className={`v2-rc-btn here${isHere ? ' on' : ''}`} disabled={!canEdit || !!busy} onClick={() => mark(r, 'showed')}>Here</button>

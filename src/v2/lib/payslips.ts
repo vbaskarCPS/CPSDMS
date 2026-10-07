@@ -12,9 +12,9 @@ export interface PayoutLine {
   id: string; center_id: string; day: string; cn: string; hire_id: string | null; first_name: string; last_name: string; manager: string | null;
   steps: number; equiv: number; total_prepay: number; payout_rate: number; aer_comm: number; upsell_comm: number;
   mach_rent: number; deductions: number; daily_bonus: number; total_payout: number; indiv_gross: number; crackfill_base: number;
-  payslip_id: string | null;
+  payslip_id: string | null; stats?: unknown;
 }
-type NewLine = Omit<PayoutLine, 'id' | 'center_id' | 'day' | 'hire_id' | 'payslip_id'> & { stats: unknown };
+export type NewLine = Omit<PayoutLine, 'id' | 'center_id' | 'day' | 'hire_id' | 'payslip_id'> & { stats: unknown };
 
 export interface SlipSettings {
   is120Program: boolean; hotels: number; advances: number; travelPkg: number; crackfillPct: number;

@@ -7,6 +7,7 @@ import { fullName, updateRoster, type RosterRow } from '../../../lib/workerbook'
 import { nextTeamName, type PlanManager, type PlanTeam } from '../../../lib/startSession';
 import { ErrorBox, Tag } from '../../../ui';
 import { TeamBoard } from '../TeamBoard';
+import { ContractorLink } from '../ContractorCard';
 
 const teamsFromRows = (rows: RosterRow[], fallbackMgr: string): PlanTeam[] =>
   [...new Set(rows.map(r => r.team).filter(Boolean) as string[])]
@@ -55,7 +56,7 @@ export const PlanTomorrow: React.FC<{ rows: RosterRow[]; managers: PlanManager[]
                     <input type="checkbox" checked={!!r.confirmed_at} disabled={!canEdit || busy}
                       onChange={e => save(() => updateRoster(r.id, { confirmed: e.target.checked }))} aria-label={`Confirmed ${fullName(r.hire.person)}`} />
                     <span style={{ minWidth: 0 }}>
-                      <b>{fullName(r.hire.person)}</b>{r.hire.person.lifetime_days === 0 && <> <Tag tone="v">FIRST DAY</Tag></>}
+                      <b><ContractorLink hireId={r.hire_id} onSaved={onChanged}>{fullName(r.hire.person)}</ContractorLink></b>{r.hire.person.lifetime_days === 0 && <> <Tag tone="v">FIRST DAY</Tag></>}
                       <span className="v2-small v2-mut" style={{ display: 'block' }}>{r.hire.cn}{r.shuttle ? ` · ${r.shuttle}` : ''}{r.confirmed_via && r.confirmed_via !== 'staff' ? ` · by ${r.confirmed_via}` : ''}</span>
                     </span>
                   </label>

@@ -16,6 +16,7 @@ import { Btn, ErrorBox, Loading, Tag, Toggle } from '../../ui';
 import { BookContractors } from './BookContractors';
 import { TeamBoard } from './TeamBoard';
 import { MapRoutePicker } from './MapRoutePicker';
+import { appShowedDates, countBefore } from '../../lib/payoutEngine';
 import { AddLiveRoutes } from './day/AddLiveRoutes';
 
 type Step = 1 | 2 | 3;
@@ -84,9 +85,16 @@ export const StartSession: React.FC = () => {
     setPrefilled(true);
   }, [prefilled, dayRoster.data, managers.loading, managers.data, seasonInfo.loading, seasonInfo.data, firstMgr, card]);
 
+  // days each worker already showed in the app before this day (their Alumni rate counts them)
+  const appDays = useLoad(async () => {
+    const ids = (roster.data || []).map(r => r.hire_id);
+    if (!ids.length) return {} as Record<string, number>;
+    const shown = await appShowedDates(ids);
+    return Object.fromEntries(ids.map(id => [id, countBefore(shown[id], date)]));
+  }, [roster.data, date]);
   const plan: Plan | null = day.data && roster.data ? {
     date, seasonYear: seasonInfo.data?.season?.year || Number(date.slice(0, 4)), card,
-    managers: mgrs, routes: [...routes.values()], teams, members, showed, roster: roster.data,
+    managers: mgrs, routes: [...routes.values()], teams, members, showed, roster: roster.data, appDaysBefore: appDays.data || {},
     settings: { service, ...settings },
   } : null;
   const problems = plan ? planProblems(plan) : [];
@@ -263,7 +271,7 @@ export const StartSession: React.FC = () => {
             {legacyWritten && <div className="v2-note">The live map already has this session. Starting again only records it here.</div>}
             {problems.length > 0 && <div className="v2-err"><b>Before you can start:</b><ul style={{ margin: '6px 0 0 18px', padding: 0 }}>{problems.map(p => <li key={p}>{p}</li>)}</ul></div>}
             <div className="v2-row"><Btn kind="o" onClick={() => setStep(2)}>Back</Btn><span className="v2-spacer" />
-              <Btn kind="g" disabled={busy || problems.length > 0 || (!!legacyOpen.data && legacyOpen.data !== date && !legacyWritten)} onClick={start}>{busy ? 'Starting…' : 'Start session'}</Btn></div>
+              <Btn kind="g" disabled={busy || appDays.loading || problems.length > 0 || (!!legacyOpen.data && legacyOpen.data !== date && !legacyWritten)} onClick={start}>{busy ? 'Starting…' : 'Start session'}</Btn></div>
             <div className="v2-note">Starting makes the day live, ticks who showed, and sets up the RM map and worker logsheets in the current app.</div>
           </div>
         </div>

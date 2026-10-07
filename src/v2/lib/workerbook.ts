@@ -48,6 +48,16 @@ export async function listHires(year: number): Promise<Hire[]> {
 export async function updatePerson(id: string, p: Partial<Pick<Person, 'first_name' | 'last_name' | 'cell_phone' | 'alt_phone' | 'email' | 'address' | 'notes'>>) {
   must(await db.from('people').update(p).eq('id', id));
 }
+/** The facts behind a worker's rate: first season, days worked before this app, Silver Hats per service. */
+export async function updatePersonFacts(id: string, f: { first_year: number | null; lifetime_days: number; hats: Record<HatCode, number> }) {
+  if (f.lifetime_days < 0 || !Number.isInteger(f.lifetime_days)) throw new Error('Days must be a whole number, 0 or more');
+  if (Object.values(f.hats).some(n => n < 0 || !Number.isInteger(n))) throw new Error('Silver Hats must be whole numbers, 0 or more');
+  must(await db.from('people').update(f).eq('id', id));
+}
+/** One contractor by hire id (for the contractor card). */
+export async function getHire(id: string): Promise<Hire | null> {
+  return must(await db.from('hires').select(HIRE_COLS).eq('id', id).maybeSingle()) as unknown as Hire | null;
+}
 export async function updateHire(id: string, h: Partial<Pick<Hire, 'shuttle' | 'status'>>) {
   must(await db.from('hires').update(h).eq('id', id));
 }

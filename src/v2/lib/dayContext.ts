@@ -1,7 +1,7 @@
-// The season, rate card and service behind a day (for adding a late arrival to the live map).
-import { listRateCards, listSeasons, regionTax } from '../../../lib/data';
-import { cardFor, defaultRateCard, type RateCardData } from '../../../lib/rateCard';
-import type { Service } from '../../../lib/permissions';
+// The season, rate card and service behind a day at a center (late arrivals, payouts).
+import { listRateCards, listSeasons, regionTax } from './data';
+import { cardFor, defaultRateCard, type RateCardData } from './rateCard';
+import type { Service } from './permissions';
 
 export interface DayContext { card: RateCardData; seasonYear: number; service: Service }
 

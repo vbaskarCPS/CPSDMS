@@ -16,6 +16,7 @@ import {
 } from '../../lib/payslips';
 import { payslipTotals, type HiddenFields, type PayslipSeason } from '../../../lib/payslipExport';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
+import { ContractorLink } from './ContractorCard';
 
 const money = (v: number) => `$${(Math.round(v * 100) / 100).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const pretty = (iso: string) => new Date(iso + 'T12:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
@@ -118,7 +119,7 @@ const RunCard: React.FC<{ run: PayslipRun; centerName: string; onChanged: () => 
                 {sorted.map(p => (
                   <tr key={p.id} style={{ opacity: p.status === 'void' ? 0.5 : 1 }}>
                     <td>{p.status === 'generated' && <input type="checkbox" checked={picked.has(p.id)} onChange={() => toggle(p.id)} aria-label={`Select ${p.first_name} ${p.last_name}`} />}</td>
-                    <td><b>{p.cn}</b></td><td><b>{p.first_name} {p.last_name}</b></td><td className="v2-small">{p.batch || '—'}</td>
+                    <td><b>{p.cn}</b></td><td><b><ContractorLink hireId={p.hire_id}>{p.first_name} {p.last_name}</ContractorLink></b></td><td className="v2-small">{p.batch || '—'}</td>
                     <td style={{ textAlign: 'right' }}>{p.days.length}</td>
                     <td style={{ textAlign: 'right' }}>{money(Number(p.earned))}</td>
                     <td style={{ textAlign: 'right' }}><b>{money(Number(p.final_pay))}</b></td>
@@ -155,7 +156,7 @@ const RunCard: React.FC<{ run: PayslipRun; centerName: string; onChanged: () => 
 };
 
 // ───────────── generate ─────────────
-interface Group { cn: string; first: string; last: string; lines: PayoutLine[] }
+interface Group { cn: string; first: string; last: string; hireId: string | null; lines: PayoutLine[] }
 
 const Generator: React.FC<{ centerId: string; centerName: string; services: string[]; onCancel: () => void; onDone: () => void }> =
   ({ centerId, centerName, services, onCancel, onDone }) => {
@@ -175,7 +176,7 @@ const Generator: React.FC<{ centerId: string; centerName: string; services: stri
       const m = new Map<string, Group>();
       for (const l of lines.data || []) {
         if (l.payslip_id) continue;
-        if (!m.has(l.cn)) m.set(l.cn, { cn: l.cn, first: l.first_name, last: l.last_name, lines: [] });
+        if (!m.has(l.cn)) m.set(l.cn, { cn: l.cn, first: l.first_name, last: l.last_name, hireId: l.hire_id, lines: [] });
         m.get(l.cn)!.lines.push(l);
       }
       return [...m.values()].sort((a, b) => a.last.localeCompare(b.last) || a.first.localeCompare(b.first));
@@ -275,7 +276,7 @@ const Generator: React.FC<{ centerId: string; centerName: string; services: stri
                         <tr>
                           <td><button className="v2-gbtn" style={{ width: 28, height: 28 }} aria-label="Show days" onClick={() => setOpen(o => { const n = new Set(o); if (n.has(g.cn)) n.delete(g.cn); else n.add(g.cn); return n; })}>
                             {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button></td>
-                          <td><b>{g.first} {g.last}</b> <span className="v2-mut v2-small">{g.cn}</span></td>
+                          <td><b><ContractorLink hireId={g.hireId} onSaved={lines.reload}>{g.first} {g.last}</ContractorLink></b> <span className="v2-mut v2-small">{g.cn}</span></td>
                           <td style={{ textAlign: 'right' }}>{g.lines.length}</td>
                           <td style={{ textAlign: 'right' }}>{money(t.earnedComm)}</td>
                           <td><input type="checkbox" checked={s.is120Program} onChange={e => set(g.cn, { is120Program: e.target.checked })} aria-label={`$120 program for ${g.first} ${g.last}`} /></td>
