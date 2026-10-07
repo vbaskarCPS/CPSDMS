@@ -12,7 +12,7 @@ export interface Component { key: string; label: string; icon: LucideIcon; color
 
 export const COMPONENTS: Component[] = [
   { key: 'rm', label: 'Route Manager', icon: Map, color: 'blue', perm: 'route_manager', subs: [
-    { key: 'map', label: 'Map', icon: Map, color: 'blue', path: '/app/rm', ready: false },
+    { key: 'map', label: 'Map', icon: Map, color: 'blue', path: '/app/rm', ready: true },
   ] },
   { key: 'wb', label: 'Workerbook', icon: BookOpen, color: 'green', perm: 'workerbook', subs: [
     { key: 'days', label: 'Days', icon: Calendar, color: 'green', path: '/app/workerbook/days', ready: true },

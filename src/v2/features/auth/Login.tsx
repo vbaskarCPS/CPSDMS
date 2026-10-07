@@ -13,14 +13,34 @@ export const Login: React.FC = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [finalized, setFinalized] = useState(false);
 
   if (session && profile) return <Navigate to={profile.must_change_password ? '/app/password' : (loc.state?.from || '/app')} replace />;
 
+  /** The old app's accounts (workers, training, command-center and campaign logins, old RM accounts). */
+  const tryLegacy = async (u: string, p: string, workersOnly: boolean): Promise<boolean> => {
+    const { legacyLogin } = await import('../../../lib/legacyLogin');
+    const res = await legacyLogin(u.trim(), p, { workersOnly });
+    if (!res) return false;
+    if ('finalized' in res) { setFinalized(true); return true; }
+    nav(res.path, { replace: true });
+    return true;
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null); setBusy(true);
-    try { await signIn(username, password); nav(loc.state?.from || '/app', { replace: true }); }
-    catch (err) { setError(err instanceof Error ? err.message : 'Sign-in failed'); }
+    setError(null); setFinalized(false); setBusy(true);
+    try {
+      if (tab === 'worker') {
+        if (!(await tryLegacy(username, password, true))) setError('That CN # and first name don’t match anyone working today.');
+        return;
+      }
+      try { await signIn(username, password); nav(loc.state?.from || '/app', { replace: true }); }
+      catch (err) {
+        // Not a new-app account: the old app's logins still work from here.
+        if (!(await tryLegacy(username, password, false))) setError(/invalid login/i.test(err instanceof Error ? err.message : '') ? 'Wrong username or password.' : (err instanceof Error ? err.message : 'Sign-in failed'));
+      }
+    } catch (err) { setError(err instanceof Error ? err.message : 'Sign-in failed'); }
     finally { setBusy(false); }
   };
 
@@ -30,20 +50,23 @@ export const Login: React.FC = () => {
       <div style={{ fontSize: 22, fontWeight: 800 }}>Canadian Property Stars</div>
       <div className="v2-mut" style={{ marginBottom: 18 }}>Sign in to continue</div>
       <div className="v2-tabs" role="tablist">
-        <button className={tab === 'manager' ? 'on' : ''} onClick={() => setTab('manager')}>Manager</button>
-        <button className={tab === 'worker' ? 'on' : ''} onClick={() => setTab('worker')}>Worker</button>
+        <button type="button" className={tab === 'manager' ? 'on' : ''} onClick={() => { setTab('manager'); setError(null); }}>Manager</button>
+        <button type="button" className={tab === 'worker' ? 'on' : ''} onClick={() => { setTab('worker'); setError(null); }}>Worker</button>
       </div>
-      {tab === 'worker' ? (
-        <div className="v2-card">Worker sign-in (CN # + PIN) arrives with phase 2. Workers keep using the current logsheet login until then.</div>
-      ) : (
-        <form className="v2-card" style={{ padding: 18 }} onSubmit={submit}>
-          <Field label="Username"><input className="v2-input" autoComplete="username" autoCapitalize="none" value={username} onChange={e => setUsername(e.target.value)} required /></Field>
-          <Field label="Password"><input className="v2-input" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required /></Field>
-          {error && <div className="v2-err" style={{ marginBottom: 12 }}>{error}</div>}
-          <Btn type="submit" disabled={busy || loading} style={{ width: '100%', justifyContent: 'center' }}>{busy ? 'Signing in…' : 'Sign in'}</Btn>
-          <div className="v2-note" style={{ textAlign: 'center' }}>You stay signed in on this device until you sign out.</div>
-        </form>
-      )}
+      <form className="v2-card" style={{ padding: 18 }} onSubmit={submit}>
+        <Field label={tab === 'worker' ? 'CN #' : 'Username'}>
+          <input className="v2-input" autoComplete="username" autoCapitalize={tab === 'worker' ? 'characters' : 'none'} placeholder={tab === 'worker' ? 'e.g. I1004' : ''}
+            value={username} onChange={e => setUsername(e.target.value)} required /></Field>
+        <Field label={tab === 'worker' ? 'First name' : 'Password'}>
+          <input className="v2-input" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required /></Field>
+        {error && <div className="v2-err" style={{ marginBottom: 12 }}>{error}</div>}
+        {finalized && <div className="v2-card" style={{ marginBottom: 12, background: '#ecfdf5', borderColor: '#a7f3d0' }}>
+          <b>Your day is complete.</b><div className="v2-small">Your payout has been processed and your logsheet is closed for today. Great work!</div></div>}
+        <Btn type="submit" disabled={busy || loading} style={{ width: '100%', justifyContent: 'center' }}>{busy ? 'Signing in…' : 'Sign in'}</Btn>
+        <div className="v2-note" style={{ textAlign: 'center' }}>
+          {tab === 'worker' ? <>New? Try training mode: <b>Training</b> / <b>training</b></> : 'You stay signed in on this device until you sign out.'}
+        </div>
+      </form>
     </div></div></div>
   );
 };
