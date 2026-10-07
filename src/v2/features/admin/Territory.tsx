@@ -1,5 +1,6 @@
 // src/v2/features/admin/Territory.tsx — Super Admin › Territory › Assignments: which center owns each digital-map area.
 import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { listCenters, useLoad } from '../../lib/data';
@@ -7,6 +8,14 @@ import { allRoutes, assignAreas, groupAreas, listAssignments } from '../../lib/t
 import { Btn, ErrorBox, Loading, Tag } from '../../ui';
 
 type Show = 'all' | 'unassigned' | string;
+
+/** The two halves of Territory & Client Data. */
+export const TerritoryTabs: React.FC<{ on: 'maps' | 'clients' }> = ({ on }) => (
+  <div className="v2-tabs" role="tablist">
+    <Link role="tab" aria-selected={on === 'maps'} className={on === 'maps' ? 'on' : ''} to="/app/admin/territory">Map assignments</Link>
+    <Link role="tab" aria-selected={on === 'clients'} className={on === 'clients' ? 'on' : ''} to="/app/admin/territory/clients">Client lists</Link>
+  </div>
+);
 
 export const Territory: React.FC = () => {
   const { center } = useAuth();
@@ -44,10 +53,11 @@ export const Territory: React.FC = () => {
   return (
     <div className="v2-main">
       <div className="v2-head">
-        <span className="v2-h1">Territory · Assignments</span>
+        <span className="v2-h1">Territory & Client Data</span>
         <span className="v2-spacer" />
         <span className="v2-mut v2-small">{areas.length} areas · {(routes.data || []).length} approved routes · {areas.filter(a => !a.centerId).length} unassigned</span>
       </div>
+      <TerritoryTabs on="maps" />
       <div className="v2-row" style={{ marginBottom: 12 }}>
         <button className={`v2-chip${show === 'all' ? ' on' : ''}`} onClick={() => setShow('all')}>All</button>
         <button className={`v2-chip${show === 'unassigned' ? ' on' : ''}`} onClick={() => setShow('unassigned')}>Unassigned</button>

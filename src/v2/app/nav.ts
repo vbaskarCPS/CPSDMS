@@ -31,7 +31,7 @@ export const COMPONENTS: Component[] = [
     { key: 'kpis', label: 'KPIs', icon: BarChart3, color: 'violet', path: '/app/bookings/kpis', ready: false },
   ] },
   { key: 'cd', label: 'Clients & Dialer', icon: Phone, color: 'violet', perm: 'dialer', subs: [
-    { key: 'clients', label: 'Clients', icon: Users, color: 'violet', path: '/app/clients', ready: false },
+    { key: 'clients', label: 'Clients', icon: Users, color: 'violet', path: '/app/clients', ready: true },
     { key: 'campaigns', label: 'Campaigns', icon: Megaphone, color: 'rose', path: '/app/clients/campaigns', ready: false },
     { key: 'dialer', label: 'Dialer', icon: Phone, color: 'green', path: '/app/clients/dialer', ready: false },
     { key: 'followups', label: 'Follow-ups', icon: Clock, color: 'amber', path: '/app/clients/follow-ups', ready: false },

@@ -108,8 +108,8 @@
 
 /* tabs & chips */
 .v2-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 14px; overflow-x: auto; }
-.v2-tabs button { padding: 9px 13px; font-weight: 700; font-size: 13px; color: var(--mut); background: none; border: 0; border-bottom: 2px solid transparent; white-space: nowrap; }
-.v2-tabs button.on { color: var(--ink); border-bottom-color: var(--blue); }
+.v2-tabs button, .v2-tabs a { padding: 9px 13px; font-weight: 700; font-size: 13px; color: var(--mut); background: none; border: 0; border-bottom: 2px solid transparent; white-space: nowrap; }
+.v2-tabs button.on, .v2-tabs a.on { color: var(--ink); border-bottom-color: var(--blue); }
 .v2-chip { display: inline-flex; align-items: center; gap: 5px; padding: 6px 11px; border-radius: 999px; background: #fff; border: 1px solid var(--line); font-size: 12px; font-weight: 600; }
 .v2-chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
 

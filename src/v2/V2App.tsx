@@ -17,6 +17,8 @@ import { Day } from './features/workerbook/Day';
 import { StartSession } from './features/workerbook/StartSession';
 import { Payouts, PayoutsLive, PayoutWorker } from './features/workerbook/Payouts';
 import { Territory } from './features/admin/Territory';
+import { ClientLists } from './features/admin/ClientLists';
+import { Clients } from './features/clients/Clients';
 import { Loading } from './ui';
 
 const Guard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({ perm, children }) => {
@@ -47,6 +49,8 @@ const V2Routes: React.FC = () => (
     <Route path="workerbook/days/:date/payouts" element={<Guard perm="workerbook"><Payouts /></Guard>} />
     <Route path="workerbook/days/:date/payouts/:contractorId" element={<Guard perm="workerbook"><PayoutWorker /></Guard>} />
     <Route path="admin/territory" element={<Guard perm="sa_territory"><Territory /></Guard>} />
+    <Route path="admin/territory/clients" element={<Guard perm="sa_territory"><ClientLists /></Guard>} />
+    <Route path="clients" element={<Guard><Clients /></Guard>} />
     <Route path="*" element={<Guard><Soon /></Guard>} />
   </Routes>
 );
