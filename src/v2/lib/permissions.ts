@@ -1,6 +1,7 @@
-// src/v2/lib/permissions.ts — the seven manager permissions and what they unlock.
+// src/v2/lib/permissions.ts — the manager permissions and what they unlock.
 export const PERMISSIONS = [
   { key: 'route_manager', label: 'Route Manager', unlocks: 'Route Manager map, team, routes, nav' },
+  { key: 'rm_floater', label: 'Floater Route Manager', unlocks: 'Executive level: pick any of the day’s route managers (any center) and open the floater map for them' },
   { key: 'workerbook', label: 'Workerbook', unlocks: 'Days, Start session, payouts, payslips, rate cards, pipeline, contractors' },
   { key: 'bookings', label: 'Master Bookings', unlocks: 'Bookings, Inbox, Accounts, Crews, KPIs' },
   { key: 'dialer', label: 'Clients & Dialer', unlocks: 'Clients, Campaigns, Dialer, Follow-ups, KPIs' },

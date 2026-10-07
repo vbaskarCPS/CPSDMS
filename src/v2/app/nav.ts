@@ -22,6 +22,7 @@ export interface Component {
 export const COMPONENTS: Component[] = [
   { key: 'rm', label: 'Route Manager', icon: Map, color: 'blue', perm: 'route_manager', home: '/app/rm', blurb: 'The live map: teams, routes and payouts in the field', subs: [
     { key: 'map', label: 'Map', icon: Map, color: 'blue', path: '/app/rm', ready: true },
+    { key: 'floater', label: 'Floater view', icon: Users, color: 'violet', path: '/app/rm/floater', ready: true },
   ] },
   { key: 'wb', label: 'Workerbook', icon: BookOpen, color: 'green', perm: 'workerbook', home: '/app/workerbook/days', blurb: 'The calendar: roll call, sessions, payouts and payslips', subs: [
     { key: 'days', label: 'Calendar', icon: Calendar, color: 'green', path: '/app/workerbook/days', ready: true },
@@ -64,7 +65,7 @@ export const SA_SUB_PERM: Record<string, Permission> = {
 export function visibleComponents(can: (p: Permission) => boolean): Component[] {
   return COMPONENTS
     .map(c => c.key === 'sa' ? { ...c, subs: c.subs.filter(s => can(SA_SUB_PERM[s.key])) } : c)
-    .filter(c => c.perm === 'super_admin_any' ? c.subs.length > 0 : can(c.perm));
+    .filter(c => c.perm === 'super_admin_any' ? c.subs.length > 0 : can(c.perm) || (c.key === 'rm' && can('rm_floater')));
 }
 
 export function findByPath(path: string): { comp: Component; sub: Sub } | null {
