@@ -515,7 +515,10 @@ class SessionService {
         : (m.metadata?.digitalMapping ? [m.metadata.digitalMapping] : []),
       // What this manager shares with the other managers' maps (private when absent).
       mapSharing: m.metadata?.mapSharing
-        ? { routes: !!m.metadata.mapSharing.routes, position: !!m.metadata.mapSharing.position }
+        ? {
+            access: Array.isArray(m.metadata.mapSharing.access) ? m.metadata.mapSharing.access.filter((x: unknown) => typeof x === 'string') : [],
+            position: Array.isArray(m.metadata.mapSharing.position) ? m.metadata.mapSharing.position.filter((x: unknown) => typeof x === 'string') : [],
+          }
         : undefined,
     }));
 
@@ -805,7 +808,7 @@ class SessionService {
     if (updateError) throw updateError;
   }
 
-  // --- MAP SHARING (RM map › Layers): what a manager lets the other managers see.
+  // --- MAP SHARING (RM map › Layers): who a manager has given access / their position.
   // Same read-merge-write as updateManagerFloatingFor, so phone, floatingFor and
   // the digital mapping config are preserved.
   public async updateManagerMapSharing(managerId: string, sharing: ManagerMapSharing): Promise<void> {
@@ -818,7 +821,7 @@ class SessionService {
       .eq('command_center_id', ccId)
       .single();
     if (fetchError || !user) throw new Error('Manager not found');
-    const newMetadata = { ...(user.metadata || {}), mapSharing: { routes: !!sharing.routes, position: !!sharing.position } };
+    const newMetadata = { ...(user.metadata || {}), mapSharing: { access: [...new Set(sharing.access)], position: [...new Set(sharing.position)] } };
     const { error: updateError } = await supabase
       .from('users')
       .update({ metadata: newMetadata })

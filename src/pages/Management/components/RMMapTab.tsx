@@ -42,7 +42,7 @@ import RMPhoneLayout, {
   RMPhoneShell, RMPhoneCtx, PhoneCrew, PhoneRouteState, PhonePinCardData, crewLabel,
 } from '../mobile/RMPhoneLayout';
 import PhoneNavigation from '../mobile/PhoneNavigation';
-import { MenuTiles, LayersList, PinsList, MenuSub, type OthersKey, type OthersLayers } from '../mobile/RMMenu';
+import { MenuTiles, LayersList, PinsList, MenuSub, type OthersLayers } from '../mobile/RMMenu';
 import { RouteList, RoutePanel } from './RMDesktopRoutes';
 import { pendingDollarValue, primeSpeech, safeAreaTop } from '../mobile/rmPhone';
 import {
@@ -692,7 +692,14 @@ function createWorkerMarkerEl(initials: string, borderColor: string, label: stri
   return el;
 }
 
-const firstNameOf = (name: string | undefined) => ((name || '').trim().split(/\s+/)[0] || name || '');
+// Map sharing grants, tolerant of anything stored (an older shape had booleans).
+function normalizeSharing(v: unknown): ManagerMapSharing {
+  const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+  const ids = (x: unknown) => (Array.isArray(x) ? [...new Set(x.filter((i): i is string => typeof i === 'string' && !!i))] : []);
+  return { access: ids(o.access), position: ids(o.position) };
+}
+const sameSharing = (a: ManagerMapSharing, b: ManagerMapSharing) =>
+  [...a.access].sort().join('|') === [...b.access].sort().join('|') && [...a.position].sort().join('|') === [...b.position].sort().join('|');
 
 // Manager-location dot (floater feature). A filled circle, palette-hued so it
 // matches the manager's route casing, with a thin dark stroke for contrast on
@@ -2388,21 +2395,23 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
   }, [mapLoaded]);
 
   // ── MAP SHARING (Layers › other managers) ─────────────────────────────────
-  // What I let the other managers in the CC see of me (my teams & routes, my
-  // position), and whether I show what they share. Sharing is private until a
-  // manager turns it on. Floaters keep seeing the managers they cover exactly as
-  // before — this is only about the managers I DON'T cover.
+  // A manager can give chosen managers in the CC
+  //   • full access — the same access and tools a floater has (their routes,
+  //     team, bookings, sales, stats, assigning, and their position), or
+  //   • position only — just their live dot.
+  // Nothing is shared until they choose. Grants live on the granter's manager
+  // row (users.metadata.mapSharing = { access: [ids], position: [ids] }) and are
+  // remembered on this device so they're put back on the next day's fresh row.
   //
-  // Seeing is this device's choice (local storage). Sharing is saved on my manager
-  // row (users.metadata.mapSharing) so the others' maps can read it, and also
-  // remembered on this device: each day's manager rows are created fresh, so the
-  // next day it is put back the first time the map opens.
-  const viewOthersKey = `rm_view_others:${managerId}`;
+  // Full access is applied by RMLogbook, which adds the granters to this
+  // manager's floatingFor — so everything downstream (coveredManagerIds and the
+  // rest of the floater code) treats them exactly like a floater's managers.
+  // This block only manages the grants and the position-only dots.
   const shareKey = `rm_share:${managerId}`;
-  const [viewOthers, setViewOthers] = useState<{ routes: boolean; positions: boolean }>(
-    () => getStorageItem(viewOthersKey, { routes: true, positions: true }));
-  const [mySharing, setMySharing] = useState<ManagerMapSharing>({ routes: false, position: false });
+  const hiddenKey = `rm_hidden_access:${managerId}`;
+  const [mySharing, setMySharing] = useState<ManagerMapSharing>({ access: [], position: [] });
   const [sharingSaving, setSharingSaving] = useState(false);
+  const [hiddenGranters, setHiddenGranters] = useState<string[]>(() => getStorageItem<string[]>(hiddenKey, []));
   const sharingTouchedAtRef = useRef(0);
   const sharingInitRef = useRef(false);
   const myManagerRow = useMemo(() => allManagers.find(m => m.userId === managerId), [allManagers, managerId]);
@@ -2411,28 +2420,31 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const saved = myManagerRow.mapSharing;
     if (!sharingInitRef.current) {
       sharingInitRef.current = true;
-      const remembered = getStorageItem<ManagerMapSharing | null>(shareKey, null);
-      if (!saved && remembered && (remembered.routes || remembered.position)) {
+      const remembered = normalizeSharing(getStorageItem<unknown>(shareKey, null));
+      if (!saved && (remembered.access.length || remembered.position.length)) {
         // A new day's manager row with nothing set: put back what I shared last time.
-        setMySharing({ routes: !!remembered.routes, position: !!remembered.position });
+        setMySharing(remembered);
         sessionService.updateManagerMapSharing(managerId, remembered).catch(e => console.warn('[MapSharing] restore failed:', e));
         return;
       }
     }
     // Follow the saved value (it may have been changed on my other device), but
-    // not while a change made here is still on its way to the other maps.
+    // not while a change made here is still on its way.
     if (Date.now() - sharingTouchedAtRef.current < 45000) return;
-    const next = { routes: !!saved?.routes, position: !!saved?.position };
-    setMySharing(prev => (prev.routes === next.routes && prev.position === next.position ? prev : next));
+    const next = normalizeSharing(saved);
+    setMySharing(prev => (sameSharing(prev, next) ? prev : next));
     if (saved) setStorageItem(shareKey, next);
   }, [myManagerRow, managerId, shareKey]);
 
-  // My position is written only when someone may see it: I share it, or a floater
-  // covers me (their map needs it). Otherwise my row is removed.
-  const coveredByFloater = useMemo(
-    () => allManagers.some(m => m.userId !== managerId && (m.floatingFor || []).includes(managerId)),
+  // Managers the admin set up to float for me (their access isn't mine to change).
+  // allManagers carries each row's admin-set floatingFor; grants are separate.
+  const adminFloatersForMe = useMemo(
+    () => new Set(allManagers.filter(m => m.userId !== managerId && (m.floatingFor || []).includes(managerId)).map(m => m.userId)),
     [allManagers, managerId]);
-  const reportPosition = mySharing.position || coveredByFloater;
+
+  // My position is written only when someone may see it: a floater covers me, or
+  // I've given someone access or my position. Otherwise my row is removed.
+  const reportPosition = mySharing.access.length > 0 || mySharing.position.length > 0 || adminFloatersForMe.size > 0;
   const reportPositionRef = useRef(false);
   reportPositionRef.current = reportPosition;
   useEffect(() => {
@@ -2440,26 +2452,23 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     sessionService.clearManagerLocation();
   }, [reportPosition, !!myManagerRow]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The managers I don't cover, and what each of them shares.
-  const otherManagers = useMemo(
-    () => allManagers.filter(m => m.role === 'RouteManager' && !coveredManagerIds.has(m.userId)),
-    [allManagers, coveredManagerIds]);
-  const routeSharers = useMemo(() => otherManagers.filter(m => m.mapSharing?.routes), [otherManagers]);
-  const positionSharers = useMemo(() => otherManagers.filter(m => m.mapSharing?.position), [otherManagers]);
-  const shownRouteSharerIds = useMemo(
-    () => new Set(viewOthers.routes ? routeSharers.map(m => m.userId) : []), [viewOthers.routes, routeSharers]);
-  const shownPositionSharerIds = useMemo(
-    () => new Set(viewOthers.positions ? positionSharers.map(m => m.userId) : []), [viewOthers.positions, positionSharers]);
+  // Managers who've shared with ME (and that I'm not already covering through an
+  // admin-set float). Hidden ones are this device's choice.
+  const grantsToMe = useMemo(() => allManagers.filter(m => m.userId !== managerId && m.role === 'RouteManager').map(m => {
+    const s = normalizeSharing(m.mapSharing);
+    return { m, access: s.access.includes(managerId), position: s.position.includes(managerId) };
+  }).filter(g => g.access || g.position), [allManagers, managerId]);
+  // Position-only dots: shared with me, not hidden, and not already covered.
+  const shownPositionSharerIds = useMemo(() => new Set(grantsToMe
+    .filter(g => g.position && !g.access && !hiddenGranters.includes(g.m.userId) && !coveredManagerIds.has(g.m.userId))
+    .map(g => g.m.userId)), [grantsToMe, hiddenGranters, coveredManagerIds]);
 
-  const toggleOthers = useCallback((k: OthersKey) => {
-    if (k === 'showRoutes' || k === 'showPositions') {
-      const f = k === 'showRoutes' ? 'routes' : 'positions';
-      setViewOthers(v => { const n = { ...v, [f]: !v[f] }; setStorageItem(viewOthersKey, n); return n; });
-      return;
-    }
-    const f = k === 'shareRoutes' ? 'routes' : 'position';
+  const setShare = useCallback((otherId: string, what: 'access' | 'position') => {
     const prev = mySharing;
-    const next = { ...prev, [f]: !prev[f] };
+    const has = prev[what].includes(otherId);
+    const next: ManagerMapSharing = { ...prev, [what]: has ? prev[what].filter(x => x !== otherId) : [...prev[what], otherId] };
+    // Full access includes the position; taking access away leaves position as it was.
+    if (what === 'access' && !has) next.position = next.position.filter(x => x !== otherId);
     sharingTouchedAtRef.current = Date.now();
     setMySharing(next);
     setStorageItem(shareKey, next);
@@ -2472,17 +2481,34 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
         setStorageItem(shareKey, prev);
       })
       .finally(() => { if (mountedRef.current) setSharingSaving(false); });
-  }, [mySharing, managerId, shareKey, viewOthersKey]);
+  }, [mySharing, managerId, shareKey]);
+
+  const toggleShown = useCallback((otherId: string) => {
+    setHiddenGranters(h => {
+      const n = h.includes(otherId) ? h.filter(x => x !== otherId) : [...h, otherId];
+      setStorageItem(hiddenKey, n);
+      // RMLogbook re-works the floater set from this.
+      window.dispatchEvent(new Event('cpsdms:rm-access'));
+      return n;
+    });
+  }, [hiddenKey]);
 
   const othersLayers: OthersLayers = {
-    showRoutes: viewOthers.routes,
-    showPositions: viewOthers.positions,
-    shareRoutes: mySharing.routes,
-    sharePosition: mySharing.position,
-    routesFrom: routeSharers.map(m => firstNameOf(m.name)),
-    positionsFrom: positionSharers.map(m => firstNameOf(m.name)),
+    share: allManagers
+      .filter(m => m.userId !== managerId && m.role === 'RouteManager')
+      .sort((x, y) => x.name.localeCompare(y.name))
+      .map(m => ({
+        id: m.userId, name: m.name,
+        access: mySharing.access.includes(m.userId),
+        position: mySharing.access.includes(m.userId) || mySharing.position.includes(m.userId),
+        floats: adminFloatersForMe.has(m.userId),
+      })),
+    seen: grantsToMe
+      .filter(g => !(myManagerRow?.floatingFor || []).includes(g.m.userId))
+      .map(g => ({ id: g.m.userId, name: g.m.name, kind: g.access ? 'access' as const : 'position' as const, shown: !hiddenGranters.includes(g.m.userId) })),
     saving: sharingSaving,
-    onToggle: toggleOthers,
+    onShare: setShare,
+    onShow: toggleShown,
   };
   const pollManagerLocations = floaterColouringActive || shownPositionSharerIds.size > 0;
 
@@ -2557,131 +2583,6 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       managerLocationMarkersRef.current.delete(id);
     });
   }, [managerLocations, mapLoaded, pollManagerLocations, shownPositionSharerIds, coveredManagerIds, managerId, allManagers, colorForOwner]);
-
-  // OTHER MANAGERS' SHARED ROUTES (Layers › their teams & routes). Fetched and
-  // drawn on their own — one source, a dashed line layer in the owner's palette
-  // hue under my own routes, and one number layer ("12 · Cheryl"). Never
-  // clickable: they're there to see, not to assign.
-  const otherRouteOwner = useMemo(() => {
-    const m = new Map<string, string>();
-    routes.forEach(r => { if (shownRouteSharerIds.has(r.managerId)) m.set(r.routeCode, r.managerId); });
-    return m;
-  }, [routes, shownRouteSharerIds]);
-  const otherRouteCodesSig = useMemo(() => [...otherRouteOwner.keys()].sort().join('|'), [otherRouteOwner]);
-  const [otherRouteMapData, setOtherRouteMapData] = useState<SavedRoute[]>([]);
-  useEffect(() => {
-    const codes = otherRouteCodesSig ? otherRouteCodesSig.split('|') : [];
-    if (!codes.length) { setOtherRouteMapData([]); return; }
-    let cancelled = false;
-    (async () => {
-      const { data, error } = await supabase.from('route_maps').select('*').in('route_code', codes).eq('status', 'approved');
-      if (cancelled || !mountedRef.current) return;
-      if (error) { console.warn('[MapSharing] shared routes failed:', error); return; }
-      setOtherRouteMapData((data || []) as SavedRoute[]);
-    })();
-    return () => { cancelled = true; };
-  }, [otherRouteCodesSig]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !mapLoaded) return;
-    const lines: GeoJSON.Feature[] = [];
-    const nums: GeoJSON.Feature[] = [];
-    for (const route of otherRouteMapData) {
-      const owner = otherRouteOwner.get(route.route_code);
-      if (!owner || !route.segments?.length) continue;
-      const color = getManagerColor(owner, sortedManagerIds);
-      const pts: [number, number][] = [];
-      route.segments.forEach(seg => {
-        if (!seg.coordinates || seg.coordinates.length < 2) return;
-        lines.push({ type: 'Feature', properties: { color }, geometry: { type: 'LineString', coordinates: seg.coordinates } });
-        seg.coordinates.forEach(c => pts.push(c));
-      });
-      if (pts.length) {
-        const lng = pts.reduce((a, c) => a + c[0], 0) / pts.length, lat = pts.reduce((a, c) => a + c[1], 0) / pts.length;
-        const who = firstNameOf(allManagers.find(m => m.userId === owner)?.name);
-        nums.push({ type: 'Feature', properties: { color, text: who ? `${route.route_number} · ${who}` : String(route.route_number) }, geometry: { type: 'Point', coordinates: [lng, lat] } });
-      }
-    }
-    const lineGj: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: lines };
-    const numGj: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: nums };
-    try {
-      const ls = map.getSource('rm-others-src') as mapboxgl.GeoJSONSource | undefined;
-      if (ls) ls.setData(lineGj);
-      else {
-        map.addSource('rm-others-src', { type: 'geojson', data: lineGj });
-        // Beneath my own route lines (the "rm-line-" prefix keeps it with the lines
-        // when the route renderer lifts pins and text above them).
-        const layers: any[] = (map.getStyle()?.layers as any[]) || [];
-        const firstOwn = layers.find(l => String(l.id).startsWith('rm-line-'))?.id;
-        const before = firstOwn ?? (map.getLayer('road-label') ? 'road-label' : undefined);
-        map.addLayer({
-          id: 'rm-line-others', type: 'line', source: 'rm-others-src',
-          paint: { 'line-color': ['get', 'color'], 'line-width': 5, 'line-opacity': 0.55, 'line-dasharray': [2, 1.5] },
-          layout: { 'line-join': 'round' },
-        }, before);
-      }
-      const ns = map.getSource('rm-others-num-src') as mapboxgl.GeoJSONSource | undefined;
-      if (ns) ns.setData(numGj);
-      else {
-        map.addSource('rm-others-num-src', { type: 'geojson', data: numGj });
-        map.addLayer({
-          id: 'rm-others-num', type: 'symbol', source: 'rm-others-num-src',
-          layout: { 'text-field': ['get', 'text'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 13, 'text-allow-overlap': false },
-          paint: { 'text-color': ['get', 'color'], 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 2 },
-        });
-      }
-    } catch (err) {
-      console.warn('[MapSharing] could not draw shared routes:', err);
-    }
-  }, [otherRouteMapData, otherRouteOwner, mapLoaded, allManagers, sortedManagerIds]);
-
-  // OTHER MANAGERS' SHARED TEAMS: their workers' live positions, as small dots in
-  // the owner's hue ("Name · Cheryl's team" on hover). Positions older than two
-  // hours are left off. Not clickable.
-  const otherTeamWorkers = useMemo(
-    () => workers.filter(w => shownRouteSharerIds.has(w.assignedManagerId as string)), [workers, shownRouteSharerIds]);
-  const otherTeamIdsSig = useMemo(() => otherTeamWorkers.map(w => w.contractorId).sort().join('|'), [otherTeamWorkers]);
-  const [otherWorkerLocations, setOtherWorkerLocations] = useState<WorkerLocation[]>([]);
-  const otherWorkerMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
-  useEffect(() => {
-    if (!mapLoaded) return;
-    const ids = otherTeamIdsSig ? otherTeamIdsSig.split('|') : [];
-    if (!ids.length) { setOtherWorkerLocations([]); return; }
-    let stopped = false;
-    const load = async () => {
-      const { data, error } = await supabase.from('worker_locations').select('*').in('worker_id', ids);
-      if (!stopped && !error && mountedRef.current) setOtherWorkerLocations((data || []) as WorkerLocation[]);
-    };
-    load();
-    const t = setInterval(load, WORKER_LOCATION_POLL_MS);
-    return () => { stopped = true; clearInterval(t); };
-  }, [mapLoaded, otherTeamIdsSig]);
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !mapLoaded) return;
-    const keep = new Set<string>();
-    for (const loc of otherWorkerLocations) {
-      const w = otherTeamWorkers.find(x => x.contractorId === loc.worker_id);
-      if (!w || Date.now() - new Date(loc.updated_at).getTime() > 2 * 3600 * 1000) continue;
-      const owner = w.assignedManagerId as string;
-      const color = getManagerColor(owner, sortedManagerIds);
-      const who = firstNameOf(allManagers.find(m => m.userId === owner)?.name);
-      const title = `${w.firstName} ${w.lastName}${who ? ` · ${who}’s team` : ''}`;
-      keep.add(loc.worker_id);
-      const ex = otherWorkerMarkersRef.current.get(loc.worker_id);
-      if (ex) {
-        ex.setLngLat([loc.lng, loc.lat]);
-        const el = ex.getElement(); el.style.background = color; el.title = title;
-      } else {
-        const el = createWorkerMarkerEl(`${w.firstName.charAt(0)}${w.lastName.charAt(0)}`.toUpperCase(), '#ffffff', title);
-        el.style.background = color; el.style.color = '#ffffff'; el.style.opacity = '0.85';
-        const marker = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([loc.lng, loc.lat]).addTo(map);
-        otherWorkerMarkersRef.current.set(loc.worker_id, marker);
-      }
-    }
-    otherWorkerMarkersRef.current.forEach((m, id) => { if (!keep.has(id)) { m.remove(); otherWorkerMarkersRef.current.delete(id); } });
-  }, [otherWorkerLocations, otherTeamWorkers, mapLoaded, sortedManagerIds, allManagers]);
 
   // Geocode cache hydration
   useEffect(() => {

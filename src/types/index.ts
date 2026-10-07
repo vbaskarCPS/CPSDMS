@@ -168,17 +168,17 @@ export interface ManagementUser {
   digitalMapping?: ManagerMappingConfig;
   digitalMappings?: ManagerMappingConfig[];
   // --- MAP SHARING (RM map › Layers) ---
-  // What this manager lets the OTHER managers in the CC see on their RM maps.
-  // Floaters always see the managers they cover, whatever this says. Stored in
-  // users.metadata.mapSharing. Absent = private (nothing shared).
+  // Which other managers in the CC this manager has given access to (floater
+  // level) or just their position. Stored in users.metadata.mapSharing, separate
+  // from floatingFor (which stays the admin's floater setup). Absent = private.
   mapSharing?: ManagerMapSharing;
 }
 
 export interface ManagerMapSharing {
-  /** My routes and my team (workers' positions). */
-  routes: boolean;
-  /** My own live position. */
-  position: boolean;
+  /** Managers given full access to me — the same as a floater covering me. */
+  access: string[];
+  /** Managers who can see only my live position. */
+  position: string[];
 }
 
 // --- BONUS STRUCTURE ---
