@@ -43,6 +43,9 @@ const MapViewer = React.lazy(() => import('./pages/SuperAdmin/MapViewer'));
 // Read-only planning view of every built map + its callbook PCLs (digimaps login).
 const DigiMaps = React.lazy(() => import('./pages/DigiMaps'));
 
+// New permission-based app (refactor). Runs beside the legacy routes during the parallel run.
+const V2App = React.lazy(() => import('./v2/V2App'));
+
 // Loading fallback
 const LoadingFallback = () => (
   <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -67,6 +70,9 @@ function App() {
             catch-all below: React Router ranks a static segment above a dynamic
             one, so /digimaps resolves here rather than being read as a slug. */}
         <Route path="/digimaps" element={<DigiMaps />} />
+
+        {/* New app — everything under /app/* (static segment ranks above /:slug). */}
+        <Route path="/app/*" element={<V2App />} />
 
         {/* Public catch-all: handles both job fair forms AND shuttle pages */}
         <Route path="/:slug" element={<SlugRouter />} />
