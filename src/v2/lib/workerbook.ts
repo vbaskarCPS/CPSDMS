@@ -278,6 +278,12 @@ export async function updateRoster(id: string, patch: Partial<Pick<RosterRow, 'm
   must(await db.from('day_roster').update(body).eq('id', id));
 }
 
+/** Mark several roster rows confirmed at once (on a road trip: planning to work). */
+export async function confirmRows(ids: string[]) {
+  if (!ids.length) return;
+  must(await db.from('day_roster').update({ confirmed_at: new Date().toISOString(), confirmed_via: 'staff' }).in('id', ids));
+}
+
 export async function removeFromDay(id: string) { must(await db.from('day_roster').delete().eq('id', id)); }
 
 /** Move a booking to another date: book there, then take it off this day. */

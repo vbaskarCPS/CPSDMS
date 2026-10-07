@@ -344,3 +344,9 @@
 .v2 .v2-x { border: 0; background: none; color: var(--mut); padding: 4px; border-radius: 6px; display: inline-flex; }
 .v2 .v2-x:hover { background: #fee2e2; color: #b91c1c; }
 .v2-roomtag { min-width: 38px; height: 26px; padding: 0 6px; border-radius: 7px; background: var(--soft); border: 1px solid var(--line); font-weight: 800; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; }
+/* crew rows dragged onto draft teams */
+.v2 .v2-draggable { cursor: grab; }   /* the list still scrolls on phones; a press-and-hold starts the drag */
+.v2 .v2-draggable:active { cursor: grabbing; }
+.v2-confirm.off { opacity: .55; }
+.v2-side-drop { border-radius: 14px; }
+.v2-side-drop.over > .v2-card { outline: 2px dashed var(--blue); outline-offset: -2px; }

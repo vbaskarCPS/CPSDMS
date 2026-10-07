@@ -47,7 +47,7 @@ export async function roadTripCenters(): Promise<{ id: string; display_name: str
  * something was already recorded for them that day).
  */
 export async function syncCrewDay(centerId: string, date: string): Promise<{ added: number; removed: number }> {
-  const { getDay, listRoster, book, removeFromDay } = await import('./workerbook');
+  const { getDay, listRoster, book, removeFromDay, confirmRows } = await import('./workerbook');
   const crew = (await crewList(centerId)).here.filter(r => r.status === 'active');
   const day = await getDay(centerId, date);
   if (day && day.state !== 'planned') return { added: 0, removed: 0 };
@@ -58,7 +58,14 @@ export async function syncCrewDay(centerId: string, date: string): Promise<{ add
   const added = add.length ? await book(centerId, date, add) : 0;
   const drop = rows.filter(r => !want.has(r.hire_id) && !r.attendance && !r.team && !r.next_action && !r.next_day);
   for (const r of drop) await removeFromDay(r.id);
-  return { added, removed: drop.length };
+  // Everyone on a road-trip day is down as working unless someone unticks them (stored as the
+  // roster's confirmation, which road trips don't otherwise use). New rows start ticked; a day
+  // that nobody has ticked yet (filled before this existed) gets everyone ticked once.
+  const after = (added || drop.length) ? await listRoster((await getDay(centerId, date))!.id) : rows;
+  const kept = after.filter(r => want.has(r.hire_id));
+  const fresh = kept.filter(r => !r.confirmed_at && (!have.has(r.hire_id) || !rows.some(x => x.confirmed_at)));
+  await confirmRows(fresh.map(r => r.id));
+  return { added: added + fresh.length, removed: drop.length };
 }
 
 /**

@@ -102,7 +102,7 @@ export const Days: React.FC = () => {
                     : <><span className="l1">{s.booked} booked · {s.showed} showed</span>
                         <span className="l2">{s.steps != null ? steps(s.steps) : '—'}{s.gross != null ? ` · ${money(s.gross)}` : ''}</span></>)
                     : s ? (rt
-                      ? <><span className="l1">{s.booked} crew</span><span className="l2">{s.confirmed ? `${s.confirmed} confirmed` : ''}</span></>
+                      ? <><span className="l1">{s.booked} crew</span><span className="l2">{s.confirmed} working</span></>
                       : <><span className="l1">{s.booked} booked</span><span className="l2">{s.confirmed} confirmed{s.firstDay ? ` · ${s.firstDay} first-day` : ''}</span></>)
                     : rt && iso >= today && crew.data && iso <= todayPlus(today, 1)
                       ? <span className="l2">{crewActive} in the crew</span> : null}
