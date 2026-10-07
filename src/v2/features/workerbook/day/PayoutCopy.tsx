@@ -1,12 +1,14 @@
 // A closed day: what was paid out — the day's numbers and each worker's finalized line
 // (the same lines payslips are built from), plus who showed.
 import React, { useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { Lock, Pencil, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useLoad } from '../../../lib/data';
 import { listLines } from '../../../lib/payslips';
 import { fullName, type Day, type RosterRow } from '../../../lib/workerbook';
 import { recalcDay } from '../../../lib/payoutEngine';
+import { listCarts } from '../../../lib/payoutCarts';
+import { PayoutEditor } from './PayoutEditor';
 import { Btn, ErrorBox, Loading, Tag } from '../../../ui';
 import { ContractorLink } from '../ContractorCard';
 
@@ -17,7 +19,13 @@ export const PayoutCopy: React.FC<{ centerId: string; region: string; date: stri
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [note, setNote] = useState<string | null>(null);
-  const unpaid = (lines.data || []).length > 0 && !(lines.data || []).some(l => l.payslip_id);
+  const [editing, setEditing] = useState(false);
+  const carts = useLoad(() => listCarts(centerId, date).catch(() => []), [centerId, date]);
+  const locked = (lines.data || []).some(l => l.payslip_id);
+  const unpaid = (lines.data || []).length > 0 && !locked;
+  const canEditDay = canEdit && !locked && (carts.data || []).length > 0;
+  if (editing && carts.data) return <PayoutEditor centerId={centerId} region={region} date={date} initial={carts.data} saved={lines.data || []}
+    onCancel={() => setEditing(false)} onSaved={() => { setEditing(false); setNote('Payouts saved.'); lines.reload(); carts.reload(); }} />;
   const recalc = async () => {
     setBusy(true); setError(null); setNote(null);
     try {
@@ -42,6 +50,8 @@ export const PayoutCopy: React.FC<{ centerId: string; region: string; date: stri
         <div className="v2-row" style={{ padding: '12px 14px 6px' }}>
           <b>Payouts</b><span className="v2-mut v2-small">{(lines.data || []).length} worker lines · {money(total)}</span>
           <span className="v2-spacer" />
+          {canEditDay && <Btn size="sm" icon={Pencil} onClick={() => { setNote(null); setEditing(true); }}>Edit payouts</Btn>}
+          {locked && <span className="v2-small v2-mut v2-row" style={{ gap: 4 }} title="Void the payslip on the Payslips page to edit this day"><Lock size={13} /> Locked by a payslip</span>}
           {canEdit && unpaid && <Btn size="sm" kind="o" icon={RefreshCw} disabled={busy} onClick={recalc}
             title="Work the pay out again with each worker's days and Silver Hats as they are now">{busy ? 'Working out…' : 'Work out again'}</Btn>}
           <Link className="v2-link v2-small" to="/app/workerbook/payslips">Payslips ›</Link>

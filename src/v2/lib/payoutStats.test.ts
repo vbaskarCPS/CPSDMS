@@ -63,3 +63,32 @@ describe('computePayoutStats (Oct 6 carts)', () => {
     expect(b.equiv).toBeGreaterThan(a.equiv);
   });
 });
+
+// Close day also saves each cart and its sales; worked out again, they must give the same lines.
+import { cartLines, cartsFromSession, type CartContext } from './payoutCarts';
+import { defaultRateCard } from './rateCard';
+
+describe('carts and sales saved at Close day (Oct 6 carts)', () => {
+  const input = { sessions, transactions, users, seasonType: 'sealing', productCostPercent: 0, noTaxOnCash: false, taxRate: 13 };
+  const ids: Record<string, string> = { E1004: 'h-e', H1055: 'h-h', C1219: 'h-c', EDM1225: 'h-d', T1065: 'h-t', T1001: 'h-1', C1026: 'h-6' };
+  const carts = cartsFromSession(input, ids);
+  it('one cart per finalized session, with its sales, splits and bonus; no card details', () => {
+    expect(carts).toHaveLength(5);
+    const team = carts.find(c => c.members.some(m => m.cn === 'EDM1225'))!;
+    expect(team.members.map(m => [m.cn, m.equiv_split, m.hire_id])).toEqual([['EDM1225', 40, 'h-d'], ['T1065', 60, 'h-t']]);
+    expect(team.sales.map(s => s.price)).toEqual([175, 169.5, 150]);
+    expect(team.eq_override).toBeCloseTo(13.9646, 3);   // the EQ set at payout
+    expect(carts.find(c => c.members[0].cn === 'T1001')!.bonuses).toEqual([{ label: 'Performance EQ', amount: 100, split: undefined }]);
+    expect(JSON.stringify(carts)).not.toMatch(/cc_|cvc|expiry/i);
+  });
+  it('worked out from the carts, every worker gets the same pay as at the payout screen', async () => {
+    const card = defaultRateCard('sealing', { name: 'HST', rate: 13 });
+    const facts = Object.fromEntries(Object.values(ids).map(h => [h, { firstYear: 2026, lifetimeDays: 0, hats: {} }]));
+    facts['h-e'] = { firstYear: 2025, lifetimeDays: 300, hats: { SE: 8 } };   // E1004: Alumni +0.50, Silver +1.00
+    const ctx: CartContext = { day: '2026-10-06', card, service: 'sealing', seasonYear: 2026, settings: { taxRate: 13, productCostPercent: 0, noTaxOnCash: false }, facts, showed: {} };
+    const fromCarts = new Map((await Promise.all(carts.map(c => cartLines(c, ctx)))).flat().map(l => [l.cn, l.total_payout]));
+    const lines = computePayoutStats(input).map(statsToLine);
+    expect(fromCarts.size).toBe(lines.length);
+    for (const l of lines) expect(fromCarts.get(l.cn), l.cn).toBeCloseTo(l.total_payout, 2);
+  });
+});
