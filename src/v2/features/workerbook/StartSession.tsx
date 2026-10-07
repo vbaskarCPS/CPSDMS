@@ -9,7 +9,7 @@ import { SERVICES, type Service } from '../../lib/permissions';
 import { centerAreas, routeShapes, type Area } from '../../lib/territory';
 import { getDay, listRoster, fullName, type RosterRow } from '../../lib/workerbook';
 import {
-  availableManagers, getSession, nextTeamName, openLegacySession, planProblems, startSession,
+  availableManagers, getSession, nextTeamName, openLegacySession, planProblems, startSession, writeLiveMapFromSession,
   type Plan, type PlanRoute, type PlanSettings, type PlanTeam,
 } from '../../lib/startSession';
 import { Btn, ErrorBox, Loading, Tag, Toggle } from '../../ui';
@@ -98,17 +98,35 @@ export const StartSession: React.FC = () => {
 
   if (!day.data || !roster.data?.length) return <div className="v2-main v2-narrow">{back}<div className="v2-card" style={{ marginTop: 12 }}>Nobody is booked on this day yet. Book contractors on the day first.</div></div>;
   if (existing.data || done) {
+    const onMap = legacyOpen.data === date;
+    const fixMap = async () => {
+      if (!day.data || !center) return;
+      setBusy(true); setError(null);
+      try { await writeLiveMapFromSession(day.data.id, center.id, date, card, seasonInfo.data?.season?.year || Number(date.slice(0, 4))); }
+      catch (e) { setError(e); }
+      finally { setBusy(false); legacyOpen.reload(); }
+    };
     return (
       <div className="v2-main v2-narrow">{back}
         <div className="v2-card" style={{ marginTop: 12, padding: 24 }}>
           <div className="v2-row"><Check color="#059669" /><span className="v2-h2">The session is live</span></div>
-          <p>The RM map, map logsheet and payouts run in the current app for now:</p>
+          {legacyOpen.loading ? <Loading label="Checking the live map…" /> : !onMap ? (
+            <div className="v2-err" style={{ margin: '12px 0' }}>
+              <b>The live map doesn’t have this session yet</b>, so managers and workers won’t see their routes or logsheets.
+              {legacyOpen.data && <> The current app still has the <b>{legacyOpen.data}</b> session open; close it first.</>}
+              <div style={{ marginTop: 10 }}><Btn kind="g" disabled={busy || !!legacyOpen.data} onClick={fixMap}>{busy ? 'Putting it on the map…' : 'Put this session on the live map'}</Btn></div>
+            </div>
+          ) : null}
+          <ErrorBox error={error} />
           <ul style={{ lineHeight: 1.7 }}>
-            <li><b>Managers</b> sign in at <a className="v2-link" href="/" target="_blank" rel="noreferrer">propertystars.app</a> with their <b>/app username and password</b>.</li>
-            <li><b>Workers</b> sign in there with their <b>CN #</b> and their <b>first name</b>.</li>
-            <li>Payouts and closing the session stay in the current app’s Session Command Center.</li>
+            <li><b>Managers</b> sign in at <a className="v2-link" href="/" target="_blank" rel="noreferrer">propertystars.app</a> with their username and password, then open <b>Route Manager › Map</b>.</li>
+            <li><b>Workers</b> sign in there on the <b>Worker</b> tab with their <b>CN #</b> and <b>first name</b>.</li>
+            <li><b>Payouts</b>: Workerbook › Payouts. Closing the session stays in the current app’s Session Command Center for now.</li>
           </ul>
-          <Btn kind="o" onClick={() => nav(`/app/workerbook/days/${date}`)}>Back to the day</Btn>
+          <div className="v2-row">
+            <Btn kind="o" onClick={() => nav(`/app/workerbook/days/${date}`)}>Back to the day</Btn>
+            {onMap && <Btn onClick={() => nav(`/app/workerbook/days/${date}/payouts`)}>Payouts</Btn>}
+          </div>
         </div>
       </div>
     );
