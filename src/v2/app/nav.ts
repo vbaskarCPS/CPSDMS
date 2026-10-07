@@ -15,12 +15,12 @@ export const COMPONENTS: Component[] = [
     { key: 'map', label: 'Map', icon: Map, color: 'blue', path: '/app/rm', ready: false },
   ] },
   { key: 'wb', label: 'Workerbook', icon: BookOpen, color: 'green', perm: 'workerbook', subs: [
-    { key: 'days', label: 'Days', icon: Calendar, color: 'green', path: '/app/workerbook/days', ready: false },
+    { key: 'days', label: 'Days', icon: Calendar, color: 'green', path: '/app/workerbook/days', ready: true },
     { key: 'payslips', label: 'Payslips', icon: FileText, color: 'sky', path: '/app/workerbook/payslips', ready: false },
     { key: 'rates', label: 'Rate cards', icon: SlidersHorizontal, color: 'slate', path: '/app/workerbook/rate-cards', ready: true },
     { key: 'pipeline', label: 'Pipeline', icon: UserPlus, color: 'violet', path: '/app/workerbook/pipeline', ready: false },
-    { key: 'contractors', label: 'Contractors', icon: Contact, color: 'teal', path: '/app/workerbook/contractors', ready: false },
-    { key: 'status', label: 'Status lists', icon: AlertCircle, color: 'amber', path: '/app/workerbook/status', ready: false },
+    { key: 'contractors', label: 'Contractors', icon: Contact, color: 'teal', path: '/app/workerbook/contractors', ready: true },
+    { key: 'status', label: 'Status lists', icon: AlertCircle, color: 'amber', path: '/app/workerbook/status', ready: true },
   ] },
   { key: 'mb', label: 'Master Bookings', icon: CalendarCheck, color: 'amber', perm: 'bookings', subs: [
     { key: 'bookings', label: 'Bookings', icon: List, color: 'amber', path: '/app/bookings', ready: false },
@@ -40,7 +40,7 @@ export const COMPONENTS: Component[] = [
     { key: 'users', label: 'Users', icon: Users, color: 'rose', path: '/app/admin/users', ready: true },
     { key: 'centers', label: 'Centers & seasons', icon: Building2, color: 'blue', path: '/app/admin/centers', ready: true },
     { key: 'availability', label: 'Availability', icon: CalendarOff, color: 'amber', path: '/app/admin/availability', ready: true },
-    { key: 'territory', label: 'Territory & Client Data', icon: MapPin, color: 'sky', path: '/app/admin/territory', ready: false },
+    { key: 'territory', label: 'Territory & Client Data', icon: MapPin, color: 'sky', path: '/app/admin/territory', ready: true },
     { key: 'reporting', label: 'Reporting', icon: BarChart3, color: 'violet', path: '/app/admin/reporting', ready: false },
   ] },
 ];

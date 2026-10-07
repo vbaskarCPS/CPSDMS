@@ -59,7 +59,7 @@ declare global {
 
 // Export types for import metadata
 export interface ImportMeta {
-  source: 'sheets' | 'file';
+  source: 'sheets' | 'file' | 'app'; // 'app' = started from a Day in /app
   dateTab?: string;
   sheetsExported?: boolean;
   seasonType?: SeasonType;
