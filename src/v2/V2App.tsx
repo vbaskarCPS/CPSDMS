@@ -12,6 +12,7 @@ import { Centers } from './features/admin/Centers';
 import { Availability } from './features/admin/Availability';
 import { RateCards } from './features/workerbook/RateCards';
 import { Contractors } from './features/workerbook/Contractors';
+import { Crew } from './features/workerbook/Crew';
 import { Days } from './features/workerbook/Days';
 import { Day } from './features/workerbook/Day';
 import { StartSession } from './features/workerbook/StartSession';
@@ -55,6 +56,7 @@ const V2Routes: React.FC = () => (
     <Route path="workerbook/rate-cards" element={<Guard perm="workerbook"><RateCards /></Guard>} />
     <Route path="workerbook/contractors" element={<Guard perm="workerbook"><Contractors /></Guard>} />
     <Route path="workerbook/status" element={<Guard perm="workerbook"><Contractors /></Guard>} />
+    <Route path="workerbook/crew" element={<Guard perm="workerbook"><Crew /></Guard>} />
     <Route path="workerbook/days" element={<Guard perm="workerbook"><Days /></Guard>} />
     <Route path="workerbook/days/:date" element={<Guard perm="workerbook"><Day /></Guard>} />
     <Route path="workerbook/days/:date/start" element={<Guard perm="workerbook"><StartSession /></Guard>} />
