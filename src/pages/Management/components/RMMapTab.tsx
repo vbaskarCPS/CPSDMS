@@ -19,11 +19,11 @@ import {
   commandCenterService,
   EQ_DIVISOR,
 } from '../../../lib/commandCenterService';
-import { setStorageItem } from '../../../lib/localStorage';
+import { getStorageItem, setStorageItem } from '../../../lib/localStorage';
 import {
   RouteData, MasterBooking, LogsheetSession, Worker, ManagementUser,
   HistoricalProperty, SeasonType, TeamCart, PendingSale, SEASON_CONFIGS,
-  SessionTransaction, RouteSplit, ManagerLocation,
+  SessionTransaction, RouteSplit, ManagerLocation, ManagerMapSharing,
   CRACKFILLER_LBS_PER_BOTTLE,
 } from '../../../types';
 import { getWorkerPCL, PCLClientGroup } from '../../../lib/pclCacheService';
@@ -42,7 +42,7 @@ import RMPhoneLayout, {
   RMPhoneShell, RMPhoneCtx, PhoneCrew, PhoneRouteState, PhonePinCardData, crewLabel,
 } from '../mobile/RMPhoneLayout';
 import PhoneNavigation from '../mobile/PhoneNavigation';
-import { MenuTiles, LayersList, PinsList, MenuSub } from '../mobile/RMMenu';
+import { MenuTiles, LayersList, PinsList, MenuSub, type OthersKey, type OthersLayers } from '../mobile/RMMenu';
 import { RouteList, RoutePanel } from './RMDesktopRoutes';
 import { pendingDollarValue, primeSpeech, safeAreaTop } from '../mobile/rmPhone';
 import {
@@ -691,6 +691,8 @@ function createWorkerMarkerEl(initials: string, borderColor: string, label: stri
   el.title = label;
   return el;
 }
+
+const firstNameOf = (name: string | undefined) => ((name || '').trim().split(/\s+/)[0] || name || '');
 
 // Manager-location dot (floater feature). A filled circle, palette-hued so it
 // matches the manager's route casing, with a thin dark stroke for contrast on
@@ -2385,12 +2387,111 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     return () => { map.off('rotate', onRotate); map.off('rotateend', onRotateEnd); };
   }, [mapLoaded]);
 
+  // ── MAP SHARING (Layers › other managers) ─────────────────────────────────
+  // What I let the other managers in the CC see of me (my teams & routes, my
+  // position), and whether I show what they share. Sharing is private until a
+  // manager turns it on. Floaters keep seeing the managers they cover exactly as
+  // before — this is only about the managers I DON'T cover.
+  //
+  // Seeing is this device's choice (local storage). Sharing is saved on my manager
+  // row (users.metadata.mapSharing) so the others' maps can read it, and also
+  // remembered on this device: each day's manager rows are created fresh, so the
+  // next day it is put back the first time the map opens.
+  const viewOthersKey = `rm_view_others:${managerId}`;
+  const shareKey = `rm_share:${managerId}`;
+  const [viewOthers, setViewOthers] = useState<{ routes: boolean; positions: boolean }>(
+    () => getStorageItem(viewOthersKey, { routes: true, positions: true }));
+  const [mySharing, setMySharing] = useState<ManagerMapSharing>({ routes: false, position: false });
+  const [sharingSaving, setSharingSaving] = useState(false);
+  const sharingTouchedAtRef = useRef(0);
+  const sharingInitRef = useRef(false);
+  const myManagerRow = useMemo(() => allManagers.find(m => m.userId === managerId), [allManagers, managerId]);
+  useEffect(() => {
+    if (!myManagerRow) return;
+    const saved = myManagerRow.mapSharing;
+    if (!sharingInitRef.current) {
+      sharingInitRef.current = true;
+      const remembered = getStorageItem<ManagerMapSharing | null>(shareKey, null);
+      if (!saved && remembered && (remembered.routes || remembered.position)) {
+        // A new day's manager row with nothing set: put back what I shared last time.
+        setMySharing({ routes: !!remembered.routes, position: !!remembered.position });
+        sessionService.updateManagerMapSharing(managerId, remembered).catch(e => console.warn('[MapSharing] restore failed:', e));
+        return;
+      }
+    }
+    // Follow the saved value (it may have been changed on my other device), but
+    // not while a change made here is still on its way to the other maps.
+    if (Date.now() - sharingTouchedAtRef.current < 45000) return;
+    const next = { routes: !!saved?.routes, position: !!saved?.position };
+    setMySharing(prev => (prev.routes === next.routes && prev.position === next.position ? prev : next));
+    if (saved) setStorageItem(shareKey, next);
+  }, [myManagerRow, managerId, shareKey]);
+
+  // My position is written only when someone may see it: I share it, or a floater
+  // covers me (their map needs it). Otherwise my row is removed.
+  const coveredByFloater = useMemo(
+    () => allManagers.some(m => m.userId !== managerId && (m.floatingFor || []).includes(managerId)),
+    [allManagers, managerId]);
+  const reportPosition = mySharing.position || coveredByFloater;
+  const reportPositionRef = useRef(false);
+  reportPositionRef.current = reportPosition;
+  useEffect(() => {
+    if (!myManagerRow || reportPosition) return;
+    sessionService.clearManagerLocation();
+  }, [reportPosition, !!myManagerRow]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The managers I don't cover, and what each of them shares.
+  const otherManagers = useMemo(
+    () => allManagers.filter(m => m.role === 'RouteManager' && !coveredManagerIds.has(m.userId)),
+    [allManagers, coveredManagerIds]);
+  const routeSharers = useMemo(() => otherManagers.filter(m => m.mapSharing?.routes), [otherManagers]);
+  const positionSharers = useMemo(() => otherManagers.filter(m => m.mapSharing?.position), [otherManagers]);
+  const shownRouteSharerIds = useMemo(
+    () => new Set(viewOthers.routes ? routeSharers.map(m => m.userId) : []), [viewOthers.routes, routeSharers]);
+  const shownPositionSharerIds = useMemo(
+    () => new Set(viewOthers.positions ? positionSharers.map(m => m.userId) : []), [viewOthers.positions, positionSharers]);
+
+  const toggleOthers = useCallback((k: OthersKey) => {
+    if (k === 'showRoutes' || k === 'showPositions') {
+      const f = k === 'showRoutes' ? 'routes' : 'positions';
+      setViewOthers(v => { const n = { ...v, [f]: !v[f] }; setStorageItem(viewOthersKey, n); return n; });
+      return;
+    }
+    const f = k === 'shareRoutes' ? 'routes' : 'position';
+    const prev = mySharing;
+    const next = { ...prev, [f]: !prev[f] };
+    sharingTouchedAtRef.current = Date.now();
+    setMySharing(next);
+    setStorageItem(shareKey, next);
+    setSharingSaving(true);
+    sessionService.updateManagerMapSharing(managerId, next)
+      .catch(e => {
+        console.warn('[MapSharing] save failed:', e);
+        sharingTouchedAtRef.current = 0;
+        setMySharing(prev);
+        setStorageItem(shareKey, prev);
+      })
+      .finally(() => { if (mountedRef.current) setSharingSaving(false); });
+  }, [mySharing, managerId, shareKey, viewOthersKey]);
+
+  const othersLayers: OthersLayers = {
+    showRoutes: viewOthers.routes,
+    showPositions: viewOthers.positions,
+    shareRoutes: mySharing.routes,
+    sharePosition: mySharing.position,
+    routesFrom: routeSharers.map(m => firstNameOf(m.name)),
+    positionsFrom: positionSharers.map(m => firstNameOf(m.name)),
+    saving: sharingSaving,
+    onToggle: toggleOthers,
+  };
+  const pollManagerLocations = floaterColouringActive || shownPositionSharerIds.size > 0;
+
   // MANAGER LOCATION poll (floater only). Fetches every reporting manager's
   // position every 8s; the marker effect filters to the covered set. Only runs
   // when floater colouring is active — a non-floater never polls, so their map is
   // unchanged. CC-wide fetch is fine; the filter happens at render.
   useEffect(() => {
-    if (!mapLoaded || !floaterColouringActive) return;
+    if (!mapLoaded || !pollManagerLocations) return;
     let cancelled = false;
     const fetchManagerLocations = async () => {
       try {
@@ -2403,7 +2504,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     fetchManagerLocations();
     const interval = setInterval(fetchManagerLocations, 8000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [mapLoaded, floaterColouringActive]);
+  }, [mapLoaded, pollManagerLocations]);
 
   // MANAGER LOCATION markers (floater only). Renders a palette-hued dot per
   // covered manager (own id excluded — we're the red GPS arrow already). Hue via
@@ -2413,8 +2514,8 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
-    // When floater colouring is inactive, ensure no stray manager dots linger.
-    if (!floaterColouringActive) {
+    // When there is nobody to show, ensure no stray manager dots linger.
+    if (!pollManagerLocations) {
       managerLocationMarkersRef.current.forEach(m => m.remove());
       managerLocationMarkersRef.current.clear();
       return;
@@ -2423,12 +2524,16 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     const existingIds = new Set(managerLocationMarkersRef.current.keys());
 
     managerLocations.forEach(loc => {
-      // Only covered managers, and never our own dot (we're the red arrow).
+      // Covered managers, plus (Layers › their positions) managers sharing theirs
+      // with a fix from the last 15 minutes. Never our own dot (we're the red arrow).
       if (loc.managerId === managerId) return;
-      if (!coveredManagerIds.has(loc.managerId)) return;
+      const covered = coveredManagerIds.has(loc.managerId);
+      const shared = shownPositionSharerIds.has(loc.managerId)
+        && Date.now() - new Date(loc.updatedAt).getTime() < 15 * 60 * 1000;
+      if (!covered && !shared) return;
 
       const mgr = allManagers.find(m => m.userId === loc.managerId);
-      const label = mgr?.name || loc.managerId;
+      const label = covered ? (mgr?.name || loc.managerId) : `${mgr?.name || 'Manager'} (sharing their position)`;
       const fill = colorForOwner(loc.managerId, '#9ca3af');
 
       const existing = managerLocationMarkersRef.current.get(loc.managerId);
@@ -2451,7 +2556,132 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       managerLocationMarkersRef.current.get(id)?.remove();
       managerLocationMarkersRef.current.delete(id);
     });
-  }, [managerLocations, mapLoaded, floaterColouringActive, coveredManagerIds, managerId, allManagers, colorForOwner]);
+  }, [managerLocations, mapLoaded, pollManagerLocations, shownPositionSharerIds, coveredManagerIds, managerId, allManagers, colorForOwner]);
+
+  // OTHER MANAGERS' SHARED ROUTES (Layers › their teams & routes). Fetched and
+  // drawn on their own — one source, a dashed line layer in the owner's palette
+  // hue under my own routes, and one number layer ("12 · Cheryl"). Never
+  // clickable: they're there to see, not to assign.
+  const otherRouteOwner = useMemo(() => {
+    const m = new Map<string, string>();
+    routes.forEach(r => { if (shownRouteSharerIds.has(r.managerId)) m.set(r.routeCode, r.managerId); });
+    return m;
+  }, [routes, shownRouteSharerIds]);
+  const otherRouteCodesSig = useMemo(() => [...otherRouteOwner.keys()].sort().join('|'), [otherRouteOwner]);
+  const [otherRouteMapData, setOtherRouteMapData] = useState<SavedRoute[]>([]);
+  useEffect(() => {
+    const codes = otherRouteCodesSig ? otherRouteCodesSig.split('|') : [];
+    if (!codes.length) { setOtherRouteMapData([]); return; }
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.from('route_maps').select('*').in('route_code', codes).eq('status', 'approved');
+      if (cancelled || !mountedRef.current) return;
+      if (error) { console.warn('[MapSharing] shared routes failed:', error); return; }
+      setOtherRouteMapData((data || []) as SavedRoute[]);
+    })();
+    return () => { cancelled = true; };
+  }, [otherRouteCodesSig]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const lines: GeoJSON.Feature[] = [];
+    const nums: GeoJSON.Feature[] = [];
+    for (const route of otherRouteMapData) {
+      const owner = otherRouteOwner.get(route.route_code);
+      if (!owner || !route.segments?.length) continue;
+      const color = getManagerColor(owner, sortedManagerIds);
+      const pts: [number, number][] = [];
+      route.segments.forEach(seg => {
+        if (!seg.coordinates || seg.coordinates.length < 2) return;
+        lines.push({ type: 'Feature', properties: { color }, geometry: { type: 'LineString', coordinates: seg.coordinates } });
+        seg.coordinates.forEach(c => pts.push(c));
+      });
+      if (pts.length) {
+        const lng = pts.reduce((a, c) => a + c[0], 0) / pts.length, lat = pts.reduce((a, c) => a + c[1], 0) / pts.length;
+        const who = firstNameOf(allManagers.find(m => m.userId === owner)?.name);
+        nums.push({ type: 'Feature', properties: { color, text: who ? `${route.route_number} · ${who}` : String(route.route_number) }, geometry: { type: 'Point', coordinates: [lng, lat] } });
+      }
+    }
+    const lineGj: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: lines };
+    const numGj: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: nums };
+    try {
+      const ls = map.getSource('rm-others-src') as mapboxgl.GeoJSONSource | undefined;
+      if (ls) ls.setData(lineGj);
+      else {
+        map.addSource('rm-others-src', { type: 'geojson', data: lineGj });
+        // Beneath my own route lines (the "rm-line-" prefix keeps it with the lines
+        // when the route renderer lifts pins and text above them).
+        const layers: any[] = (map.getStyle()?.layers as any[]) || [];
+        const firstOwn = layers.find(l => String(l.id).startsWith('rm-line-'))?.id;
+        const before = firstOwn ?? (map.getLayer('road-label') ? 'road-label' : undefined);
+        map.addLayer({
+          id: 'rm-line-others', type: 'line', source: 'rm-others-src',
+          paint: { 'line-color': ['get', 'color'], 'line-width': 5, 'line-opacity': 0.55, 'line-dasharray': [2, 1.5] },
+          layout: { 'line-join': 'round' },
+        }, before);
+      }
+      const ns = map.getSource('rm-others-num-src') as mapboxgl.GeoJSONSource | undefined;
+      if (ns) ns.setData(numGj);
+      else {
+        map.addSource('rm-others-num-src', { type: 'geojson', data: numGj });
+        map.addLayer({
+          id: 'rm-others-num', type: 'symbol', source: 'rm-others-num-src',
+          layout: { 'text-field': ['get', 'text'], 'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'], 'text-size': 13, 'text-allow-overlap': false },
+          paint: { 'text-color': ['get', 'color'], 'text-halo-color': 'rgba(255,255,255,0.9)', 'text-halo-width': 2 },
+        });
+      }
+    } catch (err) {
+      console.warn('[MapSharing] could not draw shared routes:', err);
+    }
+  }, [otherRouteMapData, otherRouteOwner, mapLoaded, allManagers, sortedManagerIds]);
+
+  // OTHER MANAGERS' SHARED TEAMS: their workers' live positions, as small dots in
+  // the owner's hue ("Name · Cheryl's team" on hover). Positions older than two
+  // hours are left off. Not clickable.
+  const otherTeamWorkers = useMemo(
+    () => workers.filter(w => shownRouteSharerIds.has(w.assignedManagerId as string)), [workers, shownRouteSharerIds]);
+  const otherTeamIdsSig = useMemo(() => otherTeamWorkers.map(w => w.contractorId).sort().join('|'), [otherTeamWorkers]);
+  const [otherWorkerLocations, setOtherWorkerLocations] = useState<WorkerLocation[]>([]);
+  const otherWorkerMarkersRef = useRef<Map<string, mapboxgl.Marker>>(new Map());
+  useEffect(() => {
+    if (!mapLoaded) return;
+    const ids = otherTeamIdsSig ? otherTeamIdsSig.split('|') : [];
+    if (!ids.length) { setOtherWorkerLocations([]); return; }
+    let stopped = false;
+    const load = async () => {
+      const { data, error } = await supabase.from('worker_locations').select('*').in('worker_id', ids);
+      if (!stopped && !error && mountedRef.current) setOtherWorkerLocations((data || []) as WorkerLocation[]);
+    };
+    load();
+    const t = setInterval(load, WORKER_LOCATION_POLL_MS);
+    return () => { stopped = true; clearInterval(t); };
+  }, [mapLoaded, otherTeamIdsSig]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const keep = new Set<string>();
+    for (const loc of otherWorkerLocations) {
+      const w = otherTeamWorkers.find(x => x.contractorId === loc.worker_id);
+      if (!w || Date.now() - new Date(loc.updated_at).getTime() > 2 * 3600 * 1000) continue;
+      const owner = w.assignedManagerId as string;
+      const color = getManagerColor(owner, sortedManagerIds);
+      const who = firstNameOf(allManagers.find(m => m.userId === owner)?.name);
+      const title = `${w.firstName} ${w.lastName}${who ? ` · ${who}’s team` : ''}`;
+      keep.add(loc.worker_id);
+      const ex = otherWorkerMarkersRef.current.get(loc.worker_id);
+      if (ex) {
+        ex.setLngLat([loc.lng, loc.lat]);
+        const el = ex.getElement(); el.style.background = color; el.title = title;
+      } else {
+        const el = createWorkerMarkerEl(`${w.firstName.charAt(0)}${w.lastName.charAt(0)}`.toUpperCase(), '#ffffff', title);
+        el.style.background = color; el.style.color = '#ffffff'; el.style.opacity = '0.85';
+        const marker = new mapboxgl.Marker({ element: el, anchor: 'center' }).setLngLat([loc.lng, loc.lat]).addTo(map);
+        otherWorkerMarkersRef.current.set(loc.worker_id, marker);
+      }
+    }
+    otherWorkerMarkersRef.current.forEach((m, id) => { if (!keep.has(id)) { m.remove(); otherWorkerMarkersRef.current.delete(id); } });
+  }, [otherWorkerLocations, otherTeamWorkers, mapLoaded, sortedManagerIds, allManagers]);
 
   // Geocode cache hydration
   useEffect(() => {
@@ -3953,7 +4183,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
     // rather than going stale. No-op until the first fix populates lastSelfPosRef.
     const selfPushInterval = setInterval(() => {
       const p = lastSelfPosRef.current;
-      if (p) sessionService.upsertManagerLocation(p.lat, p.lng).catch(() => {});
+      if (p && reportPositionRef.current) sessionService.upsertManagerLocation(p.lat, p.lng).catch(() => {});
     }, 8000);
     watchIdRef.current=navigator.geolocation.watchPosition(pos=>{
       if(!navMarkerRef.current||!mapRef.current) return;
@@ -3976,7 +4206,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       // own position). Self-resolved in the service from current_user, so this only
       // ever writes our own row. Heading omitted per spec (dots, not arrows).
       lastSelfPosRef.current = { lat, lng };
-      sessionService.upsertManagerLocation(lat, lng).catch(() => {});
+      if (reportPositionRef.current) sessionService.upsertManagerLocation(lat, lng).catch(() => {});
       applyArrowRotation();
       if (centerOnLocationRef.current && !phoneNavRef.current) {
         mapRef.current.easeTo({ center: [lng, lat], duration: 300 });
@@ -6256,6 +6486,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
       activityNow,
       filterVisibility,
       geocodeProgress,
+      othersLayers,
       centerOnLocation,
       pinMode,
 
@@ -6571,7 +6802,7 @@ const RMMapTab: React.FC<RMMapTabProps> = ({
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4">
               {desktopMenuSub === 'layers' ? (
-                <LayersList filterVisibility={filterVisibility} geocodeProgress={geocodeProgress} onToggle={shell.onToggleFilter} />
+                <LayersList filterVisibility={filterVisibility} geocodeProgress={geocodeProgress} onToggle={shell.onToggleFilter} others={othersLayers} />
               ) : desktopMenuSub === 'pins' ? (
                 <PinsList
                   verb="Click"

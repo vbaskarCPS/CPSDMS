@@ -167,6 +167,18 @@ export interface ManagementUser {
   // singular when only a legacy config exists. Nothing to migrate.
   digitalMapping?: ManagerMappingConfig;
   digitalMappings?: ManagerMappingConfig[];
+  // --- MAP SHARING (RM map › Layers) ---
+  // What this manager lets the OTHER managers in the CC see on their RM maps.
+  // Floaters always see the managers they cover, whatever this says. Stored in
+  // users.metadata.mapSharing. Absent = private (nothing shared).
+  mapSharing?: ManagerMapSharing;
+}
+
+export interface ManagerMapSharing {
+  /** My routes and my team (workers' positions). */
+  routes: boolean;
+  /** My own live position. */
+  position: boolean;
 }
 
 // --- BONUS STRUCTURE ---

@@ -26,7 +26,7 @@ import type { CartCardData, WorkerCardData, RouteCardData } from '../components/
 import { ActivityBadge, latestMs, computeRedFlags } from '../components/rmMapShared';
 import PhoneDrawer, { DrawerSnap } from './PhoneDrawer';
 import { PhoneSheet } from './PhoneSheet';
-import { MenuTiles, LayersList, PinsList } from './RMMenu';
+import { MenuTiles, LayersList, PinsList, type OthersLayers } from './RMMenu';
 import PhoneNavigation, { PhoneNavDestination } from './PhoneNavigation';
 import { money, safeAreaTop, installPixelRatioCap } from './rmPhone';
 
@@ -103,6 +103,8 @@ export interface RMPhoneCtx {
   activityNow: number;
   filterVisibility: FilterVisibility;
   geocodeProgress: GeocodeProgress;
+  /** Layers › other managers (see / share). */
+  othersLayers: OthersLayers;
   centerOnLocation: boolean;
   pinMode: boolean;
 
@@ -677,7 +679,7 @@ const RMPhoneLayout: React.FC<{ ctx: RMPhoneCtx }> = ({ ctx }) => {
 
       {sheet === 'layers' && (
         <PhoneSheet title="Map layers" onClose={() => setSheet(null)}>
-          <LayersList filterVisibility={ctx.filterVisibility} geocodeProgress={ctx.geocodeProgress} onToggle={shell.onToggleFilter} />
+          <LayersList filterVisibility={ctx.filterVisibility} geocodeProgress={ctx.geocodeProgress} onToggle={shell.onToggleFilter} others={ctx.othersLayers} />
         </PhoneSheet>
       )}
 

@@ -14,6 +14,7 @@ import React from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   Users, MapPin, Layers, CreditCard, Shovel, Truck, Loader, Clock, CheckCircle2, History, ChevronRight, LayoutDashboard,
+  Route, Navigation, Eye, Share2,
 } from 'lucide-react';
 import { Tile } from './PhoneSheet';
 import type { RMPhoneShell } from './RMPhoneLayout';
@@ -83,16 +84,79 @@ export const LayerRow: React.FC<{
   );
 };
 
+/**
+ * The "other managers" part of Layers: what I see of the other managers in the CC,
+ * and what I let them see of me. Both default to private for sharing; seeing is
+ * on, so anything a manager shares shows up straight away.
+ */
+export type OthersKey = 'showRoutes' | 'showPositions' | 'shareRoutes' | 'sharePosition';
+export interface OthersLayers {
+  showRoutes: boolean;
+  showPositions: boolean;
+  shareRoutes: boolean;
+  sharePosition: boolean;
+  /** First names of the managers sharing each thing with me right now. */
+  routesFrom: string[];
+  positionsFrom: string[];
+  /** True while my sharing change is being saved. */
+  saving: boolean;
+  onToggle: (k: OthersKey) => void;
+}
+
+const SwitchRow: React.FC<{
+  icon: LucideIcon; label: string; sub: string; on: boolean; disabled?: boolean; tone?: 'blue' | 'green';
+  onToggle: () => void;
+}> = ({ icon: Icon, label, sub, on, disabled, tone = 'blue', onToggle }) => {
+  const ring = tone === 'green' ? 'bg-emerald-600/20 ring-1 ring-emerald-500' : 'bg-blue-600/25 ring-1 ring-blue-500';
+  const knob = tone === 'green' ? 'bg-emerald-500' : 'bg-blue-500';
+  return (
+    <button
+      onClick={disabled ? undefined : onToggle}
+      role="switch" aria-checked={on} aria-label={label}
+      className={`w-full min-h-[56px] rounded-xl px-4 py-2.5 flex items-center gap-3 text-left ${on ? ring : 'bg-gray-800'} ${disabled ? 'opacity-60' : ''}`}
+    >
+      <Icon size={18} className={`flex-shrink-0 ${on ? (tone === 'green' ? 'text-emerald-300' : 'text-blue-300') : 'text-gray-400'}`} />
+      <span className="flex-1 min-w-0">
+        <span className="block text-sm font-bold text-white">{label}</span>
+        <span className="block text-[11px] text-gray-400">{sub}</span>
+      </span>
+      <span className={`w-11 h-6 rounded-full relative transition-colors flex-shrink-0 ${on ? knob : 'bg-gray-600'}`}>
+        <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${on ? 'left-[22px]' : 'left-0.5'}`} />
+      </span>
+    </button>
+  );
+};
+
+const who = (names: string[]) => names.length === 0 ? 'No one is sharing right now.'
+  : `Shared by ${names.length <= 3 ? names.join(', ') : `${names.slice(0, 3).join(', ')} +${names.length - 3}`}.`;
+
 export const LayersList: React.FC<{
   filterVisibility: FilterVisibility;
   geocodeProgress: GeocodeProgress;
   onToggle: (k: keyof FilterVisibility) => void;
-}> = ({ filterVisibility: f, geocodeProgress: g, onToggle }) => (
+  others?: OthersLayers;
+}> = ({ filterVisibility: f, geocodeProgress: g, onToggle, others: o }) => (
   <div className="space-y-2 pb-2">
     <LayerRow icon={Clock} label="Pending prebooks" on={f.pendingBookings} progress={g.pendingBookings} onToggle={() => onToggle('pendingBookings')} />
     <LayerRow icon={CheckCircle2} label="Sales & completed" on={f.pendingSalesAndCompleted} progress={g.pendingSalesAndCompleted} onToggle={() => onToggle('pendingSalesAndCompleted')} />
     <LayerRow icon={History} label="Previously done" on={f.historical} progress={g.historical} onToggle={() => onToggle('historical')} />
     <LayerRow icon={Users} label="Callbook clients (PCL)" on={f.pcl} progress={g.pcl} onToggle={() => onToggle('pcl')} />
+    {o && (
+      <>
+        <div className="pt-3 pb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-gray-500 font-bold"><Eye size={12} />Other managers on my map</div>
+        <SwitchRow icon={Route} label="Their teams & routes" sub={who(o.routesFrom)} on={o.showRoutes} onToggle={() => o.onToggle('showRoutes')} />
+        <SwitchRow icon={Navigation} label="Their positions" sub={who(o.positionsFrom)} on={o.showPositions} onToggle={() => o.onToggle('showPositions')} />
+        <div className="pt-3 pb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-gray-500 font-bold"><Share2 size={12} />What other managers can see of me</div>
+        <SwitchRow
+          icon={Route} label="My teams & routes" tone="green" disabled={o.saving} on={o.shareRoutes} onToggle={() => o.onToggle('shareRoutes')}
+          sub={o.shareRoutes ? 'Shared with every manager in this CC.' : 'Private. Only a manager covering you sees them.'}
+        />
+        <SwitchRow
+          icon={Navigation} label="My position" tone="green" disabled={o.saving} on={o.sharePosition} onToggle={() => o.onToggle('sharePosition')}
+          sub={o.sharePosition ? 'Shared with every manager in this CC.' : 'Private. Only a manager covering you sees it.'}
+        />
+      </>
+    )}
   </div>
 );
 
