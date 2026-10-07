@@ -23,6 +23,8 @@ export interface Plan {
   members: Record<string, string>;   // hire_id → team name
   showed: Set<string>;               // hire ids ticked in roll call
   roster: RosterRow[]; settings: PlanSettings;
+  /** days each hire showed in the app before this date (added to their days before the app) */
+  appDaysBefore?: Record<string, number>;
 }
 
 export const SERVICE_HAT: Record<Service, HatCode> = { aeration: 'AER', lawn_rejuv: 'RJ', sealing: 'SE', cleaning: 'CL' };
@@ -91,7 +93,7 @@ export function buildLegacySession(p: Plan, centerId: string): { data: DailySess
     return {
       contractorId: r.hire.cn, firstName: person.first_name, lastName: person.last_name, cellPhone: formatPhone(person.cell_phone),
       email: person.email || undefined, status: 'Return',
-      alumniRate: alumniRate(p.card, contractorYear, person.lifetime_days),
+      alumniRate: alumniRate(p.card, contractorYear, person.lifetime_days + (p.appDaysBefore?.[r.hire_id] || 0)),
       silverRate: silverRate(p.card, person.hats?.[hat] || 0),
       assignedManagerId: legacyManagerId(mgrById.get(team.managerId)!.full_name),
       commandCenterId: centerId, teamId: team.name, upsellsEnabled: true,
@@ -168,7 +170,7 @@ export async function startSession(p: Plan, dayId: string, centerId: string, _op
  * A worker who arrives after the session started: put them on the live map (old users table),
  * under a manager, with no team yet — the manager puts them on a cart from Manage Team.
  */
-export async function addLateArrival(centerId: string, row: RosterRow, manager: PlanManager, card: RateCardData, seasonYear: number, service: Service): Promise<void> {
+export async function addLateArrival(centerId: string, row: RosterRow, manager: PlanManager, card: RateCardData, seasonYear: number, service: Service, appDaysBefore = 0): Promise<void> {
   await import('./legacy').then(m => m.pointLegacyAt(centerId));
   const [{ supabase }, { upsertUsers }] = await Promise.all([import('../../lib/supabase'), import('../../lib/userWrites')]);
   const person = row.hire.person;
@@ -176,7 +178,7 @@ export async function addLateArrival(centerId: string, row: RosterRow, manager: 
   await upsertUsers(supabase, [{
     user_id: row.hire.cn, name: `${person.first_name} ${person.last_name}`.trim(), role: 'Worker', password: person.first_name,
     metadata: {
-      phone: formatPhone(person.cell_phone), alumniRate: alumniRate(card, contractorYear, person.lifetime_days),
+      phone: formatPhone(person.cell_phone), alumniRate: alumniRate(card, contractorYear, person.lifetime_days + appDaysBefore),
       silverRate: silverRate(card, person.hats?.[SERVICE_HAT[service]] || 0),
       assignedManagerId: legacyManagerId(manager.full_name), upsellsEnabled: true,
     },

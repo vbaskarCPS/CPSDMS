@@ -9,7 +9,7 @@ import {
   type Hire, type StatusCode,
 } from '../../lib/workerbook';
 import { Btn, ErrorBox, Loading, Tag } from '../../ui';
-import { ContractorModal } from './ContractorModal';
+import { useContractorCard } from './ContractorCard';
 import { ImportContractors } from './ImportContractors';
 import { AddContractor } from './AddContractor';
 
@@ -31,7 +31,7 @@ export const Contractors: React.FC = () => {
   });
   const [allCenters, setAllCenters] = useState(false);
   const [q, setQ] = useState('');
-  const [open, setOpen] = useState<Hire | null>(null);
+  const openCard = useContractorCard();
   const [showImport, setShowImport] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
 
@@ -102,7 +102,7 @@ export const Contractors: React.FC = () => {
                   const days = h.person.lifetime_days + (counts.data?.[h.id] || 0);
                   const hats = HAT_CODES.filter(c => (h.person.hats?.[c] || 0) > 0).map(c => `${c} ${h.person.hats[c]}`).join(' · ');
                   return (
-                    <tr key={h.id} className="click" onClick={() => setOpen(h)}>
+                    <tr key={h.id} className="click" onClick={() => openCard?.(h.id, hires.reload)}>
                       <td><b>{h.cn}</b></td>
                       <td><b>{fullName(h.person)}</b>{days === 0 && <> <Tag tone="v">ROOKIE</Tag></>}</td>
                       <td>{h.person.cell_phone || '—'}</td>
@@ -127,7 +127,6 @@ export const Contractors: React.FC = () => {
         </div>
       )}
 
-      {open && <ContractorModal hire={open} year={year} onClose={() => setOpen(null)} onSaved={() => { setOpen(null); hires.reload(); }} />}
       {showImport && center && <ImportContractors centerId={center.id} centerName={center.display_name} year={year}
         onClose={() => setShowImport(false)} onDone={() => hires.reload()} />}
       {showAdd && center && <AddContractor centerId={center.id} year={year} onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); hires.reload(); }} />}

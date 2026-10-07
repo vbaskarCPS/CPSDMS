@@ -329,3 +329,8 @@
 .v2 .v2-rchip.on span { color: rgba(255,255,255,.85); }
 .v2 .v2-rchip:disabled { cursor: not-allowed; opacity: .85; }
 .v2 .v2-rchip .lk { position: absolute; top: 3px; right: 3px; }
+
+/* a contractor's name that opens their card */
+.v2 .v2-namelink { all: unset; cursor: pointer; font: inherit; color: inherit; border-bottom: 1px dotted currentColor; }
+.v2 .v2-namelink:hover { color: var(--link); border-bottom-style: solid; }
+.v2 .v2-namelink:focus-visible { outline: 2px solid rgba(37,99,235,.45); outline-offset: 2px; border-radius: 3px; }

@@ -11,6 +11,7 @@ import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
 import { centerTypeLabel, crewList, crewMove, crewSearch, roadTripCenters, setRoom, type CrewRow } from '../../lib/crew';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
+import { ContractorLink } from './ContractorCard';
 
 const name = (r: CrewRow) => `${r.first_name} ${r.last_name}`.trim();
 const since = (iso: string | null) => iso ? new Date(iso).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) : '';
@@ -97,7 +98,7 @@ export const Crew: React.FC = () => {
                 {here.map(r => (
                   <div key={r.hire_id} className="v2-card">
                     <div className="v2-row" style={{ justifyContent: 'space-between', flexWrap: 'nowrap', alignItems: 'flex-start' }}>
-                      <div style={{ minWidth: 0 }}><b>{name(r)}</b> <span className="v2-mut v2-small">{r.cn}</span>
+                      <div style={{ minWidth: 0 }}><b><ContractorLink hireId={r.hire_id} onSaved={list.reload}>{name(r)}</ContractorLink></b> <span className="v2-mut v2-small">{r.cn}</span>
                         <div className="v2-small v2-mut">{r.home_id === center.id ? 'Home crew' : `From ${r.home}${r.moved_at ? ` · since ${since(r.moved_at)}` : ''}`}</div></div>
                       {statusTag(r.status)}
                     </div>
@@ -119,7 +120,7 @@ export const Crew: React.FC = () => {
                         <tr key={r.hire_id}>
                           <td><RoomInput row={r} onSaved={list.reload} /></td>
                           <td><b>{r.cn}</b></td>
-                          <td><b>{name(r)}</b></td>
+                          <td><b><ContractorLink hireId={r.hire_id} onSaved={list.reload}>{name(r)}</ContractorLink></b></td>
                           <td>{r.home_id === center.id ? <span className="v2-mut">Home crew</span> : r.home}</td>
                           <td className="v2-small">{r.cell_phone || '—'}</td>
                           <td>{statusTag(r.status)}</td>
@@ -147,7 +148,7 @@ export const Crew: React.FC = () => {
                   <thead><tr><th>CN #</th><th>Name</th><th>Working at</th><th>Room</th><th>Since</th><th /></tr></thead>
                   <tbody>{away.map(r => (
                     <tr key={r.hire_id}>
-                      <td><b>{r.cn}</b></td><td><b>{name(r)}</b></td><td>{r.current}</td><td>{r.room || '—'}</td><td className="v2-small v2-mut">{since(r.moved_at)}</td>
+                      <td><b>{r.cn}</b></td><td><b><ContractorLink hireId={r.hire_id} onSaved={list.reload}>{name(r)}</ContractorLink></b></td><td>{r.current}</td><td>{r.room || '—'}</td><td className="v2-small v2-mut">{since(r.moved_at)}</td>
                       <td style={{ textAlign: 'right' }}><Btn size="sm" kind="o" icon={Home} onClick={() => setSendHome(r)}>Bring home</Btn></td>
                     </tr>))}
                   </tbody>

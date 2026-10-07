@@ -8,7 +8,8 @@ import { legacyLiveSession } from '../../../lib/legacy';
 import { fullName, updateRoster, type RosterRow } from '../../../lib/workerbook';
 import { addLateArrival, type PlanManager } from '../../../lib/startSession';
 import { Btn, ErrorBox, Loading, Modal } from '../../../ui';
-import { dayContext } from './dayContext';
+import { dayContext } from '../../../lib/dayContext';
+import { appShowedDates, countBefore } from '../../../lib/payoutEngine';
 
 export const LateArrivals: React.FC<{
   centerId: string; region: string; date: string; rows: RosterRow[]; managers: PlanManager[];
@@ -32,7 +33,8 @@ export const LateArrivals: React.FC<{
     setBusy(true); setError(null);
     try {
       const ctx = await dayContext(centerId, date, region);
-      await addLateArrival(centerId, pick, m, ctx.card, ctx.seasonYear, ctx.service);
+      const shown = await appShowedDates([pick.hire_id]);
+      await addLateArrival(centerId, pick, m, ctx.card, ctx.seasonYear, ctx.service, countBefore(shown[pick.hire_id], date));
       if (pick.attendance !== 'showed') await updateRoster(pick.id, { attendance: 'showed' });
       onAdded();
     } catch (e) { setError(e); } finally { setBusy(false); }

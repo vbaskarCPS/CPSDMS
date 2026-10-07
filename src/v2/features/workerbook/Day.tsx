@@ -24,6 +24,7 @@ import { PlanTomorrow } from './day/PlanTomorrow';
 import { PayoutCopy } from './day/PayoutCopy';
 import { LateArrivals } from './day/LateArrivals';
 import { SessionPayouts } from './Payouts';
+import { ContractorLink } from './ContractorCard';
 
 const shift = (iso: string, n: number) => {
   const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() + n);
@@ -94,7 +95,7 @@ export const Day: React.FC = () => {
           )}
           {mode === 'session' && <SessionPayouts key={lateTick} centerId={center.id} centerName={center.display_name} date={date} />}
           {mode === 'plan' && <PlanTomorrow rows={rows} managers={managers.data || []} canEdit={canEdit} onChanged={roster.reload} />}
-          {mode === 'copy' && day.data && <PayoutCopy centerId={center.id} date={date} day={day.data} rows={rows} />}
+          {mode === 'copy' && day.data && <PayoutCopy centerId={center.id} region={center.region} date={date} day={day.data} rows={rows} canEdit={can('workerbook')} />}
           {(mode === 'future' || mode === 'past') && (
             <BookingList centerId={center.id} date={date} today={today} rows={rows} canEdit={canEdit} onChanged={roster.reload} onBook={() => setShowBook(true)} />
           )}
@@ -152,7 +153,7 @@ const BookingList: React.FC<{ centerId: string; date: string; today: string; row
                     return (
                       <tr key={r.id} style={{ opacity: busy ? 0.5 : 1 }}>
                         <td>{r.shuttle || '—'}</td><td><b>{r.hire.cn}</b></td>
-                        <td><b>{fullName(r.hire.person)}</b>{d === 0 && <> <Tag tone="v">FIRST DAY</Tag></>}</td>
+                        <td><b><ContractorLink hireId={r.hire_id} onSaved={onChanged}>{fullName(r.hire.person)}</ContractorLink></b>{d === 0 && <> <Tag tone="v">FIRST DAY</Tag></>}</td>
                         <td>{r.hire.person.cell_phone ? <a className="v2-link" href={`tel:${r.hire.person.cell_phone.replace(/[^\d+]/g, '')}`}>{r.hire.person.cell_phone}</a> : '—'}</td>
                         <td style={{ textAlign: 'center' }}>
                           <input type="checkbox" checked={!!r.confirmed_at} disabled={!canConfirm || busy} aria-label="Confirmed"

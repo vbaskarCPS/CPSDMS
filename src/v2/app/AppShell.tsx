@@ -8,6 +8,7 @@ import { useCurrentSeason } from '../lib/data';
 import { serviceLabel } from '../lib/permissions';
 import { Btn } from '../ui';
 import { visibleComponents, findByPath, homeOf } from './nav';
+import { ContractorCardProvider } from '../features/workerbook/ContractorCard';
 
 export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { profile, centers, center, setCenterId, can, signOut } = useAuth();
@@ -79,7 +80,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
           </div>
         </div>
       )}
-      <main>{children}</main>
+      <main><ContractorCardProvider>{children}</ContractorCardProvider></main>
     </div>
   );
 };
