@@ -18,7 +18,9 @@
 .v2-gbtn { width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--line); background: #fff;
   display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .v2-gbtn.on { background: var(--ink); color: #fff; border-color: var(--ink); }
-.v2-brand { font-weight: 800; font-size: 15px; }
+.v2-brand { font-weight: 800; font-size: 15px; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.v2-logo { width: 34px; height: 34px; border-radius: 9px; display: block; flex-shrink: 0; }
+.v2-logo-lg { width: 72px; height: 72px; border-radius: 18px; display: block; margin-bottom: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
 .v2-crumb { color: var(--mut); display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .v2-crumb b { color: var(--ink); }
 .v2-spacer { flex: 1; }

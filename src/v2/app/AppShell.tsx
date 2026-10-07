@@ -32,7 +32,7 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
         <button type="button" className={`v2-gbtn${open ? ' on' : ''}`} onClick={() => setOpen(o => !o)} aria-label="Menu" aria-expanded={open}>
           <LayoutGrid size={18} />
         </button>
-        <Link to="/app" className="v2-brand">CPSDMS</Link>
+        <Link to="/app" className="v2-brand"><img src="/icon-192.png" alt="" className="v2-logo" /><span className="v2-hide-sm">Property Stars</span></Link>
         <span className="v2-crumb">
           {here ? <><b>{here.comp.label}</b><ChevronRight size={14} />{here.sub.label}</> : <b>Home</b>}
         </span>

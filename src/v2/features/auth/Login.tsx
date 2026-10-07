@@ -26,7 +26,8 @@ export const Login: React.FC = () => {
 
   return (
     <div className="v2"><div className="v2-login"><div className="v2-login-card">
-      <div style={{ fontSize: 26, fontWeight: 800 }}>CPSDMS</div>
+      <img src="/icon-192.png" alt="Canadian Property Stars" className="v2-logo-lg" />
+      <div style={{ fontSize: 22, fontWeight: 800 }}>Canadian Property Stars</div>
       <div className="v2-mut" style={{ marginBottom: 18 }}>Sign in to continue</div>
       <div className="v2-tabs" role="tablist">
         <button className={tab === 'manager' ? 'on' : ''} onClick={() => setTab('manager')}>Manager</button>
