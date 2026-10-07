@@ -1,5 +1,6 @@
 // src/lib/commandCenterService.ts
 import { supabase } from './supabase';
+import { CENTER_COLS } from './legacyColumns';
 import { getStorageItem, setStorageItem, removeStorageItem } from './localStorage';
 import { SeasonType, SeasonConfig, SEASON_CONFIGS, TeamSplitConfig, EQ_DIVISOR } from '../types';
 
@@ -424,12 +425,8 @@ class CommandCenterService {
    * Returns the command center if successful, null otherwise
    */
   public async authenticateCommandCenter(username: string, password: string): Promise<CommandCenter | null> {
-    const { data, error } = await supabase
-      .from('command_centers')
-      .select('*')
-      .eq('username', username)
-      .eq('password', password)
-      .maybeSingle();
+    // Checked inside the database; the password column can't be read from the app.
+    const { data, error } = await supabase.rpc('legacy_login_center', { p_username: username, p_password: password });
 
     if (error || !data) return null;
 
@@ -442,7 +439,7 @@ class CommandCenterService {
   public async getCommandCenterById(id: string): Promise<CommandCenter | null> {
     const { data, error } = await supabase
       .from('command_centers')
-      .select('*')
+      .select(CENTER_COLS)
       .eq('id', id)
       .maybeSingle();
 
@@ -457,7 +454,7 @@ class CommandCenterService {
   public async getCommandCenterBySlug(slug: string): Promise<CommandCenter | null> {
     const { data, error } = await supabase
       .from('command_centers')
-      .select('*')
+      .select(CENTER_COLS)
       .eq('job_fairs_slug', slug)
       .eq('job_fairs_enabled', true)
       .maybeSingle();
@@ -475,7 +472,7 @@ class CommandCenterService {
   public async getAllCommandCenters(): Promise<CommandCenter[]> {
     const { data, error } = await supabase
       .from('command_centers')
-      .select('*')
+      .select(CENTER_COLS)
       .order('created_at', { ascending: true });
 
     if (error || !data) return [];
@@ -536,7 +533,7 @@ class CommandCenterService {
         callbook_sheet_id: cc.callbookSheetId || null,
         workerbook_run_url: cc.workerbookRunUrl || null,
       })
-      .select()
+      .select(CENTER_COLS)
       .single();
 
     if (error) throw new Error(error.message);
@@ -610,7 +607,7 @@ class CommandCenterService {
       .from('command_centers')
       .update(dbUpdates)
       .eq('id', id)
-      .select()
+      .select(CENTER_COLS)
       .single();
 
     if (error) throw new Error(error.message);

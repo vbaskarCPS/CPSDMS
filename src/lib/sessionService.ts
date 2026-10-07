@@ -1,5 +1,7 @@
 // src/lib/sessionService.ts
 import { supabase } from './supabase';
+import { cardColumnsForSave } from './cardSafety';
+import { USER_COLS } from './legacyColumns';
 import { 
   commandCenterService, 
   getSeasonConfig, 
@@ -481,8 +483,8 @@ class SessionService {
 
     const [managersRes, workersRes, routesRes, bookingsRes] = await Promise.all(
       [
-        supabase.from('users').select('*').eq('role', 'RouteManager').eq('command_center_id', ccId),
-        supabase.from('users').select('*').eq('role', 'Worker').eq('command_center_id', ccId),
+        supabase.from('users').select(USER_COLS).eq('role', 'RouteManager').eq('command_center_id', ccId),
+        supabase.from('users').select(USER_COLS).eq('role', 'Worker').eq('command_center_id', ccId),
         supabase.from('routes').select('*').eq('session_date', date).eq('command_center_id', ccId),
         supabase
           .from('bookings')
@@ -497,7 +499,7 @@ class SessionService {
       userId: m.user_id,
       name: m.name,
       username: m.username,
-      password: m.password,
+      password: '', // not readable from the app; kept in the database
       phone: m.metadata?.phone || '',
       role: 'RouteManager' as const,
       commandCenterId: m.command_center_id,
@@ -656,7 +658,7 @@ class SessionService {
     const ccId = this.getCCId();
     const { data } = await supabase
       .from('users')
-      .select('*')
+      .select(USER_COLS)
       .eq('user_id', managerId)
       .eq('role', 'RouteManager')
       .eq('command_center_id', ccId)
@@ -668,7 +670,7 @@ class SessionService {
       userId: data.user_id,
       name: data.name,
       username: data.username,
-      password: data.password,
+      password: '', // not readable from the app; kept in the database
       phone: data.metadata?.phone || '',
       role: 'RouteManager' as const,
       commandCenterId: data.command_center_id,
@@ -2293,13 +2295,8 @@ class SessionService {
     // --- 4. AUTHENTICATION ---
   
     public async authenticateRM(username: string, password: string): Promise<ManagementUser | null> {
-      const { data } = await supabase
-        .from('users')
-        .select('*')
-        .ilike('username', username)
-        .ilike('password', password)
-        .eq('role', 'RouteManager')
-        .maybeSingle();
+      // Checked inside the database; the password column can't be read from the app.
+      const { data } = await supabase.rpc('legacy_login_rm', { p_username: username, p_password: password });
       
       if (!data) return null;
       
@@ -2333,13 +2330,7 @@ class SessionService {
     }
   
     public async authenticateWorker(contractorId: string, password: string): Promise<Worker | null> {
-      const { data } = await supabase
-        .from('users')
-        .select('*')
-        .ilike('user_id', contractorId)
-        .ilike('password', password)
-        .eq('role', 'Worker')
-        .maybeSingle();
+      const { data } = await supabase.rpc('legacy_login_worker', { p_contractor_id: contractorId, p_password: password });
       
       if (!data) return null;
       
@@ -3612,9 +3603,8 @@ class SessionService {
         completed_by_worker_ids: teamWorkerIds || [workerId],
         ref_id: transaction.refId,
         
-        cc_full_number: (transaction as any).ccFullNumber,
-        cc_expiry: (transaction as any).ccExpiry,
-        cc_cvc: (transaction as any).ccCVC,
+        // Card numbers and CVCs are never stored (only Bambora refs or last 4).
+        ...cardColumnsForSave((transaction as any).ccFullNumber, (transaction as any).ccExpiry, (transaction as any).ccCVC),
   
         customer_snapshot: {
           firstName: transaction.customerName ? transaction.customerName.split(' ')[0] : 'Unknown',
@@ -3834,9 +3824,8 @@ class SessionService {
         services: transaction.services,
         completed_by_worker_ids: teamWorkerIds || [workerId],
         ref_id: transaction.refId,
-        cc_full_number: (transaction as any).ccFullNumber,
-        cc_expiry: (transaction as any).ccExpiry,
-        cc_cvc: (transaction as any).ccCVC,
+        // Card numbers and CVCs are never stored (only Bambora refs or last 4).
+        ...cardColumnsForSave((transaction as any).ccFullNumber, (transaction as any).ccExpiry, (transaction as any).ccCVC),
         customer_snapshot: {
           firstName: transaction.customerName ? transaction.customerName.split(' ')[0] : 'Unknown',
           lastName: transaction.customerName ? transaction.customerName.split(' ').slice(1).join(' ') : '',

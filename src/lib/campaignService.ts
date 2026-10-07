@@ -1,5 +1,6 @@
 // src/lib/campaignService.ts
 import { supabase } from './supabase';
+import { CAMPAIGN_MANAGER_COLS } from './legacyColumns';
 import { getStorageItem, setStorageItem, removeStorageItem } from './localStorage';
 import { extractSheetId } from './commandCenterService';
 
@@ -192,11 +193,8 @@ class CampaignService {
     repCode: string,
     password: string
   ): Promise<{ manager: CampaignManager; campaign: Campaign } | null> {
-    const { data, error } = await supabase
-      .from('campaign_managers')
-      .select('*')
-      .ilike('rep_code', repCode)
-      .eq('password', password);
+    // Checked inside the database; the password column can't be read from the app.
+    const { data, error } = await supabase.rpc('legacy_login_campaign_manager', { p_rep_code: repCode, p_password: password });
 
     if (error || !data || data.length === 0) return null;
 
@@ -418,7 +416,7 @@ class CampaignService {
   public async getManagersByCampaign(campaignId: string): Promise<CampaignManager[]> {
     const { data, error } = await supabase
       .from('campaign_managers')
-      .select('*')
+      .select(CAMPAIGN_MANAGER_COLS)
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: true });
 
@@ -440,7 +438,7 @@ class CampaignService {
         rep_code: manager.repCode,
         password: manager.password || 'callofduty',
       })
-      .select()
+      .select(CAMPAIGN_MANAGER_COLS)
       .single();
 
     if (error) throw new Error(error.message);
@@ -464,7 +462,7 @@ class CampaignService {
       .from('campaign_managers')
       .update(dbUpdates)
       .eq('id', id)
-      .select()
+      .select(CAMPAIGN_MANAGER_COLS)
       .single();
 
     if (error) throw new Error(error.message);

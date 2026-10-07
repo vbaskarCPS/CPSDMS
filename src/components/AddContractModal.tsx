@@ -270,7 +270,8 @@ const AddContractModal: React.FC<AddContractModalProps> = ({
     const matchingTx = sessionTransactions
       .filter(tx => {
         const txAddress = (tx.address || '').toLowerCase().trim();
-        return txAddress === normalizedAddress && tx.ccFullNumber && tx.ccExpiry && tx.ccCVC;
+        // Full card numbers are no longer stored, so only a real stored number could match — none exist.
+        return txAddress === normalizedAddress && /^\d{13,19}$/.test(tx.ccFullNumber || '') && tx.ccExpiry && tx.ccCVC;
       })
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
     
