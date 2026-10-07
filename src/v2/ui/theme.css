@@ -94,6 +94,9 @@
 .v2-menu-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 9px 11px; border-radius: 11px; border: 0; background: none; font-weight: 700; text-align: left; }
 .v2-menu-item.on { background: var(--sel); }
 .v2-menu-body { flex: 1; padding: 16px; overflow: auto; }
+.v2-acct { display: inline-flex; align-items: center; gap: 6px; }
+.v2-acct:hover { border-color: var(--mut); }
+
 /* home dashboard: one large stat card per component */
 .v2-stats { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); }
 .v2-stats > * { min-width: 0; }

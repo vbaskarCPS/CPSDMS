@@ -1,7 +1,7 @@
 // src/v2/app/AppShell.tsx — top bar (grid button, breadcrumb, center switcher, season badge, user) + grid menu.
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutGrid, ChevronRight, LogOut, X } from 'lucide-react';
+import { LayoutGrid, ChevronRight, LogOut, X, UserRound } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { useCurrentSeason } from '../lib/data';
 import { serviceLabel } from '../lib/permissions';
@@ -43,7 +43,9 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
           </select>
         ) : center ? <span className="v2-pill v2-hide-sm">{center.display_name}</span> : null}
         {season && <span className="v2-pill season v2-hide-sm">{serviceLabel(season.service)} {season.year}</span>}
-        <span className="v2-pill v2-hide-sm" title={profile?.full_name}>{profile?.username}</span>
+        <Link to="/app/account" className="v2-pill v2-acct" title={`${profile?.full_name} · My account`} aria-label="My account">
+          <UserRound size={14} /><span className="v2-hide-sm">{profile?.username}</span>
+        </Link>
         <button type="button" className="v2-gbtn" onClick={() => signOut().then(() => nav('/app/login'))} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>
       </header>
 

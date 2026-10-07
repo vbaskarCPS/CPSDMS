@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
+import { db, must } from '../../lib/client';
 import {
   updatePerson, updateHire, statusHistory, bookedDays, STATUS_LISTS, statusLabel, fullName, HAT_CODES,
   type Hire, type StatusCode,
@@ -17,6 +18,13 @@ export const ContractorModal: React.FC<{ hire: Hire; year: number; onClose: () =
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [pinSetAt, setPinSetAt] = useState(hire.pin_set_at);
+  // A forgotten PIN: clearing it puts the worker back on their first name until they make a new one.
+  const resetPin = async () => {
+    setBusy(true); setError(null);
+    try { must(await db.rpc('app_reset_worker_pin', { p_hire: hire.id })); setPinSetAt(null); }
+    catch (e) { setError(e); } finally { setBusy(false); }
+  };
   const history = useLoad(() => statusHistory(hire.id), [hire.id]);
   const days = useLoad(() => bookedDays(hire.id), [hire.id]);
   const isHome = !center || center.id === hire.center_id;
@@ -79,7 +87,10 @@ export const ContractorModal: React.FC<{ hire: Hire; year: number; onClose: () =
           </div>
           {!isHome && <div className="v2-note">Home center is {homeName}; only it can change shuttle and status.</div>}
           <Field label="Notes"><textarea className="v2-input" rows={3} value={f.notes} onChange={e => set('notes', e.target.value)} /></Field>
-          <div className="v2-note">Worker login PIN: {hire.pin_set_at ? `set ${new Date(hire.pin_set_at).toLocaleDateString('en-CA')}` : 'not set yet'}. ID numbers are kept in the sheet, not here.</div>
+          <div className="v2-note v2-row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <span>Sign-in PIN: {pinSetAt ? `set ${new Date(pinSetAt).toLocaleDateString('en-CA')}` : 'not set yet — signs in with first name'}. Workers make their own under My Account. ID numbers are kept in the sheet, not here.</span>
+            {pinSetAt && <Btn size="sm" kind="o" disabled={busy} onClick={resetPin}>Reset PIN</Btn>}
+          </div>
         </div>
         <div className="v2-stack">
           <div className="v2-card">
