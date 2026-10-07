@@ -1,4 +1,5 @@
-// src/v2/app/Home.tsx — one tile per component the user may open.
+// src/v2/app/Home.tsx — the dashboard: a large stat card per component the user may open;
+// "Open" on a card shows that component's screens.
 import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { hasLiveRouteManagerSeat } from '../lib/legacy';
@@ -6,6 +7,7 @@ import { legacyManagerId } from '../lib/startSession';
 import { useAuth } from '../lib/auth';
 import { Tile, Card } from '../ui';
 import { visibleComponents, type Component } from './nav';
+import { StatCards } from './StatCards';
 
 export const Home: React.FC = () => {
   const { profile, can, center } = useAuth();
@@ -40,13 +42,7 @@ export const Home: React.FC = () => {
         <div className="v2-h1">{greet}, {first}</div>
       </div>
       {!openComp ? (
-        <div className="v2-tiles">
-          {comps.map(c => (
-            <Tile key={c.key} icon={c.icon} label={c.label} color={c.color}
-              sub={`${c.subs.filter(s => s.ready).length} of ${c.subs.length} ready`}
-              onClick={() => setOpenComp(c)} />
-          ))}
-        </div>
+        <StatCards comps={comps} onOpen={setOpenComp} />
       ) : (
         <Card title={openComp.label} right={<button className="v2-link" onClick={() => setOpenComp(null)}>‹ All components</button>}>
           <div className="v2-tiles">
