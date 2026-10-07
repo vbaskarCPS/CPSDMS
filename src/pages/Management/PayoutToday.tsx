@@ -1,5 +1,6 @@
 // src/pages/Management/PayoutToday.tsx
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
@@ -2259,7 +2260,8 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
       )}
 
       {/* --- BONUS SCREENSHOT MODAL --- */}
-      {showScreenshotModal && (
+      {/* On the page body, not inside the new app's restyled panel, so the screenshot keeps its own look. */}
+      {showScreenshotModal && createPortal(
         <div
           className="fixed inset-0 bg-gray-900 z-50 flex flex-col h-screen overflow-hidden"
           style={{ fontFamily: "'Quicksand', 'Nunito', sans-serif" }}
@@ -2551,7 +2553,7 @@ const PayoutToday: React.FC<PayoutTodayProps> = ({
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
     </div>
   );
 };
