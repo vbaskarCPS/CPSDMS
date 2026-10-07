@@ -26,7 +26,8 @@ export interface Hire {
   status_since: string | null; ns_count: number; alumni_rate: number | null; silver_rate: number | null; pin_set_at: string | null;
   person: Person;
 }
-export interface Day { id: string; center_id: string; day: string; state: 'planned' | 'live' | 'closed'; notes: string | null }
+export interface DaySummaryStored { carts: number; steps: number; gross: number; upsells: number; booked: number; showed: number; no_shows: number; had_session: boolean; archived_rows: number }
+export interface Day { id: string; center_id: string; day: string; state: 'planned' | 'live' | 'closed'; notes: string | null; closed_at?: string | null; summary?: DaySummaryStored | null }
 export interface RosterRow {
   id: string; day_id: string; hire_id: string; shuttle: string | null; manager_id: string | null; team: string | null;
   confirmed_at: string | null; confirmed_via: 'staff' | 'email' | 'text' | 'worker' | null; attendance: 'showed' | 'no_show' | null;
@@ -189,7 +190,28 @@ export function monthCells(year: number, month0: number): (string | null)[] {
 }
 
 export async function getDay(centerId: string, day: string): Promise<Day | null> {
-  return must(await db.from('days').select('id, center_id, day, state, notes').eq('center_id', centerId).eq('day', day).maybeSingle()) as Day | null;
+  const res = await db.from('days').select('id, center_id, day, state, notes, closed_at, summary').eq('center_id', centerId).eq('day', day).maybeSingle();
+  // (before the close-day columns exist, read without them)
+  if (res.error && /closed_at|summary/.test(res.error.message)) {
+    return must(await db.from('days').select('id, center_id, day, state, notes').eq('center_id', centerId).eq('day', day).maybeSingle()) as Day | null;
+  }
+  return must(res) as Day | null;
+}
+
+// ───────────── close day ─────────────
+export interface CloseCheck {
+  state: Day['state']; has_session: boolean;
+  carts: number; paid: number; steps: number; gross: number; upsells: number; booked: number; showed: number;
+  unpaid: { worker_id: string; status: string; names: string | null; sales: number }[];
+  unmarked: { cn: string; name: string }[];
+  no_shows: { cn: string; name: string; status: string; ns_count: number }[];
+  can_close: boolean;
+}
+export async function closeDayCheck(centerId: string, day: string): Promise<CloseCheck> {
+  return must(await db.rpc('app_close_day_check', { p_center: centerId, p_day: day })) as CloseCheck;
+}
+export async function closeDay(centerId: string, day: string): Promise<DaySummaryStored> {
+  return must(await db.rpc('app_close_day', { p_center: centerId, p_day: day })) as DaySummaryStored;
 }
 
 export async function listRoster(dayId: string): Promise<RosterRow[]> {

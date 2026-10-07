@@ -97,6 +97,9 @@
 .v2-acct { display: inline-flex; align-items: center; gap: 6px; }
 .v2-acct:hover { border-color: var(--mut); }
 
+.v2-close-line { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; }
+.v2-close-line > svg { flex-shrink: 0; margin-top: 1px; }
+
 /* home dashboard: one large stat card per component */
 .v2-stats { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); }
 .v2-stats > * { min-width: 0; }
