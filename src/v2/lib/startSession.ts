@@ -128,22 +128,28 @@ export async function openLegacySession(centerId: string): Promise<string | null
 
 export interface StartResult { sessionId: string }
 
+/** Writes the old session tables from a plan, so the RM map and map logsheet see the day. */
+async function writeLiveMap(p: Plan, centerId: string): Promise<void> {
+  const open = await openLegacySession(centerId);
+  if (open === p.date) return;   // already there
+  if (open) throw new Error(`The old app still has the ${open} session open for this center. Close it there first (Session Command Center › Close Session).`);
+  const [{ commandCenterService }, { sessionService }] = await Promise.all([
+    import('../../lib/commandCenterService'), import('../../lib/sessionService'),
+  ]);
+  const cc = await commandCenterService.getCommandCenterById(centerId);
+  if (!cc) throw new Error('Couldn’t load this center in the old app.');
+  commandCenterService.setCurrentCommandCenter(cc);
+  const { data, meta } = buildLegacySession(p, centerId);
+  await sessionService.uploadDailySession(data, p.settings.emailReceipts, meta);
+}
+
 /** Writes the old session (so the live map works), then records the session in the new app. */
-export async function startSession(p: Plan, dayId: string, centerId: string, opts: { legacyAlreadyWritten?: boolean } = {}): Promise<StartResult> {
+export async function startSession(p: Plan, dayId: string, centerId: string, _opts: { legacyAlreadyWritten?: boolean } = {}): Promise<StartResult> {
   const problems = planProblems(p);
   if (problems.length) throw new Error(problems[0]);
-  if (!opts.legacyAlreadyWritten) {
-    const open = await openLegacySession(centerId);
-    if (open) throw new Error(`The old app still has the ${open} session open for this center. Close it there first (Session Command Center › Close Session).`);
-    const [{ commandCenterService }, { sessionService }] = await Promise.all([
-      import('../../lib/commandCenterService'), import('../../lib/sessionService'),
-    ]);
-    const cc = await commandCenterService.getCommandCenterById(centerId);
-    if (!cc) throw new Error('Couldn’t load this center in the old app.');
-    commandCenterService.setCurrentCommandCenter(cc);
-    const { data, meta } = buildLegacySession(p, centerId);
-    await sessionService.uploadDailySession(data, p.settings.emailReceipts, meta);
-  }
+  // Always checked against the database, not the page: a half-started session may have been
+  // cleared since the page loaded.
+  await writeLiveMap(p, centerId);
   const showedIds = p.roster.filter(r => p.showed.has(r.hire_id)).map(r => r.hire_id);
   const sessionId = must(await db.rpc('app_start_session', {
     p_day: dayId,
@@ -153,6 +159,35 @@ export async function startSession(p: Plan, dayId: string, centerId: string, opt
     p_showed: showedIds,
   })) as string;
   return { sessionId };
+}
+
+interface SessionRecord {
+  settings: PlanSettings;
+  routes: { code: string; area: string; manager_id: string }[];
+  teams: { name: string; kind: PlanTeam['kind']; manager_id: string; hire_ids: string[] }[];
+}
+
+/**
+ * A started day whose live map is missing (the old session tables were never written or were
+ * cleared): rebuild the plan from what was recorded at Start and write the live map from it.
+ */
+export async function writeLiveMapFromSession(dayId: string, centerId: string, date: string, card: RateCardData, seasonYear: number): Promise<void> {
+  const s = must(await db.from('sessions').select('settings, routes, teams').eq('day_id', dayId).single()) as SessionRecord;
+  const { listRoster } = await import('./workerbook');
+  const roster = await listRoster(dayId);
+  const ids = [...new Set([...s.routes.map(r => r.manager_id), ...s.teams.map(t => t.manager_id)])];
+  const managers = must(await db.from('app_users').select('id, full_name, username, phone').in('id', ids)) as PlanManager[];
+  const members: Record<string, string> = {};
+  const showed = new Set<string>();
+  for (const t of s.teams) for (const h of t.hire_ids) { members[h] = t.name; showed.add(h); }
+  const plan: Plan = {
+    date, seasonYear, card, managers, roster, settings: s.settings, members, showed,
+    routes: s.routes.map(r => ({ code: r.code, area: r.area, number: parseInt(r.code.replace(/^\D+/, ''), 10) || 0, managerId: r.manager_id })),
+    teams: s.teams.map(t => ({ name: t.name, kind: t.kind, managerId: t.manager_id })),
+  };
+  const problems = planProblems(plan);
+  if (problems.length) throw new Error(problems[0]);
+  await writeLiveMap(plan, centerId);
 }
 
 export async function availableManagers(centerId: string, day: string): Promise<PlanManager[]> {
