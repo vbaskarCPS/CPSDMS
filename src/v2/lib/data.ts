@@ -46,7 +46,8 @@ export interface UserInput {
   rm_center_id: string | null; is_active: boolean;
 }
 
-export async function createUser(u: UserInput, password: string): Promise<{ id: string; username: string }> {
+/** A null password means they'll choose their own from the account setup email (needs an email). */
+export async function createUser(u: UserInput, password: string | null): Promise<{ id: string; username: string }> {
   const rows = must(await db.rpc('app_admin_create_user', {
     p_full_name: u.full_name, p_password: password, p_phone: u.phone || null, p_email: u.email || null,
     p_permissions: u.permissions, p_centers: u.center_ids, p_rm_center: u.rm_center_id,
@@ -63,6 +64,39 @@ export async function updateUser(id: string, u: UserInput): Promise<void> {
 
 export async function resetPassword(id: string, password: string): Promise<void> {
   must(await db.rpc('app_admin_reset_password', { p_user: id, p_password: password }));
+}
+
+// ───────────── account setup emails ─────────────
+export interface SetupStatus { user_id: string; sent_at: string | null; expires_at: string; used_at: string | null; send_error: string | null; email: string }
+
+/** Emails the user a link to choose their password (account-setup Edge Function, through Resend). */
+export async function sendSetupEmail(userId: string): Promise<{ email: string; expires_at: string }> {
+  const { data, error } = await db.functions.invoke('account-setup', { body: { userId } });
+  if (error) {
+    let msg = error.message;
+    const ctx = (error as { context?: Response }).context;
+    if (ctx && typeof ctx.json === 'function') { try { const j = await ctx.json(); if (j?.error) msg = j.error; } catch { /* keep message */ } }
+    if (/Failed to send a request|FunctionsFetchError/i.test(msg)) msg = 'Setup emails aren’t switched on yet (edge function “account-setup”).';
+    throw new Error(msg);
+  }
+  if (data && typeof data === 'object' && 'error' in data && data.error) throw new Error(String(data.error));
+  return data as { email: string; expires_at: string };
+}
+
+/** Each user's latest setup link: sent, used, or failed. Empty before the setup SQL is run. */
+export async function setupStatus(): Promise<Map<string, SetupStatus>> {
+  const res = await db.rpc('app_admin_setup_status');
+  if (res.error) return new Map();
+  return new Map((res.data as SetupStatus[]).map(s => [s.user_id, s]));
+}
+
+/** The setup page: whose account a link is for (null if it's expired, used or wrong). */
+export async function setupInfo(code: string): Promise<{ username: string; full_name: string; expires_at: string } | null> {
+  const rows = must(await db.rpc('app_setup_info', { p_code: code })) as { username: string; full_name: string; expires_at: string }[];
+  return rows[0] || null;
+}
+export async function completeSetup(code: string, password: string): Promise<string> {
+  return must(await db.rpc('app_setup_complete', { p_code: code, p_password: password })) as string;
 }
 
 // ───────────── centers ─────────────

@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../lib/auth';
+import { completeSetup, setupInfo, useLoad } from '../../lib/data';
 import { Btn, Field, Loading } from '../../ui';
 
 export const Login: React.FC = () => {
@@ -107,4 +108,62 @@ export const ChangePassword: React.FC = () => {
           : <Btn kind="o" onClick={() => nav('/app/account')}>Cancel</Btn>}</div>
     </form></div></div>
   );
+};
+
+/**
+ * /app/setup#t=… — the link in the account setup email: a new manager chooses their password, then
+ * lands signed in. The code is in the #fragment, so it never reaches a server log.
+ */
+export const AccountSetup: React.FC = () => {
+  const { signIn, signOut, session } = useAuth();
+  const nav = useNavigate();
+  const loc = useLocation();
+  const [code] = useState(() => new URLSearchParams(loc.hash.replace(/^#/, '')).get('t') || '');
+  const info = useLoad(() => (code ? setupInfo(code) : Promise.resolve(null)), [code]);
+  const [pw, setPw] = useState('');
+  const [pw2, setPw2] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault(); setError(null);
+    if (pw.length < 8) { setError('Use at least 8 characters'); return; }
+    if (pw !== pw2) { setError('The two passwords don’t match'); return; }
+    setBusy(true);
+    try {
+      const username = await completeSetup(code, pw);
+      if (session) await signOut();   // someone else was signed in on this device
+      window.history.replaceState(null, '', '/app/setup');   // the used code leaves the address bar
+      await signIn(username, pw);
+      nav('/app', { replace: true, state: { fromLogin: true } });
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not set your password'); }
+    finally { setBusy(false); }
+  };
+
+  const shell = (body: React.ReactNode) => (
+    <div className="v2"><div className="v2-login"><div className="v2-login-card">
+      <img src="/icon-192.png" alt="Canadian Property Stars" className="v2-logo-lg" />
+      <div style={{ fontSize: 22, fontWeight: 800 }}>Canadian Property Stars</div>
+      <div className="v2-mut" style={{ marginBottom: 18 }}>Set up your account</div>
+      {body}
+    </div></div></div>
+  );
+  if (info.loading) return shell(<Loading />);
+  if (!info.data) return shell(
+    <div className="v2-card" style={{ padding: 18 }}>
+      <b>This setup link has expired or was already used.</b>
+      <div className="v2-small v2-mut" style={{ margin: '6px 0 14px' }}>Ask whoever added you to send a new one. If you’ve already chosen your password, just sign in.</div>
+      <Btn onClick={() => nav('/app/login')}>Go to sign in</Btn>
+    </div>);
+  return shell(
+    <form className="v2-card" style={{ padding: 18 }} onSubmit={submit}>
+      <div className="v2-h2" style={{ marginBottom: 4 }}>Welcome, {info.data.full_name.split(/\s+/)[0]}</div>
+      <div className="v2-small" style={{ marginBottom: 14 }}>Your username is <b style={{ fontFamily: 'monospace', fontSize: 15 }}>{info.data.username}</b>. Choose a password (at least 8 characters).</div>
+      <input type="text" autoComplete="username" value={info.data.username} readOnly hidden />
+      <Field label="Password"><input className="v2-input" type="password" autoComplete="new-password" value={pw} onChange={e => setPw(e.target.value)} required minLength={8} /></Field>
+      <Field label="Type it again"><input className="v2-input" type="password" autoComplete="new-password" value={pw2} onChange={e => setPw2(e.target.value)} required minLength={8} /></Field>
+      {error && <div className="v2-err" style={{ marginBottom: 12 }}>{error}</div>}
+      <Btn type="submit" disabled={busy} style={{ width: '100%', justifyContent: 'center' }}>{busy ? 'Setting up…' : 'Set password and sign in'}</Btn>
+      <div className="v2-note" style={{ textAlign: 'center' }}>Next time, sign in with <b>{info.data.username}</b> and this password.</div>
+    </form>);
 };
