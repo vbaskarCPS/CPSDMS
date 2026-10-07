@@ -126,6 +126,31 @@
 .v2-cal button { height: 44px; border-radius: 9px; border: 1px solid #bbf7d0; background: #f0fdf4; color: #166534; font-weight: 700; font-size: 12px; text-align: left; padding: 4px 6px; }
 .v2-cal button.off { background: #fff1f2; border-color: #fecdd3; color: #9f1239; }
 
+/* workerbook days */
+.v2-only-narrow { display: none !important; }
+.v2-group { background: #f9fafb; font-size: 11px !important; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--mut); padding: 7px 8px !important; }
+.v2-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+.v2-days .dow { font-size: 11px; color: var(--mut); font-weight: 700; text-align: center; }
+.v2-dayc { min-height: 92px; border-radius: 10px; border: 1px solid var(--line); background: #fff; padding: 7px 8px; text-align: left;
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.v2-dayc .n { font-weight: 800; font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.v2-dayc .l1 { font-size: 12px; font-weight: 700; }
+.v2-dayc .l2 { font-size: 11.5px; color: #4b5563; }
+.v2-dayc .pill { font-size: 10px; font-weight: 800; border-radius: 999px; padding: 0 6px; }
+.v2-dayc .pill.live { background: var(--blue); color: #fff; }
+.v2-dayc .pill.closed { background: #dcfce7; color: #166534; }
+.v2-dayc.booked { background: #eff6ff; border-color: #bfdbfe; }
+.v2-dayc.paid, .v2-dayc.closed { background: #f0fdf4; border-color: #bbf7d0; }
+.v2-dayc.today { border: 2px solid var(--blue); }
+@media (max-width: 860px) {
+  .v2-only-narrow { display: flex !important; }
+  .v2-only-wide { display: none !important; }
+  .v2-days { gap: 4px; }
+  .v2-dayc { min-height: 64px; padding: 4px 5px; }
+  .v2-dayc .l2 { display: none; }
+  .v2-dayc .l1 { font-size: 11px; }
+}
+
 /* login */
 .v2-login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
 .v2-login-card { width: 100%; max-width: 380px; }

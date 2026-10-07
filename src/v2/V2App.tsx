@@ -11,6 +11,9 @@ import { Users } from './features/admin/Users';
 import { Centers } from './features/admin/Centers';
 import { Availability } from './features/admin/Availability';
 import { RateCards } from './features/workerbook/RateCards';
+import { Contractors } from './features/workerbook/Contractors';
+import { Days } from './features/workerbook/Days';
+import { Day } from './features/workerbook/Day';
 import { Loading } from './ui';
 
 const Guard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({ perm, children }) => {
@@ -32,6 +35,10 @@ const V2Routes: React.FC = () => (
     <Route path="admin/centers" element={<Guard perm="sa_users"><Centers /></Guard>} />
     <Route path="admin/availability" element={<Guard perm="sa_users"><Availability /></Guard>} />
     <Route path="workerbook/rate-cards" element={<Guard perm="workerbook"><RateCards /></Guard>} />
+    <Route path="workerbook/contractors" element={<Guard perm="workerbook"><Contractors /></Guard>} />
+    <Route path="workerbook/status" element={<Guard perm="workerbook"><Contractors /></Guard>} />
+    <Route path="workerbook/days" element={<Guard perm="workerbook"><Days /></Guard>} />
+    <Route path="workerbook/days/:date" element={<Guard perm="workerbook"><Day /></Guard>} />
     <Route path="*" element={<Guard><Soon /></Guard>} />
   </Routes>
 );

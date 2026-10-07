@@ -15,12 +15,12 @@ export const COMPONENTS: Component[] = [
     { key: 'map', label: 'Map', icon: Map, color: 'blue', path: '/app/rm', ready: false },
   ] },
   { key: 'wb', label: 'Workerbook', icon: BookOpen, color: 'green', perm: 'workerbook', subs: [
-    { key: 'days', label: 'Days', icon: Calendar, color: 'green', path: '/app/workerbook/days', ready: false },
+    { key: 'days', label: 'Days', icon: Calendar, color: 'green', path: '/app/workerbook/days', ready: true },
     { key: 'payslips', label: 'Payslips', icon: FileText, color: 'sky', path: '/app/workerbook/payslips', ready: false },
     { key: 'rates', label: 'Rate cards', icon: SlidersHorizontal, color: 'slate', path: '/app/workerbook/rate-cards', ready: true },
     { key: 'pipeline', label: 'Pipeline', icon: UserPlus, color: 'violet', path: '/app/workerbook/pipeline', ready: false },
-    { key: 'contractors', label: 'Contractors', icon: Contact, color: 'teal', path: '/app/workerbook/contractors', ready: false },
-    { key: 'status', label: 'Status lists', icon: AlertCircle, color: 'amber', path: '/app/workerbook/status', ready: false },
+    { key: 'contractors', label: 'Contractors', icon: Contact, color: 'teal', path: '/app/workerbook/contractors', ready: true },
+    { key: 'status', label: 'Status lists', icon: AlertCircle, color: 'amber', path: '/app/workerbook/status', ready: true },
   ] },
   { key: 'mb', label: 'Master Bookings', icon: CalendarCheck, color: 'amber', perm: 'bookings', subs: [
     { key: 'bookings', label: 'Bookings', icon: List, color: 'amber', path: '/app/bookings', ready: false },
