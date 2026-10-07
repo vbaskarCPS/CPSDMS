@@ -4,7 +4,8 @@
 // button in the stats bar) so both offer the same six tiles:
 //
 //   Team (Manage Team, with the team lock inside) · Pins (drop pins + worker
-//   driver stops) · Layers (map filters) · Card Txns · Asphalt · view switch
+//   driver stops) · Layers (map filters) · Card Txns · Asphalt · view switch ·
+//   Dashboard (the new app's home)
 //
 // Stats and Team Battle aren't tiles: Stats opens from the header (phone) or
 // the stats bar (desktop), and Team Battle is a section inside Stats.
@@ -12,7 +13,7 @@
 import React from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
-  Users, MapPin, Layers, CreditCard, Shovel, Truck, Loader, Clock, CheckCircle2, History, ChevronRight,
+  Users, MapPin, Layers, CreditCard, Shovel, Truck, Loader, Clock, CheckCircle2, History, ChevronRight, LayoutDashboard,
 } from 'lucide-react';
 import { Tile } from './PhoneSheet';
 import type { RMPhoneShell } from './RMPhoneLayout';
@@ -51,6 +52,8 @@ export const MenuTiles: React.FC<{
     {viewSwitch && (
       <Tile icon={viewSwitch.icon} label={viewSwitch.label} iconClass="text-gray-300" onClick={() => { onClose(); viewSwitch.onClick(); }} />
     )}
+    {/* The manager dashboard (the new app's home, with Payouts, Days and everything else). */}
+    <Tile icon={LayoutDashboard} label="Dashboard" iconClass="text-rose-300" onClick={() => { onClose(); window.location.assign('/app'); }} />
   </div>
 );
 

@@ -55,3 +55,11 @@ export async function actAsLegacyRouteManager(centerId: string, userId: string):
   });
   return true;
 }
+
+/** True when this manager has a seat on the live session at the center (their RM map is ready). */
+export async function hasLiveRouteManagerSeat(centerId: string, userId: string): Promise<boolean> {
+  const { supabase } = await import('../../lib/supabase');
+  const { data, error } = await supabase.from('users').select('user_id')
+    .eq('user_id', userId).eq('role', 'RouteManager').eq('command_center_id', centerId).limit(1);
+  return !error && (data || []).length > 0;
+}

@@ -1,6 +1,8 @@
 // src/v2/app/Home.tsx — one tile per component the user may open.
-import React, { useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { hasLiveRouteManagerSeat } from '../lib/legacy';
+import { legacyManagerId } from '../lib/startSession';
 import { useAuth } from '../lib/auth';
 import { Tile, Card } from '../ui';
 import { visibleComponents, type Component } from './nav';
@@ -14,8 +16,22 @@ export const Home: React.FC = () => {
   const hour = d.getHours();
   const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   const first = profile?.full_name.split(' ')[0] || '';
-  // Route managers who only have the map go straight to it, as the old login did.
-  if (profile && !profile.is_super_admin && comps.length === 1 && comps[0].key === 'rm') return <Navigate to="/app/rm" replace />;
+  // Right after signing in, a manager with a seat on today's live session goes straight to
+  // their RM map. The dashboard (this page) stays one tap away from the map's menu.
+  const loc = useLocation() as { state?: { fromLogin?: boolean } };
+  const fromLogin = !!loc.state?.fromLogin;
+  const [checking, setChecking] = useState(fromLogin);
+  useEffect(() => {
+    if (!fromLogin || !profile) { setChecking(false); return; }
+    const centerId = profile.rm_center_id;
+    if (!centerId || !can('route_manager')) { setChecking(false); return; }
+    let live = true;
+    hasLiveRouteManagerSeat(centerId, legacyManagerId(profile.full_name))
+      .then(ok => { if (!live) return; if (ok) nav('/app/rm', { replace: true }); else { setChecking(false); nav('/app', { replace: true, state: {} }); } })
+      .catch(() => live && setChecking(false));
+    return () => { live = false; };
+  }, [fromLogin, profile, can, nav]);
+  if (checking) return <div className="v2-main v2-narrow"><div className="v2-mut" style={{ padding: 20 }}>Opening…</div></div>;
 
   return (
     <div className="v2-main v2-narrow">
