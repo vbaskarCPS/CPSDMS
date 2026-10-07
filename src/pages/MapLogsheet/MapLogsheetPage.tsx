@@ -915,6 +915,7 @@ const MapLogsheetPage: React.FC = () => {
             onLoadStreet={() => { setShowMenu(false); setPickingStreet(true); setSelectedId(null); }}
             onPcl={() => { setShowMenu(false); setShowPclOutreach(true); }}
             onContacts={() => { setShowMenu(false); setShowContacts(true); }}
+            onAccount={() => { setShowMenu(false); navigate('/worker/account'); }}
             onLogout={handleLogout}
           />
         )}

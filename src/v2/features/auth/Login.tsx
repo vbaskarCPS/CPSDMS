@@ -35,7 +35,7 @@ export const Login: React.FC = () => {
     setError(null); setFinalized(false); setBusy(true);
     try {
       if (tab === 'worker') {
-        if (!(await tryLegacy(username, password, true))) setError('That CN # and first name don’t match anyone working today.');
+        if (!(await tryLegacy(username, password, true))) setError('That CN # and PIN (or first name) don’t match anyone working today.');
         return;
       }
       try { await signIn(username, password); nav(target, { replace: true, state: target === '/app' ? { fromLogin: true } : undefined }); }
@@ -60,7 +60,7 @@ export const Login: React.FC = () => {
         <Field label={tab === 'worker' ? 'CN #' : 'Username'}>
           <input className="v2-input" autoComplete="username" autoCapitalize={tab === 'worker' ? 'characters' : 'none'} placeholder={tab === 'worker' ? 'e.g. I1004' : ''}
             value={username} onChange={e => setUsername(e.target.value)} required /></Field>
-        <Field label={tab === 'worker' ? 'First name' : 'Password'}>
+        <Field label={tab === 'worker' ? 'PIN (or first name if you haven’t made one)' : 'Password'}>
           <input className="v2-input" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required /></Field>
         {error && <div className="v2-err" style={{ marginBottom: 12 }}>{error}</div>}
         {finalized && <div className="v2-card" style={{ marginBottom: 12, background: '#ecfdf5', borderColor: '#a7f3d0' }}>
@@ -88,7 +88,8 @@ export const ChangePassword: React.FC = () => {
     e.preventDefault(); setError(null);
     if (pw !== pw2) { setError('The two passwords don’t match'); return; }
     setBusy(true);
-    try { await changePassword(pw); nav('/app', { replace: true }); }
+    const forced = profile.must_change_password;
+    try { await changePassword(pw); nav(forced ? '/app' : '/app/account', { replace: true }); }
     catch (err) { setError(err instanceof Error ? err.message : 'Could not change password'); }
     finally { setBusy(false); }
   };
@@ -101,7 +102,9 @@ export const ChangePassword: React.FC = () => {
       <Field label="Type it again"><input className="v2-input" type="password" autoComplete="new-password" value={pw2} onChange={e => setPw2(e.target.value)} required minLength={8} /></Field>
       {error && <div className="v2-err" style={{ marginBottom: 12 }}>{error}</div>}
       <div className="v2-row"><Btn type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save password'}</Btn>
-        <Btn kind="o" onClick={() => signOut().then(() => nav('/app/login'))}>Sign out</Btn></div>
+        {profile.must_change_password
+          ? <Btn kind="o" onClick={() => signOut().then(() => nav('/app/login'))}>Sign out</Btn>
+          : <Btn kind="o" onClick={() => nav('/app/account')}>Cancel</Btn>}</div>
     </form></div></div>
   );
 };

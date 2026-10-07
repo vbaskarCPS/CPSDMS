@@ -20,6 +20,7 @@ import { Territory } from './features/admin/Territory';
 import { RMMap } from './features/rm/RMMap';
 import { ClientLists } from './features/admin/ClientLists';
 import { Clients } from './features/clients/Clients';
+import { MyAccount } from './features/account/MyAccount';
 import { Loading } from './ui';
 
 const Guard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({ perm, children }) => {
@@ -64,6 +65,7 @@ const V2Routes: React.FC = () => (
     <Route path="rm" element={<BareGuard perm="route_manager"><RMMap /></BareGuard>} />
     <Route path="admin/territory/clients" element={<Guard perm="sa_territory"><ClientLists /></Guard>} />
     <Route path="clients" element={<Guard><Clients /></Guard>} />
+    <Route path="account" element={<Guard><MyAccount /></Guard>} />
     <Route path="*" element={<Guard><Soon /></Guard>} />
   </Routes>
 );

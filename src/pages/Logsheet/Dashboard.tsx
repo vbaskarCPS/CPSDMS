@@ -6,6 +6,7 @@ import {
   TrendingUp,
   DollarSign,
   LogOut,
+  UserCog,
   Loader,
   Plus,
   Calendar,
@@ -735,6 +736,13 @@ const Dashboard: React.FC = () => {
                     <FileText size={20} />
                   </button>
                 )}
+                <button
+                  onClick={() => navigate('/worker/account')}
+                  className="p-2 bg-gray-800 text-amber-300 rounded-lg border border-gray-700"
+                  aria-label="My account" title="My account"
+                >
+                  <UserCog size={20} />
+                </button>
                 <button
                   onClick={handleLogout}
                   className="p-2 bg-gray-800 text-red-400 rounded-lg border border-gray-700"

@@ -4,19 +4,19 @@
 //
 //   Logsheet      | Add Sale / Contract | Today's Stats
 //   Gallery       | Load House / Street | PCL Outreach
-//   Contacts      | Worker Dashboard    | Log out
+//   Contacts      | My Account          | Log out
 //
 // Two tiles open a small "choose one" pop-up:
 //   - Add Sale / Contract → "Add sale (not on the map)" or "Contract / upsell"
 //     (straight to Add sale when the worker doesn't have upsells).
 //   - Load House / Street → "Add missing house" or "Load houses on a street".
 // Tiles that don't apply right now stay in place, greyed out, so the grid
-// never shifts. Worker Dashboard is a placeholder ("Soon").
+// never shifts. My Account opens the worker's own settings (PIN, phones, email).
 
 import React, { useState } from 'react';
 import {
   X, ListChecks, Receipt, BarChart3, Images, MapPinned, MessageSquare, Phone,
-  LayoutDashboard, LogOut, Plus, FileText, Home, Route,
+  UserCog, LogOut, Plus, FileText, Home, Route,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -39,6 +39,7 @@ interface MenuGridProps {
   onLoadStreet: () => void;
   onPcl: () => void;
   onContacts: () => void;
+  onAccount: () => void;
   onLogout: () => void;
 }
 
@@ -139,7 +140,7 @@ const MenuGrid: React.FC<MenuGridProps> = (p) => {
             disabled={!p.hasPcl} badge={p.pclToText > 0 ? String(p.pclToText) : null} badgeClass="bg-teal-600 text-white" />
 
           <Tile icon={Phone} label="Contacts" iconClass="text-emerald-300" onClick={p.onContacts} />
-          <Tile icon={LayoutDashboard} label="Worker Dashboard" iconClass="text-gray-400" disabled tag="Soon" />
+          <Tile icon={UserCog} label="My Account" iconClass="text-amber-300" onClick={p.onAccount} />
           <Tile icon={LogOut} label="Log out" iconClass="text-red-400" onClick={p.onLogout} danger />
         </div>
       </div>

@@ -36,6 +36,11 @@ export async function listUsers(): Promise<UserRow[]> {
   }));
 }
 
+/** The signed-in manager's own phone and email (also copied to today's old-app manager row). */
+export async function updateMyContact(phone: string, email: string): Promise<void> {
+  must(await db.rpc('app_update_my_contact', { p_phone: phone, p_email: email }));
+}
+
 export interface UserInput {
   full_name: string; phone: string; email: string; permissions: Permission[]; center_ids: string[];
   rm_center_id: string | null; is_active: boolean;
