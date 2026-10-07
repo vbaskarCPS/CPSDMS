@@ -40,7 +40,7 @@ export const COMPONENTS: Component[] = [
     { key: 'users', label: 'Users', icon: Users, color: 'rose', path: '/app/admin/users', ready: true },
     { key: 'centers', label: 'Centers & seasons', icon: Building2, color: 'blue', path: '/app/admin/centers', ready: true },
     { key: 'availability', label: 'Availability', icon: CalendarOff, color: 'amber', path: '/app/admin/availability', ready: true },
-    { key: 'territory', label: 'Territory & Client Data', icon: MapPin, color: 'sky', path: '/app/admin/territory', ready: false },
+    { key: 'territory', label: 'Territory & Client Data', icon: MapPin, color: 'sky', path: '/app/admin/territory', ready: true },
     { key: 'reporting', label: 'Reporting', icon: BarChart3, color: 'violet', path: '/app/admin/reporting', ready: false },
   ] },
 ];

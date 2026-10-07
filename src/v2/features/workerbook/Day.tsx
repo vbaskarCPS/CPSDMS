@@ -1,7 +1,7 @@
 // src/v2/features/workerbook/Day.tsx — one day at a center: who's booked, confirmed, and who showed.
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, UserPlus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Play, UserPlus } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
 import {
@@ -64,7 +64,9 @@ export const Day: React.FC = () => {
         <span className="v2-spacer" />
         <button className="v2-gbtn" onClick={() => nav(`/app/workerbook/days/${shift(date, -1)}`)} aria-label="Previous day"><ChevronLeft size={16} /></button>
         <button className="v2-gbtn" onClick={() => nav(`/app/workerbook/days/${shift(date, 1)}`)} aria-label="Next day"><ChevronRight size={16} /></button>
-        {canEdit && <Btn icon={UserPlus} onClick={() => setShowBook(true)}>Book contractors</Btn>}
+        {canEdit && <Btn kind="o" icon={UserPlus} onClick={() => setShowBook(true)}>Book contractors</Btn>}
+        {can('workerbook') && day.data?.state === 'planned' && sorted.length > 0 && <Btn kind="g" icon={Play} onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Start session</Btn>}
+        {day.data?.state === 'live' && <Btn kind="o" onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Session details</Btn>}
       </div>
 
       <div className="v2-grid4" style={{ marginBottom: 14 }}>
@@ -186,7 +188,7 @@ export const Day: React.FC = () => {
         </div>
         </>
       )}
-      <div className="v2-note">Ticking Conf records a staff confirmation. Email and text confirmations, shuttle push and Start session come in the next steps of phase 2.</div>
+      <div className="v2-note">Ticking Conf records a staff confirmation. Email and text confirmations and the shuttle push come in a later step.</div>
 
       {showBook && <BookContractors centerId={center.id} date={date} bookedHireIds={new Set(sorted.map(r => r.hire_id))}
         onClose={() => setShowBook(false)} onBooked={() => { setShowBook(false); day.reload(); roster.reload(); }} />}
