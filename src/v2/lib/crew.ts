@@ -60,3 +60,19 @@ export async function syncCrewDay(centerId: string, date: string): Promise<{ add
   for (const r of drop) await removeFromDay(r.id);
   return { added, removed: drop.length };
 }
+
+/**
+ * Take someone off the active crew. With a home center elsewhere they go back to its WDR list;
+ * if the road trip is their home (no home center) they stay here as Inactive (stored as WDR).
+ */
+export async function setCrewInactive(row: CrewRow, centerId: string): Promise<'home' | 'inactive'> {
+  if (row.home_id !== centerId) { await crewMove([row.hire_id], null); return 'home'; }
+  const { updateHire } = await import('./workerbook');
+  await updateHire(row.hire_id, { status: 'WDR' });
+  if (row.room) await setRoom(row.hire_id, '');
+  return 'inactive';
+}
+export async function setCrewActive(hireId: string): Promise<void> {
+  const { updateHire } = await import('./workerbook');
+  await updateHire(hireId, { status: 'active' });
+}
