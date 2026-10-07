@@ -1,6 +1,4 @@
--- Baseline: the public schema of project mipvcafqrmwxnoqmicxh as it stood on 2026-10-07,
--- captured from the live database before the CPSDMS refactor. Recorded in production as
--- already applied; replayed only on fresh databases (staging branches, local).
+-- Baseline: public schema as of 2026-10-07, captured before the CPSDMS refactor.
 set check_function_bodies = off;
 
 -- extensions
@@ -11,7 +9,6 @@ create extension if not exists pg_stat_statements with schema extensions;
 create extension if not exists supabase_vault with schema vault;
 create extension if not exists postgis with schema public;
 
-
 -- sequences
 create sequence if not exists public.nar_addresses_id_seq as bigint start 1 increment 1;
 create sequence if not exists public.route_houses_id_seq as bigint start 1 increment 1;
@@ -19,7 +16,6 @@ create sequence if not exists public.house_dispositions_id_seq as bigint start 1
 create sequence if not exists public.building_footprints_id_seq as bigint start 1 increment 1;
 create sequence if not exists public.city_address_points_id_seq as bigint start 1 increment 1;
 create sequence if not exists public.route_street_lines_id_seq as bigint start 1 increment 1;
-
 
 -- tables
 create table if not exists public.area_prefixes (
@@ -815,7 +811,6 @@ create table if not exists public.workerbook_na_counts (
   updated_at timestamp with time zone default now()
 );
 
-
 -- primary/unique/check
 alter table public.job_fair_sessions add constraint job_fair_sessions_pkey PRIMARY KEY (id);
 alter table public.job_fair_sessions add constraint job_fair_sessions_status_check CHECK ((status = ANY (ARRAY['active'::text, 'closed'::text])));
@@ -917,7 +912,6 @@ alter table public.route_houses add constraint route_houses_route_code_house_key
 alter table public.report_contractor_overrides add constraint report_contractor_overrides_pkey PRIMARY KEY (id);
 alter table public.nar_addresses add constraint nar_addresses_pkey PRIMARY KEY (id);
 
-
 -- foreign keys
 alter table public.job_fair_sessions add constraint job_fair_sessions_command_center_id_fkey FOREIGN KEY (command_center_id) REFERENCES command_centers(id) ON DELETE CASCADE;
 alter table public.workerbook_na_counts add constraint workerbook_na_counts_cc_fkey FOREIGN KEY (command_center_id) REFERENCES command_centers(id);
@@ -954,7 +948,6 @@ alter table public.onboarding_config add constraint onboarding_config_command_ce
 alter table public.rf_review_queue add constraint rf_review_queue_scan_session_fkey FOREIGN KEY (scan_session_id) REFERENCES rf_scan_sessions(id) ON DELETE CASCADE;
 alter table public.map_logsheet_cc_access add constraint map_logsheet_cc_access_command_center_id_fkey FOREIGN KEY (command_center_id) REFERENCES command_centers(id) ON DELETE CASCADE;
 alter table public.worker_locations add constraint worker_locations_command_center_fkey FOREIGN KEY (command_center_id) REFERENCES command_centers(id) ON DELETE CASCADE;
-
 
 -- indexes
 CREATE INDEX route_street_lines_street_idx ON public.route_street_lines USING btree (street_norm);
@@ -1025,7 +1018,6 @@ CREATE INDEX pending_sales_parent_id_idx ON public.pending_sales USING btree (pa
 CREATE INDEX idx_job_fair_applicants_session ON public.job_fair_applicants USING btree (session_id);
 CREATE INDEX idx_bookings_session ON public.bookings USING btree (session_date, command_center_id);
 CREATE INDEX route_street_lines_zone_idx ON public.route_street_lines USING gist (zone);
-
 
 -- functions
 CREATE OR REPLACE FUNCTION public.is_username_available(check_username text)
@@ -1905,7 +1897,6 @@ end;
 $function$
 ;
 
-
 -- generated columns (need functions above)
 alter table public.building_footprints add column if not exists geom geometry(Polygon,4326) generated always as (st_geomfromtext(wkt, 4326)) stored;
 alter table public.nar_addresses add column if not exists street_norm text generated always as (norm_street(((((COALESCE(street_name, ''::text) || ' '::text) || COALESCE(street_type, ''::text)) || ' '::text) || COALESCE(street_dir, ''::text)))) stored;
@@ -1973,12 +1964,10 @@ create or replace view public.geometry_columns as
           WHERE (s.consrc ~~* '%srid(% = %'::text)) sr ON (((sr.connamespace = n.oid) AND (sr.conrelid = c.oid) AND (a.attnum = ANY (sr.conkey)))))
   WHERE ((c.relkind = ANY (ARRAY['r'::"char", 'v'::"char", 'm'::"char", 'f'::"char", 'p'::"char"])) AND (NOT (c.relname = 'raster_columns'::name)) AND (t.typname = 'geometry'::name) AND (NOT pg_is_other_temp_schema(c.relnamespace)) AND has_table_privilege(c.oid, 'SELECT'::text));
 
-
 -- triggers
 CREATE TRIGGER trigger_job_fair_applicants_updated_at BEFORE UPDATE ON public.job_fair_applicants FOR EACH ROW EXECUTE FUNCTION update_job_fair_applicant_updated_at();
 CREATE TRIGGER trg_route_splits_updated_at BEFORE UPDATE ON public.route_splits FOR EACH ROW EXECUTE FUNCTION route_splits_set_updated_at();
 CREATE TRIGGER route_maps_lines AFTER INSERT OR DELETE OR UPDATE ON public.route_maps FOR EACH ROW EXECUTE FUNCTION route_maps_lines_trigger();
-
 
 -- row level security
 alter table public.job_fair_sessions enable row level security;
@@ -2034,7 +2023,6 @@ create policy house_dispositions_all on public.house_dispositions as PERMISSIVE 
 create policy route_house_builds_all on public.route_house_builds as PERMISSIVE for ALL to public using (true) with check (true);
 create policy route_houses_all on public.route_houses as PERMISSIVE for ALL to public using (true) with check (true);
 create policy nar_addresses_read on public.nar_addresses as PERMISSIVE for SELECT to public using (true);
-
 
 -- storage buckets
 insert into storage.buckets (id, name, public) values ('logos', 'logos', true) on conflict (id) do nothing;
