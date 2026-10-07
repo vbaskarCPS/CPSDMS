@@ -1,21 +1,24 @@
 // src/v2/features/workerbook/Crew.tsx — Workerbook › Crew list.
 //
-// Road-trip center: everyone working here right now (its own people plus anyone pulled in from
-// their home cities), with hotel room numbers you can change any time. "Pull in workers" brings
-// people over from other centers; "Send home" puts them back on their home city's WDR list.
+// Road-trip center: Active — everyone working here right now (its own people plus anyone pulled in
+// from their home cities), with hotel room numbers you can change any time; Inactive — the road
+// trip's own people who aren't working now. "Pull in workers" brings people over from other
+// centers; "Set inactive" sends someone with a home center back to its WDR list, or moves
+// someone whose home is the road trip to Inactive.
 // In-city center: who from here is away on a road trip, and "Send to a road trip".
 import { Link } from 'react-router-dom';
 import React, { useEffect, useMemo, useState } from 'react';
-import { BedDouble, Check, Home, Search, Truck, UserPlus } from 'lucide-react';
+import { BedDouble, Check, Home, Search, Truck, UserCheck, UserMinus, UserPlus } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { useLoad } from '../../lib/data';
-import { centerTypeLabel, crewList, crewMove, crewSearch, roadTripCenters, setRoom, type CrewRow } from '../../lib/crew';
+import { centerTypeLabel, crewList, crewMove, crewSearch, roadTripCenters, setCrewActive, setCrewInactive, setRoom, type CrewRow } from '../../lib/crew';
+import { listHires, fullName, type Hire } from '../../lib/workerbook';
 import { Btn, ErrorBox, Field, Loading, Modal, Tag } from '../../ui';
 import { ContractorLink } from './ContractorCard';
 
 const name = (r: CrewRow) => `${r.first_name} ${r.last_name}`.trim();
 const since = (iso: string | null) => iso ? new Date(iso).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) : '';
-const statusTag = (s: string) => s === 'active' ? <Tag tone="g">Active</Tag> : <Tag tone="a">{s}</Tag>;
+const statusTag = (s: string) => s === 'active' ? <Tag tone="g">Active</Tag> : <Tag tone="a">Inactive</Tag>;
 const matches = (r: CrewRow, q: string) => {
   const t = q.trim().toLowerCase();
   if (!t) return true;
@@ -50,12 +53,23 @@ export const Crew: React.FC = () => {
   const [q, setQ] = useState('');
   const [moving, setMoving] = useState<'pull' | 'push' | null>(null);
   const [sendHome, setSendHome] = useState<CrewRow | null>(null);
+  const [tab, setTab] = useState<'active' | 'inactive'>('active');
+  const hires = useLoad(() => listHires(new Date().getFullYear()), []);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
   const data = list.data;
   const rt = data?.type === 'road_trip';
-  const here = useMemo(() => (data?.here || []).filter(r => matches(r, q)), [data, q]);
+  const here = useMemo(() => (data?.here || []).filter(r => (!rt || r.status === 'active') && matches(r, q)), [data, q, rt]);
+  // the road trip's own people who aren't working now (any status but active), plus anyone here who isn't active
+  const inactive = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    const ids = new Set((data?.here || []).map(r => r.hire_id));
+    const fromHere = (data?.here || []).filter(r => r.status !== 'active').map(r => ({ id: r.hire_id, cn: r.cn, name: name(r), home: r.shuttle, status: r.status, since: null as string | null }));
+    const fromHome = (hires.data || []).filter((h: Hire) => h.center_id === center?.id && h.status !== 'active' && !ids.has(h.id))
+      .map((h: Hire) => ({ id: h.id, cn: h.cn, name: fullName(h.person), home: h.shuttle, status: h.status, since: h.status_since }));
+    return [...fromHere, ...fromHome].filter(r => !t || r.cn.toLowerCase().startsWith(t) || r.name.toLowerCase().includes(t)).sort((a, b) => a.name.localeCompare(b.name));
+  }, [data, hires.data, center?.id, q]);
   const away = useMemo(() => (data?.away || []).filter(r => matches(r, q)), [data, q]);
 
   if (!center) return <div className="v2-main v2-narrow"><div className="v2-card">Pick a command center first.</div></div>;
@@ -63,7 +77,14 @@ export const Crew: React.FC = () => {
 
   const bringHome = async (r: CrewRow) => {
     setBusy(true); setError(null);
-    try { await crewMove([r.hire_id], null); setSendHome(null); list.reload(); } catch (e) { setError(e); } finally { setBusy(false); }
+    try {
+      if (rt) await setCrewInactive(r, center.id); else await crewMove([r.hire_id], null);
+      setSendHome(null); list.reload(); hires.reload();
+    } catch (e) { setError(e); } finally { setBusy(false); }
+  };
+  const reactivate = async (id: string) => {
+    setBusy(true); setError(null);
+    try { await setCrewActive(id); list.reload(); hires.reload(); } catch (e) { setError(e); } finally { setBusy(false); }
   };
 
   return (
@@ -72,7 +93,7 @@ export const Crew: React.FC = () => {
         <Link to="/app/workerbook/days" className="v2-link">‹ Calendar</Link>
         <span className="v2-h1">Crew list</span>
         {data && <Tag tone={rt ? 'v' : 'b'}>{centerTypeLabel(data.type)}</Tag>}
-        {data && <span className="v2-mut v2-small">{rt ? `${data.here.length} at ${center.display_name}` : `${data.away.length} away on road trips`}</span>}
+        {data && <span className="v2-mut v2-small">{rt ? `${(data.here || []).filter(r => r.status === 'active').length} active at ${center.display_name}` : `${data.away.length} away on road trips`}</span>}
         <span className="v2-spacer" />
         <div style={{ position: 'relative' }}>
           <Search size={14} style={{ position: 'absolute', left: 10, top: 11, color: '#6b7280' }} />
@@ -85,8 +106,31 @@ export const Crew: React.FC = () => {
       <ErrorBox error={list.error || error} />
       {list.loading && !data ? <Loading /> : !data ? null : rt ? (
         <>
+          <div className="v2-tabs" role="tablist">
+            <button className={tab === 'active' ? 'on' : ''} onClick={() => setTab('active')}>Active <span className="v2-mut">{(data.here || []).filter(r => r.status === 'active').length}</span></button>
+            <button className={tab === 'inactive' ? 'on' : ''} onClick={() => setTab('inactive')}>Inactive <span className="v2-mut">{inactive.length}</span></button>
+          </div>
+          {tab === 'inactive' ? (
+            <div className="v2-card" style={{ padding: 0 }}>
+              <div className="v2-note" style={{ margin: '12px 14px' }}>{center.display_name}’s own people who aren’t working right now. People with a home center go back to its WDR list instead.</div>
+              {inactive.length === 0 ? <div className="v2-mut" style={{ padding: 14 }}>{q ? 'Nobody inactive matches that.' : 'Nobody is inactive.'}</div> : (
+                <div className="v2-table-wrap">
+                  <table className="v2-table">
+                    <thead><tr><th>CN #</th><th>Name</th><th>Home city</th><th>Since</th><th /></tr></thead>
+                    <tbody>{inactive.map(r => (
+                      <tr key={r.id}>
+                        <td><b>{r.cn}</b></td><td><b><ContractorLink hireId={r.id} onSaved={() => { list.reload(); hires.reload(); }}>{r.name}</ContractorLink></b></td>
+                        <td>{r.home || '—'}</td><td className="v2-small v2-mut">{r.since ? since(r.since + 'T12:00') : '—'}</td>
+                        <td style={{ textAlign: 'right' }}><Btn size="sm" kind="o" icon={UserCheck} disabled={busy} onClick={() => reactivate(r.id)}>Set active</Btn></td>
+                      </tr>))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ) : <>
           <div className="v2-note" style={{ marginBottom: 12 }}>
-            Everyone working at {center.display_name} right now. Rooms can be changed any time. Sending someone home puts them on their home city’s WDR list.
+            Everyone working at {center.display_name} right now. Rooms can be changed any time. Setting someone inactive sends them to their home center’s WDR list, or to Inactive here if the road trip is their home.
           </div>
           {here.length === 0 ? (
             <div className="v2-card" style={{ textAlign: 'center', padding: 30 }}>
@@ -106,7 +150,7 @@ export const Crew: React.FC = () => {
                       <BedDouble size={16} color="#6b7280" /><RoomInput row={r} onSaved={list.reload} />
                       <span className="v2-spacer" />
                       {r.cell_phone && <a className="v2-btn o sm" href={`tel:${r.cell_phone.replace(/[^\d+]/g, '')}`}>Call</a>}
-                      {r.home_id !== center.id && <Btn size="sm" kind="o" icon={Home} onClick={() => setSendHome(r)}>Send home</Btn>}
+                      <Btn size="sm" kind="o" icon={UserMinus} onClick={() => setSendHome(r)}>Set inactive</Btn>
                     </div>
                   </div>
                 ))}
@@ -125,7 +169,7 @@ export const Crew: React.FC = () => {
                           <td className="v2-small">{r.cell_phone || '—'}</td>
                           <td>{statusTag(r.status)}</td>
                           <td className="v2-small v2-mut">{r.home_id === center.id ? '—' : since(r.moved_at)}</td>
-                          <td style={{ textAlign: 'right' }}>{r.home_id !== center.id && <Btn size="sm" kind="o" icon={Home} onClick={() => setSendHome(r)}>Send home</Btn>}</td>
+                          <td style={{ textAlign: 'right' }}><Btn size="sm" kind="o" icon={UserMinus} onClick={() => setSendHome(r)}>Set inactive</Btn></td>
                         </tr>
                       ))}
                     </tbody>
@@ -134,6 +178,7 @@ export const Crew: React.FC = () => {
               </div>
             </>
           )}
+          </>}
         </>
       ) : (
         <>
@@ -160,9 +205,11 @@ export const Crew: React.FC = () => {
       )}
 
       {sendHome && (
-        <Modal title={`${rt ? 'Send' : 'Bring'} ${name(sendHome)} home?`} onClose={() => setSendHome(null)}
-          footer={<><Btn kind="o" onClick={() => setSendHome(null)}>Cancel</Btn><Btn kind="r" disabled={busy} onClick={() => bringHome(sendHome)}>{busy ? 'Moving…' : rt ? 'Send home' : 'Bring home'}</Btn></>}>
-          <p style={{ marginTop: 0 }}>{sendHome.cn} goes back to <b>{sendHome.home}</b> and onto its <b>WDR</b> list (worked, didn’t rebook). {sendHome.home} can make them active again or mark them as quit.</p>
+        <Modal title={rt ? `Set ${name(sendHome)} inactive?` : `Bring ${name(sendHome)} home?`} onClose={() => setSendHome(null)}
+          footer={<><Btn kind="o" onClick={() => setSendHome(null)}>Cancel</Btn><Btn kind="r" disabled={busy} onClick={() => bringHome(sendHome)}>{busy ? 'Saving…' : rt ? 'Set inactive' : 'Bring home'}</Btn></>}>
+          {rt && sendHome.home_id === center.id
+            ? <p style={{ marginTop: 0 }}>{center.display_name} is {sendHome.first_name}’s home, so they stay here on the <b>Inactive</b> tab. They come off the crew for the coming days; <b>Set active</b> brings them back.</p>
+            : <p style={{ marginTop: 0 }}>{sendHome.cn} goes back to <b>{sendHome.home}</b> and onto its <b>WDR</b> list (worked, didn’t rebook). {sendHome.home} can make them active again or mark them as quit.</p>}
           {sendHome.room && <p className="v2-mut v2-small">Their room ({sendHome.room}) is cleared.</p>}
           <ErrorBox error={error} />
         </Modal>

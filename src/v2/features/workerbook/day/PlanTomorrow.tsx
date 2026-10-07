@@ -55,7 +55,7 @@ export const PlanTomorrow: React.FC<{ rows: RosterRow[]; managers: PlanManager[]
                 const c = crew.get(r.hire_id); const cell = r.hire.person.cell_phone;
                 return (
                   <div key={r.id} className={`v2-confirm${r.team ? ' on' : ''}`}>
-                    <span className="v2-room" title="Room">{c?.room || '—'}</span>
+                    <span className="v2-roomtag" title="Room">{c?.room || '—'}</span>
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <b><ContractorLink hireId={r.hire_id} onSaved={onChanged}>{fullName(r.hire.person)}</ContractorLink></b>
                       <span className="v2-small v2-mut" style={{ display: 'block' }}>{r.hire.cn}{r.hire.shuttle ? ` · ${r.hire.shuttle}` : ''}{r.team ? ` · ${/^RC/i.test(r.team) ? r.team : `Cart ${r.team}`}` : ''}</span>
