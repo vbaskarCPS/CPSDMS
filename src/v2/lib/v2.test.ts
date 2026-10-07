@@ -91,3 +91,27 @@ describe('navigation by permission', () => {
     expect(findByPath('/app/nope')).toBeNull();
   });
 });
+
+import { areaProblems, mergeAreas, routeCodeOf, type AreaPrefix } from './territory';
+describe('territory areas', () => {
+  const pre: AreaPrefix[] = [
+    { area_name: 'GLEN ABBEY #1', prefix: 'GA', region: 'West', route_start: 1, route_count: 8 },
+    { area_name: 'GLEN ABBEY #2', prefix: 'GA', region: 'East', route_start: 9, route_count: 14 },
+    { area_name: 'NEW AREA', prefix: 'NA', region: 'Central', route_start: 1, route_count: 5 },
+  ];
+  const routes = [1, 2, 3, 4, 5, 6, 7, 8].map(n => ({ area_name: 'GLEN ABBEY #1', route_number: n, route_code: routeCodeOf('GA', n) }))
+    .concat([{ area_name: 'LOOSE', route_number: 3, route_code: 'LO03' }]);
+  it('lists every area with its region, drawn routes and planned numbers', () => {
+    const rows = mergeAreas(pre, routes, new Map([['GLEN ABBEY #1', 'cc1']]));
+    expect(rows.map(r => [r.name, r.region, r.routes.length, r.planned, r.centerId])).toEqual([
+      ['GLEN ABBEY #1', 'West', 8, 8, 'cc1'], ['GLEN ABBEY #2', 'East', 0, 14, null], ['LOOSE', null, 1, 1, null], ['NEW AREA', 'Central', 0, 5, null]]);
+    expect(rows.find(r => r.name === 'LOOSE')!.hasPrefixRow).toBe(false);
+  });
+  it('checks a new or edited area', () => {
+    expect(areaProblems({ name: 'GLEN ABBEY #3', prefix: 'GA', region: 'West', start: 23, end: 30 }, pre, null)).toEqual([]);
+    expect(areaProblems({ name: 'GLEN ABBEY #3', prefix: 'GA', region: 'West', start: 20, end: 30 }, pre, null)[0]).toMatch(/overlaps GLEN ABBEY #2 \(GA09–GA22\)/);
+    expect(areaProblems({ name: 'glen abbey #1', prefix: 'GA', region: 'West', start: 1, end: 8 }, pre, null)).toContain('There’s already an area with that name.');
+    expect(areaProblems({ name: 'GLEN ABBEY #1', prefix: 'GA', region: 'East', start: 1, end: 8 }, pre, 'GLEN ABBEY #1')).toEqual([]);   // editing itself
+    expect(areaProblems({ name: 'X', prefix: 'G4', region: 'East', start: 3, end: 2 }, pre, null)).toHaveLength(2);
+  });
+});

@@ -231,7 +231,12 @@ function regionStyle(region: Region) {
   return 'bg-orange-900/40 text-orange-300 border-orange-700';
 }
 
-const MapBuilder: React.FC = () => {
+/**
+ * embedArea: opened from the new app's Territory list straight into one area's builder (no area
+ * cards, no PCL loading — clients come in through Client lists); onExit goes back to that list.
+ * Without them it shows the old area cards and PCL loading (no longer routed: /super-admin/maps now goes to Territory).
+ */
+const MapBuilder: React.FC<{ embedArea?: string; onExit?: () => void }> = ({ embedArea, onExit }) => {
   const navigate = useNavigate();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -407,6 +412,17 @@ const MapBuilder: React.FC = () => {
   const pendingCount = routes.filter(r => r.status === 'pending').length;
 
   useEffect(() => { loadAreas(); }, []);
+
+  // Embedded: open the area as soon as the areas are in.
+  const embedOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!embedArea || loadingAreas || embedOpenedRef.current) return;
+    embedOpenedRef.current = true;
+    const area = areas.find(a => a.area_name === embedArea);
+    if (area) handleOpenArea(area);
+    else setError(`There's no area called "${embedArea}".`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedArea, loadingAreas, areas]);
 
   const loadAreas = async () => {
     setLoadingAreas(true);
@@ -1042,9 +1058,9 @@ const MapBuilder: React.FC = () => {
       <div className="bg-gray-800 border-b border-gray-700 px-4 py-3 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-3">
           {view === 'map' ? (
-            <button onClick={handleBackToGrid} className="text-gray-400 hover:text-white flex items-center gap-1.5 text-sm"><ArrowLeft size={16} />Areas</button>
+            <button onClick={onExit || handleBackToGrid} className="text-gray-400 hover:text-white flex items-center gap-1.5 text-sm"><ArrowLeft size={16} />Areas</button>
           ) : (
-            <button onClick={() => navigate('/super-admin')} className="text-gray-400 hover:text-white"><ArrowLeft size={20} /></button>
+            <button onClick={onExit || (() => navigate('/super-admin'))} className="text-gray-400 hover:text-white"><ArrowLeft size={20} /></button>
           )}
           <MapIcon size={20} className="text-purple-400" />
           <div>
@@ -1069,17 +1085,17 @@ const MapBuilder: React.FC = () => {
               </button>
             </>
           )}
-          {view === 'grid' && (
+          {view === 'grid' && !embedArea && (
             <button onClick={() => { setPclMode('load'); setPclError(null); setPclResult(null); setPclModalOpen(true); }} className="bg-amber-700 hover:bg-amber-600 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-2">
               <BookOpen size={14} />Load PCL
             </button>
           )}
-          {view === 'grid' && (
+          {view === 'grid' && !embedArea && (
             <button onClick={() => { setPclMode('recalibrate'); setPclError(null); setPclResult(null); setPclModalOpen(true); }} className="bg-teal-700 hover:bg-teal-600 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-2" title="Re-match cached PCLs to the nearest route across every area">
               <RefreshCw size={14} />Recalibrate PCL
             </button>
           )}
-          {view === 'grid' && (
+          {view === 'grid' && !embedArea && (
             <button onClick={openNewAreaModal} className="bg-purple-700 hover:bg-purple-600 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-2">
               <Plus size={14} />New Area
             </button>
@@ -1102,7 +1118,11 @@ const MapBuilder: React.FC = () => {
         </div>
       )}
 
-      {view === 'grid' && (
+      {view === 'grid' && embedArea && !error && (
+        <div className="flex-1 flex items-center justify-center"><Loader size={24} className="animate-spin text-purple-400" /></div>
+      )}
+
+      {view === 'grid' && !embedArea && (
         <div className="flex-1 overflow-y-auto p-6">
           {loadingAreas ? (
             <div className="flex items-center justify-center h-48"><Loader size={24} className="animate-spin text-purple-400" /></div>

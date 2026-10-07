@@ -26,6 +26,9 @@ export function allRoutes(): Promise<RouteRow[]> {
   return cache;
 }
 
+/** Forget the cached routes (after the map builder saved some). */
+export function refreshRoutes(): void { cache = null; }
+
 export function groupAreas(routes: RouteRow[], assigned: Map<string, string>): Area[] {
   const by = new Map<string, RouteRow[]>();
   for (const r of routes) {
@@ -47,6 +50,88 @@ export async function assignAreas(areaNames: string[], centerId: string | null):
   if (!areaNames.length) return;
   if (centerId) must(await db.from('map_area_centers').upsert(areaNames.map(a => ({ area_name: a, center_id: centerId, assigned_at: new Date().toISOString() }))));
   else must(await db.from('map_area_centers').delete().in('area_name', areaNames));
+}
+
+// ───────────── areas (the map builder's list: name, prefix, region, route numbers) ─────────────
+export const REGIONS = ['West', 'Central', 'East'] as const;
+export type Region = typeof REGIONS[number];
+export interface AreaPrefix { area_name: string; prefix: string; region: Region; route_start: number; route_count: number; pdf_page?: number | null }
+export interface AreaRow extends Area {
+  region: Region | null;
+  /** route numbers planned for the area (start … start + count − 1); drawn = approved routes */
+  start: number; planned: number;
+  hasPrefixRow: boolean;
+}
+export const routeCodeOf = (prefix: string, n: number) => `${prefix}${String(n).padStart(2, '0')}`;
+
+export async function listAreaPrefixes(): Promise<AreaPrefix[]> {
+  return must(await db.from('area_prefixes').select('area_name, prefix, region, route_start, route_count, pdf_page').order('area_name')) as AreaPrefix[];
+}
+
+/** Every area: the builder's list, with its approved routes and center (areas with routes but no list row too). */
+export function mergeAreas(prefixes: AreaPrefix[], routes: RouteRow[], assigned: Map<string, string>): AreaRow[] {
+  const drawn = new Map(groupAreas(routes, assigned).map(a => [a.name, a]));
+  const out: AreaRow[] = prefixes.map(p => {
+    const d = drawn.get(p.area_name);
+    const start = p.route_start ?? 1;
+    return {
+      name: p.area_name, prefix: p.prefix || d?.prefix || '', region: (REGIONS as readonly string[]).includes(p.region) ? p.region : null,
+      routes: d?.routes || [], first: d?.first ?? start, last: d?.last ?? start + Math.max(1, p.route_count) - 1,
+      centerId: assigned.get(p.area_name) || null, start, planned: p.route_count || 0, hasPrefixRow: true,
+    };
+  });
+  for (const d of drawn.values()) if (!prefixes.some(p => p.area_name === d.name)) {
+    out.push({ ...d, region: null, start: d.first, planned: d.routes.length, hasPrefixRow: false });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+}
+
+/** Sets the East / West / Central designation (also on the area's cached client counts). */
+export async function setRegion(areaNames: string[], region: Region): Promise<void> {
+  if (!areaNames.length) return;
+  must(await db.from('area_prefixes').update({ region }).in('area_name', areaNames));
+  await db.from('map_pcl_cache').update({ region }).in('area_name', areaNames);   // best effort: display only
+}
+
+export interface AreaInput { name: string; prefix: string; region: Region; start: number; end: number }
+export function areaProblems(a: AreaInput, others: AreaPrefix[], editing: string | null): string[] {
+  const out: string[] = [];
+  if (!a.name.trim()) out.push('Give the area a name.');
+  if (!/^[A-Za-z]{1,6}$/.test(a.prefix.trim())) out.push('The prefix is 1–6 letters, e.g. GA.');
+  if (!(a.start >= 1) || !(a.end >= a.start)) out.push('The last route number must be at or after the first.');
+  const name = a.name.trim().toUpperCase();
+  if (others.some(o => o.area_name.toUpperCase() === name && o.area_name !== editing)) out.push('There’s already an area with that name.');
+  const prefix = a.prefix.trim().toUpperCase();
+  const clash = others.find(o => o.area_name !== editing && o.prefix.toUpperCase() === prefix
+    && a.start <= (o.route_start ?? 1) + o.route_count - 1 && (o.route_start ?? 1) <= a.end);
+  if (clash) out.push(`${routeCodeOf(prefix, a.start)}–${routeCodeOf(prefix, a.end)} overlaps ${clash.area_name} (${routeCodeOf(prefix, clash.route_start ?? 1)}–${routeCodeOf(prefix, (clash.route_start ?? 1) + clash.route_count - 1)}).`);
+  return out;
+}
+
+/** New area, or changes to one (a rename carries its drawn routes, center and client counts with it). */
+export async function saveArea(a: AreaInput, editing: AreaPrefix | null): Promise<void> {
+  const record = { area_name: a.name.trim(), prefix: a.prefix.trim().toUpperCase(), region: a.region,
+    route_start: a.start, route_count: a.end - a.start + 1, pdf_page: editing?.pdf_page ?? 0 };
+  if (editing && editing.area_name !== record.area_name) {
+    const old = editing.area_name;
+    must(await db.from('area_prefixes').insert(record));
+    must(await db.from('route_maps').update({ area_name: record.area_name }).eq('area_name', old));
+    must(await db.from('map_area_centers').update({ area_name: record.area_name }).eq('area_name', old));
+    await db.from('map_pcl_cache').update({ area_name: record.area_name }).eq('area_name', old);
+    must(await db.from('area_prefixes').delete().eq('area_name', old));
+  } else {
+    must(await db.from('area_prefixes').upsert(record, { onConflict: 'area_name' }));
+  }
+  if (editing && editing.region !== a.region) await db.from('map_pcl_cache').update({ region: a.region }).eq('area_name', record.area_name);
+  refreshRoutes();
+}
+
+/** Deletes an area and its drawn routes (and its center assignment). */
+export async function deleteArea(name: string): Promise<void> {
+  must(await db.from('map_area_centers').delete().eq('area_name', name));
+  must(await db.from('route_maps').delete().eq('area_name', name));
+  must(await db.from('area_prefixes').delete().eq('area_name', name));
+  refreshRoutes();
 }
 
 /** Areas a center may use: its assigned ones. */

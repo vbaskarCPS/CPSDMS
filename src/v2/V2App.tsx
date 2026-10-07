@@ -19,6 +19,7 @@ import { Day } from './features/workerbook/Day';
 import { StartSession } from './features/workerbook/StartSession';
 import { Payouts, PayoutsLive, PayoutWorker } from './features/workerbook/Payouts';
 import { Territory } from './features/admin/Territory';
+import { MapBuilderPage } from './features/admin/MapBuilderPage';
 import { RMMap } from './features/rm/RMMap';
 import { FloaterMap, FloaterPicker } from './features/rm/Floater';
 import { ClientLists } from './features/admin/ClientLists';
@@ -82,6 +83,7 @@ const V2Routes: React.FC = () => (
     <Route path="rm/floater" element={<Guard perm="rm_floater"><FloaterPicker /></Guard>} />
     <Route path="rm/floater/map" element={<BareGuard perm="rm_floater"><FloaterMap /></BareGuard>} />
     <Route path="admin/territory/clients" element={<Guard perm="sa_territory"><ClientLists /></Guard>} />
+    <Route path="admin/territory/builder/:area" element={<BareGuard perm="sa_territory"><MapBuilderPage /></BareGuard>} />
     <Route path="clients" element={<Guard><Clients /></Guard>} />
     <Route path="account" element={<Guard><MyAccount /></Guard>} />
     <Route path="*" element={<Guard><Soon /></Guard>} />
