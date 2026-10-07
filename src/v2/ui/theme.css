@@ -45,14 +45,14 @@
 .v2-kpi { font-size: 24px; font-weight: 800; }
 
 /* buttons */
-.v2-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 13px; border-radius: 9px; border: 1px solid var(--blue);
-  background: var(--blue); color: #fff; font-weight: 700; font-size: 13px; white-space: nowrap; }
-.v2-btn:disabled { opacity: .45; cursor: not-allowed; }
-.v2-btn.o { background: #fff; color: var(--ink); border-color: var(--line); }
-.v2-btn.g { background: var(--green); border-color: var(--green); }
-.v2-btn.r { background: #fff; color: var(--rose); border-color: #fecdd3; }
-.v2-btn.sm { padding: 5px 9px; font-size: 12px; }
-.v2-link { color: var(--blue); font-weight: 600; background: none; border: 0; padding: 0; }
+.v2 .v2-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 13px; border-radius: 9px; border: 1px solid var(--blue);
+  background: var(--blue); color: #fff; font-weight: 700; font-size: 13px; white-space: nowrap; text-transform: none; letter-spacing: 0; }
+.v2 .v2-btn:disabled { opacity: .45; cursor: not-allowed; }
+.v2 .v2-btn.o { background: #fff; color: var(--ink); border-color: var(--line); }
+.v2 .v2-btn.g { background: var(--green); border-color: var(--green); }
+.v2 .v2-btn.r { background: #fff; color: var(--rose); border-color: #fecdd3; }
+.v2 .v2-btn.sm { padding: 5px 9px; font-size: 12px; }
+.v2 .v2-link { color: var(--blue); font-weight: 600; background: none; border: 0; padding: 0; }
 
 /* tiles */
 .v2-tiles { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }

@@ -143,7 +143,7 @@ export const RateCards: React.FC = () => {
               <Field label="Applies from"><input className="v2-input" type="date" value={from} min={minFrom} max={season.ends_on} onChange={e => setFrom(e.target.value)} /></Field>
               <div style={{ flex: 1, minWidth: 200 }} className="v2-small v2-mut">
                 {latest ? 'Saving creates a new version. Days already closed keep the version they used.' : 'This is the first version for this season.'}
-                {season.service === 'sealing' && !latest && <><br />Note: the code default for sealing product cost is 20%; the road trip currently runs at 0%.</>}
+                {season.service === 'sealing' && !latest && <><br />Sealing product cost starts at 0% (what the road trip runs today). Change it here if that changes.</>}
               </div>
               <Btn onClick={save} disabled={busy || !dirty}>{busy ? 'Saving…' : latest ? 'Save new version' : 'Save rate card'}</Btn>
             </div>
