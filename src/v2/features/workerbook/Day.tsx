@@ -1,14 +1,14 @@
 // src/v2/features/workerbook/Day.tsx — one day at a center. What the page is depends on the day:
 //
 //   today, not started   Roll call (who's here; in-city: next day / WDR / Quit) → Start session
-//   started (live)       The session: roll call (late arrivals onto the live map) + Payouts + Close day
+//   started (live)       The session = the day's payouts (late arrivals onto the live map; Close day)
 //   closed               The payout copy: the day's numbers and each worker's finalized line
 //   tomorrow             Confirmations + a draft of the teams (pre-fills Start session)
 //   later                Bookings: move or remove people; confirm from two days ahead
 //   earlier, never run   The bookings as they were (read only)
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, ListChecks, Lock, Play, UserPlus, Wallet } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ListChecks, Lock, Play, UserPlus, UserRoundPlus } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
 import { getCenterType } from '../../lib/crew';
@@ -22,6 +22,8 @@ import { CloseDay } from './CloseDay';
 import { RollCall } from './day/RollCall';
 import { PlanTomorrow } from './day/PlanTomorrow';
 import { PayoutCopy } from './day/PayoutCopy';
+import { LateArrivals } from './day/LateArrivals';
+import { SessionPayouts } from './Payouts';
 
 const shift = (iso: string, n: number) => {
   const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() + n);
@@ -39,6 +41,8 @@ export const Day: React.FC = () => {
   const nav = useNavigate();
   const [showBook, setShowBook] = useState(false);
   const [showClose, setShowClose] = useState(false);
+  const [showLate, setShowLate] = useState(false);
+  const [lateTick, setLateTick] = useState(0);   // re-reads the payouts after someone is put on the map
   const valid = /^\d{4}-\d{2}-\d{2}$/.test(date);
 
   const day = useLoad(() => center && valid ? getDay(center.id, date) : Promise.resolve(null), [center?.id, date]);
@@ -77,7 +81,7 @@ export const Day: React.FC = () => {
           <Btn kind="g" icon={Play} onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Start session</Btn>}
         {mode === 'session' && <>
           <Btn kind="o" icon={ListChecks} onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Session details</Btn>
-          {can('workerbook') && <Btn kind="g" icon={Wallet} onClick={() => nav(`/app/workerbook/days/${date}/payouts`)}>Payouts</Btn>}
+          {can('workerbook') && <Btn kind="o" icon={UserRoundPlus} onClick={() => setShowLate(true)}>Late arrival</Btn>}
           {can('workerbook') && <Btn kind="o" icon={Lock} onClick={() => setShowClose(true)}>Close day</Btn>}
         </>}
       </div>
@@ -85,10 +89,10 @@ export const Day: React.FC = () => {
       <ErrorBox error={day.error || roster.error} />
       {firstLoad ? <Loading /> : (
         <>
-          {(mode === 'rollcall' || mode === 'session') && (
-            <RollCall centerId={center.id} region={center.region} date={date} day={day.data} rows={rows} type={ctype.data || 'in_city'}
-              live={mode === 'session'} managers={managers.data || []} canEdit={canEdit} onChanged={roster.reload} onWalkIn={() => setShowBook(true)} />
+          {mode === 'rollcall' && (
+            <RollCall rows={rows} date={date} type={ctype.data || 'in_city'} canEdit={canEdit} onChanged={roster.reload} onWalkIn={() => setShowBook(true)} />
           )}
+          {mode === 'session' && <SessionPayouts key={lateTick} centerId={center.id} centerName={center.display_name} date={date} />}
           {mode === 'plan' && <PlanTomorrow rows={rows} managers={managers.data || []} canEdit={canEdit} onChanged={roster.reload} />}
           {mode === 'copy' && day.data && <PayoutCopy centerId={center.id} date={date} day={day.data} rows={rows} />}
           {(mode === 'future' || mode === 'past') && (
@@ -97,6 +101,8 @@ export const Day: React.FC = () => {
         </>
       )}
 
+      {showLate && <LateArrivals centerId={center.id} region={center.region} date={date} rows={rows} managers={managers.data || []}
+        onClose={() => setShowLate(false)} onBook={() => setShowBook(true)} onAdded={() => { setShowLate(false); setLateTick(t => t + 1); roster.reload(); }} />}
       {showClose && day.data && <CloseDay centerId={center.id} date={date} pretty={pretty} onClose={() => setShowClose(false)}
         onClosed={() => { setShowClose(false); reload(); }} />}
       {showBook && <BookContractors centerId={center.id} date={date} bookedHireIds={new Set(rows.map(r => r.hire_id))}
