@@ -345,7 +345,7 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
     const hist = new Map<string, HistoryEntry & { any: boolean }>();
     const h = (year: number | null | undefined) => {
       const k = year ? String(year) : 'row';
-      if (!hist.has(k)) hist.set(k, { year: year ?? null, service: '', price: '', contractor: '', payment: '', any: false });
+      if (!hist.has(k)) hist.set(k, { year: year ?? null, service: '', price: '', contractor: '', payment: '', line: '', any: false });
       return hist.get(k)!;
     };
     let rawAddress = '';
