@@ -40,3 +40,23 @@ export async function setRoom(hireId: string, room: string): Promise<void> {
 export async function roadTripCenters(): Promise<{ id: string; display_name: string }[]> {
   return must(await db.rpc('app_road_trip_centers')) as { id: string; display_name: string }[];
 }
+
+/**
+ * A road trip's day runs off the crew, not bookings: a day that hasn't started gets everyone
+ * active in the crew on its roster, and anyone no longer in the crew comes off it (unless
+ * something was already recorded for them that day).
+ */
+export async function syncCrewDay(centerId: string, date: string): Promise<{ added: number; removed: number }> {
+  const { getDay, listRoster, book, removeFromDay } = await import('./workerbook');
+  const crew = (await crewList(centerId)).here.filter(r => r.status === 'active');
+  const day = await getDay(centerId, date);
+  if (day && day.state !== 'planned') return { added: 0, removed: 0 };
+  const rows = day ? await listRoster(day.id) : [];
+  const have = new Set(rows.map(r => r.hire_id));
+  const want = new Set(crew.map(r => r.hire_id));
+  const add = crew.filter(r => !have.has(r.hire_id)).map(r => r.hire_id);
+  const added = add.length ? await book(centerId, date, add) : 0;
+  const drop = rows.filter(r => !want.has(r.hire_id) && !r.attendance && !r.team && !r.next_action && !r.next_day);
+  for (const r of drop) await removeFromDay(r.id);
+  return { added, removed: drop.length };
+}

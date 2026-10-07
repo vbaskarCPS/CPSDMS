@@ -168,16 +168,33 @@ export async function importContractors(centerId: string, year: number, rows: Im
 }
 
 // ───────────── days ─────────────
-export interface DaySummary { day: string; state: Day['state']; booked: number; confirmed: number; showed: number; noShow: number; firstDay: number }
+export interface DaySummary {
+  day: string; state: Day['state']; booked: number; confirmed: number; showed: number; noShow: number; firstDay: number;
+  /** closed days: from the day's summary and payout lines */
+  steps?: number; gross?: number; worked?: number;
+}
 
 export async function monthSummary(centerId: string, from: string, to: string): Promise<DaySummary[]> {
   const rows = must(await db.from('days')
-    .select('day, state, day_roster(confirmed_at, attendance, hire:hires(person:people(lifetime_days)))')
+    .select('day, state, summary, day_roster(confirmed_at, attendance, hire:hires(person:people(lifetime_days)))')
     .eq('center_id', centerId).gte('day', from).lte('day', to)) as unknown as
-    { day: string; state: Day['state']; day_roster: { confirmed_at: string | null; attendance: string | null; hire: { person: { lifetime_days: number } } | null }[] }[];
-  return rows.map(d => summarize(d.day, d.state, d.day_roster.map(r => ({
-    confirmed_at: r.confirmed_at, attendance: r.attendance, firstDay: (r.hire?.person?.lifetime_days ?? 1) === 0,
-  }))));
+    { day: string; state: Day['state']; summary: Record<string, unknown> | null; day_roster: { confirmed_at: string | null; attendance: string | null; hire: { person: { lifetime_days: number } } | null }[] }[];
+  // who worked a closed day = who has a payout line for it
+  const lines = rows.some(d => d.state === 'closed')
+    ? (await db.from('payout_lines').select('day, cn').eq('center_id', centerId).gte('day', from).lte('day', to)).data as { day: string; cn: string }[] | null
+    : null;
+  const worked = new Map<string, Set<string>>();
+  for (const l of lines || []) { if (!worked.has(l.day)) worked.set(l.day, new Set()); worked.get(l.day)!.add(l.cn); }
+  return rows.map(d => {
+    const s = summarize(d.day, d.state, d.day_roster.map(r => ({
+      confirmed_at: r.confirmed_at, attendance: r.attendance, firstDay: (r.hire?.person?.lifetime_days ?? 1) === 0,
+    })));
+    if (d.state === 'closed') {
+      const num = (v: unknown) => (v == null || v === '' ? undefined : Number(v));
+      return { ...s, steps: num(d.summary?.steps), gross: num(d.summary?.gross), worked: worked.get(d.day)?.size ?? num(d.summary?.showed) };
+    }
+    return s;
+  });
 }
 
 export function summarize(day: string, state: Day['state'], roster: { confirmed_at: string | null; attendance: string | null; firstDay: boolean }[]): DaySummary {
