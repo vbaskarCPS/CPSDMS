@@ -7,6 +7,7 @@
 
 import { ColumnIndices } from './dialerHeaders';
 import { normalizePhone, parseYear } from './dialerUtils';
+import { maskCardNumber } from '../cardSafety';
 
 // --- Types ---
 
@@ -110,9 +111,9 @@ export function buildCCDRow(
   const dateCol = ccdMap['DATE.1'] || ccdMap['DATE'];
 
   if (cardTypeCol) destData[cardTypeCol - 1] = cardData.cardType;
-  if (cardNumCol) destData[cardNumCol - 1] = cardData.cardNumber;
+  if (cardNumCol) destData[cardNumCol - 1] = maskCardNumber(cardData.cardNumber) || '';
   if (expCol) destData[expCol - 1] = cardData.expiry;
-  if (cvcCol) destData[cvcCol - 1] = cardData.cvv;
+  if (cvcCol) destData[cvcCol - 1] = ''; // CVCs are never written to sheets
   if (amtCol) destData[amtCol - 1] = cardData.amount || extraData.price || '';
   if (svcCol) destData[svcCol - 1] = 'aer';
   if (repCol) destData[repCol - 1] = repCode;
@@ -124,6 +125,6 @@ export function buildCCDRow(
   return {
     rowValues: destData,
     cardNumberCol: cardNumCol ? cardNumCol - 1 : -1,
-    cardNumberValue: cardData.cardNumber,
+    cardNumberValue: maskCardNumber(cardData.cardNumber) || '',
   };
 }

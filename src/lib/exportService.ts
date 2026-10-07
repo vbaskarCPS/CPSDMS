@@ -1,6 +1,8 @@
 // src/lib/exportService.ts
 import * as XLSX from 'xlsx';
 import { supabase } from './supabase';
+import { maskCardNumber } from './cardSafety';
+import { USER_COLS } from './legacyColumns';
 import { commandCenterService, seasonHasTeams, getSeasonConfig, getPayoutRate, createEqualSplit, EQ_DIVISOR } from './commandCenterService';
 import { sessionService } from './sessionService';
 import { googleSheetsService } from './googleSheetsService';
@@ -485,7 +487,7 @@ export async function generateSessionExport(): Promise<void> {
   const [sessionsRes, transactionsRes, usersRes, bookingsRes] = await Promise.all([
     supabase.from('logsheet_sessions').select('*').eq('date', date).eq('command_center_id', ccId),
     supabase.from('transactions').select('*').eq('command_center_id', ccId),
-    supabase.from('users').select('*').eq('command_center_id', ccId),
+    supabase.from('users').select(USER_COLS).eq('command_center_id', ccId),
     supabase.from('bookings').select('*').eq('session_date', date).eq('command_center_id', ccId),
   ]);
 
@@ -745,7 +747,7 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
   const [sessionsRes, transactionsRes, usersRes] = await Promise.all([
     supabase.from('logsheet_sessions').select('*').eq('date', date).eq('command_center_id', ccId),
     supabase.from('transactions').select('*').eq('command_center_id', ccId),
-    supabase.from('users').select('*').eq('command_center_id', ccId),
+    supabase.from('users').select(USER_COLS).eq('command_center_id', ccId),
   ]);
 
   const sessions = sessionsRes.data || [];
@@ -847,16 +849,17 @@ export async function exportToGoogleSheets(dateTab: string): Promise<{
     const contractorName = getTeamWorkerNames(tx, workersMap, isTeamSeason ? sessionsMap : undefined);
     const clientType = getClientType(tx);
     const isBambora = (tx.cc_full_number || '').startsWith('BAMBORA-');
+    // Card numbers, expiry dates and CVCs never go to the sheet — only Bambora's last 4 or a masked number.
     const paymentDetails = isBambora
       ? `\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022${tx.cc_cvc || ''}`
-      : (tx.cc_full_number || tx.cheque_number || tx.etransfer_email || tx.invoice_number || '');
+      : (maskCardNumber(tx.cc_full_number) || tx.cheque_number || tx.etransfer_email || tx.invoice_number || '');
     return {
       routeNumber: tx.customer_snapshot?.routeCode || '', firstName: tx.customer_snapshot?.firstName || '',
       lastName: tx.customer_snapshot?.lastName || '', streetNum: streetParts[0] || '',
       streetName: streetParts.slice(1).join(' ') || '', phone: tx.customer_phone || '', email: tx.customer_email || '',
       clientType, propertyType: tx.customer_snapshot?.serviceType || 'FP', notes: tx.item_description || '',
       price: tx.price || 0, paymentType: formatPaymentType(tx), contractorName,
-      paymentDetails, expiry: isBambora ? '' : (tx.cc_expiry || ''), cvc: isBambora ? '' : (tx.cc_cvc || ''),
+      paymentDetails, expiry: '', cvc: '',
       services: tx.services as ServiceFlags | undefined,
     };
   });
