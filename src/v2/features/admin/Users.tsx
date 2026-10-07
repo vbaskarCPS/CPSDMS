@@ -37,7 +37,7 @@ export const Users: React.FC = () => {
         <Card style={{ padding: '4px 10px' }}>
           <div className="v2-table-wrap"><table className="v2-table">
             <thead><tr><th>Name</th><th>Username</th><th>Centers</th><th>RM center</th>
-              {PERMISSIONS.map(p => <th key={p.key} title={p.unlocks}>{p.label.replace('SA · ', 'SA ').replace('Master ', '').replace('Clients & ', '').replace(' & Client Data', '')}</th>)}
+              {PERMISSIONS.map(p => <th key={p.key} title={p.unlocks}>{p.label.replace('Floater Route Manager', 'Floater RM').replace('SA · ', 'SA ').replace('Master ', '').replace('Clients & ', '').replace(' & Client Data', '')}</th>)}
               <th>Status</th></tr></thead>
             <tbody>
               {rows.map(u => (
@@ -173,7 +173,7 @@ const UserEditor: React.FC<{ user: UserRow | null; centers: Center[]; isSuperAdm
             {user?.is_super_admin ? <div className="v2-note">Super Admin has every permission.</div> : PERMISSIONS.map(p => {
               const saOnly = SUPER_ADMIN_PERMISSIONS.includes(p.key as Permission) && !isSuperAdmin;
               return (
-                <label key={p.key} className="v2-check" title={p.unlocks} style={saOnly ? { opacity: .5 } : undefined}>
+                <label key={p.key} className="v2-check" title={p.unlocks} style={{ ...(saOnly ? { opacity: .5 } : {}), ...(p.key === 'rm_floater' ? { marginLeft: 22 } : {}) }}>
                   <input type="checkbox" checked={form.permissions.includes(p.key)} disabled={saOnly} onChange={() => togglePerm(p.key)} />
                   <span><b style={{ fontWeight: 600 }}>{p.label}</b><br /><span className="v2-mut v2-small">{p.unlocks}</span></span>
                 </label>

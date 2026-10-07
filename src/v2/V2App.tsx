@@ -20,6 +20,7 @@ import { StartSession } from './features/workerbook/StartSession';
 import { Payouts, PayoutsLive, PayoutWorker } from './features/workerbook/Payouts';
 import { Territory } from './features/admin/Territory';
 import { RMMap } from './features/rm/RMMap';
+import { FloaterMap, FloaterPicker } from './features/rm/Floater';
 import { ClientLists } from './features/admin/ClientLists';
 import { Clients } from './features/clients/Clients';
 import { MyAccount } from './features/account/MyAccount';
@@ -46,6 +47,15 @@ const BareGuard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({
   return <>{children}</>;
 };
 
+/** Route Manager opens the floater view for Floater Route Managers (their own map is one tap away). */
+const RMGate: React.FC = () => {
+  const { can, loading, profile } = useAuth();
+  const loc = useLocation();
+  const ownMap = new URLSearchParams(loc.search).has('own');
+  if (!loading && profile && can('rm_floater') && !ownMap) return <Navigate to="/app/rm/floater" replace />;
+  return <BareGuard perm={!loading && profile && can('rm_floater') ? 'rm_floater' : 'route_manager'}><RMMap /></BareGuard>;
+};
+
 const V2Routes: React.FC = () => (
   <Routes>
     <Route path="login" element={<Login />} />
@@ -68,7 +78,9 @@ const V2Routes: React.FC = () => (
     <Route path="workerbook/days/:date/payouts" element={<Guard perm="workerbook"><Payouts /></Guard>} />
     <Route path="workerbook/days/:date/payouts/:contractorId" element={<Guard perm="workerbook"><PayoutWorker /></Guard>} />
     <Route path="admin/territory" element={<Guard perm="sa_territory"><Territory /></Guard>} />
-    <Route path="rm" element={<BareGuard perm="route_manager"><RMMap /></BareGuard>} />
+    <Route path="rm" element={<RMGate />} />
+    <Route path="rm/floater" element={<Guard perm="rm_floater"><FloaterPicker /></Guard>} />
+    <Route path="rm/floater/map" element={<BareGuard perm="rm_floater"><FloaterMap /></BareGuard>} />
     <Route path="admin/territory/clients" element={<Guard perm="sa_territory"><ClientLists /></Guard>} />
     <Route path="clients" element={<Guard><Clients /></Guard>} />
     <Route path="account" element={<Guard><MyAccount /></Guard>} />

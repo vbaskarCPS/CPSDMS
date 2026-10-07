@@ -353,3 +353,10 @@
 .v2-side-drop.over > .v2-card { outline: 2px dashed var(--blue); outline-offset: -2px; }
 /* map markers must stay absolutely placed (Mapbox positions them with a transform) */
 .v2 .mapboxgl-marker.v2-rnum, .v2 .mapboxgl-marker.v2-aname { position: absolute; }
+
+/* floater map: back to the floater picker (the old map has no menu of its own) */
+.v2-floater-back { position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 60; display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,.25); background: rgba(17,24,39,.88); color: #fff;
+  font: 700 13px/1 system-ui, -apple-system, 'Segoe UI', sans-serif; box-shadow: 0 4px 14px rgba(0,0,0,.3); cursor: pointer; }
+.v2-floater-back:hover { background: #111827; }
+@media (max-width: 760px) { .v2-floater-back { bottom: auto; top: 56px; } }   /* phones: clear of the team drawer */
