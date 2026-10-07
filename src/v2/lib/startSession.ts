@@ -158,7 +158,30 @@ export async function startSession(p: Plan, dayId: string, centerId: string, _op
     p_teams: p.teams.map(t => ({ name: t.name, kind: t.kind, manager_id: t.managerId, hire_ids: showedIds.filter(h => p.members[h] === t.name) })),
     p_showed: showedIds,
   })) as string;
+  // Roll call answers (next day / WDR / Quit) take effect now that the session has started.
+  try { await db.rpc('app_apply_next_days', { p_day: dayId, p_hire: null }); }
+  catch (e) { console.warn('[StartSession] next-day answers not applied:', e); }
   return { sessionId };
+}
+
+/**
+ * A worker who arrives after the session started: put them on the live map (old users table),
+ * under a manager, with no team yet — the manager puts them on a cart from Manage Team.
+ */
+export async function addLateArrival(centerId: string, row: RosterRow, manager: PlanManager, card: RateCardData, seasonYear: number, service: Service): Promise<void> {
+  await import('./legacy').then(m => m.pointLegacyAt(centerId));
+  const [{ supabase }, { upsertUsers }] = await Promise.all([import('../../lib/supabase'), import('../../lib/userWrites')]);
+  const person = row.hire.person;
+  const contractorYear = seasonYear - (person.first_year ?? seasonYear) + 1;
+  await upsertUsers(supabase, [{
+    user_id: row.hire.cn, name: `${person.first_name} ${person.last_name}`.trim(), role: 'Worker', password: person.first_name,
+    metadata: {
+      phone: formatPhone(person.cell_phone), alumniRate: alumniRate(card, contractorYear, person.lifetime_days),
+      silverRate: silverRate(card, person.hats?.[SERVICE_HAT[service]] || 0),
+      assignedManagerId: legacyManagerId(manager.full_name), upsellsEnabled: true,
+    },
+    command_center_id: centerId,
+  }]);
 }
 
 interface SessionRecord {

@@ -1,4 +1,5 @@
 // src/v2/features/workerbook/RateCards.tsx — one rate card per center per season, saved as dated versions.
+import { Link } from 'react-router-dom';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2, History } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
@@ -63,6 +64,7 @@ export const RateCards: React.FC = () => {
   return (
     <div className="v2-main">
       <div className="v2-head">
+        <Link to="/app/workerbook/days" className="v2-link">‹ Calendar</Link>
         <span className="v2-h1">Rate card</span>
         {(seasons.data || []).length > 0 && (
           <select className="v2-select-pill" value={seasonId || ''} onChange={e => setSeasonId(e.target.value)} aria-label="Season">

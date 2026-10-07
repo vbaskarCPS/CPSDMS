@@ -71,12 +71,16 @@ export const CloseDay: React.FC<{ centerId: string; date: string; pretty: string
                 <Link className="v2-link" to={`/app/workerbook/days/${date}/payouts`}>open Payouts</Link>
               </>}
             </Line>
-            <Line ok={c.unmarked.length === 0} title={c.unmarked.length === 0 ? `Attendance marked (${c.showed} showed of ${c.booked} booked)` : `${c.unmarked.length} not marked Showed or No-show`}>
-              {c.unmarked.length > 0 && <>{c.unmarked.map(u => `${u.name} ${u.cn}`).join(' · ')} — mark them on this page first.</>}
-            </Line>
-            <Line ok warn={c.no_shows.length > 0} title={c.no_shows.length === 0 ? 'No no-shows' : `${c.no_shows.length} no-show${c.no_shows.length === 1 ? '' : 's'} will go onto the NS list`}>
-              {c.no_shows.length > 0 && c.no_shows.map(n => `${n.name} ${n.cn} (${n.ns_count + 1} NS)`).join(' · ')}
-            </Line>
+            {c.road_trip ? (
+              <Line ok title="Road trip: no attendance to mark">Whoever has a finalized payout worked today; nobody goes onto the NS list.</Line>
+            ) : <>
+              <Line ok={c.unmarked.length === 0} title={c.unmarked.length === 0 ? `Attendance marked (${c.showed} showed of ${c.booked} booked)` : `${c.unmarked.length} not marked Showed or No-show`}>
+                {c.unmarked.length > 0 && <>{c.unmarked.map(u => `${u.name} ${u.cn}`).join(' · ')} — mark them on this page first.</>}
+              </Line>
+              <Line ok warn={c.no_shows.length > 0} title={c.no_shows.length === 0 ? 'No no-shows' : `${c.no_shows.length} no-show${c.no_shows.length === 1 ? '' : 's'} will go onto the NS list`}>
+                {c.no_shows.length > 0 && c.no_shows.map(n => `${n.name} ${n.cn} (${n.ns_count + 1} NS)`).join(' · ')}
+              </Line>
+            </>}
             {needsExport && (
               <Line ok={downloaded} warn title={downloaded ? 'Day’s Excel downloaded' : 'Download the day’s Excel first'}>
                 The same export the old command center made before closing.{' '}

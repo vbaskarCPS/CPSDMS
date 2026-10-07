@@ -31,7 +31,7 @@ export interface Day { id: string; center_id: string; day: string; state: 'plann
 export interface RosterRow {
   id: string; day_id: string; hire_id: string; shuttle: string | null; manager_id: string | null; team: string | null;
   confirmed_at: string | null; confirmed_via: 'staff' | 'email' | 'text' | 'worker' | null; attendance: 'showed' | 'no_show' | null;
-  next_day: string | null; notes: string | null; hire: Hire;
+  next_day: string | null; next_action?: 'book' | 'WDR' | 'Q' | null; notes: string | null; hire: Hire;
 }
 
 export const fullName = (p: Pick<Person, 'first_name' | 'last_name'>) => `${p.first_name} ${p.last_name}`.trim();
@@ -201,6 +201,8 @@ export async function getDay(centerId: string, day: string): Promise<Day | null>
 // ───────────── close day ─────────────
 export interface CloseCheck {
   state: Day['state']; has_session: boolean;
+  /** road-trip center: no attendance or NS list (who worked = who has a finalized payout) */
+  road_trip?: boolean;
   carts: number; paid: number; steps: number; gross: number; upsells: number; booked: number; showed: number;
   unpaid: { worker_id: string; status: string; names: string | null; sales: number }[];
   unmarked: { cn: string; name: string }[];
@@ -215,9 +217,18 @@ export async function closeDay(centerId: string, day: string): Promise<DaySummar
 }
 
 export async function listRoster(dayId: string): Promise<RosterRow[]> {
-  return must(await db.from('day_roster')
-    .select(`id, day_id, hire_id, shuttle, manager_id, team, confirmed_at, confirmed_via, attendance, next_day, notes, hire:hires(${HIRE_COLS})`)
-    .eq('day_id', dayId)) as unknown as RosterRow[];
+  const cols = 'id, day_id, hire_id, shuttle, manager_id, team, confirmed_at, confirmed_via, attendance, next_day, notes';
+  const res = await db.from('day_roster').select(`${cols}, next_action, hire:hires(${HIRE_COLS})`).eq('day_id', dayId);
+  // (before the roll-call column exists, read without it)
+  if (res.error && /next_action/.test(res.error.message)) {
+    return must(await db.from('day_roster').select(`${cols}, hire:hires(${HIRE_COLS})`).eq('day_id', dayId)) as unknown as RosterRow[];
+  }
+  return must(res) as unknown as RosterRow[];
+}
+
+/** Roll call answers → bookings / WDR / Quit (all showed people, or one). */
+export async function applyNextDays(dayId: string, hireId?: string): Promise<{ booked: number; wdr: number; quit: number }> {
+  return must(await db.rpc('app_apply_next_days', { p_day: dayId, p_hire: hireId ?? null })) as { booked: number; wdr: number; quit: number };
 }
 
 /** Showed days recorded in this app per hire (added to the imported lifetime days). */
@@ -233,7 +244,7 @@ export async function book(centerId: string, day: string, hireIds: string[]): Pr
   return must(await db.rpc('app_book', { p_center: centerId, p_day: day, p_hires: hireIds })) as number;
 }
 
-export async function updateRoster(id: string, patch: Partial<Pick<RosterRow, 'manager_id' | 'team' | 'attendance' | 'notes' | 'shuttle' | 'next_day'>> & { confirmed?: boolean }) {
+export async function updateRoster(id: string, patch: Partial<Pick<RosterRow, 'manager_id' | 'team' | 'attendance' | 'notes' | 'shuttle' | 'next_day' | 'next_action'>> & { confirmed?: boolean }) {
   const { confirmed, ...rest } = patch;
   const body: Record<string, unknown> = { ...rest };
   if (confirmed !== undefined) { body.confirmed_at = confirmed ? new Date().toISOString() : null; body.confirmed_via = confirmed ? 'staff' : null; }

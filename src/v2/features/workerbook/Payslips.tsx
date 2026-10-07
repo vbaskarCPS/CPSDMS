@@ -5,6 +5,7 @@
 // travel package, crackfill %, $120 program, extra deductions / additions, batches) and
 // Generate: the payslips are saved as Generated and the PDFs download. Signing a payslip off
 // marks it Paid. A Generated payslip can be voided, which frees its days for a new one.
+import { Link } from 'react-router-dom';
 import React, { useMemo, useState } from 'react';
 import { CheckCircle2, ChevronDown, ChevronRight, Download, FileText, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
@@ -43,6 +44,7 @@ export const Payslips: React.FC = () => {
   return (
     <div className="v2-main">
       <div className="v2-head">
+        <Link to="/app/workerbook/days" className="v2-link">‹ Calendar</Link>
         <span className="v2-h1">Payslips</span>
         <span className="v2-spacer" />
         <Btn icon={FileText} onClick={() => setGenerating(true)}>Generate payslips</Btn>

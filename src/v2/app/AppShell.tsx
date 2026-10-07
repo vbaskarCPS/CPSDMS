@@ -1,12 +1,13 @@
-// src/v2/app/AppShell.tsx — top bar (grid button, breadcrumb, center switcher, season badge, user) + grid menu.
+// src/v2/app/AppShell.tsx — top bar (grid button, breadcrumb, center switcher, season badge, user) + the menu,
+// which only switches between components (each opens at its home).
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutGrid, ChevronRight, LogOut, X, UserRound } from 'lucide-react';
+import { LayoutGrid, ChevronRight, LogOut, UserRound, Home } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { useCurrentSeason } from '../lib/data';
 import { serviceLabel } from '../lib/permissions';
-import { Tile, Btn } from '../ui';
-import { visibleComponents, findByPath, type Component } from './nav';
+import { Btn } from '../ui';
+import { visibleComponents, findByPath, homeOf } from './nav';
 
 export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { profile, centers, center, setCenterId, can, signOut } = useAuth();
@@ -15,16 +16,19 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
   const [open, setOpen] = useState(false);
   const comps = visibleComponents(can);
   const here = findByPath(loc.pathname);
-  const [menuComp, setMenuComp] = useState<Component | null>(null);
+  const hereComp = here ? comps.find(c => c.key === here.comp.key) || null : null;
   const season = useCurrentSeason(center?.id || null);
+  const atHome = loc.pathname === '/app' || loc.pathname === '/app/';
 
   useEffect(() => { setOpen(false); }, [loc.pathname]);
   useEffect(() => {
-    if (open) setMenuComp(comps.find(c => c.key === here?.comp.key) || comps[0] || null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!open) return;
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    window.addEventListener('keydown', esc);
+    return () => window.removeEventListener('keydown', esc);
   }, [open]);
 
-  const shownComp = menuComp ? comps.find(c => c.key === menuComp.key) || null : null;
+  const tabs = hereComp?.tabs ? hereComp.subs.filter(s => s.ready) : [];
 
   return (
     <div className="v2">
@@ -34,7 +38,10 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
         </button>
         <Link to="/app" className="v2-brand"><img src="/icon-192.png" alt="" className="v2-logo" /><span className="v2-hide-sm">Property Stars</span></Link>
         <span className="v2-crumb">
-          {here ? <><b>{here.comp.label}</b><ChevronRight size={14} />{here.sub.label}</> : <b>Home</b>}
+          {here ? <>
+            <Link to={homeOf(hereComp || here.comp)}><b>{here.comp.label}</b></Link>
+            {!here.comp.tabs && homeOf(here.comp) !== here.sub.path && <><ChevronRight size={14} />{here.sub.label}</>}
+          </> : <b>Home</b>}
         </span>
         <span className="v2-spacer" />
         {centers.length > 1 ? (
@@ -52,28 +59,25 @@ export const AppShell: React.FC<{ children: React.ReactNode }> = ({ children }) 
       {open && (
         <>
           <div className="v2-overlay" onClick={() => setOpen(false)} />
-          <div className="v2-menu" role="dialog" aria-label="Menu">
-            <div className="v2-menu-side">
-              <div className="v2-card-h v2-hide-sm">Components</div>
-              {comps.map(c => (
-                <button key={c.key} type="button" className={`v2-menu-item${shownComp?.key === c.key ? ' on' : ''}`} onClick={() => setMenuComp(c)}>
-                  <c.icon size={18} color={`var(--${c.color})`} />{c.label}
-                </button>
-              ))}
-            </div>
-            <div className="v2-menu-body">
-              <div className="v2-card-h">{shownComp?.label}<span className="v2-spacer" />
-                <button type="button" className="v2-link" onClick={() => setOpen(false)} aria-label="Close menu"><X size={18} color="#6b7280" /></button></div>
-              <div className="v2-tiles">
-                {shownComp?.subs.map(s => (
-                  <Tile key={s.key} icon={s.icon} label={s.label} color={s.color} soon={!s.ready}
-                    on={here?.sub.key === s.key && here.comp.key === shownComp.key} onClick={() => nav(s.path)} />
-                ))}
-              </div>
-              {shownComp?.subs.some(s => !s.ready) && <div className="v2-note">Tiles marked Soon arrive in later phases.</div>}
-            </div>
-          </div>
+          <nav className="v2-menu v2-menu-simple" aria-label="Menu">
+            <button type="button" className={`v2-menu-row${atHome ? ' on' : ''}`} onClick={() => nav('/app')}>
+              <span className="ic"><Home size={20} /></span><span className="tx"><b>Home</b><span>Your dashboard</span></span>
+            </button>
+            {comps.map(c => (
+              <button key={c.key} type="button" className={`v2-menu-row${hereComp?.key === c.key ? ' on' : ''}`} onClick={() => nav(homeOf(c))}>
+                <span className="ic" style={{ color: `var(--${c.color})` }}><c.icon size={20} /></span>
+                <span className="tx"><b>{c.label}</b><span>{c.blurb}</span></span>
+              </button>
+            ))}
+          </nav>
         </>
+      )}
+      {tabs.length > 1 && (
+        <div className="v2-subtabs">
+          <div className="v2-tabs" role="tablist">
+            {tabs.map(s => <Link key={s.key} to={s.path} className={here?.sub.key === s.key ? 'on' : ''}>{s.label}</Link>)}
+          </div>
+        </div>
       )}
       <main>{children}</main>
     </div>

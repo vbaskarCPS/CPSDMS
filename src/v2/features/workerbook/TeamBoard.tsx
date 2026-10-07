@@ -19,6 +19,8 @@ interface Props {
   onRamp: (team: string, ramp: boolean) => void;
   onManager: (team: string, managerId: string) => void;
   onRemove: (team: string) => void;
+  /** Shown in the pool when everyone is on a team. */
+  emptyPoolText?: string;
 }
 
 const teamLabel = (t: PlanTeam) => t.kind === 'ramp' ? t.name : `Cart ${t.name}`;
@@ -41,7 +43,7 @@ const Drop: React.FC<{ id: string; className?: string; children: React.ReactNode
   return <div ref={setNodeRef} className={`${className || ''}${isOver ? ' over' : ''}`} style={style}>{children}</div>;
 };
 
-export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, onAssign, onNewTeam, onRamp, onManager, onRemove }) => {
+export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, onAssign, onNewTeam, onRamp, onManager, onRemove, emptyPoolText }) => {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 160, tolerance: 6 } }),
@@ -74,7 +76,7 @@ export const TeamBoard: React.FC<Props> = ({ people, teams, members, managers, o
           </div>
           <div className="v2-people">
             {unassigned.sort(sortByName).map(r => <Person key={r.hire_id} row={r} />)}
-            {unassigned.length === 0 && <span className="v2-mut v2-small">{people.length ? 'Everyone who showed is on a team.' : 'Tick who showed in roll call first.'}</span>}
+            {unassigned.length === 0 && <span className="v2-mut v2-small">{people.length ? (emptyPoolText || 'Everyone who showed is on a team.') : 'Tick who showed in roll call first.'}</span>}
           </div>
         </Drop>
 

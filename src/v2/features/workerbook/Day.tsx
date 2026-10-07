@@ -1,20 +1,36 @@
-// src/v2/features/workerbook/Day.tsx — one day at a center: who's booked, confirmed, and who showed.
+// src/v2/features/workerbook/Day.tsx — one day at a center. What the page is depends on the day:
+//
+//   today, not started   Roll call (who's here; in-city: next day / WDR / Quit) → Start session
+//   started (live)       The session: roll call (late arrivals onto the live map) + Payouts + Close day
+//   closed               The payout copy: the day's numbers and each worker's finalized line
+//   tomorrow             Confirmations + a draft of the teams (pre-fills Start session)
+//   later                Bookings: move or remove people; confirm from two days ahead
+//   earlier, never run   The bookings as they were (read only)
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Lock, Play, UserPlus, Wallet } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ListChecks, Lock, Play, UserPlus, Wallet } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
+import { getCenterType } from '../../lib/crew';
+import { availableManagers } from '../../lib/startSession';
 import {
-  getDay, listRoster, listCenterManagers, showedCounts, updateRoster, removeFromDay, moveBooking, fullName,
-  type RosterRow,
+  getDay, listRoster, showedCounts, updateRoster, removeFromDay, moveBooking, fullName, type RosterRow,
 } from '../../lib/workerbook';
 import { Btn, ErrorBox, Loading, Tag } from '../../ui';
 import { BookContractors } from './BookContractors';
 import { CloseDay } from './CloseDay';
+import { RollCall } from './day/RollCall';
+import { PlanTomorrow } from './day/PlanTomorrow';
+import { PayoutCopy } from './day/PayoutCopy';
 
 const shift = (iso: string, n: number) => {
   const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() + n);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+type Mode = 'rollcall' | 'session' | 'copy' | 'plan' | 'future' | 'past';
+const MODE_TAG: Record<Mode, { label: string; tone: 'g' | 'a' | 'b' | 'v' | 'r' }> = {
+  rollcall: { label: 'Roll call', tone: 'a' }, session: { label: 'Live session · payouts', tone: 'b' }, copy: { label: 'Closed · payout copy', tone: 'g' },
+  plan: { label: 'Next day · confirmations & draft', tone: 'v' }, future: { label: 'Workerbook day', tone: 'v' }, past: { label: 'No session was run', tone: 'r' },
 };
 
 export const Day: React.FC = () => {
@@ -23,187 +39,138 @@ export const Day: React.FC = () => {
   const nav = useNavigate();
   const [showBook, setShowBook] = useState(false);
   const [showClose, setShowClose] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
   const valid = /^\d{4}-\d{2}-\d{2}$/.test(date);
 
   const day = useLoad(() => center && valid ? getDay(center.id, date) : Promise.resolve(null), [center?.id, date]);
   const roster = useLoad(() => day.data ? listRoster(day.data.id) : Promise.resolve([] as RosterRow[]), [day.data?.id]);
-  const managers = useLoad(() => center ? listCenterManagers(center.id) : Promise.resolve([]), [center?.id]);
-  const shown = useLoad(() => showedCounts((roster.data || []).map(r => r.hire_id)), [roster.data]);
+  const managers = useLoad(() => center ? availableManagers(center.id, date) : Promise.resolve([]), [center?.id, date]);
+  const ctype = useLoad(() => center ? getCenterType(center.id) : Promise.resolve('in_city' as const), [center?.id]);
 
   const today = todayISO();
-  // A payout day is a day with a session started; before that it's a Workerbook day (bookings).
-  const canMark = day.data?.state === 'live' || day.data?.state === 'closed';
-  const locked = day.data?.state === 'closed';
-  const canEdit = can('workerbook') && !locked;
-
-  const sorted = useMemo(() => [...(roster.data || [])].sort((a, b) =>
-    (a.shuttle || '~').localeCompare(b.shuttle || '~', undefined, { numeric: true }) || a.hire.cn.localeCompare(b.hire.cn)), [roster.data]);
-  const groups = canMark
-    ? [{ key: 'open', label: 'Not marked yet', rows: sorted.filter(r => !r.attendance) },
-       { key: 'showed', label: 'Showed', rows: sorted.filter(r => r.attendance === 'showed') },
-       { key: 'ns', label: 'No-show', rows: sorted.filter(r => r.attendance === 'no_show') }]
-    : [{ key: 'unconf', label: 'Unconfirmed', rows: sorted.filter(r => !r.confirmed_at) },
-       { key: 'conf', label: 'Confirmed', rows: sorted.filter(r => r.confirmed_at) }];
-  const n = (pred: (r: RosterRow) => boolean) => sorted.filter(pred).length;
-  const daysOf = (r: RosterRow) => r.hire.person.lifetime_days + (shown.data?.[r.hire_id] || 0);
-
-  const act = async (id: string, fn: () => Promise<void>) => {
-    setBusyId(id); setError(null);
-    try { await fn(); roster.reload(); } catch (e) { setError(e); } finally { setBusyId(null); }
-  };
+  const tomorrow = shift(today, 1);
+  const state = day.data?.state;
+  const mode: Mode = state === 'closed' ? 'copy' : state === 'live' ? 'session'
+    : date === today ? 'rollcall' : date === tomorrow ? 'plan' : date > tomorrow ? 'future' : 'past';
+  const canEdit = can('workerbook') && mode !== 'copy' && mode !== 'past';
+  const rows = roster.data || [];
+  const reload = () => { day.reload(); roster.reload(); };
+  // Only the first load (or a new date) shows the spinner; a reload after a change keeps the page
+  // mounted, so open dialogs (e.g. a late arrival) survive it.
+  const firstLoad = (day.loading && (day.data?.day ?? null) !== date) || (roster.loading && !roster.data) || (ctype.loading && !ctype.data);
 
   if (!center) return <div className="v2-main v2-narrow"><div className="v2-card">Pick a command center first.</div></div>;
   if (!valid) return <div className="v2-main v2-narrow"><div className="v2-err">That isn’t a date.</div></div>;
   const pretty = new Date(date + 'T12:00').toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const tag = MODE_TAG[mode];
 
   return (
     <div className="v2-main">
       <div className="v2-head">
-        <Link to="/app/workerbook/days" className="v2-link">‹ Days</Link>
+        <Link to="/app/workerbook/days" className="v2-link">‹ Calendar</Link>
         <span className="v2-h1">{pretty}</span>
-        {locked ? <Tag tone="g">Closed · payout day</Tag> : day.data?.state === 'live' ? <Tag tone="b">Live · payout day</Tag> : <Tag tone="v">Workerbook day</Tag>}
+        <Tag tone={tag.tone}>{tag.label}</Tag>
         <span className="v2-spacer" />
         <button className="v2-gbtn" onClick={() => nav(`/app/workerbook/days/${shift(date, -1)}`)} aria-label="Previous day"><ChevronLeft size={16} /></button>
         <button className="v2-gbtn" onClick={() => nav(`/app/workerbook/days/${shift(date, 1)}`)} aria-label="Next day"><ChevronRight size={16} /></button>
-        {canEdit && <Btn kind="o" icon={UserPlus} onClick={() => setShowBook(true)}>Book contractors</Btn>}
-        {can('workerbook') && day.data?.state === 'planned' && sorted.length > 0 && <Btn kind="g" icon={Play} onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Start session</Btn>}
-        {day.data?.state === 'live' && <Btn kind="o" onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Session details</Btn>}
-        {day.data?.state === 'live' && can('workerbook') && <Btn kind="g" icon={Wallet} onClick={() => nav(`/app/workerbook/days/${date}/payouts`)}>Payouts</Btn>}
-        {can('workerbook') && day.data && !locked && canMark && (day.data.state === 'live' || sorted.length > 0) &&
-          <Btn kind="o" icon={Lock} onClick={() => setShowClose(true)}>Close day</Btn>}
-      </div>
-
-      <div className="v2-grid4" style={{ marginBottom: 14 }}>
-        <div className="v2-card"><div className="v2-card-h">Booked</div><div className="v2-kpi">{sorted.length}</div></div>
-        <div className="v2-card"><div className="v2-card-h">Confirmed</div><div className="v2-kpi" style={{ color: '#059669' }}>{n(r => !!r.confirmed_at)}</div></div>
-        {canMark ? <>
-          <div className="v2-card"><div className="v2-card-h">Showed</div><div className="v2-kpi">{n(r => r.attendance === 'showed')}</div></div>
-          <div className="v2-card"><div className="v2-card-h">No-show</div><div className="v2-kpi" style={{ color: '#b91c1c' }}>{n(r => r.attendance === 'no_show')}</div></div>
-        </> : <>
-          <div className="v2-card"><div className="v2-card-h">Unconfirmed</div><div className="v2-kpi" style={{ color: '#b45309' }}>{n(r => !r.confirmed_at)}</div></div>
-          <div className="v2-card"><div className="v2-card-h">First day</div><div className="v2-kpi">{n(r => daysOf(r) === 0)}</div></div>
+        {(mode === 'plan' || mode === 'future') && can('workerbook') && <Btn kind="o" icon={UserPlus} onClick={() => setShowBook(true)}>Book contractors</Btn>}
+        {mode === 'rollcall' && can('workerbook') && rows.length > 0 &&
+          <Btn kind="g" icon={Play} onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Start session</Btn>}
+        {mode === 'session' && <>
+          <Btn kind="o" icon={ListChecks} onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Session details</Btn>
+          {can('workerbook') && <Btn kind="g" icon={Wallet} onClick={() => nav(`/app/workerbook/days/${date}/payouts`)}>Payouts</Btn>}
+          {can('workerbook') && <Btn kind="o" icon={Lock} onClick={() => setShowClose(true)}>Close day</Btn>}
         </>}
       </div>
 
-      <ErrorBox error={day.error || roster.error || error} />
-      {locked && <div className="v2-note" style={{ marginBottom: 10 }}>
-        This day is closed{day.data?.closed_at ? ` (${new Date(day.data.closed_at).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })})` : ''}.
-        {day.data?.summary && <> {day.data.summary.carts} carts · {day.data.summary.steps} steps · ${Math.round(Number(day.data.summary.gross)).toLocaleString('en-CA')} gross · {day.data.summary.upsells} upsells · {day.data.summary.no_shows} moved to NS.</>}
-        {' '}Only the Super Admin can change it.
-      </div>}
-      {day.loading || roster.loading ? <Loading /> : sorted.length === 0 ? (
-        <div className="v2-card" style={{ textAlign: 'center', padding: 30 }}>
-          Nobody is booked on this day yet.{canEdit && <div style={{ marginTop: 12 }}><Btn icon={UserPlus} onClick={() => setShowBook(true)}>Book contractors</Btn></div>}
-        </div>
-      ) : (
+      <ErrorBox error={day.error || roster.error} />
+      {firstLoad ? <Loading /> : (
         <>
-        <div className="v2-stack v2-only-narrow" style={{ gap: 10 }}>
-          {groups.map(g => g.rows.length === 0 ? null : (
-            <React.Fragment key={g.key}>
-              <div className="v2-card-h" style={{ margin: '4px 0 0' }}>{g.label} · {g.rows.length}</div>
-              {g.rows.map(r => {
-                const busy = busyId === r.id;
-                const cell = r.hire.person.cell_phone;
-                return (
-                  <div key={r.id} className="v2-card" style={{ opacity: busy ? 0.5 : 1 }}>
-                    <div className="v2-row" style={{ justifyContent: 'space-between', flexWrap: 'nowrap' }}>
-                      <div><b>{fullName(r.hire.person)}</b>{daysOf(r) === 0 && <> <Tag tone="v">FIRST DAY</Tag></>}
-                        <div className="v2-small v2-mut">{r.hire.cn} · shuttle {r.shuttle || '—'} · {daysOf(r)} days{r.hire.ns_count ? ` · ${r.hire.ns_count} NS` : ''}</div></div>
-                      {cell && <a className="v2-btn o sm" href={`tel:${cell.replace(/[^\d+]/g, '')}`}>Call</a>}
-                    </div>
-                    <div className="v2-row" style={{ marginTop: 10, gap: 8 }}>
-                      <label className="v2-chip" style={{ gap: 8 }}>
-                        <input type="checkbox" checked={!!r.confirmed_at} disabled={!canEdit || busy}
-                          onChange={e => act(r.id, () => updateRoster(r.id, { confirmed: e.target.checked }))} />Confirmed
-                      </label>
-                      {canMark && <>
-                        <button className={`v2-chip${r.attendance === 'showed' ? ' on' : ''}`} disabled={!canEdit || busy}
-                          onClick={() => act(r.id, () => updateRoster(r.id, { attendance: r.attendance === 'showed' ? null : 'showed' }))}>Showed</button>
-                        <button className={`v2-chip${r.attendance === 'no_show' ? ' on' : ''}`} disabled={!canEdit || busy}
-                          onClick={() => act(r.id, () => updateRoster(r.id, { attendance: r.attendance === 'no_show' ? null : 'no_show' }))}>No-show</button>
-                      </>}
-                    </div>
-                  </div>
-                );
-              })}
-            </React.Fragment>
-          ))}
-        </div>
-        <div className="v2-card v2-only-wide" style={{ padding: 0 }}>
-          <div className="v2-table-wrap">
-            <table className="v2-table" style={{ minWidth: 1020 }}>
-              <thead><tr>
-                <th>Shuttle</th><th>CN #</th><th>Name</th><th>Cell</th><th>Manager</th><th>Team</th>
-                <th style={{ textAlign: 'center' }}>Conf</th>{canMark && <th>Attendance</th>}
-                <th style={{ textAlign: 'right' }}>Days</th><th style={{ textAlign: 'right' }}>NS</th><th>Move / remove</th>
-              </tr></thead>
-              <tbody>
-                {groups.map(g => g.rows.length === 0 ? null : (
-                  <React.Fragment key={g.key}>
-                    <tr><td colSpan={canMark ? 11 : 10} className="v2-group">{g.label} · {g.rows.length}</td></tr>
-                    {g.rows.map(r => {
-                      const busy = busyId === r.id;
-                      const d = daysOf(r);
-                      return (
-                        <tr key={r.id} style={{ opacity: busy ? 0.5 : 1 }}>
-                          <td>{r.shuttle || '—'}</td>
-                          <td><b>{r.hire.cn}</b></td>
-                          <td><b>{fullName(r.hire.person)}</b>{d === 0 && <> <Tag tone="v">FIRST DAY</Tag></>}</td>
-                          <td>{r.hire.person.cell_phone ? <a className="v2-link" href={`tel:${r.hire.person.cell_phone.replace(/[^\d+]/g, '')}`}>{r.hire.person.cell_phone}</a> : '—'}</td>
-                          <td>
-                            <select className="v2-sel" style={{ padding: '5px 8px', minWidth: 130 }} disabled={!canEdit || busy} value={r.manager_id || ''}
-                              aria-label="Manager" onChange={e => act(r.id, () => updateRoster(r.id, { manager_id: e.target.value || null }))}>
-                              <option value="">—</option>
-                              {(managers.data || []).map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}
-                            </select>
-                          </td>
-                          <td><input className="v2-input" style={{ padding: '5px 8px', width: 74 }} disabled={!canEdit || busy} defaultValue={r.team || ''} aria-label="Team"
-                            onBlur={e => { const v = e.target.value.trim(); if (v !== (r.team || '')) act(r.id, () => updateRoster(r.id, { team: v || null })); }} /></td>
-                          <td style={{ textAlign: 'center' }}>
-                            <input type="checkbox" checked={!!r.confirmed_at} disabled={!canEdit || busy} aria-label="Confirmed"
-                              onChange={e => act(r.id, () => updateRoster(r.id, { confirmed: e.target.checked }))} />
-                            {r.confirmed_via && r.confirmed_via !== 'staff' && <div className="v2-small v2-mut">{r.confirmed_via}</div>}
-                          </td>
-                          {canMark && (
-                            <td>
-                              <div className="v2-row" style={{ gap: 4, flexWrap: 'nowrap' }}>
-                                <button className={`v2-chip${r.attendance === 'showed' ? ' on' : ''}`} disabled={!canEdit || busy}
-                                  onClick={() => act(r.id, () => updateRoster(r.id, { attendance: r.attendance === 'showed' ? null : 'showed' }))}>Showed</button>
-                                <button className={`v2-chip${r.attendance === 'no_show' ? ' on' : ''}`} disabled={!canEdit || busy}
-                                  onClick={() => act(r.id, () => updateRoster(r.id, { attendance: r.attendance === 'no_show' ? null : 'no_show' }))}>No-show</button>
-                              </div>
-                            </td>
-                          )}
-                          <td style={{ textAlign: 'right' }}>{d}</td>
-                          <td style={{ textAlign: 'right', color: r.hire.ns_count ? '#b91c1c' : undefined }}>{r.hire.ns_count}</td>
-                          <td>
-                            <div className="v2-row" style={{ gap: 4, flexWrap: 'nowrap' }}>
-                              <input type="date" className="v2-input" style={{ padding: '4px 6px', width: 140 }} disabled={!canEdit || busy || !!r.attendance}
-                                aria-label="Move to date" min={today}
-                                onChange={e => { const to = e.target.value; if (to && to !== date) act(r.id, () => moveBooking(r, center.id, to)); }} />
-                              <button className="v2-btn r sm" disabled={!canEdit || busy || !!r.attendance} aria-label={`Remove ${fullName(r.hire.person)} from this day`}
-                                onClick={() => act(r.id, () => removeFromDay(r.id))}>Remove</button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+          {(mode === 'rollcall' || mode === 'session') && (
+            <RollCall centerId={center.id} region={center.region} date={date} day={day.data} rows={rows} type={ctype.data || 'in_city'}
+              live={mode === 'session'} managers={managers.data || []} canEdit={canEdit} onChanged={roster.reload} onWalkIn={() => setShowBook(true)} />
+          )}
+          {mode === 'plan' && <PlanTomorrow rows={rows} managers={managers.data || []} canEdit={canEdit} onChanged={roster.reload} />}
+          {mode === 'copy' && day.data && <PayoutCopy centerId={center.id} date={date} day={day.data} rows={rows} />}
+          {(mode === 'future' || mode === 'past') && (
+            <BookingList centerId={center.id} date={date} today={today} rows={rows} canEdit={canEdit} onChanged={roster.reload} onBook={() => setShowBook(true)} />
+          )}
         </>
       )}
-      <div className="v2-note">Ticking Conf records a staff confirmation. Email and text confirmations and the shuttle push come in a later step.</div>
 
       {showClose && day.data && <CloseDay centerId={center.id} date={date} pretty={pretty} onClose={() => setShowClose(false)}
-        onClosed={() => { setShowClose(false); day.reload(); roster.reload(); }} />}
-      {showBook && <BookContractors centerId={center.id} date={date} bookedHireIds={new Set(sorted.map(r => r.hire_id))}
-        onClose={() => setShowBook(false)} onBooked={() => { setShowBook(false); day.reload(); roster.reload(); }} />}
+        onClosed={() => { setShowClose(false); reload(); }} />}
+      {showBook && <BookContractors centerId={center.id} date={date} bookedHireIds={new Set(rows.map(r => r.hire_id))}
+        onClose={() => setShowBook(false)} onBooked={() => { setShowBook(false); reload(); }} />}
     </div>
   );
 };
+
+/** Later days: who's booked; move them to another day or remove them. Confirming opens two days ahead. */
+const BookingList: React.FC<{ centerId: string; date: string; today: string; rows: RosterRow[]; canEdit: boolean; onChanged: () => void; onBook: () => void }> =
+  ({ centerId, date, today, rows, canEdit, onChanged, onBook }) => {
+    const [busyId, setBusyId] = useState<string | null>(null);
+    const [error, setError] = useState<unknown>(null);
+    const shown = useLoad(() => showedCounts(rows.map(r => r.hire_id)), [rows]);
+    const canConfirm = canEdit && date <= shift(today, 2);
+    const sorted = useMemo(() => [...rows].sort((a, b) =>
+      (a.shuttle || '~').localeCompare(b.shuttle || '~', undefined, { numeric: true }) || a.hire.cn.localeCompare(b.hire.cn)), [rows]);
+    const daysOf = (r: RosterRow) => r.hire.person.lifetime_days + (shown.data?.[r.hire_id] || 0);
+    const act = async (id: string, fn: () => Promise<void>) => {
+      setBusyId(id); setError(null);
+      try { await fn(); onChanged(); } catch (e) { setError(e); } finally { setBusyId(null); }
+    };
+    const confirmed = rows.filter(r => r.confirmed_at).length;
+
+    return (
+      <>
+        <div className="v2-row" style={{ gap: 8, marginBottom: 12 }}>
+          <span className="v2-pill" style={{ color: 'var(--ink)' }}><b>{rows.length}</b>&nbsp;booked</span>
+          <span className="v2-pill" style={{ color: 'var(--ink)' }}><b>{confirmed}</b>&nbsp;confirmed</span>
+          <span className="v2-pill" style={{ color: 'var(--ink)' }}><b>{rows.filter(r => daysOf(r) === 0).length}</b>&nbsp;first-day</span>
+        </div>
+        <ErrorBox error={error} />
+        {rows.length === 0 ? (
+          <div className="v2-card" style={{ textAlign: 'center', padding: 30 }}>
+            Nobody is booked on this day.{canEdit && <div style={{ marginTop: 12 }}><Btn icon={UserPlus} onClick={onBook}>Book contractors</Btn></div>}
+          </div>
+        ) : (
+          <div className="v2-card" style={{ padding: 0 }}>
+            <div className="v2-table-wrap">
+              <table className="v2-table">
+                <thead><tr><th>Shuttle</th><th>CN #</th><th>Name</th><th>Cell</th>
+                  <th style={{ textAlign: 'center' }} title={canConfirm ? '' : 'Confirming opens two days ahead'}>Conf</th>
+                  <th style={{ textAlign: 'right' }}>Days</th><th style={{ textAlign: 'right' }}>NS</th>{canEdit && <th>Move / remove</th>}</tr></thead>
+                <tbody>
+                  {sorted.map(r => {
+                    const busy = busyId === r.id; const d = daysOf(r);
+                    return (
+                      <tr key={r.id} style={{ opacity: busy ? 0.5 : 1 }}>
+                        <td>{r.shuttle || '—'}</td><td><b>{r.hire.cn}</b></td>
+                        <td><b>{fullName(r.hire.person)}</b>{d === 0 && <> <Tag tone="v">FIRST DAY</Tag></>}</td>
+                        <td>{r.hire.person.cell_phone ? <a className="v2-link" href={`tel:${r.hire.person.cell_phone.replace(/[^\d+]/g, '')}`}>{r.hire.person.cell_phone}</a> : '—'}</td>
+                        <td style={{ textAlign: 'center' }}>
+                          <input type="checkbox" checked={!!r.confirmed_at} disabled={!canConfirm || busy} aria-label="Confirmed"
+                            onChange={e => act(r.id, () => updateRoster(r.id, { confirmed: e.target.checked }))} />
+                        </td>
+                        <td style={{ textAlign: 'right' }}>{d}</td>
+                        <td style={{ textAlign: 'right', color: r.hire.ns_count ? '#b91c1c' : undefined }}>{r.hire.ns_count}</td>
+                        {canEdit && <td>
+                          <div className="v2-row" style={{ gap: 4, flexWrap: 'nowrap' }}>
+                            <input type="date" className="v2-input" style={{ padding: '4px 6px', width: 140 }} disabled={busy} aria-label="Move to date" min={today}
+                              onChange={e => { const to = e.target.value; if (to && to !== date) act(r.id, () => moveBooking(r, centerId, to)); }} />
+                            <button className="v2-btn r sm" disabled={busy} aria-label={`Remove ${fullName(r.hire.person)} from this day`}
+                              onClick={() => act(r.id, () => removeFromDay(r.id))}>Remove</button>
+                          </div>
+                        </td>}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        {canEdit && !canConfirm && <div className="v2-note" style={{ marginTop: 10 }}>Confirming opens two days ahead. Tomorrow’s page has confirmations and the draft teams.</div>}
+      </>
+    );
+  };

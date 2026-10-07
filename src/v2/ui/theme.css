@@ -265,3 +265,44 @@
   .v2-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .v2-kpi-box .n { font-size: 24px; }
 }
+
+/* Workerbook day: roll call cards */
+.v2-rollcall { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; align-items: start; }
+.v2-rc { padding: 11px 12px; border-left: 4px solid var(--line); transition: border-color .15s, background .15s; }
+.v2-rc.here { border-left-color: var(--green); background: #f0fdf4; }
+.v2-rc.ns { border-left-color: var(--rose); background: #fff1f2; }
+.v2-rc .nm { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2 .v2-rc-btn { min-width: 64px; height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card);
+  color: var(--ink); font-weight: 700; font-size: 13px; flex-shrink: 0; }
+.v2 .v2-rc-btn:disabled { cursor: default; opacity: .6; }
+.v2 .v2-rc-btn.here.on { background: var(--green); border-color: var(--green); color: #fff; opacity: 1; }
+.v2 .v2-rc-btn.ns.on { background: var(--rose); border-color: var(--rose); color: #fff; opacity: 1; }
+.v2-rc-next { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--line); }
+.v2 .v2-chip.sm { padding: 4px 9px; font-size: 11.5px; height: 30px; color: var(--ink); }
+.v2 .v2-chip.sm.on { color: var(--bg); }
+.v2 .v2-chip.sm:disabled { cursor: default; }
+
+/* Workerbook day: tomorrow's confirmations + draft teams */
+.v2-plan { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.v2-confirm-list { max-height: calc(100vh - 220px); overflow: auto; padding: 4px 8px 8px; }
+.v2-confirm { display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-bottom: 1px solid var(--line-soft); border-radius: 8px; }
+.v2-confirm:last-child { border-bottom: 0; }
+.v2-confirm.on { background: #f0fdf4; }
+@media (max-width: 860px) {
+  .v2-plan { grid-template-columns: minmax(0, 1fr); }
+  .v2-confirm-list { max-height: none; }
+  .v2-rollcall { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* the menu: one row per component */
+.v2 .v2-menu-simple { flex-direction: column; max-width: 380px; right: auto; width: calc(100vw - 24px); padding: 8px; gap: 2px; background: var(--card); overflow: auto; }
+.v2 .v2-menu-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border-radius: 12px; border: 0; background: none; text-align: left; color: var(--ink); }
+.v2 .v2-menu-row:hover { background: var(--hover); }
+.v2 .v2-menu-row.on { background: var(--sel); }
+.v2-menu-row .ic { width: 38px; height: 38px; border-radius: 10px; background: var(--soft); display: grid; place-items: center; flex-shrink: 0; }
+.v2-menu-row .tx { display: flex; flex-direction: column; min-width: 0; }
+.v2-menu-row .tx span { font-size: 12px; color: var(--mut); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-crumb a:hover b { text-decoration: underline; }
+/* a component's screens as tabs under the bar (Super Admin) */
+.v2-subtabs { padding: 0 22px; border-bottom: 1px solid var(--line); background: var(--card); }
+.v2-subtabs .v2-tabs { margin: 0 auto; border-bottom: 0; max-width: 1356px; }
