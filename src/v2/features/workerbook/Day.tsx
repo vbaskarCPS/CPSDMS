@@ -6,12 +6,12 @@
 //   tomorrow             Confirmations + a draft of the teams (pre-fills Start session)
 //   later                Bookings: move or remove people; confirm from two days ahead
 //   earlier, never run   The bookings as they were (read only)
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, ListChecks, Lock, Play, UserPlus, UserRoundPlus } from 'lucide-react';
+import { BedDouble, ChevronLeft, ChevronRight, ListChecks, Lock, Play, UserPlus, UserRoundPlus } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
-import { getCenterType } from '../../lib/crew';
+import { crewList, getCenterType, syncCrewDay, type CrewRow } from '../../lib/crew';
 import { availableManagers } from '../../lib/startSession';
 import {
   getDay, listRoster, showedCounts, updateRoster, removeFromDay, moveBooking, fullName, type RosterRow,
@@ -50,6 +50,8 @@ export const Day: React.FC = () => {
   const roster = useLoad(() => day.data ? listRoster(day.data.id) : Promise.resolve([] as RosterRow[]), [day.data?.id]);
   const managers = useLoad(() => center ? availableManagers(center.id, date) : Promise.resolve([]), [center?.id, date]);
   const ctype = useLoad(() => center ? getCenterType(center.id) : Promise.resolve('in_city' as const), [center?.id]);
+  const rt = ctype.data === 'road_trip';
+  const crew = useLoad(() => center && rt ? crewList(center.id) : Promise.resolve(null), [center?.id, rt]);
 
   const today = todayISO();
   const tomorrow = shift(today, 1);
@@ -59,6 +61,18 @@ export const Day: React.FC = () => {
   const canEdit = can('workerbook') && mode !== 'copy' && mode !== 'past';
   const rows = roster.data || [];
   const reload = () => { day.reload(); roster.reload(); };
+  // A road trip's day runs off the crew: a day that hasn't started takes the active crew as its roster.
+  const synced = useRef(new Set<string>());
+  useEffect(() => {
+    if (!center || !rt || !can('workerbook') || date < today || day.loading || (state && state !== 'planned')) return;
+    const key = `${center.id}|${date}`;
+    if (synced.current.has(key)) return;
+    synced.current.add(key);
+    syncCrewDay(center.id, date).then(r => { if (r.added || r.removed) reload(); }).catch(() => synced.current.delete(key));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [center?.id, rt, date, day.loading, state]);
+  const crewById = useMemo(() => new Map((crew.data?.here || []).map(r => [r.hire_id, r])), [crew.data]);
+  const tag = rt && mode === 'plan' ? { label: 'Next day · crew & draft teams', tone: 'v' as const } : rt && mode === 'future' ? { label: 'Crew day', tone: 'v' as const } : MODE_TAG[mode];
   // Only the first load (or a new date) shows the spinner; a reload after a change keeps the page
   // mounted, so open dialogs (e.g. a late arrival) survive it.
   const firstLoad = (day.loading && (day.data?.day ?? null) !== date) || (roster.loading && !roster.data) || (ctype.loading && !ctype.data);
@@ -66,7 +80,6 @@ export const Day: React.FC = () => {
   if (!center) return <div className="v2-main v2-narrow"><div className="v2-card">Pick a command center first.</div></div>;
   if (!valid) return <div className="v2-main v2-narrow"><div className="v2-err">That isn’t a date.</div></div>;
   const pretty = new Date(date + 'T12:00').toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  const tag = MODE_TAG[mode];
 
   return (
     <div className="v2-main">
@@ -77,7 +90,9 @@ export const Day: React.FC = () => {
         <span className="v2-spacer" />
         <button className="v2-gbtn" onClick={() => nav(`/app/workerbook/days/${shift(date, -1)}`)} aria-label="Previous day"><ChevronLeft size={16} /></button>
         <button className="v2-gbtn" onClick={() => nav(`/app/workerbook/days/${shift(date, 1)}`)} aria-label="Next day"><ChevronRight size={16} /></button>
-        {(mode === 'plan' || mode === 'future') && can('workerbook') && <Btn kind="o" icon={UserPlus} onClick={() => setShowBook(true)}>Book contractors</Btn>}
+        {(mode === 'plan' || mode === 'future') && can('workerbook') && (rt
+          ? <Btn kind="o" icon={BedDouble} onClick={() => nav('/app/workerbook/crew')}>Crew list</Btn>
+          : <Btn kind="o" icon={UserPlus} onClick={() => setShowBook(true)}>Book contractors</Btn>)}
         {mode === 'rollcall' && can('workerbook') && rows.length > 0 &&
           <Btn kind="g" icon={Play} onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Start session</Btn>}
         {mode === 'session' && <>
@@ -91,12 +106,13 @@ export const Day: React.FC = () => {
       {firstLoad ? <Loading /> : (
         <>
           {mode === 'rollcall' && (
-            <RollCall rows={rows} date={date} type={ctype.data || 'in_city'} canEdit={canEdit} onChanged={roster.reload} onWalkIn={() => setShowBook(true)} />
+            <RollCall rows={rows} date={date} type={ctype.data || 'in_city'} canEdit={canEdit} onChanged={roster.reload} onWalkIn={() => (rt ? nav('/app/workerbook/crew') : setShowBook(true))} />
           )}
           {mode === 'session' && <SessionPayouts key={lateTick} centerId={center.id} centerName={center.display_name} date={date} />}
-          {mode === 'plan' && <PlanTomorrow rows={rows} managers={managers.data || []} canEdit={canEdit} onChanged={roster.reload} />}
+          {mode === 'plan' && <PlanTomorrow rows={rows} managers={managers.data || []} canEdit={canEdit} onChanged={roster.reload} crew={rt ? crewById : undefined} />}
           {mode === 'copy' && day.data && <PayoutCopy centerId={center.id} region={center.region} date={date} day={day.data} rows={rows} canEdit={can('workerbook')} />}
-          {(mode === 'future' || mode === 'past') && (
+          {rt && (mode === 'future' || mode === 'past') && <CrewDay rows={rows} crew={crewById} past={mode === 'past'} />}
+          {!rt && (mode === 'future' || mode === 'past') && (
             <BookingList centerId={center.id} date={date} today={today} rows={rows} canEdit={canEdit} onChanged={roster.reload} onBook={() => setShowBook(true)} />
           )}
         </>
@@ -181,3 +197,25 @@ const BookingList: React.FC<{ centerId: string; date: string; today: string; row
       </>
     );
   };
+
+/** A road-trip day that isn't today or tomorrow: who's in the crew for it, by room. */
+const CrewDay: React.FC<{ rows: RosterRow[]; crew: Map<string, CrewRow>; past: boolean }> = ({ rows, crew, past }) => {
+  const sorted = [...rows].sort((a, b) => (crew.get(a.hire_id)?.room || '~').localeCompare(crew.get(b.hire_id)?.room || '~', undefined, { numeric: true }) || fullName(a.hire.person).localeCompare(fullName(b.hire.person)));
+  if (!rows.length) return <div className="v2-card" style={{ textAlign: 'center', padding: 30 }}>{past ? 'Nobody was on the crew for this day.' : 'The crew fills in from the crew list.'}</div>;
+  return (
+    <div className="v2-card" style={{ padding: 0 }}>
+      <div className="v2-row" style={{ padding: '12px 14px 6px' }}><b>Crew</b><span className="v2-mut v2-small">{rows.length} people</span>
+        <span className="v2-spacer" /><Link className="v2-link v2-small" to="/app/workerbook/crew">Crew list ›</Link></div>
+      <div className="v2-table-wrap">
+        <table className="v2-table">
+          <thead><tr><th>Room</th><th>CN #</th><th>Name</th><th>Home</th><th>Cell</th></tr></thead>
+          <tbody>{sorted.map(r => { const c = crew.get(r.hire_id); return (
+            <tr key={r.id}><td>{c?.room || '—'}</td><td><b>{r.hire.cn}</b></td>
+              <td><b><ContractorLink hireId={r.hire_id}>{fullName(r.hire.person)}</ContractorLink></b></td>
+              <td>{r.hire.shuttle || c?.home || '—'}</td><td>{r.hire.person.cell_phone || '—'}</td></tr>); })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};

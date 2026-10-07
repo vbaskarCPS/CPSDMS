@@ -13,6 +13,8 @@ const count = (r: { count: number | null; error: { message: string } | null }) =
 export interface LiveStats {
   date: string;
   workers: number; carts: number; managers: number;
+  /** people on carts already paid out (finalized) */
+  paidWorkers: number;
   steps: number; gross: number; upsells: number; upsellGross: number;
   routes: number; openRoutes: number;
   prebooks: number; prebookRoutes: number; prebookValue: number;
@@ -32,6 +34,7 @@ export async function liveStats(centerId: string): Promise<LiveStats | null> {
     date: live.date,
     workers: d.workers.length,
     carts: sheets.length,
+    paidWorkers: sheets.filter(s => s.status === 'PAID').reduce((a, s) => a + Math.max(1, s.teamWorkerIds?.length || 0), 0),
     managers: d.managers.length,
     steps: sum(s => s.stats?.stepCount),
     gross: sum(s => (s.stats?.prodGross || 0) + (s.stats?.upsellGross || 0)),

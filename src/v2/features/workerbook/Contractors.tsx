@@ -10,10 +10,11 @@ import {
 } from '../../lib/workerbook';
 import { Btn, ErrorBox, Loading, Tag } from '../../ui';
 import { useContractorCard } from './ContractorCard';
+import { getCenterType } from '../../lib/crew';
 import { ImportContractors } from './ImportContractors';
 import { AddContractor } from './AddContractor';
 
-type Filter = 'active' | StatusCode | 'all';
+type Filter = 'active' | StatusCode | 'all' | 'inactive';
 const tone = (s: StatusCode) => s === 'active' ? 'g' : s === 'WL' || s === 'F' ? 'r' : 'a';
 
 export const Contractors: React.FC = () => {
@@ -26,12 +27,14 @@ export const Contractors: React.FC = () => {
   // ?status=WDR opens a bucket straight from the Workerbook calendar
   const [filter, setFilter] = useState<Filter>(() => {
     const want = new URLSearchParams(loc.search).get('status');
-    if (want && (want === 'active' || want === 'all' || STATUS_LISTS.some(s => s.code === want))) return want as Filter;
+    if (want && (want === 'active' || want === 'all' || want === 'inactive' || STATUS_LISTS.some(s => s.code === want))) return want as Filter;
     return loc.pathname.endsWith('/status') ? 'NS' : 'active';
   });
   const [allCenters, setAllCenters] = useState(false);
   const [q, setQ] = useState('');
   const openCard = useContractorCard();
+  const ctype = useLoad(() => center ? getCenterType(center.id) : Promise.resolve('in_city' as const), [center?.id]);
+  const rt = ctype.data === 'road_trip' && !allCenters;
   const [showImport, setShowImport] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
 
@@ -46,7 +49,7 @@ export const Contractors: React.FC = () => {
   }, [scoped]);
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return scoped.filter(h => (filter === 'all' || h.status === filter)
+    return scoped.filter(h => (filter === 'all' || h.status === filter || (filter === 'inactive' && h.status !== 'active'))
       && (!needle || h.cn.toLowerCase().includes(needle) || fullName(h.person).toLowerCase().includes(needle)
         || (h.person.cell_phone || '').replace(/\D/g, '').includes(needle.replace(/\D/g, '') || '~')));
   }, [scoped, filter, q]);
@@ -67,7 +70,8 @@ export const Contractors: React.FC = () => {
 
       <div className="v2-row" style={{ marginBottom: 12 }}>
         <button className={`v2-chip${filter === 'active' ? ' on' : ''}`} onClick={() => setFilter('active')}>Active · {byStatus.active || 0}</button>
-        {STATUS_LISTS.map(s => (
+        {rt && <button className={`v2-chip${filter === 'inactive' ? ' on' : ''}`} onClick={() => setFilter('inactive')}>Inactive · {(byStatus.all || 0) - (byStatus.active || 0)}</button>}
+        {!rt && STATUS_LISTS.map(s => (
           <button key={s.code} className={`v2-chip${filter === s.code ? ' on' : ''}`} onClick={() => setFilter(s.code)} title={s.label}>
             {s.code} · {byStatus[s.code] || 0}
           </button>
