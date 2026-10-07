@@ -6,7 +6,7 @@ import { AuthProvider, useAuth } from './lib/auth';
 import type { Permission } from './lib/permissions';
 import { AppShell, Soon } from './app/AppShell';
 import { Home } from './app/Home';
-import { Login, ChangePassword } from './features/auth/Login';
+import { Login, ChangePassword, AccountSetup } from './features/auth/Login';
 import { Users } from './features/admin/Users';
 import { Centers } from './features/admin/Centers';
 import { Availability } from './features/admin/Availability';
@@ -50,6 +50,7 @@ const V2Routes: React.FC = () => (
   <Routes>
     <Route path="login" element={<Login />} />
     <Route path="password" element={<ChangePassword />} />
+    <Route path="setup" element={<AccountSetup />} />
     <Route index element={<Guard><Home /></Guard>} />
     <Route path="admin/users" element={<Guard perm="sa_users"><Users /></Guard>} />
     <Route path="admin/centers" element={<Guard perm="sa_users"><Centers /></Guard>} />
