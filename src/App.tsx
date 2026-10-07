@@ -39,7 +39,6 @@ const TrainingPortal = React.lazy(() => import('./pages/Training/TrainingPortal'
 const TrainingModulePage = React.lazy(() => import('./pages/Training/TrainingModulePage'));
 
 // Map pages
-const MapBuilder = React.lazy(() => import('./pages/SuperAdmin/MapBuilder'));
 const MapViewer = React.lazy(() => import('./pages/SuperAdmin/MapViewer'));
 // Read-only planning view of every built map + its callbook PCLs (digimaps login).
 const DigiMaps = React.lazy(() => import('./pages/DigiMaps'));
@@ -84,7 +83,8 @@ function App() {
         {/* Super Admin Routes */}
         <Route path="/super-admin" element={<CommandCenterCreator />} />
         <Route path="/super-admin/campaigns" element={<CampaignCreator />} />
-        <Route path="/super-admin/maps" element={<MapBuilder />} />
+        {/* the area cards and PCL loading are retired: areas are listed (and open in the builder) under Territory */}
+        <Route path="/super-admin/maps" element={<Navigate to="/app/admin/territory" replace />} />
         <Route path="/super-admin/map-viewer" element={<MapViewer />} />
 
         {/* Command Center Admin Routes */}
