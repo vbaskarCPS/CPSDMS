@@ -2,6 +2,7 @@
 import { supabase } from './supabase';
 import { cardColumnsForSave } from './cardSafety';
 import { USER_COLS } from './legacyColumns';
+import { upsertUsers } from './userWrites';
 import { 
   commandCenterService, 
   getSeasonConfig, 
@@ -1683,10 +1684,7 @@ class SessionService {
         })),
       ];
   
-      const { error: userError } = await supabase
-        .from('users')
-        .upsert(allUsers, { onConflict: 'user_id' });
-      if (userError) throw userError;
+      await upsertUsers(supabase, allUsers);
   
       const routeRows = data.routes.map((r) => ({
         route_code: r.routeCode,
@@ -2844,8 +2842,7 @@ class SessionService {
           metadata: { phone: m.phone },
           command_center_id: ccId,
         }));
-        const { error } = await supabase.from('users').upsert(managerRows, { onConflict: 'user_id' });
-        if (error) throw error;
+        await upsertUsers(supabase, managerRows);
       }
   
       if (newWorkers.length > 0) {
@@ -2864,8 +2861,7 @@ class SessionService {
           },
           command_center_id: ccId,
         }));
-        const { error } = await supabase.from('users').upsert(workerRows, { onConflict: 'user_id' });
-        if (error) throw error;
+        await upsertUsers(supabase, workerRows);
   
         if (isTeamSeason && newData.teamCarts) {
           const newWorkerIdSet = new Set(newWorkers.map(w => w.contractorId));
