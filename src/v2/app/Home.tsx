@@ -1,6 +1,6 @@
 // src/v2/app/Home.tsx — one tile per component the user may open.
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { Tile, Card } from '../ui';
 import { visibleComponents, type Component } from './nav';
@@ -14,6 +14,8 @@ export const Home: React.FC = () => {
   const hour = d.getHours();
   const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   const first = profile?.full_name.split(' ')[0] || '';
+  // Route managers who only have the map go straight to it, as the old login did.
+  if (profile && !profile.is_super_admin && comps.length === 1 && comps[0].key === 'rm') return <Navigate to="/app/rm" replace />;
 
   return (
     <div className="v2-main v2-narrow">

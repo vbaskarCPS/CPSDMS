@@ -17,6 +17,7 @@ import { Day } from './features/workerbook/Day';
 import { StartSession } from './features/workerbook/StartSession';
 import { Payouts, PayoutsLive, PayoutWorker } from './features/workerbook/Payouts';
 import { Territory } from './features/admin/Territory';
+import { RMMap } from './features/rm/RMMap';
 import { ClientLists } from './features/admin/ClientLists';
 import { Clients } from './features/clients/Clients';
 import { Loading } from './ui';
@@ -29,6 +30,17 @@ const Guard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({ per
   if (profile.must_change_password) return <Navigate to="/app/password" replace />;
   if (perm && !can(perm)) return <AppShell><div className="v2-main v2-narrow"><div className="v2-err">You don’t have access to this screen.</div></div></AppShell>;
   return <AppShell>{children}</AppShell>;
+};
+
+/** Like Guard, but full screen (no top bar): for the RM map, which has its own header on phone and desktop. */
+const BareGuard: React.FC<{ perm?: Permission; children: React.ReactNode }> = ({ perm, children }) => {
+  const { loading, session, profile, can } = useAuth();
+  const loc = useLocation();
+  if (loading) return <div className="v2"><Loading /></div>;
+  if (!session || !profile) return <Navigate to="/app/login" replace state={{ from: loc.pathname }} />;
+  if (profile.must_change_password) return <Navigate to="/app/password" replace />;
+  if (perm && !can(perm)) return <AppShell><div className="v2-main v2-narrow"><div className="v2-err">You don’t have access to this screen.</div></div></AppShell>;
+  return <>{children}</>;
 };
 
 const V2Routes: React.FC = () => (
@@ -49,6 +61,7 @@ const V2Routes: React.FC = () => (
     <Route path="workerbook/days/:date/payouts" element={<Guard perm="workerbook"><Payouts /></Guard>} />
     <Route path="workerbook/days/:date/payouts/:contractorId" element={<Guard perm="workerbook"><PayoutWorker /></Guard>} />
     <Route path="admin/territory" element={<Guard perm="sa_territory"><Territory /></Guard>} />
+    <Route path="rm" element={<BareGuard perm="route_manager"><RMMap /></BareGuard>} />
     <Route path="admin/territory/clients" element={<Guard perm="sa_territory"><ClientLists /></Guard>} />
     <Route path="clients" element={<Guard><Clients /></Guard>} />
     <Route path="*" element={<Guard><Soon /></Guard>} />

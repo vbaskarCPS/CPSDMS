@@ -60,8 +60,11 @@ function App() {
       <WorkerLocationTracker />
       <Routes>
         {/* Public Routes */}
-        <Route path="/login" element={<HomePage />} />
-        <Route path="/" element={<Navigate to="/login" replace />} />
+        {/* The new app is the home page; its sign-in also takes every old login (workers, command
+            centers, campaign managers, training, maps viewer). The old page stays at /login-classic. */}
+        <Route path="/" element={<Navigate to="/app" replace />} />
+        <Route path="/login" element={<Navigate to="/app/login" replace />} />
+        <Route path="/login-classic" element={<HomePage />} />
 
         {/* Shift confirmation landing page — must be before /:slug catch-all */}
         <Route path="/shift-confirmed" element={<ShiftConfirmed />} />
