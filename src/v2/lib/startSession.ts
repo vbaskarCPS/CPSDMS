@@ -130,11 +130,19 @@ export async function openLegacySession(centerId: string): Promise<string | null
 
 export interface StartResult { sessionId: string }
 
-/** Writes the old session tables from a plan, so the RM map and map logsheet see the day. */
+/**
+ * Writes the old session tables from a plan, so the RM map and map logsheet see the day. Worker
+ * sign-ins follow the newest day started: an older open day is handed off first (its carts saved,
+ * the old tables cleared); it stays open to be finished and closed later.
+ */
 async function writeLiveMap(p: Plan, centerId: string): Promise<void> {
   const open = await openLegacySession(centerId);
   if (open === p.date) return;   // already there
-  if (open) throw new Error(`The old app still has the ${open} session open for this center. Close it there first (Session Command Center › Close Session).`);
+  if (open && open > p.date) throw new Error(`Worker sign-ins and the RM map are on ${open}, a newer day. They follow the newest day started.`);
+  if (open) {
+    const { handOffDay } = await import('./payoutCarts');
+    await handOffDay(centerId, open);
+  }
   const [{ commandCenterService }, { sessionService }] = await Promise.all([
     import('../../lib/commandCenterService'), import('../../lib/sessionService'),
   ]);

@@ -195,6 +195,7 @@
 .v2-dayc .pill { font-size: 10px; font-weight: 800; border-radius: 999px; padding: 0 6px; }
 .v2-dayc .pill.live { background: var(--blue); color: #fff; }
 .v2-dayc .pill.closed { background: #dcfce7; color: #166534; }
+.v2-dayc .pill.open { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
 .v2-dayc.booked { background: #eff6ff; border-color: #bfdbfe; }
 .v2-dayc.paid, .v2-dayc.closed { background: #f0fdf4; border-color: #bbf7d0; }
 .v2-dayc.payout { background: #fffbeb; border-color: #fde68a; }

@@ -69,7 +69,7 @@ import { cartLines, cartsFromSession, type CartContext } from './payoutCarts';
 import { defaultRateCard } from './rateCard';
 
 describe('carts and sales saved at Close day (Oct 6 carts)', () => {
-  const input = { sessions, transactions, users, seasonType: 'sealing', productCostPercent: 0, noTaxOnCash: false, taxRate: 13 };
+  const input = { sessions, transactions, users, seasonType: 'sealing' as const, productCostPercent: 0, noTaxOnCash: false, taxRate: 13 };
   const ids: Record<string, string> = { E1004: 'h-e', H1055: 'h-h', C1219: 'h-c', EDM1225: 'h-d', T1065: 'h-t', T1001: 'h-1', C1026: 'h-6' };
   const carts = cartsFromSession(input, ids);
   it('one cart per finalized session, with its sales, splits and bonus; no card details', () => {
@@ -78,7 +78,8 @@ describe('carts and sales saved at Close day (Oct 6 carts)', () => {
     expect(team.members.map(m => [m.cn, m.equiv_split, m.hire_id])).toEqual([['EDM1225', 40, 'h-d'], ['T1065', 60, 'h-t']]);
     expect(team.sales.map(s => s.price)).toEqual([175, 169.5, 150]);
     expect(team.eq_override).toBeCloseTo(13.9646, 3);   // the EQ set at payout
-    expect(carts.find(c => c.members[0].cn === 'T1001')!.bonuses).toEqual([{ label: 'Performance EQ', amount: 100, split: undefined }]);
+    expect(carts.find(c => c.members[0].cn === 'T1001')!.bonuses).toEqual([{ label: 'Performance EQ', amount: 100, split: undefined, id: 1, type: 'Performance EQ', placing: 1 }]);
+    expect(carts.every(c => c.finalized)).toBe(true);
     expect(JSON.stringify(carts)).not.toMatch(/cc_|cvc|expiry/i);
   });
   it('worked out from the carts, every worker gets the same pay as at the payout screen', async () => {
@@ -90,5 +91,54 @@ describe('carts and sales saved at Close day (Oct 6 carts)', () => {
     const lines = computePayoutStats(input).map(statsToLine);
     expect(fromCarts.size).toBe(lines.length);
     for (const l of lines) expect(fromCarts.get(l.cn), l.cn).toBeCloseTo(l.total_payout, 2);
+  });
+});
+
+// Handing a day off to a newer one: carts not paid out yet are kept, as not finalized, with no lines.
+import { dayLines, isFinalized } from './payoutCarts';
+import { fromBonus, savedDayView, toBonus } from './savedPayouts';
+
+describe('handing an open day off, then showing it like the live payout screen', () => {
+  const pendingSession = { ...sess('s9', ['H1055X'], { H1055X: 100 }, 0, 0), status: 'OPEN', validation: { isValidated: false } };
+  const input = {
+    sessions: [...sessions, pendingSession], transactions: [...transactions, { ...tx('z', 's9', 'H1055X', 226, 'Cash'), customer_phone: '555', customer_email: '' }],
+    users: [...users, user('H1055X')], seasonType: 'sealing' as const, productCostPercent: 0, noTaxOnCash: false, taxRate: 13,
+  };
+  const all = cartsFromSession(input, {}, { includeOpen: true });
+  const ctx: CartContext = { day: '2026-10-06', card: defaultRateCard('sealing', { name: 'HST', rate: 13 }), service: 'sealing', seasonYear: 2026,
+    settings: { taxRate: 13, productCostPercent: 0, noTaxOnCash: false }, facts: {}, showed: {} };
+  it('keeps the unpaid cart with sales (not finalized); still skips the empty open one', () => {
+    expect(all).toHaveLength(6);
+    const p = all.find(c => c.members[0].cn === 'H1055X')!;
+    expect(p.finalized).toBe(false);
+    expect(p.sales[0].meta).toMatchObject({ details: 1 });
+    expect(cartsFromSession(input, {})).toHaveLength(5);   // Close day: paid-out carts only
+  });
+  it('only paid-out carts get payout lines', async () => {
+    const lines = await dayLines(all, ctx);
+    expect(lines.map(l => l.cn)).not.toContain('H1055X');
+    expect(lines).toHaveLength(7);
+    expect(all.filter(c => !isFinalized(c))).toHaveLength(1);
+  });
+  it('the saved day reads like the live screen: Paid / Pending, team pay = its lines, bonuses round-trip', async () => {
+    const stats = all.map(c => ({ totalEQ: c.eq_override ?? 0, stepCount: c.sales.length, prodCash: 0, prodCheque: 0 }));
+    const lines = (await dayLines(all, ctx)).map(l => ({ ...l, total_payout: l.total_payout }));
+    const v = savedDayView('2026-10-06', all, stats, lines);
+    expect(v.sessions).toHaveLength(6);
+    const team = v.sessions.find(s => s.teamWorkerIds?.includes('EDM1225'))!;
+    expect(team.validation?.isValidated).toBe(true);
+    expect(team.validation?.finalCommission).toBeCloseTo(lines.filter(l => ['EDM1225', 'T1065'].includes(l.cn)).reduce((a, l) => a + l.total_payout, 0), 6);
+    expect(team.equivSplit).toEqual({ EDM1225: 40, T1065: 60 });
+    const pend = v.sessions.find(s => s.workerId === 'H1055X')!;
+    expect(pend.validation).toBeUndefined();
+    expect(pend.status).toBe('OPEN');
+    expect(pend.financialStore[0].customerPhone).toBeTruthy();
+    expect(v.workers.map(w => w.contractorId)).toContain('T1065');
+    expect(v.managers).toHaveLength(1);   // the carts' manager, linked to their workers
+    expect(v.workers.find(w => w.contractorId === 'T1065')!.assignedManagerId).toBe(v.managers[0].userId);
+    const b = v.sessions.find(s => s.workerId === 'T1001')!.bonuses![0];
+    expect(b).toMatchObject({ id: 1, type: 'Performance EQ', amount: 100, placing: 1 });
+    expect(fromBonus(b)).toMatchObject({ label: 'Performance EQ - 1st Place', amount: 100, id: 1, placing: 1 });
+    expect(toBonus({ label: 'Hustle', amount: 20 }, 7)).toEqual({ id: 7, type: 'Other', amount: 20, customDescription: 'Hustle' });
   });
 });

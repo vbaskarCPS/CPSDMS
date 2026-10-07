@@ -107,6 +107,8 @@ export const StartSession: React.FC = () => {
   if (!day.data || !roster.data?.length) return <div className="v2-main v2-narrow">{back}<div className="v2-card" style={{ marginTop: 12 }}>Nobody is booked on this day yet. Book contractors on the day first.</div></div>;
   if (existing.data || done) {
     const onMap = legacyOpen.data === date;
+    const handedOff = !!day.data?.handed_off_at;
+    const newer = !!legacyOpen.data && legacyOpen.data > date;
     const fixMap = async () => {
       if (!day.data || !center) return;
       setBusy(true); setError(null);
@@ -118,13 +120,18 @@ export const StartSession: React.FC = () => {
       <div className="v2-main">{back}
         <div className="v2-card" style={{ marginTop: 12, padding: 24 }}>
           <div className="v2-row"><Check color="#059669" /><span className="v2-h2">The session is live</span></div>
-          {legacyOpen.loading ? <Loading label="Checking the live map…" /> : !onMap ? (
+          {legacyOpen.loading ? <Loading label="Checking the live map…" /> : onMap ? null : handedOff || newer ? (
+            <div className="v2-note" style={{ margin: '12px 0' }}>
+              Worker sign-ins and the RM map are on {legacyOpen.data ? <b>{legacyOpen.data}</b> : 'a newer day'} now (they follow the newest day started).
+              This day stays open: finish its payouts on the day page, then close it.
+            </div>
+          ) : (
             <div className="v2-err" style={{ margin: '12px 0' }}>
               <b>The live map doesn’t have this session yet</b>, so managers and workers won’t see their routes or logsheets.
-              {legacyOpen.data && <> The current app still has the <b>{legacyOpen.data}</b> session open; close it first.</>}
-              <div style={{ marginTop: 10 }}><Btn kind="g" disabled={busy || !!legacyOpen.data} onClick={fixMap}>{busy ? 'Putting it on the map…' : 'Put this session on the live map'}</Btn></div>
+              {legacyOpen.data && <> It has <b>{legacyOpen.data}</b> now; putting this day on moves worker sign-ins here and leaves {legacyOpen.data} open to finish and close.</>}
+              <div style={{ marginTop: 10 }}><Btn kind="g" disabled={busy} onClick={fixMap}>{busy ? 'Putting it on the map…' : 'Put this session on the live map'}</Btn></div>
             </div>
-          ) : null}
+          )}
           <ErrorBox error={error} />
           <ul style={{ lineHeight: 1.7 }}>
             <li><b>Managers</b> sign in at <a className="v2-link" href="/" target="_blank" rel="noreferrer">propertystars.app</a> with their username and password, then open <b>Route Manager › Map</b>.</li>
@@ -265,13 +272,17 @@ export const StartSession: React.FC = () => {
                 <div><b>{showedRows.length}</b> workers showed · {roster.data.length - showedRows.length} not ticked</div>
               </div>
             </div>
-            {legacyOpen.data && legacyOpen.data !== date && (
-              <div className="v2-err">The current app still has the <b>{legacyOpen.data}</b> session open for {center.display_name}. Close it there first (Session Command Center › Close Session), then come back and start.</div>
+            {legacyOpen.data && legacyOpen.data < date && !legacyWritten && (
+              <div className="v2-note" style={{ margin: 0 }}><b>{legacyOpen.data}</b> is still open. Starting moves worker sign-ins and the RM map to this day;
+                {' '}{legacyOpen.data}’s carts are saved and it stays open, to finish its payouts and close it when you get to it.</div>
+            )}
+            {legacyOpen.data && legacyOpen.data > date && !legacyWritten && (
+              <div className="v2-err">Worker sign-ins and the RM map are on <b>{legacyOpen.data}</b>, a newer day. They follow the newest day started, so this earlier day can’t take them back.</div>
             )}
             {legacyWritten && <div className="v2-note">The live map already has this session. Starting again only records it here.</div>}
             {problems.length > 0 && <div className="v2-err"><b>Before you can start:</b><ul style={{ margin: '6px 0 0 18px', padding: 0 }}>{problems.map(p => <li key={p}>{p}</li>)}</ul></div>}
             <div className="v2-row"><Btn kind="o" onClick={() => setStep(2)}>Back</Btn><span className="v2-spacer" />
-              <Btn kind="g" disabled={busy || appDays.loading || problems.length > 0 || (!!legacyOpen.data && legacyOpen.data !== date && !legacyWritten)} onClick={start}>{busy ? 'Starting…' : 'Start session'}</Btn></div>
+              <Btn kind="g" disabled={busy || appDays.loading || problems.length > 0 || (!!legacyOpen.data && legacyOpen.data > date && !legacyWritten)} onClick={start}>{busy ? 'Starting…' : 'Start session'}</Btn></div>
             <div className="v2-note">Starting makes the day live, ticks who showed, and sets up the RM map and worker logsheets in the current app.</div>
           </div>
         </div>

@@ -2,6 +2,8 @@
 //
 //   today, not started   Roll call (who's here; in-city: next day / WDR / Quit) → Start session
 //   started (live)       The session = the day's payouts (late arrivals onto the live map; Close day)
+//   open, handed off     A newer day took the live map: its saved carts, on the same payout screen,
+//                        finished in the payout editor, then closed
 //   closed               The payout copy: the day's numbers and each worker's finalized line
 //   tomorrow             Confirmations + a draft of the teams (pre-fills Start session)
 //   later                Bookings: move or remove people; confirm from two days ahead
@@ -59,6 +61,7 @@ export const Day: React.FC = () => {
   const mode: Mode = state === 'closed' ? 'copy' : state === 'live' ? 'session'
     : date === today ? 'rollcall' : date === tomorrow ? 'plan' : date > tomorrow ? 'future' : 'past';
   const canEdit = can('workerbook') && mode !== 'copy' && mode !== 'past';
+  const handedOff = state === 'live' && !!day.data?.handed_off_at;
   const rows = roster.data || [];
   const reload = () => { day.reload(); roster.reload(); };
   // A road trip's day runs off the crew: a day that hasn't started takes the active crew as its roster.
@@ -72,7 +75,7 @@ export const Day: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [center?.id, rt, date, day.loading, state]);
   const crewById = useMemo(() => new Map((crew.data?.here || []).map(r => [r.hire_id, r])), [crew.data]);
-  const tag = rt && mode === 'plan' ? { label: 'Next day · crew & draft teams', tone: 'v' as const } : rt && mode === 'future' ? { label: 'Crew day', tone: 'v' as const } : MODE_TAG[mode];
+  const tag = handedOff ? { label: 'Open · finish payouts', tone: 'a' as const } : rt && mode === 'plan' ? { label: 'Next day · crew & draft teams', tone: 'v' as const } : rt && mode === 'future' ? { label: 'Crew day', tone: 'v' as const } : MODE_TAG[mode];
   // Only the first load (or a new date) shows the spinner; a reload after a change keeps the page
   // mounted, so open dialogs (e.g. a late arrival) survive it.
   const firstLoad = (day.loading && (day.data?.day ?? null) !== date) || (roster.loading && !roster.data) || (ctype.loading && !ctype.data);
@@ -97,7 +100,7 @@ export const Day: React.FC = () => {
           <Btn kind="g" icon={Play} onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Start session</Btn>}
         {mode === 'session' && <>
           <Btn kind="o" icon={ListChecks} onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Session details</Btn>
-          {can('workerbook') && <Btn kind="o" icon={UserRoundPlus} onClick={() => setShowLate(true)}>Late arrival</Btn>}
+          {can('workerbook') && !handedOff && <Btn kind="o" icon={UserRoundPlus} onClick={() => setShowLate(true)}>Late arrival</Btn>}
           {can('workerbook') && <Btn kind="o" icon={Lock} onClick={() => setShowClose(true)}>Close day</Btn>}
         </>}
       </div>
@@ -108,7 +111,8 @@ export const Day: React.FC = () => {
           {mode === 'rollcall' && (
             <RollCall rows={rows} date={date} type={ctype.data || 'in_city'} canEdit={canEdit} onChanged={roster.reload} onWalkIn={() => (rt ? nav('/app/workerbook/crew') : setShowBook(true))} />
           )}
-          {mode === 'session' && <SessionPayouts key={lateTick} centerId={center.id} centerName={center.display_name} date={date} />}
+          {mode === 'session' && !handedOff && <SessionPayouts key={lateTick} centerId={center.id} centerName={center.display_name} date={date} />}
+          {mode === 'session' && handedOff && day.data && <PayoutCopy centerId={center.id} region={center.region} date={date} day={day.data} rows={rows} canEdit={can('workerbook')} onChanged={day.reload} />}
           {mode === 'plan' && <PlanTomorrow rows={rows} managers={managers.data || []} canEdit={canEdit} onChanged={roster.reload} crew={rt ? crewById : undefined} />}
           {mode === 'copy' && day.data && <PayoutCopy centerId={center.id} region={center.region} date={date} day={day.data} rows={rows} canEdit={can('workerbook')} />}
           {rt && (mode === 'future' || mode === 'past') && <CrewDay rows={rows} crew={crewById} past={mode === 'past'} />}

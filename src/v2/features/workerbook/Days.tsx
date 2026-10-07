@@ -95,7 +95,11 @@ export const Days: React.FC = () => {
               return (
                 <button key={iso} className={`v2-dayc ${kind}`} onClick={() => nav(`/app/workerbook/days/${iso}`)}
                   aria-label={`${iso}${s ? `, ${s.booked} booked` : ''}`}>
-                  <span className="n">{Number(iso.slice(8))}{s?.state === 'live' && <span className="pill live">Live</span>}{s?.state === 'closed' && <span className="pill closed">Closed</span>}</span>
+                  <span className="n">{Number(iso.slice(8))}
+                    {s?.state === 'live' && (s.handedOff
+                      ? <span className="pill open" title="Still open: a newer day has worker sign-ins. Finish its payouts and close it.">Open</span>
+                      : <span className="pill live">Live</span>)}
+                    {s?.state === 'closed' && <span className="pill closed">Closed</span>}</span>
                   {s && payout ? (rt
                     ? <><span className="l1">{s.booked} crew · {s.worked ?? s.showed} worked</span>
                         <span className="l2">{s.steps != null ? steps(s.steps) : '—'}{s.gross != null ? ` · ${money(s.gross)}` : ''}</span></>
@@ -113,8 +117,8 @@ export const Days: React.FC = () => {
         </div>
       )}
       <div className="v2-note">Click any day to open it. {rt
-        ? 'On a road trip each day runs off the crew list; a day turns into a payout day once its session is started (crew · worked · steps · gross).'
-        : 'Blue days are Workerbook days (booked, not started); a day turns into a payout day once its session is started (booked · showed · steps · gross).'}</div>
+        ? 'On a road trip each day runs off the crew list; a day turns into a payout day once its session is started (crew · worked · steps · gross). Starting a new day moves worker sign-ins to it; an older day stays Open until you close it.'
+        : 'Blue days are Workerbook days (booked, not started); a day turns into a payout day once its session is started (booked · showed · steps · gross). Starting a new day moves worker sign-ins to it; an older day stays Open until you close it.'}</div>
     </div>
   );
 };

@@ -24,7 +24,11 @@ export interface CartMember {
   equiv_split: number; upsell_split: number;   // percent
   machine_rental: number; deductions: number;  // dollars
 }
-export interface CartBonus { label: string; amount: number; split?: Record<string, number> }   // split by cn, percent
+/** A bonus on a cart, split by cn (percent; by EQ split when missing). The payout screen's own fields ride along. */
+export interface CartBonus {
+  label: string; amount: number; split?: Record<string, number>;
+  id?: number; type?: string; placing?: number | 'other'; customDescription?: string; sortOrder?: number;
+}
 export interface CartSale {
   id?: string; route_code: string | null; address: string | null; client_name: string | null;
   price: number; payment_type: string; payments?: Record<string, number> | null; type: SaleType;
@@ -34,8 +38,13 @@ export interface DaySettings { taxRate: number; productCostPercent: number; noTa
 export interface PayoutCart {
   id?: string; label: string; manager: string | null; members: CartMember[]; eq_override: number | null;
   crackfill_lbs: number; bonuses: CartBonus[]; settings: Partial<DaySettings>; notes: string | null; source?: string | null;
+  /** paid out (signed off). A cart saved when its day was handed off before it was paid out isn't, until it's finished. */
+  finalized?: boolean;
   sales: CartSale[];
 }
+
+/** Carts that count for pay: the ones paid out. */
+export const isFinalized = (c: Pick<PayoutCart, 'finalized'>) => c.finalized !== false;
 
 export async function listCarts(centerId: string, day: string): Promise<PayoutCart[]> {
   const rows = must(await db.from('payout_carts').select('*, sales:payout_sales(*)').eq('center_id', centerId).eq('day', day).order('sort')) as unknown as
@@ -108,8 +117,9 @@ export async function cartLines(cart: PayoutCart, ctx: CartContext): Promise<New
   });
 }
 
+/** The day's payout lines: one per member of each paid-out cart (a cart not finalized has none yet). */
 export async function dayLines(carts: PayoutCart[], ctx: CartContext): Promise<NewLine[]> {
-  return (await Promise.all(carts.map(c => cartLines(c, ctx)))).flat();
+  return (await Promise.all(carts.filter(isFinalized).map(c => cartLines(c, ctx)))).flat();
 }
 
 /** Problems that stop a save. */
@@ -143,10 +153,12 @@ type Row = Record<string, any>;   // eslint-disable-line @typescript-eslint/no-e
  * Close day. Only what pay needs: card numbers, expiry dates and CVCs are never read into these.
  */
 export function cartsFromSession(input: { sessions: Row[]; transactions: Row[]; users: Row[]; seasonType: string; productCostPercent: number; noTaxOnCash: boolean; taxRate: number },
-  hireIdByCn: Record<string, string>): PayoutCart[] {
+  hireIdByCn: Record<string, string>, opts: { includeOpen?: boolean } = {}): PayoutCart[] {
   const users = new Map(input.users.map(u => [String(u.user_id), u]));
   const settings = { taxRate: input.taxRate, productCostPercent: input.productCostPercent, noTaxOnCash: input.noTaxOnCash };
-  const sessions = input.sessions.filter(s => s.validation?.isValidated);
+  const hasSales = (s: Row) => input.transactions.some(t => t.session_id === s.id);
+  // paid-out carts; with includeOpen (a day handed off) also the carts with sales not paid out yet
+  const sessions = input.sessions.filter(s => s.validation?.isValidated || (opts.includeOpen && hasSales(s)));
   return sessions.map((s, i) => {
     const ids: string[] = s.team_worker_ids?.length ? s.team_worker_ids : [s.worker_id];
     const even = 100 / ids.length;
@@ -169,21 +181,32 @@ export function cartsFromSession(input: { sessions: Row[]; transactions: Row[]; 
       price: Number(t.price) || 0, payment_type: String(t.payment_method || 'Cash'), payments: t.payment_breakdown || null,
       type: (SALE_TYPES as readonly string[]).includes(t.type) ? t.type : 'Sale', display_price: t.display_price || null,
       service: t.customer_snapshot?.serviceType || null, notes: null,
-      meta: { ...(t.payout_share != null ? { payoutShare: Number(t.payout_share) } : {}), ...(t.asphalt_meta ? { asphaltMeta: t.asphalt_meta } : {}) },
+      meta: {
+        ...(t.payout_share != null ? { payoutShare: Number(t.payout_share) } : {}), ...(t.asphalt_meta ? { asphaltMeta: t.asphalt_meta } : {}),
+        // whether a phone and an email were taken (for the bonus check), never the details themselves
+        details: Number(!!String(t.customer_phone || '').trim()) + Number(!!String(t.customer_email || '').trim()),
+      },
     }));
     return {
       label: members.length > 1 ? `Cart ${members.map(m => m.first_name).join(' & ')}` : `${members[0]?.first_name || ''} ${members[0]?.last_name || ''}`.trim() || `Cart ${i + 1}`,
       manager, members, eq_override: typeof v.actualTotalEQ === 'number' ? v.actualTotalEQ : null,
       crackfill_lbs: Number(v.crackfillerPounds || 0), settings, notes: null, source: 'close_day',
+      finalized: !!v.isValidated,
       bonuses: (s.bonuses || []).map((b: Row) => ({ label: String(b.customDescription || b.type || 'Bonus'), amount: Number(b.amount) || 0,
-        split: b.splitPercentages ? Object.fromEntries(Object.entries(b.splitPercentages).map(([k, x]) => [k.toUpperCase(), Number(x)])) : undefined })),
+        split: b.splitPercentages ? Object.fromEntries(Object.entries(b.splitPercentages).map(([k, x]) => [k.toUpperCase(), Number(x)])) : undefined,
+        ...(b.id != null ? { id: Number(b.id) } : {}), ...(b.type ? { type: String(b.type) } : {}), ...(b.placing != null ? { placing: b.placing } : {}),
+        ...(b.customDescription ? { customDescription: String(b.customDescription) } : {}), ...(b.sortOrder != null ? { sortOrder: Number(b.sortOrder) } : {}) })),
       sales,
     };
   });
 }
 
-/** Carts and lines for the live session at a center, for Close day. */
-export async function liveDayForClose(centerId: string, year: number): Promise<{ date: string; carts: PayoutCart[]; lines: NewLine[] }> {
+/**
+ * Carts and lines for the live session at a center, for Close day — or, with includeOpen, for
+ * handing the day off to a newer one: carts not paid out yet are kept (not finalized), and only
+ * the paid-out carts' members get lines.
+ */
+export async function liveDayForClose(centerId: string, year: number, opts: { includeOpen?: boolean } = {}): Promise<{ date: string; carts: PayoutCart[]; lines: NewLine[] }> {
   const { pointLegacyAt } = await import('./legacy');
   await pointLegacyAt(centerId);
   const { loadLivePayoutInput, computePayoutStats } = await import('../../lib/exportService');
@@ -191,10 +214,24 @@ export async function liveDayForClose(centerId: string, year: number): Promise<{
   const cns = [...new Set(input.sessions.flatMap(s => (s.team_worker_ids?.length ? s.team_worker_ids : [s.worker_id]).map((x: string) => String(x).toUpperCase())))];
   const hires = cns.length ? must(await db.from('hires').select('id, cn').eq('year', year).in('cn', cns)) as { id: string; cn: string }[] : [];
   const { statsToLine } = await import('./payslips');
+  const carts = cartsFromSession(input, Object.fromEntries(hires.map(h => [h.cn.toUpperCase(), h.id])), opts);
+  const paid = new Set(carts.filter(isFinalized).flatMap(c => c.members.map(m => m.cn)));
   return {
-    date: input.date,
-    carts: cartsFromSession(input, Object.fromEntries(hires.map(h => [h.cn.toUpperCase(), h.id]))),
+    date: input.date, carts,
     // the lines are what the payout screen showed and was signed off on
-    lines: computePayoutStats(input).map(statsToLine),
+    lines: computePayoutStats(input).map(statsToLine).filter(l => paid.has(String(l.cn).toUpperCase())),
   };
+}
+
+/**
+ * Hands the open day off so a newer day can take the old app's tables (worker sign-ins, logsheets,
+ * the RM map): its carts and sales are saved first (those not paid out yet as not finalized), then
+ * the old session is copied and cleared. The day stays open; it's finished and closed in the app.
+ */
+export async function handOffDay(centerId: string, date: string): Promise<{ carts: number; open: number }> {
+  const live = await liveDayForClose(centerId, Number(date.slice(0, 4)), { includeOpen: true });
+  if (live.date !== date) throw new Error(`The open session is for ${live.date}, not ${date}`);
+  await saveDay(centerId, date, live.carts, live.lines);
+  must(await db.rpc('app_handoff_day', { p_center: centerId, p_day: date }));
+  return { carts: live.carts.length, open: live.carts.filter(c => !isFinalized(c)).length };
 }
