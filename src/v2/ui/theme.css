@@ -312,7 +312,7 @@
 .v2-routemap-hint.bottom { top: auto; bottom: 34px; }
 .v2 .v2-rnum { min-width: 30px; height: 30px; padding: 0 6px; border-radius: 15px; border: 2px solid #374151; background: var(--c, #fff);
   color: #111827; font: 800 14px/1 system-ui, sans-serif; display: inline-flex; align-items: center; justify-content: center; gap: 3px;
-  box-shadow: 0 1px 4px rgba(0,0,0,.25); cursor: pointer; position: relative; }
+  box-shadow: 0 1px 4px rgba(0,0,0,.25); cursor: pointer; }
 .v2 .v2-rnum.on { color: #fff; border-color: #fff; }
 .v2 .v2-rnum.locked { opacity: .8; cursor: not-allowed; border-style: dashed; }
 .v2 .v2-rnum i { font-style: normal; font-weight: 700; font-size: 10px; background: rgba(17,24,39,.75); color: #fff; border-radius: 7px; padding: 1px 4px; }
@@ -351,3 +351,5 @@
 .v2-confirm.off { opacity: .55; }
 .v2-side-drop { border-radius: 14px; }
 .v2-side-drop.over > .v2-card { outline: 2px dashed var(--blue); outline-offset: -2px; }
+/* map markers must stay absolutely placed (Mapbox positions them with a transform) */
+.v2 .mapboxgl-marker.v2-rnum, .v2 .mapboxgl-marker.v2-aname { position: absolute; }
