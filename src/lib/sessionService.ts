@@ -41,6 +41,7 @@ import {
   RouteSplitBucket,
   RouteSplitRectangle,
   ManagerLocation,
+  ManagerMapSharing,
   ManagerMappingConfig,
 } from '../types';
 
@@ -512,6 +513,10 @@ class SessionService {
       digitalMappings: Array.isArray(m.metadata?.digitalMappings)
         ? m.metadata.digitalMappings
         : (m.metadata?.digitalMapping ? [m.metadata.digitalMapping] : []),
+      // What this manager shares with the other managers' maps (private when absent).
+      mapSharing: m.metadata?.mapSharing
+        ? { routes: !!m.metadata.mapSharing.routes, position: !!m.metadata.mapSharing.position }
+        : undefined,
     }));
 
     const workers: Worker[] = (workersRes.data || []).map((w) => ({
@@ -797,6 +802,29 @@ class SessionService {
       .eq('user_id', managerId)
       .eq('command_center_id', ccId);
 
+    if (updateError) throw updateError;
+  }
+
+  // --- MAP SHARING (RM map › Layers): what a manager lets the other managers see.
+  // Same read-merge-write as updateManagerFloatingFor, so phone, floatingFor and
+  // the digital mapping config are preserved.
+  public async updateManagerMapSharing(managerId: string, sharing: ManagerMapSharing): Promise<void> {
+    const ccId = this.getCCId();
+    const { data: user, error: fetchError } = await supabase
+      .from('users')
+      .select('metadata')
+      .eq('user_id', managerId)
+      .eq('role', 'RouteManager')
+      .eq('command_center_id', ccId)
+      .single();
+    if (fetchError || !user) throw new Error('Manager not found');
+    const newMetadata = { ...(user.metadata || {}), mapSharing: { routes: !!sharing.routes, position: !!sharing.position } };
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ metadata: newMetadata })
+      .eq('user_id', managerId)
+      .eq('role', 'RouteManager')
+      .eq('command_center_id', ccId);
     if (updateError) throw updateError;
   }
 
@@ -1218,6 +1246,22 @@ class SessionService {
       }
     } catch (err) {
       console.warn('[ManagerLoc] upsertManagerLocation error:', err);
+    }
+  }
+
+  /**
+   * Remove THIS manager's live-location row (self-resolved like the upsert), so a
+   * manager who stops sharing their position doesn't linger on others' maps.
+   */
+  public async clearManagerLocation(): Promise<void> {
+    try {
+      const { getStorageItem } = await import('./localStorage');
+      const currentUser = getStorageItem<ManagementUser | null>('current_user', null);
+      if (!currentUser || currentUser.role !== 'RouteManager' || !currentUser.userId) return;
+      const { error } = await supabase.from('manager_locations').delete().eq('manager_id', currentUser.userId);
+      if (error) console.warn('[ManagerLoc] clearManagerLocation failed:', error);
+    } catch (err) {
+      console.warn('[ManagerLoc] clearManagerLocation error:', err);
     }
   }
 
@@ -1664,6 +1708,7 @@ class SessionService {
             digitalMappings: m.digitalMappings && m.digitalMappings.length > 0
               ? m.digitalMappings
               : (m.digitalMapping ? [m.digitalMapping] : []),
+            ...(m.mapSharing ? { mapSharing: m.mapSharing } : {}),
           },
           command_center_id: ccId,
         })),
