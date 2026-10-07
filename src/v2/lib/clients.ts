@@ -34,6 +34,31 @@ export async function bennyFixAddresses(items: { i: number; text: string }[]): P
   return out;
 }
 
+export interface Candidate { street: string; near: boolean; score: number }
+export interface Placement { i: number; house_no: string; street: string | null; confidence: 'high' | 'medium' | 'low'; reason: string }
+
+/** Real street names an unplaced address most likely meant (from the map's streets). */
+export async function streetCandidates(items: { i: number; house_no: string; street: string; city: string }[], routes: string[]): Promise<Map<number, Candidate[]>> {
+  const out = new Map<number, Candidate[]>();
+  for (let k = 0; k < items.length; k += 300) {
+    const res = must(await db.rpc('app_client_street_candidates', { p_items: items.slice(k, k + 300), p_routes: routes })) as { i: number; candidates: Candidate[] }[];
+    for (const r of res) out.set(Number(r.i), r.candidates || []);
+  }
+  return out;
+}
+
+/** The Benny picks which real street each misspelled address meant (or none). */
+export async function bennyPlace(items: { i: number; house_no: string; street: string; city: string; text: string; candidates: Candidate[] }[],
+  onProgress?: (done: number) => void): Promise<Placement[]> {
+  const out: Placement[] = [];
+  for (let k = 0; k < items.length; k += 80) {
+    const res = await benny<{ items: Placement[] }>({ task: 'place_addresses', items: items.slice(k, k + 80) });
+    out.push(...(res.items || []));
+    onProgress?.(Math.min(items.length, k + 80));
+  }
+  return out;
+}
+
 export async function fetchSheetCsv(url: string): Promise<string> {
   return (await benny<{ csv: string }>({ task: 'fetch_sheet', url })).csv;
 }

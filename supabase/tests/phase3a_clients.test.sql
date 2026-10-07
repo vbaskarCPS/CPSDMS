@@ -82,3 +82,12 @@ select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-0000000000a1'
 insert into clients (address_key, house_no, street_name, street_norm) values ('x','1','a','a');
 select client_refresh_map_pcl(array['WO08']);
 reset role;
+
+\echo '== 7 street candidates for misspelled addresses (expect baronwood dr near first, then alstep way for "alstepp")'
+set role authenticated;
+select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-0000000000a1',false);
+select x->>'i' i, x->>'street_norm' norm, x->'candidates' cands from jsonb_array_elements(app_client_street_candidates('[
+ {"i":0,"house_no":"2280","street":"Baronwod Drive"},{"i":1,"house_no":"2403","street":"Alstepp Wy"},{"i":2,"house_no":"1","street":"Zzzz"}]', array['WO08'])) x;
+select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-0000000000a2',false);
+select app_client_street_candidates('[]', null);
+reset role;

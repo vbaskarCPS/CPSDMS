@@ -8,7 +8,9 @@ import { listClients, type Client } from '../../lib/clients';
 import { formatPhone, lineLabel, SERVICE_LINES } from '../../lib/clientImport';
 import { Btn, ErrorBox, Loading, Modal, Tag } from '../../ui';
 
-const HOW: Record<string, string> = { house: 'house on the route', address_point: 'official address point', geocode: 'map search', street: 'only route on the street', given: 'the list’s route code', manual: 'set by hand' };
+const HOW: Record<string, string> = { house: 'house on the route', address_point: 'official address point', geocode: 'map search', street: 'only route on the street', given: 'the list’s route code', manual: 'set by hand',
+  house_benny: 'house on the route, address fixed by The Benny', address_point_benny: 'official address point, address fixed by The Benny',
+  geocode_benny: 'map search, address fixed by The Benny', street_benny: 'only route on the street, address fixed by The Benny', given_benny: 'the list’s route code' };
 const name = (c: Client) => c.people.map(p => `${p.first} ${p.last}`.trim()).filter(Boolean).join(', ');
 
 export const Clients: React.FC = () => {
