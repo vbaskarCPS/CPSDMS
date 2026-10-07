@@ -201,6 +201,8 @@ export async function getDay(centerId: string, day: string): Promise<Day | null>
 // ───────────── close day ─────────────
 export interface CloseCheck {
   state: Day['state']; has_session: boolean;
+  /** road-trip center: no attendance or NS list (who worked = who has a finalized payout) */
+  road_trip?: boolean;
   carts: number; paid: number; steps: number; gross: number; upsells: number; booked: number; showed: number;
   unpaid: { worker_id: string; status: string; names: string | null; sales: number }[];
   unmarked: { cn: string; name: string }[];
