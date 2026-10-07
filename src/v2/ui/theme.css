@@ -97,12 +97,16 @@
 .v2-acct { display: inline-flex; align-items: center; gap: 6px; }
 .v2-acct:hover { border-color: var(--mut); }
 
+.v2-close-line { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; }
+.v2-close-line > svg { flex-shrink: 0; margin-top: 1px; }
 .v2-room { display: inline-flex; align-items: center; gap: 6px; }
 .v2-room .v2-input { width: 84px; height: 34px; padding: 4px 8px; font-weight: 700; }
 .v2-pick { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); cursor: pointer; }
 .v2-pick:hover { background: var(--hover); }
 .v2-pick.on { border-color: var(--blue); background: var(--sel); }
 .v2-pick:disabled { opacity: .5; cursor: not-allowed; }
+
+@media (max-width: 860px) { .v2-wb-links { display: none; } }
 
 /* home dashboard: one large stat card per component */
 .v2-stats { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); }
@@ -193,6 +197,7 @@
 .v2-dayc .pill.closed { background: #dcfce7; color: #166534; }
 .v2-dayc.booked { background: #eff6ff; border-color: #bfdbfe; }
 .v2-dayc.paid, .v2-dayc.closed { background: #f0fdf4; border-color: #bbf7d0; }
+.v2-dayc.payout { background: #fffbeb; border-color: #fde68a; }
 .v2-dayc.today { border: 2px solid var(--blue); }
 @media (max-width: 860px) {
   .v2-only-narrow { display: flex !important; }

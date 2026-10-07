@@ -1,7 +1,7 @@
 // src/v2/features/workerbook/Day.tsx — one day at a center: who's booked, confirmed, and who showed.
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Play, UserPlus, Wallet } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Lock, Play, UserPlus, Wallet } from 'lucide-react';
 import { useAuth } from '../../lib/auth';
 import { todayISO, useLoad } from '../../lib/data';
 import {
@@ -10,6 +10,7 @@ import {
 } from '../../lib/workerbook';
 import { Btn, ErrorBox, Loading, Tag } from '../../ui';
 import { BookContractors } from './BookContractors';
+import { CloseDay } from './CloseDay';
 
 const shift = (iso: string, n: number) => {
   const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() + n);
@@ -21,6 +22,7 @@ export const Day: React.FC = () => {
   const { center, can } = useAuth();
   const nav = useNavigate();
   const [showBook, setShowBook] = useState(false);
+  const [showClose, setShowClose] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const valid = /^\d{4}-\d{2}-\d{2}$/.test(date);
@@ -31,7 +33,8 @@ export const Day: React.FC = () => {
   const shown = useLoad(() => showedCounts((roster.data || []).map(r => r.hire_id)), [roster.data]);
 
   const today = todayISO();
-  const canMark = date <= today;
+  // A payout day is a day with a session started; before that it's a Workerbook day (bookings).
+  const canMark = day.data?.state === 'live' || day.data?.state === 'closed';
   const locked = day.data?.state === 'closed';
   const canEdit = can('workerbook') && !locked;
 
@@ -60,7 +63,7 @@ export const Day: React.FC = () => {
       <div className="v2-head">
         <Link to="/app/workerbook/days" className="v2-link">‹ Days</Link>
         <span className="v2-h1">{pretty}</span>
-        {locked ? <Tag tone="g">Closed</Tag> : day.data?.state === 'live' ? <Tag tone="b">Live</Tag> : canMark ? <Tag tone="a">Payout day</Tag> : <Tag tone="b">Workerbook day</Tag>}
+        {locked ? <Tag tone="g">Closed · payout day</Tag> : day.data?.state === 'live' ? <Tag tone="b">Live · payout day</Tag> : <Tag tone="v">Workerbook day</Tag>}
         <span className="v2-spacer" />
         <button className="v2-gbtn" onClick={() => nav(`/app/workerbook/days/${shift(date, -1)}`)} aria-label="Previous day"><ChevronLeft size={16} /></button>
         <button className="v2-gbtn" onClick={() => nav(`/app/workerbook/days/${shift(date, 1)}`)} aria-label="Next day"><ChevronRight size={16} /></button>
@@ -68,6 +71,8 @@ export const Day: React.FC = () => {
         {can('workerbook') && day.data?.state === 'planned' && sorted.length > 0 && <Btn kind="g" icon={Play} onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Start session</Btn>}
         {day.data?.state === 'live' && <Btn kind="o" onClick={() => nav(`/app/workerbook/days/${date}/start`)}>Session details</Btn>}
         {day.data?.state === 'live' && can('workerbook') && <Btn kind="g" icon={Wallet} onClick={() => nav(`/app/workerbook/days/${date}/payouts`)}>Payouts</Btn>}
+        {can('workerbook') && day.data && !locked && canMark && (day.data.state === 'live' || sorted.length > 0) &&
+          <Btn kind="o" icon={Lock} onClick={() => setShowClose(true)}>Close day</Btn>}
       </div>
 
       <div className="v2-grid4" style={{ marginBottom: 14 }}>
@@ -83,7 +88,11 @@ export const Day: React.FC = () => {
       </div>
 
       <ErrorBox error={day.error || roster.error || error} />
-      {locked && <div className="v2-note" style={{ marginBottom: 10 }}>This day is closed. Only the Super Admin can change it.</div>}
+      {locked && <div className="v2-note" style={{ marginBottom: 10 }}>
+        This day is closed{day.data?.closed_at ? ` (${new Date(day.data.closed_at).toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })})` : ''}.
+        {day.data?.summary && <> {day.data.summary.carts} carts · {day.data.summary.steps} steps · ${Math.round(Number(day.data.summary.gross)).toLocaleString('en-CA')} gross · {day.data.summary.upsells} upsells · {day.data.summary.no_shows} moved to NS.</>}
+        {' '}Only the Super Admin can change it.
+      </div>}
       {day.loading || roster.loading ? <Loading /> : sorted.length === 0 ? (
         <div className="v2-card" style={{ textAlign: 'center', padding: 30 }}>
           Nobody is booked on this day yet.{canEdit && <div style={{ marginTop: 12 }}><Btn icon={UserPlus} onClick={() => setShowBook(true)}>Book contractors</Btn></div>}
@@ -191,6 +200,8 @@ export const Day: React.FC = () => {
       )}
       <div className="v2-note">Ticking Conf records a staff confirmation. Email and text confirmations and the shuttle push come in a later step.</div>
 
+      {showClose && day.data && <CloseDay centerId={center.id} date={date} pretty={pretty} onClose={() => setShowClose(false)}
+        onClosed={() => { setShowClose(false); day.reload(); roster.reload(); }} />}
       {showBook && <BookContractors centerId={center.id} date={date} bookedHireIds={new Set(sorted.map(r => r.hire_id))}
         onClose={() => setShowBook(false)} onBooked={() => { setShowBook(false); day.reload(); roster.reload(); }} />}
     </div>
