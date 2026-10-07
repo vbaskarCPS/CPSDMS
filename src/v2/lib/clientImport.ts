@@ -47,6 +47,26 @@ export const FIELDS: { key: Field; label: string; group: string }[] = [
 ];
 const FIELD_KEYS = new Set(FIELDS.map(f => f.key));
 
+/** The service a past client belongs to; each route has a past-client list per service. */
+export type ServiceLine = 'aeration' | 'lawn_rejuv' | 'sealing' | 'cleaning';
+export const SERVICE_LINES: { key: ServiceLine; label: string }[] = [
+  { key: 'aeration', label: 'Aeration' }, { key: 'sealing', label: 'Sealing' },
+  { key: 'lawn_rejuv', label: 'Lawn Rejuv' }, { key: 'cleaning', label: 'Window Cleaning' },
+];
+const LINE_KEYS = new Set<string>(SERVICE_LINES.map(l => l.key));
+export const lineLabel = (l: string) => SERVICE_LINES.find(x => x.key === l)?.label || l;
+
+/** A service code that clearly belongs to one service; anything else follows the list's service. */
+export function classifyLine(code: string): ServiceLine | null {
+  const c = code.trim().toUpperCase();
+  if (!c) return null;
+  if (/^(AER|AERATION|CORE AERATION)$/.test(c)) return 'aeration';
+  if (/^(SS|SSP|SSF|SEAL|SEALING|DRIVEWAY SEALING|DWS|RAMP|HOT ASPHALT)/.test(c) || /SEAL/.test(c)) return 'sealing';
+  if (/^(RJ|REJUV|LAWN REJUV|LAWN REJUVENATION|REJUVENATION)/.test(c)) return 'lawn_rejuv';
+  if (/^(WW|CL|WINDOW|WINDOWS|WINDOW CLEANING)/.test(c)) return 'cleaning';
+  return null;
+}
+
 export interface ColumnRule {
   field: Field;
   year?: number | null;      // history columns that belong to one fixed year (e.g. "2024 Price")
@@ -61,12 +81,13 @@ export interface Mapping {
   defaultService?: string | null;            // service when the list is all one service
   defaultCity?: string | null;
   defaultProvince?: string | null;
+  serviceLine?: ServiceLine | null;          // which service this list's clients are past clients of
   yesValues?: string[];                      // extra values that mean "yes"
   notes?: string | null;                     // The Benny's explanation, shown on the review screen
 }
 
 export interface Person { first: string; last: string }
-export interface HistoryEntry { year: number | null; service: string; price: string; contractor: string; payment: string }
+export interface HistoryEntry { year: number | null; service: string; price: string; contractor: string; payment: string; line: ServiceLine | '' }
 
 export interface ClientRow {
   key: string;                // address key inside this file
@@ -296,6 +317,7 @@ export function sanitizeMapping(m: unknown, columnCount: number): Mapping {
     defaultService: str(src.defaultService, 20),
     defaultCity: str(src.defaultCity),
     defaultProvince: str(src.defaultProvince, 20) ? (cleanProvince(String(src.defaultProvince)) || null) : null,
+    serviceLine: typeof src.serviceLine === 'string' && LINE_KEYS.has(src.serviceLine) ? src.serviceLine as ServiceLine : null,
     yesValues: Array.isArray(src.yesValues) ? src.yesValues.filter(v => typeof v === 'string').slice(0, 20) as string[] : [],
     notes: str(src.notes, 2000),
   };
@@ -384,10 +406,16 @@ export function applyMapping(rows: unknown[][], mapping: Mapping, opts: { fixedA
     if (first || last) people.unshift({ first: titleCase(first), last: titleCase(last) });
 
     const history: HistoryEntry[] = [];
+    const listLine = mapping.serviceLine || '';
     for (const e of hist.values()) {
       if (!e.any && !e.contractor) continue;
       const year = e.year ?? rowYear ?? mapping.defaultYear ?? null;
-      history.push({ year, service: e.service || (mapping.defaultService || '').toUpperCase(), price: e.price, contractor: e.contractor, payment: e.payment });
+      const service = e.service || (mapping.defaultService || '').toUpperCase();
+      history.push({ year, service, price: e.price, contractor: e.contractor, payment: e.payment, line: classifyLine(service) || listLine });
+    }
+    // a client on a list with no history columns is still a past client of the list's service
+    if (!history.length && listLine) {
+      history.push({ year: rowYear ?? mapping.defaultYear ?? null, service: (mapping.defaultService || '').toUpperCase(), price: '', contractor: '', payment: '', line: listLine });
     }
 
     const key = `${house}|${roughStreet(street)}|${unit.toLowerCase()}|${city.toLowerCase()}`;
@@ -421,7 +449,7 @@ function dedupePeople(list: Person[]): Person[] {
 }
 function dedupeHistory(list: HistoryEntry[]): HistoryEntry[] {
   const seen = new Set<string>(); const out: HistoryEntry[] = [];
-  for (const e of list) { const k = `${e.year}|${e.service}|${e.price}|${e.contractor}`.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(e); } }
+  for (const e of list) { const k = `${e.year}|${e.line}|${e.service}|${e.price}|${e.contractor}`.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(e); } }
   return out.sort((a, b) => (b.year || 0) - (a.year || 0));
 }
 

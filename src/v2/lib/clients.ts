@@ -34,6 +34,31 @@ export async function bennyFixAddresses(items: { i: number; text: string }[]): P
   return out;
 }
 
+export interface Candidate { street: string; near: boolean; score: number }
+export interface Placement { i: number; house_no: string; street: string | null; confidence: 'high' | 'medium' | 'low'; reason: string }
+
+/** Real street names an unplaced address most likely meant (from the map's streets). */
+export async function streetCandidates(items: { i: number; house_no: string; street: string; city: string }[], routes: string[]): Promise<Map<number, Candidate[]>> {
+  const out = new Map<number, Candidate[]>();
+  for (let k = 0; k < items.length; k += 300) {
+    const res = must(await db.rpc('app_client_street_candidates', { p_items: items.slice(k, k + 300), p_routes: routes })) as { i: number; candidates: Candidate[] }[];
+    for (const r of res) out.set(Number(r.i), r.candidates || []);
+  }
+  return out;
+}
+
+/** The Benny picks which real street each misspelled address meant (or none). */
+export async function bennyPlace(items: { i: number; house_no: string; street: string; city: string; text: string; candidates: Candidate[] }[],
+  onProgress?: (done: number) => void): Promise<Placement[]> {
+  const out: Placement[] = [];
+  for (let k = 0; k < items.length; k += 80) {
+    const res = await benny<{ items: Placement[] }>({ task: 'place_addresses', items: items.slice(k, k + 80) });
+    out.push(...(res.items || []));
+    onProgress?.(Math.min(items.length, k + 80));
+  }
+  return out;
+}
+
 export async function fetchSheetCsv(url: string): Promise<string> {
   return (await benny<{ csv: string }>({ task: 'fetch_sheet', url })).csv;
 }
@@ -98,7 +123,7 @@ export interface ImportRow {
   house_no: string; street_name: string; unit: string; city: string; province: string; postal_code: string;
   lat: number | null; lng: number | null; route_code: string | null; match_how: string | null;
   people: { first: string; last: string }[]; phones: string[]; emails: string[];
-  history: { year: number | null; service: string; price: string; contractor: string; payment: string }[];
+  history: { year: number | null; service: string; price: string; contractor: string; payment: string; line: string }[];
   tags: string[]; notes: string; call_first: string; do_not_call: boolean; do_not_text: boolean;
 }
 
@@ -137,12 +162,14 @@ export interface Client {
   id: string; house_no: string; street_name: string; unit: string | null; city: string | null; province: string | null; postal_code: string | null;
   lat: number | null; lng: number | null; route_code: string | null; match_how: string | null;
   people: { first: string; last: string }[]; phones: string[]; emails: string[];
-  history: { year: number | null; service: string; price: string; contractor: string; payment: string }[];
+  history: { year: number | null; service: string; price: string; contractor: string; payment: string; line?: string }[];
+  services: string[];
   tags: string[]; notes: string | null; call_first: string | null; do_not_call: boolean; do_not_text: boolean; updated_at: string;
 }
-export async function listClients(opts: { q?: string; route?: string; noRoute?: boolean; page?: number; pageSize?: number }): Promise<{ rows: Client[]; total: number }> {
+export async function listClients(opts: { q?: string; route?: string; noRoute?: boolean; service?: string; page?: number; pageSize?: number }): Promise<{ rows: Client[]; total: number }> {
   const size = opts.pageSize || 100; const from = (opts.page || 0) * size;
   let qb = db.from('clients').select('*', { count: 'exact' });
+  if (opts.service) qb = qb.contains('services', [opts.service]);
   if (opts.noRoute) qb = qb.is('route_code', null);
   else if (opts.route) qb = qb.eq('route_code', opts.route.toUpperCase());
   const q = (opts.q || '').trim().toLowerCase();

@@ -47,7 +47,7 @@ describe('a callbook', () => {
     const m = guessMapping(rows);
     m.columns['7'] = { field: 'service' };
     m.columns['11'] = { field: 'tag', tag: 'NO SP' };
-    const out = applyMapping(rows, { ...m, defaultService: 'AER' });
+    const out = applyMapping(rows, { ...m, defaultService: 'AER', serviceLine: 'aeration' });
     expect(out.rowsRead).toBe(3);
     expect(out.skipped).toEqual([{ row: 5, reason: 'No address', text: '' }]);
     expect(out.clients).toHaveLength(1);
@@ -55,8 +55,8 @@ describe('a callbook', () => {
     expect(c).toMatchObject({ house_no: '12', street_name: 'Elm Rd', route_given: 'CA01', phones: ['4035551234'], tags: ['NO SP'], rows: [3, 4] });
     expect(c.people).toEqual([{ first: 'Ann', last: 'Lee' }]);
     expect(c.history).toEqual([
-      { year: 2025, service: 'AER', price: '70', contractor: 'Bo Smith', payment: '' },
-      { year: 2024, service: 'X', price: '65', contractor: 'Bo Smith', payment: '' },
+      { year: 2025, service: 'AER', price: '70', contractor: 'Bo Smith', payment: '', line: 'aeration' },
+      { year: 2024, service: 'X', price: '65', contractor: 'Bo Smith', payment: '', line: 'aeration' },
     ]);
   });
   it('handles one column per year', () => {
@@ -66,11 +66,15 @@ describe('a callbook', () => {
     ];
     const m = sanitizeMapping({ headerRow: 0, columns: { 0: { field: 'full_name' }, 1: { field: 'street_address' }, 2: { field: 'city' },
       3: { field: 'serviced', year: 2024 }, 4: { field: 'serviced', year: 2025 }, 5: { field: 'serviced', year: 2026 }, 6: { field: 'email' }, 9: { field: 'bogus' } },
-      defaultService: 'SS', defaultProvince: 'ontario' }, 7);
+      defaultService: 'SS', defaultProvince: 'ontario', serviceLine: 'sealing' }, 7);
     expect(m.defaultProvince).toBe('ON');
     const c = applyMapping(wide, m).clients[0];
     expect(c).toMatchObject({ house_no: '123', unit: '4', street_name: 'Main St', city: 'Oakville', province: 'ON', emails: ['ann@x.com'] });
-    expect(c.history.map(h => `${h.year}:${h.service}`)).toEqual(['2026:AER', '2024:SS']);
+    expect(c.history.map(h => `${h.year}:${h.service}:${h.line}`)).toEqual(['2026:AER:aeration', '2024:SS:sealing']);
+  });
+  it('keeps a client with no history as a past client of the list’s service', () => {
+    const c = applyMapping([['Address'], ['5 Oak Ave']], { headerRow: 0, columns: { 0: { field: 'street_address' } }, serviceLine: 'cleaning', defaultYear: 2025 }).clients[0];
+    expect(c.history).toEqual([{ year: 2025, service: '', price: '', contractor: '', payment: '', line: 'cleaning' }]);
   });
 });
 

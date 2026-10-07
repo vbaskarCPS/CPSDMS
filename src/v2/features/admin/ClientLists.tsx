@@ -7,11 +7,11 @@ import { Link } from 'react-router-dom';
 import { FileSpreadsheet, Link2, Sparkles, Undo2, Upload } from 'lucide-react';
 import { useLoad } from '../../lib/data';
 import {
-  applyMapping, cell, FIELDS, findHeaderRow, fingerprint, guessMapping, formatPhone,
-  type Applied, type ClientRow, type ColumnRule, type Field, type Mapping,
+  applyMapping, cell, FIELDS, findHeaderRow, fingerprint, guessMapping, formatPhone, lineLabel, SERVICE_LINES, titleCase,
+  type Applied, type ClientRow, type ColumnRule, type Field, type Mapping, type ServiceLine,
 } from '../../lib/clientImport';
 import {
-  bennyFixAddresses, bennyMap, commitImport, fetchSheetCsv, findRecipe, finishStuckImport, geocode, listImports, listRecipes,
+  bennyFixAddresses, bennyMap, bennyPlace, commitImport, streetCandidates, fetchSheetCsv, findRecipe, finishStuckImport, geocode, listImports, listRecipes,
   matchClients, parseCsv, readWorkbook, undoImport, updateRecipe, type ImportRecord, type ImportRow, type MatchResult, type Recipe, type Sheet,
 } from '../../lib/clients';
 import { Btn, ErrorBox, Loading, Tabs, Tag, Toggle } from '../../ui';
@@ -19,10 +19,15 @@ import { TerritoryTabs } from './Territory';
 
 type Step = 'source' | 'columns' | 'review' | 'done';
 interface Source { fileName: string; kind: 'file' | 'sheet'; sheetUrl: string | null; sheets: Sheet[]; sheet: number }
-interface Matched { client: ClientRow; match: MatchResult | null }
+/** The Benny's correction of an address that couldn't be placed as written. */
+interface Fix { house_no: string; street: string; confidence: 'high' | 'medium' | 'low'; reason: string; match: MatchResult | null; on: boolean }
+interface Matched { client: ClientRow; match: MatchResult | null; fix?: Fix }
+/** The address and route an import row will actually use (the correction, when it's switched on). */
+const effective = (m: Matched): { client: ClientRow; match: MatchResult | null; fixed: boolean } =>
+  m.fix?.on ? { client: { ...m.client, house_no: m.fix.house_no, street_name: m.fix.street }, match: m.fix.match, fixed: true } : { client: m.client, match: m.match, fixed: false };
 
 const HISTORY: Field[] = ['year', 'service', 'price', 'contractor', 'payment', 'serviced'];
-const HOW: Record<string, string> = { house: 'House on route', address_point: 'Address point', geocode: 'Map search', street: 'Only route on street', given: 'List’s route code' };
+const HOW: Record<string, string> = { house_benny: 'House on route', address_point_benny: 'Address point', geocode_benny: 'Map search', street_benny: 'Only route on street', house: 'House on route', address_point: 'Address point', geocode: 'Map search', street: 'Only route on street', given: 'List’s route code' };
 const fmtDate = (s: string) => new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 export const ClientLists: React.FC = () => {
@@ -119,28 +124,69 @@ export const ClientLists: React.FC = () => {
         for (const [i, r] of again) if (r.route_code || r.lat) res.set(i, { ...r, lat: r.lat ?? found.get(i)!.lat, lng: r.lng ?? found.get(i)!.lng });
       }
     }
+    // The Benny places what's still missing: it picks which real street a misspelled address meant
+    const fixes = new Map<number, Fix>();
+    const unplaced = all.filter(i => !res.get(i)?.route_code).slice(0, 800);
+    if (unplaced.length) {
+      try {
+        setBusy(`The Benny is placing ${unplaced.length} addresses that couldn’t be found…`);
+        const routes = [...new Set([...res.values()].map(r => r.route_code).filter((r): r is string => !!r))];
+        const cands = await streetCandidates(unplaced.map(i => ({ i, house_no: list[i].house_no, street: list[i].street_name, city: list[i].city })), routes);
+        const asks = unplaced.filter(i => (cands.get(i) || []).length).map(i => ({
+          i, house_no: list[i].house_no, street: list[i].street_name, city: list[i].city, text: list[i].raw_address, candidates: cands.get(i)!,
+        }));
+        const placed = (await bennyPlace(asks, n => setBusy(`The Benny is placing addresses… ${n} of ${asks.length}`))).filter(p => p.street);
+        if (placed.length) {
+          const fixedAddr = (p: typeof placed[number]) => ({ i: p.i, house_no: p.house_no || list[p.i].house_no, street: titleCase(p.street!), unit: list[p.i].unit, city: list[p.i].city, route: list[p.i].route_given });
+          const again = await matchClients(placed.map(fixedAddr));
+          // a corrected address the map's own data doesn't know: one map search, then match again
+          const look = placed.filter(p => !again.get(p.i)?.route_code).slice(0, 200);
+          const pts = new Map<number, { lat: number; lng: number }>();
+          for (let k = 0; k < look.length; k += 6) {
+            await Promise.all(look.slice(k, k + 6).map(async p => {
+              const a = fixedAddr(p); const g = await geocode({ ...list[p.i], house_no: a.house_no, street_name: a.street });
+              if (g) pts.set(p.i, g);
+            }));
+          }
+          if (pts.size) {
+            const third = await matchClients(look.filter(p => pts.has(p.i)).map(p => ({ ...fixedAddr(p), ...pts.get(p.i)! })));
+            for (const [i, r] of third) if (r.route_code) again.set(i, r);
+          }
+          for (const p of placed) {
+            const m = again.get(p.i) || null;
+            fixes.set(p.i, { house_no: (p.house_no || list[p.i].house_no).toUpperCase(), street: titleCase(p.street!), confidence: p.confidence, reason: p.reason, match: m,
+              on: p.confidence !== 'low' && !!m?.route_code });
+          }
+        }
+      } catch (e) {
+        setBennyNote(`The Benny couldn’t place the missing addresses (${e instanceof Error ? e.message : String(e)}). They are listed under Needs attention.`);
+      }
+    }
     setApplied(preview);
-    setMatched(list.map((client, i) => ({ client, match: res.get(i) || null })));
+    setMatched(list.map((client, i) => ({ client, match: res.get(i) || null, fix: fixes.get(i) })));
     setStep('review');
   });
 
   const counts = useMemo(() => {
-    const n = { rowsRead: applied?.rowsRead || 0, clients: matched.length, skipped: applied?.skipped.length || 0, combined: 0, fresh: 0, merge: 0, routed: 0, unrouted: 0 };
+    const n = { rowsRead: applied?.rowsRead || 0, clients: matched.length, skipped: applied?.skipped.length || 0, combined: 0, fresh: 0, merge: 0, routed: 0, unrouted: 0, fixed: 0, suggested: 0 };
     n.combined = Math.max(0, n.rowsRead - n.skipped - n.clients);
-    for (const m of matched) {
+    for (const raw of matched) {
+      const m = effective(raw);
       if (m.match?.client_id) n.merge++; else n.fresh++;
       if (m.match?.route_code) n.routed++; else n.unrouted++;
+      if (raw.fix) { n.suggested++; if (raw.fix.on) n.fixed++; }
     }
     return n;
   }, [applied, matched]);
 
   const approve = () => src && mapping && run('Saving…', async () => {
-    const chosen = matched.filter(m => includeUnrouted || m.match?.route_code);
-    const toRow = ({ client: c, match: m }: Matched): ImportRow => ({
+    const chosen = matched.map(effective).filter(m => includeUnrouted || m.match?.route_code);
+    const toRow = ({ client: c, match: m, fixed }: ReturnType<typeof effective>): ImportRow => ({
       house_no: c.house_no, street_name: c.street_name, unit: c.unit, city: c.city, province: c.province, postal_code: c.postal_code,
-      lat: m?.lat ?? null, lng: m?.lng ?? null, route_code: m?.route_code ?? null, match_how: m?.how ?? null,
-      people: c.people, phones: c.phones, emails: c.emails, history: c.history, tags: c.tags, notes: c.notes, call_first: c.call_first,
-      do_not_call: c.do_not_call, do_not_text: c.do_not_text,
+      lat: m?.lat ?? null, lng: m?.lng ?? null, route_code: m?.route_code ?? null, match_how: fixed && m?.how ? `${m.how}_benny` : m?.how ?? null,
+      people: c.people, phones: c.phones, emails: c.emails, history: c.history, tags: c.tags,
+      notes: [c.notes, fixed ? `Address on the list: “${c.raw_address}”, corrected by The Benny.` : ''].filter(Boolean).join('\n'),
+      call_first: c.call_first, do_not_call: c.do_not_call, do_not_text: c.do_not_text,
     });
     const res = await commitImport({
       fileName: src.fileName, source: src.kind, sheetUrl: src.sheetUrl, fingerprint: lookupFp || fingerprint(headers), recipeName: recipeName || src.fileName,
@@ -198,6 +244,14 @@ export const ClientLists: React.FC = () => {
               <Btn kind="o" size="sm" onClick={reset}>Start over</Btn>
             </div>
             {(bennyNote || mapping.notes) && <div className="v2-note" style={{ whiteSpace: 'pre-wrap' }}>{bennyNote || mapping.notes}</div>}
+            <div className="v2-row" style={{ marginTop: 12, gap: 8 }}>
+              <b>These are past clients of</b>
+              {SERVICE_LINES.map(l => (
+                <button key={l.key} type="button" className={`v2-chip${mapping.serviceLine === l.key ? ' on' : ''}`}
+                  onClick={() => setMapping({ ...mapping, serviceLine: l.key as ServiceLine })}>{l.label}</button>
+              ))}
+              {!mapping.serviceLine && <span className="v2-small" style={{ color: '#b45309' }}>Pick the service. Each route keeps a separate past-client list per service.</span>}
+            </div>
             <div className="v2-grid4" style={{ marginTop: 12 }}>
               <label className="v2-small"><span className="v2-label">Title row</span>
                 <input className="v2-input" type="number" min={1} value={mapping.headerRow + 1} onChange={e => setMapping({ ...mapping, headerRow: Math.max(0, Number(e.target.value) - 1) })} /></label>
@@ -253,13 +307,14 @@ export const ClientLists: React.FC = () => {
               <Btn kind="o" size="sm" icon={Sparkles} disabled={!!busy} onClick={fixWithBenny}>Ask The Benny to read {preview.skipped.filter(s => s.reason !== 'No address' && s.text).length} addresses</Btn>
             )}
             <span className="v2-spacer" />
-            <Btn disabled={!!busy || preview.clients.length === 0} onClick={matchAll}>Next: match to routes</Btn>
+            <Btn disabled={!!busy || preview.clients.length === 0 || !mapping.serviceLine} onClick={matchAll}>Next: match to routes</Btn>
           </div>
         </div>
       )}
 
       {step === 'review' && src && (
-        <Review counts={counts} matched={matched} skipped={applied?.skipped || []} busy={!!busy}
+        <Review counts={counts} matched={matched} skipped={applied?.skipped || []} busy={!!busy} note={bennyNote}
+          onToggleFix={key => setMatched(ms => ms.map(m => m.client.key === key && m.fix ? { ...m, fix: { ...m.fix, on: !m.fix.on } } : m))}
           recipeName={recipeName} setRecipeName={setRecipeName} includeUnrouted={includeUnrouted} setIncludeUnrouted={setIncludeUnrouted}
           onBack={() => setStep('columns')} onApprove={approve} />
       )}
@@ -283,20 +338,23 @@ export const ClientLists: React.FC = () => {
 };
 
 const Review: React.FC<{
-  counts: { rowsRead: number; clients: number; skipped: number; combined: number; fresh: number; merge: number; routed: number; unrouted: number };
-  matched: Matched[]; skipped: Applied['skipped']; busy: boolean; recipeName: string; setRecipeName: (s: string) => void;
+  counts: { rowsRead: number; clients: number; skipped: number; combined: number; fresh: number; merge: number; routed: number; unrouted: number; fixed: number; suggested: number };
+  matched: Matched[]; skipped: Applied['skipped']; busy: boolean; note: string | null; onToggleFix: (key: string) => void;
+  recipeName: string; setRecipeName: (s: string) => void;
   includeUnrouted: boolean; setIncludeUnrouted: (b: boolean) => void; onBack: () => void; onApprove: () => void;
-}> = ({ counts, matched, skipped, busy, recipeName, setRecipeName, includeUnrouted, setIncludeUnrouted, onBack, onApprove }) => {
-  const [tab, setTab] = useState<'new' | 'merge' | 'attention' | 'skipped'>('new');
-  const list = tab === 'new' ? matched.filter(m => !m.match?.client_id) : tab === 'merge' ? matched.filter(m => m.match?.client_id)
-    : tab === 'attention' ? matched.filter(m => !m.match?.route_code) : [];
+}> = ({ counts, matched, skipped, busy, note, onToggleFix, recipeName, setRecipeName, includeUnrouted, setIncludeUnrouted, onBack, onApprove }) => {
+  const [tab, setTab] = useState<'new' | 'merge' | 'fixed' | 'attention' | 'skipped'>('new');
+  const eff = matched.map(effective);
+  const list = tab === 'new' ? eff.filter(m => !m.match?.client_id) : tab === 'merge' ? eff.filter(m => m.match?.client_id)
+    : tab === 'attention' ? eff.filter(m => !m.match?.route_code) : [];
+  const fixes = matched.filter(m => m.fix);
   const willImport = includeUnrouted ? counts.clients : counts.routed;
   return (
     <div className="v2-stack">
       <div className="v2-grid4">
         {[['Rows read', counts.rowsRead, ''], ['Clients (one per address)', counts.clients, `${counts.combined} duplicate rows combined`],
           ['New', counts.fresh, ''], ['Merge into existing', counts.merge, ''],
-          ['On a route', counts.routed, ''], ['Needs attention', counts.unrouted, 'no route found'], ['Rows skipped', counts.skipped, 'no usable address'],
+          ['On a route', counts.routed, counts.fixed ? `${counts.fixed} placed by The Benny` : ''], ['Needs attention', counts.unrouted, 'no route found'], ['Rows skipped', counts.skipped, 'no usable address'],
           ['Will be imported', willImport, '']].map(([label, n, sub]) => (
           <div key={String(label)} className="v2-card"><div className="v2-card-h">{label}</div><div className="v2-kpi">{n}</div>{sub && <div className="v2-note" style={{ marginTop: 0 }}>{sub}</div>}</div>
         ))}
@@ -304,22 +362,37 @@ const Review: React.FC<{
       <div className="v2-card" style={{ padding: 0 }}>
         <div style={{ padding: '10px 12px 0' }}>
           <Tabs value={tab} onChange={setTab} items={[{ key: 'new', label: 'New', count: counts.fresh }, { key: 'merge', label: 'Merging', count: counts.merge },
+            { key: 'fixed', label: 'Placed by The Benny', count: counts.suggested },
             { key: 'attention', label: 'Needs attention', count: counts.unrouted }, { key: 'skipped', label: 'Skipped rows', count: counts.skipped }]} />
+          {note && <div className="v2-note" style={{ margin: '0 0 8px' }}>{note}</div>}
         </div>
         <div className="v2-table-wrap" style={{ maxHeight: 420, overflow: 'auto' }}>
-          {tab === 'skipped' ? (
+          {tab === 'fixed' ? (
+            <table className="v2-table"><thead><tr><th>On the list</th><th>The Benny’s reading</th><th>Route</th><th>Why</th><th>Use it</th></tr></thead>
+              <tbody>{fixes.slice(0, 300).map(m => (
+                <tr key={m.client.key} style={{ opacity: m.fix!.on ? 1 : 0.6 }}>
+                  <td className="v2-mut">{m.client.raw_address || `${m.client.house_no} ${m.client.street_name}`}{m.client.city && `, ${m.client.city}`}</td>
+                  <td><b>{m.fix!.house_no} {m.fix!.street}</b> <Tag tone={m.fix!.confidence === 'high' ? 'g' : m.fix!.confidence === 'medium' ? 'b' : 'a'}>{m.fix!.confidence}</Tag></td>
+                  <td>{m.fix!.match?.route_code ? <b>{m.fix!.match.route_code}</b> : <Tag tone="a">Still no route</Tag>}</td>
+                  <td className="v2-small v2-mut">{m.fix!.reason}</td>
+                  <td><Toggle on={m.fix!.on} onChange={() => onToggleFix(m.client.key)} label={`Use The Benny’s reading for ${m.client.raw_address}`} /></td>
+                </tr>
+              ))}
+              {fixes.length === 0 && <tr><td colSpan={5} className="v2-mut" style={{ textAlign: 'center', padding: 20 }}>Every address was found as written.</td></tr>}</tbody></table>
+          ) : tab === 'skipped' ? (
             <table className="v2-table"><thead><tr><th>Row</th><th>Why</th><th>What it said</th></tr></thead>
               <tbody>{skipped.slice(0, 300).map(s => <tr key={s.row}><td>{s.row}</td><td>{s.reason}</td><td className="v2-mut">{s.text || '—'}</td></tr>)}</tbody></table>
           ) : (
             <table className="v2-table">
               <thead><tr><th>Address</th><th>Route</th><th>People</th><th>Phones</th><th>History</th><th>Flags</th><th>Rows</th></tr></thead>
-              <tbody>{list.slice(0, 300).map(({ client: c, match: m }) => (
+              <tbody>{list.slice(0, 300).map(({ client: c, match: m, fixed }) => (
                 <tr key={c.key}>
-                  <td><b>{c.house_no} {c.street_name}</b>{c.unit && ` Unit ${c.unit}`}<div className="v2-small v2-mut">{[c.city, c.province, c.postal_code].filter(Boolean).join(', ')}</div></td>
+                  <td><b>{c.house_no} {c.street_name}</b>{c.unit && ` Unit ${c.unit}`}{fixed && <> <Tag tone="v">fixed</Tag></>}<div className="v2-small v2-mut">{[c.city, c.province, c.postal_code].filter(Boolean).join(', ')}</div></td>
                   <td>{m?.route_code ? <><b>{m.route_code}</b><div className="v2-small v2-mut">{HOW[m.how || ''] || ''}</div></> : <Tag tone="a">No route</Tag>}</td>
                   <td className="v2-small">{c.people.map(p => `${p.first} ${p.last}`.trim()).join(', ') || '—'}</td>
                   <td className="v2-small">{c.phones.map(formatPhone).join(', ') || '—'}</td>
-                  <td className="v2-small">{c.history.map(h => [h.year, h.service, h.price && `$${h.price}`].filter(Boolean).join(' ')).join(' · ') || '—'}</td>
+                  <td className="v2-small">{c.history.map(h => [h.year, h.service || (h.line && lineLabel(h.line)), h.price && `$${h.price}`].filter(Boolean).join(' ')).join(' · ') || '—'}
+                    {[...new Set(c.history.map(h => h.line).filter(Boolean))].map(l => <span key={l} style={{ marginLeft: 6 }}><Tag tone="b">{lineLabel(l)}</Tag></span>)}</td>
                   <td>{c.do_not_call && <Tag tone="r">DNC</Tag>} {c.do_not_text && <Tag tone="r">No text</Tag>} {c.tags.map(t => <Tag key={t}>{t}</Tag>)}</td>
                   <td className="v2-small v2-mut">{c.rows.join(', ')}</td>
                 </tr>

@@ -3,6 +3,7 @@
 // Tasks (POST JSON, signed-in user with the Super Admin › Territory permission):
 //   { task: 'map', fileName, rows }            → { mapping }   which column is what in a client list
 //   { task: 'fix_addresses', items: [{i,text}] } → { items }   split addresses the app couldn't read
+//   { task: 'place_addresses', items }         → { items }   which real street a misspelled address meant
 //   { task: 'fetch_sheet', url }               → { csv }       read a Google Sheet shared by link
 //
 // The Claude API key lives only in the ANTHROPIC_API_KEY secret (Supabase › Edge Functions ›
@@ -45,12 +46,13 @@ const MAP_TOOL = {
       },
       defaultYear: { type: ['integer', 'null'], description: 'Year for history when the list has no year column (e.g. from the file name)' },
       defaultService: { type: ['string', 'null'], description: 'Service code when the whole list is one service (AER aeration, SS sealing, RJ rejuv, WW windows)' },
+      serviceLine: { type: ['string', 'null'], enum: ['aeration', 'lawn_rejuv', 'sealing', 'cleaning', null], description: 'Which service these are past clients of: aeration, sealing (driveway sealing, ramps), lawn_rejuv, or cleaning (window cleaning). From the file name, title or service codes. null only if truly unclear.' },
       defaultCity: { type: ['string', 'null'] },
       defaultProvince: { type: ['string', 'null'], description: 'Two-letter province code' },
       yesValues: { type: 'array', items: { type: 'string' }, description: 'Values in this file that mean yes/serviced besides yes, y, x, 1, true' },
       notes: { type: 'string', description: 'Two to five short plain-English sentences for the person importing: what this list is and anything unusual' },
     },
-    required: ['headerRow', 'columns', 'notes'],
+    required: ['headerRow', 'columns', 'serviceLine', 'notes'],
   },
 };
 
@@ -72,7 +74,7 @@ Callbook conventions you will see:
 - "NO SP" (not interested in the Star Plan) and "2nd" (second service) are tags.
 - "HOUSE #" or "PREFIX" is house_no; "STREET NAME" is street.
 - Columns that repeat for several years (e.g. "2024 Price", "2025 Price") are history columns with their own "year".
-If a column's purpose is unclear, choose "ignore" and say so in notes. Infer defaultYear from the file name or a title row when there is no year column, and defaultService when the whole list is one service. Give every column index in the header row an entry.`;
+If a column's purpose is unclear, choose "ignore" and say so in notes. Each route keeps a separate past-client list per service, so always say which service the list is for (serviceLine): aeration callbooks (codes AER, FO/FP/BO), sealing callbooks (SS, SSP, SSF, ramp), lawn rejuvenation (RJ), window cleaning (WW). Infer defaultYear from the file name or a title row when there is no year column, and defaultService when the whole list is one service. Give every column index in the header row an entry.`;
 
 async function claude(apiKey: string, body: Record<string, unknown>) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -150,6 +152,36 @@ Deno.serve(async req => {
       });
       const use = data.content.find(c => c.type === 'tool_use');
       return json({ items: (use?.input as { items?: unknown[] })?.items || [] });
+    }
+
+    if (body.task === 'place_addresses') {
+      const items = (Array.isArray(body.items) ? body.items : []).slice(0, 80).map((x: Record<string, unknown>) => ({
+        i: Number(x.i), house_no: String(x.house_no || '').slice(0, 20), street: String(x.street || '').slice(0, 120),
+        city: String(x.city || '').slice(0, 60), text: String(x.text || '').slice(0, 200),
+        candidates: (Array.isArray(x.candidates) ? x.candidates : []).slice(0, 8).map((c: Record<string, unknown>) => ({ street: String(c.street || ''), near: !!c.near, score: Number(c.score) || 0 })),
+      }));
+      if (!items.length) return json({ items: [] });
+      const data = await claude(apiKey, {
+        max_tokens: 8192,
+        system: `You place addresses from a door-to-door service company's client lists onto its route maps. Each address below could not be found as written, usually because of a spelling mistake, a wrong or missing street type ("Rd" for "Dr", "Cres" missing), run-together or split words, transposed letters, or a phonetic spelling.
+For each item you get what the list said and candidate street names that really exist on the maps (lower case, abbreviated types: dr, rd, st, ave, cres, crt, blvd, pl, ln, way, cir, trl, gate...). "near" candidates are in the same neighbourhoods as the rest of this list, so prefer them when the spelling is close.
+Pick the candidate the person most plausibly meant and return it exactly as given. If none is a plausible match, return street null. Keep the house number as written unless it is plainly garbled (for example "l2" for 12, "12a" kept as 12A); never invent one.
+confidence: high = obvious typo of a near candidate; medium = likely but the spelling differs more, or the candidate is not near; low = a guess. reason: a few plain words, e.g. "typo: Baronwod → Baronwood".`,
+        tools: [{
+          name: 'save_placements', description: 'Save the chosen street for each address.',
+          input_schema: { type: 'object', required: ['items'], properties: { items: { type: 'array', items: { type: 'object', required: ['i', 'house_no', 'street', 'confidence', 'reason'], properties: {
+            i: { type: 'integer' }, house_no: { type: 'string' }, street: { type: ['string', 'null'] },
+            confidence: { type: 'string', enum: ['high', 'medium', 'low'] }, reason: { type: 'string' } } } } } },
+        }],
+        tool_choice: { type: 'tool', name: 'save_placements' },
+        messages: [{ role: 'user', content: JSON.stringify(items) }],
+      });
+      const use = data.content.find(c => c.type === 'tool_use');
+      const allowed = new Map(items.map((x: { i: number; candidates: { street: string }[] }) => [x.i, new Set(x.candidates.map(c => c.street))]));
+      // only streets that were offered: The Benny chooses, it doesn't invent
+      const placed = ((use?.input as { items?: { i: number; street: string | null }[] })?.items || [])
+        .map(p => ({ ...p, street: p.street && allowed.get(Number(p.i))?.has(p.street) ? p.street : null }));
+      return json({ items: placed });
     }
 
     return json({ error: 'Unknown task' }, 400);
