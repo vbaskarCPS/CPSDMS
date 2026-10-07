@@ -16,6 +16,7 @@ import { Btn, ErrorBox, Loading, Tag, Toggle } from '../../ui';
 import { BookContractors } from './BookContractors';
 import { TeamBoard } from './TeamBoard';
 import { RoutePickerMap, MANAGER_COLORS } from './RoutePickerMap';
+import { AddLiveRoutes } from './day/AddLiveRoutes';
 
 type Step = 1 | 2 | 3;
 const STEPS: { n: Step; label: string }[] = [{ n: 1, label: 'Routes' }, { n: 2, label: 'Roll call & teams' }, { n: 3, label: 'Settings & start' }];
@@ -107,7 +108,7 @@ export const StartSession: React.FC = () => {
       finally { setBusy(false); legacyOpen.reload(); }
     };
     return (
-      <div className="v2-main v2-narrow">{back}
+      <div className="v2-main">{back}
         <div className="v2-card" style={{ marginTop: 12, padding: 24 }}>
           <div className="v2-row"><Check color="#059669" /><span className="v2-h2">The session is live</span></div>
           {legacyOpen.loading ? <Loading label="Checking the live map…" /> : !onMap ? (
@@ -121,13 +122,13 @@ export const StartSession: React.FC = () => {
           <ul style={{ lineHeight: 1.7 }}>
             <li><b>Managers</b> sign in at <a className="v2-link" href="/" target="_blank" rel="noreferrer">propertystars.app</a> with their username and password, then open <b>Route Manager › Map</b>.</li>
             <li><b>Workers</b> sign in there on the <b>Worker</b> tab with their <b>CN #</b> and <b>first name</b>.</li>
-            <li><b>Payouts</b>: Workerbook › Payouts. Closing the session stays in the current app’s Session Command Center for now.</li>
+            <li><b>Payouts</b> and <b>Close day</b> are on the day’s page.</li>
           </ul>
           <div className="v2-row">
-            <Btn kind="o" onClick={() => nav(`/app/workerbook/days/${date}`)}>Back to the day</Btn>
-            {onMap && <Btn onClick={() => nav(`/app/workerbook/days/${date}`)}>Payouts</Btn>}
+            <Btn kind="o" onClick={() => nav(`/app/workerbook/days/${date}`)}>Back to the day (payouts)</Btn>
           </div>
         </div>
+        {onMap && <AddLiveRoutes centerId={center.id} areas={areas.data || []} shapes={shapes.data || []} canEdit={can('workerbook')} />}
       </div>
     );
   }
